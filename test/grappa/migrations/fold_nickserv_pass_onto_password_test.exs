@@ -33,9 +33,8 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.EncryptedBinary
+  alias Grappa.{EncryptedBinary, Repo}
   alias Grappa.Networks.Credential
-  alias Grappa.Repo
 
   @migration_path "priv/repo/migrations/20260807120000_fold_nickserv_pass_onto_password.exs"
 

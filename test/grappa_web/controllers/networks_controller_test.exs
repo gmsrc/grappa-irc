@@ -732,6 +732,136 @@ defmodule GrappaWeb.NetworksControllerTest do
     end
   end
 
+  describe "PUT /networks/:network_id/password (#124)" do
+    # The cure for the split brain: one field, one stored secret. Every test
+    # here asserts through `Credential.recover_secret/1` rather than the column,
+    # because what matters is that the value the operator typed is the value the
+    # next identify will USE — a write that lands in a column nothing reads is
+    # exactly the bug #124 is named after.
+    defp password_setup(attrs) do
+      vjt = user_fixture(name: "vjt-pw-#{u()}")
+      session = session_fixture(vjt)
+      slug = "net-pw-#{u()}"
+      {network, _} = network_with_server(port: 9_999, slug: slug)
+      # The wide changeset refuses `:nickserv_identify` without a password, so
+      # the fixture always carries one; tests that care override it.
+      cred =
+        credential_fixture(
+          vjt,
+          network,
+          Map.merge(%{nick: "vjt-irc", password: "fixture-pw"}, attrs)
+        )
+
+      {vjt, session, network, slug, cred}
+    end
+
+    defp put_password(conn, session, slug, body) do
+      conn
+      |> put_bearer(session.id)
+      |> put_req_header("content-type", "application/json")
+      |> put("/networks/#{slug}/password", body)
+    end
+
+    test "sets the secret the next identify will use, and never echoes it", %{conn: conn} do
+      {vjt, session, network, slug, _} =
+        password_setup(%{auth_method: :nickserv_identify, password: "stale-pw"})
+
+      conn = put_password(conn, session, slug, %{password: "repaired"})
+
+      # WRITE-ONLY end to end: the response says nothing about the stored
+      # secret — not the value, and deliberately not even its set-ness.
+      body = json_response(conn, 200)
+      refute Map.has_key?(body, "password")
+      refute Map.has_key?(body, "password_set")
+      refute inspect(body) =~ "repaired"
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert Credential.recover_secret(reloaded) == "repaired"
+    end
+
+    test "an :none credential is PROMOTED to :nickserv_identify", %{conn: conn} do
+      # Without the promotion the password would land on a row configured not to
+      # identify and sit there inert — a save that changes nothing.
+      {vjt, session, network, slug, _} = password_setup(%{auth_method: :none, password: nil})
+
+      assert json_response(put_password(conn, session, slug, %{password: "newsecret"}), 200)
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert reloaded.auth_method == :nickserv_identify
+      assert Credential.recover_secret(reloaded) == "newsecret"
+    end
+
+    test ":server_pass keeps its method — the password is spent on PASS", %{conn: conn} do
+      # The field edits THE secret for the network, whatever the method spends
+      # it on. Promoting here would silently redirect a server password to
+      # NickServ and break a working handshake.
+      {vjt, session, network, slug, _} =
+        password_setup(%{auth_method: :server_pass, password: "old-server-pw"})
+
+      assert json_response(put_password(conn, session, slug, %{password: "new-server-pw"}), 200)
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert reloaded.auth_method == :server_pass
+      assert Credential.upstream_password(reloaded) == "new-server-pw"
+    end
+
+    test "a blank or missing password is a 400, never a silent clear", %{conn: conn} do
+      {_, session, _, slug, _} = password_setup(%{auth_method: :nickserv_identify})
+
+      assert json_response(put_password(conn, session, slug, %{password: ""}), 400)
+      assert json_response(put_password(conn, session, slug, %{}), 400)
+    end
+
+    for {label, password} <- [
+          {"spaces", "two words"},
+          {"under 5 bytes", "abcd"},
+          {"over PASSMAX 32 bytes", String.duplicate("a", 33)},
+          {"equal to the nick", "vjt-irc"}
+        ] do
+      test "422 on a password services would refuse — #{label}", %{conn: conn} do
+        # Azzurra's `do_set_password` chain, shared verbatim with the on-wire
+        # door. Storing one of these would be a silent identify failure: grappa
+        # would keep sending a password NickServ always rejects.
+        {vjt, session, network, slug, _} =
+          password_setup(%{auth_method: :nickserv_identify, password: "known-good"})
+
+        conn = put_password(conn, session, slug, %{password: unquote(password)})
+
+        assert json_response(conn, 422)["error"] == "validation_failed"
+        assert [_ | _] = json_response(conn, 422)["field_errors"]["password"]
+
+        # And the known-good secret must survive the refusal.
+        {:ok, reloaded} = Credentials.get_credential(vjt, network)
+        assert Credential.recover_secret(reloaded) == "known-good"
+      end
+    end
+
+    test "a long password is ACCEPTED on :sasl — Azzurra's cap is NickServ-only", %{conn: conn} do
+      # The guard chain is applied only when the secret is NickServ-bound. A
+      # 40-character SASL password is perfectly legal and must not be refused by
+      # a rule that belongs to a different auth channel.
+      {vjt, session, network, slug, _} =
+        password_setup(%{auth_method: :sasl, sasl_user: "vjt", password: "short"})
+
+      long = String.duplicate("z", 40)
+      assert json_response(put_password(conn, session, slug, %{password: long}), 200)
+
+      {:ok, reloaded} = Credentials.get_credential(vjt, network)
+      assert Credential.upstream_password(reloaded) == long
+    end
+
+    test "requires a Bearer", %{conn: conn} do
+      {_, _, _, slug, _} = password_setup(%{auth_method: :nickserv_identify})
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> put("/networks/#{slug}/password", %{password: "whatever"})
+
+      assert json_response(conn, 401)
+    end
+  end
+
   describe "GET + PUT /networks/:network_id/perform (#189)" do
     test "GET returns the perform list + oper_pass_set (empty by default)", %{conn: conn} do
       vjt = user_fixture(name: "vjt-perf-#{u()}")

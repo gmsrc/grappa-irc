@@ -2482,17 +2482,45 @@ export async function updateNetworkIdentity(
   return (await res.json()) as CredentialJson;
 }
 
-// #189 / #509 — per-network on-connect perform list. `perform_list` is the raw
-// command list (one IRC line per line; null when unset); `oper_pass_set` /
-// `nickserv_pass_set` report whether the WRITE-ONLY `$oper_pass` /
-// `$nickserv_pass` secrets are stored — the secrets themselves are never
-// returned. There is no live verb: an edit persists and takes effect on the
-// next (re)connect.
+// #189 — per-network on-connect perform list. `perform_list` is the raw
+// command list (one IRC line per line; null when unset); `oper_pass_set`
+// reports whether the WRITE-ONLY `$oper_pass` secret is stored — the secret
+// itself is never returned. There is no live verb: an edit persists and takes
+// effect on the next (re)connect.
+//
+// #124 dropped the `nickserv_pass` body key and its `nickserv_pass_set` flag.
+// The server answers 410 to a body still carrying the key, so a stale cached
+// bundle fails LOUDLY instead of silently pretending it saved a password.
 export type PerformView = {
   perform_list: string | null;
   oper_pass_set: boolean;
-  nickserv_pass_set: boolean;
 };
+
+// #124 — the per-network PASSWORD field (Settings -> General). One field, one
+// stored secret: this writes the credential password, and that same value is
+// what `$nickserv_pass` expands to.
+//
+// WRITE-ONLY end to end — there is no getter, and the wire publishes nothing
+// about the stored value, not even its set-ness. A
+// blank password is a 400 rather than a clear: the caller simply does not call
+// this when the input is empty (leave-blank-to-keep lives HERE, in the client,
+// so "clear my password" can never be what an empty form submits).
+//
+// 422 carries `field_errors.password` when Azzurra's services would refuse the
+// value (spaces / under 5 / over 32 bytes / control codes / equal to the nick).
+export async function putNetworkPassword(
+  token: string,
+  networkSlug: string,
+  password: string,
+): Promise<CredentialJson> {
+  const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/password`, {
+    method: "PUT",
+    headers: buildHeaders(token),
+    body: JSON.stringify({ password }),
+  });
+  if (!res.ok) throw await readError(res);
+  return (await res.json()) as CredentialJson;
+}
 
 export async function getPerform(token: string, networkSlug: string): Promise<PerformView> {
   const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/perform`, {
@@ -2502,13 +2530,13 @@ export async function getPerform(token: string, networkSlug: string): Promise<Pe
   return (await res.json()) as PerformView;
 }
 
-// PUT the list + optional oper_pass / nickserv_pass. `perform_list: ""` clears
-// the list; omitting a secret KEEPS the stored one (leave-blank-to-keep, like a
-// password field), while `"<field>": ""` clears it. Echoes the same shape.
+// PUT the list + optional oper_pass. `perform_list: ""` clears the list;
+// omitting the secret KEEPS the stored one (leave-blank-to-keep, like a
+// password field), while `oper_pass: ""` clears it. Echoes the same shape.
 export async function putPerform(
   token: string,
   networkSlug: string,
-  body: { perform_list?: string; oper_pass?: string; nickserv_pass?: string },
+  body: { perform_list?: string; oper_pass?: string },
 ): Promise<PerformView> {
   const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/perform`, {
     method: "PUT",

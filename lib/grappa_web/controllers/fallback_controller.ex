@@ -97,6 +97,7 @@ defmodule GrappaWeb.FallbackController do
            | {:anon_collision, non_neg_integer()}
            | {:credentials_present, non_neg_integer()}
            | {:start_failed, term()}
+           | :nickserv_pass_retired
            | Grappa.Admission.error()
            | Ecto.Changeset.t()}
         ) :: Plug.Conn.t()
@@ -139,7 +140,7 @@ defmodule GrappaWeb.FallbackController do
     |> put_status(:gone)
     |> json(%{
       error: "nickserv_pass_retired",
-      detail: "set the per-network password via PATCH /api/networks/:network_id/identity"
+      detail: "set the per-network password via PUT /api/networks/:network_id/password"
     })
   end
 

@@ -1,5 +1,6 @@
 import {
   deleteAccount as apiDeleteAccount,
+  putNetworkPassword as apiPutNetworkPassword,
   updateNetworkIdentity as apiUpdateNetworkIdentity,
 } from "./api";
 import { clearLocalAuth, getSubject, isPersistentIdentity, logout, token } from "./auth";
@@ -181,6 +182,29 @@ export async function updateIdentity(
   const t = token();
   if (t === null) return;
   await apiUpdateNetworkIdentity(t, networkSlug, fields);
+  refetchUser();
+}
+
+/**
+ * updateNetworkPassword — #124 — set the PER-NETWORK password on
+ * `networkSlug` (`PUT /networks/:slug/password`), live-applied server-side by
+ * the same internal reconnect the identity door uses: the secret is read at
+ * connect, so a live session has to re-register to identify with it.
+ *
+ * The cure for the split brain. One field, one stored secret — this writes the
+ * credential password, and that same value is what `$nickserv_pass` expands
+ * to. Never send a blank: leave-blank-to-keep lives in the CALLER, so an empty
+ * input simply does not reach this (the server 400s a blank rather than
+ * treating it as "clear my password").
+ *
+ * Refetches `/me` so `password_set` reflects the write. Errors PROPAGATE — a
+ * 422 (a value Azzurra's services would refuse) must surface inline, because
+ * silently storing it is exactly the failure #124 exists to end.
+ */
+export async function updateNetworkPassword(networkSlug: string, password: string): Promise<void> {
+  const t = token();
+  if (t === null) return;
+  await apiPutNetworkPassword(t, networkSlug, password);
   refetchUser();
 }
 

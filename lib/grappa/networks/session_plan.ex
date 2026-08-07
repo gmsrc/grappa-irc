@@ -102,8 +102,8 @@ defmodule Grappa.Networks.SessionPlan do
       # outbound NickServ-secret capture choke point when a well-formed
       # in-session SET PASSWD leaves the wire (no `+r` fires to stage
       # against). Returns `{:ok, cred} | {:error, _}`; Session.Server logs
-      # the outcome and never retries — #124 re-auth recovers a failed
-      # commit on the next identify.
+      # the outcome and never retries; a failed commit is repaired by
+      # retyping the password into the per-network password field (#124, Settings -> General).
       credential_committer: fn password ->
         Credentials.commit_password(user.id, cred.network_id, password)
       end,

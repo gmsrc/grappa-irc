@@ -20,7 +20,7 @@ import { syncedSetColoredNicklist, syncedSetTimeFormat } from "./lib/displayPref
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
-import { updateIdentity } from "./lib/lifecycle";
+import { updateIdentity, updateNetworkPassword } from "./lib/lifecycle";
 import { networks, user } from "./lib/networks";
 import { mirrorNotificationPrefs } from "./lib/notificationPrefs";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
@@ -247,6 +247,17 @@ const SettingsDrawer: Component<Props> = (props) => {
   // call sites.
   const [identityArmed, setIdentityArmed] = createSignal(false);
 
+  // #124 — the per-network PASSWORD field. Its own signals and its own save,
+  // NOT folded into the identity form above: the password is write-only and
+  // leave-blank-to-keep, while the identity fields round-trip and treat a
+  // blank as "clear to default". One Save over both would make an untouched
+  // password field indistinguishable from "clear my password".
+  const [passwordText, setPasswordText] = createSignal("");
+  const [passwordSaving, setPasswordSaving] = createSignal(false);
+  const [passwordError, setPasswordError] = createSignal<string | null>(null);
+  const [passwordSaved, setPasswordSaved] = createSignal(false);
+  const [passwordArmed, setPasswordArmed] = createSignal(false);
+
   // Default the editor's target ONCE per open-session: the currently-focused
   // network (if it resolves to one of the subject's rows), else the first
   // row. `identitySeeded` latches so a later /networks refetch never re-picks
@@ -306,6 +317,31 @@ const SettingsDrawer: Component<Props> = (props) => {
       );
     } finally {
       setIdentitySaving(false);
+    }
+  };
+
+  const onSavePassword = async () => {
+    setPasswordArmed(false);
+    setPasswordError(null);
+    setPasswordSaved(false);
+    const net = selectedIdentityNetwork();
+    if (!net) return;
+    // Leave-blank-to-keep lives HERE: an empty input is "I did not touch
+    // this", never "clear my password". The server 400s a blank precisely so
+    // this can never be an accident.
+    const pw = passwordText();
+    if (pw === "") return;
+    setPasswordSaving(true);
+    try {
+      await updateNetworkPassword(net.slug, pw);
+      setPasswordText("");
+      setPasswordSaved(true);
+    } catch (err) {
+      setPasswordError(
+        err instanceof ApiError ? friendlyApiError(err) : "Couldn't save the password. Try again.",
+      );
+    } finally {
+      setPasswordSaving(false);
     }
   };
 
@@ -1115,6 +1151,69 @@ const SettingsDrawer: Component<Props> = (props) => {
                   <Show when={identitySaved()}>
                     <p class="settings-identity-ok" data-testid="settings-identity-ok">
                       Identity applied.
+                    </p>
+                  </Show>
+                </div>
+              </div>
+
+              {/* #124 — the per-network password. THE one place this secret is
+                editable: it is the credential password, the value
+                `$nickserv_pass` expands to, and for a visitor the credential
+                you log into grappa with. The perform editor's rival field is
+                gone — two editable homes for one secret was the split brain
+                this cures. Targets the same network the identity card above
+                does, so the picker there governs both. */}
+              <div
+                class="settings-section settings-section-card"
+                data-testid="settings-section-password"
+              >
+                <h4 class="settings-section-heading">password</h4>
+                <div class="settings-identity" data-testid="settings-password">
+                  <label for="settings-network-password">Network password</label>
+                  <input
+                    id="settings-network-password"
+                    type="password"
+                    autocapitalize="none"
+                    autocorrect="off"
+                    spellcheck={false}
+                    placeholder="type a new password (leave blank to keep)"
+                    value={passwordText()}
+                    data-testid="settings-network-password-input"
+                    onInput={(e) => {
+                      setPasswordText(e.currentTarget.value);
+                      setPasswordSaved(false);
+                    }}
+                  />
+                  <p class="settings-identity-hint">
+                    Your NickServ password for this network. Saving reconnects your session so it
+                    can identify with the new value — you'll briefly drop and rejoin your channels.
+                  </p>
+
+                  <InlineConfirmButton
+                    idleLabel={passwordSaving() ? "saving…" : "save password"}
+                    confirmLabel="save — this reconnects"
+                    testId="settings-password-apply"
+                    armed={passwordArmed()}
+                    onArm={() => setPasswordArmed(true)}
+                    onConfirm={() => {
+                      void onSavePassword();
+                    }}
+                  />
+
+                  <Show when={passwordError()}>
+                    {(msg) => (
+                      <p
+                        role="alert"
+                        class="settings-identity-error"
+                        data-testid="settings-password-error"
+                      >
+                        {msg()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={passwordSaved()}>
+                    <p class="settings-identity-ok" data-testid="settings-password-ok">
+                      Password saved.
                     </p>
                   </Show>
                 </div>

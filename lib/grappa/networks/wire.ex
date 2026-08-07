@@ -280,7 +280,9 @@ defmodule Grappa.Networks.Wire do
   Excludes `:password_encrypted` (the post-Cloak-load plaintext
   upstream secret) and the virtual `:password` field — both must
   NEVER appear on the wire. If you're tempted to add either, stop
-  and re-read the moduledoc.
+  and re-read the moduledoc. #124's per-network password field writes
+  that column and deliberately publishes NOTHING about it — not even
+  its set-ness. The field is write-only end to end.
 
   Includes T32 connection-state fields (`connection_state`,
   `connection_state_reason`, `connection_state_changed_at`) so the

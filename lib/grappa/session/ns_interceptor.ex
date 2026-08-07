@@ -12,7 +12,8 @@ defmodule Grappa.Session.NSInterceptor do
   is no rendezvous to stage against). Staged captures are committed to the
   visitor row ONLY on +r MODE observation (the timed slot is also discarded
   on the `@pending_auth_timeout_ms` timeout). Wrong passwords never touch
-  the DB; a rejected SET PASSWD is recovered by #124's re-auth backstop.
+  the DB; a rejected SET PASSWD leaves a stored password that never took,
+  which the operator repairs by retyping it into the per-network password field (#124, Settings -> General).
 
   Covers the full azzurra identify-channel set (source-verified against
   `bahamut-azzurra` ircd + azzurra `services`):
@@ -71,7 +72,7 @@ defmodule Grappa.Session.NSInterceptor do
   the value already stored — no divergence either way) and the old-password
   check itself (`str_equals(param, ni->pass)`; grappa cannot vet a wrong OLD
   password from the line alone, so a mistyped one still commits optimistically
-  — the #124 re-auth backstop, unchanged by #977).
+  — repaired by retyping it into the per-network password field (#124, Settings -> General), unchanged by #977).
 
   ## RESETPASS: the THIRD token, and it names the account (#978)
 
@@ -120,7 +121,7 @@ defmodule Grappa.Session.NSInterceptor do
   forbidden, not frozen, `NI_PASSRESET` set, the code within `ONE_WEEK` of the
   SENDPASS, and the code matching `ni->auth` — is services-side state this
   module cannot see, so a doomed RESETPASS still commits optimistically
-  (#124's re-auth prompt is the backstop). The code is deliberately not vetted
+  (repaired by retyping the password into the per-network password field (#124, Settings -> General)). The code is deliberately not vetted
   even for shape: `strtoul(codestr, &err, 10)` accepts a leading sign, so a
   partial mirror would reject lines services accept — and a false reject
   silently reinstates the very bug #978 closes, while a false accept only
@@ -343,11 +344,35 @@ defmodule Grappa.Session.NSInterceptor do
   @spec vet_new_password(rotation_kind(), String.t(), String.t()) ::
           :ok | {:reject, rotation_kind(), vet_reject_reason()}
   defp vet_new_password(kind, new_password, nick) do
+    case vet_password(new_password, nick) do
+      :ok -> :ok
+      {:error, reason} -> {:reject, kind, reason}
+    end
+  end
+
+  @doc """
+  The guard chain on its own, without a wire verb attached — `:ok`, or
+  `{:error, reason}` naming the services error the value would earn.
+
+  #124 gave the NickServ password a SECOND door: an operator can now type it
+  straight into the per-network password field instead of rotating it through
+  a `SET PASSWD` on the wire. Both doors write the SAME credential column, so
+  both must refuse the same values — a field that accepts what services will
+  refuse just stores a password that silently never identifies, which is the
+  split brain #124 exists to end.
+
+  Public for that second caller (`Grappa.Networks.Credentials`). It is the
+  SAME chain `vet_new_password/3` runs, deliberately not a copy: a second copy
+  would drift from the first the next time Azzurra adds a rule, and then the
+  two doors would disagree about the same secret.
+  """
+  @spec vet_password(String.t(), String.t()) :: :ok | {:error, vet_reject_reason()}
+  def vet_password(new_password, nick) when is_binary(new_password) and is_binary(nick) do
     cond do
-      String.contains?(new_password, " ") -> {:reject, kind, :password_with_spaces}
-      insecure?(new_password, nick) -> {:reject, kind, :insecure_password}
-      byte_size(new_password) > @passmax -> {:reject, kind, :password_max_length}
-      ccodes?(new_password) -> {:reject, kind, :password_with_ccodes}
+      String.contains?(new_password, " ") -> {:error, :password_with_spaces}
+      insecure?(new_password, nick) -> {:error, :insecure_password}
+      byte_size(new_password) > @passmax -> {:error, :password_max_length}
+      ccodes?(new_password) -> {:error, :password_with_ccodes}
       true -> :ok
     end
   end

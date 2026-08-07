@@ -207,6 +207,52 @@ defmodule GrappaWeb.NetworksController do
   end
 
   @doc """
+  `PUT /networks/:network_id/password` — #124: the per-network PASSWORD field,
+  for BOTH subjects. One field, one stored secret.
+
+  Sibling of `/identity` rather than a key on it, deliberately. The password is
+  WRITE-ONLY (identity round-trips), it needs its own changeset and Azzurra's
+  services-side validation, and its blank semantics are the OPPOSITE of
+  identity's: there, `""` is a deliberate "clear to default"; here a blank is a
+  400, because clearing the secret an operator identifies with must never be
+  something a form submits by accident.
+
+  Live-applied by the same internal reconnect `/identity` uses: the secret is
+  read at connect, so a live session has to re-register to identify with the
+  new value — which is the entire point of the field. A parked / no-session
+  edit persists only.
+
+  Body: `{password}` — required, non-blank. 200 with the updated credential
+  (carrying `password_set: true`, never the value); 400 on a missing or blank
+  password; 422 when services would refuse it (spaces / under 5 / over 32 bytes
+  / control codes / equal to the nick); 404 if the credential vanished; 401
+  without a Bearer.
+  """
+  @spec update_password(Plug.Conn.t(), map()) ::
+          Plug.Conn.t()
+          | {:error, :bad_request | :not_found | Ecto.Changeset.t()}
+  def update_password(conn, params) do
+    subject = conn.assigns.current_subject
+    network = conn.assigns.network
+
+    with {:ok, password} <- parse_password(params),
+         {:ok, credential} <- fetch_credential(subject, network),
+         {:ok, updated} <- Credentials.update_credential_password(credential, password) do
+      :ok = live_apply_identity(subject, network, updated)
+      render(conn, :update, credential: updated)
+    end
+  end
+
+  # A password is REQUIRED here — unlike the identity fields, an absent or
+  # blank one is not "leave alone" but a malformed request. Leave-blank-to-keep
+  # lives in the CLIENT (it simply does not call this endpoint when the input is
+  # empty); encoding it here would make "clear my password" and "I typed
+  # nothing" the same request, and one of those must never happen by accident.
+  @spec parse_password(map()) :: {:ok, String.t()} | {:error, :bad_request}
+  defp parse_password(%{"password" => pw}) when is_binary(pw) and pw != "", do: {:ok, pw}
+  defp parse_password(_), do: {:error, :bad_request}
+
+  @doc """
   GH #189 — GET the on-connect perform list for this `(subject, network)`.
 
   Returns `{perform_list, oper_pass_set}`: the raw command list (nil when
@@ -239,7 +285,7 @@ defmodule GrappaWeb.NetworksController do
   CRLF in the secret); 404 if the credential vanished; 401 without a Bearer.
 
   #124 retired the `nickserv_pass` body key — that secret has ONE home now, the
-  credential password, written through `PATCH /networks/:network_id/identity`.
+  credential password, written through `PUT /networks/:network_id/password`.
   A body still carrying the key earns a 410 rather than a silent drop, so a
   stale cached client cannot pretend it saved a password.
   """

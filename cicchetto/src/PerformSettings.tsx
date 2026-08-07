@@ -15,18 +15,21 @@ import { networks } from "./lib/networks";
 // not just the issue. `$nickserv_pass` / `$oper_pass` keep secrets out of
 // the text; #885's `$nick` is NOT a secret — it expands to the credential's
 // configured nick (not the live one), which is what makes an identify still
-// name the account after a collision parked the session on an alt nick. Both passwords are WRITE-ONLY: the server returns only whether each
-// is set, never the value; the inputs are leave-blank-to-keep, exactly like a
-// password field (mirrors AdminCredentialsTab's edit form). #509 gave
-// `$nickserv_pass` its own field, decoupled from auth_method, so it works even
-// when the credential's password is spent on PASS (server-password/hostmasking).
+// name the account after a collision parked the session on an alt nick.
+// `$oper_pass` is WRITE-ONLY: the server returns only whether it is set, never
+// the value, and the input is leave-blank-to-keep like a password field.
+//
+// #124 removed the sibling `$nickserv_pass` INPUT from this page. The VARIABLE
+// stays and keeps working — it just expands from the per-network password in
+// Settings -> General now. Two editable homes for one secret was the split
+// brain #124 cures: the operator repaired one and the other kept driving the
+// identify. `$oper_pass` keeps its field here because it is a genuinely
+// different secret with no credential column behind it.
 
 const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
   const [listDraft, setListDraft] = createSignal("");
   const [operDraft, setOperDraft] = createSignal("");
   const [operSet, setOperSet] = createSignal(false);
-  const [nickservDraft, setNickservDraft] = createSignal("");
-  const [nickservSet, setNickservSet] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   const [saved, setSaved] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
@@ -39,7 +42,6 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
       .then((view) => {
         setListDraft(view.perform_list ?? "");
         setOperSet(view.oper_pass_set);
-        setNickservSet(view.nickserv_pass_set);
       })
       .catch((err) => setError(friendlyError(err)));
   });
@@ -51,22 +53,18 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
     setError(null);
     setBusy(true);
     try {
-      const body: { perform_list?: string; oper_pass?: string; nickserv_pass?: string } = {
+      const body: { perform_list?: string; oper_pass?: string } = {
         perform_list: listDraft(),
       };
-      // Leave-blank-to-keep: only send a secret when the user typed one, so
-      // saving the list alone never disturbs the stored secrets.
+      // Leave-blank-to-keep: only send the secret when the user typed one, so
+      // saving the list alone never disturbs the stored one.
       const oper = operDraft();
       if (oper !== "") body.oper_pass = oper;
-      const nickserv = nickservDraft();
-      if (nickserv !== "") body.nickserv_pass = nickserv;
 
       const view = await putPerform(t, props.net.slug, body);
       setListDraft(view.perform_list ?? "");
       setOperSet(view.oper_pass_set);
       setOperDraft("");
-      setNickservSet(view.nickserv_pass_set);
-      setNickservDraft("");
       setSaved(true);
     } catch (err) {
       setError(friendlyError(err));
@@ -92,28 +90,6 @@ const PerformNetworkBlock: Component<{ net: Network }> = (props) => {
             setSaved(false);
           }}
         />
-        <div class="perform-secret">
-          <input
-            type="password"
-            class="perform-secret-input"
-            autocapitalize="none"
-            autocorrect="off"
-            spellcheck={false}
-            placeholder="new nickserv password (leave blank to keep)"
-            value={nickservDraft()}
-            data-testid={`perform-nickserv-${props.net.slug}`}
-            onInput={(e) => {
-              setNickservDraft(e.currentTarget.value);
-              setSaved(false);
-            }}
-          />
-          <span
-            class="perform-secret-status"
-            data-testid={`perform-nickserv-status-${props.net.slug}`}
-          >
-            {nickservSet() ? "nickserv pass: set" : "nickserv pass: not set"}
-          </span>
-        </div>
         <div class="perform-secret">
           <input
             type="password"
@@ -182,13 +158,14 @@ const PerformSettings: Component<{ onBack: () => void }> = (props) => {
           here. Write the wire command itself:{" "}
           <code>PRIVMSG NickServ :IDENTIFY $nickserv_pass</code>,{" "}
           <code>OPER myname $oper_pass</code>, <code>MODE $nick +x</code>. Use{" "}
-          <code>$nickserv_pass</code> and <code>$oper_pass</code> so passwords stay out of the text
-          — each expands from its own write-only field below (leave blank to keep the stored value).{" "}
-          <code>$nickserv_pass</code> works on any network, including one whose password is already
-          spent on the server password. <code>$nick</code> expands to your{" "}
-          <strong>configured</strong> nick — not the one you happen to be wearing — so{" "}
-          <code>NS IDENTIFY $nick $nickserv_pass</code> still names your account after a nick
-          collision parked you on an alt nick. Lines starting with <code>#</code> are comments.
+          <code>$nickserv_pass</code> and <code>$oper_pass</code> so passwords stay out of the text.{" "}
+          <code>$oper_pass</code> expands from the write-only field below (leave blank to keep the
+          stored value); <code>$nickserv_pass</code> expands from your{" "}
+          <strong>per-network password</strong> in Settings → General — one field, one stored
+          password. <code>$nick</code> expands to your <strong>configured</strong> nick — not the
+          one you happen to be wearing — so <code>NS IDENTIFY $nick $nickserv_pass</code> still
+          names your account after a nick collision parked you on an alt nick. Lines starting with{" "}
+          <code>#</code> are comments.
         </p>
         <Show
           when={(networks() ?? []).length > 0}

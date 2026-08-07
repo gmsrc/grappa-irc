@@ -84,6 +84,10 @@ defmodule GrappaWeb.ErrorTokens do
           shared_error_token
           | :bad_request
           | :unauthorized
+          # #124 — 410 Gone: the `nickserv_pass` key on PUT /perform is
+          # permanently withdrawn. Its own token so a client can tell "stop
+          # sending this" apart from "retry".
+          | :nickserv_pass_retired
           | :file_too_large
           | :metadata_strip_failed
           | :insufficient_storage

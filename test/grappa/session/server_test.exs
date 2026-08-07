@@ -1743,6 +1743,7 @@ defmodule Grappa.Session.ServerTest do
     # shape a post-fold production row has.
     defp seed_retired_nickserv_column(credential, pass) do
       {:ok, blob} = Grappa.EncryptedBinary.dump(pass)
+
       Repo.query!("UPDATE network_credentials SET nickserv_pass_encrypted = ? WHERE id = ?", [
         blob,
         credential.id

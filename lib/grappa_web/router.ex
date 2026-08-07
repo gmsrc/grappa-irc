@@ -419,6 +419,13 @@ defmodule GrappaWeb.Router do
     get "/perform", NetworksController, :perform
     put "/perform", NetworksController, :update_perform
 
+    # #124 — the per-network PASSWORD field (Settings -> General). A sibling of
+    # `/identity` rather than a key on it: the password is WRITE-ONLY with its
+    # own changeset, its own services-side validation, and leave-blank-to-keep
+    # semantics that clash with identity's "blank clears to default". Same
+    # ResolveNetwork pipeline, so ownership is asserted the same way.
+    put "/password", NetworksController, :update_password
+
     get "/channels", ChannelsController, :index
     post "/channels", ChannelsController, :create
     delete "/channels/:channel_id", ChannelsController, :delete

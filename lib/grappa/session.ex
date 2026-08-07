@@ -72,7 +72,12 @@ defmodule Grappa.Session do
       Grappa.Version,
       Grappa.WindowCounts
     ],
-    exports: [Backoff, Server, Wire]
+    # NSInterceptor is exported for its `vet_password/2` ALONE (#124): the
+    # per-network password field is a second door onto the same credential
+    # secret the on-wire `SET PASSWD` rotates, and both must refuse exactly
+    # what Azzurra's services refuse. Sharing the one chain beats a copy that
+    # drifts. It is a pure module with no process or state behind it.
+    exports: [Backoff, NSInterceptor, Server, Wire]
 
   alias Grappa.IRC.{AuthFSM, CTCP, Identifier}
   alias Grappa.Session.Server

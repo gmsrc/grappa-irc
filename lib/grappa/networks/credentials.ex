@@ -597,6 +597,95 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
+  GH #124 — per-network PASSWORD edit on a `(subject, network)` credential.
+  Backs `PUT /networks/:network_id/password` for BOTH subjects: the one field,
+  writing the one stored secret.
+
+  This is the cure for the split brain. When grappa's stored secret and
+  NickServ's disagree there was previously no way to reconcile them from inside
+  the product; now the operator retypes the real password and the credential is
+  correct again. For a VISITOR the credential password IS the bouncer login
+  credential, so a corrupted secret used to lock them out of grappa itself, not
+  merely out of services.
+
+  Write-only by construction — there is no read side. Routes through the narrow
+  `Credential.password_changeset/2` (the same one the in-session `SET PASSWD`
+  capture uses, so the two doors cannot store different shapes), plus two steps
+  that only this door needs:
+
+    * **`:none` is promoted to `:nickserv_identify`.** A password typed into a
+      credential configured not to identify would otherwise sit there inert.
+      Same promotion, for the same reason, as `commit_visitor_password/3`.
+      ONLY `:none`: rewriting `:sasl` or `:server_pass` would change what the
+      password is SPENT ON and break a working handshake. Those methods keep
+      their password updated by this door — the field edits THE secret for the
+      network, whatever the method spends it on.
+
+    * **Azzurra's own guard chain, when the secret is NickServ-bound.** Storing
+      a password services will always refuse is a silent identify failure — the
+      exact failure mode #124 is about. Shared verbatim with the on-wire door
+      via `Session.NSInterceptor.vet_password/2` rather than copied. Applied
+      ONLY when the resulting `auth_method` is `:nickserv_identify`: a SASL or
+      server password is not spoken to NickServ, and Azzurra's 32-byte cap has
+      no business rejecting a legitimately longer one.
+
+  A blank password never reaches here — the caller drops it (leave-blank-to-keep)
+  and `password_changeset/2`'s `validate_required/2` would refuse it anyway.
+  `{:error, :not_found}` on a concurrent unbind (H14 stale-struct race).
+  """
+  @spec update_credential_password(Credential.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_credential_password(%Credential{} = credential, password)
+      when is_binary(password) do
+    changeset =
+      credential
+      |> Credential.password_changeset(password)
+      |> promote_none_to_nickserv_identify()
+      |> vet_nickserv_password(credential, password)
+
+    case Repo.update(changeset) do
+      {:ok, updated} -> {:ok, Repo.preload(updated, :network)}
+      {:error, _} = err -> err
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  @spec promote_none_to_nickserv_identify(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp promote_none_to_nickserv_identify(changeset) do
+    if Ecto.Changeset.get_field(changeset, :auth_method) == :none,
+      do: Ecto.Changeset.put_change(changeset, :auth_method, :nickserv_identify),
+      else: changeset
+  end
+
+  # Reads auth_method off the CHANGESET, not the row, so it sees the promotion
+  # above: a `:none` credential getting its first password is NickServ-bound
+  # from this write onward and must be vetted as such.
+  @spec vet_nickserv_password(Ecto.Changeset.t(), Credential.t(), String.t()) ::
+          Ecto.Changeset.t()
+  defp vet_nickserv_password(changeset, %Credential{nick: nick}, password) do
+    if Ecto.Changeset.get_field(changeset, :auth_method) == :nickserv_identify do
+      # `nick || ""` — the nick column is nullable (the session plan resolves a
+      # fallback at connect time). An empty nick only makes the chain's
+      # "password equals your nick" arm inert; every other guard still applies.
+      case Session.NSInterceptor.vet_password(password, nick || "") do
+        :ok -> changeset
+        {:error, reason} -> Ecto.Changeset.add_error(changeset, :password, message(reason))
+      end
+    else
+      changeset
+    end
+  end
+
+  # The services notice the value would have earned, in words the operator can
+  # act on. Same vocabulary as `NSInterceptor`'s reject reasons.
+  @spec message(Session.NSInterceptor.vet_reject_reason()) :: String.t()
+  defp message(:password_with_spaces), do: "must not contain spaces"
+  defp message(:insecure_password), do: "must be at least 5 characters and not equal your nick"
+  defp message(:password_max_length), do: "must be at most 32 bytes"
+  defp message(:password_with_ccodes), do: "must not contain control characters"
+
+  @doc """
   GH #189 — per-network ON-CONNECT PERFORM LIST edit on a
   `(subject, network)` credential (the raw command list + its `$oper_pass`
   secret). Backs `PUT /networks/:network_id/perform` for BOTH subjects.
@@ -638,8 +727,8 @@ defmodule Grappa.Networks.Credentials do
   over `PASSMAX` bytes, equal to the nick, control codes) INTO `NSInterceptor`,
   so a value services would refuse never reaches this function. The one
   rejection grappa still cannot foresee is a mistyped OLD password — that one
-  stores a password that didn't take, recovered by #124's
-  re-auth-on-identify-failure prompt.
+  stores a password that didn't take. The operator repairs it by retyping it
+  into the per-network password field (#124, Settings -> General) — `update_credential_password/2` above.
 
   User-bound mirror of the visitor-side `Grappa.Visitors.commit_password/2`.
   The `password` is the SECOND token of `SET PASSWD <old> <new>` (#977 — the

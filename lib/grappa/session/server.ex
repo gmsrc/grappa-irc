@@ -4000,7 +4000,8 @@ defmodule Grappa.Session.Server do
   # authenticated and it's their own deliberate change — success is the
   # common case. A rejected change (Azzurra `do_set_password` refuses
   # insecure / over-PASSMAX / same-as-current) stores a password that
-  # didn't take; #124's re-auth-on-identify-failure prompt is the backstop.
+  # didn't take, which the operator repairs by retyping it into
+  # the per-network password field (#124, Settings -> General).
   #
   # Both credential homes via the same opaque committers the +r path uses,
   # picked per subject: visitors via `visitor_password_rotator`
@@ -4028,8 +4029,8 @@ defmodule Grappa.Session.Server do
   # existed (the struct-key patterns fail to match, so we land on the
   # catch-all rather than crashing). The capture is observed but not
   # persisted; the operator-visible signal is the caller's log line, and
-  # #124's re-auth recovers the now-stale stored password on the next
-  # identify. A cold restart re-inits with the committer wired.
+  # the now-stale stored password is repaired by retyping it into
+  # the per-network password field (#124, Settings -> General). A cold restart re-inits with the committer wired.
   @spec rotate_stored_password(t(), String.t()) :: {{:ok, term()} | {:error, term()}, keyword()}
   defp rotate_stored_password(%{subject: {:visitor, visitor_id}, visitor_password_rotator: rotator}, new_password)
        when is_function(rotator, 2),
