@@ -10276,12 +10276,17 @@ defmodule Grappa.Session.ServerTest do
           end
         end)
 
-      refute inspect(result) =~ sentinel,
-             "the OPER password rode back inside the caller's term — the same term the crash report and the persisted session-log reason are built from"
+      # The SINK is the discriminator here, asserted first. The caller's own
+      # term is NOT: `Session.call_session/3` catches the callee's exit and
+      # maps it to `{:error, :no_session}`, so at this layer the frame never
+      # rides back to the caller either way — it rides into the crash report
+      # and into `SessionLog`'s persisted reason. (The caller-term assertion
+      # belongs one layer down, on `Client.send_oper/3`, where it bites.)
+      refute log =~ sentinel,
+             "the OPER frame reached a log sink — the same reason `terminate/2` persists to session_log_events"
 
-      assert result == {:error, :no_socket}
-      refute log =~ sentinel
       assert Process.alive?(pid), "a /oper during the reconnect window must not take the session down"
+      assert result == {:error, :no_socket}
     end
 
     test "rejects CRLF in name before whereis lookup" do
