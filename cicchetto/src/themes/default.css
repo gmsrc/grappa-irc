@@ -5070,20 +5070,22 @@ html.resize-dragging * {
   }
 }
 
-/* Decorative overlay (`admin/MatrixRain.tsx`). Portalled to `<body>`
-   and painted OVER the pane; `pointer-events: none` so it can never take
-   a tap meant for a control underneath.
+/* Decorative layer (`admin/MatrixRain.tsx`) — absolutely positioned
+   inside `.adm-matrix`, which is already `position: relative` and clips
+   its overflow. Contained in the panel rather than laid over the page:
+   it belongs to the readouts it rains behind.
 
-   The alpha is the design constraint — it has to stay readable-through.
-   Glyph alpha lives in the canvas paint calls; this caps the layer on
-   top of that, and `mix-blend-mode: screen` keeps it from muddying the
-   surfaces it lies over: it adds light rather than painting over. */
+   Under the text, not over it. The scanline pseudo-element and the
+   glyphs both sit below `.adm-matrix`'s own children, which stay legible
+   because the rain is dim and `mix-blend-mode: screen` adds light
+   instead of painting over. `pointer-events: none` so it never takes a
+   tap meant for the panel. */
 .adm-rain {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  z-index: 60;
+  z-index: 0;
   pointer-events: none;
-  opacity: 0.45;
+  opacity: 0.55;
   mix-blend-mode: screen;
 }
 
@@ -5091,6 +5093,17 @@ html.resize-dragging * {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* The readouts sit above the rain. */
+.adm-matrix > *:not(.adm-rain) {
+  position: relative;
+  z-index: 1;
+}
+
+/* The panel is a click target now, so say so. */
+.adm-matrix {
+  cursor: default;
 }
 
 /* Debug tab's phosphor panel.

@@ -22,13 +22,6 @@ export type Props = {
    * renders it instead, and it is never in both places at once.
    */
   hostsRefresh?: boolean;
-  /**
-   * Optional click handler on the card's TITLE. Deliberately does not
-   * turn the title into a `<button>`: it stays a heading in the
-   * accessibility tree, because announcing an action that only decorates
-   * would be a lie to anyone using a screen reader.
-   */
-  onTitleClick?: () => void;
   children: JSX.Element;
   class?: string;
   "data-testid"?: string;
@@ -38,11 +31,7 @@ const AdminCard: Component<Props> = (props) => (
   <section class={`adm-card ${props.class ?? ""}`.trim()} data-testid={props["data-testid"]}>
     <header class="adm-card-head">
       <div>
-        {/* biome-ignore lint/a11y/useKeyWithClickEvents: decorative only —
-            no keyboard action worth exposing. See `onTitleClick`. */}
-        <h3 class="adm-card-title" onClick={props.onTitleClick}>
-          {props.title}
-        </h3>
+        <h3 class="adm-card-title">{props.title}</h3>
         {props.subtitle !== undefined ? <p class="adm-card-sub">{props.subtitle}</p> : null}
       </div>
       <div class="adm-card-actions">

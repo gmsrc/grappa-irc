@@ -180,12 +180,14 @@ const AdminDebugTab: Component = () => {
           </div>
         </AdminCard>
 
-        <AdminCard
-          title="Viewport diagnostics"
-          subtitle="read-only probes, no side effects"
-          onTitleClick={tapHeading}
-        >
-          <div class="adm-matrix">
+        <AdminCard title="Viewport diagnostics" subtitle="read-only probes, no side effects">
+          {/* biome-ignore lint/a11y/useKeyWithClickEvents: decorative only —
+              no keyboard action worth exposing. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: same. */}
+          <div class="adm-matrix" onClick={tapHeading}>
+            <Show when={rainOn()}>
+              <MatrixRain />
+            </Show>
             <p class="adm-matrix-prompt" aria-hidden="true">
               grappa@cicchetto:~$ tail -f /dev/viewport
             </p>
@@ -238,9 +240,6 @@ const AdminDebugTab: Component = () => {
           </div>
         </AdminCard>
       </div>
-      <Show when={rainOn()}>
-        <MatrixRain />
-      </Show>
     </div>
   );
 };

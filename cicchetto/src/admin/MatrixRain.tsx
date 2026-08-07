@@ -1,7 +1,13 @@
 import { type Component, onCleanup, onMount } from "solid-js";
-import { Portal } from "solid-js/web";
 
-// Decorative amber character rain, admin console only.
+// Decorative amber character rain. Absolutely positioned inside its
+// parent, which must be `position: relative` and clip its overflow —
+// today that is `.adm-matrix`, the Debug tab's phosphor panel.
+//
+// Sized off the PARENT box rather than the window: it is a panel effect,
+// not a page overlay, so it must follow the panel through a resize, a
+// keyboard slide-in, or a column reflow. A `ResizeObserver` is the only
+// thing that sees all three; `window.resize` misses the last two.
 //
 // Constraints that are NOT preferences, and why:
 //
@@ -39,13 +45,17 @@ const MatrixRain: Component = () => {
 
     let columns: number[] = [];
     const resize = (): void => {
-      el.width = window.innerWidth;
-      el.height = window.innerHeight;
+      const box = el.parentElement;
+      if (box === null) return;
+      el.width = box.clientWidth;
+      el.height = box.clientHeight;
       columns = new Array(Math.ceil(el.width / FONT_SIZE)).fill(0);
       ctx.font = `${FONT_SIZE}px monospace`;
     };
     resize();
-    window.addEventListener("resize", resize);
+
+    const observer = new ResizeObserver(resize);
+    if (el.parentElement !== null) observer.observe(el.parentElement);
 
     let raf = 0;
     let last = 0;
@@ -73,37 +83,24 @@ const MatrixRain: Component = () => {
 
     onCleanup(() => {
       cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
+      observer.disconnect();
     });
   });
 
-  // Portalled to `<body>` and painted over the pane, not under it. Two
-  // reasons, both load-bearing: `position: fixed` is only
-  // viewport-fixed when no ancestor is transformed, and the shell
-  // transforms for its drawers; and inside the pane the canvas landed
-  // beneath `.adm-scroll`'s opaque background, where it rendered
-  // perfectly and was never visible.
-  //
-  // On top is also the correct look — it is light cast over the room,
-  // not a wallpaper behind furniture — and it is safe because the layer
-  // is `pointer-events: none` and blends by `screen`.
-  //
-  // The canvas sits inside an `aria-hidden` div rather than carrying the
-  // hint itself: a `<canvas>` is focusable, and `aria-hidden` on a
-  // focusable element is a real defect. The wrapper is not focusable, so
-  // the hint belongs there; `tabindex={-1}` keeps the canvas out of the
-  // tab order.
+  // The canvas is `aria-hidden` through a wrapper rather than on itself:
+  // a `<canvas>` is focusable, and `aria-hidden` on a focusable element
+  // is a real defect — a screen-reader user could tab into something
+  // that announces nothing. The wrapper is not focusable, so the hint
+  // belongs there; `tabindex={-1}` keeps the canvas out of the tab order.
   return (
-    <Portal>
-      <div class="adm-rain" aria-hidden="true" data-testid="admin-matrix-rain">
-        <canvas
-          tabindex={-1}
-          ref={(node) => {
-            canvas = node;
-          }}
-        />
-      </div>
-    </Portal>
+    <div class="adm-rain" aria-hidden="true" data-testid="admin-matrix-rain">
+      <canvas
+        tabindex={-1}
+        ref={(node) => {
+          canvas = node;
+        }}
+      />
+    </div>
   );
 };
 
