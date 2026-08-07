@@ -475,6 +475,62 @@ describe("pushAwaySet / pushAwayUnset (S3.4 — /away channel push)", () => {
   });
 });
 
+// #579 — /lusers [<mask> [<server>]]. The two RFC 2812 §3.4.2 args were
+// dropped client-side, so a filtered request silently answered network-wide.
+// These assert the WIRE PAYLOAD, not that a function was called: a null arg
+// must OMIT its key (pushMotd/pushLinks' shape — grappa's
+// `validate_lusers_args/2` clauses match on absent, and an unfiltered LUSERS
+// is what a bare form must still produce), a present one must carry its value.
+describe("pushLusers (#579 — mask + target server on the wire)", () => {
+  const okReply = (): void => {
+    const okCb = h.mockPush.receive.mock.calls.find(([ev]) => ev === "ok")?.[1] as () => void;
+    okCb();
+  };
+
+  it("bare /lusers sends network_id only — no mask, no server key", async () => {
+    localStorage.setItem("grappa-token", "tok-1");
+    const socket = await import("../lib/socket");
+    socket.joinUser("alice");
+
+    const promise = socket.pushLusers(7, null, null);
+    okReply();
+    await promise;
+
+    expect(h.mockChannel.push).toHaveBeenCalledWith("lusers", { network_id: 7 });
+  });
+
+  it("/lusers <mask> carries the mask and still omits server", async () => {
+    localStorage.setItem("grappa-token", "tok-1");
+    const socket = await import("../lib/socket");
+    socket.joinUser("alice");
+
+    const promise = socket.pushLusers(7, "*.azzurra.org", null);
+    okReply();
+    await promise;
+
+    expect(h.mockChannel.push).toHaveBeenCalledWith("lusers", {
+      network_id: 7,
+      mask: "*.azzurra.org",
+    });
+  });
+
+  it("/lusers <mask> <server> carries both", async () => {
+    localStorage.setItem("grappa-token", "tok-1");
+    const socket = await import("../lib/socket");
+    socket.joinUser("alice");
+
+    const promise = socket.pushLusers(7, "*.azzurra.org", "void.azzurra.chat");
+    okReply();
+    await promise;
+
+    expect(h.mockChannel.push).toHaveBeenCalledWith("lusers", {
+      network_id: 7,
+      mask: "*.azzurra.org",
+      server: "void.azzurra.chat",
+    });
+  });
+});
+
 // S21 (codebase review 2026-07-08) — /topic -delete was fire-and-forget:
 // `pushChannelTopicClear` returned void with no `.receive` chain, so a
 // server {:error,_} or a WS-down was swallowed. It now shares the

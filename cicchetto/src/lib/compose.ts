@@ -1510,10 +1510,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: true };
           break;
         }
-        // P-0d — /lusers. Bare verb, no args. Pushes on user-level channel;
+        // P-0d — /lusers [<mask> [<server>]]. Pushes on user-level channel;
         // server emits the 7-numeric LUSERS bundle. cic dispatches the
         // typed `:lusers_bundle` wire event in userTopic.ts and renders
         // the LusersCard pinned at the top of the current window (#231).
+        // #579 — the mask + target server ride along (they were dropped at
+        // the parser, so a filtered request silently answered network-wide).
         case "lusers": {
           const networkId = networkIdBySlug(networkSlug);
           if (networkId === undefined) return { error: "/lusers: network not found" };
@@ -1523,7 +1525,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // auto-emit), so an operator /lusers that skipped this mark
           // would show nothing.
           markLusersRequested(networkSlug);
-          await pushLusers(networkId); // S6 (#364): await verb-ack
+          await pushLusers(networkId, cmd.mask, cmd.server); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
         }

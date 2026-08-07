@@ -712,13 +712,26 @@ export function pushWho(networkId: number, channel: string): Promise<void> {
   return pushUserChannelVerb("who", { network_id: networkId, channel });
 }
 
-// P-0d — /lusers → LUSERS upstream — bare verb, no args. Pushes on
+// P-0d — /lusers [<mask> [<server>]] → LUSERS upstream. Pushes on
 // the user-level channel; server emits the 7-numeric bundle which
 // EventRouter folds and 266 RPL_GLOBALUSERS flushes into a typed
 // :lusers_bundle wire event on Topic.user/1. cic dispatches in
 // userTopic.ts and renders the LusersCard in the current window (#231).
-export function pushLusers(networkId: number): Promise<void> {
-  return pushUserChannelVerb("lusers", { network_id: networkId });
+// #579 — both RFC 2812 §3.4.2 args thread through; a null one OMITS its
+// wire key (pushMotd/pushLinks' optional-arg shape) so grappa's
+// `validate_lusers_args/2` sees the same absent-arg shape a pre-#579
+// client sends. `server` needs `mask`: the parser cannot produce one
+// without the other, and grappa refuses that shape as `:invalid_line`.
+export function pushLusers(
+  networkId: number,
+  mask: string | null,
+  server: string | null,
+): Promise<void> {
+  return pushUserChannelVerb("lusers", {
+    network_id: networkId,
+    ...(mask === null ? {} : { mask }),
+    ...(server === null ? {} : { server }),
+  });
 }
 
 // #127 — /info, /version, /motd. Push on the user-level channel; server

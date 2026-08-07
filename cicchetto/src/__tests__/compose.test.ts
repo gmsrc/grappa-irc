@@ -1309,7 +1309,7 @@ describe("compose submit — slash command dispatch", () => {
   // the incoming bundle surfaces the card. Without the mark, the store's
   // #248 gate drops the bundle (same path the connect-welcome auto-emit
   // takes) and the operator's explicit /lusers would show nothing.
-  it("/lusers marks the request solicited then pushes LUSERS via pushLusers(networkId)", async () => {
+  it("/lusers marks the request solicited then pushes LUSERS via pushLusers(networkId, null, null)", async () => {
     const socket = await import("../lib/socket");
     const lusersBundle = await import("../lib/lusersBundle");
     const compose = await import("../lib/compose");
@@ -1318,7 +1318,33 @@ describe("compose submit — slash command dispatch", () => {
     const result = await compose.submit(k, "freenode", "#a");
 
     expect(lusersBundle.markLusersRequested).toHaveBeenCalledWith("freenode");
-    expect(socket.pushLusers).toHaveBeenCalledWith(1);
+    expect(socket.pushLusers).toHaveBeenCalledWith(1, null, null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #579 — the typed args survive the whole submit path. Pre-#579 the parser
+  // dropped them, so `/lusers <mask>` reached the wire as a bare LUSERS and
+  // the operator silently read network-wide counts instead of the filtered
+  // ones they asked for.
+  it("/lusers <mask> threads the mask through pushLusers", async () => {
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/lusers *.azzurra.org");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushLusers).toHaveBeenCalledWith(1, "*.azzurra.org", null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("/lusers <mask> <server> threads both through pushLusers", async () => {
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/lusers *.azzurra.org void.azzurra.chat");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushLusers).toHaveBeenCalledWith(1, "*.azzurra.org", "void.azzurra.chat");
     expect(result).toEqual({ ok: true });
   });
 
