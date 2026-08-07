@@ -22,13 +22,55 @@ set -eu
 REPO_ROOT="/home/grappa/grappa"
 NGINX_ETC="/usr/local/etc/nginx"
 
+# Test-before-arm. An invalid config must never be LEFT on disk: the running
+# nginx keeps serving whatever it parsed at start, so a broken file is
+# invisible until the next reload or jail restart. That is how a stale
+# address literal turned a config error into an armed mine instead of a clean
+# deploy failure (#599) — `nginx -t` failed, the deploy moved on, and the site
+# stayed up on the in-memory config with an unloadable file underneath it.
+#
+# Validate in PLACE and roll back on failure, rather than staging elsewhere
+# and testing with `-c`/`-p`: `nginx -t` resolves relative includes, log paths
+# and temp paths against the prefix, so only an in-place test exercises the
+# exact bytes and paths nginx will actually load.
+BACKUP="$(mktemp -d)"
+trap 'rm -rf "${BACKUP}"' EXIT
+
+restore_previous() {
+	restored=0
+	if [ -f "${BACKUP}/nginx.conf" ]; then
+		install -o root -g wheel -m 0644 "${BACKUP}/nginx.conf" "${NGINX_ETC}/nginx.conf"
+		restored=1
+	fi
+	if [ -f "${BACKUP}/locations-api.conf" ]; then
+		install -o root -g wheel -m 0644 "${BACKUP}/locations-api.conf" "${NGINX_ETC}/snippets/locations-api.conf"
+		restored=1
+	fi
+	if [ "$restored" -eq 1 ]; then
+		echo "[install_nginx] previous config restored; nginx was NOT reloaded and still serves it"
+	else
+		echo "[install_nginx] no previous config existed — the invalid file is still in place, nginx will not start from it"
+	fi
+}
+
 echo "[install_nginx] copying config + snippet"
+if [ -f "${NGINX_ETC}/nginx.conf" ]; then
+	cp -p "${NGINX_ETC}/nginx.conf" "${BACKUP}/nginx.conf"
+fi
+if [ -f "${NGINX_ETC}/snippets/locations-api.conf" ]; then
+	cp -p "${NGINX_ETC}/snippets/locations-api.conf" "${BACKUP}/locations-api.conf"
+fi
+
 install -o root -g wheel -m 0644 "${REPO_ROOT}/infra/freebsd/nginx.conf" "${NGINX_ETC}/nginx.conf"
 mkdir -p "${NGINX_ETC}/snippets"
 install -o root -g wheel -m 0644 "${REPO_ROOT}/infra/snippets/locations-api.conf" "${NGINX_ETC}/snippets/locations-api.conf"
 
 echo "[install_nginx] nginx -t"
-nginx -t
+if ! nginx -t; then
+	echo "[install_nginx] nginx -t FAILED on the new config — rolling back"
+	restore_previous
+	exit 1
+fi
 
 echo "[install_nginx] sysrc nginx_enable=YES"
 sysrc nginx_enable=YES
