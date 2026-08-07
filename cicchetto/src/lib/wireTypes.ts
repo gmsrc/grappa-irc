@@ -1374,6 +1374,7 @@ export const ERROR_TOKENS_REST_ERROR_TOKEN = [
   ...ERROR_TOKENS_SHARED_ERROR_TOKEN,
   "bad_request",
   "unauthorized",
+  "nickserv_pass_retired",
   "file_too_large",
   "metadata_strip_failed",
   "insufficient_storage",

@@ -427,6 +427,13 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
     case "share_token_consumed":
       // 410 Gone — the visitor share link was already redeemed (one-shot).
       return "This share link has already been used.";
+    case "nickserv_pass_retired":
+      // 410 Gone — #124 retired the perform page's nickserv password input.
+      // Only a stale service-worker-cached bundle can still send the key, so
+      // the copy names the reload AND where the field went: an operator seeing
+      // this is mid-way through repairing a password and must not be left
+      // hunting for it.
+      return "Your app is out of date — reload, then set the password in Settings → General.";
     case "invalid_line":
       // Shared token, REST side — CRLF/NUL in an IRC-bound field (400).
       // Mirrors the channel-side copy for the same token.
