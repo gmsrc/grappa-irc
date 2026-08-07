@@ -23,12 +23,12 @@
 // chromium's layout viewport == its visual viewport (there is no OS
 // keyboard), so it CANNOT reproduce the real iOS layout/visual
 // divergence that triggers the occlusion. This spec therefore asserts
-// the CSS CONTRACT, not the iOS physics: with `--viewport-height` pinned
-// to a keyboard-shrunk value (exactly what `installViewportHeightTracker`
-// writes from `vv.height` on iOS — unit-covered in
-// viewportHeight.test.ts), the modal stays fully inside that visible
-// region. Real on-device occlusion still needs Mezmerize dogfood before
-// final close — flagged on #grappa.
+// the CSS CONTRACT, not the iOS physics: with the visible region shrunk
+// to a keyboard-sized value by the production tracker itself (the same
+// `installViewportHeightTracker` write that `vv.height` drives on iOS —
+// unit-covered in viewportHeight.test.ts), the modal stays fully inside
+// that region. Real on-device occlusion still needs Mezmerize dogfood
+// before final close — flagged on #grappa.
 
 import type { Page } from "@playwright/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
@@ -54,22 +54,60 @@ async function openNamesModal(page: Page) {
 test("#143 — NamesModal stays within the keyboard-shrunk visible viewport", async ({ page }) => {
   const modal = await openNamesModal(page);
 
-  // Simulate the iOS keyboard-up state: pin the visible-region var to a
-  // value far below the window height. `installViewportHeightTracker`
-  // would write this from `vv.height`; we set it directly because
-  // chromium has no keyboard to shrink the visual viewport.
+  // Simulate the iOS keyboard-up state the way docs/TESTING.md mandates
+  // and issue66/issue253 already do: stub the SOURCE (`vv.height`) and
+  // dispatch the `resize` the production code listens for, so
+  // `installViewportHeightTracker` — the single writer of both vars
+  // (lib/viewportHeight.ts:110) — shrinks the region itself.
+  //
+  // A bare `setProperty("--viewport-height", …)` is the documented trap,
+  // and it is what this spec used to do: the tracker re-reads the REAL
+  // `vv.height` on resize, focus, visibilitychange, pageshow AND a
+  // post-boot settle schedule, so any one of them silently restores the
+  // full height mid-test. Stubbing the source makes EVERY one of those
+  // writes land on FAKE_VISIBLE_PX instead of racing them — the pin
+  // survives the writer rather than being clobbered by it.
   await page.evaluate((px) => {
-    document.documentElement.style.setProperty("--viewport-height", `${px}px`);
+    const vv = window.visualViewport;
+    if (!vv) throw new Error("names143 spec: window.visualViewport unavailable");
+    Object.defineProperty(vv, "height", { configurable: true, get: () => px });
+    vv.dispatchEvent(new Event("resize"));
   }, FAKE_VISIBLE_PX);
+
+  // Guard: the shrink is in effect BEFORE any geometry is read, so a
+  // failure below means "the modal overflows the visible region" (the
+  // #143 bug) and never "the simulation didn't take".
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() =>
+          document.documentElement.style.getPropertyValue("--viewport-height").trim(),
+        ),
+      { timeout: 5_000 },
+    )
+    .toBe(`${FAKE_VISIBLE_PX}px`);
 
   // The modal must stay fully inside [0, FAKE_VISIBLE_PX]; its bottom
   // edge cannot fall into the keyboard region. Pre-fix, the backdrop
   // centered in the full layout viewport, parking the lower half below.
+  // Polled, not read once: the re-centre is a layout pass the resize
+  // schedules. The poll reports the offending number on failure, which
+  // is what made the clobber diagnosable in the first place.
+  await expect
+    .poll(
+      async () => {
+        const box = await modal.boundingBox();
+        return box ? box.y + box.height : Number.POSITIVE_INFINITY;
+      },
+      { timeout: 5_000 },
+    )
+    .toBeLessThanOrEqual(FAKE_VISIBLE_PX + 1);
+
+  // Top edge, from the now-settled layout the poll above proved landed.
   const box = await modal.boundingBox();
   expect(box).not.toBeNull();
   if (box) {
     expect(box.y).toBeGreaterThanOrEqual(-1);
-    expect(box.y + box.height).toBeLessThanOrEqual(FAKE_VISIBLE_PX + 1);
   }
 });
 
