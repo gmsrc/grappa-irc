@@ -392,13 +392,31 @@ TEST(the_terminal_reads_the_invites_sfu) {
  * through the queue, and that the page it asks for is bounded by the
  * window's own oldest row rather than by wall-clock or by nothing. */
 TEST(the_top_of_a_pane_asks_for_what_came_before_it) {
-    /* Asked from the measuring pass, which is the only thing that knows
-     * where the top is — and AFTER the clamp, or the offset compared
-     * against max_offset is one the pane never actually had. */
-    size_t clamp = (size_t)(strstr(source, "pane->scroll_offset = (size_t)max_offset;") - source);
+    /* Asked only from INSIDE the at_top branch: the walk is the one
+     * thing that knows the pane reached the oldest row the buffer holds
+     * for this window, and that — not the scroll gesture on its own — is
+     * what a fetch answers. */
+    const char *top = strstr(source, "    if (view.at_top) {");
     const char *ask = strstr(source, "if (history_wanted(pane->scroll_pinned");
-    CHECK(ask != NULL && (size_t)(ask - source) > clamp);
+    const char *after = top ? strstr(top, "\n    }\n") : NULL;
+    CHECK(top != NULL && ask != NULL && after != NULL);
+    CHECK(ask > top && ask < after);
     CHECK(strstr(source, "request_older_history_locked(app, w);") != NULL);
+
+    /* And the walk itself never leaves the process. Scrolling moves a
+     * window over the buffer that is already here; the buffer running
+     * out is a different event, and it is the only one that reaches
+     * grappa. A fetch inside the walk would put an HTTP round trip on
+     * the draw path once per frame. */
+    const char *walk = strstr(source, "static void pane_view_collect(");
+    CHECK(walk != NULL);
+    size_t walk_len = (size_t)(strstr(walk, "\n}\n") - walk);
+    char *body = strndup(walk, walk_len);
+    CHECK(body != NULL);
+    CHECK(strstr(body, "http_request") == NULL);
+    CHECK(strstr(body, "enqueue_job") == NULL);
+    CHECK(strstr(body, "fetch_") == NULL);
+    free(body);
 
     /* Through the queue: an HTTP round trip on the draw path would stop
      * the client for as long as the bouncer took to answer. */

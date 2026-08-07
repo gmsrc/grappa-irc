@@ -3048,25 +3048,205 @@ TEST(a_page_keeps_its_place_when_another_window_is_cleared) {
 /* Reaching the top is a GESTURE, and every one of these guards is a way
  * of asking that is not one. */
 TEST(only_a_reader_at_the_top_asks_for_more) {
-    /* Scrolled up, and there is nothing above: ask. */
-    CHECK(history_wanted(true, 40, 40, true, false, false));
-    /* Scrolled up but not to the top: there is more in the buffer. */
-    CHECK(!history_wanted(true, 20, 40, true, false, false));
+    /* Scrolled up, and the walk ran out of rows above: ask. */
+    CHECK(history_wanted(true, true, true, false, false));
+    /* The walk still had rows above the region — there is more to show
+     * before there is more to fetch. */
+    CHECK(!history_wanted(true, false, true, false, false));
     /* Not pinned. A short window shows its top from the moment it opens,
      * and opening a quiet channel is not a request to read its 2019. */
-    CHECK(!history_wanted(false, 0, 0, true, false, false));
-    /* PgUp in a window with nowhere left to go IS the request: the
-     * offset is set before the draw clamps it. */
-    CHECK(history_wanted(true, 10, 0, true, false, false));
+    CHECK(!history_wanted(false, true, true, false, false));
     /* One page at a time. The trigger fires from the draw path, so
      * without this a pane parked at the top asks every frame. */
-    CHECK(!history_wanted(true, 40, 40, true, true, false));
+    CHECK(!history_wanted(true, true, true, true, false));
     /* The server said there is nothing older. */
-    CHECK(!history_wanted(true, 40, 40, true, false, true));
+    CHECK(!history_wanted(true, true, true, false, true));
     /* No room in the ring: an inserted row would evict the row it was
      * inserted above, and the window would page backwards forever
      * without ever growing. Not latched — free a row and it resumes. */
-    CHECK(!history_wanted(true, 40, 40, false, false, false));
+    CHECK(!history_wanted(true, true, false, false, false));
+}
+
+/* ── The pane's moving window over the buffer ──────────────────────────
+ *
+ * The frame used to measure every row in scope into arrays as long as
+ * the buffer, on the stack, which is what kept the buffer at 2000 rows.
+ * It walks back from the newest and stops instead. These are the numbers
+ * that walk has to get right, and they are the numbers a screenshot
+ * cannot show. */
+
+static struct app *view_app(size_t rows) {
+    struct app *app = window_app();
+    if (!app) return NULL;
+    add_window(app, "azzurra", "#sniffo");
+    for (size_t k = 0; k < rows; k++) {
+        char *line = xasprintf("[azzurra/#sniffo] 10:00 <alice> line %zu", k);
+        pthread_mutex_lock(&app->lock);
+        log_push_locked(app, line, false, false);
+        pthread_mutex_unlock(&app->lock);
+    }
+    return app;
+}
+
+/* Every row here is one line wide, so lines and rows are the same number
+ * and the arithmetic is readable. */
+static void collect_at(struct app *app, size_t offset, int scroll_h, struct pane_view *v) {
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
+    pthread_mutex_lock(&app->lock);
+    pane_view_collect(app, scope, app->log_count, 200, scroll_h, offset, v);
+    pthread_mutex_unlock(&app->lock);
+}
+
+TEST(a_frame_looks_at_the_region_and_not_the_buffer) {
+    struct app *app = view_app(500);
+    CHECK(app != NULL);
+    struct pane_view v;
+
+    /* At the bottom of 500 rows with a 10-line region: ten rows, the
+     * newest last, and nothing above them measured. */
+    collect_at(app, 0, 10, &v);
+    CHECK_LONG(v.count, 10);
+    CHECK(strstr(app->log[v.rows[9]], "line 499") != NULL);
+    CHECK(strstr(app->log[v.rows[0]], "line 490") != NULL);
+    CHECK_LONG(v.skip_lines, 0);
+    CHECK(!v.at_top);
+
+    /* Scrolled up 100 lines: the window MOVED. Still ten rows, and still
+     * only ten — the cost of a frame is the region, not the distance. */
+    collect_at(app, 100, 10, &v);
+    CHECK_LONG(v.count, 10);
+    CHECK(strstr(app->log[v.rows[9]], "line 399") != NULL);
+    CHECK(strstr(app->log[v.rows[0]], "line 390") != NULL);
+    CHECK(!v.at_top);
+
+    free_app(app);
+}
+
+TEST(the_walk_says_when_it_ran_out_of_rows) {
+    struct app *app = view_app(20);
+    CHECK(app != NULL);
+    struct pane_view v;
+
+    /* 20 rows, a 10-line region, scrolled up 10: the region starts at the
+     * oldest row exactly. There is nothing above it, and the walk has to
+     * say so — landing precisely on the boundary is the case that leaves
+     * "is there another row" unanswered unless it is asked. */
+    collect_at(app, 10, 10, &v);
+    CHECK(v.at_top);
+    CHECK_LONG(v.content_lines, 20);
+    CHECK(strstr(app->log[v.rows[0]], "line 0") != NULL);
+
+    /* One line short of the top: more above, so not at_top. */
+    collect_at(app, 9, 10, &v);
+    CHECK(!v.at_top);
+
+    /* A window that fits entirely in the region is at its top from the
+     * first frame — which is why the trigger also wants `pinned`. */
+    collect_at(app, 0, 40, &v);
+    CHECK(v.at_top);
+    CHECK_LONG(v.count, 20);
+    CHECK_LONG(v.content_lines, 20);
+    CHECK_LONG(v.skip_lines, 0);
+
+    free_app(app);
+}
+
+/* A row is several lines and the offset is counted in lines, so the
+ * topmost row in view is usually only PARTLY on screen. The draw pass
+ * spends exactly what the walk reserved; getting this number wrong is
+ * how a client ends up permanently one line behind. */
+TEST(the_topmost_row_in_view_is_cut_where_the_region_starts) {
+    struct app *app = window_app();
+    CHECK(app != NULL);
+    add_window(app, "azzurra", "#sniffo");
+    /* Three rows of three lines each at width 20: nine lines of content
+     * for a region of five. */
+    for (int k = 0; k < 3; k++) {
+        char *line = xasprintf("[azzurra/#sniffo] %d aaaaaaaa bbbbbbbb cccccccc", k);
+        pthread_mutex_lock(&app->lock);
+        log_push_locked(app, line, false, false);
+        pthread_mutex_unlock(&app->lock);
+    }
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
+
+    struct pane_view v;
+    pthread_mutex_lock(&app->lock);
+    int h = message_display_lines(app->log[0], 20 - 2);
+    pane_view_collect(app, scope, app->log_count, 20, 5, 0, &v);
+    pthread_mutex_unlock(&app->lock);
+    CHECK(h > 1); /* the premise: these rows really do wrap */
+
+    /* The region is 5 lines. Rows are taken until they cover it, so the
+     * top one hangs over by however much the last row overshot. */
+    int spanned = 0;
+    for (size_t k = 0; k < v.count; k++) spanned += v.heights[k];
+    CHECK_LONG(v.skip_lines, spanned - 5);
+    CHECK(v.skip_lines > 0);
+    /* And the NEWEST row is always the last one in view: the offset is
+     * counted from the bottom, so the bottom is what is anchored. */
+    CHECK_LONG(v.rows[v.count - 1], app->log_count - 1);
+
+    free_app(app);
+}
+
+/* The divider is a property of the ROW, not of the region.
+ *
+ * The walk runs newest-first, and newest-first "the first unread row" is
+ * not knowable until an older read row proves it — so it is decided by
+ * its own scan beforehand. Deciding it per-region instead would re-anchor
+ * the divider to whatever is at the top of the screen, which is the bug
+ * that spent a reserved line on a row no longer drawn and clipped the
+ * newest message off the bottom every frame. */
+TEST(the_unread_divider_belongs_to_a_row_not_to_the_screen) {
+    struct app *app = view_app(40);
+    CHECK(app != NULL);
+    struct window *w = &app->windows[0];
+    /* Rows carry ids 1..40; the cursor has covered the first 30. */
+    pthread_mutex_lock(&app->lock);
+    for (size_t k = 0; k < app->log_count; k++) app->log_ids[k] = (long)k + 1;
+    w->last_read_id = 30;
+    char scope[MAX_SLUG + MAX_CHANNEL + 8];
+    window_scope_key("azzurra", "#sniffo", scope, sizeof(scope));
+    size_t divider = window_divider_row_locked(app, w, scope);
+    pthread_mutex_unlock(&app->lock);
+
+    /* Row 30 holds id 31 — the oldest one the cursor has not covered. */
+    CHECK_LONG(divider, 30);
+
+    struct pane_view v;
+    pthread_mutex_lock(&app->lock);
+    pane_view_collect(app, scope, divider, 200, 10, 0, &v);
+    pthread_mutex_unlock(&app->lock);
+    /* At the bottom the region holds rows 30..39, and the divider is at
+     * the top of it — reserved a line, so its height is one more than
+     * the rows around it. */
+    CHECK_LONG(v.rows[0], 30);
+    CHECK_LONG(v.divider_vi, 0);
+    CHECK_LONG(v.heights[0], v.heights[1] + 1);
+
+    /* And now the case the whole arrangement exists for: a region made
+     * ENTIRELY of unread rows, whose divider row sits just above it.
+     * Rows 31..35 with a 5-line region — every one of them past the
+     * cursor, and none of them the first.
+     *
+     * A divider decided from what is on screen would mark row 31 and
+     * spend a line on it. That is the re-anchoring bug: the line was
+     * reserved for a row that is no longer drawn, the budget is paid at
+     * the BOTTOM, and the newest message is clipped away every frame —
+     * a client permanently one line behind. Nothing in view carries the
+     * divider, so nothing draws one. */
+    pthread_mutex_lock(&app->lock);
+    pane_view_collect(app, scope, divider, 200, 5, 4, &v);
+    pthread_mutex_unlock(&app->lock);
+    CHECK_LONG(v.rows[0], 31);
+    CHECK_LONG(v.rows[v.count - 1], 35);
+    CHECK(app->log_ids[v.rows[0]] > w->last_read_id); /* the premise */
+    CHECK_LONG(v.divider_vi, -1);
+    for (size_t k = 0; k < v.count; k++) CHECK_LONG(v.heights[k], v.text_heights[k]);
+
+    free_app(app);
 }
 
 /* The bot's door, not its judgement.
@@ -4778,6 +4958,10 @@ int main(void) {
     RUN(a_page_is_asked_for_before_the_oldest_and_written_above_the_first);
     RUN(a_page_keeps_its_place_when_another_window_is_cleared);
     RUN(only_a_reader_at_the_top_asks_for_more);
+    RUN(a_frame_looks_at_the_region_and_not_the_buffer);
+    RUN(the_walk_says_when_it_ran_out_of_rows);
+    RUN(the_topmost_row_in_view_is_cut_where_the_region_starts);
+    RUN(the_unread_divider_belongs_to_a_row_not_to_the_screen);
     RUN(a_conversation_reaches_the_bot_and_a_join_does_not);
     RUN(a_preference_survives_a_restart);
     RUN(an_identity_keeps_its_notes_across_the_rename);

@@ -274,28 +274,39 @@ binding that does not fire is then a bug report with a number in it.
 
 ### Scrolling past the beginning
 
-A window opens with its last 80 messages. **Keep scrolling up and it asks
-grappa for the 80 before those**, and the 80 before those — the same
-gesture cicchetto pages on, and the same `?before=` cursor underneath it.
-Nothing to turn on and nothing to type: reaching the top of a pane is the
-request. Pressing `PgUp` in a window already showing everything it has
-counts as reaching the top, so a short window can be paged too.
+A window opens with its last 80 messages, and the client holds **one ring
+of 20000 lines shared by every window**. Two different things happen when
+you scroll up, and it is worth knowing which is which:
+
+- **Inside the ring**, scrolling is a moving window over what is already
+  here. No round trip, however far back you go.
+- **At the oldest row the ring holds for that window**, it asks grappa
+  for the 80 before it — the same gesture cicchetto pages on, and the
+  same `?before=` cursor underneath. Nothing to turn on and nothing to
+  type. Pressing `PgUp` in a window already showing everything it has
+  counts as reaching the top, so a short window can be paged too.
 
 The new rows land **above** what you were reading, so the view does not
 jump — the offset is measured from the bottom, and what arrives arrives
 over your head.
 
-Two things stop it, and they say different things:
+Two things stop the fetching, and they say different things:
 
 - The server answers with an empty page. That is the beginning of the
   channel, and the window stops asking for the session.
-- The buffer fills. Scrollback is **one ring of 2000 lines shared by
-  every window**, so the client says `scrollback buffer full (2000
-  lines) — older history stops here` rather than letting you believe you
-  reached 2019. `/clear` frees it; the bouncer still has everything.
+- The ring fills. The client says `scrollback buffer full (20000 lines) —
+  older history stops here` rather than letting you believe you reached
+  2019. `/clear` frees it; the bouncer still has everything.
 
 A failed request is neither: it says so and leaves the question open, so
 scrolling up again asks again.
+
+**What a frame costs.** A pane measures the rows it is showing, not the
+rows it is holding: the draw walks back from the newest and stops as soon
+as it has covered the region. That is what let the ring grow — it used to
+measure every row in scope, every frame, into arrays as long as the
+buffer. Sitting at the bottom of a full 20000-line ring is now cheaper
+than sitting at the bottom of the old 2000-line one.
 
 ## The userlist
 

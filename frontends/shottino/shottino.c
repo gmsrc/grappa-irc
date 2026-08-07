@@ -99,7 +99,18 @@
 #define MAX_SLUG 128
 #define MAX_LINE 1024
 #define MAX_TOPIC 4096
-#define LOG_LINES 2000
+/* The scrollback ring, shared by every window.
+ *
+ * It used to be 2000, and the ceiling was not the memory — it was the
+ * DRAW path, which measured every row in scope on every frame into three
+ * arrays of LOG_LINES on the stack. Raising the buffer raised the stack
+ * cost of a frame with it, so the buffer could not grow.
+ *
+ * The frame works over a moving window now (see struct pane_view): it
+ * walks back from the newest row and stops as soon as it has covered the
+ * region, so what a frame costs is what you are LOOKING at, not what you
+ * are holding. The buffer is free to be as big as it is worth. */
+#define LOG_LINES 20000
 /* One page of scrollback, wherever it is asked for: the first load of a
  * window and every scroll-to-the-top after it. Two numbers would mean a
  * window that pages back in a different stride than it opened with, for
@@ -1989,6 +2000,38 @@ static long window_oldest_id_locked(const struct app *app, const char *scope) {
     return oldest;
 }
 
+/* The row the unread divider sits above: the OLDEST row this window
+ * holds that the server's read cursor has not covered, or log_count when
+ * there is none.
+ *
+ * Found BEFORE anything is measured, and by its own scan, because the
+ * measuring walk cannot answer it. That walk runs newest-first (see
+ * pane_view_collect), and newest-first a row is only known to be the
+ * FIRST unread once an older read row has proved it — which is after its
+ * height was already spent. Adding the divider's line to a row already
+ * measured is precisely the after-the-fact adjustment that every
+ * "a line went missing" bug in this client has been.
+ *
+ * Cheap: ids and scopes, no wrapping, and it stops at the first row the
+ * cursor covers — a few rows down in the steady state. It reads the ids
+ * as ASCENDING within a window, which is what both the append and the
+ * history insert maintain. Caller holds app->lock. */
+static size_t window_divider_row_locked(const struct app *app, const struct window *w,
+                                        const char *scope) {
+    if (w->last_read_id <= 0) return app->log_count;
+    size_t divider = app->log_count;
+    size_t i = app->log_count;
+    while (i > 0) {
+        i--;
+        if (!log_row_in_scope(app, i, scope)) continue;
+        /* Operational rows carry no id and are neither read nor unread. */
+        if (app->log_ids[i] <= 0) continue;
+        if (app->log_ids[i] <= w->last_read_id) break;
+        divider = i;
+    }
+    return divider;
+}
+
 /* Where a page of older history goes: above the window's FIRST row —
  * not above the row carrying the oldest id. The "joined #chan" line
  * written before the first message is part of what the window showed at
@@ -2007,23 +2050,25 @@ static size_t window_first_row_locked(const struct app *app, const char *scope) 
  * Pure, and kept out of the draw path that feeds it, because the
  * question is arithmetic and arithmetic wants a test.
  *
- * `pinned` is what makes this a GESTURE rather than a state. A pane
- * shows its top the moment its window is short enough to fit, and
- * paging back through a quiet channel nobody asked about is not what
- * opening it means. Pinned means somebody scrolled — including PgUp in
- * a window with nowhere left to go, since the offset is set before the
- * draw clamps it, and that is precisely a person saying "further back"
- * to a pane already showing everything it has.
+ * `at_top` comes from the walk, which is the only thing that knows: it
+ * means the walk ran out of rows in this window before it had covered
+ * the region, so what is on screen reaches the oldest row there is.
+ *
+ * `pinned` is what makes it a GESTURE rather than a state. A pane shows
+ * its top the moment its window is short enough to fit, and paging back
+ * through a quiet channel nobody asked about is not what opening it
+ * means. Pinned means somebody scrolled — including PgUp in a window
+ * with nowhere left to go, which is precisely a person saying "further
+ * back" to a pane already showing everything it has.
  *
  * `room` because the buffer is one ring shared by every window. With
  * none left, a row inserted at the top evicts the row it was inserted
  * above: the window would page backwards forever without ever growing.
  * Not an exhausted latch — free a row and there is more to be had. */
-static bool history_wanted(bool pinned, size_t scroll_offset, int max_offset, bool room,
-                           bool inflight, bool exhausted) {
-    if (!pinned || inflight || exhausted || !room) return false;
-    return (int)scroll_offset >= max_offset;
+static bool history_wanted(bool pinned, bool at_top, bool room, bool inflight, bool exhausted) {
+    return pinned && at_top && room && !inflight && !exhausted;
 }
+
 
 /* Ask the bouncer for the page before this window's oldest row.
  *
@@ -8667,6 +8712,151 @@ static size_t draw_member_list(struct app *app, struct window *w, int y, int x, 
     return row;
 }
 
+/* How many rows one pane can hold in view at once.
+ *
+ * A region is `scroll_h` lines and a row is at least one line, so it
+ * takes at most `scroll_h` rows to fill, plus the two that straddle its
+ * edges. This is a ceiling on a terminal PANE's height, not on the
+ * buffer — which is the whole point of the walk below. */
+#define PANE_VIEW_ROWS 1024
+
+/* The rows one frame will actually consider, and what they measure.
+ *
+ * Sized by the pane rather than by the buffer: the arrays this replaced
+ * were LOG_LINES long and lived on the draw path's stack, which is what
+ * pinned the buffer at 2000 rows for as long as it was. */
+struct pane_view {
+    size_t rows[PANE_VIEW_ROWS]; /* log indices, OLDEST first */
+    int heights[PANE_VIEW_ROWS]; /* total: text + divider + picture */
+    int text_heights[PANE_VIEW_ROWS];
+    size_t count;
+    /* Lines of rows[0] that sit above the region — a row is several
+     * lines and the offset is counted in lines, so the topmost one is
+     * usually only partly on screen. */
+    int skip_lines;
+    /* Which row in view carries the unread divider, -1 for none. */
+    int divider_vi;
+    /* The walk reached the oldest row this window has: there is nothing
+     * above what is on screen. */
+    bool at_top;
+    /* Total height of the window's rows — known ONLY when at_top, since
+     * that is the only case where the walk saw all of them. */
+    int content_lines;
+};
+
+/* Collect the rows this pane will draw, newest first, and stop.
+ *
+ * The buffer holds far more than a pane can show, so a frame that
+ * measured all of it would pay for history nobody is looking at — and
+ * would need somewhere as big as the buffer to put the answer. The
+ * offset counts lines from the BOTTOM, which is what makes backwards the
+ * natural direction: the walk stops as soon as it has covered the
+ * region, so a frame costs what you are looking at plus how far you
+ * scrolled, never how much you are holding.
+ *
+ * `divider_row` is decided before this runs, by
+ * window_divider_row_locked — see there for why it cannot be decided
+ * here. Caller holds app->lock. */
+static void pane_view_collect(struct app *app, const char *scope, size_t divider_row, int width,
+                              int scroll_h, size_t scroll_offset, struct pane_view *v) {
+    v->count = 0;
+    v->skip_lines = 0;
+    v->divider_vi = -1;
+    v->at_top = true;
+    v->content_lines = 0;
+
+    /* Lines wanted, counted up from the bottom of the newest row: the
+     * region itself, plus everything scrolled past to reach it. */
+    int want = (int)scroll_offset + scroll_h;
+    int acc = 0;
+    int below = 0; /* lines under the first row taken into view */
+    size_t n = 0;
+    size_t i = app->log_count;
+    while (i > 0) {
+        i--;
+        if (!log_row_in_scope(app, i, scope)) continue;
+        int th = message_display_lines(app->log[i], width - 2);
+        if (th < 1) th = 1;
+        int h = th;
+        /* The divider occupies a row of its own above the first unread
+         * message, and the DRAW pass spends one. Reserved here or the
+         * budget is a line short of what gets drawn, the content
+         * overflows the region by one, and the bottom line — the newest
+         * message — never appears. */
+        if (i == divider_row) h += 1;
+        /* A picture reserves rows UNDER its message line. The height is
+         * known before the decode (the cell box comes from the available
+         * width), so the layout does not jump when the decode lands. */
+        int mi = app->log_media[i];
+        if (mi >= 0 && mi < (int)app->media_count) {
+            struct inline_media *m = &app->media[mi];
+            if (m->rows <= 0) {
+                int box_rows = INLINE_MAX_ROWS;
+                if (box_rows > scroll_h / 2) box_rows = scroll_h / 2;
+                if (box_rows < 3) box_rows = 3;
+                /* Aspect is unknown until decode; assume 4:3, which is
+                 * close enough that the reserved box rarely changes. */
+                media_fit_cells(4, 3, width - 4, box_rows, &m->cols, &m->rows);
+            }
+            h += media_extra_rows_locked(m);
+        }
+        /* This row occupies lines [acc, acc + h) up from the bottom. It
+         * is taken into view when that span meets the region — rows
+         * entirely below it are scrolled past and cost nothing but the
+         * measuring, and rows entirely above it end the walk. */
+        if (acc < want && acc + h > (int)scroll_offset) {
+            if (n == 0) below = acc;
+            if (n == PANE_VIEW_ROWS) {
+                /* A pane taller than the ceiling. Cannot happen on a real
+                 * terminal, and stopping is the honest answer: the region
+                 * is full of rows either way, and there IS more above. */
+                v->at_top = false;
+                break;
+            }
+            v->rows[n] = i;
+            v->heights[n] = h;
+            v->text_heights[n] = th;
+            n++;
+        }
+        acc += h;
+        /* Strictly greater, not >=: landing exactly on the boundary
+         * leaves "is there another row above" unanswered, and that
+         * question is what at_top IS. One more row settles it — or the
+         * loop ends, which settles it the other way. */
+        if (acc > want) {
+            v->at_top = false;
+            break;
+        }
+    }
+    v->content_lines = acc;
+
+    /* The rows came out newest first; the draw pass walks a pane top
+     * down. Reversed in place rather than into a second array — that
+     * array is the thing this walk exists to not need. */
+    for (size_t k = 0; k < n / 2; k++) {
+        size_t j = n - 1 - k;
+        size_t r = v->rows[k];
+        int hh = v->heights[k], tt = v->text_heights[k];
+        v->rows[k] = v->rows[j];
+        v->heights[k] = v->heights[j];
+        v->text_heights[k] = v->text_heights[j];
+        v->rows[j] = r;
+        v->heights[j] = hh;
+        v->text_heights[j] = tt;
+    }
+    v->count = n;
+
+    int spanned = 0;
+    for (size_t k = 0; k < n; k++) {
+        spanned += v->heights[k];
+        if (v->rows[k] == divider_row) v->divider_vi = (int)k;
+    }
+    /* What the rows in view cover, less what the region wants, is the
+     * part of the topmost one that is above it. */
+    v->skip_lines = below + spanned - want;
+    if (v->skip_lines < 0) v->skip_lines = 0;
+}
+
 /* Draw one chat pane: its own header band, its own scrollback view.
  *
  * Everything that used to be "the chat area" lives here, parameterised by
@@ -8821,63 +9011,37 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
 
     char wanted_prefix[MAX_SLUG + MAX_CHANNEL + 8];
     window_scope_key(w->network, w->channel, wanted_prefix, sizeof(wanted_prefix));
-    size_t visible[LOG_LINES];
-    int heights[LOG_LINES];
-    size_t visible_count = 0;
-    static int text_heights[LOG_LINES];
-    /* Which visible row carries the unread divider, decided ONCE here and
-     * obeyed verbatim by the draw pass below. -1 = no divider this frame. */
-    int divider_vi = -1;
-    int total_visible_lines = 0;
-    for (size_t i = 0; i < app->log_count; i++) {
-        if (log_row_in_scope(app, i, wanted_prefix)) {
-            visible[visible_count] = i;
-            heights[visible_count] = message_display_lines(app->log[i], width - 2);
-            if (heights[visible_count] < 1) heights[visible_count] = 1;
-            /* The TEXT height, kept apart from the total below. Conflating
-             * the two put the image after text+image rows instead of
-             * after the text, and double-counted it in used_lines — which
-             * pushed later rows past the scroll region and over the input
-             * box, leaving the client looking dead. */
-            text_heights[visible_count] = heights[visible_count];
-            /* The unread divider occupies a row of its own above the first
-             * unread message, and the DRAW pass spends one (`used_lines +=
-             * 1`). Measuring has to reserve it too: otherwise the budget is
-             * a line short of what gets drawn, the content overflows the
-             * region by one, and the bottom line — the newest message —
-             * never appears. Reserved on the same row the draw pass tests,
-             * so the two agree — and the ROW is recorded, not just the fact
-             * that one was reserved: see the draw pass. */
-            if (divider_vi < 0 && w->last_read_id > 0 &&
-                app->log_ids[i] > w->last_read_id) {
-                heights[visible_count] += 1;
-                divider_vi = (int)visible_count;
-            }
-            /* An image reserves rows UNDER its message line. The height is
-             * known before the picture is decoded (the cell box is chosen
-             * from the available width), so the layout does not jump when
-             * the decode lands. */
-            int mi = app->log_media[i];
-            if (mi >= 0 && mi < (int)app->media_count) {
-                struct inline_media *m = &app->media[mi];
-                if (m->rows <= 0) {
-                    int box_rows = INLINE_MAX_ROWS;
-                    if (box_rows > scroll_h / 2) box_rows = scroll_h / 2;
-                    if (box_rows < 3) box_rows = 3;
-                    /* Aspect is unknown until decode; assume 4:3, which is
-                     * close enough that the reserved box rarely changes. */
-                    media_fit_cells(4, 3, width - 4, box_rows, &m->cols, &m->rows);
-                }
-                heights[visible_count] += media_extra_rows_locked(m);
-            }
-            total_visible_lines += heights[visible_count];
-            visible_count++;
+    size_t divider_row = window_divider_row_locked(app, w, wanted_prefix);
+    struct pane_view view;
+    pane_view_collect(app, wanted_prefix, divider_row, width, scroll_h, pane->scroll_offset, &view);
+    /* Scrolled past the top — the offset is bumped by whole pages and
+     * only the walk knows where the content ends. Now that it does, the
+     * offset is corrected and the walk redone against it: the first walk
+     * was measured for a region that is not there, and its rows would
+     * leave the pane blank. Only ever ONE retry, and only on the frame
+     * the over-scroll happened: from the next one the offset already
+     * equals the extent. */
+    if (view.at_top) {
+        int extent = view.content_lines > scroll_h ? view.content_lines - scroll_h : 0;
+        if ((int)pane->scroll_offset > extent) {
+            pane->scroll_offset = (size_t)extent;
+            pane_view_collect(app, wanted_prefix, divider_row, width, scroll_h,
+                              pane->scroll_offset, &view);
         }
+        /* Reaching the top of a pane is the ask for what came before it —
+         * the same gesture cicchetto pages on, and it is read HERE
+         * because the walk is the only thing that knows the top was
+         * reached. The offset counts lines from the BOTTOM, so a page
+         * landing above the view leaves the view exactly where it was;
+         * the rows the reader is looking at do not move under them. */
+        if (history_wanted(pane->scroll_pinned, true, app->log_count < LOG_LINES,
+                           w->history_inflight, w->history_exhausted))
+            request_older_history_locked(app, w);
     }
     /* Layout diagnostic, off unless SHOTTINO_LAYOUT_LOG names a file.
      *
-     * A scrollback row's height is computed in TWO places — here, to size
-     * the scroll region, and again in the draw loop, to consume it. Every
+     * A scrollback row's height is computed in TWO places — the walk, to
+     * size the region, and the draw loop below, to consume it. Every
      * "a line went missing" bug in this client so far has been those two
      * disagreeing, and the disagreement is invisible from the screen:
      * you see a missing line, not which pass was wrong. This dumps both
@@ -8886,43 +9050,32 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
      * Written from the draw path, which already holds app->lock. */
     FILE *lay = layout_log();
     if (lay) {
-        fprintf(lay, "\n== frame scroll_y=%d scroll_h=%d visible=%zu total=%d divider_row=%d\n",
-                scroll_y, scroll_h, visible_count, total_visible_lines,
-                divider_vi >= 0 ? (int)visible[divider_vi] : -1);
-        for (size_t k = 0; k < visible_count; k++) {
-            int mi = app->log_media[visible[k]];
-            fprintf(lay, "   row=%zu h=%d text=%d media=%d%s :: %.56s\n", visible[k], heights[k],
-                    text_heights[k], mi,
+        fprintf(lay, "\n== frame scroll_y=%d scroll_h=%d in_view=%zu skip=%d top=%d divider_row=%d\n",
+                scroll_y, scroll_h, view.count, view.skip_lines, (int)view.at_top,
+                view.divider_vi >= 0 ? (int)view.rows[view.divider_vi] : -1);
+        for (size_t k = 0; k < view.count; k++) {
+            int mi = app->log_media[view.rows[k]];
+            fprintf(lay, "   row=%zu h=%d text=%d media=%d%s :: %.56s\n", view.rows[k],
+                    view.heights[k], view.text_heights[k], mi,
                     mi >= 0 && mi < (int)app->media_count
                         ? (app->media[mi].state == IM_READY      ? " READY"
                            : app->media[mi].state == IM_FETCHING ? " FETCHING"
                            : app->media[mi].state == IM_FAILED   ? " FAILED"
                                                                  : " IDLE")
                         : "",
-                    app->log[visible[k]]);
+                    app->log[view.rows[k]]);
         }
     }
-    int max_offset = total_visible_lines > scroll_h ? total_visible_lines - scroll_h : 0;
-    if ((int)pane->scroll_offset > max_offset) pane->scroll_offset = (size_t)max_offset;
-    /* Reaching the top of a pane is the ask for what came before it —
-     * the same gesture cicchetto pages on, and the reason it is read
-     * HERE is that the measuring pass above is the only thing that knows
-     * where the top is. The offset counts lines from the BOTTOM, so a
-     * page landing above the view leaves the view exactly where it was;
-     * the rows the reader is looking at do not move under them. */
-    if (history_wanted(pane->scroll_pinned, pane->scroll_offset, max_offset,
-                       app->log_count < LOG_LINES, w->history_inflight, w->history_exhausted))
-        request_older_history_locked(app, w);
-    int skip_lines = max_offset - (int)pane->scroll_offset;
+    int skip_lines = view.skip_lines;
     int used_lines = 0;
     int drawn_rows = 0;
     int last_drawn_vi = -1;
-    for (size_t vi = 0; vi < visible_count; vi++) {
-        if (skip_lines >= heights[vi]) {
-            skip_lines -= heights[vi];
+    for (size_t vi = 0; vi < view.count; vi++) {
+        if (skip_lines >= view.heights[vi]) {
+            skip_lines -= view.heights[vi];
             continue;
         }
-        size_t i = visible[vi];
+        size_t i = view.rows[vi];
         /* The topmost row is usually only PARTLY scrolled off — the offset
          * is counted in lines, and a row is several. Its remaining lines
          * are drawn, in the row's own order (divider, then text, then
@@ -8958,7 +9111,7 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
          * behind. When the reserved row is scrolled off, the divider goes
          * with it — its line was skipped along with its row, so the two
          * passes still agree. */
-        if ((int)vi == divider_vi) {
+        if ((int)vi == view.divider_vi) {
             if (row_skip > 0) {
                 row_skip -= 1; /* the divider itself is above the region */
             } else if (used_lines + 1 < scroll_h) {
@@ -8971,9 +9124,9 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
                 available -= 1;
             }
         }
-        int text_skip = row_skip < text_heights[vi] ? row_skip : text_heights[vi];
+        int text_skip = row_skip < view.text_heights[vi] ? row_skip : view.text_heights[vi];
         row_skip -= text_skip;
-        int draw_lines = text_heights[vi] - text_skip;
+        int draw_lines = view.text_heights[vi] - text_skip;
         if (draw_lines > available) draw_lines = available;
         const char *msg_url = find_url(app->log[i]);
         enum media_kind mk = MEDIA_NONE;
@@ -9108,11 +9261,11 @@ static void draw_chat_pane(struct app *app, struct pane *pane, int x, int y, int
          * drawn. That is the shape every measure-vs-draw disagreement
          * takes — whatever line the draw pass spends that the measuring
          * pass did not reserve is paid for out of the last row. */
-        bool clipped = visible_count > 0 && pane->scroll_offset == 0 &&
-                       last_drawn_vi != (int)visible_count - 1;
-        fprintf(lay, "   END max_off=%d skip=%d used=%d/%d drawn=%d/%zu last_drawn=%d%s%s\n",
-                max_offset, max_offset - (int)pane->scroll_offset, used_lines, scroll_h,
-                drawn_rows, visible_count, last_drawn_vi,
+        bool clipped = view.count > 0 && pane->scroll_offset == 0 &&
+                       last_drawn_vi != (int)view.count - 1;
+        fprintf(lay, "   END offset=%zu skip=%d used=%d/%d drawn=%d/%zu last_drawn=%d%s%s\n",
+                pane->scroll_offset, view.skip_lines, used_lines, scroll_h,
+                drawn_rows, view.count, last_drawn_vi,
                 (used_lines > scroll_h) ? "  *** OVERFLOW: budget exceeded ***" : "",
                 clipped ? "  *** CLIPPED: newest row not drawn ***" : "");
         fflush(lay);
