@@ -4857,11 +4857,12 @@ defmodule Grappa.Session.ServerTest do
       # browser keeps the banner and re-shows it on ITS next reload.
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "event",
-                       payload: %{
-                         kind: :window_invite_declined,
-                         network: net_slug,
-                         channel: "#random"
-                       } = payload
+                       payload:
+                         %{
+                           kind: :window_invite_declined,
+                           network: net_slug,
+                           channel: "#random"
+                         } = payload
                      },
                      1_000
 
