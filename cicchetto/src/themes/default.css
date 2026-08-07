@@ -10541,12 +10541,15 @@ button.home-pane-network-title:hover .home-pane-network-slug {
 /* #496 — the honest per-subject session-lifetime line, rendered as a small
    left-accented callout under the welcome copy so the ∞ / 48h / 7-day truth
    reads as a deliberate note rather than more body text. */
+/* A marked aside, not a panel. It sits INSIDE the welcome card, and
+   with its own background and radius it was a rounded box drawn inside a
+   rounded box — the last of the nesting. The accent rule alone is enough
+   to say "this line is about your session": a rule marks, a surface
+   encloses, and there is nothing here to enclose. */
 .home-pane-session {
-  margin: 0.25rem 0 0 0;
-  padding: 0.5rem 0.75rem;
-  border-left: 2px solid var(--accent);
-  background: var(--bg-alt);
-  border-radius: 0 3px 3px 0;
+  margin: var(--adm-space-3) 0 0 0;
+  padding: 0 0 0 var(--adm-space-3);
+  border-left: 2px solid var(--adm-accent);
   font-size: 0.9em;
 }
 
