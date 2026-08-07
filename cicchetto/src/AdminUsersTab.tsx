@@ -280,6 +280,53 @@ const AdminUsersTab: Component = () => {
           <AdminEmpty message="no users" testId="admin-users-empty" />
         </Show>
 
+        <Show when={rotatingUser()}>
+          {(u) => (
+            <AdminDetailPanel
+              title={`Rotate password for ${u().name}`}
+              subtitle="PUT /admin/users/:id/password"
+              onClose={onCancelRotate}
+              closeLabel="cancel password rotation"
+              data-testid={`admin-user-rotate-form-${u().id}`}
+            >
+              <form
+                class="adm-form-grid"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void onSubmitRotate(u());
+                }}
+              >
+                <input
+                  placeholder="new password"
+                  aria-label={`new password for ${u().name}`}
+                  type="password"
+                  value={passwordInput()}
+                  onInput={(e) => setPasswordInput((e.currentTarget as HTMLInputElement).value)}
+                  data-testid={`admin-user-rotate-input-${u().id}`}
+                  required
+                />
+                <div class="adm-form-grid-actions">
+                  <button
+                    type="submit"
+                    class="adm-btn adm-btn--ok"
+                    disabled={passwordInput() === ""}
+                    data-testid={`admin-user-rotate-submit-${u().id}`}
+                  >
+                    Rotate
+                  </button>
+                  <button
+                    type="button"
+                    class="adm-btn adm-btn--danger"
+                    onClick={onCancelRotate}
+                    data-testid={`admin-user-rotate-cancel-${u().id}`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </AdminDetailPanel>
+          )}
+        </Show>
         <Show when={users() !== null && (users() ?? []).length > 0}>
           <AdminCard
             title="Accounts"
@@ -350,53 +397,6 @@ const AdminUsersTab: Component = () => {
               </tbody>
             </AdminTable>
           </AdminCard>
-        </Show>
-        <Show when={rotatingUser()}>
-          {(u) => (
-            <AdminDetailPanel
-              title={`Rotate password for ${u().name}`}
-              subtitle="PUT /admin/users/:id/password"
-              onClose={onCancelRotate}
-              closeLabel="cancel password rotation"
-              data-testid={`admin-user-rotate-form-${u().id}`}
-            >
-              <form
-                class="adm-form-grid"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void onSubmitRotate(u());
-                }}
-              >
-                <input
-                  placeholder="new password"
-                  aria-label={`new password for ${u().name}`}
-                  type="password"
-                  value={passwordInput()}
-                  onInput={(e) => setPasswordInput((e.currentTarget as HTMLInputElement).value)}
-                  data-testid={`admin-user-rotate-input-${u().id}`}
-                  required
-                />
-                <div class="adm-form-grid-actions">
-                  <button
-                    type="submit"
-                    class="adm-btn adm-btn--ok"
-                    disabled={passwordInput() === ""}
-                    data-testid={`admin-user-rotate-submit-${u().id}`}
-                  >
-                    Rotate
-                  </button>
-                  <button
-                    type="button"
-                    class="adm-btn adm-btn--danger"
-                    onClick={onCancelRotate}
-                    data-testid={`admin-user-rotate-cancel-${u().id}`}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </AdminDetailPanel>
-          )}
         </Show>
       </div>
     </div>

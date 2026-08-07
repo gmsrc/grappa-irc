@@ -428,6 +428,48 @@ const AdminCredentialsTab: Component = () => {
           <AdminEmpty message="no credentials" testId="admin-credentials-empty" />
         </Show>
 
+        <Show when={editForm() !== null && editingCredential()}>
+          {(c) => (
+            <AdminDetailPanel
+              title={`Edit ${userName(c().user_id)} @ ${c().network_slug}`}
+              subtitle="only changed fields are sent; a password or auth-method change stops the live session"
+              onClose={onCancelEdit}
+              closeLabel="cancel credential edit"
+              data-testid={`admin-credential-edit-form-${credKey(c())}`}
+            >
+              <form
+                class="adm-form-grid"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void onSubmitEdit(c());
+                }}
+              >
+                <CredentialEditFields
+                  form={editForm() as EditForm}
+                  onChange={(next) => setEditForm(next)}
+                  credKey={credKey(c())}
+                />
+                <div class="adm-form-grid-actions">
+                  <button
+                    type="submit"
+                    class="adm-btn adm-btn--ok"
+                    data-testid={`admin-credential-edit-submit-${credKey(c())}`}
+                  >
+                    Save
+                  </button>
+                  <button
+                    type="button"
+                    class="adm-btn adm-btn--danger"
+                    onClick={onCancelEdit}
+                    data-testid={`admin-credential-edit-cancel-${credKey(c())}`}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </AdminDetailPanel>
+          )}
+        </Show>
         <Show when={credentials() !== null && (credentials() ?? []).length > 0}>
           <AdminCard
             title="Bindings"
@@ -514,48 +556,6 @@ const AdminCredentialsTab: Component = () => {
             order. Gating on the row alone renders the panel for one tick
             with a null draft, and `CredentialEditFields` reads
             `props.form.nick` unconditionally. */}
-        <Show when={editForm() !== null && editingCredential()}>
-          {(c) => (
-            <AdminDetailPanel
-              title={`Edit ${userName(c().user_id)} @ ${c().network_slug}`}
-              subtitle="only changed fields are sent; a password or auth-method change stops the live session"
-              onClose={onCancelEdit}
-              closeLabel="cancel credential edit"
-              data-testid={`admin-credential-edit-form-${credKey(c())}`}
-            >
-              <form
-                class="adm-form-grid"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void onSubmitEdit(c());
-                }}
-              >
-                <CredentialEditFields
-                  form={editForm() as EditForm}
-                  onChange={(next) => setEditForm(next)}
-                  credKey={credKey(c())}
-                />
-                <div class="adm-form-grid-actions">
-                  <button
-                    type="submit"
-                    class="adm-btn adm-btn--ok"
-                    data-testid={`admin-credential-edit-submit-${credKey(c())}`}
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    class="adm-btn adm-btn--danger"
-                    onClick={onCancelEdit}
-                    data-testid={`admin-credential-edit-cancel-${credKey(c())}`}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </AdminDetailPanel>
-          )}
-        </Show>
       </div>
     </div>
   );

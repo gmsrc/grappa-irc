@@ -1,4 +1,4 @@
-import type { Component, JSX } from "solid-js";
+import { type Component, type JSX, onMount } from "solid-js";
 
 // Admin redesign (2026-08-07 review) — the detail surface for the row a
 // table has open.
@@ -40,24 +40,57 @@ export type Props = {
   "data-testid"?: string;
 };
 
-const AdminDetailPanel: Component<Props> = (props) => (
-  <section class="adm-detail" data-testid={props["data-testid"]}>
-    <header class="adm-detail-head">
-      <div>
-        <h3 class="adm-card-title">{props.title}</h3>
-        {props.subtitle !== undefined ? <p class="adm-card-sub">{props.subtitle}</p> : null}
-      </div>
-      <button
-        type="button"
-        class="adm-btn adm-detail-close"
-        aria-label={props.closeLabel}
-        onClick={props.onClose}
-      >
-        ×
-      </button>
-    </header>
-    <div class="adm-detail-body">{props.children}</div>
-  </section>
-);
+const AdminDetailPanel: Component<Props> = (props) => {
+  let el: HTMLElement | undefined;
+
+  // Scroll the panel into view when it opens.
+  //
+  // This is not a nicety, it is the other half of moving out of the
+  // table. Inside a row, the editor appeared exactly where the operator
+  // had just tapped. Out here it is a sibling of the table, and tapping
+  // Edit on a row while scrolled anywhere down the list opened a panel
+  // the operator could not see — which reads, correctly, as the button
+  // doing nothing. The panel renders BEFORE the table for the same
+  // reason (so closing it leaves you at the top of the list rather than
+  // stranded past it); this covers the case where the table is what you
+  // were looking at.
+  //
+  // `block: "nearest"` so an already-visible panel does not jump.
+  //
+  // Feature-detected because jsdom does not implement `scrollIntoView`
+  // at all — this is a real environment gap, not defensive padding, and
+  // without the check every vitest case that opens a panel throws.
+  onMount(() => {
+    if (typeof el?.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
+  });
+
+  return (
+    <section
+      class="adm-detail"
+      data-testid={props["data-testid"]}
+      ref={(node) => {
+        el = node;
+      }}
+    >
+      <header class="adm-detail-head">
+        <div>
+          <h3 class="adm-card-title">{props.title}</h3>
+          {props.subtitle !== undefined ? <p class="adm-card-sub">{props.subtitle}</p> : null}
+        </div>
+        <button
+          type="button"
+          class="adm-btn adm-detail-close"
+          aria-label={props.closeLabel}
+          onClick={props.onClose}
+        >
+          ×
+        </button>
+      </header>
+      <div class="adm-detail-body">{props.children}</div>
+    </section>
+  );
+};
 
 export default AdminDetailPanel;
