@@ -32736,3 +32736,49 @@ and asserts the RESIDUAL is zero, so any offset that is not border + padding —
 a real scroll, a margin, a hidden sibling — fails loudly instead of being
 absorbed by a tolerance. A geometric argument that predicts a shape but no
 magnitude cannot tell you which of the two it is; only the number can.
+
+## 2026-08-07 — #41: the smoke fixture now owns its migration set (and the two entries above are partly superseded)
+
+`test/grappa/migrations/hot_deploy_migrate_test.exs` shipped with
+`priv: "priv/repo"` and hardcoded the project's last three migration versions
+as its anchors. That made every assertion in the file a statement about
+whatever migration set the repo happened to ship that day. It went red the
+first time it met one: #124 adds one migration and **all 14 tests fail**, with
+`assert [] = pending_migration_files(SmokeRepo)` naming the new file as
+unapplied. Any PR that adds a migration would have done the same. The defect is
+#41's — coupling to the environment — not the adding branch's, so it was
+repaired inside #124's branch rather than parked behind another PR and another
+30-minute gate.
+
+**The fix, and why it is not a weakening.** The fixture points at
+`priv/repo/hot_migrate_smoke/migrations`: a BASE `create table`, a CONTRACT
+`create unique_index` on a pre-existing table, an EXPAND nullable `add`. Three
+files, and the set never grows. "Nothing unapplied → empty" is a legitimate
+claim about the handler; it just has to be made about a set the test controls.
+The production path is exercised identically — `HotReload` still resolves the
+directory through `Ecto.Migrator.migrations_path/1` against a real one, which
+is the only thing the old `priv: "priv/repo"` comment was defending. A new test
+pins the set to exactly three files AND pins `Preflight`'s verdict on the last
+two, because a contract anchor that drifted to HOT would leave the refusal
+scenarios green while measuring nothing. Proved by mutation: planting a fourth
+pending migration turns 10 of 15 red.
+
+**Why the directory sits under `priv/repo/`,** which reads odd. Two constraints
+intersect at that path: `Ecto.Migrator.migrations_path/1` resolves
+`Application.app_dir(:grappa, priv) <> "/migrations"`, so it must live under
+`priv/`; and `scripts/_lib.sh` bind-mounts a worktree's sources one directory
+at a time, and of `priv/` it mounts `priv/repo` alone — a sibling
+`priv/hot_migrate_smoke/` would be invisible from every worktree and silently
+resolve to main's tree. `priv/repo/migrations/` itself is out: `Grappa.Repo`
+would apply the fixtures to production.
+
+**What this supersedes.** The two entries above measure the whole-graph replay
+(`pool_size: 5` red 10/10, the `module_code` ceiling at 58 repetitions, the
+65536 / (tests × migrations) bound). Those measurements stand as findings, but
+this fixture no longer performs that replay, so they no longer describe this
+file. `pool_size: 2` in the setup is now just the width every migration path in
+the project runs at (`Ecto.Migrator.with_repo/2` forces it); the cases that care
+about width still restart the pool at 5 and 10 themselves. The ceiling
+correspondingly stops binding here: 14 tests × ~80 migrations per run becomes
+14 × 3, and the file drops from 8.6s to 0.4s. The undiagnosed replay red is
+still undiagnosed — it simply no longer has a home in this test.
