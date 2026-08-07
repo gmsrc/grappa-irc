@@ -1,4 +1,9 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
+import AdminBadge from "./admin/AdminBadge";
+import AdminCard from "./admin/AdminCard";
+import { AdminEmpty, AdminError } from "./admin/AdminStatus";
+import AdminTable from "./admin/AdminTable";
+import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminNetwork,
@@ -152,151 +157,156 @@ const AdminSessionsTab: Component = () => {
 
   return (
     <div class="admin-sessions-tab">
-      <header class="admin-sessions-header">
-        <button
-          type="button"
-          class="admin-refresh-btn"
-          aria-label="refresh sessions list"
-          aria-busy={loading()}
-          onClick={() => {
-            void refresh();
-          }}
-          data-testid="admin-sessions-refresh"
-        >
-          ↻ refresh
-        </button>
-      </header>
+      <AdminToolbar
+        title="Sessions"
+        actions={
+          <AdminRefreshButton
+            onClick={() => {
+              void refresh();
+            }}
+            busy={loading()}
+            label="refresh sessions list"
+            testId="admin-sessions-refresh"
+          />
+        }
+      />
 
-      <Show when={error() !== null}>
-        <p class="admin-error" role="alert" data-testid="admin-sessions-error">
-          failed: {error()} — click ↻ refresh to retry
-        </p>
-      </Show>
+      <div class="adm-scroll">
+        <Show when={error() !== null}>
+          <AdminError message={error() ?? ""} testId="admin-sessions-error" />
+        </Show>
 
-      <Show when={networks() !== null && (networks() ?? []).length > 0}>
-        <section
-          class="admin-sessions-network-summary"
-          aria-label="per-network capacity summary"
-          data-testid="admin-sessions-network-summary"
-        >
-          <table class="admin-sessions-summary-table">
-            <thead>
-              <tr>
-                <th>network</th>
-                <th>visitors</th>
-                <th>users</th>
-                <th>per-IP cap</th>
-              </tr>
-            </thead>
-            <tbody>
-              <For each={networks() ?? []}>
-                {(net) => (
-                  <tr
-                    class="admin-sessions-summary-row"
-                    data-testid={`admin-sessions-summary-row-${net.slug}`}
-                  >
-                    <td>{net.slug}</td>
-                    <td
-                      data-testid={`admin-sessions-summary-visitors-${net.slug}`}
-                      title={`${net.live_counts.visitors} live visitor sessions of ${renderCap(
-                        net.max_concurrent_visitor_sessions,
-                      )} cap`}
+        <Show when={networks() !== null && (networks() ?? []).length > 0}>
+          <AdminCard
+            title="Capacity per network"
+            subtitle="live_counts from the Registry — the same projection the admission policy uses"
+            data-testid="admin-sessions-network-summary"
+          >
+            <AdminTable data-testid="admin-sessions-summary-table">
+              <thead>
+                <tr>
+                  <th>network</th>
+                  <th>visitors</th>
+                  <th>users</th>
+                  <th>per-IP cap</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={networks() ?? []}>
+                  {(net) => (
+                    <tr
+                      class="admin-sessions-summary-row"
+                      data-testid={`admin-sessions-summary-row-${net.slug}`}
                     >
-                      {net.live_counts.visitors}/{renderCap(net.max_concurrent_visitor_sessions)}
-                    </td>
-                    <td
-                      data-testid={`admin-sessions-summary-users-${net.slug}`}
-                      title={`${net.live_counts.users} live user sessions of ${renderCap(
-                        net.max_concurrent_user_sessions,
-                      )} cap`}
-                    >
-                      {net.live_counts.users}/{renderCap(net.max_concurrent_user_sessions)}
-                    </td>
-                    <td data-testid={`admin-sessions-summary-per-ip-${net.slug}`}>
-                      {renderCap(net.max_per_ip)}
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </section>
-      </Show>
+                      <td>{net.slug}</td>
+                      <td
+                        data-testid={`admin-sessions-summary-visitors-${net.slug}`}
+                        title={`${net.live_counts.visitors} live visitor sessions of ${renderCap(
+                          net.max_concurrent_visitor_sessions,
+                        )} cap`}
+                      >
+                        {net.live_counts.visitors}/{renderCap(net.max_concurrent_visitor_sessions)}
+                      </td>
+                      <td
+                        data-testid={`admin-sessions-summary-users-${net.slug}`}
+                        title={`${net.live_counts.users} live user sessions of ${renderCap(
+                          net.max_concurrent_user_sessions,
+                        )} cap`}
+                      >
+                        {net.live_counts.users}/{renderCap(net.max_concurrent_user_sessions)}
+                      </td>
+                      <td data-testid={`admin-sessions-summary-per-ip-${net.slug}`}>
+                        {renderCap(net.max_per_ip)}
+                      </td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </AdminTable>
+          </AdminCard>
+        </Show>
 
-      <Show when={sessions() === null && error() === null}>
-        <p class="muted">loading…</p>
-      </Show>
+        <Show when={sessions() === null && error() === null}>
+          <AdminEmpty message="loading…" />
+        </Show>
 
-      <Show when={sessions() !== null && (sessions() ?? []).length === 0}>
-        <p class="muted" data-testid="admin-sessions-empty">
-          no sessions
-        </p>
-      </Show>
+        <Show when={sessions() !== null && (sessions() ?? []).length === 0}>
+          <AdminEmpty message="no sessions" testId="admin-sessions-empty" />
+        </Show>
 
-      <Show when={sessions() !== null && (sessions() ?? []).length > 0}>
-        <table class="admin-sessions-table" data-testid="admin-sessions-table">
-          <thead>
-            <tr>
-              <th>state</th>
-              <th>who</th>
-              <th>network</th>
-              <th>upstream</th>
-              <th>mailbox</th>
-              <th>memory</th>
-              <th>last seen</th>
-              <th>degraded</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            <For each={sessions() ?? []}>
-              {(s) => {
-                const id = adminSessionId(s);
-                return (
-                  <tr class="admin-sessions-row" data-testid={`admin-session-row-${id}`}>
-                    <td>
-                      <LiveBadge live={s.live_state} />
-                    </td>
-                    <td>{renderWho(s)}</td>
-                    <td data-testid={`admin-session-network-${id}`}>
-                      {networkSlugById().get(s.network_id) ?? String(s.network_id)}
-                    </td>
-                    <td data-testid={`admin-session-upstream-${id}`}>
-                      {renderUpstream(s.live_state)}
-                    </td>
-                    <td>{s.live_state.mailbox_len}</td>
-                    <td>{renderKb(s.live_state.memory_bytes)}</td>
-                    <td title={s.last_seen_at ?? "no browser login on record"}>
-                      {renderLastSeen(s.last_seen_at)}
-                    </td>
-                    <td>{renderDegraded(s.live_state.introspection_degraded, id)}</td>
-                    <td class="admin-sessions-actions">
-                      <InlineConfirmButton
-                        idleLabel="Disconnect"
-                        confirmLabel="Confirm disconnect?"
-                        armed={confirmingKey() === confirmKey(id, "disconnect")}
-                        onArm={() => setConfirmingKey(confirmKey(id, "disconnect"))}
-                        onConfirm={() => runAction(s, "disconnect", adminDisconnectSession)}
-                        testId={`admin-session-disconnect-${id}`}
-                        extraClass="disconnect-btn"
-                      />
-                      <InlineConfirmButton
-                        idleLabel="Terminate"
-                        confirmLabel="Confirm terminate?"
-                        armed={confirmingKey() === confirmKey(id, "terminate")}
-                        onArm={() => setConfirmingKey(confirmKey(id, "terminate"))}
-                        onConfirm={() => runAction(s, "terminate", adminTerminateSession)}
-                        testId={`admin-session-terminate-${id}`}
-                        extraClass="terminate-btn"
-                      />
-                    </td>
-                  </tr>
-                );
-              }}
-            </For>
-          </tbody>
-        </table>
-      </Show>
+        <Show when={sessions() !== null && (sessions() ?? []).length > 0}>
+          <AdminCard
+            title="Live sessions"
+            subtitle={`${(sessions() ?? []).length} session${(sessions() ?? []).length === 1 ? "" : "s"}`}
+            data-testid="admin-sessions-table-card"
+          >
+            <AdminTable data-testid="admin-sessions-table">
+              <thead>
+                <tr>
+                  <th>state</th>
+                  <th>who</th>
+                  <th>network</th>
+                  <th>upstream</th>
+                  <th>mailbox</th>
+                  <th>memory</th>
+                  <th>last seen</th>
+                  <th>degraded</th>
+                  <th class="adm-table-sticky-actions">
+                    <span class="sr-only">actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={sessions() ?? []}>
+                  {(s) => {
+                    const id = adminSessionId(s);
+                    return (
+                      <tr class="admin-sessions-row" data-testid={`admin-session-row-${id}`}>
+                        <td>
+                          <LiveBadge live={s.live_state} />
+                        </td>
+                        <td>{renderWho(s)}</td>
+                        <td data-testid={`admin-session-network-${id}`}>
+                          {networkSlugById().get(s.network_id) ?? String(s.network_id)}
+                        </td>
+                        <td class="adm-table-truncate" data-testid={`admin-session-upstream-${id}`}>
+                          {renderUpstream(s.live_state)}
+                        </td>
+                        <td>{s.live_state.mailbox_len}</td>
+                        <td>{renderKb(s.live_state.memory_bytes)}</td>
+                        <td title={s.last_seen_at ?? "no browser login on record"}>
+                          {renderLastSeen(s.last_seen_at)}
+                        </td>
+                        <td>{renderDegraded(s.live_state.introspection_degraded, id)}</td>
+                        <td class="admin-sessions-actions adm-table-sticky-actions">
+                          <InlineConfirmButton
+                            idleLabel="Disconnect"
+                            confirmLabel="Confirm disconnect?"
+                            armed={confirmingKey() === confirmKey(id, "disconnect")}
+                            onArm={() => setConfirmingKey(confirmKey(id, "disconnect"))}
+                            onConfirm={() => runAction(s, "disconnect", adminDisconnectSession)}
+                            testId={`admin-session-disconnect-${id}`}
+                            extraClass="disconnect-btn"
+                          />
+                          <InlineConfirmButton
+                            idleLabel="Terminate"
+                            confirmLabel="Confirm terminate?"
+                            armed={confirmingKey() === confirmKey(id, "terminate")}
+                            onArm={() => setConfirmingKey(confirmKey(id, "terminate"))}
+                            onConfirm={() => runAction(s, "terminate", adminTerminateSession)}
+                            testId={`admin-session-terminate-${id}`}
+                            extraClass="terminate-btn"
+                          />
+                        </td>
+                      </tr>
+                    );
+                  }}
+                </For>
+              </tbody>
+            </AdminTable>
+          </AdminCard>
+        </Show>
+      </div>
     </div>
   );
 };
@@ -319,21 +329,17 @@ const AdminSessionsTab: Component = () => {
 const LiveBadge: Component<{ live: AdminSession["live_state"] }> = (props) => {
   if (props.live.alive === false) {
     return (
-      <span
-        class="live-badge dead"
-        role="status"
-        aria-label="pid registered but Session.Server is dead"
-      >
+      <AdminBadge tone="danger" class="dead" ariaLabel="pid registered but Session.Server is dead">
         pid registered but dead
-      </span>
+      </AdminBadge>
     );
   }
   const channels = props.live.joined_channels;
   const count = channels === null ? "?" : channels.length;
   return (
-    <span class="live-badge alive" role="status" aria-label={`alive on ${count} channels`}>
-      ● {count} chan
-    </span>
+    <AdminBadge tone="ok" class="alive" ariaLabel={`alive on ${count} channels`}>
+      {count} chan
+    </AdminBadge>
   );
 };
 
