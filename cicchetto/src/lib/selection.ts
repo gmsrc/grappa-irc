@@ -554,13 +554,24 @@ const exports = identityScopedStore((onIdentityChange) => {
   // Token guard: identity-rotation can null the bearer mid-effect.
   // #693 — the far-behind freeze. A pane that anchored at the tail renders
   // rows thousands of ids above the operator's real read position, and every
-  // writer that funnels through here (scroll-settle, focus-leave, the
-  // visibility-hide arm, the scroll-to-bottom gesture) offers the newest
-  // RENDERED id. Forward-only would happily take it and mark the entire
-  // abandoned region read — server-side, fanned to every other device,
-  // destroying the position the jump affordance exists to return to. Freeze
-  // the cursor for as long as the window is far behind; `dismissFarBehind`
-  // (scrollback.ts) is the one deliberate way past it.
+  // writer that funnels through here (scroll-settle, the visibility-hide arm,
+  // the scroll-to-bottom gesture) offers the newest RENDERED id. Forward-only
+  // would happily take it and mark the entire abandoned region read —
+  // server-side, fanned to every other device, destroying the position the
+  // jump affordance exists to return to. Freeze the cursor for as long as the
+  // window is far behind; `dismissFarBehind` (scrollback.ts) is the one
+  // deliberate way past it.
+  //
+  // #1019 — focus-leave USED to be a fourth name on that list and is not
+  // anymore, and the difference is who decides, not how strong the guard is.
+  // Leaving a window is a deliberate "I'm done with those", so the leave arm
+  // (ScrollbackPane's `on(key, prevKey)` effect) now routes a far-behind
+  // window to `dismissFarBehind` and never reaches this door with it. The
+  // door itself did NOT move: the remaining three are passive — scrolling,
+  // backgrounding, tapping to the bottom — and each still gets frozen out
+  // here. Do not "simplify" that routing back into a caller-kind flag on this
+  // function: the freeze is the invariant, and a parameter that can turn it
+  // off is one careless call site away from being gone for all four.
   //
   // This is the single door for cursor advancement, so the guard belongs
   // here, not in each of the four callers.

@@ -1663,6 +1663,16 @@ const ScrollbackPane: Component<Props> = (props) => {
   // CURRENT pane (props.networkSlug, props.channelName — captured in
   // the closure at component-init time, won't change before unmount
   // because the component IS this (slug, channel) instance).
+  //
+  // #1019 does NOT reach this path, deliberately. Leaving a far-behind
+  // window for another CHAT window is the dismiss (the `on(key, …)` arm
+  // above); leaving it for home/mentions/admin is not, because at the
+  // dispose tick `props` already read the ARRIVING virtual selection (the
+  // same reason `setReadCursor` carries the #160 virtual-window guard). The
+  // leaving window cannot be named from here, and naming it would mean
+  // duplicating a "last mounted key" the key arm already owns. So a
+  // channel→home switch leaves the far-behind state standing — the region
+  // stays recoverable, which is the safe side of the gap.
   onCleanup(settleCursorToVisibleTail);
 
   createEffect(
@@ -2210,15 +2220,32 @@ const ScrollbackPane: Component<Props> = (props) => {
       // `prevKey === undefined` only on the mount run (no `defer` here);
       // `prevKey === newKey` shouldn't happen. Skip both.
       if (prevKey === undefined || prevKey === newKey) return;
-      const snapshotted = visibleTailSnapshot.get(prevKey);
-      const prevMsgs = scrollbackByChannel()[prevKey];
-      const storeTail =
-        prevMsgs && prevMsgs.length > 0 ? (prevMsgs[prevMsgs.length - 1]?.id ?? null) : null;
-      const id = snapshotted ?? storeTail;
-      if (id !== null) {
-        const decoded = decodeChannelKey(prevKey);
-        if (decoded !== null) {
-          setCursorIfAdvances(decoded.slug, decoded.name, id);
+      const decoded = decodeChannelKey(prevKey);
+      if (decoded !== null) {
+        if (farBehindByChannel()[prevKey]) {
+          // #1019 — walking away from a far-behind window IS the bar's ×.
+          // The cursor is FROZEN here (#693), so the settle below would be a
+          // silent no-op and the operator would carry a stuck badge until they
+          // noticed the bar. Leaving is the same sentence the × speaks, so it
+          // gets the same verb — ROUTED here rather than let through
+          // `setCursorIfAdvances`, which must keep freezing out the other three
+          // writers (scroll-settle, visibility-hide, scroll-to-bottom): none of
+          // them is a statement about being done with the window, and thawing
+          // the door for one thaws it for all four.
+          //
+          // No `setMarkerCursorId` re-latch, unlike the × (which stays in this
+          // window and would otherwise slam a stale divider across the top).
+          // The pane has already moved on; the sibling activation effect owns
+          // the arriving window's marker, and a later return re-latches from
+          // the cursor this dismiss just advanced.
+          dismissFarBehind(decoded.slug, decoded.name);
+        } else {
+          const snapshotted = visibleTailSnapshot.get(prevKey);
+          const prevMsgs = scrollbackByChannel()[prevKey];
+          const storeTail =
+            prevMsgs && prevMsgs.length > 0 ? (prevMsgs[prevMsgs.length - 1]?.id ?? null) : null;
+          const id = snapshotted ?? storeTail;
+          if (id !== null) setCursorIfAdvances(decoded.slug, decoded.name, id);
         }
       }
       // Free the snapshot for the leaving key — we won't visit this

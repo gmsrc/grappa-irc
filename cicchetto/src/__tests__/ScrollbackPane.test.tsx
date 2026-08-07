@@ -2206,6 +2206,119 @@ describe("ScrollbackPane", () => {
       });
     });
 
+    // #1019 — the third exit, and it costs no click. The bar's two exits are
+    // both deliberate gestures, and #693 froze the cursor precisely so that
+    // nothing passive could take them. But WALKING AWAY from a window is not
+    // passive: it is the same "I'm done with those" sentence the × speaks, so
+    // it gets the same effect. The freeze itself is untouched — the leave
+    // writer is ROUTED to the dismiss, not released through
+    // `setCursorIfAdvances`, which must keep holding back the other three.
+    describe("leaving a far-behind window dismisses it (#1019)", () => {
+      afterEach(() => {
+        setFarBehind({});
+        jumpToUnreadSpy.mockClear();
+        dismissFarBehindSpy.mockClear();
+      });
+
+      // A real selection change, driven the way the #608 switch specs drive
+      // one: a signal on `channelName`, so the pane's `on(key, prevKey)` leave
+      // arm fires against a genuinely-changed key. Directly calling
+      // `dismissFarBehind` would assert nothing about who calls it.
+      const switchAwayFrom = async (farBehindOn: string | null) => {
+        const [chan, setChan] = createSignal("#a");
+        setScrollback({ "freenode #a": fixture, "freenode #b": fixture });
+        if (farBehindOn !== null) {
+          setFarBehind({ [farBehindOn]: { missed: 3000, resumeFrom: 1 } });
+        }
+        render(() => <ScrollbackPane networkSlug="freenode" channelName={chan()} kind="channel" />);
+        // jsdom leaves scrollTo undefined; the key-change smooth-scroll
+        // interrupt calls it on the switch (same stub as the #608 specs).
+        (screen.getByTestId("scrollback") as HTMLDivElement).scrollTo = vi.fn();
+        dismissFarBehindSpy.mockClear();
+        mockSetCursorIfAdvances.mockClear();
+        setChan("#b");
+        // Synchronous flush only: the #887 read-at-the-tail arm lands its own
+        // write 500 ms later, and this assertion is about the leave.
+        await Promise.resolve();
+      };
+
+      it("marks the LEAVING window read, the same verb the × fires", async () => {
+        await switchAwayFrom("freenode #a");
+        expect(dismissFarBehindSpy).toHaveBeenCalledWith("freenode", "#a");
+      });
+
+      it("does not offer the abandoned tail to the frozen forward-only door", async () => {
+        // The whole point of routing rather than relaxing: if the leave still
+        // walks through `setCursorIfAdvances`, then either the freeze drops it
+        // (nothing happens, the defect stands) or the freeze was loosened for
+        // everybody — the #693 regression this issue must not cause.
+        await switchAwayFrom("freenode #a");
+        expect(mockSetCursorIfAdvances).not.toHaveBeenCalledWith(
+          "freenode",
+          "#a",
+          expect.anything(),
+        );
+      });
+
+      it("leaves an ordinary window on its existing settle path", async () => {
+        await switchAwayFrom(null);
+        expect(mockSetCursorIfAdvances).toHaveBeenCalledWith("freenode", "#a", 3);
+        expect(dismissFarBehindSpy).not.toHaveBeenCalled();
+      });
+
+      it("does not dismiss a window it is switching TO", async () => {
+        // The arm reads `prevKey`. Keying it off the pane's live props would
+        // burn the ARRIVING window's abandoned region on every switch into it.
+        await switchAwayFrom("freenode #b");
+        expect(dismissFarBehindSpy).not.toHaveBeenCalled();
+      });
+
+      it("keeps the visibility-hide writer frozen — backgrounding is not leaving", async () => {
+        // Q1 ruled by vjt: only a window switch inside cic dismisses. A phone
+        // lock is not a statement about one window, and routing it here would
+        // burn the region on every screen blank.
+        seedReadCursor("freenode", "#grappa", 1);
+        setScrollback({ "freenode #grappa": fixture });
+        setFarBehind({ "freenode #grappa": { missed: 3000, resumeFrom: 1 } });
+        render(() => (
+          <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
+        ));
+        dismissFarBehindSpy.mockClear();
+        setDocVisible(false);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(dismissFarBehindSpy).not.toHaveBeenCalled();
+      });
+
+      it("keeps the scroll-settle writer frozen — reading at the tail is not leaving", async () => {
+        // The other back door onto the same cursor. Reading the newest rows of
+        // a far-behind window says nothing about the thousands below them.
+        const rows: ScrollbackMessage[] = Array.from({ length: 30 }, (_, i) => ({
+          id: i + 1,
+          network: "freenode",
+          channel: "#grappa",
+          server_time: i + 1,
+          kind: "privmsg",
+          sender: "alice",
+          body: `row ${i + 1}`,
+          meta: {},
+        }));
+        setScrollback({ "freenode #grappa": rows });
+        setFarBehind({ "freenode #grappa": { missed: 3000, resumeFrom: 1 } });
+        const { container } = render(() => (
+          <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
+        ));
+        const list = container.querySelector('[data-testid="scrollback"]') as HTMLDivElement;
+        // A real input event arms the settle gate (BUGHUNT-2), so the timer
+        // genuinely fires — otherwise this would pass on the gate, not the freeze.
+        list.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+        dismissFarBehindSpy.mockClear();
+        list.scrollTop = 100;
+        list.dispatchEvent(new Event("scroll"));
+        await new Promise((r) => setTimeout(r, 700));
+        expect(dismissFarBehindSpy).not.toHaveBeenCalled();
+      });
+    });
+
     // #947 — the notch after #693. The operator took the jump, so the flag is
     // gone and the divider is back; but the jump could only carry ONE page of
     // the gap, so counting the loaded rows reports the page size. The number
