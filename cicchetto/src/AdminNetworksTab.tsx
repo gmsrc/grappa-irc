@@ -3,7 +3,6 @@ import { createStore, produce } from "solid-js/store";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
-import AdminField from "./admin/AdminField";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
@@ -51,7 +50,9 @@ import { token } from "./lib/auth";
 // Tab-header controls:
 //   * Refresh (↻) — re-calls GET; clears in-flight per-row edits
 //     because the server state might have moved under us.
-//   * Force Reap (InlineConfirmButton) — POST /admin/reaper/run.
+//   * Sweep visitors (InlineConfirmButton) — POST /admin/reaper/run.
+//     Labelled for what it DOES, not for the internal name of the
+//     process that does it: "Force Reap" told an operator nothing.
 //     Transient success line under the header shows the swept count.
 //
 // Post-mutation refresh: every server mutation (Save, Reset Circuit)
@@ -64,7 +65,7 @@ import { token } from "./lib/auth";
 // Per `feedback_no_localized_strings_server_side`: server emits typed
 // `circuit_state` (`state: "open" | "closed"` + integer counts +
 // seconds); cic owns every human-readable rendering ("OPEN (retry in
-// 12s)" / "—" / "Force Reap" / etc).
+// 12s)" / "—" / "Sweep visitors" / etc).
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT.
 // AdminPane's mount gate is the reachability boundary.
@@ -561,12 +562,12 @@ const AdminNetworksTab: Component = () => {
     <div class="admin-networks-tab">
       <AdminToolbar
         title="Networks"
-        subtitle="caps are DB intent; the live counts beside them come from the Registry"
+        subtitle="caps are DB intent, the live counts beside them come from the Registry — Sweep visitors runs the expired-visitor reaper now"
         actions={
           <>
             <InlineConfirmButton
-              idleLabel="Force Reap"
-              confirmLabel="Confirm reap?"
+              idleLabel="Sweep visitors"
+              confirmLabel="Sweep now?"
               armed={confirmingKey() === reapKey()}
               onArm={() => setConfirmingKey(reapKey())}
               onConfirm={onForceReap}
@@ -604,23 +605,22 @@ const AdminNetworksTab: Component = () => {
             }}
             data-testid="admin-networks-create-form"
           >
-            <AdminField label="slug" for="admin-networks-create-slug" hint="e.g. azzurra">
-              <input
-                id="admin-networks-create-slug"
-                type="text"
-                value={createSlug()}
-                onInput={(e) => setCreateSlug((e.currentTarget as HTMLInputElement).value)}
-                data-testid="admin-networks-create-slug"
-                required
-              />
-            </AdminField>
+            <input
+              placeholder="slug"
+              aria-label="slug"
+              type="text"
+              value={createSlug()}
+              onInput={(e) => setCreateSlug((e.currentTarget as HTMLInputElement).value)}
+              data-testid="admin-networks-create-slug"
+              required
+            />
             <button
               type="submit"
               class="adm-btn"
               disabled={creating() || createSlug().trim() === ""}
               data-testid="admin-networks-create-submit"
             >
-              Create network
+              Create
             </button>
           </form>
         </AdminCard>
@@ -971,32 +971,26 @@ const ServersDisclosure: Component<{
         onSubmit={props.onAddServer}
         data-testid={`admin-network-add-server-form-${props.net.slug}`}
       >
-        <AdminField label="host" for={`admin-network-add-server-host-${props.net.slug}`}>
-          <input
-            id={`admin-network-add-server-host-${props.net.slug}`}
-            type="text"
-            value={props.form.host}
-            onInput={(e) =>
-              props.onFormChange({ host: (e.currentTarget as HTMLInputElement).value })
-            }
-            data-testid={`admin-network-add-server-host-${props.net.slug}`}
-            required
-          />
-        </AdminField>
-        <AdminField label="port" for={`admin-network-add-server-port-${props.net.slug}`}>
-          <input
-            id={`admin-network-add-server-port-${props.net.slug}`}
-            type="number"
-            min="1"
-            max="65535"
-            value={props.form.port}
-            onInput={(e) =>
-              props.onFormChange({ port: (e.currentTarget as HTMLInputElement).value })
-            }
-            data-testid={`admin-network-add-server-port-${props.net.slug}`}
-            required
-          />
-        </AdminField>
+        <input
+          placeholder="host"
+          aria-label="host"
+          type="text"
+          value={props.form.host}
+          onInput={(e) => props.onFormChange({ host: (e.currentTarget as HTMLInputElement).value })}
+          data-testid={`admin-network-add-server-host-${props.net.slug}`}
+          required
+        />
+        <input
+          placeholder="port"
+          aria-label="port"
+          type="number"
+          min="1"
+          max="65535"
+          value={props.form.port}
+          onInput={(e) => props.onFormChange({ port: (e.currentTarget as HTMLInputElement).value })}
+          data-testid={`admin-network-add-server-port-${props.net.slug}`}
+          required
+        />
         <label class="adm-check">
           <input
             type="checkbox"
@@ -1008,21 +1002,16 @@ const ServersDisclosure: Component<{
           />
           TLS
         </label>
-        <AdminField
-          label="source"
-          for={`admin-network-add-server-source-${props.net.slug}`}
-          hint="optional outbound address"
-        >
-          <input
-            id={`admin-network-add-server-source-${props.net.slug}`}
-            type="text"
-            value={props.form.source}
-            onInput={(e) =>
-              props.onFormChange({ source: (e.currentTarget as HTMLInputElement).value })
-            }
-            data-testid={`admin-network-add-server-source-${props.net.slug}`}
-          />
-        </AdminField>
+        <input
+          placeholder="source"
+          aria-label="source"
+          type="text"
+          value={props.form.source}
+          onInput={(e) =>
+            props.onFormChange({ source: (e.currentTarget as HTMLInputElement).value })
+          }
+          data-testid={`admin-network-add-server-source-${props.net.slug}`}
+        />
         <button
           type="submit"
           class="adm-btn"
@@ -1136,46 +1125,36 @@ const FeaturedChannelsDisclosure: Component<{
         onSubmit={props.onAddFeatured}
         data-testid={`admin-network-add-featured-form-${props.net.slug}`}
       >
-        <AdminField label="channel" for={`admin-network-add-featured-name-${props.net.slug}`}>
-          <input
-            id={`admin-network-add-featured-name-${props.net.slug}`}
-            type="text"
-            placeholder="#channel"
-            value={props.form.name}
-            onInput={(e) =>
-              props.onFormChange({ name: (e.currentTarget as HTMLInputElement).value })
-            }
-            data-testid={`admin-network-add-featured-name-${props.net.slug}`}
-            required
-          />
-        </AdminField>
-        <AdminField
-          label="description"
-          for={`admin-network-add-featured-description-${props.net.slug}`}
-          hint="optional"
-        >
-          <input
-            id={`admin-network-add-featured-description-${props.net.slug}`}
-            type="text"
-            value={props.form.description}
-            onInput={(e) =>
-              props.onFormChange({ description: (e.currentTarget as HTMLInputElement).value })
-            }
-            data-testid={`admin-network-add-featured-description-${props.net.slug}`}
-          />
-        </AdminField>
-        <AdminField label="position" for={`admin-network-add-featured-position-${props.net.slug}`}>
-          <input
-            id={`admin-network-add-featured-position-${props.net.slug}`}
-            type="number"
-            min="0"
-            value={props.form.position}
-            onInput={(e) =>
-              props.onFormChange({ position: (e.currentTarget as HTMLInputElement).value })
-            }
-            data-testid={`admin-network-add-featured-position-${props.net.slug}`}
-          />
-        </AdminField>
+        <input
+          aria-label="channel"
+          type="text"
+          placeholder="#channel"
+          value={props.form.name}
+          onInput={(e) => props.onFormChange({ name: (e.currentTarget as HTMLInputElement).value })}
+          data-testid={`admin-network-add-featured-name-${props.net.slug}`}
+          required
+        />
+        <input
+          placeholder="description"
+          aria-label="description"
+          type="text"
+          value={props.form.description}
+          onInput={(e) =>
+            props.onFormChange({ description: (e.currentTarget as HTMLInputElement).value })
+          }
+          data-testid={`admin-network-add-featured-description-${props.net.slug}`}
+        />
+        <input
+          placeholder="position"
+          aria-label="position"
+          type="number"
+          min="0"
+          value={props.form.position}
+          onInput={(e) =>
+            props.onFormChange({ position: (e.currentTarget as HTMLInputElement).value })
+          }
+          data-testid={`admin-network-add-featured-position-${props.net.slug}`}
+        />
         <button
           type="submit"
           class="adm-btn"

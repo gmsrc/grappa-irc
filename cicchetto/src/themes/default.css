@@ -4238,16 +4238,20 @@ html.resize-dragging * {
   flex-shrink: 0;
 }
 
+/* Hidden on the mobile chip strip — three headings cost a whole line of
+   a 402px screen to name a section the operator just tapped into. The
+   group is carried by the card top-stripe there (`--adm-group`). Not
+   `display: none`: the heading stays in the accessibility tree so the
+   grouping survives for a screen reader, which is the only thing it was
+   buying on a phone anyway. The desktop rail below re-shows it. */
 .adm-nav-group-label {
-  margin: 0;
-  padding-right: var(--adm-space-2);
-  border-right: 1px solid var(--adm-line);
-  font-family: var(--adm-font);
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--adm-text-dim);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
 
@@ -4325,9 +4329,23 @@ html.resize-dragging * {
     gap: 2px;
   }
 
+  /* The rail has the vertical room the chip strip does not, so the
+     heading comes back as real text — undoing the visually-hidden
+     clip above, property by property. */
   .adm-nav-group-label {
-    border-right: 0;
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    overflow: visible;
+    clip: auto;
     padding: 0 0 var(--adm-space-1) var(--adm-space-2);
+    font-family: var(--adm-font);
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--adm-text-dim);
   }
 
   .admin-tab-panel {
@@ -4752,6 +4770,22 @@ html.resize-dragging * {
   position: static;
 }
 
+/* Action cells space their buttons with a real gap instead of relying
+   on the whitespace between inline elements. NOT `display: flex` — the
+   cell is `position: sticky` above 769px and a flex `<td>` drops out of
+   table layout, taking the pin with it. */
+.adm-table td.adm-table-sticky-actions {
+  white-space: nowrap;
+}
+
+.adm-table td.adm-table-sticky-actions > * {
+  vertical-align: middle;
+}
+
+.adm-table td.adm-table-sticky-actions > * + * {
+  margin-left: var(--adm-space-2);
+}
+
 @media (min-width: 769px) {
   .adm-table-sticky-actions {
     position: sticky;
@@ -4784,6 +4818,43 @@ html.resize-dragging * {
 .adm-expand-row td {
   background: var(--adm-surface-1);
   padding: var(--adm-space-3) var(--adm-space-4);
+  /* Pinned to the left edge of the scroll wrapper. The expand row lives
+     inside a table that is deliberately WIDER than the viewport (the
+     UX-6-G contract), so without this its edit form inherited that width
+     and the operator had to swipe right to reach the very controls the
+     row exists to offer. Sticky keeps the form under the thumb while the
+     data columns above still pan. */
+  position: sticky;
+  left: 0;
+}
+
+/* …and the content inside it is capped to the visible width rather than
+   the table's, so it wraps instead of running off. */
+.adm-expand-row td > * {
+  max-width: 92vw;
+}
+
+@media (min-width: 900px) {
+  /* Minus the 220px nav rail. */
+  .adm-expand-row td > * {
+    max-width: calc(100vw - 220px - 4rem);
+  }
+}
+
+/* Every button inside an admin table or form is the same size. The
+   InlineConfirmButton family (Delete / Unbind / Revoke / Reset Circuit)
+   was built at `0.8rem` with `0.2rem` padding, next to `.adm-btn`'s
+   44px tap floor — so Delete rendered visibly smaller than the Save or
+   Promote sitting beside it in the same cell. Scoped to the admin
+   containers: the component is shared, and its metrics elsewhere are
+   not this redesign's business. */
+.adm-table .inline-confirm-btn,
+.adm-form-row .inline-confirm-btn {
+  min-height: var(--tap-min);
+  padding: 0 var(--adm-space-3);
+  border-radius: var(--adm-radius-sm);
+  font-family: var(--adm-font);
+  font-size: 0.85rem;
 }
 
 /* One badge idiom (`admin/AdminBadge.tsx`) replacing `LiveBadge`×2 +
@@ -4855,9 +4926,30 @@ html.resize-dragging * {
 .adm-card {
   background: var(--adm-surface-0);
   border: 1px solid var(--adm-line);
+  border-top: 3px solid var(--adm-group, var(--adm-line));
   border-radius: var(--adm-radius);
   box-shadow: var(--adm-shadow);
   overflow: hidden;
+}
+
+/* Section accent. The nav's Live / Configuration / Diagnostics headings
+   are hidden on mobile, so the group is carried by this stripe along the
+   top of the tab's cards instead — `AdminPane` stamps `data-adm-group`
+   on the active tabpanel and the cards inherit the variable.
+   Theme-derived, like every other colour here: no fixed palette, or the
+   pane stops following a custom theme. The three are deliberately far
+   apart in hue rather than a severity ramp — they name a SECTION, and a
+   reader must not mistake "Configuration" for "warning". */
+.admin-tab-panel[data-adm-group="live"] {
+  --adm-group: var(--adm-accent);
+}
+
+.admin-tab-panel[data-adm-group="config"] {
+  --adm-group: color-mix(in oklab, var(--adm-accent), var(--adm-warn) 65%);
+}
+
+.admin-tab-panel[data-adm-group="diag"] {
+  --adm-group: var(--adm-line-strong);
 }
 
 .adm-card-head {
@@ -4931,16 +5023,86 @@ html.resize-dragging * {
    pan-x" contract does not apply and a phone should stack the fields.
    `align-items: end` keeps the buttons on the control baseline while
    each field is a label-over-control column of its own height. */
+/* `.adm-card-body` is deliberately unpadded so a table can fill it
+   edge to edge (the cells carry their own padding). Everything that is
+   NOT a table therefore supplies its own — a form row and a log list
+   are the two, and without this they sat flush against the card border
+   while the card TITLE above them was indented, which reads as a
+   broken layout rather than a deliberate one. */
 .adm-form-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: end;
+  align-items: center;
   gap: var(--adm-space-3);
+  padding: var(--adm-space-4);
+}
+
+/* A nested form (inside `.adm-subsection`, itself already inside a
+   padded expand row) must not pad twice. */
+.adm-subsection .adm-form-row {
+  padding: 0;
 }
 
 .adm-form-row .adm-field {
   flex: 1 1 10rem;
   min-width: 0;
+}
+
+/* Admin form controls. There was NO rule for these at all: every input
+   and select in the pane rendered with UA defaults, which is why the
+   fields had no padding and the selects looked like nothing else on the
+   page. Checkboxes are excluded — they are not text fields and the
+   sizing below would deform them.
+
+   Inputs and selects are written as two complete rules rather than one
+   shared list plus a select-only override. The override would have to
+   come second and re-declare `padding-right` to keep room for the
+   chevron, and a selector list mixing `:not()` with a bare element also
+   trips `noDescendingSpecificity`. Two self-contained rules cost a few
+   repeated declarations and read unambiguously. */
+.adm-scroll input:not([type="checkbox"]) {
+  min-height: var(--tap-min);
+  padding: 0 var(--adm-space-3);
+  background: var(--adm-surface-0);
+  color: var(--adm-text);
+  border: 1px solid var(--adm-line-strong);
+  border-radius: var(--adm-radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.adm-scroll input:not([type="checkbox"]):focus-visible {
+  outline: 2px solid var(--adm-accent);
+  outline-offset: -2px;
+}
+
+/* The native select chrome is the one control that refuses to match
+   anything else, so it gets `appearance: none` plus an inlined SVG
+   chevron. `background-image` rather than a pseudo-element: a `<select>`
+   cannot host one. */
+.adm-scroll select {
+  appearance: none;
+  min-height: var(--tap-min);
+  padding: 0 var(--adm-space-6) 0 var(--adm-space-3);
+  background-color: var(--adm-surface-0);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='%23888' d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right var(--adm-space-3) center;
+  background-size: 10px;
+  color: var(--adm-text);
+  border: 1px solid var(--adm-line-strong);
+  border-radius: var(--adm-radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.adm-scroll select:focus-visible {
+  outline: 2px solid var(--adm-accent);
+  outline-offset: -2px;
 }
 
 /* A titled block nested INSIDE an expand row (today: the per-vhost
@@ -5028,13 +5190,24 @@ html.resize-dragging * {
   flex-direction: column;
 }
 
+/* Horizontal padding matches `.adm-card-head`'s so a log line starts on
+   the same left edge as the card title above it. `.adm-card-body` has
+   none of its own (a table fills it edge to edge), so a list has to say
+   so itself — without this the rows sat flush against the border while
+   the title was indented. */
 .adm-log-row {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--adm-space-1) var(--adm-space-3);
-  padding: var(--adm-space-2) 0;
+  padding: var(--adm-space-2) var(--adm-space-4);
   border-bottom: 1px solid var(--adm-line);
+}
+
+/* The empty/loading line is a `<p>` inside a bare `<li>`, so it needs
+   the same indent as a real row. */
+.adm-log > li > .adm-empty {
+  padding: var(--adm-space-3) var(--adm-space-4);
 }
 
 .adm-log-row:last-child {

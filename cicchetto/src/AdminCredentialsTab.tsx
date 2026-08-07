@@ -2,7 +2,6 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
-import AdminField from "./admin/AdminField";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
@@ -296,131 +295,112 @@ const AdminCredentialsTab: Component = () => {
             }}
             data-testid="admin-credentials-bind-form"
           >
-            <AdminField label="user" for="admin-credentials-bind-user">
-              <select
-                id="admin-credentials-bind-user"
-                value={bindForm().user_id}
-                onChange={(e) =>
-                  setBindForm({
-                    ...bindForm(),
-                    user_id: (e.currentTarget as HTMLSelectElement).value,
-                  })
-                }
-                data-testid="admin-credentials-bind-user"
-                required
-              >
-                <option value="">— user —</option>
-                <For each={users()}>{(u) => <option value={u.id}>{u.name}</option>}</For>
-              </select>
-            </AdminField>
-            <AdminField label="network" for="admin-credentials-bind-network">
-              <select
-                id="admin-credentials-bind-network"
-                value={bindForm().network_id}
-                onChange={(e) =>
-                  setBindForm({
-                    ...bindForm(),
-                    network_id: (e.currentTarget as HTMLSelectElement).value,
-                  })
-                }
-                data-testid="admin-credentials-bind-network"
-                required
-              >
-                <option value="">— network —</option>
-                <For each={networks()}>{(n) => <option value={String(n.id)}>{n.slug}</option>}</For>
-              </select>
-            </AdminField>
-            <AdminField label="nick" for="admin-credentials-bind-nick">
-              <input
-                id="admin-credentials-bind-nick"
-                type="text"
-                value={bindForm().nick}
-                onInput={(e) =>
-                  setBindForm({ ...bindForm(), nick: (e.currentTarget as HTMLInputElement).value })
-                }
-                data-testid="admin-credentials-bind-nick"
-                required
-              />
-            </AdminField>
-            <AdminField label="auth method" for="admin-credentials-bind-auth-method">
-              <select
-                id="admin-credentials-bind-auth-method"
-                value={bindForm().auth_method}
-                onChange={(e) =>
-                  setBindForm({
-                    ...bindForm(),
-                    auth_method: (e.currentTarget as HTMLSelectElement).value,
-                  })
-                }
-                data-testid="admin-credentials-bind-auth-method"
-              >
-                <For each={IRCAUTH_FSMAUTH_METHOD}>{(m) => <option value={m}>{m}</option>}</For>
-              </select>
-            </AdminField>
-            <AdminField
-              label="password"
-              for="admin-credentials-bind-password"
-              hint="optional — encrypted at rest"
+            <select
+              aria-label="user"
+              value={bindForm().user_id}
+              onChange={(e) =>
+                setBindForm({
+                  ...bindForm(),
+                  user_id: (e.currentTarget as HTMLSelectElement).value,
+                })
+              }
+              data-testid="admin-credentials-bind-user"
+              required
             >
-              <input
-                id="admin-credentials-bind-password"
-                type="password"
-                value={bindForm().password}
-                onInput={(e) =>
-                  setBindForm({
-                    ...bindForm(),
-                    password: (e.currentTarget as HTMLInputElement).value,
-                  })
-                }
-                data-testid="admin-credentials-bind-password"
-              />
-            </AdminField>
-            <AdminField label="sasl user" for="admin-credentials-bind-sasl-user" hint="optional">
-              <input
-                id="admin-credentials-bind-sasl-user"
-                type="text"
-                value={bindForm().sasl_user}
-                onInput={(e) =>
-                  setBindForm({
-                    ...bindForm(),
-                    sasl_user: (e.currentTarget as HTMLInputElement).value,
-                  })
-                }
-                data-testid="admin-credentials-bind-sasl-user"
-              />
-            </AdminField>
-            <AdminField label="realname" for="admin-credentials-bind-realname" hint="optional">
-              <input
-                id="admin-credentials-bind-realname"
-                type="text"
-                value={bindForm().realname}
-                onInput={(e) =>
-                  setBindForm({
-                    ...bindForm(),
-                    realname: (e.currentTarget as HTMLInputElement).value,
-                  })
-                }
-                data-testid="admin-credentials-bind-realname"
-              />
-            </AdminField>
-            <AdminField
-              label="autojoin"
-              for="admin-credentials-bind-autojoin"
-              hint="comma separated"
+              <option value="">— user —</option>
+              <For each={users()}>{(u) => <option value={u.id}>{u.name}</option>}</For>
+            </select>
+            <select
+              aria-label="network"
+              value={bindForm().network_id}
+              onChange={(e) =>
+                setBindForm({
+                  ...bindForm(),
+                  network_id: (e.currentTarget as HTMLSelectElement).value,
+                })
+              }
+              data-testid="admin-credentials-bind-network"
+              required
             >
-              <input
-                id="admin-credentials-bind-autojoin"
-                type="text"
-                value={bindForm().autojoin_channels}
-                onInput={(e) =>
-                  setBindForm({
-                    ...bindForm(),
-                    autojoin_channels: (e.currentTarget as HTMLInputElement).value,
-                  })
-                }
-                data-testid="admin-credentials-bind-autojoin"
-              />
-            </AdminField>
+              <option value="">— network —</option>
+              <For each={networks()}>{(n) => <option value={String(n.id)}>{n.slug}</option>}</For>
+            </select>
+            <input
+              placeholder="nick"
+              aria-label="nick"
+              type="text"
+              value={bindForm().nick}
+              onInput={(e) =>
+                setBindForm({ ...bindForm(), nick: (e.currentTarget as HTMLInputElement).value })
+              }
+              data-testid="admin-credentials-bind-nick"
+              required
+            />
+            <select
+              aria-label="auth method"
+              value={bindForm().auth_method}
+              onChange={(e) =>
+                setBindForm({
+                  ...bindForm(),
+                  auth_method: (e.currentTarget as HTMLSelectElement).value,
+                })
+              }
+              data-testid="admin-credentials-bind-auth-method"
+            >
+              <For each={IRCAUTH_FSMAUTH_METHOD}>{(m) => <option value={m}>auth: {m}</option>}</For>
+            </select>
+            <input
+              placeholder="password"
+              aria-label="password"
+              type="password"
+              value={bindForm().password}
+              onInput={(e) =>
+                setBindForm({
+                  ...bindForm(),
+                  password: (e.currentTarget as HTMLInputElement).value,
+                })
+              }
+              data-testid="admin-credentials-bind-password"
+            />
+            <input
+              placeholder="sasl user"
+              aria-label="sasl user"
+              type="text"
+              value={bindForm().sasl_user}
+              onInput={(e) =>
+                setBindForm({
+                  ...bindForm(),
+                  sasl_user: (e.currentTarget as HTMLInputElement).value,
+                })
+              }
+              data-testid="admin-credentials-bind-sasl-user"
+            />
+            <input
+              placeholder="realname"
+              aria-label="realname"
+              type="text"
+              value={bindForm().realname}
+              onInput={(e) =>
+                setBindForm({
+                  ...bindForm(),
+                  realname: (e.currentTarget as HTMLInputElement).value,
+                })
+              }
+              data-testid="admin-credentials-bind-realname"
+            />
+            <input
+              placeholder="autojoin"
+              aria-label="autojoin"
+              type="text"
+              value={bindForm().autojoin_channels}
+              onInput={(e) =>
+                setBindForm({
+                  ...bindForm(),
+                  autojoin_channels: (e.currentTarget as HTMLInputElement).value,
+                })
+              }
+              data-testid="admin-credentials-bind-autojoin"
+            />
             <button
               type="submit"
               class="adm-btn"
@@ -584,69 +564,54 @@ const CredentialEditFields: Component<{
   };
   return (
     <>
-      <AdminField label="nick" for={`admin-credential-edit-nick-${props.credKey}`}>
-        <input
-          id={`admin-credential-edit-nick-${props.credKey}`}
-          type="text"
-          value={props.form.nick}
-          onInput={(e) => set({ nick: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-credential-edit-nick-${props.credKey}`}
-        />
-      </AdminField>
-      <AdminField label="realname" for={`admin-credential-edit-realname-${props.credKey}`}>
-        <input
-          id={`admin-credential-edit-realname-${props.credKey}`}
-          type="text"
-          value={props.form.realname}
-          onInput={(e) => set({ realname: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-credential-edit-realname-${props.credKey}`}
-        />
-      </AdminField>
-      <AdminField label="sasl user" for={`admin-credential-edit-sasl-user-${props.credKey}`}>
-        <input
-          id={`admin-credential-edit-sasl-user-${props.credKey}`}
-          type="text"
-          value={props.form.sasl_user}
-          onInput={(e) => set({ sasl_user: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-credential-edit-sasl-user-${props.credKey}`}
-        />
-      </AdminField>
-      <AdminField label="auth method" for={`admin-credential-edit-auth-method-${props.credKey}`}>
-        <select
-          id={`admin-credential-edit-auth-method-${props.credKey}`}
-          value={props.form.auth_method}
-          onChange={(e) => set({ auth_method: (e.currentTarget as HTMLSelectElement).value })}
-          data-testid={`admin-credential-edit-auth-method-${props.credKey}`}
-        >
-          <For each={IRCAUTH_FSMAUTH_METHOD}>{(m) => <option value={m}>{m}</option>}</For>
-        </select>
-      </AdminField>
-      <AdminField
-        label="password"
-        for={`admin-credential-edit-password-${props.credKey}`}
-        hint="leave blank to keep the stored one"
+      <input
+        placeholder="nick"
+        aria-label="nick"
+        type="text"
+        value={props.form.nick}
+        onInput={(e) => set({ nick: (e.currentTarget as HTMLInputElement).value })}
+        data-testid={`admin-credential-edit-nick-${props.credKey}`}
+      />
+      <input
+        placeholder="realname"
+        aria-label="realname"
+        type="text"
+        value={props.form.realname}
+        onInput={(e) => set({ realname: (e.currentTarget as HTMLInputElement).value })}
+        data-testid={`admin-credential-edit-realname-${props.credKey}`}
+      />
+      <input
+        placeholder="sasl user"
+        aria-label="sasl user"
+        type="text"
+        value={props.form.sasl_user}
+        onInput={(e) => set({ sasl_user: (e.currentTarget as HTMLInputElement).value })}
+        data-testid={`admin-credential-edit-sasl-user-${props.credKey}`}
+      />
+      <select
+        aria-label="auth method"
+        value={props.form.auth_method}
+        onChange={(e) => set({ auth_method: (e.currentTarget as HTMLSelectElement).value })}
+        data-testid={`admin-credential-edit-auth-method-${props.credKey}`}
       >
-        <input
-          id={`admin-credential-edit-password-${props.credKey}`}
-          type="password"
-          value={props.form.password}
-          onInput={(e) => set({ password: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-credential-edit-password-${props.credKey}`}
-        />
-      </AdminField>
-      <AdminField
-        label="autojoin"
-        for={`admin-credential-edit-autojoin-${props.credKey}`}
-        hint="comma separated"
-      >
-        <input
-          id={`admin-credential-edit-autojoin-${props.credKey}`}
-          type="text"
-          value={props.form.autojoin_channels}
-          onInput={(e) => set({ autojoin_channels: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-credential-edit-autojoin-${props.credKey}`}
-        />
-      </AdminField>
+        <For each={IRCAUTH_FSMAUTH_METHOD}>{(m) => <option value={m}>auth: {m}</option>}</For>
+      </select>
+      <input
+        placeholder="password"
+        aria-label="password"
+        type="password"
+        value={props.form.password}
+        onInput={(e) => set({ password: (e.currentTarget as HTMLInputElement).value })}
+        data-testid={`admin-credential-edit-password-${props.credKey}`}
+      />
+      <input
+        placeholder="autojoin"
+        aria-label="autojoin"
+        type="text"
+        value={props.form.autojoin_channels}
+        onInput={(e) => set({ autojoin_channels: (e.currentTarget as HTMLInputElement).value })}
+        data-testid={`admin-credential-edit-autojoin-${props.credKey}`}
+      />
     </>
   );
 };

@@ -46,7 +46,15 @@ const AdminNav: Component<Props> = (props) => {
     >
       <For each={props.groups}>
         {(group) => (
-          <div class="adm-nav-group" role="presentation">
+          <div class="adm-nav-group" role="presentation" data-adm-group={group.key}>
+            {/* Visible on the desktop rail, CSS-hidden on the mobile chip
+                strip: there the three headings ate a whole line of a
+                402px screen to say something the operator already knows
+                from the tab they just tapped. On mobile the group reads
+                from the accent stripe along the top of the tab's cards
+                instead (`[data-adm-group]` on the panel, same key). Kept
+                in the DOM either way so a screen reader still gets the
+                grouping. */}
             <p class="adm-nav-group-label">{group.label}</p>
             <For each={props.tabs.filter((tab) => tab.group === group.key)}>
               {(tab) => (

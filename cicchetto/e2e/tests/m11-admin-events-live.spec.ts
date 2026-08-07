@@ -39,12 +39,12 @@ async function openAdminPane(page: import("@playwright/test").Page): Promise<voi
   await openAdminConsole(page);
 }
 
-test("M-11 Events tab renders + receives reaper_swept after Force Reap", async ({ page }) => {
+test("M-11 Events tab renders + receives reaper_swept after Sweep visitors", async ({ page }) => {
   await adminFriendlyLogin(page, getSeededAdmin());
   await openAdminPane(page);
 
   // Mount triggered the channel join + snapshot push. Switch to
-  // Networks tab to trigger Force Reap (which emits admin event
+  // Networks tab to trigger Sweep visitors (which emits admin event
   // `reaper_swept` per CRIT-2 fix — unconditional emit from
   // Operator.reap_visitors/1).
   await page.getByTestId("admin-tab-networks").click();
@@ -52,7 +52,7 @@ test("M-11 Events tab renders + receives reaper_swept after Force Reap", async (
 
   const reap = page.getByTestId("admin-networks-force-reap");
   await reap.click();
-  await expect(reap).toHaveText(/^Confirm reap\?$/);
+  await expect(reap).toHaveText(/^Sweep now\?$/);
   await reap.click();
   await expect(page.getByTestId("admin-networks-reap-result")).toBeVisible({ timeout: 5_000 });
 

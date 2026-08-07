@@ -2,7 +2,6 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
-import AdminField from "./admin/AdminField";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
@@ -220,39 +219,36 @@ const AdminUsersTab: Component = () => {
             }}
             data-testid="admin-users-create-form"
           >
-            <AdminField label="name" for="admin-users-create-name">
-              <input
-                id="admin-users-create-name"
-                type="text"
-                value={createForm().name}
-                onInput={(e) =>
-                  setCreateForm({
-                    ...createForm(),
-                    name: (e.currentTarget as HTMLInputElement).value,
-                  })
-                }
-                data-testid="admin-users-create-name"
-                required
-              />
-            </AdminField>
-            <AdminField label="password" for="admin-users-create-password">
-              <input
-                id="admin-users-create-password"
-                type="password"
-                value={createForm().password}
-                onInput={(e) =>
-                  setCreateForm({
-                    ...createForm(),
-                    password: (e.currentTarget as HTMLInputElement).value,
-                  })
-                }
-                data-testid="admin-users-create-password"
-                required
-              />
-            </AdminField>
-            {/* Not an `AdminField`: that primitive stacks label ABOVE
-                control, which is right for a text input and wrong for a
-                checkbox, where the label belongs beside the box. */}
+            <input
+              placeholder="name"
+              aria-label="name"
+              type="text"
+              value={createForm().name}
+              onInput={(e) =>
+                setCreateForm({
+                  ...createForm(),
+                  name: (e.currentTarget as HTMLInputElement).value,
+                })
+              }
+              data-testid="admin-users-create-name"
+              required
+            />
+            <input
+              placeholder="password"
+              aria-label="password"
+              type="password"
+              value={createForm().password}
+              onInput={(e) =>
+                setCreateForm({
+                  ...createForm(),
+                  password: (e.currentTarget as HTMLInputElement).value,
+                })
+              }
+              data-testid="admin-users-create-password"
+              required
+            />
+            {/* A checkbox carries its label beside it, not inside it as a
+                placeholder the way the text fields above do. */}
             <label class="admin-users-create-admin adm-check">
               <input
                 type="checkbox"
@@ -273,7 +269,7 @@ const AdminUsersTab: Component = () => {
               disabled={creating() || createForm().name === "" || createForm().password === ""}
               data-testid="admin-users-create-submit"
             >
-              Create user
+              Create
             </button>
           </form>
         </AdminCard>
@@ -365,21 +361,17 @@ const AdminUsersTab: Component = () => {
                               void onSubmitRotate(u);
                             }}
                           >
-                            <AdminField
-                              label={`new password for ${u.name}`}
-                              for={`admin-user-rotate-input-${u.id}`}
-                            >
-                              <input
-                                id={`admin-user-rotate-input-${u.id}`}
-                                type="password"
-                                value={passwordInput()}
-                                onInput={(e) =>
-                                  setPasswordInput((e.currentTarget as HTMLInputElement).value)
-                                }
-                                data-testid={`admin-user-rotate-input-${u.id}`}
-                                required
-                              />
-                            </AdminField>
+                            <input
+                              placeholder={`new password for ${u.name}`}
+                              aria-label={`new password for ${u.name}`}
+                              type="password"
+                              value={passwordInput()}
+                              onInput={(e) =>
+                                setPasswordInput((e.currentTarget as HTMLInputElement).value)
+                              }
+                              data-testid={`admin-user-rotate-input-${u.id}`}
+                              required
+                            />
                             <button
                               type="submit"
                               class="adm-btn"

@@ -105,6 +105,13 @@ const AdminPane: Component<Props> = (props) => {
 
   const isActive = (k: TabKey): boolean => currentTab() === k;
 
+  // The active tab's group, stamped on every tabpanel as
+  // `data-adm-group`. On mobile the nav's group headings are CSS-hidden
+  // (they cost a whole line of a 402px screen), so this is what tells
+  // the operator which section they are in: default.css draws an accent
+  // stripe along the top of the panel's cards, one colour per group.
+  const currentGroup = (): string => TABS.find((t) => t.key === currentTab())?.group ?? "";
+
   // #215 — `startAdminEventsSubscription` joins `grappa:admin:events` and
   // installs BOTH the admin-events handler AND the session-log handler on
   // the one channel (adminEvents.ts owns the join/leave; it calls
@@ -146,6 +153,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-visitors"
           aria-labelledby="admin-tab-visitors-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminVisitorsTab />
         </div>
@@ -156,6 +164,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-sessions"
           aria-labelledby="admin-tab-sessions-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminSessionsTab />
         </div>
@@ -166,6 +175,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-networks"
           aria-labelledby="admin-tab-networks-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminNetworksTab />
         </div>
@@ -176,6 +186,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-vhosts"
           aria-labelledby="admin-tab-vhosts-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminVhostsTab />
         </div>
@@ -186,6 +197,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-users"
           aria-labelledby="admin-tab-users-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminUsersTab />
         </div>
@@ -196,6 +208,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-credentials"
           aria-labelledby="admin-tab-credentials-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminCredentialsTab />
         </div>
@@ -206,6 +219,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-events"
           aria-labelledby="admin-tab-events-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminEventsTab />
         </div>
@@ -216,6 +230,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-session_log"
           aria-labelledby="admin-tab-session_log-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminSessionLogTab />
         </div>
@@ -226,6 +241,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-settings"
           aria-labelledby="admin-tab-settings-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminSettingsTab />
         </div>
@@ -236,6 +252,7 @@ const AdminPane: Component<Props> = (props) => {
           id="admin-tab-debug"
           aria-labelledby="admin-tab-debug-handle"
           class="admin-tab-panel"
+          data-adm-group={currentGroup()}
         >
           <AdminDebugTab />
         </div>

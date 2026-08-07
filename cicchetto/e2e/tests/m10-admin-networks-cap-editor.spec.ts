@@ -1,5 +1,5 @@
 // M-cluster M-10 — admin Networks tab end-to-end: list + inline
-// cap editor + per-row Save + Force Reap + (when applicable) Reset
+// cap editor + per-row Save + Sweep visitors + (when applicable) Reset
 // Circuit.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT —
@@ -107,14 +107,14 @@ test("M-10 cap editor: edit + Save round-trips through server", async ({ page })
   await expect(sessionsInput).toHaveValue(current);
 });
 
-test("M-10 Force Reap inline-confirm fires + renders swept count", async ({ page }) => {
+test("M-10 Sweep visitors inline-confirm fires + renders swept count", async ({ page }) => {
   await adminFriendlyLogin(page, getSeededAdmin());
   await openAdminNetworksTab(page);
 
   const reap = page.getByTestId("admin-networks-force-reap");
-  await expect(reap).toHaveText(/^Force Reap$/);
+  await expect(reap).toHaveText(/^Sweep visitors$/);
   await reap.click();
-  await expect(reap).toHaveText(/^Confirm reap\?$/);
+  await expect(reap).toHaveText(/^Sweep now\?$/);
   await expect(reap).toHaveClass(/confirming/);
   await reap.click();
 

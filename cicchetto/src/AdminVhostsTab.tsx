@@ -2,7 +2,6 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
-import AdminField from "./admin/AdminField";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
@@ -302,18 +301,16 @@ const AdminVhostsTab: Component = () => {
             }}
             data-testid="admin-vhosts-create-form"
           >
-            <AdminField label="address" for="vhost-address-select">
-              <select
-                id="vhost-address-select"
-                value={createAddress()}
-                onChange={(e) => setCreateAddress((e.currentTarget as HTMLSelectElement).value)}
-                data-testid="vhost-address-select"
-                required
-              >
-                <option value="">choose an address</option>
-                <For each={hostCandidates()}>{(addr) => <option value={addr}>{addr}</option>}</For>
-              </select>
-            </AdminField>
+            <select
+              aria-label="address"
+              value={createAddress()}
+              onChange={(e) => setCreateAddress((e.currentTarget as HTMLSelectElement).value)}
+              data-testid="vhost-address-select"
+              required
+            >
+              <option value="">choose an address</option>
+              <For each={hostCandidates()}>{(addr) => <option value={addr}>{addr}</option>}</For>
+            </select>
             <label class="adm-check">
               <input
                 type="checkbox"
@@ -334,7 +331,7 @@ const AdminVhostsTab: Component = () => {
                 data-testid="vhost-create-generally-available"
                 title={generallyAvailableLocked(createInPool()) ? IN_POOL_LOCK_TITLE : undefined}
               />
-              generally available
+              public
             </label>
             <button
               type="submit"
@@ -342,7 +339,7 @@ const AdminVhostsTab: Component = () => {
               disabled={creating() || createAddress().trim() === ""}
               data-testid="vhost-create-submit"
             >
-              Create vhost
+              Create
             </button>
           </form>
         </AdminCard>
@@ -362,7 +359,7 @@ const AdminVhostsTab: Component = () => {
                 <tr>
                   <th class="adm-table-grow">address</th>
                   <th>in pool</th>
-                  <th>generally available</th>
+                  <th>public</th>
                   <th class="adm-table-sticky-actions">actions</th>
                 </tr>
               </thead>
@@ -399,7 +396,7 @@ const AdminVhostsTab: Component = () => {
                                 void onToggleGeneral(v);
                               }}
                               data-testid={`vhost-generally-available-toggle-${v.id}`}
-                              aria-label={`generally available for ${v.address}`}
+                              aria-label={`public for ${v.address}`}
                               title={
                                 generallyAvailableLocked(v.in_pool) ? IN_POOL_LOCK_TITLE : undefined
                               }

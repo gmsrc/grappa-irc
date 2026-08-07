@@ -1,4 +1,5 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
+import AdminBadge, { type Tone } from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
@@ -117,7 +118,9 @@ const AdminSessionLogTab: Component = () => {
                 {(ev) => (
                   <li class="adm-log-row" data-testid={`session-log-row-${ev.event}`}>
                     <time class="adm-log-at">{ev.at}</time>
-                    <span class={`adm-log-kind event-${ev.event}`}>{eventLabel(ev.event)}</span>
+                    <AdminBadge tone={EVENT_TONE[ev.event]} class={`event-${ev.event}`}>
+                      {eventLabel(ev.event)}
+                    </AdminBadge>
                     <span class="adm-log-text">{subjectLabel(ev)}</span>
                     <span class="adm-log-detail">{renderDetail(ev)}</span>
                     {/* `.session-log-session-id` is a CLASS contract, not just
@@ -136,6 +139,26 @@ const AdminSessionLogTab: Component = () => {
       </div>
     </div>
   );
+};
+
+// Lifecycle event → badge tone. Unlike AdminEventsTab's ~25 unranked
+// admin-event kinds (grey chips there, on purpose), this is a SEVEN-value
+// closed set that maps cleanly onto what an operator wants to spot while
+// scanning: the session came up, the session went away, or something is
+// retrying.
+//
+// `disconnected` is NEUTRAL, not danger: a session ending is the normal
+// end of its life, and the log carries a `clean` flag for the case that
+// isn't. `backoff` is the warn — a session actively failing to reconnect
+// is the one line worth catching mid-scroll.
+const EVENT_TONE: Record<SessionLogEvent, Tone> = {
+  connected: "ok",
+  registered: "ok",
+  identified: "ok",
+  deidentified: "warn",
+  disconnected: "neutral",
+  backoff: "warn",
+  nick_changed: "neutral",
 };
 
 // Human label for a lifecycle event kind — cic owns the wording.

@@ -44,7 +44,7 @@ import { installAdminEvents, uninstallAdminEvents } from "../lib/adminEvents";
 // server-echoed value) + per-row Reset Circuit (InlineConfirmButton,
 // visible only when circuit_state !== null).
 //
-// Tab-level surface: Force Reap (InlineConfirmButton) in the header
+// Tab-level surface: Sweep visitors (InlineConfirmButton) in the header
 // + ↻ refresh + transient success line for the last reap count.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT.
@@ -419,7 +419,7 @@ describe("AdminNetworksTab", () => {
     expect(badge.textContent).toContain("12");
   });
 
-  it("Force Reap inline-confirm fires POST + renders swept count line", async () => {
+  it("Sweep visitors inline-confirm fires POST + renders swept count line", async () => {
     const api = await import("../lib/api");
     vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT]);
     vi.mocked(api.adminRunReaper).mockResolvedValue({
@@ -430,9 +430,9 @@ describe("AdminNetworksTab", () => {
     render(() => <AdminNetworksTab />);
 
     const btn = (await screen.findByTestId("admin-networks-force-reap")) as HTMLButtonElement;
-    expect(btn.textContent?.trim()).toBe("Force Reap");
+    expect(btn.textContent?.trim()).toBe("Sweep visitors");
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm reap?");
+    expect(btn.textContent?.trim()).toBe("Sweep now?");
     fireEvent.click(btn);
     await waitFor(() => {
       expect(api.adminRunReaper).toHaveBeenCalledWith("test-bearer");
