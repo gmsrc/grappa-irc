@@ -33426,3 +33426,99 @@ affordance's own count and auto-hide DO drop the muted window, because they read
 the same ordered list. A button that says "2" and cycles through 1 would be the
 lie. And when every unread window is muted the cycle is a no-op (Q2), which the
 empty list gives for free.
+## 2026-08-07 — #976: the invite got an exit, and #902's "allowed to be lost" is retired
+
+An inbound `/invite` could be accepted or ignored, and ignoring it did
+not work: the banner came back at the top of the page on every reload,
+for as long as the session lived. Reported by Mezmerize on #it-opers —
+"una volta chiuso con la x non dovresti più riproporlo ... sennò è cazzo
+stalking". vjt's ruling, same thread: **serve il decline**, and the `×`
+IS it — one control, not a decline button beside a hide button.
+
+**The old behaviour was documented, deliberate, and resting on something
+that was not true.** #902 ruled the banner's `×` episode-scoped on the
+grounds that "an invite is allowed to be lost, and the peer can invite
+again"; the reappearance after a reload was intent, written into three
+places (`ErrorBanners.tsx`, `windowClose.ts`, `WindowState`). But
+nothing in the code could lose an invite. In
+`lib/grappa/session/window_state.ex` the `invited_by` key — and with it
+the `:invited` state — was dropped ONLY by `set_pending/2`,
+`set_joined/2` and the failure/park transitions, i.e. by JOINing.
+Nothing else cleared it and nothing expired it, while
+`invited_windows/2` re-emitted `window_invited` for every held channel
+on every cold WS subscribe. So the escape hatch existed in the prose and
+not in the program: the invite was not lost, it was re-asserted until
+the operator gave in. **An offer you cannot refuse is not an offer** —
+the ruling was sound about invites and wrong about this codebase, which
+is the failure mode CLAUDE.md's "directions over code" cuts the other
+way. All three sites now say what the code does.
+
+**The verb is a guarded drop, not a new transition shape.**
+`WindowState.decline_invite/2` returns `{:ok, ws}` only when the channel
+is `:invited`, and the drop it performs IS `set_parted/2`'s — called,
+not respelled, because a refused invite leaves no window and "absence of
+state" is already this module's projection for that. The guard is the
+part that is load-bearing: this verb is reachable over HTTP
+(`DELETE /networks/:slug/invites/:channel`), so an unguarded
+channel-keyed drop would let a stray or forged decline erase a `:joined`
+or `:kicked` window. `{:error, :not_invited}` everywhere else, unknown
+channels included — a decline of something that is not an invite is a
+caller bug, not a no-op to swallow.
+
+**Nothing goes upstream, and the copy says so.** IRC has no DECLINE:
+the invite exists only as session-local window state plus the persisted
+`:server_event` row that recorded it. The peer learns nothing. That was
+worth deciding rather than omitting, and worth SAYING in the UI — an
+operator who suspects refusing sends a snub will keep ignoring the
+banner, which is the reported behaviour with extra steps. The banner
+reads "… × declines it quietly — nothing is sent to the IRC server", and
+the `×`'s accessible name names the channel it declines. A server-side
+test asserts no line carrying the channel reaches the socket, so
+"helpfully" turning this into a wire message is a red.
+
+**The fan-out is the non-obvious half.** `:invited` is per-SESSION
+state that reaches clients by broadcast, so the decline had to travel
+the same way: a new user-topic event, `window_invite_declined`. Without
+it, device B keeps a banner for an invite the server no longer holds and
+re-shows it on B's next reload — the original complaint with one extra
+step. The payload deliberately carries NO `state` field, unlike every
+sibling window payload: a declined invite lands in no state, and a
+`state: "declined"` would mint a seventh window state that cic mirrors
+into `windowStateByChannel`, redrawing as a greyed pseudo-row the very
+row the operator just refused. Additive event kind ⇒ no
+`Grappa.Protocol` bump; an older client ignores it and merely keeps its
+pre-#976 behaviour on its own reload.
+
+**The invite is its own REST resource**, not a verb hung off
+`/channels/:channel_id`. Accepting is already `POST /channels` (a JOIN),
+so deleting the OFFER and deleting the MEMBERSHIP are different nouns;
+folding them into one URL would make its meaning depend on server-side
+window state. It is also NOT routed through `windowClose.ts`'s
+`partAndForget`: PARTing a channel you were never in is a 442 no-op
+whose only real effect is the server-side cleanup, and dressing a
+refusal as a leave would make it inherit de-autojoin and
+`channels_changed` semantics it has no business with. The two doors stay
+separate on purpose.
+
+**Does the decline need to survive a session restart? No, and that is
+measured, not assumed.** `window_states` lives in `Session.Server`'s
+in-memory struct — the module's own moduledoc says a crash drops it on
+the floor, derived from autojoin's natural transition flow on respawn
+(CP15 Q5). Nothing persists `:invited`: not `autojoin_channels`, not the
+credential, nothing. So a session restart already forgets every invite,
+declined or not, and a peer would have to INVITE again to raise the
+banner. Persisting the refusal would mean inventing a durable
+"declined" record whose only job is to outlive state that itself does
+not outlive a restart — a parallel structure with lifecycle and
+housekeeping of its own, to solve a case the restart already solves.
+Not built.
+
+**One cic simplification rode along.** `ErrorBanners.tsx` carried a
+`source === "push-optin" ? declinePushOptin() : dismissBanner(...)`
+ternary — the owner's one piece of per-source knowledge. #976 would have
+made it three arms, the third having to reconstruct the invite's
+(network, channel) by parsing `entry.id` back apart. Instead the verb
+became data: `BannerEntry.dismiss` (a `BannerAction`, so it carries the
+`×`'s accessible name too), supplied by the registry that already holds
+each source's context. Push-optin moved onto it as well — no half
+migration — and the owner now has no source-specific branch at all.

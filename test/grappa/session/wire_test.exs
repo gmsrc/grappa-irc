@@ -454,6 +454,22 @@ defmodule Grappa.Session.WireTest do
     end
   end
 
+  describe "window_invite_declined/2" do
+    test "carries kind + network + channel and NO state field (#976)" do
+      # #976 — the operator refused the invite. Whole-map equality, and the
+      # absent `state` is the assertion with teeth: every sibling window
+      # payload names a state, this one deliberately does not, because a
+      # declined invite lands in NO window state. Adding `state: :declined`
+      # "for symmetry" would mint a seventh state that cic mirrors into
+      # `windowStateByChannel`, redrawing the row the operator just refused.
+      assert Wire.window_invite_declined("azzurra", "#grappa") == %{
+               kind: :window_invite_declined,
+               network: "azzurra",
+               channel: "#grappa"
+             }
+    end
+  end
+
   describe "join_failed/4" do
     test "carries the failure reason + numeric" do
       assert Wire.join_failed("azzurra", "#grappa", "Cannot join (+i)", 473) == %{

@@ -1,4 +1,4 @@
-import { postJoin } from "./api";
+import { deleteInvite, postJoin } from "./api";
 import { token } from "./auth";
 import { canonicalChannel, channelKey } from "./channelKey";
 import { requestConfirm } from "./confirmDialog";
@@ -81,6 +81,43 @@ async function performJoin(networkSlug: string, rawChannel: string): Promise<voi
 // never foregrounds a phantom window (#244).
 export function acceptInvite(networkSlug: string, rawChannel: string): void {
   void performJoin(networkSlug, rawChannel);
+}
+
+// #976 — THE invite-REFUSAL verb, and the other half of the question
+// `acceptInvite` answers. It lives here beside its twin rather than in
+// windowClose.ts: the two are the two answers to one question, and the
+// window-close file owns the PART, which this is emphatically not.
+//
+// This REVERSES the #902 ruling that the banner's × writes nothing. That
+// ruling rested on "an invite is allowed to be lost", which was true in
+// principle and false in the code: nothing ever dropped an `:invited` window
+// except JOINing it, so the server re-announced the invite on every cold
+// subscribe until the operator gave in (#976 — "sennò è cazzo stalking"). The
+// × is the decline now; there is no second "hide for now" affordance, because
+// one control that means one thing beats two controls the operator has to
+// tell apart on a banner.
+//
+// NOTHING is sent upstream — IRC has no DECLINE — so the peer never learns
+// they were refused. The banner copy says so; do not quietly turn this into a
+// wire message.
+//
+// No confirm gate (unlike `confirmLeaveChannel`): a refused invite costs
+// nothing to undo, since the peer can simply invite again. No optimistic
+// local drop either — the server owns window state, and its
+// `window_invite_declined` broadcast is what clears the banner, here and on
+// every other device (CLAUDE.md: cic NEVER originates state).
+export function declineInvite(networkSlug: string, rawChannel: string): void {
+  const t = token();
+  if (!t) return; // post-logout race — nothing to decline with.
+  // RAW on the wire, as with the JOIN (#510/#516/#525): only the server
+  // knows this network's CASEMAPPING, and it folds the window key itself.
+  void deleteInvite(t, networkSlug, rawChannel).catch((err: unknown) => {
+    // Same fire-and-forget posture as performJoin: no dedicated error
+    // surface. A `not_invited` here means the window already left `:invited`
+    // (joined, or declined on another device) — the banner is about to
+    // disappear from that state change anyway.
+    console.warn(`[#976 decline] failed to decline ${rawChannel} on ${networkSlug}:`, err);
+  });
 }
 
 // Already in the channel ⇒ switch, no modal. Otherwise confirm, then join on

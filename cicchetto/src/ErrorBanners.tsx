@@ -8,7 +8,6 @@ import {
   sanitizeBanners,
   visibleBanners,
 } from "./lib/errorBanners";
-import { declinePushOptin } from "./lib/pushOptin";
 
 // #119 — unified stacked error-banner owner.
 //
@@ -50,22 +49,20 @@ const ErrorBanners: Component = () => {
           {(entry) => (
             <BannerSlot
               entry={entry}
-              // #459 — push-optin's × is a PERSISTENT decline (localStorage, via
-              // its owner) so the offer never returns; the fault sources use the
-              // episode-scoped dismissed-set (returns when the fault recurs).
-              // The one source-specific branch: push-optin is an offer, not a
-              // fault, so its dismiss semantics genuinely differ. (BannerEntry
-              // stays unchanged — #459 keeps its one-action-plus-dismiss shape.)
+              // The × means "hide this until the fault recurs" — UNLESS the
+              // source says otherwise. #459's push-optin decline (persisted in
+              // localStorage) and #976's invite decline (a REST call the server
+              // fans out) both do, and both now ride `entry.dismiss` rather
+              // than a branch here.
               //
-              // #902 — `invite` is an offer too, yet takes the EPISODE-scoped
-              // path, not push-optin's persistent one. Ruled deliberately: an
-              // invite is allowed to be lost, so nothing is written either way
-              // and a dismissed invite reappears after a reload (the server
-              // re-emits `window_invited` on every cold subscribe). The
-              // dismiss is keyed per ENTRY, so hiding one invite leaves the
-              // others — and any later one — alone.
+              // #976 reversed #902 on the invite specifically: its × used to
+              // take this episode-scoped path deliberately, so a hidden invite
+              // returned on the next reload. It is a real decline now.
+              //
+              // The default stays keyed per ENTRY, not per source, so hiding
+              // one banner leaves its siblings — and any later one — alone.
               onDismiss={() =>
-                entry.source === "push-optin" ? declinePushOptin() : dismissBanner(entryId(entry))
+                entry.dismiss ? entry.dismiss.onAction() : dismissBanner(entryId(entry))
               }
             />
           )}

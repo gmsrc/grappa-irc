@@ -81,6 +81,7 @@ defmodule Grappa.Session.Wire do
           | :joined
           | :window_pending
           | :window_invited
+          | :window_invite_declined
           | :join_failed
           | :kicked
           | :away_confirmed
@@ -394,6 +395,19 @@ defmodule Grappa.Session.Wire do
           channel: String.t(),
           state: :invited,
           inviter: String.t()
+        }
+
+  # #976 — carries NO `state` field, and its absence is the contract. Every
+  # sibling window payload names the state the window landed in; a declined
+  # invite lands in no state at all — the window is gone, and "no key in the
+  # map" is how this codebase has always projected that (see `set_parted/2`).
+  # Inventing a `state: :declined` here would mint a seventh window state that
+  # cic would faithfully mirror into `windowStateByChannel`, resurrecting as a
+  # greyed pseudo-row the very row the operator just refused.
+  @type window_invite_declined_payload :: %{
+          kind: :window_invite_declined,
+          network: String.t(),
+          channel: String.t()
         }
 
   @type join_failed_payload :: %{
@@ -1196,6 +1210,31 @@ defmodule Grappa.Session.Wire do
       state: :invited,
       inviter: inviter
     }
+  end
+
+  @doc """
+  #976 — the operator REFUSED an invite: the `:invited` window is dropped and
+  every device must drop the banner with it.
+
+  Broadcast on `Topic.user(...)`, the same carrier `window_invited/3` came in
+  on, and for a stronger reason than the chicken-and-egg one: `:invited` is
+  per-SESSION state that fans out to every device, so a decline taken on
+  phone A must reach laptop B — otherwise B keeps the banner and re-renders
+  it on its next reload, which is the #976 complaint with one extra step.
+
+  There is deliberately no `state` field (see `window_invite_declined_payload`)
+  and no per-channel twin: cic never subscribed per-channel for an `:invited`
+  window, so absence there is unobservable — this event IS the observation.
+  Nothing is sent upstream; IRC has no DECLINE.
+
+  ADDITIVE (a new event kind), so no `Grappa.Protocol` bump: an older client
+  ignores it and simply keeps behaving as it did pre-#976 (the banner returns
+  on ITS next reload; the server-side state is gone either way).
+  """
+  @spec window_invite_declined(String.t(), String.t()) :: window_invite_declined_payload()
+  def window_invite_declined(network_slug, channel)
+      when is_binary(network_slug) and is_binary(channel) do
+    %{kind: :window_invite_declined, network: network_slug, channel: channel}
   end
 
   @doc """

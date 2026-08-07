@@ -55,7 +55,14 @@ import { seedUmodes } from "./umodes";
 import { setWhoisBundle } from "./whoisCard";
 import { setWhoReply } from "./whoModal";
 import { setWhowasBundle } from "./whowasCard";
-import { setFailed, setInvited, setJoined, setKicked, setPending } from "./windowState";
+import {
+  forceParted,
+  setFailed,
+  setInvited,
+  setJoined,
+  setKicked,
+  setPending,
+} from "./windowState";
 import {
   isMessageKind,
   narrowIsupportChanged,
@@ -497,6 +504,17 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         // anonymous-sender sentinel the server uses for a prefix-less
         // INVITE, so the banner has one nameless shape, not two.
         inviter: typeof r.inviter === "string" && r.inviter !== "" ? r.inviter : "*",
+      };
+    case "window_invite_declined":
+      // #976 — no `state` to validate: a declined invite lands in no window
+      // state, so the payload carries none (see the server's
+      // `window_invite_declined_payload`). Network + channel are the whole
+      // contract; a payload missing either names no window and is dropped.
+      if (typeof r.network !== "string" || typeof r.channel !== "string") return null;
+      return {
+        kind: "window_invite_declined",
+        network: r.network,
+        channel: r.channel,
       };
     case "connection_state_changed": {
       // REV-J M15: pre-fix this arm carried only the wider transition
@@ -1242,6 +1260,22 @@ moduleRoot(() => {
           // single state owner ("derive, don't duplicate") — the banner
           // registry only projects it.
           setInvited(channelKey(payload.network, payload.channel), payload.inviter);
+          return;
+
+        case "window_invite_declined":
+          // #976 — the invite was REFUSED (this device's × or another
+          // device's). The server has already dropped the `:invited` window,
+          // so mirroring it is a pure drop: `forceParted` clears the state
+          // map + `invitedByChannel`, the banner registry stops deriving the
+          // entry, and the cold-subscribe backfill has nothing left to
+          // re-emit — which is the whole point of the issue.
+          //
+          // `forceParted`, not `setParted`: the #495 stale-echo guard makes
+          // `setParted` a no-op on a "pending" key, and a decline racing a
+          // JOIN the operator started elsewhere must still clear the invite
+          // state it names. The server refuses to decline anything that is
+          // not `:invited`, so this event never arrives for a live window.
+          forceParted(channelKey(payload.network, payload.channel));
           return;
 
         case "whois_bundle": {

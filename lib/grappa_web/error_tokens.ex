@@ -148,6 +148,12 @@ defmodule GrappaWeb.ErrorTokens do
           | :last_admin
           | :share_token_expired
           | :share_token_consumed
+          # #976 — DELETE /networks/:slug/invites/:channel on a window that
+          # holds no invite. Distinct from `not_found` on purpose: the client
+          # derives its decline affordance from server state, so this token
+          # names a real divergence (already joined, or declined on another
+          # device) rather than a bad URL.
+          | :not_invited
           | :validation_failed
 
   @typedoc """

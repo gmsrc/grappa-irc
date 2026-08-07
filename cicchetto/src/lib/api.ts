@@ -1037,6 +1037,21 @@ export type WireUserEvent =
       inviter: string;
     }
   | {
+      // #976 — the operator DECLINED an invite (the banner's ×). Server's
+      // `handle_call({:decline_invite, ch})` drops the `:invited` window and
+      // emits this on `Topic.user/1`, so the drop reaches EVERY device: the
+      // state is per-session, and a decline taken on the phone has to clear
+      // the laptop's banner or the laptop re-shows it on its next reload.
+      // userTopic.ts dispatches into `forceParted(channelKey(...))`.
+      //
+      // No `state` field, deliberately: a declined invite lands in no window
+      // state at all — absence is the projection (mirrors the server's
+      // `window_invite_declined_payload`).
+      kind: "window_invite_declined";
+      network: string;
+      channel: string;
+    }
+  | {
       kind: "connection_state_changed";
       // #211 phase 6 — nullable: a VISITOR credential's transition
       // carries user_id: null (visitor_id set instead — the XOR FK).
@@ -2310,6 +2325,30 @@ export async function postPart(
 ): Promise<void> {
   const res = await fetch(
     `/networks/${encodeURIComponent(networkSlug)}/channels/${encodeURIComponent(channelName)}`,
+    {
+      method: "DELETE",
+      headers: buildHeaders(token),
+    },
+  );
+  if (!res.ok) throw await readError(res);
+}
+
+// #976 — refuse an inbound invite. Its own resource, not a verb on
+// `/channels/:channel_id`: accepting is already `POST /channels` (a JOIN), so
+// deleting the OFFER and deleting the MEMBERSHIP are different nouns and must
+// not share a URL whose meaning depends on server-side window state.
+//
+// Nothing reaches the IRC server — there is no DECLINE verb in the protocol.
+// The call drops the session's `:invited` window and fans the drop out on the
+// user topic (`window_invite_declined`), which is what makes the refusal stick
+// across a reload AND across the operator's other devices.
+export async function deleteInvite(
+  token: string,
+  networkSlug: string,
+  channelName: string,
+): Promise<void> {
+  const res = await fetch(
+    `/networks/${encodeURIComponent(networkSlug)}/invites/${encodeURIComponent(channelName)}`,
     {
       method: "DELETE",
       headers: buildHeaders(token),

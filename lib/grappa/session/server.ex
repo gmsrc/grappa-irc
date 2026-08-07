@@ -2581,6 +2581,46 @@ defmodule Grappa.Session.Server do
     end
   end
 
+  # #976 — the operator DECLINED an inbound invite. Purely local: IRC has no
+  # DECLINE verb, so nothing is framed upstream and `state.client` is never
+  # touched. The whole transaction is "drop the `:invited` window, then tell
+  # every device".
+  #
+  # A `call`, not a cast, for two reasons that both matter at the REST door:
+  # `{:error, :not_invited}` has to reach the controller (a decline of a
+  # window that is not an invite is a caller bug, not something to swallow),
+  # and the fan-out must have happened before the HTTP response returns, so
+  # the acting device's own banner cannot be raced by its own optimism.
+  #
+  # ORDER: mutate, THEN broadcast — the #373 rename lesson. The broadcast is a
+  # truthful "the decline is fully applied" barrier, so a device that reacts to
+  # it by re-reading the session (or reconnecting into `invited_windows/2`)
+  # cannot observe the invite still standing.
+  #
+  # #537 — the facade passes `channel` RAW; the window-state map is keyed by
+  # the network-folded channel (EventRouter folds at ingress before
+  # `{:invited, …}` is ever emitted), so fold here or a `#Chan` decline of a
+  # `#chan` invite silently 404s.
+  @impl GenServer
+  def handle_call({:decline_invite, channel}, _, state) when is_binary(channel) do
+    chan_key = fold_key(state, channel)
+
+    case WindowState.decline_invite(state.window_state, chan_key) do
+      {:ok, window_state} ->
+        state = %{state | window_state: window_state}
+
+        broadcast_window_state(
+          state,
+          SessionWire.window_invite_declined(state.network_slug, chan_key)
+        )
+
+        {:reply, :ok, state}
+
+      {:error, :not_invited} = err ->
+        {:reply, err, state}
+    end
+  end
+
   @impl GenServer
   def handle_cast({:send_part, channel}, state) when is_binary(channel) do
     # UX-4 bucket H — eager local-state cleanup regardless of upstream

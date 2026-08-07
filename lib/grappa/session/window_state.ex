@@ -254,6 +254,39 @@ defmodule Grappa.Session.WindowState do
   end
 
   @doc """
+  Declines the invite held on `channel` (#976) — the operator's REFUSAL.
+
+  Pre-#976 a channel left `:invited` only by being acted ON: `set_pending/2`,
+  `set_joined/2` and the failure/park transitions all mean "I engaged with
+  this invite". Nothing dropped the state without joining, and nothing expired
+  it, so `invited_windows/2` re-asserted the banner on EVERY cold subscribe
+  until the operator gave in (the #976 report: "sennò è cazzo stalking"). This
+  is the missing exit — the reversal of the #902 ruling that an invite may
+  simply be lost, which was true in principle and false in practice.
+
+  The drop IS `set_parted/2`'s drop, called rather than respelled: an invite
+  that has been refused leaves NO window behind, and "absence of state" is
+  already this module's projection for a window that is gone. What differs is
+  the GUARD, and the guard is the whole design — this verb is reachable from a
+  REST door (`DELETE /networks/:slug/invites/:channel`), so an unguarded
+  channel-keyed drop would let a stray/forged decline erase a `:joined` or
+  `:kicked` window. `{:error, :not_invited}` on every other state, unknown
+  channels included: a decline of something that is not an invite is a caller
+  bug, not a no-op to swallow (CLAUDE.md: no silent-swallow at boundaries).
+
+  Nothing goes upstream. IRC has no DECLINE verb — the invite lives only in
+  this struct and in the persisted `:server_event` row that recorded it — so
+  the refusal is purely local, and the copy on the client says so.
+  """
+  @spec decline_invite(t(), String.t()) :: {:ok, t()} | {:error, :not_invited}
+  def decline_invite(%__MODULE__{} = ws, channel) when is_binary(channel) do
+    case state_of(ws, channel) do
+      :invited -> {:ok, set_parted(ws, channel)}
+      _ -> {:error, :not_invited}
+    end
+  end
+
+  @doc """
   Returns the recorded state atom for `channel`, or `nil` if the
   channel has never been tracked or has been parted.
 
@@ -298,7 +331,8 @@ defmodule Grappa.Session.WindowState do
   is the single source of truth for invitedness; this map only carries the
   extra datum, exactly as `kicked_meta` does for `:kicked`. Every mutator
   that moves a channel out of `:invited` (`set_pending/2`, `set_joined/2`,
-  `set_failed/4`, `set_kicked/4`, `set_parted/2`) deletes the key, so the map
+  `set_failed/4`, `set_kicked/4`, `set_parted/2`, `decline_invite/2`)
+  deletes the key, so the map
   cannot accumulate unreadable entries that drift from the state it decorates
   (CLAUDE.md: a parallel structure without housekeeping is the bug).
 
@@ -396,6 +430,16 @@ defmodule Grappa.Session.WindowState do
   `Map.fetch!/2` is deliberate — the key-iff-`:invited` invariant
   (`invited_by/2`) makes an absent key a mutator bug, and a loud one beats a
   silently anonymous invite.
+
+  #976 — this re-emission is unconditional and has no expiry, which is
+  exactly right AND was exactly the bug: an invite the operator refuses is
+  re-announced on every cold subscribe for the life of the session. The fix is
+  not here (a backfill that second-guesses the state map would be a second
+  source of truth); it is `decline_invite/2`, the exit that was missing. A
+  channel that has been declined is no longer `:invited`, so it stops being
+  produced here — by construction, on every device, because the decline fans
+  out on the user topic. The `×` on the banner is that verb now, NOT the
+  episode-scoped hide the #902 text describes.
   """
   @spec invited_windows(t(), String.t()) :: [SessionWire.window_invited_payload()]
   def invited_windows(%__MODULE__{states: states, invited_by: invited_by}, network_slug)

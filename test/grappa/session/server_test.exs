@@ -4825,6 +4825,101 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#976 declining an invite drops the window, fans out on the user topic, and sends NOTHING upstream" do
+      # #976 — the missing exit. Pre-#976 a channel left `:invited` only by
+      # being JOINed, so `invited_windows/2` re-asserted the banner on every
+      # cold subscribe for the life of the session ("an invite is allowed to
+      # be lost" was true in principle, unreachable in practice).
+      #
+      # Three assertions, and the third is the one with teeth: the decline
+      # must not put a DECLINE-shaped line on the wire, because IRC has no
+      # such verb — an implementation that "told the peer" would be inventing
+      # protocol. Sampled after a PING/PONG round-trip, so "no line" is a
+      # settled observation rather than a race against a slow write.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(server, ":someguy!u@h INVITE grappa-test :#random\r\n")
+      assert_receive %Phoenix.Socket.Broadcast{payload: %{kind: :window_invited}}, 1_000
+
+      # RAW-cased decline of a folded window key (#537): the facade ships the
+      # channel as typed and the Server folds it, so `#RANDOM` must reach the
+      # same window `#random` holds.
+      assert :ok = Session.decline_invite({:user, user.id}, network.id, "#RANDOM")
+
+      # The FAN-OUT. Per-session state reaching every device is the whole
+      # reason this is on the user topic: without it, the operator's other
+      # browser keeps the banner and re-shows it on ITS next reload.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{
+                         kind: :window_invite_declined,
+                         network: net_slug,
+                         channel: "#random"
+                       } = payload
+                     },
+                     1_000
+
+      assert net_slug == network.slug
+      # No `state` key: a declined invite lands in NO window state (see
+      # `Wire.window_invite_declined_payload`). A `state: "declined"` here
+      # would be mirrored by cic into `windowStateByChannel` and redraw the
+      # greyed row the operator just refused.
+      refute Map.has_key?(payload, :state)
+
+      state = SessionStateHelpers.fetch(pid)
+      window_state = SessionStateHelpers.window_state(state)
+      assert WindowState.state_of(window_state, "#random") == nil
+      assert WindowState.invited_by(window_state, "#random") == nil
+      # The cold-subscribe backfill — the mechanism that made the banner
+      # return — now has nothing to re-emit. THIS is what a reload sees.
+      assert WindowState.invited_windows(window_state, network.slug) == []
+
+      # NOTHING upstream. PING/PONG flushes the socket; the only line the
+      # server has seen since the handshake must be that PONG.
+      IRCServer.feed(server, "PING :flush\r\n")
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
+
+      refute Enum.any?(IRCServer.sent_lines(server), fn line ->
+               String.contains?(line, "#random") or String.contains?(line, "#RANDOM")
+             end)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#976 declining a window that is not an invite is refused, not silently swallowed" do
+      # The decline door is channel-keyed and REST-reachable, so an unguarded
+      # "drop this channel's window state" would let a stray decline erase a
+      # window the operator is actually using. `:joined` is the case that
+      # matters: it is the state a just-accepted invite lands in, so a
+      # double-click on [Join]-then-× must not evict a live channel.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      IRCServer.feed(server, ":grappa-test!u@h JOIN :#live\r\n")
+      IRCServer.feed(server, "PING :flush\r\n")
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 1_000)
+
+      assert {:error, :not_invited} =
+               Session.decline_invite({:user, user.id}, network.id, "#live")
+
+      window_state = SessionStateHelpers.window_state(SessionStateHelpers.fetch(pid))
+      assert WindowState.state_of(window_state, "#live") == :joined
+
+      assert {:error, :not_invited} =
+               Session.decline_invite({:user, user.id}, network.id, "#never-heard-of-it")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "inbound INVITE does NOT downgrade an in-flight :pending window to :invited (#78)" do
       # #78 L2: a concurrent INVITE to a channel we are mid-JOIN on must not
       # flip the optimistic :pending tab to a greyed :invited one (nor

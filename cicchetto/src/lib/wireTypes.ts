@@ -814,6 +814,7 @@ export const SESSION_WIRE_WIRE_EVENT_KIND = [
   "joined",
   "window_pending",
   "window_invited",
+  "window_invite_declined",
   "join_failed",
   "kicked",
   "away_confirmed",
@@ -995,6 +996,12 @@ export type SessionWireWindowInvitedPayload = {
   channel: string;
   state: "invited";
   inviter: string;
+};
+
+export type SessionWireWindowInviteDeclinedPayload = {
+  kind: "window_invite_declined";
+  network: string;
+  channel: string;
 };
 
 export type SessionWireJoinFailedPayload = {
@@ -1228,6 +1235,7 @@ export type WireSessionEvent =
   | SessionWireJoinedPayload
   | SessionWireWindowPendingPayload
   | SessionWireWindowInvitedPayload
+  | SessionWireWindowInviteDeclinedPayload
   | SessionWireJoinFailedPayload
   | SessionWireKickedPayload
   | SessionWireAwayConfirmedPayload
@@ -1443,6 +1451,7 @@ export const ERROR_TOKENS_REST_ERROR_TOKEN = [
   "last_admin",
   "share_token_expired",
   "share_token_consumed",
+  "not_invited",
   "validation_failed",
 ] as const;
 export type ErrorTokensRestErrorToken = (typeof ERROR_TOKENS_REST_ERROR_TOKEN)[number];

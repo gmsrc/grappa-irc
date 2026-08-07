@@ -50,6 +50,7 @@ vi.mock("../lib/windowState", () => ({
   setJoined: vi.fn(),
   setFailed: vi.fn(),
   setKicked: vi.fn(),
+  forceParted: vi.fn(),
 }));
 
 vi.mock("../lib/awayStatus", () => ({
@@ -625,6 +626,46 @@ describe("userTopic", () => {
         state: "invited",
       });
       expect(ws.setInvited).not.toHaveBeenCalled();
+    });
+  });
+
+  // #976 — the REFUSAL, fanned out on the user topic so it reaches every
+  // device: the `:invited` state is per-session, so a decline taken on the
+  // phone has to clear the laptop's banner too, or the laptop re-shows the
+  // invite on its next reload.
+  describe("window_invite_declined event (#976)", () => {
+    it("drops the window with forceParted(channelKey(network, channel))", async () => {
+      const ws = await import("../lib/windowState");
+      const { channelKey } = await import("../lib/channelKey");
+      channelMock.fireEvent({
+        kind: "window_invite_declined",
+        network: "freenode",
+        channel: "#random",
+      });
+      expect(ws.forceParted).toHaveBeenCalledWith(channelKey("freenode", "#random"));
+    });
+
+    // `forceParted`, not `setParted`: the #495 stale-echo guard makes
+    // `setParted` a no-op on a "pending" key, and a decline that names a
+    // window must clear it regardless of what the operator started elsewhere.
+    it("does not route the decline through the part-echo setter", async () => {
+      const ws = await import("../lib/windowState");
+      channelMock.fireEvent({
+        kind: "window_invite_declined",
+        network: "freenode",
+        channel: "#random",
+      });
+      expect(ws.setInvited).not.toHaveBeenCalled();
+      expect(ws.setJoined).not.toHaveBeenCalled();
+    });
+
+    it("drops a payload missing `channel` rather than clearing an unnamed window", async () => {
+      const ws = await import("../lib/windowState");
+      channelMock.fireEvent({
+        kind: "window_invite_declined",
+        network: "freenode",
+      });
+      expect(ws.forceParted).not.toHaveBeenCalled();
     });
   });
 

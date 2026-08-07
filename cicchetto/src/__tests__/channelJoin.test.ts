@@ -23,6 +23,9 @@ const { tokenMock } = vi.hoisted(() => ({
 }));
 const setSelectedChannelMock = vi.fn();
 const windowStateByChannelMock = vi.fn<() => Record<string, string>>(() => ({}));
+const deleteInviteMock = vi.fn<(t: string, slug: string, name: string) => Promise<void>>(() =>
+  Promise.resolve(),
+);
 
 vi.mock("../lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/api")>();
@@ -30,6 +33,7 @@ vi.mock("../lib/api", async (importOriginal) => {
     ...actual,
     postJoin: (t: string, slug: string, name: string, key: string | null) =>
       postJoinMock(t, slug, name, key),
+    deleteInvite: (t: string, slug: string, name: string) => deleteInviteMock(t, slug, name),
   };
 });
 
@@ -123,5 +127,54 @@ describe("confirmJoinChannel — not joined (#648)", () => {
     acceptConfirm();
     await Promise.resolve();
     expect(postJoinMock).not.toHaveBeenCalled();
+  });
+});
+
+// #976 — the REFUSAL, the other answer to the question `acceptInvite` answers.
+// It DELETEs the invite resource; the server drops the `:invited` window and
+// broadcasts the drop, so there is deliberately no local state write here —
+// cic never originates window state.
+describe("declineInvite (#976)", () => {
+  it("DELETEs the invite with the RAW channel spelling (the server folds the key)", async () => {
+    const { declineInvite } = await import("../lib/channelJoin");
+    declineInvite(SLUG, "#Sniffo");
+    await Promise.resolve();
+
+    expect(deleteInviteMock).toHaveBeenCalledWith("tok", SLUG, "#Sniffo");
+  });
+
+  it("does NOT join, focus, or confirm — a refusal is not a leave and not an accept", async () => {
+    const { declineInvite } = await import("../lib/channelJoin");
+    declineInvite(SLUG, "#Sniffo");
+    await Promise.resolve();
+
+    expect(postJoinMock).not.toHaveBeenCalled();
+    expect(setSelectedChannelMock).not.toHaveBeenCalled();
+    expect(confirmRequest()).toBeNull();
+  });
+
+  it("no-ops when no token is set (post-logout race)", async () => {
+    tokenMock.mockReturnValue(null);
+    const { declineInvite } = await import("../lib/channelJoin");
+    declineInvite(SLUG, "#chan");
+    await Promise.resolve();
+
+    expect(deleteInviteMock).not.toHaveBeenCalled();
+  });
+
+  it("swallows a rejected DELETE instead of surfacing an unhandled rejection", async () => {
+    // A `not_invited` here means the window already left `:invited` (joined,
+    // or declined on another device) — the banner is about to disappear from
+    // that state change anyway. Fire-and-forget, same posture as performJoin.
+    deleteInviteMock.mockRejectedValueOnce(new Error("not_invited"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { declineInvite } = await import("../lib/channelJoin");
+
+    expect(() => declineInvite(SLUG, "#chan")).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

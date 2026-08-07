@@ -798,6 +798,33 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  Declines the inbound invite held on `channel` (#976) — drops the `:invited`
+  window for this `(subject, network_id)` and fans the drop out on the user
+  topic so every one of the subject's devices loses the banner.
+
+  Sends NOTHING upstream. IRC has no DECLINE verb: the invite exists only as
+  session-local window state, so refusing it is a local transaction and the
+  peer learns nothing. Call (not cast) — `{:error, :not_invited}` has to reach
+  the caller, and the fan-out must precede the reply.
+
+  `{:error, :not_invited}` when the window is in any other state (or unknown):
+  the decline door is channel-keyed and REST-reachable, so it must not double
+  as a way to erase a `:joined` window.
+  """
+  @spec decline_invite(subject(), integer(), String.t()) ::
+          :ok | {:error, :no_session | :invalid_line | :not_invited}
+  def decline_invite(subject, network_id, channel)
+      when is_subject(subject) and is_integer(network_id) and is_binary(channel) do
+    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel) do
+      # RAW on the wire-facing side as everywhere post-#537: only the
+      # Session.Server knows this network's CASEMAPPING, so it folds the KEY.
+      call_session(subject, network_id, {:decline_invite, channel})
+    else
+      {:error, :invalid_line}
+    end
+  end
+
+  @doc """
   Sets the topic on `channel` for the session's `(subject, network_id)`.
   Writes `TOPIC <chan> :<body>` upstream; the upstream server echoes the
   TOPIC back and `EventRouter` persists the canonical `:topic` scrollback

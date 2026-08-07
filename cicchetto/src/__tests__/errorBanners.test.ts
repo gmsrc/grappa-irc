@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldShowRefreshBanner } from "../lib/bundleHash";
-import { acceptInvite } from "../lib/channelJoin";
+import { acceptInvite, declineInvite } from "../lib/channelJoin";
 import { channelKey } from "../lib/channelKey";
 import { __setConnectivityForTests } from "../lib/connectivity";
 import {
@@ -60,8 +60,12 @@ vi.mock("../lib/pushOptin", () => ({
 // same reason as acceptPushOptin above: the registry's job is to project the
 // state and wire the verb; the verb's own behaviour (fold, await-before-focus,
 // failure log) belongs to channelJoin.
+// #976 — same for the REFUSAL verb, which fires a REST DELETE. The registry
+// wires it; the call itself (token guard, RAW casing, failure log) belongs to
+// channelJoin.
 vi.mock("../lib/channelJoin", () => ({
   acceptInvite: vi.fn(),
+  declineInvite: vi.fn(),
   confirmJoinChannel: vi.fn(),
 }));
 
@@ -409,7 +413,42 @@ describe("errorBanners invite (#902)", () => {
     expect(sources.indexOf("invite")).toBeLessThan(sources.indexOf("push-optin"));
   });
 
-  // THE reason the dismiss identity had to widen from source to entry. With a
+  // #976 — the invite's × is a DECLINE now: it calls the server verb, and the
+  // banner goes away because the state leaves `:invited`, not because it was
+  // hidden. The copy has to say the refusal stays local, or an operator who
+  // suspects the inviter gets notified will just ignore the banner — which is
+  // the behaviour the issue was filed about.
+  it("wires the × to the decline verb with (network, channel), not to the dismissed-set", () => {
+    setInvited(KEY_ONE, "alice");
+    const entry = activeBanners().find((e) => e.source === "invite");
+
+    entry?.dismiss?.onAction();
+
+    expect(vi.mocked(declineInvite)).toHaveBeenCalledWith("azzurra", "#one");
+    // The entry is still ACTIVE and still VISIBLE: nothing was hidden
+    // client-side. It disappears when the server's `window_invite_declined`
+    // drops the window (userTopic.ts), which is what makes the refusal
+    // survive a reload.
+    expect(visibleBanners().some((e) => e.source === "invite")).toBe(true);
+  });
+
+  it("labels the × as a decline and says the refusal never reaches IRC", () => {
+    setInvited(KEY_ONE, "alice");
+    const entry = activeBanners().find((e) => e.source === "invite");
+
+    expect(entry?.dismiss?.label).toContain("Decline");
+    expect(entry?.dismiss?.label).toContain("#one");
+    expect(entry?.message).toContain("nothing is sent to the IRC server");
+  });
+
+  // The four tests below drive `dismissBanner` DIRECTLY. Post-#976 no
+  // production path does that for an invite — they are here because the
+  // invite source is still the only one with several live entries, so it is
+  // the only fixture that can exercise the registry's per-ENTRY dismiss
+  // identity at all. What they pin is the dismissed-set mechanics the FAULT
+  // sources depend on, not the invite ×.
+  //
+  // THE reason that identity had to widen from source to entry. With a
   // source-keyed set, dismissing one invite hides every other live one — and,
   // worse, `rearmDismissed` would keep the whole source silenced (it stays
   // "active" while any invite lives), swallowing invites that arrive later.

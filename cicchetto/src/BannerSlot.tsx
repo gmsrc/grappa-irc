@@ -52,7 +52,12 @@ const BannerSlot: Component<{ entry: BannerEntry; onDismiss?: () => void }> = (p
           <button
             type="button"
             class="error-banner-dismiss"
-            aria-label="Dismiss notification"
+            // #976 — the source names the ×'s meaning when it is not a
+            // dismiss. An invite's × DECLINES the invite; announcing that as
+            // "dismiss notification" would describe a control that no longer
+            // exists. The slot stays pure — it reads the label, it does not
+            // know which source supplied it.
+            aria-label={props.entry.dismiss?.label ?? "Dismiss notification"}
             onClick={() => onDismiss()()}
           >
             {"×"}

@@ -2,6 +2,8 @@ import { fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ErrorBanners from "../ErrorBanners";
 import { shouldShowRefreshBanner } from "../lib/bundleHash";
+import { declineInvite } from "../lib/channelJoin";
+import { channelKey } from "../lib/channelKey";
 import { __setConnectivityForTests } from "../lib/connectivity";
 import { __resetDismissedForTests } from "../lib/errorBanners";
 import { acceptPushOptin, declinePushOptin, shouldShowPushOptinBanner } from "../lib/pushOptin";
@@ -11,6 +13,7 @@ import {
   recordSocketError,
   recordSocketOpen,
 } from "../lib/socketHealth";
+import { forceParted, setInvited } from "../lib/windowState";
 
 // The bundle-refresh source needs a real vite build's script tag (absent in
 // jsdom), so mock ONLY that DOM-derived boundary; socketHealth + connectivity
@@ -31,6 +34,15 @@ vi.mock("../lib/pushOptin", () => ({
   shouldShowPushOptinBanner: vi.fn(() => false),
   acceptPushOptin: vi.fn(),
   declinePushOptin: vi.fn(),
+}));
+
+// #976 — the invite verbs fire real REST calls; mock them for the same reason
+// as pushOptin's. `windowState` stays REAL so the entry is derived from the
+// true server-owned projection, not from a stub of it.
+vi.mock("../lib/channelJoin", () => ({
+  acceptInvite: vi.fn(),
+  declineInvite: vi.fn(),
+  confirmJoinChannel: vi.fn(),
 }));
 
 const mockShouldShowRefresh = vi.mocked(shouldShowRefreshBanner);
@@ -135,7 +147,12 @@ describe("ErrorBanners", () => {
 
 // #459 — the push opt-in banner: [of course!] runs the accept verb; × runs the
 // PERSISTENT decline (declinePushOptin), NOT the episode-scoped dismiss the
-// fault sources use. This is the ONE source-specific wiring in the owner.
+// fault sources use.
+//
+// #976 — the owner no longer knows that. Both non-default dismisses ride
+// `entry.dismiss`, supplied by the registry that already holds the source's
+// context, so the owner has zero source-specific branches. The behaviour under
+// test is unchanged; only who decides it moved.
 describe("ErrorBanners push-optin (#459)", () => {
   beforeEach(() => {
     __resetSocketHealthForTests();
@@ -167,5 +184,53 @@ describe("ErrorBanners push-optin (#459)", () => {
     expect(close).not.toBeNull();
     if (close) fireEvent.click(close);
     expect(vi.mocked(declinePushOptin)).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #976 — the invite banner's × on the RENDERED stack. The registry-level test
+// proves the entry carries the verb; this proves the button the operator
+// actually presses reaches it, and that the slot announces it as a decline
+// rather than as a dismiss.
+describe("ErrorBanners invite decline (#976)", () => {
+  const KEY = channelKey("azzurra", "#refused");
+
+  beforeEach(() => {
+    __resetSocketHealthForTests();
+    __setConnectivityForTests(true);
+    __resetDismissedForTests();
+    mockShouldShowRefresh.mockReturnValue(false);
+    mockShouldShowPushOptin.mockReturnValue(false);
+    vi.mocked(declineInvite).mockClear();
+    forceParted(KEY);
+  });
+
+  afterEach(() => forceParted(KEY));
+
+  it("runs the decline verb when × is clicked, and does NOT hide the banner client-side", () => {
+    setInvited(KEY, "alice");
+    const { container } = render(() => <ErrorBanners />);
+    const close = container.querySelector<HTMLButtonElement>(
+      '.error-banner[data-source="invite"] .error-banner-dismiss',
+    );
+    expect(close).not.toBeNull();
+    if (close) fireEvent.click(close);
+
+    expect(vi.mocked(declineInvite)).toHaveBeenCalledWith("azzurra", "#refused");
+    // Still on screen: the server owns the state, so the banner leaves when
+    // `window_invite_declined` drops the window — not on an optimistic hide.
+    // A client-side hide here would be the #902 behaviour wearing a new name,
+    // and it would come back on reload exactly as before.
+    expect(container.querySelector('.error-banner[data-source="invite"]')).not.toBeNull();
+  });
+
+  it("announces the × as a decline naming the channel", () => {
+    setInvited(KEY, "alice");
+    const { container } = render(() => <ErrorBanners />);
+    const close = container.querySelector<HTMLButtonElement>(
+      '.error-banner[data-source="invite"] .error-banner-dismiss',
+    );
+
+    expect(close?.getAttribute("aria-label")).toContain("Decline");
+    expect(close?.getAttribute("aria-label")).toContain("#refused");
   });
 });

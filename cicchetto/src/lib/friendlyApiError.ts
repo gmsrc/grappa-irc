@@ -434,6 +434,13 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       // this is mid-way through repairing a password and must not be left
       // hunting for it.
       return "Your app is out of date — reload, then set the password in Settings → General.";
+    case "not_invited":
+      // #976 — 404 from DELETE /networks/:slug/invites/:channel: the window
+      // holds no invite. Almost always benign and self-correcting (it was
+      // joined, or declined on another device, and the banner is on its way
+      // out from that state change), so the copy states the outcome the
+      // operator wanted rather than raising an alarm about a race.
+      return "That invite is already gone.";
     case "invalid_line":
       // Shared token, REST side — CRLF/NUL in an IRC-bound field (400).
       // Mirrors the channel-side copy for the same token.

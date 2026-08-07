@@ -1,8 +1,8 @@
 import { createSignal, untrack } from "solid-js";
 import { performRefresh, refreshBannerMessage, shouldShowRefreshBanner } from "./bundleHash";
-import { acceptInvite } from "./channelJoin";
+import { acceptInvite, declineInvite } from "./channelJoin";
 import { isOffline } from "./connectivity";
-import { acceptPushOptin, shouldShowPushOptinBanner } from "./pushOptin";
+import { acceptPushOptin, declinePushOptin, shouldShowPushOptinBanner } from "./pushOptin";
 import { shouldShowBanner, socketHealth } from "./socketHealth";
 import { shouldShowSwRegBanner, swRegistration } from "./swRegistration";
 import { type InvitedWindow, invitedWindows } from "./windowState";
@@ -79,6 +79,18 @@ export interface BannerEntry {
   // derived-and-auto-clearing source (ws, connectivity) and a
   // user-actionable-and-sticky one (bundle-refresh).
   actionHint?: BannerAction;
+  // #976 — the source-owned meaning of the ×, when the episode-scoped hide is
+  // the wrong verb. `label` is the ×'s accessible name (a control that
+  // DECLINES an invite must not be announced as "dismiss notification"),
+  // `onAction` the verb. Absent ⇒ `dismissBanner(entryId(entry))`, the
+  // hide-until-it-recurs the fault sources want.
+  //
+  // Data, not a branch in the owner: pre-#976 `ErrorBanners.tsx` carried a
+  // `source === "push-optin" ? … : …` ternary, and #976 would have made it a
+  // three-arm one that has to reconstruct the invite's (network, channel)
+  // by parsing `entry.id` back apart. The registry already holds both, so the
+  // verb belongs here — with it, the owner has no per-source knowledge at all.
+  dismiss?: BannerAction;
 }
 
 // The one place the source-or-id fallback is resolved. Every dismiss-side
@@ -197,13 +209,21 @@ export function activeBanners(): BannerEntry[] {
   // reconcile when an invite resolves — the entry simply stops being derived,
   // and `rearmDismissed` forgets any × taken on it.
   //
-  // Both controls are session-scoped and write NOTHING persistent (vjt's
-  // ruling): [Join] joins and the entry disappears because the state leaves
-  // `:invited`; × hides it for this page life only. The server re-emits
-  // `window_invited` on every cold subscribe, so a dismissed invite returns
-  // after a reload — accepted, because an invite is allowed to be lost and
-  // the peer can simply invite again. Deliberately NOT the persistent decline
-  // `push-optin` uses.
+  // #976 REVERSES the #902 ruling this comment used to record. Both controls
+  // now ANSWER the invite: [Join] accepts (the state leaves `:invited`), × is
+  // the DECLINE (the server drops the window and fans the drop out). There is
+  // no third "hide for now" affordance — one control, one meaning.
+  //
+  // #902 had ruled the × session-scoped on the grounds that "an invite is
+  // allowed to be lost". True in principle, false in the code: nothing ever
+  // moved a channel out of `:invited` except JOINing it, so the server
+  // re-emitted `window_invited` on every cold subscribe and the invite came
+  // back at the top of the page until the operator gave in. An offer you
+  // cannot refuse is not an offer.
+  //
+  // The decline is still LOCAL — IRC has no DECLINE verb, so nothing reaches
+  // the peer or the server upstream. The copy says so out loud rather than
+  // leaving the operator to guess whether refusing is a snub.
   for (const invite of invitedWindows()) {
     entries.push(inviteEntry(invite));
   }
@@ -212,15 +232,19 @@ export function activeBanners(): BannerEntry[] {
   // fault ("you are disconnected"), an update prompt, or a person waiting on
   // an answer. Gated + actioned by pushOptin.ts (the source owner); the
   // registry only projects the gate into an info entry and wires [of course!]
-  // to the accept verb. The × is the decline — routed by the owner
-  // (ErrorBanners.tsx) to declinePushOptin so it PERSISTS, unlike the
-  // episode-scoped dismiss every other source uses.
+  // to the accept verb. The × is the decline, and it PERSISTS (localStorage,
+  // via the owner) unlike the episode-scoped dismiss the fault sources use.
+  //
+  // #976 — that decline used to be a `source === "push-optin"` ternary in
+  // `ErrorBanners.tsx`; it rides `dismiss` now, like the invite's. Same verb,
+  // same behaviour, one fewer place that knows which source is special.
   if (shouldShowPushOptinBanner()) {
     entries.push({
       source: "push-optin",
       severity: "info",
       message: "Enable push notifications?",
       actionHint: { label: "of course!", onAction: () => void acceptPushOptin() },
+      dismiss: { label: "Decline push notifications", onAction: () => declinePushOptin() },
     });
   }
 
@@ -238,11 +262,22 @@ function inviteEntry(invite: InvitedWindow): BannerEntry {
     source: "invite",
     id: `invite:${invite.networkSlug}:${invite.channelName}`,
     severity: "info",
-    message: `${invite.inviter} is inviting you to ${invite.channelName}`,
+    // #976 — the copy names what the × does AND what it does not do. Making
+    // the locality explicit is the point: an operator who suspects declining
+    // notifies the inviter will ignore the banner instead, which is the
+    // behaviour the issue was filed about.
+    message: `${invite.inviter} is inviting you to ${invite.channelName}. × declines it quietly — nothing is sent to the IRC server.`,
     actionHint: {
       label: "Join",
       // The SAME verb the invite row's [Join] CTA in scrollback calls.
       onAction: () => acceptInvite(invite.networkSlug, invite.channelName),
+    },
+    // #976 — the × is the DECLINE, not the episode-scoped hide. Labelled as
+    // such: a screen reader announcing "dismiss notification" would describe
+    // a control that no longer does that.
+    dismiss: {
+      label: `Decline the invite to ${invite.channelName} — nothing is sent to the IRC server`,
+      onAction: () => declineInvite(invite.networkSlug, invite.channelName),
     },
   };
 }

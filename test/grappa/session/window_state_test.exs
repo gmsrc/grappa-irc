@@ -135,6 +135,57 @@ defmodule Grappa.Session.WindowStateTest do
 
       assert WindowState.invited_by(ws, "#grappa") == "vjt"
     end
+
+    test "decline_invite/2 clears the recorded inviter (#976)", %{invited: ws} do
+      assert {:ok, declined} = WindowState.decline_invite(ws, "#grappa")
+      assert WindowState.invited_by(declined, "#grappa") == nil
+    end
+  end
+
+  # #976 — the REFUSAL. Pre-#976 a channel left `:invited` only by being
+  # JOINed: no mutator dropped the state without acting on the invite, so the
+  # banner was re-asserted on every cold subscribe until the operator gave in.
+  # This verb is the missing exit, and its GUARD is the whole design: it is
+  # reachable from a REST door, so an unguarded "drop this channel's window
+  # state" would let a stray decline erase a `:joined` or `:kicked` window.
+  describe "decline_invite/2 (#976)" do
+    test "drops an :invited channel from every map — absence IS the projection" do
+      ws = WindowState.set_invited(WindowState.new(), "#grappa", "vjt")
+
+      assert {:ok, declined} = WindowState.decline_invite(ws, "#grappa")
+      assert WindowState.state_of(declined, "#grappa") == nil
+      assert WindowState.invited_by(declined, "#grappa") == nil
+      assert WindowState.invited_windows(declined, "azzurra") == []
+    end
+
+    test "refuses a channel that is not :invited, leaving the window untouched" do
+      for {label, ws} <- [
+            {:joined, WindowState.set_joined(WindowState.new(), "#grappa")},
+            {:pending, WindowState.set_pending(WindowState.new(), "#grappa")},
+            {:kicked, WindowState.set_kicked(WindowState.new(), "#grappa", "op", "bye")},
+            {:failed, WindowState.set_failed(WindowState.new(), "#grappa", "+i", 473)}
+          ] do
+        assert WindowState.decline_invite(ws, "#grappa") == {:error, :not_invited},
+               "decline_invite/2 must refuse a #{label} window"
+
+        assert WindowState.state_of(ws, "#grappa") == label
+      end
+    end
+
+    test "refuses an unknown channel rather than silently succeeding" do
+      assert WindowState.decline_invite(WindowState.new(), "#never") == {:error, :not_invited}
+    end
+
+    test "declining one invite leaves every other invite standing" do
+      ws =
+        WindowState.new()
+        |> WindowState.set_invited("#declined", "vjt")
+        |> WindowState.set_invited("#kept", "mezmerize")
+
+      assert {:ok, declined} = WindowState.decline_invite(ws, "#declined")
+      assert WindowState.state_of(declined, "#kept") == :invited
+      assert WindowState.invited_by(declined, "#kept") == "mezmerize"
+    end
   end
 
   describe "set_joined/2" do

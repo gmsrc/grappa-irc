@@ -57,8 +57,9 @@ let peer: IrcPeer | null = null;
 
 test.afterEach(async () => {
   // Drop both windows from the operator's state HERE rather than at the end of
-  // the test body: #902 makes a dismissed invite RETURN on the next cold load,
-  // so an `:invited` window stranded by a mid-spec failure is a cascade
+  // the test body: nothing in this spec declines anything (#976 gave the × that
+  // meaning; this one taps [Join]), and a live `:invited` window is re-emitted
+  // on every cold load, so one stranded by a mid-spec failure is a cascade
   // poisoner for every later spec whose layout the fixed banner region shifts.
   // Cleanup that only runs on the happy path is cleanup that is absent exactly
   // when it is needed. Idempotent; the helper swallows 404.

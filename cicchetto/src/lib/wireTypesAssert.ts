@@ -104,6 +104,7 @@ import type {
   SessionWireWhoReplyPayload,
   SessionWireWhoUser,
   SessionWireWhowasBundlePayload,
+  SessionWireWindowInviteDeclinedPayload,
   SessionWireWindowInvitedPayload,
   SessionWireWindowPendingPayload,
   WindowCountsWireEvent,
@@ -278,6 +279,12 @@ export type _Assert_WindowPending = Assert<
 >;
 export type _Assert_WindowInvited = Assert<
   Equal<Extract<WireUserEvent, { kind: "window_invited" }>, SessionWireWindowInvitedPayload>
+>;
+export type _Assert_WindowInviteDeclined = Assert<
+  Equal<
+    Extract<WireUserEvent, { kind: "window_invite_declined" }>,
+    SessionWireWindowInviteDeclinedPayload
+  >
 >;
 export type _Assert_AwayConfirmed = Assert<
   Equal<Extract<WireUserEvent, { kind: "away_confirmed" }>, SessionWireAwayConfirmedPayload>

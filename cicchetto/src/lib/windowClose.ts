@@ -38,17 +38,16 @@ import { forceParted } from "./windowState";
 // snapshot resurrect the row on the next reload; routing the × through the
 // DELETE clears the server key so the snapshot stops re-asserting it.
 //
-// #902 — `:invited` is NO LONGER one of these. It has no pseudo-row to
-// dismiss any more; an invite is a top banner whose × is deliberately
-// session-scoped and writes NOTHING (vjt's ruling: an invite is allowed to
-// be lost, and the peer can invite again). So a dismissed invite DOES come
-// back after a reload, because `WindowState.invited_windows/2` still
-// re-emits `window_invited` for every channel held at `:invited` — the exact
-// behaviour #511 was filed to stop for the TAB, now intended for the BANNER.
-// The difference is that a banner is a notification, not a window: nothing
-// accumulates in the sidebar, so re-announcing it is cheap rather than the
-// "dismissed tab came back" bug. `[Join]` (or a server-side clear) is what
-// ends it for good.
+// #902 — `:invited` is NO LONGER one of these: it has no pseudo-row to
+// dismiss, so there is no × here to route. #976 — nor is its refusal a PART.
+// The invite banner's × calls `declineInvite` (channelJoin.ts), which DELETEs
+// the invite resource; the server drops the `:invited` window and fans
+// `window_invite_declined` out on the user topic. Same durability #511 won
+// for the tab, reached by a different door on purpose: PARTing a channel you
+// were never in is a 442 no-op whose only real effect is the server-side
+// cleanup, and dressing a refusal up as a leave would make the decline
+// inherit de-autojoin and `channels_changed` semantics it has no business
+// with. Whatever you do, do not "unify" the two for consistency.
 //
 // `forceParted` (not the echo's `setParted`): a × is a USER close, fresh
 // intent, so it drops the local key even mid-`pending` — the #495
@@ -94,8 +93,9 @@ export function closeQueryWindow(networkId: number, targetNick: string): void {
 // tab came back. The PART is a 442 no-op for the never-joined channel, but
 // the server-side `set_parted` clears the key so the dismissal is durable.
 // See the `partAndForget` doc above for why the PART, the `forceParted`,
-// and the token guard are the right primitives — including why #902's
-// invite banner deliberately does NOT take this path.
+// and the token guard are the right primitives — including why the invite
+// banner takes its own DELETE door instead (#902 removed the row, #976 gave
+// the refusal its own verb).
 //
 // If the dismissed row IS the focused window, redirect to the network's
 // $server window FIRST, pre-empting the bucket-E watcher (which would

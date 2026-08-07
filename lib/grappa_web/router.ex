@@ -435,6 +435,14 @@ defmodule GrappaWeb.Router do
     delete "/channels/:channel_id", ChannelsController, :delete
     post "/channels/:channel_id/topic", ChannelsController, :topic
 
+    # #976 — refuse an inbound invite. Its own resource, NOT a verb hung off
+    # `/channels/:channel_id`: an invite is an offer to a channel you are not
+    # in, and the accept door is already `POST /channels` (a JOIN). Deleting
+    # the OFFER is a different noun from deleting the MEMBERSHIP, and folding
+    # it into the channel DELETE would mean one URL whose meaning depends on
+    # server-side window state.
+    delete "/invites/:channel_id", InvitesController, :delete
+
     get "/directory", DirectoryController, :index
     post "/directory/refresh", DirectoryController, :refresh
 

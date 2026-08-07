@@ -43,6 +43,7 @@ defmodule GrappaWeb.FallbackController do
            | :forbidden_vhost
            | :not_found
            | :no_session
+           | :not_invited
            | :not_connected
            | :invalid_credentials
            | :invalid_two_factor
@@ -390,6 +391,18 @@ defmodule GrappaWeb.FallbackController do
     conn
     |> put_status(:not_found)
     |> json(%{error: "not_found"})
+  end
+
+  # #976 — declining something that is not an invite. Distinct token from
+  # `not_found` deliberately: the client's decline is driven by a banner it
+  # derives from server state, so a `not_invited` is a real divergence
+  # (the invite was already joined / cleared on another device) and the
+  # operator log wants to say which. No oracle concern — reaching this
+  # clause already required an owned network + a live session.
+  def call(conn, {:error, :not_invited}) do
+    conn
+    |> put_status(:not_found)
+    |> json(%{error: "not_invited"})
   end
 
   # Login failure — uniform shape regardless of which credential
