@@ -209,11 +209,14 @@ defmodule GrappaWeb.NetworksController do
   @doc """
   GH #189 — GET the on-connect perform list for this `(subject, network)`.
 
-  Returns `{perform_list, oper_pass_set, nickserv_pass_set}`: the raw command
-  list (nil when unset) plus booleans for whether the write-only `$oper_pass` /
-  `$nickserv_pass` secrets are set. The secrets themselves are NEVER returned —
-  write-only, like a password. 404 if the credential vanished; 401 without a
-  Bearer.
+  Returns `{perform_list, oper_pass_set}`: the raw command list (nil when
+  unset) plus a boolean for whether the write-only `$oper_pass` secret is set.
+  The secret itself is NEVER returned — write-only, like a password. 404 if the
+  credential vanished; 401 without a Bearer.
+
+  #124 removed the `nickserv_pass_set` sibling: `$nickserv_pass` expands from
+  the credential password now, whose set-ness is reported by the identity
+  surface (`password_set`), not here.
   """
   @spec perform(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :not_found}
   def perform(conn, _) do
@@ -226,24 +229,29 @@ defmodule GrappaWeb.NetworksController do
   end
 
   @doc """
-  GH #189 / #509 — PUT the on-connect perform list + `$oper_pass` /
-  `$nickserv_pass`.
+  GH #189 — PUT the on-connect perform list + `$oper_pass`.
 
-  Body: `{perform_list?, oper_pass?, nickserv_pass?}` — all optional; `""`
-  clears a field, omitting a secret keeps it (leave-blank-to-keep). Persists
-  ONLY: there is no live verb, since the list is read at 001. A live session
-  applies it on its next (re)connect (the plan is re-resolved on every
-  `Session.Server` restart). 200 with `{perform_list, oper_pass_set,
-  nickserv_pass_set}`; 422 on validation (NUL / over-cap / CRLF in a secret);
-  404 if the credential vanished; 401 without a Bearer.
+  Body: `{perform_list?, oper_pass?}` — both optional; `""` clears a field,
+  omitting the secret keeps it (leave-blank-to-keep). Persists ONLY: there is
+  no live verb, since the list is read at 001. A live session applies it on its
+  next (re)connect (the plan is re-resolved on every `Session.Server` restart).
+  200 with `{perform_list, oper_pass_set}`; 422 on validation (NUL / over-cap /
+  CRLF in the secret); 404 if the credential vanished; 401 without a Bearer.
+
+  #124 retired the `nickserv_pass` body key — that secret has ONE home now, the
+  credential password, written through `PATCH /networks/:network_id/identity`.
+  A body still carrying the key earns a 410 rather than a silent drop, so a
+  stale cached client cannot pretend it saved a password.
   """
   @spec update_perform(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :not_found | Ecto.Changeset.t()}
+          Plug.Conn.t()
+          | {:error, :not_found | :nickserv_pass_retired | Ecto.Changeset.t()}
   def update_perform(conn, params) do
     subject = conn.assigns.current_subject
     network = conn.assigns.network
 
-    with {:ok, credential} <- fetch_credential(subject, network),
+    with :ok <- reject_retired_nickserv_pass(params),
+         {:ok, credential} <- fetch_credential(subject, network),
          {:ok, updated} <- Credentials.update_perform_list(credential, perform_attrs(params)) do
       render(conn, :perform, perform: perform_wire(updated))
     end
@@ -288,27 +296,39 @@ defmodule GrappaWeb.NetworksController do
   defp fetch_credential({:visitor, %Visitor{id: vid}}, %{id: nid}),
     do: Credentials.get_visitor_credential(vid, nid)
 
-  # #189 / #509 — pick ONLY the perform-list fields from the request body
+  # #189 — pick ONLY the perform-list fields from the request body
   # (string keys). The `:network_id` route param and any stray keys are
   # dropped before the changeset casts; `Credential.perform_changeset/2`
-  # validates the values (NUL / byte cap / oper_pass + nickserv_pass CRLF).
+  # validates the values (NUL / byte cap / oper_pass CRLF).
   @spec perform_attrs(map()) :: map()
-  defp perform_attrs(params), do: Map.take(params, ["perform_list", "oper_pass", "nickserv_pass"])
+  defp perform_attrs(params), do: Map.take(params, ["perform_list", "oper_pass"])
 
-  # #189 / #509 — the perform wire shape: the raw list text (nil when unset) +
-  # booleans for whether the write-only `$oper_pass` / `$nickserv_pass` secrets
-  # are set. The secrets themselves are NEVER serialised (write-only, like a
-  # password).
+  # #124 — a `nickserv_pass` key in the body is REFUSED, loudly, rather than
+  # dropped by the `Map.take/2` above. cic is a PWA: a service-worker-cached
+  # bundle predating #124 still carries the retired input, and silently
+  # discarding its write is exactly the silent-swallow the boundary rule
+  # forbids — the operator would watch a password "save" and go on failing to
+  # identify, which is the split brain #124 exists to end. 410 Gone, naming the
+  # door that replaced it.
+  @spec reject_retired_nickserv_pass(map()) :: :ok | {:error, :nickserv_pass_retired}
+  defp reject_retired_nickserv_pass(params) do
+    if Map.has_key?(params, "nickserv_pass"),
+      do: {:error, :nickserv_pass_retired},
+      else: :ok
+  end
+
+  # #189 — the perform wire shape: the raw list text (nil when unset) + a
+  # boolean for whether the write-only `$oper_pass` secret is set. The secret
+  # itself is NEVER serialised (write-only, like a password). #124 dropped the
+  # `nickserv_pass_set` sibling along with the field it described.
   @spec perform_wire(Credential.t()) :: %{
           perform_list: String.t() | nil,
-          oper_pass_set: boolean(),
-          nickserv_pass_set: boolean()
+          oper_pass_set: boolean()
         }
   defp perform_wire(%Credential{} = credential) do
     %{
       perform_list: Credential.perform_list_text(credential),
-      oper_pass_set: Credential.upstream_oper_pass(credential) != nil,
-      nickserv_pass_set: Credential.upstream_nickserv_pass(credential) != nil
+      oper_pass_set: Credential.upstream_oper_pass(credential) != nil
     }
   end
 

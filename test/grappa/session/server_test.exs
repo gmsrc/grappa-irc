@@ -1728,21 +1728,30 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
-  describe "$nickserv_pass decoupled from auth_method (#509)" do
-    # #509 — the credential's dedicated `nickserv_pass` field drives the built-in
-    # identify AND `$nickserv_pass` expansion on ANY auth method, so a
-    # :server_pass credential (password spent on PASS / hostmasking) can still
-    # identify. The autojoin +r gate (#347) follows the same rule.
-    defp put_nickserv_pass(credential, pass) do
-      {:ok, updated} =
-        credential
-        |> Grappa.Networks.Credential.perform_changeset(%{nickserv_pass: pass})
-        |> Repo.update()
+  describe "$nickserv_pass resolves from the credential password (#124, retiring #509)" do
+    # #509 gave the credential a SECOND NickServ secret that WON over
+    # `password_encrypted` and worked on ANY auth method. #124 retired it: one
+    # field, one stored secret. These tests pin the retirement END-TO-END, on
+    # the wire, because the failure mode of getting it wrong is silent — a
+    # session that simply never becomes `+r`.
+    #
+    # The retired column still EXISTS (#124 is expand-only), so the sharpest
+    # tests are the ones that leave a value in it and prove it is inert.
 
-      updated
+    # The #509 write path is gone with its virtual field, so a leftover column
+    # value can only be staged as raw ciphertext — which is also exactly the
+    # shape a post-fold production row has.
+    defp seed_retired_nickserv_column(credential, pass) do
+      {:ok, blob} = Grappa.EncryptedBinary.dump(pass)
+      Repo.query!("UPDATE network_credentials SET nickserv_pass_encrypted = ? WHERE id = ?", [
+        blob,
+        credential.id
+      ])
+
+      credential
     end
 
-    test "built-in identify fires from nickserv_pass on a :server_pass credential" do
+    test "a :server_pass credential does NOT identify — the second secret is gone" do
       {server, port} = start_server()
 
       {user, network, credential} =
@@ -1753,20 +1762,57 @@ defmodule Grappa.Session.ServerTest do
           autojoin_channels: []
         })
 
-      cred = put_nickserv_pass(credential, "ns-secret")
+      # Pre-#124 this exact row identified from the dedicated field. Now the
+      # password is spent on PASS and there is no second secret to fall back
+      # on, so nothing may reach NickServ — least of all the server password.
+      cred = seed_retired_nickserv_column(credential, "ns-secret")
       pid = nickserv_plan(user, network, cred, 60_000)
 
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
-      # No perform line consumed the variable → grappa's built-in identify fires
-      # from the dedicated field, even though auth_method is :server_pass.
+      # The umode query is emitted at the END of the same 001 clause that runs
+      # perform + identify, so it is an ordering barrier, not a sleep: once it
+      # lands, an identify would already have been sent.
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "MODE grappa-test\r\n"), 1_000)
+
+      refute Enum.any?(
+               IRCServer.sent_lines(server),
+               &String.starts_with?(&1, "PRIVMSG NickServ :IDENTIFY")
+             )
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the credential password drives the identify, NOT a leftover nickserv column" do
+      {server, port} = start_server()
+
+      {user, network, credential} =
+        setup_user_and_network(port, %{
+          nick: "grappa-test",
+          auth_method: :nickserv_identify,
+          password: "identify-pw",
+          autojoin_channels: []
+        })
+
+      # The precedence INVERTED at #124: pre-#124 this row identified with
+      # "stale-override". A post-fold row can still carry the column, and it
+      # must be inert — otherwise the operator repairs the password field and
+      # the old value keeps going on the wire, which IS the split brain.
+      cred = seed_retired_nickserv_column(credential, "stale-override")
+      pid = nickserv_plan(user, network, cred, 60_000)
+
+      :ok = await_handshake(server)
+      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
+
       {:ok, _} =
         IRCServer.wait_for_line(
           server,
-          &(&1 == "PRIVMSG NickServ :IDENTIFY ns-secret\r\n"),
+          &(&1 == "PRIVMSG NickServ :IDENTIFY identify-pw\r\n"),
           1_000
         )
+
+      refute "PRIVMSG NickServ :IDENTIFY stale-override\r\n" in IRCServer.sent_lines(server)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -1782,26 +1828,21 @@ defmodule Grappa.Session.ServerTest do
           autojoin_channels: []
         })
 
-      # The DEDICATED `nickserv_pass` field, not the one-shot
-      # `pending_password`: the latter is cleared after the first pass by
-      # design, so the re-welcome below would expand it to empty and the two
-      # runs would not be comparable.
-      cred =
-        credential
-        |> put_nickserv_pass("ns-secret")
-        |> put_perform_list("NS IDENTIFY $nick $nickserv_pass")
+      # A `$nick`-only line, deliberately: this test is about the `$nick`
+      # BINDING, and it discriminates by re-running the perform list after the
+      # live nick diverges. #124 made the identify one-shot (the secret is
+      # `pending_password`, cleared after the first pass), so a line carrying
+      # `$nickserv_pass` would expand to empty on the second run and the two
+      # runs would no longer be comparable. The perform list itself is
+      # persistent config and DOES re-run.
+      cred = put_perform_list(credential, "MODE $nick +x")
 
       pid = nickserv_plan(user, network, cred, 60_000)
 
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
-      {:ok, _} =
-        IRCServer.wait_for_line(
-          server,
-          &(&1 == "NS IDENTIFY grappa-test ns-secret\r\n"),
-          1_000
-        )
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "MODE grappa-test +x\r\n"), 1_000)
 
       # Now make the LIVE nick diverge from the configured one — the whole
       # reason the feature exists. Asserting the divergence landed is what
@@ -1818,27 +1859,27 @@ defmodule Grappa.Session.ServerTest do
 
       lines = IRCServer.sent_lines(server)
 
-      assert Enum.count(lines, &(&1 == "NS IDENTIFY grappa-test ns-secret\r\n")) == 2
-      refute "NS IDENTIFY grappa-test_ ns-secret\r\n" in lines
+      assert Enum.count(lines, &(&1 == "MODE grappa-test +x\r\n")) == 2
+      refute "MODE grappa-test_ +x\r\n" in lines
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "a :server_pass perform line expands $nickserv_pass and suppresses the built-in identify" do
+    test "a perform line consuming $nickserv_pass still suppresses the built-in identify" do
       {server, port} = start_server()
 
       {user, network, credential} =
         setup_user_and_network(port, %{
           nick: "grappa-test",
-          auth_method: :server_pass,
-          password: "server-pw",
+          auth_method: :nickserv_identify,
+          password: "ns-secret",
           autojoin_channels: []
         })
 
-      cred =
-        credential
-        |> put_nickserv_pass("ns-secret")
-        |> put_perform_list("NS IDENTIFY $nickserv_pass")
+      # The SUPPRESSION mechanism survives #124 untouched — only the SOURCE the
+      # variable binds to changed. Losing this would double-identify every
+      # operator who writes their own NS line.
+      cred = put_perform_list(credential, "NS IDENTIFY $nickserv_pass")
 
       pid = nickserv_plan(user, network, cred, 60_000)
 
@@ -1855,39 +1896,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "the dedicated nickserv_pass field wins over the :nickserv_identify password" do
-      {server, port} = start_server()
-
-      {user, network, credential} =
-        setup_user_and_network(port, %{
-          nick: "grappa-test",
-          auth_method: :nickserv_identify,
-          password: "identify-pw",
-          autojoin_channels: []
-        })
-
-      # BOTH sources present: the dedicated field must take precedence so an
-      # operator can override the login password with a distinct NickServ one.
-      cred = put_nickserv_pass(credential, "override-pw")
-      pid = nickserv_plan(user, network, cred, 60_000)
-
-      :ok = await_handshake(server)
-      IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
-
-      {:ok, _} =
-        IRCServer.wait_for_line(
-          server,
-          &(&1 == "PRIVMSG NickServ :IDENTIFY override-pw\r\n"),
-          1_000
-        )
-
-      Process.sleep(150)
-      refute "PRIVMSG NickServ :IDENTIFY identify-pw\r\n" in IRCServer.sent_lines(server)
-
-      :ok = GenServer.stop(pid, :normal, 1_000)
-    end
-
-    test "autojoin defers behind the +r gate for a :server_pass credential with nickserv_pass" do
+    test "autojoin fires immediately for :server_pass carrying only the retired column" do
       {server, port} = start_server()
 
       {user, network, credential} =
@@ -1898,18 +1907,18 @@ defmodule Grappa.Session.ServerTest do
           autojoin_channels: ["#sniffo"]
         })
 
-      cred = put_nickserv_pass(credential, "ns-secret")
+      # #509 made this row DEFER behind the +r gate, because it expected an
+      # identify. #124 narrowed `identify_expected?/1` back to `auth_method`
+      # alone, so no identify is coming and waiting for a `+r` that will never
+      # arrive would strand the JOIN for the full fallback window. The 60s
+      # fallback below is load-bearing: with the production ~0.5s default a
+      # wrongful defer would still fire inside the 1s window and this test
+      # would pass either way.
+      cred = seed_retired_nickserv_column(credential, "ns-secret")
       pid = nickserv_plan(user, network, cred, 60_000)
 
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
-
-      # An identify is expected (nickserv_pass set) → the JOIN must wait for +r,
-      # not race the identify on 001 (the #347 gate now covers :server_pass too).
-      Process.sleep(150)
-      refute Enum.any?(IRCServer.sent_lines(server), &String.starts_with?(&1, "JOIN"))
-
-      IRCServer.feed(server, ":irc.test.org MODE grappa-test :+r\r\n")
 
       assert {:ok, "JOIN #sniffo\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "JOIN #sniffo\r\n"), 1_000)

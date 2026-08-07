@@ -238,16 +238,17 @@ defmodule Grappa.Networks.SessionPlan do
       sasl_user: Credential.effective_sasl_user(cred),
       auth_method: cred.auth_method,
       password: Credential.upstream_password(cred),
-      # GH #189 / #509 — on-connect perform list + its `$oper_pass` /
-      # `$nickserv_pass` secrets. All decrypted-on-load plaintext (accessors),
-      # nil when unset. Threaded into Session.Server state and expanded + run at
-      # 001, before the built-in identify and before autojoin. `nickserv_pass`
-      # is the FIRST source for `$nickserv_pass` / the built-in identify,
-      # decoupled from `auth_method` (#509). Shared by the user + visitor base
-      # plan; a visitor credential normally carries none.
+      # GH #189 — on-connect perform list + its `$oper_pass` secret. Both
+      # decrypted-on-load plaintext (accessors), nil when unset. Threaded into
+      # Session.Server state and expanded + run at 001, before the built-in
+      # identify and before autojoin. Shared by the user + visitor base plan; a
+      # visitor credential normally carries none.
+      #
+      # `$nickserv_pass` is NOT threaded: #124 collapsed its value onto the
+      # credential password above, so the expander binds it from
+      # `pending_password` at 001. One secret, one home.
       perform_list: Credential.perform_list_text(cred),
       oper_pass: Credential.upstream_oper_pass(cred),
-      nickserv_pass: Credential.upstream_nickserv_pass(cred),
       # CP22 cluster B (channel-client-polish #14, B-restart) — boot
       # channel list is the union of operator config + last-live snapshot.
       # `autojoin_channels` = "channels you ALWAYS want auto-joined no

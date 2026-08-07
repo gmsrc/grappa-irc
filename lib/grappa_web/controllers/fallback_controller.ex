@@ -127,6 +127,22 @@ defmodule GrappaWeb.FallbackController do
     |> json(%{error: "invalid_line"})
   end
 
+  # 410 Gone: #124 retired the `nickserv_pass` key from the
+  # `PUT /networks/:network_id/perform` body. Its own status, not a
+  # 400/422, because the request is not malformed and not invalid —
+  # the field is permanently withdrawn, and a client that still sends
+  # it needs to be told to stop rather than to retry. Refusing beats
+  # dropping the key silently: cic is a PWA and a cached bundle would
+  # otherwise let an operator watch a password "save" that went nowhere.
+  def call(conn, {:error, :nickserv_pass_retired}) do
+    conn
+    |> put_status(:gone)
+    |> json(%{
+      error: "nickserv_pass_retired",
+      detail: "set the per-network password via PATCH /api/networks/:network_id/identity"
+    })
+  end
+
   # 413 body_too_large: GrappaWeb.BodyLimit boundary reject when a
   # POST body / channel-verb text field exceeds the configured byte
   # cap (no-silent-drops B6.9a HIGH-19). Pre-fix the payload reached

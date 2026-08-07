@@ -37,14 +37,13 @@ defmodule Grappa.Networks.PerformChangesetTest do
   end
 
   describe "Credential.perform_changeset/2" do
-    test "encrypts + round-trips perform_list, oper_pass and nickserv_pass on read (Cloak decrypt)" do
+    test "encrypts + round-trips perform_list and oper_pass on read (Cloak decrypt)" do
       {_, _, cred} = setup_credential()
 
       cs =
         Credential.perform_changeset(cred, %{
           perform_list: "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass",
-          oper_pass: "hunter2",
-          nickserv_pass: "nspass"
+          oper_pass: "hunter2"
         })
 
       assert cs.valid?
@@ -56,7 +55,6 @@ defmodule Grappa.Networks.PerformChangesetTest do
                "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass"
 
       assert reloaded.oper_pass_encrypted == "hunter2"
-      assert reloaded.nickserv_pass_encrypted == "nspass"
     end
 
     test "accessors return the decrypted plaintext, nil when unset" do
@@ -66,38 +64,33 @@ defmodule Grappa.Networks.PerformChangesetTest do
         cred
         |> Credential.perform_changeset(%{
           perform_list: "MODE $nick +x",
-          oper_pass: "s3cr3t",
-          nickserv_pass: "nspass"
+          oper_pass: "s3cr3t"
         })
         |> Repo.update()
 
       reloaded = reload(saved)
       assert Credential.perform_list_text(reloaded) == "MODE $nick +x"
       assert Credential.upstream_oper_pass(reloaded) == "s3cr3t"
-      assert Credential.upstream_nickserv_pass(reloaded) == "nspass"
 
       {_, _, bare} = setup_credential()
       assert Credential.perform_list_text(bare) == nil
       assert Credential.upstream_oper_pass(bare) == nil
-      assert Credential.upstream_nickserv_pass(bare) == nil
     end
 
-    test "inspect/1 never leaks perform_list, oper_pass or nickserv_pass (redact: true)" do
+    test "inspect/1 never leaks perform_list or oper_pass (redact: true)" do
       {_, _, cred} = setup_credential()
 
       {:ok, saved} =
         cred
         |> Credential.perform_changeset(%{
           perform_list: "OPER vjt topsecret",
-          oper_pass: "leakme",
-          nickserv_pass: "nsleakme"
+          oper_pass: "leakme"
         })
         |> Repo.update()
 
       dump = inspect(reload(saved))
       refute dump =~ "topsecret"
       refute dump =~ "leakme"
-      refute dump =~ "nsleakme"
     end
 
     test "a multi-line perform list is accepted (newlines are the line separator)" do
@@ -111,39 +104,37 @@ defmodule Grappa.Networks.PerformChangesetTest do
       assert cs.valid?
     end
 
-    test "clearing perform_list / oper_pass / nickserv_pass with empty string stores nil" do
+    test "clearing perform_list / oper_pass with empty string stores nil" do
       {_, _, cred} = setup_credential()
 
       {:ok, saved} =
         cred
         |> Credential.perform_changeset(%{
           perform_list: "MODE $nick +x",
-          oper_pass: "x",
-          nickserv_pass: "ns"
+          oper_pass: "x"
         })
         |> Repo.update()
 
       {:ok, cleared} =
         saved
-        |> Credential.perform_changeset(%{perform_list: "", oper_pass: "", nickserv_pass: ""})
+        |> Credential.perform_changeset(%{perform_list: "", oper_pass: ""})
         |> Repo.update()
 
       reloaded = reload(cleared)
       assert Credential.perform_list_text(reloaded) == nil
       assert Credential.upstream_oper_pass(reloaded) == nil
-      assert Credential.upstream_nickserv_pass(reloaded) == nil
     end
 
-    test "omitting nickserv_pass keeps the stored secret (leave-blank-to-keep)" do
+    test "omitting oper_pass keeps the stored secret (leave-blank-to-keep)" do
       {_, _, cred} = setup_credential()
 
       {:ok, saved} =
         cred
-        |> Credential.perform_changeset(%{nickserv_pass: "keepme"})
+        |> Credential.perform_changeset(%{oper_pass: "keepme"})
         |> Repo.update()
 
       # A later edit that touches ONLY the perform list must not disturb the
-      # stored nickserv secret (get_change == nil → keep-branch).
+      # stored oper secret (get_change == nil → keep-branch).
       {:ok, updated} =
         saved
         |> Credential.perform_changeset(%{perform_list: "MODE $nick +x"})
@@ -151,7 +142,7 @@ defmodule Grappa.Networks.PerformChangesetTest do
 
       reloaded = reload(updated)
       assert Credential.perform_list_text(reloaded) == "MODE $nick +x"
-      assert Credential.upstream_nickserv_pass(reloaded) == "keepme"
+      assert Credential.upstream_oper_pass(reloaded) == "keepme"
     end
 
     test "rejects a NUL byte in perform_list" do
@@ -168,11 +159,20 @@ defmodule Grappa.Networks.PerformChangesetTest do
       assert %{oper_pass: [_ | _]} = errors_on(cs)
     end
 
-    test "rejects CR/LF/NUL in nickserv_pass (single-line secret)" do
+    test "#124 — a nickserv_pass attr is not cast, so it can never reach the column" do
+      # The controller answers a stale client with a 410, but the changeset is
+      # the LAST line: even a caller that bypasses the controller cannot write
+      # the retired column, because `cast/3` no longer lists the field. Without
+      # this, re-adding it to the cast list would silently reopen the second
+      # source and no test would notice.
       {_, _, cred} = setup_credential()
-      cs = Credential.perform_changeset(cred, %{nickserv_pass: "bad\r\npass"})
-      refute cs.valid?
-      assert %{nickserv_pass: [_ | _]} = errors_on(cs)
+
+      {:ok, saved} =
+        cred
+        |> Credential.perform_changeset(%{perform_list: "MODE $nick +x", nickserv_pass: "sneaky"})
+        |> Repo.update()
+
+      assert reload(saved).nickserv_pass_encrypted == nil
     end
 
     test "rejects a perform list over the byte cap" do

@@ -598,14 +598,16 @@ defmodule Grappa.Networks.Credentials do
 
   @doc """
   GH #189 — per-network ON-CONNECT PERFORM LIST edit on a
-  `(subject, network)` credential (the raw command list + its `$oper_pass` /
-  `$nickserv_pass` secrets). Backs `PUT /networks/:network_id/perform` for BOTH
-  subjects.
+  `(subject, network)` credential (the raw command list + its `$oper_pass`
+  secret). Backs `PUT /networks/:network_id/perform` for BOTH subjects.
+
+  #124 removed the sibling `$nickserv_pass` secret from this door: it now lives
+  in the credential password, written by `update_credential_password/2`.
 
   Takes the already-resolved `%Credential{}` (the controller fetched it
   subject-scoped, so ownership is asserted) + the attrs. Routes through the
-  narrow `Credential.perform_changeset/2` (perform_list + oper_pass +
-  nickserv_pass, all encrypted at rest). Unlike identity, there is NO live
+  narrow `Credential.perform_changeset/2` (perform_list + oper_pass, both
+  encrypted at rest). Unlike identity, there is NO live
   verb: the perform list is read at 001 by `Grappa.Session.Server` and
   re-resolved on every (re)start via `SessionPlan.base_plan/6`, so an edit
   persists only and takes effect on the next (re)connect. No `:network`

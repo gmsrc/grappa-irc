@@ -745,10 +745,11 @@ defmodule GrappaWeb.NetworksControllerTest do
       body = json_response(conn, 200)
       assert body["perform_list"] == nil
       assert body["oper_pass_set"] == false
-      assert body["nickserv_pass_set"] == false
+      # #124 retired the `nickserv_pass_set` sibling with the field it described.
+      refute Map.has_key?(body, "nickserv_pass_set")
     end
 
-    test "PUT sets the list + secrets → 200, persisted, secrets write-only", %{conn: conn} do
+    test "PUT sets the list + oper_pass → 200, persisted, secret write-only", %{conn: conn} do
       vjt = user_fixture(name: "vjt-perfw-#{u()}")
       session = session_fixture(vjt)
       slug = "net-perfw-#{u()}"
@@ -761,27 +762,24 @@ defmodule GrappaWeb.NetworksControllerTest do
         |> put_req_header("content-type", "application/json")
         |> put("/networks/#{slug}/perform", %{
           perform_list: "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass",
-          oper_pass: "hunter2",
-          nickserv_pass: "nspass"
+          oper_pass: "hunter2"
         })
 
       body = json_response(conn, 200)
       assert body["perform_list"] == "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass"
       assert body["oper_pass_set"] == true
-      assert body["nickserv_pass_set"] == true
-      # The secrets are write-only — never echoed back, in any field.
+      # The secret is write-only — never echoed back, in any field. The
+      # `$nickserv_pass` in the LIST is just text: the variable survives #124
+      # and expands from the credential password at 001.
       refute Map.has_key?(body, "oper_pass")
-      refute Map.has_key?(body, "nickserv_pass")
       refute body["perform_list"] =~ "hunter2"
-      refute body["perform_list"] =~ "nspass"
 
       {:ok, cred} = Credentials.get_credential(vjt, network)
       assert Credential.perform_list_text(cred) == "NS IDENTIFY $nickserv_pass\nOPER vjt $oper_pass"
       assert Credential.upstream_oper_pass(cred) == "hunter2"
-      assert Credential.upstream_nickserv_pass(cred) == "nspass"
     end
 
-    test "PUT with only nickserv_pass keeps the list, is write-only + persisted (#509)", %{
+    test "PUT carrying the retired nickserv_pass is REFUSED with 410, and writes nothing", %{
       conn: conn
     } do
       vjt = user_fixture(name: "vjt-perfns-#{u()}")
@@ -790,24 +788,27 @@ defmodule GrappaWeb.NetworksControllerTest do
       {network, _} = network_with_server(port: 9_999, slug: slug)
       cred = credential_fixture(vjt, network, %{nick: "vjt-irc"})
 
-      # Seed a list first, then PUT nickserv_pass ALONE — the stored list must
-      # survive (leave-list-alone keep branch) while the secret is set.
       {:ok, _} = Credentials.update_perform_list(cred, %{perform_list: "MODE vjt-irc +x"})
 
+      # cic is a PWA, so a service-worker-cached bundle predating #124 will keep
+      # PUTting this key. Dropping it silently would let the operator watch a
+      # password "save" and go on failing to identify — the exact split brain
+      # #124 cures. It must be refused, LOUDLY.
       conn =
         conn
         |> put_bearer(session.id)
         |> put_req_header("content-type", "application/json")
-        |> put("/networks/#{slug}/perform", %{nickserv_pass: "ns-secret"})
+        |> put("/networks/#{slug}/perform", %{
+          perform_list: "MODE vjt-irc +z",
+          nickserv_pass: "ns-secret"
+        })
 
-      body = json_response(conn, 200)
-      assert body["perform_list"] == "MODE vjt-irc +x"
-      assert body["nickserv_pass_set"] == true
-      refute Map.has_key?(body, "nickserv_pass")
+      assert json_response(conn, 410)["error"] == "nickserv_pass_retired"
 
+      # ALL-or-nothing: the accompanying perform_list must not have landed
+      # either, or the client would see a rejection over a partial write.
       {:ok, reloaded} = Credentials.get_credential(vjt, network)
       assert Credential.perform_list_text(reloaded) == "MODE vjt-irc +x"
-      assert Credential.upstream_nickserv_pass(reloaded) == "ns-secret"
     end
 
     test "PUT with only perform_list leaves oper_pass unset", %{conn: conn} do

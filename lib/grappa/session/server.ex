@@ -542,13 +542,14 @@ defmodule Grappa.Session.Server do
           # `Grappa.Session.start_session/3` from the boot-resolved default;
           # a test / integration env may substitute a short window.
           optional(:auto_away_debounce_ms) => non_neg_integer(),
-          # GH #189 / #509 — on-connect perform list + its `$oper_pass` /
-          # `$nickserv_pass` secrets, decrypted plaintext from the credential
-          # (nil when unset). Run at 001 before the built-in identify and before
-          # autojoin.
+          # GH #189 — on-connect perform list + its `$oper_pass` secret,
+          # decrypted plaintext from the credential (nil when unset). Run at 001
+          # before the built-in identify and before autojoin. The `$nickserv_pass`
+          # variable still expands, but #124 collapsed its VALUE onto the
+          # credential password (`pending_password`) — there is no second secret
+          # to thread any more.
           optional(:perform_list) => String.t() | nil,
-          optional(:oper_pass) => String.t() | nil,
-          optional(:nickserv_pass) => String.t() | nil
+          optional(:oper_pass) => String.t() | nil
         }
 
   @type t :: %{
@@ -637,15 +638,11 @@ defmodule Grappa.Session.Server do
           pending_auth_timer: reference() | nil,
           pending_registration_secret: String.t() | nil,
           pending_password: String.t() | nil,
-          # GH #189 / #509 — the on-connect perform list (raw text) + its
-          # `$oper_pass` / `$nickserv_pass` secrets, decrypted plaintext threaded
-          # from the credential at boot. Read at 001 by
-          # `run_perform_and_identify/1` (+ `nickserv_pass` at the autojoin defer
-          # decision). nil when unset. `nickserv_pass` is persistent config (like
-          # `oper_pass`), NOT one-shot like `pending_password`.
+          # GH #189 — the on-connect perform list (raw text) + its `$oper_pass`
+          # secret, decrypted plaintext threaded from the credential at boot.
+          # Read at 001 by `run_perform_and_identify/1`. nil when unset.
           perform_list: String.t() | nil,
           oper_pass: String.t() | nil,
-          nickserv_pass: String.t() | nil,
           visitor_committer: visitor_committer() | nil,
           visitor_password_rotator: visitor_password_rotator() | nil,
           visitor_nick_persister: visitor_nick_persister() | nil,
@@ -1161,7 +1158,6 @@ defmodule Grappa.Session.Server do
       pending_password: pending_password_from_opts(opts),
       perform_list: Map.get(opts, :perform_list),
       oper_pass: Map.get(opts, :oper_pass),
-      nickserv_pass: Map.get(opts, :nickserv_pass),
       visitor_committer: Map.get(opts, :visitor_committer),
       visitor_password_rotator: Map.get(opts, :visitor_password_rotator),
       visitor_nick_persister: Map.get(opts, :visitor_nick_persister),
@@ -3770,15 +3766,18 @@ defmodule Grappa.Session.Server do
   # identify + autojoin in this ONE handler (not split across Client + Server)
   # makes their order deterministic rather than a cross-process race.
   #
-  # `$nickserv_pass` + the built-in identify resolve to `nickserv_secret/1`:
-  # the dedicated `nickserv_pass` field FIRST, else the `:nickserv_identify`
-  # `pending_password` (#509). `pending_password` is cleared after this pass —
-  # one-shot, mirroring the old staging: a defensive re-welcome (a second 001
-  # without an intervening crash) must not re-run against a stale secret. The
-  # `nickserv_pass` field is persistent config (re-resolved from the credential
-  # on every restart), so — exactly like the perform list + `$oper_pass` — it
-  # DOES re-run on such a re-welcome; that is consistent with the whole list
-  # re-running and is bounded by the downstream +r gate.
+  # `$nickserv_pass` + the built-in identify both resolve to
+  # `nickserv_secret/1` — since #124 the ONE `:nickserv_identify`
+  # `pending_password`, which is cleared after this pass. One-shot, mirroring
+  # the old staging: a defensive re-welcome (a second 001 without an
+  # intervening crash) must not re-run against a stale secret.
+  #
+  # #124 narrowed the re-welcome behaviour, deliberately. The retired #509
+  # `nickserv_pass` field was persistent config, so it DID re-identify on a
+  # re-welcome while `pending_password` does not. Now that the secret has one
+  # home, the perform list + `$oper_pass` still re-run but the identify does
+  # not — and that is the safer half of the old split, not a loss: the +r the
+  # first identify won is still held, so a second one buys nothing.
   @spec run_perform_and_identify(t()) :: t()
   defp run_perform_and_identify(state) do
     # GH #509 — one effective secret drives BOTH the `$nickserv_pass` expansion
@@ -3807,13 +3806,20 @@ defmodule Grappa.Session.Server do
     |> Map.put(:pending_password, nil)
   end
 
-  # GH #509 — the effective NickServ secret for `$nickserv_pass` expansion + the
-  # built-in identify. The dedicated `nickserv_pass` field WINS (any
-  # auth_method, so a `:server_pass` credential whose password is spent on PASS
-  # can still identify); the `:nickserv_identify` `pending_password` is the
-  # fallback. A blank field is treated as absent so it never masks the fallback.
+  # GH #509 / #124 — the effective NickServ secret for `$nickserv_pass`
+  # expansion + the built-in identify. ONE source since #124: the credential
+  # password, staged as `pending_password`. The #509 second source (a dedicated
+  # `nickserv_pass` field that WON ahead of it, decoupled from `auth_method`)
+  # is gone — two editable homes for one secret is the split brain #124 cures.
+  #
+  # Documented twin of `Grappa.Networks.Credential.recover_secret/1`, and the
+  # two really are identical now: `recover_secret/1` gates on
+  # `auth_method == :nickserv_identify` + non-empty, and `pending_password`
+  # carries exactly that gate applied earlier — `pending_password_from_opts/1`
+  # only binds a non-empty password on `:nickserv_identify`. Kept as a named
+  # function, not inlined, because that equivalence is the contract: a future
+  # change to either MUST move both.
   @spec nickserv_secret(t()) :: String.t() | nil
-  defp nickserv_secret(%{nickserv_pass: pw}) when is_binary(pw) and pw != "", do: pw
   defp nickserv_secret(%{pending_password: pw}), do: pw
 
   # GH #885 — the value bound to `$nick`. The CONFIGURED nick, never
@@ -3848,13 +3854,12 @@ defmodule Grappa.Session.Server do
     state
   end
 
-  # #189 / #509 — grappa's built-in NickServ IDENTIFY, sent AFTER the perform
-  # list. Fires whenever an EFFECTIVE NickServ secret exists (`nickserv_secret/1`
-  # — the dedicated `nickserv_pass` field OR the `:nickserv_identify` password),
-  # decoupled from `auth_method` so a `:server_pass` credential whose password
-  # is spent on PASS can still identify (#509). Suppressed when the perform list
-  # already consumed `$nickserv_pass` (the STRUCTURAL signal from the expander —
-  # never a scan of the line text). Routed through `send_perform_line/2` so it
+  # #189 / #509 / #124 — grappa's built-in NickServ IDENTIFY, sent AFTER the
+  # perform list. Fires whenever an EFFECTIVE NickServ secret exists
+  # (`nickserv_secret/1` — since #124 the `:nickserv_identify` credential
+  # password, the single source). Suppressed when the perform list already
+  # consumed `$nickserv_pass` (the STRUCTURAL signal from the expander — never a
+  # scan of the line text). Routed through `send_perform_line/2` so it
   # self-stages `pending_auth` via the choke point exactly like a user-typed
   # identify.
   @spec maybe_builtin_identify(t(), String.t() | nil, boolean()) :: t()
@@ -4206,8 +4211,8 @@ defmodule Grappa.Session.Server do
   # NickServ secret) via the plan-injected `recover_source` closure. Session
   # can't statically dep Networks/Visitors (Boundary cycle — Visitors deps
   # Session via Login), so the plan injects the reader (mirroring
-  # `visitor_committer`). Reads the LIVE credential each call — NOT
-  # `state.nickserv_pass` / the one-shot-cleared `pending_password` — so the
+  # `visitor_committer`). Reads the LIVE credential each call — NOT the
+  # one-shot-cleared `pending_password` — so the
   # action resolves the SAME source as the `recoverable` button gate
   # (`Credential.has_nickserv_secret?/1`); both go through
   # `Credential.recover_secret/1`, so the action can never refuse a session the
@@ -5727,26 +5732,21 @@ defmodule Grappa.Session.Server do
   # the `:autojoin_defer` timeout — no NickServ NOTICE-text parsing.
   #
   # #509 widened the trigger from `auth_method == :nickserv_identify` to "an
-  # identify is expected at all": a `:server_pass` credential with a dedicated
-  # `nickserv_pass` (whose password is spent on PASS) now identifies from the
-  # built-in / perform list too, and must get the SAME +r gate — otherwise the
-  # feature ships with the exact race #347 exists to prevent.
+  # identify is expected at all", to cover a `:server_pass` credential carrying
+  # a dedicated `nickserv_pass`. #124 retired that second secret, so the
+  # trigger is back to the single `auth_method` test — and with it the #509
+  # KNOWN EDGE (a `nickserv_pass` set on a SASL credential took the defer path
+  # for no reason, costing a bounded ~0.5s) is gone by construction: there is
+  # no field left to set on the wrong method.
   #
   # Everything else fires immediately: SASL identifies BEFORE 001 (so the 001
-  # autojoin already sees +r), and `:none`/`:server_pass`/`:auto` with NO
-  # nickserv secret have no identify step to wait on. An empty autojoin set also
-  # fires now (the loop is a no-op) rather than arming a pointless timer.
+  # autojoin already sees +r), and `:none`/`:server_pass`/`:auto` have no
+  # identify step to wait on. An empty autojoin set also fires now (the loop is
+  # a no-op) rather than arming a pointless timer.
   #
-  # KNOWN EDGE (#509): a `nickserv_pass` field set on a method that already
-  # authed pre-001 (SASL — a misconfiguration, but the editor exposes the field
-  # for every network) STILL takes the defer path. We cannot cheaply avoid it:
-  # `state.umodes` is empty until the 221 RPL_UMODEIS reply (queried at 001,
-  # lands after), so there is no honest "already +r" signal to test here. The
-  # cost is bounded — the JOINs fire on the `@autojoin_defer_ms` fallback (the
-  # +r echo already passed) — and correctness holds; only a ~0.5s delay on a
-  # misconfigured SASL credential, never a hang. Not worth an `auth_method`
-  # exclusion (asymmetric with the built-in identify, which fires the redundant
-  # IDENTIFY on the same combo by design).
+  # There is deliberately no "already +r, skip the defer" shortcut: `state.umodes`
+  # is empty until the 221 RPL_UMODEIS reply (queried at 001, lands after), so
+  # there is no honest signal to test here.
   @spec maybe_autojoin_or_defer(t()) :: t()
   defp maybe_autojoin_or_defer(%{autojoin: [_ | _]} = state) do
     if identify_expected?(state) do
@@ -5765,17 +5765,16 @@ defmodule Grappa.Session.Server do
 
   defp maybe_autojoin_or_defer(state), do: fire_autojoin(state)
 
-  # GH #347 / #509 — an identify is expected at 001 (so autojoin must wait for
-  # the +r echo) whenever an effective NickServ secret exists: the dedicated
-  # `nickserv_pass` field (any auth_method, #509) OR `:nickserv_identify` (whose
-  # `pending_password` was staged from the credential password). This subsumes
-  # the "perform list consumed `$nickserv_pass`" case — consumption requires an
-  # effective secret, which is exactly one of these two sources. We test the
+  # GH #347 / #509 / #124 — an identify is expected at 001 (so autojoin must
+  # wait for the +r echo) whenever an effective NickServ secret exists. Since
+  # #124 that is exactly ONE condition: `:nickserv_identify`, whose
+  # `pending_password` was staged from the credential password. It subsumes the
+  # "perform list consumed `$nickserv_pass`" case — consumption requires an
+  # effective secret, and there is only this one source of it. We test the
   # STABLE `auth_method` (the origin of `pending_password`) rather than
   # `pending_password` itself, since `run_perform_and_identify/1` has already
   # cleared it one-shot by the time this runs.
   @spec identify_expected?(t()) :: boolean()
-  defp identify_expected?(%{nickserv_pass: pw}) when is_binary(pw) and pw != "", do: true
   defp identify_expected?(%{auth_method: :nickserv_identify}), do: true
   defp identify_expected?(_), do: false
 

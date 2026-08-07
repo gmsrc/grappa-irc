@@ -58,12 +58,7 @@ defmodule Grappa.Networks.CredentialTest do
     # Post-Cloak-load, the `*_encrypted` fields carry DECRYPTED plaintext
     # (accessor contract), so a plain struct exercises the predicate without
     # the DB — mirrors the `effective_ident/1` unit tests above.
-    test "true when the #509 $nickserv_pass is present (decoupled from auth_method)" do
-      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
-      assert Credential.has_nickserv_secret?(cred)
-    end
-
-    test "true for :nickserv_identify with an upstream password (the fallback source)" do
+    test "true for :nickserv_identify with an upstream password (the ONLY source, #124)" do
       cred = %Credential{auth_method: :nickserv_identify, password_encrypted: "hunter2"}
       assert Credential.has_nickserv_secret?(cred)
     end
@@ -78,13 +73,22 @@ defmodule Grappa.Networks.CredentialTest do
 
     test "an empty-string secret is treated as absent (mirrors the live gate's pw != \"\")" do
       refute Credential.has_nickserv_secret?(%Credential{
-               auth_method: :server_pass,
-               nickserv_pass_encrypted: ""
+               auth_method: :nickserv_identify,
+               password_encrypted: ""
              })
     end
 
     test "false for :server_pass with only an upstream password (spent on PASS, not NickServ)" do
       cred = %Credential{auth_method: :server_pass, password_encrypted: "shibboleth"}
+      refute Credential.has_nickserv_secret?(cred)
+    end
+
+    test "#124 — the retired nickserv_pass column no longer grants the gate" do
+      # Pre-#124 this was TRUE (the #509 second source, decoupled from
+      # auth_method). The expand migration folded any live value onto
+      # `password_encrypted`, so a row still carrying one here is a
+      # post-fold leftover and must NOT resurrect the second source.
+      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
       refute Credential.has_nickserv_secret?(cred)
     end
   end
@@ -95,22 +99,7 @@ defmodule Grappa.Networks.CredentialTest do
     # action read ONE source and can never diverge (review-#1). Post-Cloak-load
     # the `*_encrypted` fields carry DECRYPTED plaintext (accessor contract),
     # so a plain struct exercises it without the DB.
-    test "returns the #509 $nickserv_pass (the FIRST source, decoupled from auth_method)" do
-      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
-      assert Credential.recover_secret(cred) == "hunter2"
-    end
-
-    test "$nickserv_pass WINS over the :nickserv_identify password when both are set" do
-      cred = %Credential{
-        auth_method: :nickserv_identify,
-        nickserv_pass_encrypted: "primary",
-        password_encrypted: "fallback"
-      }
-
-      assert Credential.recover_secret(cred) == "primary"
-    end
-
-    test "falls back to the :nickserv_identify upstream password" do
+    test "returns the :nickserv_identify upstream password (the single source, #124)" do
       cred = %Credential{auth_method: :nickserv_identify, password_encrypted: "hunter2"}
       assert Credential.recover_secret(cred) == "hunter2"
     end
@@ -124,11 +113,29 @@ defmodule Grappa.Networks.CredentialTest do
       assert Credential.recover_secret(cred) == nil
     end
 
-    test "an empty-string $nickserv_pass is treated as absent (falls through to nil)" do
+    test "an empty-string password is treated as absent (falls through to nil)" do
       assert Credential.recover_secret(%Credential{
-               auth_method: :server_pass,
-               nickserv_pass_encrypted: ""
+               auth_method: :nickserv_identify,
+               password_encrypted: ""
              }) == nil
+    end
+
+    test "#124 — a leftover nickserv_pass column is NOT read" do
+      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
+      assert Credential.recover_secret(cred) == nil
+    end
+
+    test "#124 — the credential password wins over a leftover nickserv_pass column" do
+      # Pre-#124 the column WON this exact shape ("$nickserv_pass WINS over
+      # the :nickserv_identify password"). The precedence is gone: after the
+      # fold there is one secret, and it is `password_encrypted`.
+      cred = %Credential{
+        auth_method: :nickserv_identify,
+        nickserv_pass_encrypted: "stale",
+        password_encrypted: "folded"
+      }
+
+      assert Credential.recover_secret(cred) == "folded"
     end
   end
 

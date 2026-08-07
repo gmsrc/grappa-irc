@@ -149,7 +149,6 @@ defmodule Grappa.Networks.Credential do
           oper_pass_encrypted: binary() | nil,
           oper_pass: String.t() | nil,
           nickserv_pass_encrypted: binary() | nil,
-          nickserv_pass: String.t() | nil,
           perform_list_encrypted: binary() | nil,
           perform_list: String.t() | nil,
           auth_method: auth_method() | nil,
@@ -189,24 +188,29 @@ defmodule Grappa.Networks.Credential do
     field :password_encrypted, EncryptedBinary, redact: true
     field :password, :string, virtual: true, redact: true
 
-    # GH #189 — on-connect perform list + its `$oper_pass` secret. GH #509 adds
-    # the sibling `$nickserv_pass` secret. All three encrypted at rest (Cloak
-    # AES-GCM); `redact: true` so neither the decrypted-on-load `*_encrypted`
-    # value nor the input-only virtual leaks in `inspect/1` / Logger output. The
-    # perform list is encrypted (not a plain `:string`) because a user may paste
-    # a literal password into it — so the column IS a secret. The virtuals
-    # mirror `:password` above: input-only, copied into the encrypted column by
-    # the narrow `perform_changeset/2` only when otherwise valid. After
-    # `Repo.one!` the `*_encrypted` fields carry the DECRYPTED plaintext (see
-    # accessors `perform_list_text/1` / `upstream_oper_pass/1` /
-    # `upstream_nickserv_pass/1`).
+    # GH #189 — on-connect perform list + its `$oper_pass` secret. Both
+    # encrypted at rest (Cloak AES-GCM); `redact: true` so neither the
+    # decrypted-on-load `*_encrypted` value nor the input-only virtual leaks in
+    # `inspect/1` / Logger output. The perform list is encrypted (not a plain
+    # `:string`) because a user may paste a literal password into it — so the
+    # column IS a secret. The virtuals mirror `:password` above: input-only,
+    # copied into the encrypted column by the narrow `perform_changeset/2` only
+    # when otherwise valid. After `Repo.one!` the `*_encrypted` fields carry the
+    # DECRYPTED plaintext (see accessors `perform_list_text/1` /
+    # `upstream_oper_pass/1`).
     field :oper_pass_encrypted, EncryptedBinary, redact: true
     field :oper_pass, :string, virtual: true, redact: true
-    # GH #509 — the `$nickserv_pass` secret, decoupled from `auth_method` so a
-    # `:server_pass` credential (password spent on `PASS`) can still expand the
-    # variable / drive the built-in identify. See `upstream_nickserv_pass/1`.
+    # RETIRED by #124 (GH #509's `$nickserv_pass`). NOTHING reads or writes this
+    # column any more: `20260807120000_fold_nickserv_pass_onto_password` folded
+    # every live value onto `password_encrypted`, and the secret now has exactly
+    # one home. The field is declared ONLY so the retired column stays visible
+    # and `redact: true` while it exists.
+    #
+    # #124 is deliberately EXPAND-ONLY (vjt's scope ruling): dropping the column
+    # is CONTRACT and needs a cold window, and the cure was not to be held
+    # hostage to scheduling one. Its input-only virtual is already gone, so the
+    # follow-up that drops the column deletes this line and nothing else.
     field :nickserv_pass_encrypted, EncryptedBinary, redact: true
-    field :nickserv_pass, :string, virtual: true, redact: true
     field :perform_list_encrypted, EncryptedBinary, redact: true
     field :perform_list, :string, virtual: true, redact: true
     # No default: operators MUST pick the auth method explicitly. S29
@@ -528,36 +532,38 @@ defmodule Grappa.Networks.Credential do
   end
 
   @doc """
-  GH #189 / #509 — narrow changeset for the on-connect perform list +
-  `$oper_pass` + `$nickserv_pass`. Casts the three virtual inputs, encrypts
-  them into the sibling `*_encrypted` columns, and touches nothing else (mirror
-  of `password_changeset/2` and `last_joined_channels_changeset/2` — the
-  narrow-changeset convention).
+  GH #189 — narrow changeset for the on-connect perform list + `$oper_pass`.
+  Casts the two virtual inputs, encrypts them into the sibling `*_encrypted`
+  columns, and touches nothing else (mirror of `password_changeset/2` and
+  `last_joined_channels_changeset/2` — the narrow-changeset convention).
 
   `empty_values: []` keeps a blank `""` as a real change (default `cast/3`
   would drop it as "missing"), so the editor can CLEAR the perform list /
-  oper pass / nickserv pass: `put_encrypted_perform_field/3` maps `""` → `nil`
-  (stores SQL NULL). All three fields are optional — an empty attrs map is a
-  valid no-op, and OMITTING a secret keeps the stored one (leave-blank-to-keep,
-  like a password field).
+  oper pass: `put_encrypted_perform_field/3` maps `""` → `nil` (stores SQL
+  NULL). Both fields are optional — an empty attrs map is a valid no-op, and
+  OMITTING the secret keeps the stored one (leave-blank-to-keep, like a
+  password field).
 
   The perform list may legitimately contain newlines (the line separator),
   so it is NOT run through `safe_line_token/2`; instead `validate_perform/2`
   rejects only NUL bytes and caps the byte size. Each individual expanded
   line is CR/LF/NUL-guarded at send time by `Grappa.IRC.Client`. `oper_pass`
-  and `nickserv_pass` ARE single-line secrets, so they get the full
-  `safe_line_token/2` guard.
+  IS a single-line secret, so it gets the full `safe_line_token/2` guard.
+
+  #124 removed the sibling `$nickserv_pass` input. `$oper_pass` stays because
+  it is a genuinely DIFFERENT secret with no credential column behind it — the
+  NickServ one now lives in the credential password, written through the
+  per-network password door (`Credentials.update_credential_password/2`), and
+  a second editable home for it is precisely the split brain #124 cures.
   """
   @spec perform_changeset(t(), map()) :: Ecto.Changeset.t()
   def perform_changeset(%__MODULE__{} = credential, attrs) when is_map(attrs) do
     credential
-    |> cast(attrs, [:perform_list, :oper_pass, :nickserv_pass], empty_values: [])
+    |> cast(attrs, [:perform_list, :oper_pass], empty_values: [])
     |> validate_change(:perform_list, &validate_perform/2)
     |> validate_change(:oper_pass, &Identity.safe_line_token/2)
-    |> validate_change(:nickserv_pass, &Identity.safe_line_token/2)
     |> put_encrypted_perform_field(:perform_list, :perform_list_encrypted)
     |> put_encrypted_perform_field(:oper_pass, :oper_pass_encrypted)
-    |> put_encrypted_perform_field(:nickserv_pass, :nickserv_pass_encrypted)
   end
 
   # NUL byte + byte-cap guard for the perform list. Allows newlines (the
@@ -774,19 +780,6 @@ defmodule Grappa.Networks.Credential do
   def upstream_oper_pass(%__MODULE__{oper_pass_encrypted: pw}), do: pw
 
   @doc """
-  GH #509 — returns the post-Cloak-load plaintext `$nickserv_pass` secret, or
-  `nil` when unset. Same accessor contract as `upstream_oper_pass/1`: the
-  `:nickserv_pass_encrypted` field name describes the on-disk representation;
-  after `Repo.one!` it carries the DECRYPTED plaintext. Threaded into the
-  connect plan by `Grappa.Networks.SessionPlan.base_plan/6` and consumed at 001
-  by `Grappa.Session.Server` — it is the FIRST source for `$nickserv_pass`
-  expansion and the built-in identify, falling back to the `:nickserv_identify`
-  upstream password only when this is `nil`.
-  """
-  @spec upstream_nickserv_pass(t()) :: binary() | nil
-  def upstream_nickserv_pass(%__MODULE__{nickserv_pass_encrypted: pw}), do: pw
-
-  @doc """
   GH #581 — the NickServ secret VALUE this credential recovers an identity
   with, or `nil` when none is on file. The SINGLE SOURCE OF TRUTH for BOTH
   the `/recover` action (`Session.Server` IDENTIFYs with this value) AND the
@@ -795,9 +788,19 @@ defmodule Grappa.Networks.Credential do
 
   Mirrors EXACTLY the resolution `Session.Server`'s `nickserv_secret/1`
   applies, but over the PERSISTENT credential rather than the one-shot
-  session state: the #509 `$nickserv_pass` (the FIRST source, decoupled from
-  `auth_method`) WINS; falling back, a `:nickserv_identify` upstream
-  password. Both must be non-empty — an empty secret is "nothing to identify
+  session state: a `:nickserv_identify` upstream password, and nothing else.
+
+  #124 collapsed this to ONE source. It used to be a two-source precedence
+  with the #509 `$nickserv_pass` column winning ahead of the password. Two
+  editable homes for one secret is the split brain #124 is named after — the
+  operator repaired one and the other kept driving the identify — so the
+  column was folded onto `password_encrypted` by
+  `20260807120000_fold_nickserv_pass_onto_password` and is no longer read
+  here or anywhere. `Session.Server`'s `nickserv_secret/1` collapsed in the
+  SAME commit: the two are documented as required to stay identical, so they
+  can only move together.
+
+  The secret must be non-empty — an empty secret is "nothing to identify
   with" (same `pw != ""` posture as the live gate and
   `pending_password_from_opts`).
 
@@ -809,16 +812,9 @@ defmodule Grappa.Networks.Credential do
   """
   @spec recover_secret(t()) :: binary() | nil
   def recover_secret(%__MODULE__{} = cred) do
-    cond do
-      secret_present?(upstream_nickserv_pass(cred)) ->
-        upstream_nickserv_pass(cred)
-
-      cred.auth_method == :nickserv_identify and secret_present?(upstream_password(cred)) ->
-        upstream_password(cred)
-
-      true ->
-        nil
-    end
+    if cred.auth_method == :nickserv_identify and secret_present?(upstream_password(cred)),
+      do: upstream_password(cred),
+      else: nil
   end
 
   @doc """

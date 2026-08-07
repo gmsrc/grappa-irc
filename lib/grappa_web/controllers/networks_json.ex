@@ -56,30 +56,19 @@ defmodule GrappaWeb.NetworksJSON do
   def update(%{credential: credential}), do: Wire.credential_to_json(credential)
 
   @doc """
-  Renders the `:perform` action (#189 / #509) — the on-connect perform list
-  wire shape: the raw list text (nil when unset) + booleans for whether the
-  write-only `$oper_pass` / `$nickserv_pass` secrets are set. Passed straight
-  through from the controller's `perform_wire/1`; the secrets never reach here.
+  Renders the `:perform` action (#189) — the on-connect perform list wire
+  shape: the raw list text (nil when unset) + a boolean for whether the
+  write-only `$oper_pass` secret is set. Passed straight through from the
+  controller's `perform_wire/1`; the secret never reaches here.
+
+  #124 dropped the `nickserv_pass_set` sibling. `$oper_pass` keeps its flag
+  because it remains a perform-owned secret; the NickServ one moved to the
+  credential password and is reported as `password_set` on the credential wire
+  shape instead.
   """
-  @spec perform(%{
-          perform: %{
-            perform_list: String.t() | nil,
-            oper_pass_set: boolean(),
-            nickserv_pass_set: boolean()
-          }
-        }) ::
-          %{perform_list: String.t() | nil, oper_pass_set: boolean(), nickserv_pass_set: boolean()}
-  def perform(%{
-        perform: %{
-          perform_list: perform_list,
-          oper_pass_set: oper_pass_set,
-          nickserv_pass_set: nickserv_pass_set
-        }
-      }) do
-    %{
-      perform_list: perform_list,
-      oper_pass_set: oper_pass_set,
-      nickserv_pass_set: nickserv_pass_set
-    }
+  @spec perform(%{perform: %{perform_list: String.t() | nil, oper_pass_set: boolean()}}) ::
+          %{perform_list: String.t() | nil, oper_pass_set: boolean()}
+  def perform(%{perform: %{perform_list: perform_list, oper_pass_set: oper_pass_set}}) do
+    %{perform_list: perform_list, oper_pass_set: oper_pass_set}
   end
 end
