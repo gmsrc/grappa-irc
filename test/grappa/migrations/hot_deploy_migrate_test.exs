@@ -127,19 +127,7 @@ defmodule Grappa.Migrations.HotDeployMigrateTest do
   defp columns_from_every_connection(table, pool_size) do
     parent = self()
 
-    holders =
-      for _ <- 1..pool_size do
-        Task.async(fn ->
-          {:ok, cols} =
-            SmokeRepo.transaction(fn ->
-              send(parent, {:holding, self()})
-              receive do: (:release -> :ok)
-              columns(table)
-            end)
-
-          cols
-        end)
-      end
+    holders = for _ <- 1..pool_size, do: Task.async(fn -> hold_then_read(parent, table) end)
 
     held =
       for _ <- 1..pool_size do
@@ -149,6 +137,17 @@ defmodule Grappa.Migrations.HotDeployMigrateTest do
 
     Enum.each(held, &send(&1, :release))
     Task.await_many(holders, 30_000)
+  end
+
+  defp hold_then_read(parent, table) do
+    {:ok, cols} =
+      SmokeRepo.transaction(fn ->
+        send(parent, {:holding, self()})
+        receive do: (:release -> :ok)
+        columns(table)
+      end)
+
+    cols
   end
 
   describe "pending_migration_files/1 against a live pool" do
