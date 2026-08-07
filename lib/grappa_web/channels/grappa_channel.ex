@@ -874,8 +874,33 @@ defmodule GrappaWeb.GrappaChannel do
 
     dispatch_subject_verb(
       socket,
-      fn -> validate_motd_target(target) end,
+      fn -> validate_server_target(target) end,
       fn subject -> Session.send_motd(subject, network_id, target) end
+    )
+  end
+
+  # #992 — /admin [<target>] (RFC 2812 §3.4.4). Same door and same optional
+  # server target as /motd — bahamut hands both to the same `hunt_server` —
+  # so the target rides the shared single-wire-token validator and an
+  # injection-shaped one dies here, not on the wire. Read-only server query;
+  # visitors are entitled to issue it (mirror of /motd + /lusers).
+  #
+  # Worth knowing before this is ever wired to a BUTTON: upstream ADMIN is a
+  # spy-level command (`sendto_realops_lev(SPY_LEV, …)` in `m_admin`), so
+  # opers on the target server see who asked. Not a blocker for a typed
+  # command the user chose to run.
+  defp do_handle_in(
+         "admin",
+         %{"network_id" => network_id} = params,
+         socket
+       )
+       when is_integer(network_id) do
+    target = Map.get(params, "target")
+
+    dispatch_subject_verb(
+      socket,
+      fn -> validate_server_target(target) end,
+      fn subject -> Session.send_admin(subject, network_id, target) end
     )
   end
 
@@ -1564,13 +1589,17 @@ defmodule GrappaWeb.GrappaChannel do
   @spec validate_args([validate_arg()]) ::
           {:ok, :ok}
           | {:error, :invalid_channel | :invalid_nick | :invalid_mask | :invalid_line}
-  # #374 — /motd [<target>]. Absent (nil) → bare MOTD, no validation. Present
-  # → a single wire token (same `{:server, _}` gate WHOIS/STATS use). A
-  # non-binary target (malformed client) is rejected loudly, never silently
-  # downgraded to a bare MOTD.
-  defp validate_motd_target(nil), do: {:ok, :ok}
-  defp validate_motd_target(target) when is_binary(target), do: validate_args(server: target)
-  defp validate_motd_target(_), do: {:error, :invalid_line}
+  # #374/#992 — the optional `<target>` of /motd and /admin. Absent (nil) →
+  # the bare verb, no validation. Present → a single wire token (same
+  # `{:server, _}` gate WHOIS/STATS use). A non-binary target (malformed
+  # client) is rejected loudly, never silently downgraded to the bare verb.
+  #
+  # One validator, both verbs: upstream they are the SAME argument — bahamut
+  # routes `m_motd` and `m_admin` through one `hunt_server` call each, with
+  # the server name in the same slot.
+  defp validate_server_target(nil), do: {:ok, :ok}
+  defp validate_server_target(target) when is_binary(target), do: validate_args(server: target)
+  defp validate_server_target(_), do: {:error, :invalid_line}
 
   # #238 — /links [<mask>]. nil = full mesh (bare LINKS); a binary mask is
   # gated as a single wire token (reuses the `:server` validator →

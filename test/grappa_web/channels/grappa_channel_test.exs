@@ -1996,6 +1996,43 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert_reply(ref, :error, %{error: "invalid_line"})
     end
 
+    # #992 — /admin [<target>] bridge. Same door and same shared
+    # single-wire-token validator as /motd: bahamut hands both arguments to
+    # the same `hunt_server`, so one validator covers both and the injection
+    # case must die here, not on the wire.
+    test "admin: sends bare ADMIN upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "admin", %{"network_id" => network.id})
+
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "ADMIN\r\n"), 1_000)
+    end
+
+    test "admin: with target sends ADMIN <target> upstream", %{
+      irc_server: irc_server,
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "admin", %{"network_id" => network.id, "target" => "void.azzurra.chat"})
+
+      assert_reply(ref, :ok)
+
+      {:ok, _} =
+        IRCServer.wait_for_line(irc_server, &(&1 == "ADMIN void.azzurra.chat\r\n"), 1_000)
+    end
+
+    test "admin: rejects an injection target with invalid_line", %{
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "admin", %{"network_id" => network.id, "target" => "srv\r\nQUIT"})
+
+      assert_reply(ref, :error, %{error: "invalid_line"})
+    end
+
     # #238 — /links bridge: cic pushes the bare verb (or with a mask) with
     # %{network_id}; the channel relays to Session.send_links/3 which primes
     # links_pending + emits LINKS upstream. Smoke-tests dispatch plumbing;
