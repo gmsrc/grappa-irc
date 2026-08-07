@@ -33198,3 +33198,96 @@ entry points rather than the jail's alone — the Linux copy was previously
 untested, which is a large part of how it drifted — plus one structural case
 asserting that exactly one file under `infra/` defines the algorithm. That last
 one is red on the parent commit for the right reason: two definers.
+---
+## 2026-08-07 — #992: /admin has four ways to answer, and 402 belongs to nobody
+
+**`/admin` was filed as the fourth member of the #127/#374 server-text family,
+and most of it is.** Parser, push, channel door, accumulator, modal: /motd's
+shapes, verbatim. Upstream justifies the copying rather than merely excusing it
+— bahamut hands the optional target of `m_motd` and `m_admin` to the *same*
+`hunt_server` call, in the same argument slot (`src/s_user.c:267`), so one
+grammar and one single-wire-token validator is the correct answer, and a second
+subtly-different one would be the defect. `validate_motd_target/1` became
+`validate_server_target/1` for that reason. `/links` kept its own: a mask is not
+a server target, even though today the byte gate happens to be identical.
+
+**The terminator set is four wide, and that is the whole issue.** Read out of
+`m_admin` (`src/s_serv.c:2676`), which has exactly four exits: 256/257/258/259
+when `find_admin()` hits; **423 ERR_NOADMININFO** when it misses, with *no*
+256-259 sent at all; **402 ERR_NOSUCHSERVER** from `hunt_server`; **447
+ERR_RESTRICTED** from `check_restricted_user` (`src/s_misc.c:1211`), which fires
+and returns before anything else. An accumulator waiting only on 259 stays armed
+on three of the four. There is no timeout on these flags, so the honest
+statement of the damage is not "armed forever" — the next explicit /admin
+re-arms unconditionally — but (a) no modal for the request that asked, and (b) a
+later unsolicited burst folding into the stale lines instead of reaching
+`$server`.
+
+**259 is not 376.** RPL_ENDOFMOTD is a pure terminator; RPL_ADMINEMAIL is
+`":%s 259 %s :%s"` fed `aconf->name`, the contact address — the single most
+useful line in the reply. Every terminator here folds its own line before
+draining. Only 256/257/258 are pure accumulation. A mutant that moved 259 into
+the fold-only branch was killed by the test that pins the drained line list.
+
+**402 ERR_NOSUCHSERVER now has its own clause, because it is owned by no verb.**
+`/motd <target>` and `/admin <target>` both reach it through the same
+`hunt_server`, and the wire carries no correlation tag — no label, no verb echo.
+The considered-and-rejected discriminator was gating on whether the accumulator
+was primed *with* a target, which is sound (a bare request cannot produce a 402:
+`hunt_server` returns `HUNTED_ISME` when the target param is absent) but adds
+state to defend a case the simpler rule already covers. **The rule shipped is:
+on a 402, disarm every armed candidate and surface the error once.** The
+asymmetry is deliberate and is the reasoning worth keeping — an accumulator left
+armed is a real break, while over-clearing costs at most one modal that the next
+explicit request re-arms anyway. Those two failure modes do not weigh the same,
+so the tie is broken toward over-clearing. MOTD leads the priority order purely
+so #374's shipped behaviour is byte-identical whenever /admin is not in flight.
+
+**ADMIN (256-259) moved from `@active_numerics` to `@delegated_numerics`, which
+moved #911's guarantee out from under its own proof.** #911 measured that a
+one-word dotless A-line ("Azzurra", "staff", a nick) fed verbatim into 257's
+only middle would be scan-routed as a *query destination*, and closed it with
+the active deny-list. Delegation short-circuits one rung *above* that deny-list,
+so the old test could be flipped to `:delegated` and #911 would silently reopen
+with every test green. The guarantee is re-proven at its new owner instead: an
+`event_router_test` case asserts that an unprimed 257 carrying a bare "Azzurra"
+still lands on `$server`. General rule worth carrying: **when a decision moves
+between precedence layers, the property it guaranteed has to be re-proven at the
+new layer, not assumed to have travelled with it.**
+
+**A validator that duplicates a closed set will be forgotten.** cic's
+`userTopic` `server_reply` arm guarded `source` with a hand-written three-way
+`!==` chain — a second, silent copy of `SESSION_WIRE_SERVER_REPLY_SOURCE`.
+Adding `admin` server-side would have left it rejecting a legitimate reply as
+"unknown source": no modal, no error, nothing at all. It now reads the generated
+constant.
+
+**Measured negative results, recorded because they were the expensive part.**
+
+- **ADMIN is not rate-limited upstream.** `static time_t last_used` appears in
+  exactly one file and four functions — `m_info:1257`, `m_stats:1607`,
+  `m_help:2029`, `m_motd:5287` — and `m_admin` is not among them. So every ADMIN
+  path answers with a numeric and the four-terminator set is *exhaustive*, not
+  merely wider than one. Had ADMIN throttled, #992 would have had a no-reply
+  terminator class, which no numeric can cure.
+- **`/motd` and `/info` DO have that no-reply class, and it is not a missing
+  numeric.** `MOTD_WAIT` is 10 seconds (`include/config.h:501`, commented
+  "minimum seconds between use of MOTD, INFO, HELP, LINKS"), and for a non-oper
+  inside the window both handlers `return 0` with **no numeric at all**.
+  `last_used` is a function-static, so it is global to the ircd, not per-client:
+  on a busy network any non-oper's `/motd` in the last 10s silences yours. The
+  user types `/motd` and nothing whatsoever happens. `/version` is clean (no
+  throttle, no restricted check, bare VERSION always hits `HUNTED_ISME`).
+  `/links` has a third shape: `m_links` calls `check_restricted_user`, so 447
+  can arrive where only 365 is expected — bounded, but only by #513b's
+  stale-clobber. Out of scope for #992 and deliberately not filed here.
+- **An injection test that asserts only the outcome does not prove the door.**
+  The `/admin` channel test rejecting `"srv\r\nQUIT"` survived a mutant that
+  neutralised `validate_server_target/1`, because `Client.send_admin/2` gates on
+  the same predicate and produces an identical observable. The end-to-end
+  guarantee is real and was kept; a non-binary target was added alongside it,
+  which only the channel's catch-all clause can answer (`Session.send_admin/3`'s
+  guard requires binary-or-nil, so without the door the call raises). **#374's
+  `/motd` injection test was then measured and has the same shape** — it does
+  not prove its channel gate either. Left as-is; noted here so the next reader
+  does not mistake it for coverage.
