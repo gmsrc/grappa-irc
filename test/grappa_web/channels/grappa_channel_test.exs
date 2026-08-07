@@ -2024,11 +2024,32 @@ defmodule GrappaWeb.GrappaChannelTest do
         IRCServer.wait_for_line(irc_server, &(&1 == "ADMIN void.azzurra.chat\r\n"), 1_000)
     end
 
+    # An injection-shaped target must never reach the wire. NOTE what this
+    # test does and does not prove: BOTH the channel door and
+    # Client.send_admin/2 gate on safe_oper_token?, and they produce the
+    # SAME observable, so neutralising the door alone still leaves this
+    # green (measured — the mutant survived). It pins the OUTCOME, which is
+    # the thing that matters; the door itself is pinned by the next test.
     test "admin: rejects an injection target with invalid_line", %{
       socket: socket,
       network: network
     } do
       ref = push(socket, "admin", %{"network_id" => network.id, "target" => "srv\r\nQUIT"})
+
+      assert_reply(ref, :error, %{error: "invalid_line"})
+    end
+
+    # This one DOES discriminate the layers. A non-binary target is rejected
+    # by `validate_server_target/1`'s catch-all clause at the channel
+    # boundary; nothing downstream would answer `invalid_line` for it —
+    # `Session.send_admin/3`'s guard requires a binary or nil, so without the
+    # door the call would raise instead of replying. So a green here is
+    # evidence the door ran, not merely that the wire stayed clean.
+    test "admin: rejects a non-binary target at the channel boundary", %{
+      socket: socket,
+      network: network
+    } do
+      ref = push(socket, "admin", %{"network_id" => network.id, "target" => 42})
 
       assert_reply(ref, :error, %{error: "invalid_line"})
     end
