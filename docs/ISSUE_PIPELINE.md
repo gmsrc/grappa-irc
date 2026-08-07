@@ -46,6 +46,34 @@ and picks ONE to dispatch:
 On dispatch it moves the chosen issue `status:queued → status:cooking`; the label
 transitions ARE the queue's state, so the WIP board always reflects the real queue.
 
+## Label state machine (the ONLY legal transitions)
+
+vjt, 2026-08-07: *"non ci inventiamo le transizioni allucinate"*. There are four
+states and three transitions. Nothing else exists.
+
+```
+status:queued  ──▶  status:cooking  ──▶  status:soon  ──▶  closed
+   (ircbot          (orchestrator        (PR MERGED,        (RELEASED)
+    enqueues)        dispatches)          awaiting release)
+```
+
+- **`status:queued`** — triaged and enqueued by the ircbot. Nobody is working on it.
+- **`status:cooking`** — a worker holds it. It is in flight *right now*.
+- **`status:soon`** — **the work is MERGED** and is waiting for a release. It does
+  NOT mean "coming soon" / "planned". An issue sitting at `cooking` whose change is
+  already merged is a **stale label**, not work in progress — advance it.
+- **closed** — shipped in a release.
+
+Rules:
+
+- The **orchestrator owns every transition**. The ircbot only sets `status:queued`
+  at intake, and otherwise measures and reports drift — it does not relabel.
+- **Advance the label in the same step that causes it.** Merging without moving
+  `cooking → soon` makes the board lie; a board audit on 2026-08-07 found nine
+  issues stuck at `cooking` with their change already merged.
+- **Do not invent intermediate states.** No `status:review`, no `status:blocked`
+  improvised on the spot; if a real new state is needed it goes in this doc first.
+
 ## Per-issue execution flow (NO pull request)
 
 ```
