@@ -10372,12 +10372,33 @@ html.resize-dragging * {
 /* `.home-pane-available` had NO rule at all — it rendered as a UA list,
    with disc bullets and a ~40px indent, inside a card that had already
    paid for its own padding. */
+/* The `<li>` holds NOTHING but the connect button, so making it a card
+   put a box around a box — the button already draws one. The list item
+   carries no chrome; the button IS the card, and it fills the slot so
+   the whole tile is the tap target rather than a button floating inside
+   a frame with dead space around it. */
 .home-pane-available-item {
+  display: flex;
+}
+
+.home-pane-available-connect {
+  flex: 1 1 auto;
+  justify-content: flex-start;
   padding: var(--adm-space-4);
+  min-height: 0;
   background: var(--adm-surface-0);
   border: 1px solid var(--adm-line);
   border-radius: var(--adm-radius);
   box-shadow: var(--adm-shadow);
+  font-family: var(--font-mono);
+  font-size: 0.95rem;
+  text-align: left;
+}
+
+.home-pane-available-connect:hover:not(:disabled) {
+  border-color: var(--adm-accent);
+  color: var(--adm-accent);
+  background: var(--adm-surface-0);
 }
 
 /* Desktop lays the network blocks out side by side. A single column is
