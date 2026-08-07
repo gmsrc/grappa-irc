@@ -32324,3 +32324,87 @@ write can witness a newline that got in.
 that eats nicks, channels and `/commands` that default is wrong on its own
 merits and is now `off`. It was the falsified hypothesis' subject, and it must
 not be read as the mechanism — it changes nothing about which keystrokes send.
+## 2026-08-07 — an expand migration has no crash window, so it goes hot (#41)
+
+`Grappa.Deploy.Preflight` used to cold-trip **any** `priv/repo/migrations/*`
+diff, and the hot path ran no migration at all. Both halves of that were
+load-bearing together: skip the migrate, and new code meets an old schema and
+500s on first query. So a one-line `add :old_nick, :string` cost a full
+`service grappa restart` — every IRC session dropped, a visible QUIT/rejoin on
+every network. #41 splits the class instead of the timing.
+
+**The asymmetry is real, and it is the whole design.** An **expand** op has a
+crash window of ZERO: the still-loaded old code cannot reference a column that
+did not exist when it was compiled, and the new code that does reference it is
+loaded only after the DDL commits. A **contract** op has no safe ordering at
+all. The BEAM and sqlite do not share a clock — a GenServer adopts reloaded
+code on its NEXT message, while the commit is one connection's action, so
+there is always a boundary where one side is new and the other old. Holding
+the migration transaction open until every process has switched does not
+rescue it either: sqlite is single-writer, so the live `Session.Server`s
+persisting scrollback would starve into `busy_timeout` and crash anyway — a
+schema crash traded for a write-timeout crash. Contract migrations genuinely
+need the clean cut of a cold restart, where no old code exists to crash.
+
+So the classifier is an **allowlist**, and the two errors are priced
+differently: a false-COLD costs one restart; a false-HOT crashes a
+`Session.Server`, which is linked to its `IRC.Client`, which owns the upstream
+socket. In doubt, COLD.
+
+**No annotation, no opt-in — pure AST inference.** The proof that prose cannot
+be the gate was already in the tree: `20260805100000_add_old_nick_to_session_
+log_events`'s moduledoc declares "HOT" for its additive nullable column while
+the classifier of the day cold-tripped it. That migration is now a pinned test
+case, not an anecdote.
+
+**Widened past the issue text, with the evidence that forced it.** #41's
+allowlist stopped at `create table` / plain `create index` / nullable-or-
+defaulted `add`. Validating against all 80 real migrations first (which #41
+asked for, and which is what surfaced this) showed that **8 of the 14
+create-table migrations pair `create table` with a `create unique_index` on
+that same new table** — the dominant shape for "new feature table". Under the
+literal allowlist every one of them, and every future one, is COLD. The
+widening is a *structural* proof, not a statistical one: `create table` raises
+if the table already exists, so reaching the index statement proves zero rows
+and proves no loaded module has a schema for it. `create_if_not_exists
+table(...)` deliberately does NOT qualify — it may have found a populated
+table. This is categorically unlike teaching the classifier to read raw SQL,
+which stays refused.
+
+Two deliberate false-COLDs, both measured and both kept: `def change, do: :ok`
+(2026-05-04, provably harmless, but "this is not an op at all" is a second
+proof obligation the allowlist does not take on) and any
+`@disable_ddl_transaction` migration (the fail-aborts-reload contract below
+rests on the rollback).
+
+**The runtime refuses too, and that is not belt-and-braces.** Preflight
+classifies the DIFF being deployed; what is PENDING is a different set.
+`--force-hot` skips preflight entirely, and a migration added in an earlier
+undeployed commit is pending without appearing in this diff. Running
+`:up, all: true` unconditionally on every reload — which is what makes the hot
+path idempotent — would therefore have turned "#41 also hardens `--force-hot`"
+into a session-dropping vector. So `Grappa.HotReload.migrate_and_reload/0`
+re-checks the actually-pending set against the SAME pure classifier and
+answers `409 contract_migrations_pending`, having run nothing. One rule, both
+doors.
+
+Mechanics worth not re-deriving: `Ecto.Migrator.run/3` on the already-open
+pool, NOT `with_repo/2` (which starts and stops the repo, fighting the
+supervised one — that is why `Grappa.Release.migrate/0`'s shape is wrong
+here). Migrate first, load second. A raising migration is NOT rescued: it
+5xxes, the transaction rolls back, old code stays loaded and correct, and the
+deploy script's `curl -fsS` fails loudly. Rescuing would convert a schema
+failure into a 200 with new code on a stale schema.
+
+One honest gap this opened: every substrate's `substrate_reload` uses
+`curl -f`, which discards the body on a non-2xx — so the 409's explanation
+never reaches the operator's terminal. `_deploy_hot` now names both possible
+causes rather than asserting the one it used to guess. Fixing it properly
+means `--fail-with-body` (curl ≥ 7.76) across four substrates, which is a
+separate decision.
+
+**Backfills are still an operator step.** #124's `nickserv_pass_encrypted`
+backfill is a DATA migration; written as `execute(raw_sql)` the allowlist
+marks it COLD, correctly. Whether such backfills stay outside the classifier
+as operator-run steps is open, and is not the classifier's bug to route
+around.

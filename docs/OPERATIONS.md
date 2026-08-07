@@ -387,9 +387,33 @@ downtime):
   operator-on-demand verbs (`infra/freebsd/jail_*.sh`) and
   `grappa.env.example` are HOT on both substrates — nothing about
   them lands in the running BEAM (d8f354c).
-- `priv/repo/migrations/*` — hot path skips `mix ecto.migrate`;
-  new tables/columns 500 on first query post-reload, Bootstrap
-  crash-loops if it reads them.
+- `priv/repo/migrations/*` — **CONTRACT migrations only** since #41.
+  The hot path no longer skips the migration: `POST /admin/reload`
+  applies pending migrations in-process on the live `Grappa.Repo` pool
+  and only THEN reloads modules, so an all-**expand** migration is HOT
+  (that is why the pre-#41 blanket rule existed — new tables/columns
+  used to 500 on first query post-reload, and Bootstrap crash-looped if
+  it read them).
+  `Grappa.Deploy.Preflight.classify_migration/1` parses `change/0` /
+  `up/0` and allowlists: `create table`, plain `create index`,
+  `add`/`add_if_not_exists` of a nullable-or-defaulted column, and a
+  `unique_index`/`constraint` on a table the SAME body created.
+  Everything else — `remove`, `rename`, `modify`, `drop`, `add null:
+  false` with no default, `unique_index` on an existing table, raw
+  `execute`, `@disable_ddl_transaction`, anything unparseable — is
+  COLD, and no annotation can override it (a migration cannot vouch for
+  itself). **A DATA BACKFILL written as `execute(raw_sql)` is COLD by
+  design**: reading raw SQL to guess would be exactly the false-HOT this
+  exists to prevent.
+  The rule is asymmetric on purpose: a false-COLD costs one restart, a
+  false-HOT crashes a `Session.Server` → its linked `IRC.Client` → a
+  visible QUIT upstream. The BEAM and sqlite share no clock, so a
+  contract change has no safe ordering at all (and holding the DDL
+  transaction open would starve the single sqlite writer instead).
+  The reload handler re-checks the PENDING set against the same
+  classifier and answers `409 contract_migrations_pending` — that is
+  what keeps `--force-hot`, which skips preflight entirely, from
+  applying a contract migration to a live BEAM.
 - `infra/linux/nginx.conf` + `infra/snippets/*` — COLD on **`:linux`
   only**. `:linux` is the last deploy substrate that runs an nginx:
   #485 dropped the Docker container and the bastille jail's nginx was
