@@ -462,18 +462,21 @@ export async function waitForQueryWindowReady(
 
 // Mirror of `cicchetto/src/lib/channelKey.ts:canonicalChannel` — the e2e
 // tree MIRRORS src, never imports it (separate build context; see
-// fixtures/push.ts). Channel names (RFC 2812 sigils `#&!+`) are
-// case-folded; other targets keep casing. MUST stay byte-identical to the
-// src twin, or the composite key this rebuilds won't match the one
-// subscribe.ts stamped into `__cic_channelReady`.
+// fixtures/push.ts). MUST stay byte-identical to the src twin, or the
+// composite key this rebuilds won't match the one subscribe.ts stamped
+// into `__cic_channelReady`.
+//
+// #973 — this mirror had drifted two ways and was silently rebuilding keys
+// nothing had stamped. It was still the PRE-#537 shape: sigil-gated (a nick
+// came back RAW) and folding with `toLowerCase`. The src twin folds EVERY
+// identifier — a nick as well as a channel — because bahamut folds them the
+// same way, and it folds with the byte-level `asciiFold` so non-ASCII stays
+// distinct (`#CAFÉ` ≠ `#café`, the #525 posture `toLowerCase` breaks). No
+// green spec caught it because none had yet passed a mixed-case nick through
+// these seams; the first one to try would have hung on a barrier that can
+// never fire and read as a product bug.
 function canonicalChannelName(name: string): string {
-  if (name.length === 0) return name;
-  const first = name.charCodeAt(0);
-  // 0x23 #, 0x26 &, 0x21 !, 0x2B +
-  if (first === 0x23 || first === 0x26 || first === 0x21 || first === 0x2b) {
-    return name.toLowerCase();
-  }
-  return name;
+  return name.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
 }
 
 // Wait until cic's channels-loop has subscribed to a real IRC channel's
