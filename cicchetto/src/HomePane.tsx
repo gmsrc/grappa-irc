@@ -216,7 +216,7 @@ const AvailableNetworks: Component<{ available: AvailableNetworkRow[] }> = (prop
               <li class="home-pane-available-item">
                 <button
                   type="button"
-                  class="home-pane-available-connect"
+                  class="adm-btn home-pane-available-connect"
                   disabled={connecting() === net.slug}
                   data-testid={`home-available-connect-${net.slug}`}
                   onClick={() => void onConnect(net.slug)}
@@ -365,7 +365,7 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
           <Show when={SHOW_NETWORK_MAP}>
             <button
               type="button"
-              class="home-pane-network-action home-pane-network-topology"
+              class="adm-btn home-pane-network-action home-pane-network-topology"
               data-testid={`home-topology-${props.row.slug}`}
               aria-label={`Network map for ${props.row.slug}`}
               onClick={onTopology}
@@ -375,7 +375,7 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
           </Show>
           <button
             type="button"
-            class="home-pane-network-action home-pane-network-disconnect"
+            class="adm-btn adm-btn--danger home-pane-network-action home-pane-network-disconnect"
             aria-label={`Disconnect ${props.row.slug}`}
             onClick={onDisconnect}
           >
@@ -384,7 +384,7 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
         </div>
       </div>
       <div class="home-pane-network-cta">
-        <button type="button" class="home-pane-network-browse" onClick={onBrowse}>
+        <button type="button" class="adm-btn home-pane-network-browse" onClick={onBrowse}>
           📇 Browse channels
         </button>
         <Show when={canRegister()}>
@@ -392,7 +392,7 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
               (equal weight); identified in tests by its data-testid. */}
           <button
             type="button"
-            class="home-pane-network-browse"
+            class="adm-btn home-pane-network-browse"
             data-testid={`home-register-nick-${props.row.slug}`}
             onClick={() => openRegistrationWizard(props.row.slug)}
           >
@@ -404,7 +404,7 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
               identified in tests by its data-testid. */}
           <button
             type="button"
-            class="home-pane-network-browse"
+            class="adm-btn home-pane-network-browse"
             data-testid={`home-recover-identity-${props.row.slug}`}
             onClick={onRecover}
           >
@@ -470,7 +470,7 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
           <span class="home-pane-network-state">{props.row.connection_state}</span>
           <button
             type="button"
-            class="home-pane-network-action home-pane-network-reconnect"
+            class="adm-btn home-pane-network-action home-pane-network-reconnect"
             disabled={pending()}
             aria-label={`Reconnect ${props.row.slug}`}
             onClick={() => void onReconnect()}

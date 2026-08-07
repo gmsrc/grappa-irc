@@ -5071,6 +5071,11 @@ html.resize-dragging * {
 }
 
 /* Debug tab's phosphor panel — the one easter egg in the pane.
+   AMBER, not green: on a diagnostics surface green reads as "everything
+   is fine", which is the one thing a debug panel must not claim. Amber
+   is also the other CRT phosphor, so the reference survives intact.
+   The border is amber too — a grey edge said "generic card" on the one
+   tab where the edge should say what you are looking at.
    Deliberately does NOT follow the active theme: it commits to a green
    terminal, which is the point. Allowed here and nowhere else because
    Debug is admin-gated, carries no product data, and nobody lands on it
@@ -5083,9 +5088,10 @@ html.resize-dragging * {
 .adm-matrix {
   position: relative;
   padding: var(--adm-space-4);
-  background: #05100a;
+  background: #120c02;
+  border: 1px solid #7a5200;
   border-radius: var(--adm-radius-sm);
-  color: #55ff9a;
+  color: #ffb000;
   font-family: var(--font-mono);
   overflow: hidden;
 }
@@ -5110,7 +5116,7 @@ html.resize-dragging * {
 .adm-matrix-prompt {
   margin: 0 0 var(--adm-space-3);
   font-size: 0.72rem;
-  color: #2f9e5e;
+  color: #b37400;
 }
 
 .adm-matrix-prompt::after {
@@ -5133,12 +5139,12 @@ html.resize-dragging * {
 }
 
 .adm-matrix-facts dt {
-  color: #2f9e5e;
+  color: #b37400;
 }
 
 .adm-matrix-facts dd {
-  color: #7dffb8;
-  text-shadow: 0 0 6px rgb(85 255 154 / 35%);
+  color: #ffc85c;
+  text-shadow: 0 0 6px rgb(255 176 0 / 35%);
 }
 
 .adm-matrix-line {
@@ -5146,7 +5152,7 @@ html.resize-dragging * {
   font-size: 0.75rem;
   line-height: 1.6;
   overflow-wrap: anywhere;
-  text-shadow: 0 0 6px rgb(85 255 154 / 35%);
+  text-shadow: 0 0 6px rgb(255 176 0 / 35%);
 }
 
 .adm-matrix-log {
@@ -5378,8 +5384,12 @@ html.resize-dragging * {
   --adm-group: color-mix(in oklab, #8b5cd6, var(--fg) 15%);
 }
 
+/* Amber, matching the Debug tab's phosphor panel — the section stripe
+   was `--adm-line-strong`, i.e. grey, which reads as "no section" and
+   said nothing about where you are. Diagnostics is the one group whose
+   colour has a natural referent. */
 .admin-tab-panel[data-adm-group="diag"] {
-  --adm-group: var(--adm-line-strong);
+  --adm-group: #b37400;
 }
 
 .adm-card-head {
@@ -10353,24 +10363,14 @@ button.home-pane-network-title:hover .home-pane-network-slug {
 
 /* #392/#529 — the paired content CTAs (Browse + Register) share ONE style
    so they read as siblings, a "button pair, not chip-next-to-button".
-   Admin redesign follow-up: `.adm-btn` metrics — 44px tap floor, shared
-   radius — keeping the accent outline, since these two ARE the window's
-   primary action. */
+   They carry `.adm-btn` in the markup now and this only says what
+   DIFFERS: the accent outline, because these two are the window's
+   primary action. Re-describing padding and tap height here is how the
+   two drift apart. */
 .home-pane-network-browse {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   gap: 0.4rem;
-  min-height: var(--tap-min);
-  padding: 0 var(--adm-space-4);
-  background: transparent;
   color: var(--adm-accent);
-  border: 1px solid var(--adm-accent);
-  border-radius: var(--adm-radius-sm);
-  font-family: var(--adm-font);
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
+  border-color: var(--adm-accent);
 }
 
 .home-pane-network-browse:hover {
@@ -10893,23 +10893,10 @@ button.home-pane-network-title:hover .home-pane-network-slug {
    but a subdued outline (transparent fill) so it reads as a SECONDARY /
    destructive action — not the accent-filled primary CTA. Hover tints
    toward the accent, matching the browse affordance. */
-/* Destructive, so it wears danger at rest — the same rule the console
-   applies to Delete / Unbind / Revoke. It was indistinguishable from the
-   neutral buttons beside it. */
-.home-pane-network-disconnect {
-  background: transparent;
-  color: var(--adm-danger);
-  border: 1px solid var(--adm-danger);
-  border-radius: var(--adm-radius-sm);
-  padding: 0 var(--adm-space-3);
-  font-family: var(--adm-font);
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.home-pane-network-disconnect:hover {
-  background: var(--adm-danger-bg);
-}
+/* Destructive: it carries `.adm-btn--danger` in the markup, the same
+   modifier the console's Delete / Unbind / Revoke use, so there is
+   nothing left to declare here. The class survives as the per-surface
+   hook and as the seam existing specs query. */
 
 .home-pane-network-disconnect:hover {
   border-color: var(--accent);
