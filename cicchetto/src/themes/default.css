@@ -4721,6 +4721,41 @@ html.resize-dragging * {
   cursor: not-allowed;
 }
 
+/* Row-expander in the Networks slug cell (`▸ slug` / `▾ slug`). Its old
+   `.admin-network-expand-btn` rule went out with the M-10 block and
+   nothing replaced it, so it fell back to the UA button: a grey chunk
+   with a bevel, sitting in a table cell, looking like a native control
+   that had wandered in.
+
+   It is a disclosure, not a command — the row's own name is the label —
+   so it renders as the cell's text with a caret, and only reveals its
+   affordance on hover/focus. Mono, because a network slug is machine
+   data like every other identifier in these tables. */
+.admin-network-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--adm-space-2);
+  min-height: var(--tap-min);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--adm-text);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-network-expand-btn:hover {
+  color: var(--adm-accent);
+}
+
+.admin-network-expand-btn:focus-visible {
+  outline: 2px solid var(--adm-accent);
+  outline-offset: 2px;
+  border-radius: var(--adm-radius-sm);
+}
+
 /* Inline numeric cap editor (Networks). It inherits the whole look from
    the `.adm-scroll input` rule above — a cap editor is not a different
    KIND of control from a bind-form field and should not look like one;
