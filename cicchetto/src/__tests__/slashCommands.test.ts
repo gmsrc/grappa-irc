@@ -916,13 +916,55 @@ describe("parseSlash — keyword highlight (/hilight, /highlight alias, /dehilig
   });
 });
 
-describe("parseSlash — /lusers (P-0d)", () => {
-  it("parses bare /lusers", () => {
-    expect(parseSlash("/lusers")).toEqual({ kind: "lusers" });
+describe("parseSlash — /lusers (P-0d, args #579)", () => {
+  it("parses bare /lusers (no mask, no server)", () => {
+    expect(parseSlash("/lusers")).toEqual({ kind: "lusers", mask: null, server: null });
   });
 
-  it("ignores any trailing args (LUSERS is param-less)", () => {
-    expect(parseSlash("/lusers ignored")).toEqual({ kind: "lusers" });
+  it("/lusers <mask> → mask, null server", () => {
+    expect(parseSlash("/lusers *.azzurra.org")).toEqual({
+      kind: "lusers",
+      mask: "*.azzurra.org",
+      server: null,
+    });
+  });
+
+  it("/lusers <mask> <server> → both, in RFC 2812 §3.4.2 order", () => {
+    expect(parseSlash("/lusers *.azzurra.org void.azzurra.chat")).toEqual({
+      kind: "lusers",
+      mask: "*.azzurra.org",
+      server: "void.azzurra.chat",
+    });
+  });
+
+  it("ignores tokens past the second (LUSERS is a 2-slot wire frame)", () => {
+    expect(parseSlash("/lusers *.azzurra.org void.azzurra.chat junk")).toEqual({
+      kind: "lusers",
+      mask: "*.azzurra.org",
+      server: "void.azzurra.chat",
+    });
+  });
+
+  // #579 — the client mirror of the server's `:invalid_line` for a server
+  // with no mask (grappa_channel `validate_lusers_args/2`): the positional
+  // parse cannot BUILD that shape, so there is nothing to reject at runtime.
+  // This pins that property — it fails the moment the handler reads the first
+  // token as the server (i.e. copies /whois's `<server> <nick>` order, which
+  // for a one-token form yields exactly the rejected mask-less shape).
+  it("never yields a server without a mask, for any argument shape", () => {
+    for (const line of [
+      "/lusers",
+      "/lusers *.azzurra.org",
+      "/lusers void.azzurra.chat",
+      "/lusers *.azzurra.org void.azzurra.chat",
+      "/lusers *.azzurra.org void.azzurra.chat junk",
+      "/lusers    *.azzurra.org   void.azzurra.chat  ",
+    ]) {
+      const cmd = parseSlash(line);
+      expect(cmd.kind).toBe("lusers");
+      if (cmd.kind !== "lusers") continue;
+      if (cmd.server !== null) expect(cmd.mask).not.toBeNull();
+    }
   });
 });
 

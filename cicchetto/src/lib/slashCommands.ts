@@ -159,7 +159,11 @@ export type SlashCommand =
   // optional first token is the network slug (bare → the active window's
   // network, resolved in compose.ts). Same optional-arg grammar as /links.
   | { kind: "recover"; network: string | null }
-  | { kind: "lusers" }
+  // #579 — /lusers [<mask> [<server>]] (RFC 2812 §3.4.2). Both optional and
+  // POSITIONAL: `server` can never be present without `mask`, which is how the
+  // client mirrors the server's `:invalid_line` rejection of that shape — the
+  // illegal state is unconstructible here rather than built-then-refused.
+  | { kind: "lusers"; mask: string | null; server: string | null }
   | { kind: "info" }
   | { kind: "version" }
   | { kind: "motd"; target: string | null }
@@ -632,11 +636,23 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     return { kind: "recover", network: network ?? null };
   },
 
-  lusers: (_verb, _rest) => ({ kind: "lusers" }),
+  // #579 — /lusers [<mask> [<server>]] (RFC 2812 §3.4.2). Pre-#579 `rest` was
+  // dropped, so `/lusers *.azzurra.org` silently returned the UNFILTERED
+  // network-wide counts — the wrong answer with no error, the failure mode
+  // #374 closed for /motd. #571 already threads both tokens server-side.
+  // Two-optional-token split, same shape as /stats' `query` + `target`.
+  // ORDER NOTE: /whois's two-arg form is `<server> <nick>` (server FIRST,
+  // RFC 2812 §3.6.2) — LUSERS is the other way round, mask FIRST. Reading the
+  // first token as a server would produce the one shape the server rejects as
+  // `:invalid_line`; the invariant test pins the order.
+  // Tokens past the second are ignored (LUSERS is a 2-slot wire frame).
+  lusers: (_verb, rest) => {
+    const [mask, server] = tokens(rest);
+    return { kind: "lusers", mask: mask ?? null, server: server ?? null };
+  },
 
   // #127 — /info, /version. No-arg server-text queries; the reply renders
-  // in a dismissable retro modal (ServerReplyModal). Mirror the /lusers
-  // no-arg shape.
+  // in a dismissable retro modal (ServerReplyModal).
   info: (_verb, _rest) => ({ kind: "info" }),
   version: (_verb, _rest) => ({ kind: "version" }),
   // #374 — /motd [<target>] (RFC 2812 §3.4.1). Bare = current server's
