@@ -113,6 +113,44 @@ defmodule Grappa.Migrations.HotDeployMigrateTest do
 
   defp noop_reload, do: %{reloaded: [], failed: []}
 
+  # Reads `table`'s columns from `pool_size` connections held open AT THE
+  # SAME TIME, and returns one column list per connection.
+  #
+  # The simultaneity is the whole point and it is enforced, not hoped
+  # for: nothing is released until every holder has reported in, and a
+  # connection cannot sit inside two transactions at once, so N
+  # concurrent holders are N distinct connections. A pool that could not
+  # serve them all fails the `assert_receive` instead of quietly
+  # measuring less. Without this, a wide-pool test can pass by reading
+  # back through the very connection the migrator wrote on — which is
+  # not the question a wide pool asks.
+  defp columns_from_every_connection(table, pool_size) do
+    parent = self()
+
+    holders =
+      for _ <- 1..pool_size do
+        Task.async(fn ->
+          {:ok, cols} =
+            SmokeRepo.transaction(fn ->
+              send(parent, {:holding, self()})
+              receive do: (:release -> :ok)
+              columns(table)
+            end)
+
+          cols
+        end)
+      end
+
+    held =
+      for _ <- 1..pool_size do
+        assert_receive {:holding, pid}, 30_000
+        pid
+      end
+
+    Enum.each(held, &send(&1, :release))
+    Task.await_many(holders, 30_000)
+  end
+
   describe "pending_migration_files/1 against a live pool" do
     test "resolves the real migrations dir and names exactly what is unapplied" do
       migrate_to(@passkeys_version)
@@ -247,45 +285,65 @@ defmodule Grappa.Migrations.HotDeployMigrateTest do
     end
   end
 
-  describe "migrate_and_reload/2 — at the production pool size" do
-    @prod_pool_size 10
+  describe "migrate_and_reload/2 — at wide pool sizes" do
+    # The hazard the rest of this file cannot see. Every OTHER migration
+    # path in the project runs through `Ecto.Migrator.with_repo/2`, which
+    # forces `pool_size: 2`. The #41 handler deliberately does NOT — it
+    # uses the pool that is already open, and in prod
+    # `config/runtime.exs` opens ten connections (POOL_SIZE default). So
+    # the hot path is the only place a migration ever meets a wide pool,
+    # and "it worked under with_repo" proves nothing about it.
+    #
+    # Both widths, not just prod's: 5 is the narrowest width at which the
+    # WHOLE-GRAPH replay is measured red (see the setup comment), so if
+    # the single-pending regime shared that hazard, 5 is where it would
+    # show first. It does not — which is the scope claim #41 rests on,
+    # and the reason the graph-replay red can be recorded as a limit
+    # outside the handler's regime instead of blocking it.
+    @wide_pool_sizes [5, 10]
 
-    test "one pending expand applies on a pool as wide as prod's", %{path: path} do
-      # The hazard the rest of this file cannot see. Every OTHER
-      # migration path in the project runs through
-      # `Ecto.Migrator.with_repo/2`, which forces `pool_size: 2`. The
-      # #41 handler deliberately does NOT — it uses the pool that is
-      # already open, and in prod `config/runtime.exs` opens ten
-      # connections (POOL_SIZE default). So the hot path is the only
-      # place a migration ever meets a wide pool, and "it worked under
-      # with_repo" proves nothing about it.
-      migrate_to(@passkeys_version)
-      refute "old_nick" in columns("session_log_events")
+    for pool_size <- @wide_pool_sizes do
+      test "one pending expand applies on a #{pool_size}-wide pool, and every connection sees it",
+           %{path: path} do
+        pool_size = unquote(pool_size)
 
-      stop_supervised!(SmokeRepo)
-      start_pool!(path, @prod_pool_size)
+        migrate_to(@passkeys_version)
+        refute "old_nick" in columns("session_log_events")
 
-      assert {:ok, %{migrated: [@old_nick_version]}} =
-               HotReload.migrate_and_reload(SmokeRepo, &noop_reload/0)
+        stop_supervised!(SmokeRepo)
+        start_pool!(path, pool_size)
 
-      assert "old_nick" in columns("session_log_events")
-      assert @old_nick_version in applied_versions()
-    end
+        assert {:ok, %{migrated: [@old_nick_version]}} =
+                 HotReload.migrate_and_reload(SmokeRepo, &noop_reload/0)
 
-    test "a pending contract is refused at that width too", %{path: path} do
-      migrate_to(@totp_version)
-      before = applied_versions()
+        assert "old_nick" in columns("session_log_events")
+        assert @old_nick_version in applied_versions()
 
-      stop_supervised!(SmokeRepo)
-      start_pool!(path, @prod_pool_size)
+        # The observed graph-replay failure is a later statement not
+        # seeing an earlier migration's column. With one pending file
+        # there is no later migration, so the only place that shape can
+        # still hide is a pool connection that missed the DDL — read
+        # every one of them.
+        for seen <- columns_from_every_connection("session_log_events", pool_size) do
+          assert "old_nick" in seen
+        end
+      end
 
-      assert {:error, {:contract_migrations, [contract]}} =
-               HotReload.migrate_and_reload(SmokeRepo, fn ->
-                 flunk("reload must not run with a contract migration pending")
-               end)
+      test "a pending contract is refused on a #{pool_size}-wide pool too", %{path: path} do
+        migrate_to(@totp_version)
+        before = applied_versions()
 
-      assert Path.basename(contract) == @passkeys_file
-      assert applied_versions() == before
+        stop_supervised!(SmokeRepo)
+        start_pool!(path, unquote(pool_size))
+
+        assert {:error, {:contract_migrations, [contract]}} =
+                 HotReload.migrate_and_reload(SmokeRepo, fn ->
+                   flunk("reload must not run with a contract migration pending")
+                 end)
+
+        assert Path.basename(contract) == @passkeys_file
+        assert applied_versions() == before
+      end
     end
   end
 
