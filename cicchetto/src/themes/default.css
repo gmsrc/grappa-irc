@@ -7810,8 +7810,49 @@ html.resize-dragging * {
    binds here too because `.whois-card-fields dd` AND this heading both wrap
    (`word-break`) — the coupling gotcha #605 flagged: a non-wrapping token
    would floor `fit-content` above the cap. */
+/* #984 — the query branch owns the rail's scroll, exactly as `.members-pane`
+   does for the channel branch (~:3335). `.shell-members` is `overflow-y:
+   visible` by DECISION (#500: the launcher's absolute overlay menu must not be
+   clipped), so SOME inner child has to be the scroller or nothing is. With the
+   pre-#984 `flex: 0 0 auto` this one refused to shrink, a tall WHOIS bundle
+   grew the column past its own height, and the `margin-top: auto`
+   `.rail-actions` launcher was pushed below the fold — under the keyboard on
+   mobile, where the column height tracks `--viewport-height`. Same class as
+   #500 and #962: a flex child with no shrink contract in a bounded column. */
 .rail-query-context {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* #984 — the gesture half. The mobile drawer's scroller needs the SAME
+   contract `.members-pane` gets at the members carve-out (~:4861), for the same
+   two reasons. The drawer is `position: fixed` under the `.shell-mobile {
+   touch-action: none }` blanket (UX-3 PENT ~:2144), so `pan-y` has to be
+   re-asserted on the element that actually scrolls (UX-6 bucket A); and
+   `touch-action` does NOT inherit (CSS UI L4), so the subtree needs it too
+   (UX-6 bucket A v2) — a drag whose hit-test target is a `<dd>` of the WHOIS
+   card would otherwise be routed by that descendant's default `auto` to a
+   non-root scroll ancestor (`<body>`, with the keyboard up) and the scroller's
+   own `pan-y` would never fire. Without this pair the card scrolls under a
+   mouse and refuses to scroll under a finger.
+
+   Placed HERE, in its own breakpoint block right after the base rule, rather
+   than alongside the members carve-out in the big mobile block (~:4656): that
+   block comes EARLIER in the file than this selector's base rule, so the
+   `(0,3,0)` override would precede the `(0,1,0)` it overrides and trip
+   `noDescendingSpecificity`. Same `(0,3,0)` specificity guard as the members
+   pair — a future horizontal-swipe gesture inside the card must be declared
+   MORE specific than `.shell-mobile .shell-members .rail-query-context *`. */
+@media (max-width: 768px) {
+  .shell-mobile .shell-members .rail-query-context,
+  .shell-mobile .shell-members .rail-query-context * {
+    touch-action: pan-y;
+  }
+
+  .shell-mobile .shell-members .rail-query-context {
+    overscroll-behavior: contain;
+  }
 }
 
 /* #857 — the rail mount STACKS the pairs; the scrollback overlay keeps the
