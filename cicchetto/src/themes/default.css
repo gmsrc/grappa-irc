@@ -4805,6 +4805,17 @@ html.resize-dragging * {
   white-space: nowrap;
 }
 
+/* Slack absorber. `width: 100%` on the table with the default
+   `table-layout: auto` spreads leftover width across EVERY column, which
+   is what opens the gaps between a short cell and its neighbour. Marking
+   one column as the grower collects all of it there and lets the rest
+   shrink to their content, so the row reads as related columns instead
+   of scattered ones. Put it on the richest column — the one that
+   actually benefits from room. */
+.adm-table-grow {
+  width: 100%;
+}
+
 .adm-table th,
 .adm-table td {
   text-align: left;
@@ -4909,6 +4920,18 @@ html.resize-dragging * {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+
+/* Dot-only variant — the state reads from colour alone, so the pill
+   chrome around it is noise. The dot keeps the same 6px as every other
+   badge so a row mixing both idioms still lines up; only the label,
+   padding, background and border go. The label itself stays in the DOM
+   as `.sr-only` text at the call site. */
+.adm-badge--dot {
+  gap: 0;
+  padding: 0;
+  background: none;
+  border-color: transparent;
 }
 
 .adm-badge--ok {

@@ -190,20 +190,33 @@ const AdminVisitorsTab: Component = () => {
               <thead>
                 <tr>
                   <th>identified</th>
-                  <th>networks (state · nick)</th>
+                  <th class="adm-table-grow">networks (state · nick)</th>
                   <th>ip</th>
                   <th>expires</th>
                   <th>joined</th>
-                  <th class="adm-table-sticky-actions">
-                    <span class="sr-only">actions</span>
-                  </th>
+                  <th class="adm-table-sticky-actions">actions</th>
                 </tr>
               </thead>
               <tbody>
                 <For each={visitors() ?? []}>
                   {(v) => (
                     <tr class="admin-visitors-row" data-testid={`admin-visitor-row-${v.id}`}>
-                      <td>{v.identified ? "yes" : "no"}</td>
+                      <td>
+                        {/* A dot, like every other state in the pane. The
+                            word stays as visually-hidden text: a colour
+                            alone is not an accessible answer to a
+                            yes/no question, and it is what the tests
+                            assert. Neutral rather than danger for "no" —
+                            an anonymous visitor is the normal case, not
+                            a fault. */}
+                        <AdminBadge
+                          tone={v.identified ? "ok" : "neutral"}
+                          class="adm-badge--dot"
+                          ariaLabel={v.identified ? "identified" : "not identified"}
+                        >
+                          <span class="sr-only">{v.identified ? "yes" : "no"}</span>
+                        </AdminBadge>
+                      </td>
                       <td>
                         {/* #211 phase 7 — a visitor is multi-network; render
                             one line per attached network with its own
@@ -325,19 +338,37 @@ const LiveBadge: Component<{ live: AdminVisitorNetwork["live_state"] }> = (props
 // is the a11y text AND the vitest seam; the glyph map lives in the pure
 // connectionStateEmoji.ts so an unexpected value degrades to ⚪, never
 // throws.
+// The admin console shows this state as a toned badge rather than the
+// emoji glyph. An emoji is a font-dependent picture: it can't follow the
+// theme, it renders differently per platform, and it sits at odds with
+// every other status in the redesigned pane. `connectionStateEmoji`
+// stays the source of truth for the WORD — the a11y text and the vitest
+// seam, asserted by label rather than codepoint — and keeps its glyph
+// for `ServerInfoCard`, which is IRC-client chrome and outside this
+// redesign.
+const STATE_TONE: Record<string, "ok" | "warn" | "danger" | "neutral"> = {
+  connected: "ok",
+  parked: "warn",
+  failed: "danger",
+  unknown: "neutral",
+};
+
 const NetworkStateEmoji: Component<{ state: AdminVisitorNetwork["connection_state"] }> = (
   props,
 ) => {
-  const emoji = () => connectionStateEmoji(props.state);
+  const label = () => connectionStateEmoji(props.state).label;
   return (
-    <span
-      class="admin-visitor-network-state"
-      role="img"
-      title={emoji().label}
-      aria-label={emoji().label}
+    <AdminBadge
+      tone={STATE_TONE[label()] ?? "neutral"}
+      class="admin-visitor-network-state adm-badge--dot"
+      ariaLabel={label()}
     >
-      {emoji().glyph}
-    </span>
+      {/* The dot alone carries the state; the word would repeat what the
+          colour already says, in a cell that is already dense. It stays
+          in the DOM as visually-hidden text so the accessible name and
+          the vitest seam both survive the visual change. */}
+      <span class="sr-only">{label()}</span>
+    </AdminBadge>
   );
 };
 
