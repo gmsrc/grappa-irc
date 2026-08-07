@@ -1,5 +1,12 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import AdminBadge from "./admin/AdminBadge";
+import AdminCard from "./admin/AdminCard";
+import AdminExpandRow from "./admin/AdminExpandRow";
+import AdminField from "./admin/AdminField";
+import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
+import AdminTable from "./admin/AdminTable";
+import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import InlineConfirmButton from "./InlineConfirmButton";
 import { liveCountsByNetworkId } from "./lib/adminEvents";
 import {
@@ -73,6 +80,12 @@ type RowEdit = {
 };
 
 type ParseResult = { ok: true; value: number | null } | { ok: false };
+
+// Admin redesign (2026-08-07 plan, Layer 4) — column count of the
+// networks table, fed to `AdminExpandRow` so the servers/featured
+// disclosure row's `colspan` follows a column edit instead of staying
+// at the hardcoded `8`.
+const NETWORK_COLUMNS = 8;
 
 // Max admission cap. 2^31-1 is the SQLite INTEGER 4-byte signed cap;
 // any operator who needs more is doing something else wrong. Guards
@@ -546,261 +559,275 @@ const AdminNetworksTab: Component = () => {
 
   return (
     <div class="admin-networks-tab">
-      <header class="admin-networks-header">
-        <InlineConfirmButton
-          idleLabel="Force Reap"
-          confirmLabel="Confirm reap?"
-          armed={confirmingKey() === reapKey()}
-          onArm={() => setConfirmingKey(reapKey())}
-          onConfirm={onForceReap}
-          testId="admin-networks-force-reap"
-          extraClass="force-reap-btn"
-        />
-        <button
-          type="button"
-          class="admin-refresh-btn"
-          aria-label="refresh networks list"
-          aria-busy={loading()}
-          onClick={() => {
-            void refresh();
-          }}
-          data-testid="admin-networks-refresh"
-        >
-          ↻ refresh
-        </button>
-      </header>
+      <AdminToolbar
+        title="Networks"
+        subtitle="caps are DB intent; the live counts beside them come from the Registry"
+        actions={
+          <>
+            <InlineConfirmButton
+              idleLabel="Force Reap"
+              confirmLabel="Confirm reap?"
+              armed={confirmingKey() === reapKey()}
+              onArm={() => setConfirmingKey(reapKey())}
+              onConfirm={onForceReap}
+              testId="admin-networks-force-reap"
+              extraClass="force-reap-btn"
+            />
+            <AdminRefreshButton
+              onClick={() => {
+                void refresh();
+              }}
+              busy={loading()}
+              label="refresh networks list"
+              testId="admin-networks-refresh"
+            />
+          </>
+        }
+      />
 
-      <Show when={reapResult() !== null}>
-        <p class="admin-success" data-testid="admin-networks-reap-result">
-          reaper swept {reapResult()?.count} visitor(s)
-        </p>
-      </Show>
+      <div class="adm-scroll">
+        <Show when={reapResult() !== null}>
+          <p class="adm-success" data-testid="admin-networks-reap-result">
+            reaper swept {reapResult()?.count} visitor(s)
+          </p>
+        </Show>
 
-      <form
-        class="admin-networks-create-form"
-        onSubmit={(e) => {
-          void onCreateNetwork(e);
-        }}
-        data-testid="admin-networks-create-form"
-      >
-        <input
-          type="text"
-          placeholder="new network slug (e.g. azzurra)"
-          value={createSlug()}
-          onInput={(e) => setCreateSlug((e.currentTarget as HTMLInputElement).value)}
-          data-testid="admin-networks-create-slug"
-          aria-label="new network slug"
-          required
-        />
-        <button
-          type="submit"
-          disabled={creating() || createSlug().trim() === ""}
-          data-testid="admin-networks-create-submit"
-        >
-          Create network
-        </button>
-      </form>
+        <Show when={error() !== null}>
+          <AdminError message={error() ?? ""} testId="admin-networks-error" />
+        </Show>
 
-      <Show when={error() !== null}>
-        <p class="admin-error" role="alert" data-testid="admin-networks-error">
-          failed: {error()} — click ↻ refresh to retry
-        </p>
-      </Show>
+        <AdminCard title="Create network" subtitle="POST /admin/networks">
+          <form
+            class="admin-networks-create-form adm-form-row"
+            onSubmit={(e) => {
+              void onCreateNetwork(e);
+            }}
+            data-testid="admin-networks-create-form"
+          >
+            <AdminField label="slug" for="admin-networks-create-slug" hint="e.g. azzurra">
+              <input
+                id="admin-networks-create-slug"
+                type="text"
+                value={createSlug()}
+                onInput={(e) => setCreateSlug((e.currentTarget as HTMLInputElement).value)}
+                data-testid="admin-networks-create-slug"
+                required
+              />
+            </AdminField>
+            <button
+              type="submit"
+              class="adm-btn"
+              disabled={creating() || createSlug().trim() === ""}
+              data-testid="admin-networks-create-submit"
+            >
+              Create network
+            </button>
+          </form>
+        </AdminCard>
 
-      <Show when={networks() === null && error() === null}>
-        <p class="muted">loading…</p>
-      </Show>
+        <Show when={networks() === null && error() === null}>
+          <AdminLoading />
+        </Show>
 
-      <Show when={networks() !== null && (networks() ?? []).length === 0}>
-        <p class="muted" data-testid="admin-networks-empty">
-          no networks
-        </p>
-      </Show>
+        <Show when={networks() !== null && (networks() ?? []).length === 0}>
+          <AdminEmpty message="no networks" testId="admin-networks-empty" />
+        </Show>
 
-      <Show when={networks() !== null && (networks() ?? []).length > 0}>
-        <table class="admin-networks-table" data-testid="admin-networks-table">
-          <thead>
-            <tr>
-              <th>slug</th>
-              <th>visitors (live/cap)</th>
-              <th>max visitor sessions</th>
-              <th>users (live/cap)</th>
-              <th>max user sessions</th>
-              <th>max per ip</th>
-              <th>circuit</th>
-              <th>
-                <span class="sr-only">actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <For each={networks() ?? []}>
-              {(net) => (
-                <>
-                  <tr class="admin-networks-row" data-testid={`admin-network-row-${net.slug}`}>
-                    <td>
-                      <button
-                        type="button"
-                        class="admin-network-expand-btn"
-                        onClick={() => {
-                          void onToggleExpand(net);
-                        }}
-                        data-testid={`admin-network-expand-${net.slug}`}
-                        aria-expanded={expandedNetworkId() === net.id}
-                      >
-                        {expandedNetworkId() === net.id ? "▾" : "▸"} {net.slug}
-                      </button>
-                    </td>
-                    <td
-                      data-testid={`admin-network-live-visitors-${net.slug}`}
-                      title={`${effectiveLive(net).visitors} live visitor sessions of ${renderCap(
-                        net.max_concurrent_visitor_sessions,
-                      )} cap`}
-                    >
-                      {effectiveLive(net).visitors}/{renderCap(net.max_concurrent_visitor_sessions)}
-                    </td>
-                    <td>
-                      <CapInput
-                        slug={net.slug}
-                        field="max_concurrent_visitor_sessions"
-                        value={edits[net.slug]?.max_concurrent_visitor_sessions ?? ""}
-                        onInput={(v) => onEditCap(net.slug, "max_concurrent_visitor_sessions", v)}
-                      />
-                    </td>
-                    <td
-                      data-testid={`admin-network-live-users-${net.slug}`}
-                      title={`${effectiveLive(net).users} live user sessions of ${renderCap(
-                        net.max_concurrent_user_sessions,
-                      )} cap`}
-                    >
-                      {effectiveLive(net).users}/{renderCap(net.max_concurrent_user_sessions)}
-                    </td>
-                    <td>
-                      <CapInput
-                        slug={net.slug}
-                        field="max_concurrent_user_sessions"
-                        value={edits[net.slug]?.max_concurrent_user_sessions ?? ""}
-                        onInput={(v) => onEditCap(net.slug, "max_concurrent_user_sessions", v)}
-                      />
-                    </td>
-                    <td>
-                      <CapInput
-                        slug={net.slug}
-                        field="max_per_ip"
-                        value={edits[net.slug]?.max_per_ip ?? ""}
-                        onInput={(v) => onEditCap(net.slug, "max_per_ip", v)}
-                      />
-                    </td>
-                    <td>
-                      <CircuitBadge net={net} />
-                    </td>
-                    <td class="admin-networks-actions">
-                      <button
-                        type="button"
-                        class="admin-network-save-btn"
-                        disabled={!isDirtyAndValid(net, edits[net.slug])}
-                        onClick={() => {
-                          void onSave(net);
-                        }}
-                        data-testid={`admin-network-save-${net.slug}`}
-                      >
-                        Save
-                      </button>
-                      <Show when={net.circuit_state !== null}>
-                        <InlineConfirmButton
-                          idleLabel="Reset Circuit"
-                          confirmLabel="Confirm reset?"
-                          armed={confirmingKey() === resetKey(net.slug)}
-                          onArm={() => setConfirmingKey(resetKey(net.slug))}
-                          onConfirm={() => onResetCircuit(net)}
-                          testId={`admin-network-reset-circuit-${net.slug}`}
-                          extraClass="reset-circuit-btn"
-                        />
+        <Show when={networks() !== null && (networks() ?? []).length > 0}>
+          <AdminCard
+            title="Networks"
+            subtitle="expand a row for its server pool and featured channels"
+          >
+            <AdminTable data-testid="admin-networks-table">
+              <thead>
+                <tr>
+                  <th class="adm-table-grow">slug</th>
+                  <th>visitors (live/cap)</th>
+                  <th>max visitor sessions</th>
+                  <th>users (live/cap)</th>
+                  <th>max user sessions</th>
+                  <th>max per ip</th>
+                  <th>circuit</th>
+                  <th class="adm-table-sticky-actions">actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={networks() ?? []}>
+                  {(net) => (
+                    <>
+                      <tr class="admin-networks-row" data-testid={`admin-network-row-${net.slug}`}>
+                        <td>
+                          <button
+                            type="button"
+                            class="admin-network-expand-btn"
+                            onClick={() => {
+                              void onToggleExpand(net);
+                            }}
+                            data-testid={`admin-network-expand-${net.slug}`}
+                            aria-expanded={expandedNetworkId() === net.id}
+                          >
+                            {expandedNetworkId() === net.id ? "▾" : "▸"} {net.slug}
+                          </button>
+                        </td>
+                        <td
+                          data-testid={`admin-network-live-visitors-${net.slug}`}
+                          title={`${effectiveLive(net).visitors} live visitor sessions of ${renderCap(
+                            net.max_concurrent_visitor_sessions,
+                          )} cap`}
+                        >
+                          {effectiveLive(net).visitors}/
+                          {renderCap(net.max_concurrent_visitor_sessions)}
+                        </td>
+                        <td>
+                          <CapInput
+                            slug={net.slug}
+                            field="max_concurrent_visitor_sessions"
+                            value={edits[net.slug]?.max_concurrent_visitor_sessions ?? ""}
+                            onInput={(v) =>
+                              onEditCap(net.slug, "max_concurrent_visitor_sessions", v)
+                            }
+                          />
+                        </td>
+                        <td
+                          data-testid={`admin-network-live-users-${net.slug}`}
+                          title={`${effectiveLive(net).users} live user sessions of ${renderCap(
+                            net.max_concurrent_user_sessions,
+                          )} cap`}
+                        >
+                          {effectiveLive(net).users}/{renderCap(net.max_concurrent_user_sessions)}
+                        </td>
+                        <td>
+                          <CapInput
+                            slug={net.slug}
+                            field="max_concurrent_user_sessions"
+                            value={edits[net.slug]?.max_concurrent_user_sessions ?? ""}
+                            onInput={(v) => onEditCap(net.slug, "max_concurrent_user_sessions", v)}
+                          />
+                        </td>
+                        <td>
+                          <CapInput
+                            slug={net.slug}
+                            field="max_per_ip"
+                            value={edits[net.slug]?.max_per_ip ?? ""}
+                            onInput={(v) => onEditCap(net.slug, "max_per_ip", v)}
+                          />
+                        </td>
+                        <td>
+                          <CircuitBadge net={net} />
+                        </td>
+                        <td class="admin-networks-actions adm-table-sticky-actions">
+                          <button
+                            type="button"
+                            class="adm-btn"
+                            disabled={!isDirtyAndValid(net, edits[net.slug])}
+                            onClick={() => {
+                              void onSave(net);
+                            }}
+                            data-testid={`admin-network-save-${net.slug}`}
+                          >
+                            Save
+                          </button>
+                          <Show when={net.circuit_state !== null}>
+                            <InlineConfirmButton
+                              idleLabel="Reset Circuit"
+                              confirmLabel="Confirm reset?"
+                              armed={confirmingKey() === resetKey(net.slug)}
+                              onArm={() => setConfirmingKey(resetKey(net.slug))}
+                              onConfirm={() => onResetCircuit(net)}
+                              testId={`admin-network-reset-circuit-${net.slug}`}
+                              extraClass="reset-circuit-btn"
+                            />
+                          </Show>
+                          <InlineConfirmButton
+                            idleLabel="Delete"
+                            confirmLabel="Confirm delete?"
+                            armed={confirmingKey() === `delete:${net.slug}`}
+                            onArm={() => setConfirmingKey(`delete:${net.slug}`)}
+                            onConfirm={() => onDeleteNetwork(net)}
+                            testId={`admin-network-delete-${net.slug}`}
+                            extraClass="delete-btn"
+                          />
+                        </td>
+                      </tr>
+                      <Show when={expandedNetworkId() === net.id}>
+                        <AdminExpandRow
+                          columns={NETWORK_COLUMNS}
+                          class="admin-networks-servers-row"
+                          data-testid={`admin-network-servers-${net.slug}`}
+                        >
+                          <ServersDisclosure
+                            net={net}
+                            servers={serversByNetworkId[net.id] ?? []}
+                            form={
+                              serverForm[net.id] ?? {
+                                host: "",
+                                port: "6697",
+                                tls: true,
+                                source: "",
+                              }
+                            }
+                            onFormChange={(patch) =>
+                              setServerForm(
+                                produce((draft) => {
+                                  const cur = draft[net.id] ?? {
+                                    host: "",
+                                    port: "6697",
+                                    tls: true,
+                                    source: "",
+                                  };
+                                  draft[net.id] = { ...cur, ...patch };
+                                }),
+                              )
+                            }
+                            onAddServer={(e) => {
+                              void onAddServer(net, e);
+                            }}
+                            onToggleTls={(s) => {
+                              void onToggleServerTls(net, s);
+                            }}
+                            onSaveSource={(s, raw) => {
+                              void onSaveServerSource(net, s, raw);
+                            }}
+                            confirmingServerKey={serverConfirmKey()}
+                            onArmServerDelete={(key) => setServerConfirmKey(key)}
+                            onDeleteServer={(s) => {
+                              void onDeleteServer(net, s);
+                            }}
+                          />
+                          <FeaturedChannelsDisclosure
+                            net={net}
+                            featured={featuredByNetworkId[net.id] ?? []}
+                            form={featuredForm[net.id] ?? emptyFeaturedForm()}
+                            onFormChange={(patch) =>
+                              setFeaturedForm(
+                                produce((draft) => {
+                                  const cur = draft[net.id] ?? emptyFeaturedForm();
+                                  draft[net.id] = { ...cur, ...patch };
+                                }),
+                              )
+                            }
+                            onAddFeatured={(e) => {
+                              void onAddFeaturedChannel(net, e);
+                            }}
+                            onToggleEnabled={(fc) => {
+                              void onToggleFeaturedEnabled(net, fc);
+                            }}
+                            confirmingFeaturedKey={featuredConfirmKey()}
+                            onArmFeaturedDelete={(key) => setFeaturedConfirmKey(key)}
+                            onDeleteFeatured={(fc) => {
+                              void onDeleteFeaturedChannel(net, fc);
+                            }}
+                          />
+                        </AdminExpandRow>
                       </Show>
-                      <InlineConfirmButton
-                        idleLabel="Delete"
-                        confirmLabel="Confirm delete?"
-                        armed={confirmingKey() === `delete:${net.slug}`}
-                        onArm={() => setConfirmingKey(`delete:${net.slug}`)}
-                        onConfirm={() => onDeleteNetwork(net)}
-                        testId={`admin-network-delete-${net.slug}`}
-                        extraClass="delete-btn"
-                      />
-                    </td>
-                  </tr>
-                  <Show when={expandedNetworkId() === net.id}>
-                    <tr
-                      class="admin-networks-servers-row"
-                      data-testid={`admin-network-servers-${net.slug}`}
-                    >
-                      <td colspan="8">
-                        <ServersDisclosure
-                          net={net}
-                          servers={serversByNetworkId[net.id] ?? []}
-                          form={
-                            serverForm[net.id] ?? { host: "", port: "6697", tls: true, source: "" }
-                          }
-                          onFormChange={(patch) =>
-                            setServerForm(
-                              produce((draft) => {
-                                const cur = draft[net.id] ?? {
-                                  host: "",
-                                  port: "6697",
-                                  tls: true,
-                                  source: "",
-                                };
-                                draft[net.id] = { ...cur, ...patch };
-                              }),
-                            )
-                          }
-                          onAddServer={(e) => {
-                            void onAddServer(net, e);
-                          }}
-                          onToggleTls={(s) => {
-                            void onToggleServerTls(net, s);
-                          }}
-                          onSaveSource={(s, raw) => {
-                            void onSaveServerSource(net, s, raw);
-                          }}
-                          confirmingServerKey={serverConfirmKey()}
-                          onArmServerDelete={(key) => setServerConfirmKey(key)}
-                          onDeleteServer={(s) => {
-                            void onDeleteServer(net, s);
-                          }}
-                        />
-                        <FeaturedChannelsDisclosure
-                          net={net}
-                          featured={featuredByNetworkId[net.id] ?? []}
-                          form={featuredForm[net.id] ?? emptyFeaturedForm()}
-                          onFormChange={(patch) =>
-                            setFeaturedForm(
-                              produce((draft) => {
-                                const cur = draft[net.id] ?? emptyFeaturedForm();
-                                draft[net.id] = { ...cur, ...patch };
-                              }),
-                            )
-                          }
-                          onAddFeatured={(e) => {
-                            void onAddFeaturedChannel(net, e);
-                          }}
-                          onToggleEnabled={(fc) => {
-                            void onToggleFeaturedEnabled(net, fc);
-                          }}
-                          confirmingFeaturedKey={featuredConfirmKey()}
-                          onArmFeaturedDelete={(key) => setFeaturedConfirmKey(key)}
-                          onDeleteFeatured={(fc) => {
-                            void onDeleteFeaturedChannel(net, fc);
-                          }}
-                        />
-                      </td>
-                    </tr>
-                  </Show>
-                </>
-              )}
-            </For>
-          </tbody>
-        </table>
-      </Show>
+                    </>
+                  )}
+                </For>
+              </tbody>
+            </AdminTable>
+          </AdminCard>
+        </Show>
+      </div>
     </div>
   );
 };
@@ -816,8 +843,7 @@ const CapInput: Component<{
   return (
     <input
       type="number"
-      class="cap-editor-input"
-      classList={{ invalid: invalid() }}
+      class="adm-cap-input"
       min="0"
       step="1"
       value={props.value}
@@ -830,23 +856,32 @@ const CapInput: Component<{
   );
 };
 
+// Admin redesign (2026-08-07 plan, Layer 4) — one of the four badge
+// idioms the shared `AdminBadge` replaces. The `.circuit-badge` classes
+// carried hardcoded hexes, so the circuit state was the one status in
+// the pane that ignored the active theme.
+//
+// `none` is NEUTRAL rather than ok: a network with no circuit row has
+// never tripped the breaker, which is not the same claim as "the
+// breaker is closed" and must not read as one.
 const CircuitBadge: Component<{ net: AdminNetwork }> = (props) => {
   if (props.net.circuit_state === null) {
     return (
-      <span class="circuit-badge none" data-testid={`admin-network-circuit-${props.net.slug}`}>
+      <AdminBadge tone="neutral" testId={`admin-network-circuit-${props.net.slug}`}>
         —
-      </span>
+      </AdminBadge>
     );
   }
   const c = props.net.circuit_state;
   return (
-    <span
-      class={`circuit-badge ${c.state}`}
-      data-testid={`admin-network-circuit-${props.net.slug}`}
-      title={`failures=${c.failure_count}`}
+    <AdminBadge
+      tone={c.state === "open" ? "danger" : "ok"}
+      testId={`admin-network-circuit-${props.net.slug}`}
     >
-      {renderCircuitLabel(c.state, c.retry_after_seconds)}
-    </span>
+      <span title={`failures=${c.failure_count}`}>
+        {renderCircuitLabel(c.state, c.retry_after_seconds)}
+      </span>
+    </AdminBadge>
   );
 };
 
@@ -929,33 +964,40 @@ const ServersDisclosure: Component<{
   onDeleteServer: (s: AdminServer) => void;
 }> = (props) => {
   return (
-    <div class="admin-network-servers-disclosure">
+    <div class="admin-network-servers-disclosure adm-subsection">
+      <h4 class="adm-subsection-title">Servers</h4>
       <form
-        class="admin-network-server-add-form"
+        class="admin-network-server-add-form adm-form-row"
         onSubmit={props.onAddServer}
         data-testid={`admin-network-add-server-form-${props.net.slug}`}
       >
-        <input
-          type="text"
-          placeholder="host"
-          value={props.form.host}
-          onInput={(e) => props.onFormChange({ host: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-network-add-server-host-${props.net.slug}`}
-          aria-label={`new server host for ${props.net.slug}`}
-          required
-        />
-        <input
-          type="number"
-          placeholder="port"
-          min="1"
-          max="65535"
-          value={props.form.port}
-          onInput={(e) => props.onFormChange({ port: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-network-add-server-port-${props.net.slug}`}
-          aria-label={`new server port for ${props.net.slug}`}
-          required
-        />
-        <label>
+        <AdminField label="host" for={`admin-network-add-server-host-${props.net.slug}`}>
+          <input
+            id={`admin-network-add-server-host-${props.net.slug}`}
+            type="text"
+            value={props.form.host}
+            onInput={(e) =>
+              props.onFormChange({ host: (e.currentTarget as HTMLInputElement).value })
+            }
+            data-testid={`admin-network-add-server-host-${props.net.slug}`}
+            required
+          />
+        </AdminField>
+        <AdminField label="port" for={`admin-network-add-server-port-${props.net.slug}`}>
+          <input
+            id={`admin-network-add-server-port-${props.net.slug}`}
+            type="number"
+            min="1"
+            max="65535"
+            value={props.form.port}
+            onInput={(e) =>
+              props.onFormChange({ port: (e.currentTarget as HTMLInputElement).value })
+            }
+            data-testid={`admin-network-add-server-port-${props.net.slug}`}
+            required
+          />
+        </AdminField>
+        <label class="adm-check">
           <input
             type="checkbox"
             checked={props.form.tls}
@@ -966,18 +1008,24 @@ const ServersDisclosure: Component<{
           />
           TLS
         </label>
-        <input
-          type="text"
-          placeholder="source (optional)"
-          value={props.form.source}
-          onInput={(e) =>
-            props.onFormChange({ source: (e.currentTarget as HTMLInputElement).value })
-          }
-          data-testid={`admin-network-add-server-source-${props.net.slug}`}
-          aria-label={`new server outbound source for ${props.net.slug}`}
-        />
+        <AdminField
+          label="source"
+          for={`admin-network-add-server-source-${props.net.slug}`}
+          hint="optional outbound address"
+        >
+          <input
+            id={`admin-network-add-server-source-${props.net.slug}`}
+            type="text"
+            value={props.form.source}
+            onInput={(e) =>
+              props.onFormChange({ source: (e.currentTarget as HTMLInputElement).value })
+            }
+            data-testid={`admin-network-add-server-source-${props.net.slug}`}
+          />
+        </AdminField>
         <button
           type="submit"
+          class="adm-btn"
           disabled={props.form.host.trim() === ""}
           data-testid={`admin-network-add-server-submit-${props.net.slug}`}
         >
@@ -985,26 +1033,22 @@ const ServersDisclosure: Component<{
         </button>
       </form>
       <Show when={props.servers.length === 0}>
-        <p class="muted" data-testid={`admin-network-servers-empty-${props.net.slug}`}>
-          no servers
-        </p>
+        <AdminEmpty message="no servers" testId={`admin-network-servers-empty-${props.net.slug}`} />
       </Show>
       <Show when={props.servers.length > 0}>
-        <table
+        <AdminTable
           class="admin-network-servers-table"
           data-testid={`admin-network-servers-table-${props.net.slug}`}
         >
           <thead>
             <tr>
-              <th>host</th>
+              <th class="adm-table-grow">host</th>
               <th>port</th>
               <th>tls</th>
               <th>priority</th>
               <th>enabled</th>
               <th>source</th>
-              <th>
-                <span class="sr-only">actions</span>
-              </th>
+              <th>actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1033,6 +1077,7 @@ const ServersDisclosure: Component<{
                       />
                       <button
                         type="button"
+                        class="adm-btn"
                         onClick={() => props.onSaveSource(s, sourceDraft())}
                         data-testid={`admin-network-server-source-save-${props.net.slug}-${s.id}`}
                       >
@@ -1042,6 +1087,7 @@ const ServersDisclosure: Component<{
                     <td>
                       <button
                         type="button"
+                        class="adm-btn"
                         onClick={() => props.onToggleTls(s)}
                         data-testid={`admin-network-server-toggle-tls-${props.net.slug}-${s.id}`}
                       >
@@ -1062,7 +1108,7 @@ const ServersDisclosure: Component<{
               }}
             </For>
           </tbody>
-        </table>
+        </AdminTable>
       </Show>
     </div>
   );
@@ -1083,45 +1129,56 @@ const FeaturedChannelsDisclosure: Component<{
   onDeleteFeatured: (fc: AdminFeaturedChannel) => void;
 }> = (props) => {
   return (
-    <div class="admin-network-featured-disclosure">
-      <h4 class="admin-network-featured-title">Featured channels</h4>
+    <div class="admin-network-featured-disclosure adm-subsection">
+      <h4 class="admin-network-featured-title adm-subsection-title">Featured channels</h4>
       <form
-        class="admin-network-featured-add-form"
+        class="admin-network-featured-add-form adm-form-row"
         onSubmit={props.onAddFeatured}
         data-testid={`admin-network-add-featured-form-${props.net.slug}`}
       >
-        <input
-          type="text"
-          placeholder="#channel"
-          value={props.form.name}
-          onInput={(e) => props.onFormChange({ name: (e.currentTarget as HTMLInputElement).value })}
-          data-testid={`admin-network-add-featured-name-${props.net.slug}`}
-          aria-label={`new featured channel for ${props.net.slug}`}
-          required
-        />
-        <input
-          type="text"
-          placeholder="description (optional)"
-          value={props.form.description}
-          onInput={(e) =>
-            props.onFormChange({ description: (e.currentTarget as HTMLInputElement).value })
-          }
-          data-testid={`admin-network-add-featured-description-${props.net.slug}`}
-          aria-label={`featured description for ${props.net.slug}`}
-        />
-        <input
-          type="number"
-          placeholder="position"
-          min="0"
-          value={props.form.position}
-          onInput={(e) =>
-            props.onFormChange({ position: (e.currentTarget as HTMLInputElement).value })
-          }
-          data-testid={`admin-network-add-featured-position-${props.net.slug}`}
-          aria-label={`featured position for ${props.net.slug}`}
-        />
+        <AdminField label="channel" for={`admin-network-add-featured-name-${props.net.slug}`}>
+          <input
+            id={`admin-network-add-featured-name-${props.net.slug}`}
+            type="text"
+            placeholder="#channel"
+            value={props.form.name}
+            onInput={(e) =>
+              props.onFormChange({ name: (e.currentTarget as HTMLInputElement).value })
+            }
+            data-testid={`admin-network-add-featured-name-${props.net.slug}`}
+            required
+          />
+        </AdminField>
+        <AdminField
+          label="description"
+          for={`admin-network-add-featured-description-${props.net.slug}`}
+          hint="optional"
+        >
+          <input
+            id={`admin-network-add-featured-description-${props.net.slug}`}
+            type="text"
+            value={props.form.description}
+            onInput={(e) =>
+              props.onFormChange({ description: (e.currentTarget as HTMLInputElement).value })
+            }
+            data-testid={`admin-network-add-featured-description-${props.net.slug}`}
+          />
+        </AdminField>
+        <AdminField label="position" for={`admin-network-add-featured-position-${props.net.slug}`}>
+          <input
+            id={`admin-network-add-featured-position-${props.net.slug}`}
+            type="number"
+            min="0"
+            value={props.form.position}
+            onInput={(e) =>
+              props.onFormChange({ position: (e.currentTarget as HTMLInputElement).value })
+            }
+            data-testid={`admin-network-add-featured-position-${props.net.slug}`}
+          />
+        </AdminField>
         <button
           type="submit"
+          class="adm-btn"
           disabled={props.form.name.trim() === ""}
           data-testid={`admin-network-add-featured-submit-${props.net.slug}`}
         >
@@ -1129,24 +1186,23 @@ const FeaturedChannelsDisclosure: Component<{
         </button>
       </form>
       <Show when={props.featured.length === 0}>
-        <p class="muted" data-testid={`admin-network-featured-empty-${props.net.slug}`}>
-          no featured channels
-        </p>
+        <AdminEmpty
+          message="no featured channels"
+          testId={`admin-network-featured-empty-${props.net.slug}`}
+        />
       </Show>
       <Show when={props.featured.length > 0}>
-        <table
+        <AdminTable
           class="admin-network-featured-table"
           data-testid={`admin-network-featured-table-${props.net.slug}`}
         >
           <thead>
             <tr>
               <th>channel</th>
-              <th>description</th>
+              <th class="adm-table-grow">description</th>
               <th>position</th>
               <th>enabled</th>
-              <th>
-                <span class="sr-only">actions</span>
-              </th>
+              <th>actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1160,6 +1216,7 @@ const FeaturedChannelsDisclosure: Component<{
                   <td>
                     <button
                       type="button"
+                      class="adm-btn"
                       onClick={() => props.onToggleEnabled(fc)}
                       data-testid={`admin-network-featured-toggle-${props.net.slug}-${fc.id}`}
                     >
@@ -1179,7 +1236,7 @@ const FeaturedChannelsDisclosure: Component<{
               )}
             </For>
           </tbody>
-        </table>
+        </AdminTable>
       </Show>
     </div>
   );

@@ -4368,27 +4368,11 @@ html.resize-dragging * {
   gap: 0.5rem;
 }
 
-.admin-refresh-btn {
-  background: transparent;
-  color: var(--mode-op);
-  border: 1px solid var(--border);
-  padding: 0.25rem 0.75rem;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  cursor: pointer;
-}
-
-.admin-refresh-btn[aria-busy="true"] {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-.admin-error {
-  color: #c00;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  margin: 0;
-}
+/* `.admin-refresh-btn` and `.admin-error` lived here. Every tab now
+   renders `AdminRefreshButton` / `AdminError` instead, so both rules
+   were dead — and `.admin-error`'s `#c00` was one of the hardcoded
+   colours the redesign removes (`.adm-error` derives from
+   `--adm-danger`). */
 
 /* ADMIN-LAYOUT-FIX (2026-07-12) — the #211-phase-7 visitor→multi-network
    cutover changed the per-network cell to a `<ul>` of `<li>` lines but
@@ -4511,45 +4495,11 @@ html.resize-dragging * {
    archive section. ArchiveModal now owns archive; its rows use the
    `.archive-modal-*` family (below). */
 
-/* M-cluster M-9b — admin Sessions tab. Same base as Visitors but
-   wider (more columns) and with two action buttons per row. */
-.admin-sessions-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.admin-sessions-header {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.admin-sessions-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-}
-
-.admin-sessions-table th,
-.admin-sessions-table td {
-  text-align: left;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  vertical-align: top;
-}
-
-.admin-sessions-table th {
-  color: var(--muted);
-  font-weight: normal;
-  text-transform: uppercase;
-  font-size: 0.75rem;
-}
-
-.admin-sessions-actions {
-  display: flex;
-  gap: 0.4rem;
-}
+/* The `.admin-sessions-tab` / `-header` / `-table` / `-actions` rules
+   lived here, including one of the three byte-identical copies of the
+   `th/td { text-align:left; padding:.4rem .5rem; border-bottom }` block.
+   All four are dead: the tab renders `AdminToolbar` + `AdminCard` +
+   `AdminTable` now. */
 
 .disconnect-btn.confirming {
   color: #c80;
@@ -4573,110 +4523,21 @@ html.resize-dragging * {
   font-size: 0.75rem;
 }
 
-/* U-3 (UD4) — per-network cap-count summary above the sessions
-   list. Visually distinct from the live-sessions table below: tighter
-   padding, italic header, no per-row hover, no action column. */
-.admin-sessions-network-summary {
-  margin-bottom: 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 0.25rem 0.5rem;
-}
+/* U-3 (UD4)'s cap-count summary rules are gone: the summary is an
+   `AdminCard` with its own title and context line now, which is what
+   the italic-header-and-tighter-padding trick was approximating. */
 
-.admin-sessions-summary-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-}
+/* M-cluster M-10's Networks-tab rules lived here: tab / header /
+   table / actions, the cap editor, the Save button, `.circuit-badge`
+   and `.admin-success`. All dead — the tab renders through the shared
+   primitives now, and the four hardcoded colours in that block
+   (`#c00` twice, `#c80` twice, `#0a0`) are exactly the reason the
+   circuit state and the reap toast used to ignore the active theme.
 
-.admin-sessions-summary-table th,
-.admin-sessions-summary-table td {
-  text-align: left;
-  padding: 0.2rem 0.5rem;
-}
-
-.admin-sessions-summary-table th {
-  color: var(--muted);
-  font-weight: normal;
-  text-transform: uppercase;
-  font-size: 0.7rem;
-  font-style: italic;
-}
-
-/* M-cluster M-10 — admin Networks tab. Same base shape as Visitors
-   + Sessions tabs (header row + table + per-row actions). Adds the
-   per-row cap editor + Save button + Reset Circuit button + tab-
-   level Force Reap. Cap editor is an inline number input; Save is
-   a plain button (only enabled when dirty + valid). Reset Circuit
-   + Force Reap reuse the shared InlineConfirmButton. */
-
-.admin-networks-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.admin-networks-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.admin-networks-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-}
-
-.admin-networks-table th,
-.admin-networks-table td {
-  text-align: left;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  vertical-align: middle;
-}
-
-.admin-networks-table th {
-  color: var(--muted);
-  font-weight: normal;
-  text-transform: uppercase;
-  font-size: 0.75rem;
-}
-
-.admin-networks-actions {
-  display: flex;
-  gap: 0.4rem;
-}
-
-.cap-editor-input {
-  background: transparent;
-  color: var(--mode-op);
-  padding: 0.15rem 0.4rem;
-  width: 6rem;
-}
-
-.cap-editor-input.invalid {
-  border-color: #c00;
-  color: #c00;
-}
-
-.admin-network-save-btn {
-  background: transparent;
-  color: var(--mode-op);
-  border: 1px solid var(--border);
-  padding: 0.2rem 0.6rem;
-  font-family: var(--font-mono);
-  font-size: 0.8rem;
-  cursor: pointer;
-}
-
-.admin-network-save-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
+   `.reset-circuit-btn.confirming` and `.force-reap-btn.confirming`
+   survive below: they are InlineConfirmButton variants, not table
+   chrome, and that component is shared with surfaces this redesign
+   does not touch. */
 
 .reset-circuit-btn.confirming {
   color: #c80;
@@ -4686,34 +4547,6 @@ html.resize-dragging * {
 .force-reap-btn.confirming {
   color: #c80;
   border-color: #c80;
-}
-
-.circuit-badge {
-  display: inline-block;
-  padding: 0.1rem 0.4rem;
-  border-radius: 0.2rem;
-  font-size: 0.75rem;
-}
-
-.circuit-badge.none {
-  color: var(--muted);
-}
-
-.circuit-badge.open {
-  color: #c00;
-  border: 1px solid #c00;
-}
-
-.circuit-badge.closed {
-  color: #c80;
-  border: 1px solid #c80;
-}
-
-.admin-success {
-  color: #0a0;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
-  margin: 0;
 }
 
 /* Visually-hidden screen-reader-only label. Used in the Networks
@@ -4811,6 +4644,37 @@ html.resize-dragging * {
 .adm-btn[aria-busy="true"] {
   opacity: 0.6;
   cursor: progress;
+}
+
+/* A disabled admin button is almost always a "you haven't changed
+   anything yet" signal (Networks' Save, every add-form submit), so it
+   has to read as inert rather than broken. Absorbs the identical rule
+   that used to hang off `.admin-network-save-btn:disabled`. */
+.adm-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Inline numeric cap editor (Networks). `aria-invalid` drives the
+   error state instead of a `.invalid` class: the attribute is already
+   set for assistive tech, so styling off it keeps one source of truth
+   for "this value doesn't parse" rather than a class that has to be
+   kept in sync with it. */
+.adm-cap-input {
+  width: 6rem;
+  min-height: var(--tap-min);
+  padding: 0 var(--adm-space-2);
+  background: var(--adm-surface-0);
+  color: var(--adm-text);
+  border: 1px solid var(--adm-line-strong);
+  border-radius: var(--adm-radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.adm-cap-input[aria-invalid="true"] {
+  border-color: var(--adm-danger);
+  color: var(--adm-danger);
 }
 
 /* One table shape for all 10 tabs (`admin/AdminTable.tsx`), replacing
