@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, onMount } from "solid-js";
+import { isMobile } from "../lib/theme";
 
 // Admin redesign (2026-08-07 mobile review) — the active tab's refresh
 // action, hoisted into the pane header.
@@ -38,6 +39,26 @@ export type RefreshRegistration = {
 const [registration, setRegistration] = createSignal<RefreshRegistration | null>(null);
 
 export const refreshSlot = registration;
+
+/**
+ * Where the registered refresh button is rendered.
+ *
+ * On a phone it goes in the pane header, beside the close ×: there is
+ * one row of chrome up there and no room for anything else.
+ *
+ * On desktop the pane header is a wide, near-empty band and the card the
+ * data actually lives in has its own right-aligned actions slot, so the
+ * button belongs there — next to what it refreshes rather than up in the
+ * window furniture.
+ *
+ * ONE button either way, carrying the tab's own testid. Rendering it in
+ * both places and hiding one with CSS would put a duplicate
+ * `admin-*-refresh` in the DOM, which is exactly what the e2e specs
+ * click.
+ */
+export function refreshInCardHead(): boolean {
+  return !isMobile();
+}
 
 /**
  * Publish this tab's refresh action to the pane header for as long as the

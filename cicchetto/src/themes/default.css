@@ -5098,8 +5098,14 @@ html.resize-dragging * {
   --adm-group: var(--adm-accent);
 }
 
+/* Was `accent mixed with warn`, which on a theme whose accent is already
+   warm came out a muddy grey — and a grey stripe reads as "no section"
+   rather than as a section. Anchored to a violet instead, the way the
+   Session Log event colours are anchored: far enough from the accent
+   (Live) and from anything that could be mistaken for a warning, and
+   still mixed against the theme so it follows a custom palette. */
 .admin-tab-panel[data-adm-group="config"] {
-  --adm-group: color-mix(in oklab, var(--adm-accent), var(--adm-warn) 65%);
+  --adm-group: color-mix(in oklab, #8b5cd6, var(--fg) 15%);
 }
 
 .admin-tab-panel[data-adm-group="diag"] {
@@ -5330,6 +5336,22 @@ html.resize-dragging * {
 
 .adm-form-grid-actions > button {
   flex: 1 1 0;
+}
+
+/* On desktop the actions rejoin the field grid as one more cell and the
+   buttons take their intrinsic width. Spanning the full row is a MOBILE
+   affordance — a big thumb target at the end of a stacked form — and at
+   1440px it produced a Rotate button several hundred pixels wide for a
+   one-field form, which reads as a mistake rather than as emphasis. */
+@media (min-width: 900px) {
+  .adm-form-grid-actions {
+    grid-column: auto;
+    align-items: end;
+  }
+
+  .adm-form-grid-actions > button {
+    flex: 0 0 auto;
+  }
 }
 
 /* Admin form controls. There was NO rule for these at all: every input

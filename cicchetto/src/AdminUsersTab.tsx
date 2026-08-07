@@ -329,6 +329,7 @@ const AdminUsersTab: Component = () => {
         </Show>
         <Show when={users() !== null && (users() ?? []).length > 0}>
           <AdminCard
+            hostsRefresh
             title="Accounts"
             subtitle="live sessions is the Registry count, not a DB column"
           >

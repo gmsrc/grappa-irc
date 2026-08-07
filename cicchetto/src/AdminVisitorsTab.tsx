@@ -181,6 +181,7 @@ const AdminVisitorsTab: Component = () => {
 
         <Show when={visitors() !== null && (visitors() ?? []).length > 0}>
           <AdminCard
+            hostsRefresh
             title="Visitors"
             subtitle={`${(visitors() ?? []).length} visitors`}
             data-testid="admin-visitors-table-card"

@@ -11,7 +11,7 @@ import AdminVhostsTab from "./AdminVhostsTab";
 import AdminVisitorsTab from "./AdminVisitorsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
 import { AdminRefreshButton } from "./admin/AdminToolbar";
-import { refreshSlot } from "./admin/refreshSlot";
+import { refreshInCardHead, refreshSlot } from "./admin/refreshSlot";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
 import { RailOpenerButton } from "./ShellChrome";
 
@@ -143,7 +143,11 @@ const AdminPane: Component<Props> = (props) => {
             callback form of `<Show>` so the button exists only when a tab
             registered one: Events has no fetch to repeat and correctly
             contributes nothing. */}
-        <Show when={refreshSlot()}>
+        {/* Phone only: on desktop the button lives in the data card's own
+            header (`refreshInCardHead`), next to what it refreshes rather
+            than up in the window furniture. Never both — one button, one
+            testid, which is what the e2e specs click. */}
+        <Show when={!refreshInCardHead() && refreshSlot()}>
           {(reg) => (
             <AdminRefreshButton
               compact

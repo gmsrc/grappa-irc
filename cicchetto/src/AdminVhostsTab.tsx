@@ -350,7 +350,11 @@ const AdminVhostsTab: Component = () => {
         </Show>
 
         <Show when={vhosts() !== null && (vhosts() ?? []).length > 0}>
-          <AdminCard title="Pool" subtitle="each address carries its grants in the row beneath it">
+          <AdminCard
+            hostsRefresh
+            title="Pool"
+            subtitle="each address carries its grants in the row beneath it"
+          >
             <AdminTable data-testid="admin-vhosts-table">
               <thead>
                 <tr>

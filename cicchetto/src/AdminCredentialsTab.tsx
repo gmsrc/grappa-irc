@@ -472,6 +472,7 @@ const AdminCredentialsTab: Component = () => {
         </Show>
         <Show when={credentials() !== null && (credentials() ?? []).length > 0}>
           <AdminCard
+            hostsRefresh
             title="Bindings"
             subtitle="CONNECTION is the DB state, LIVE is the BEAM pid — they can disagree"
           >

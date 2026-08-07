@@ -96,6 +96,7 @@ const AdminSessionLogTab: Component = () => {
 
         <Show when={error() === null}>
           <AdminCard
+            hostsRefresh
             title="Session lifecycle"
             subtitle="REST snapshot merged with the live channel feed"
           >

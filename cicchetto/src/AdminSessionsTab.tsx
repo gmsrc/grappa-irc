@@ -234,6 +234,7 @@ const AdminSessionsTab: Component = () => {
 
         <Show when={sessions() !== null && (sessions() ?? []).length > 0}>
           <AdminCard
+            hostsRefresh
             title="Live sessions"
             subtitle={`${(sessions() ?? []).length} session${(sessions() ?? []).length === 1 ? "" : "s"}`}
             data-testid="admin-sessions-table-card"
@@ -249,9 +250,10 @@ const AdminSessionsTab: Component = () => {
                   <th>memory</th>
                   <th>last seen</th>
                   <th>degraded</th>
-                  <th class="adm-table-sticky-actions">
-                    <span class="sr-only">actions</span>
-                  </th>
+                  {/* Visible, like every other migrated tab: an unlabelled
+                      column reads as a rendering bug, and Disconnect and
+                      Terminate are destructive enough to deserve naming. */}
+                  <th class="adm-table-sticky-actions">actions</th>
                 </tr>
               </thead>
               <tbody>
