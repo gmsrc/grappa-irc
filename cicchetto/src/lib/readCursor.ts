@@ -32,12 +32,41 @@
 
 import { createEffect, createSignal, on } from "solid-js";
 import { token } from "./auth";
+import { canonicalChannel } from "./channelKey";
 import { moduleRoot } from "./moduleRoot";
 import { isVirtualWindowName } from "./windowKinds";
 
 const LEGACY_KEY_PREFIX = "rc:";
 
-const cacheKey = (networkSlug: string, channel: string): string => `${networkSlug} ${channel}`;
+// #973 — the ONE fold on the cursor map's KEY boundary, same
+// `canonicalChannel` (`asciiFold`, mirror of the server's
+// `Grappa.IRC.Identifier.canonical_target/1`) that `channelKey/2` applies.
+//
+// Pre-fix this interpolated the caller's string verbatim, which forked the
+// map for QUERY windows: `query_windows.target_nick` is case-preserving
+// server-side and `canonicalQueryNick` deliberately resolves a selection to
+// that CASING (it answers "which spelling does this window wear", it is not a
+// fold), so every writer on the query path — the `read_cursor_set` WS arm and
+// join-reply in subscribe.ts, the settle/leave writes in ScrollbackPane —
+// handed us `Mezmerize`. The badge memo (selection.ts `perChannelUnread`)
+// reads the cursor under the name it decodes out of a `ChannelKey`, which IS
+// folded, so it asked for `mezmerize`, missed, and counted the whole window
+// unread. The only writer that landed the folded key was the `/me` cold load
+// (the server persists cursors canonicalised), which is why the badge was
+// right at page load and then grew monotonically forever.
+//
+// Folding HERE rather than at each call site is the single-door form the
+// key/display/wire split asks for: every entry point (`getReadCursor`,
+// `applyMeEnvelope`, `applyJoinReply`, `applyReadCursorSet`, `setReadCursor`'s
+// optimistic advance, `renameReadCursorChannel`) inherits it and no future
+// caller can get it wrong. It is idempotent, so the already-folded `/me` keys
+// are unaffected; it is invisible for channels, whose names arrive canonical
+// (raw === folded), which is why only queries ever broke. Display casing is
+// untouched — this feeds map KEYS only, never a label. So is the WIRE: the
+// POST below still targets the RAW channel, because the server folds at
+// ingress and the wire carries the operator's spelling.
+const cacheKey = (networkSlug: string, channel: string): string =>
+  `${networkSlug} ${canonicalChannel(channel)}`;
 
 const [cursors, setCursors] = moduleRoot(() => createSignal<Record<string, number>>({}));
 
@@ -66,7 +95,8 @@ export const readCursors = (): Record<string, number> => cursors();
 /**
  * Cursor map key shape — exported so the consumer memo can decode a
  * `${slug} ${chan}` map key back into its parts without re-deriving
- * the separator. Mirrors `cacheKey/2`.
+ * the separator. Mirrors `cacheKey/2`, so the `channel` it returns is the
+ * FOLDED identifier (#973), never a display spelling.
  */
 export const decodeCursorKey = (key: string): { slug: string; channel: string } | null => {
   const sep = key.indexOf(" ");
@@ -257,7 +287,12 @@ export const renameReadCursorChannel = (
   oldChannel: string,
   newChannel: string,
 ): void => {
-  if (oldChannel === newChannel) return;
+  // The `nick_change` event carries whatever casing the ircd sent on either
+  // side, so "same window, nothing to migrate" is a KEY question and folds
+  // (#973). A pure re-casing (`Foo` → `foo`) is one identity, not a rename:
+  // without the fold it fell through to a self-migration that rebuilt the map
+  // into an equal-but-new object and woke every cursor consumer for nothing.
+  if (cacheKey(networkSlug, oldChannel) === cacheKey(networkSlug, newChannel)) return;
   setCursors((prev) => {
     const oldKey = cacheKey(networkSlug, oldChannel);
     const oldVal = prev[oldKey];
