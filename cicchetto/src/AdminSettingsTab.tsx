@@ -1,4 +1,8 @@
-import { type Component, createSignal, onMount, Show } from "solid-js";
+import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import AdminCard from "./admin/AdminCard";
+import AdminField from "./admin/AdminField";
+import { AdminLoading } from "./admin/AdminStatus";
+import AdminToolbar from "./admin/AdminToolbar";
 import { type AdminSettingsView, ApiError, adminGetSettings, adminPutSettings } from "./lib/api";
 import { token } from "./lib/auth";
 
@@ -161,104 +165,119 @@ const AdminSettingsTab: Component = () => {
 
   return (
     <div class="admin-settings-tab" data-testid="admin-settings-tab">
-      <header class="admin-settings-header">
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          disabled={loading()}
-          data-testid="admin-settings-refresh"
-        >
-          {loading() ? "loading…" : "refresh"}
-        </button>
+      <AdminToolbar
+        title="Settings"
+        subtitle="Server-wide upload limits"
+        actions={
+          <button
+            type="button"
+            class="adm-btn adm-refresh-btn"
+            onClick={() => void refresh()}
+            disabled={loading()}
+            data-testid="admin-settings-refresh"
+          >
+            {loading() ? "loading…" : "↻ refresh"}
+          </button>
+        }
+      />
+
+      <div class="adm-scroll">
         <Show when={error()}>
-          <span class="admin-settings-error" data-testid="admin-settings-error">
+          <span class="adm-field-error" role="alert" data-testid="admin-settings-error">
             error: {error()}
           </span>
         </Show>
-      </header>
 
-      <Show when={settings() !== null} fallback={<p>loading settings…</p>}>
-        <form onSubmit={(e) => void onSave(e)} class="admin-settings-form" noValidate>
-          <fieldset>
-            <legend>Uploads</legend>
-
-            <div class="admin-settings-field">
-              <label for="admin-settings-active-host">Active host</label>
-              <select
-                id="admin-settings-active-host"
-                data-testid="admin-settings-active-host"
-                value={activeHost()}
-                onChange={(e) => setActiveHost(e.currentTarget.value as "embedded" | "litterbox")}
-                disabled={saving()}
-                classList={{
-                  "admin-settings-field-error": fieldError() === "upload.active_host",
-                }}
+        <Show when={settings() !== null} fallback={<AdminLoading message="loading settings…" />}>
+          <form onSubmit={(e) => void onSave(e)} class="admin-settings-form" noValidate>
+            <AdminCard title="Uploads" subtitle="Applies to every network on this server">
+              <AdminField
+                label="Active host"
+                for="admin-settings-active-host"
+                error={fieldError() === "upload.active_host" ? "invalid value" : undefined}
               >
-                <option value="embedded">embedded (this server)</option>
-                <option value="litterbox">litterbox.catbox.moe</option>
-              </select>
-              <Show when={fieldError() === "upload.active_host"}>
-                <span class="admin-settings-field-error-msg">invalid value</span>
-              </Show>
-            </div>
+                <select
+                  id="admin-settings-active-host"
+                  data-testid="admin-settings-active-host"
+                  value={activeHost()}
+                  onChange={(e) => setActiveHost(e.currentTarget.value as "embedded" | "litterbox")}
+                  disabled={saving()}
+                  classList={{
+                    "admin-settings-field-error": fieldError() === "upload.active_host",
+                  }}
+                >
+                  <option value="embedded">embedded (this server)</option>
+                  <option value="litterbox">litterbox.catbox.moe</option>
+                </select>
+              </AdminField>
 
-            {capFields.map((cap) => (
-              <div class="admin-settings-field">
-                <label for={cap.testid}>{cap.label}</label>
+              <For each={capFields}>
+                {(cap) => (
+                  <AdminField
+                    label={cap.label}
+                    for={cap.testid}
+                    error={fieldError() === cap.field ? "must be positive" : undefined}
+                  >
+                    <input
+                      id={cap.testid}
+                      data-testid={cap.testid}
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={cap.value()}
+                      onInput={(e) => cap.set(Number(e.currentTarget.value))}
+                      disabled={saving()}
+                      classList={{
+                        "admin-settings-field-error": fieldError() === cap.field,
+                      }}
+                    />
+                  </AdminField>
+                )}
+              </For>
+
+              <AdminField
+                label="Global cap (GB)"
+                for="admin-settings-global-cap"
+                error={fieldError() === "upload.global_cap_bytes" ? "must be positive" : undefined}
+              >
                 <input
-                  id={cap.testid}
-                  data-testid={cap.testid}
+                  id="admin-settings-global-cap"
+                  data-testid="admin-settings-global-cap"
                   type="number"
                   min="1"
                   step="1"
-                  value={cap.value()}
-                  onInput={(e) => cap.set(Number(e.currentTarget.value))}
+                  value={globalCapGB()}
+                  onInput={(e) => setGlobalCapGB(Number(e.currentTarget.value))}
                   disabled={saving()}
                   classList={{
-                    "admin-settings-field-error": fieldError() === cap.field,
+                    "admin-settings-field-error": fieldError() === "upload.global_cap_bytes",
                   }}
                 />
-                <Show when={fieldError() === cap.field}>
-                  <span class="admin-settings-field-error-msg">must be positive</span>
+              </AdminField>
+
+              <div class="adm-toolbar-actions">
+                <button
+                  type="submit"
+                  class="adm-btn"
+                  disabled={saving()}
+                  data-testid="admin-settings-save"
+                >
+                  {saving() ? "saving…" : "save"}
+                </button>
+                <Show
+                  when={
+                    savedAt() !== null && !saving() && error() === null && fieldError() === null
+                  }
+                >
+                  <span class="adm-field-hint" data-testid="admin-settings-saved">
+                    saved
+                  </span>
                 </Show>
               </div>
-            ))}
-
-            <div class="admin-settings-field">
-              <label for="admin-settings-global-cap">Global cap (GB)</label>
-              <input
-                id="admin-settings-global-cap"
-                data-testid="admin-settings-global-cap"
-                type="number"
-                min="1"
-                step="1"
-                value={globalCapGB()}
-                onInput={(e) => setGlobalCapGB(Number(e.currentTarget.value))}
-                disabled={saving()}
-                classList={{
-                  "admin-settings-field-error": fieldError() === "upload.global_cap_bytes",
-                }}
-              />
-              <Show when={fieldError() === "upload.global_cap_bytes"}>
-                <span class="admin-settings-field-error-msg">must be positive</span>
-              </Show>
-            </div>
-          </fieldset>
-
-          <div class="admin-settings-actions">
-            <button type="submit" disabled={saving()} data-testid="admin-settings-save">
-              {saving() ? "saving…" : "save"}
-            </button>
-            <Show
-              when={savedAt() !== null && !saving() && error() === null && fieldError() === null}
-            >
-              <span class="admin-settings-saved" data-testid="admin-settings-saved">
-                saved
-              </span>
-            </Show>
-          </div>
-        </form>
-      </Show>
+            </AdminCard>
+          </form>
+        </Show>
+      </div>
     </div>
   );
 };
