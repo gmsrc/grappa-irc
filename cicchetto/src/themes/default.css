@@ -4176,6 +4176,15 @@ html.resize-dragging * {
   border-radius: var(--adm-radius-sm);
 }
 
+/* The refresh sits with the close ×, not adrift between the title and
+   it. The header is `space-between` over four children (☰, title,
+   refresh, ×), which spread the middle two evenly and left refresh
+   floating in the gap; pushing it right groups the two controls into one
+   cluster at the corner where controls belong. */
+.admin-pane-header .adm-refresh-btn {
+  margin-left: auto;
+}
+
 .admin-pane-header .shell-chrome-rail-opener:hover {
   background: var(--adm-surface-2);
   color: var(--adm-text);
