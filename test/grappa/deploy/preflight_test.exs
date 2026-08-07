@@ -1,6 +1,7 @@
 defmodule Grappa.Deploy.PreflightTest do
   # async: true — pure logic, no global state.
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias Grappa.Deploy.Preflight
 
@@ -780,5 +781,516 @@ defmodule Grappa.Deploy.PreflightTest do
       assert {:cold, reasons} = Preflight.classify("from", "to", :jail, diff_fn, show_fn)
       assert {:mix_deps, ["mix.lock"]} in reasons
     end
+  end
+
+  describe "classify_migration/1 — expand (HOT) allowlist" do
+    test "additive column with no opts — nullable by Ecto default (the #618 instance)" do
+      # Verbatim from 20260805100000_add_old_nick_to_session_log_events,
+      # whose moduledoc claims HOT while the pre-#41 classifier said COLD.
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     alter table(:session_log_events) do
+                       add :old_nick, :string
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "add null: true (the #41 canonical case: source_address)" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     alter table(:network_servers) do
+                       add :source_address, :string, null: true
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "add null: false WITH a default — an old-code insert omitting it still lands" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     alter table(:users) do
+                       add :is_admin, :boolean, default: false, null: false
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "add with only a default:" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     alter table(:t) do
+                       add :c, :integer, default: 0
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "array type is a literal type" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     alter table(:t) do
+                       add :c, {:array, :string}
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "add_if_not_exists follows the same nullability rule" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     alter table(:t) do
+                       add_if_not_exists :c, :string
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "create table with a block — contents irrelevant, incl. references + timestamps" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create table(:sessions, primary_key: false) do
+                       add :id, :binary_id, primary_key: true
+                       add :user_id, references(:users, type: :binary_id), null: false
+                       timestamps(type: :utc_datetime_usec)
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "create_if_not_exists table with a block" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create_if_not_exists table(:t) do
+                       add :c, :string
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "plain index, 2-arg" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create index(:messages, [:network_id, :channel])
+                   end
+                 """)
+               )
+    end
+
+    test "plain partial index with where:/name: opts" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create index(:network_credentials, [:connection_state],
+                              where: "connection_state = 'connected'",
+                              name: :nc_connected_index
+                            )
+                   end
+                 """)
+               )
+    end
+
+    test "index over SQL column expressions (strings, not atoms)" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create index(:messages, ["user_id", "COALESCE(dm_with, channel)"],
+                              name: :messages_archive_user_idx
+                            )
+                   end
+                 """)
+               )
+    end
+
+    test "unique_index on a table THIS body created — zero rows, no loaded schema" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create table(:themes) do
+                       add :name, :string, null: false
+                     end
+
+                     create unique_index(:themes, [:name])
+                   end
+                 """)
+               )
+    end
+
+    test "check constraint on a table THIS body created" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create table(:t) do
+                       add :n, :integer
+                     end
+
+                     create constraint(:t, :n_positive, check: "n > 0")
+                   end
+                 """)
+               )
+    end
+
+    test "def up/0 is classified like def change/0" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def up do
+                     alter table(:t) do
+                       add :c, :string
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "a CONTRACT down/0 does not cold-trip an expand up/0 — down never runs on deploy" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def up do
+                     alter table(:t) do
+                       add :c, :string
+                     end
+                   end
+
+                   def down do
+                     alter table(:t) do
+                       remove :c
+                     end
+                   end
+                 """)
+               )
+    end
+
+    test "several expand statements in one body" do
+      assert :hot =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     alter table(:network_credentials) do
+                       add :ident, :string, null: true
+                     end
+
+                     alter table(:visitors) do
+                       add :ident, :string, null: true
+                       add :realname, :string, null: true
+                     end
+
+                     create index(:visitors, [:ident])
+                   end
+                 """)
+               )
+    end
+  end
+
+  describe "classify_migration/1 — contract + unprovable (COLD)" do
+    for {label, body} <- [
+          {"remove", "alter table(:t) do\n  remove :c\nend"},
+          {"remove_if_exists", "alter table(:t) do\n  remove_if_exists :c, :string\nend"},
+          {"modify", "alter table(:t) do\n  modify :c, :text\nend"},
+          {"modify tightening to null: false", "alter table(:t) do\n  modify :c, :text, null: false\nend"},
+          {"rename column", "rename table(:t), :a, to: :b"},
+          {"rename table", "rename table(:t), to: table(:u)"},
+          {"drop", "drop table(:t)"},
+          {"drop_if_exists", "drop_if_exists index(:t, [:c])"},
+          {"raw execute", ~s|execute("ALTER TABLE t ADD COLUMN c TEXT")|},
+          {"add null: false with no default", "alter table(:t) do\n  add :c, :string, null: false\nend"},
+          {"unique_index on a pre-existing table", "create unique_index(:users, [:name])"},
+          {"constraint on a pre-existing table", ~s|create constraint(:t, :n_positive, check: "n > 0")|},
+          {"index with unique: true", "create index(:t, [:c], unique: true)"},
+          {"add of a references/0 type", "alter table(:t) do\n  add :u, references(:users)\nend"},
+          {"timestamps inside alter (two NOT NULL columns)",
+           "alter table(:t) do\n  timestamps(type: :utc_datetime_usec)\nend"},
+          {"flush", "flush()"},
+          {"conditional", "if true do\n  create index(:t, [:c])\nend"},
+          {"call into a local helper", "backfill()"},
+          {"dynamic column name", "alter table(:t) do\n  add col, :string\nend"},
+          {"dynamic type", "alter table(:t) do\n  add :c, type\nend"},
+          {"non-literal null: value", "alter table(:t) do\n  add :c, :string, null: nullable?\nend"},
+          {"repo() escape hatch", ~s|repo().query!("PRAGMA writable_schema = ON")|},
+          {"expand statement followed by a contract one",
+           "alter table(:t) do\n  add :c, :string\nend\n\ndrop index(:t, [:d])"},
+          {"expand and contract inside ONE alter block", "alter table(:t) do\n  add :c, :string\n  remove :d\nend"}
+        ] do
+      test "#{label} → :cold" do
+        assert :cold =
+                 Preflight.classify_migration(migration("def change do\n#{unquote(body)}\nend"))
+      end
+    end
+
+    test "create_if_not_exists table does NOT make a unique_index provable" do
+      # The table may already exist, populated, from an earlier partial run.
+      assert :cold =
+               Preflight.classify_migration(
+                 migration("""
+                   def change do
+                     create_if_not_exists table(:t) do
+                       add :name, :string
+                     end
+
+                     create unique_index(:t, [:name])
+                   end
+                 """)
+               )
+    end
+
+    test "@disable_ddl_transaction opts out of the rollback the abort contract needs" do
+      assert :cold =
+               Preflight.classify_migration("""
+               defmodule Grappa.Repo.Migrations.Probe do
+                 use Ecto.Migration
+
+                 @disable_ddl_transaction true
+
+                 def change do
+                   alter table(:t) do
+                     add :c, :string
+                   end
+                 end
+               end
+               """)
+    end
+
+    test "no change/0 and no up/0 (down-only module)" do
+      assert :cold =
+               Preflight.classify_migration(
+                 migration("""
+                   def down do
+                     drop table(:t)
+                   end
+                 """)
+               )
+    end
+
+    test "def change, do: :ok — a literal body is provably harmless yet still COLD" do
+      # Deliberate: the allowlist enumerates OPS. "This statement is not
+      # an op at all" is a second, unrelated proof obligation, and this
+      # real 2026-05-04 migration is already applied everywhere.
+      assert :cold = Preflight.classify_migration(migration("def change, do: :ok"))
+    end
+
+    test "unparseable source" do
+      assert :cold = Preflight.classify_migration("defmodule Broken do\n  def change do\n")
+    end
+
+    test "empty source" do
+      assert :cold = Preflight.classify_migration("")
+    end
+  end
+
+  describe "classify_migration/1 — property: one unprovable op poisons the body" do
+    @hot_ops [
+      "create index(:t, [:c])",
+      "create table(:fresh) do\n  add :c, :string\nend",
+      "alter table(:t) do\n  add :c, :string\nend",
+      "alter table(:t) do\n  add :d, :integer, null: false, default: 0\nend"
+    ]
+    @cold_ops [
+      "alter table(:t) do\n  remove :c\nend",
+      "alter table(:t) do\n  modify :c, :text\nend",
+      ~s|execute("VACUUM")|,
+      "drop table(:t)",
+      "create unique_index(:t, [:c])",
+      "alter table(:t) do\n  add :e, :string, null: false\nend"
+    ]
+
+    property "a body of only allowlisted ops is :hot" do
+      check all(ops <- list_of(member_of(@hot_ops), min_length: 1, max_length: 5)) do
+        assert :cold != Preflight.classify_migration(body_of(ops))
+      end
+    end
+
+    property "adding ANY non-allowlisted op to an all-expand body flips it to :cold" do
+      check all(
+              hot <- list_of(member_of(@hot_ops), max_length: 4),
+              cold <- member_of(@cold_ops),
+              at <- integer(0..length(hot))
+            ) do
+        ops = List.insert_at(hot, at, cold)
+        assert :cold = Preflight.classify_migration(body_of(ops))
+      end
+    end
+  end
+
+  describe "classify_migration/1 — the real migration history" do
+    # #41 asks for this explicitly: validate against every migration in
+    # the repo BEFORE wiring the classifier into the deploy path. The
+    # list is PINNED, so a future classifier edit that silently flips a
+    # real migration's class fails here instead of on m42.
+    @migrations_glob "priv/repo/migrations/*.exs"
+    @expected_hot ~w(
+      20260425000000_init
+      20260426000000_create_users
+      20260426000001_create_sessions
+      20260502073632_create_visitors
+      20260502080806_create_visitor_channels
+      20260503090000_add_client_id_to_sessions
+      20260503090001_add_admission_caps_to_networks
+      20260504140000_create_user_settings
+      20260510170000_add_last_joined_channels_to_network_credentials
+      20260512083037_network_credentials_connection_state_partial_index
+      20260514114123_create_push_subscriptions
+      20260516030833_add_is_admin_to_users
+      20260522073826_add_archive_covering_indexes
+      20260603174206_add_source_address_to_servers
+      20260628105147_create_network_featured_channels
+      20260709120000_recreate_read_cursors_last_read_message_id_index
+      20260709120100_add_messages_network_id_index
+      20260711120000_add_ident_to_credentials_and_ident_realname_to_visitors
+      20260711124000_add_visitor_enabled_to_networks
+      20260712120000_add_visitor_autoconnect_to_networks
+      20260715120000_create_session_log_events
+      20260715120100_create_admin_events
+      20260717120000_create_themes
+      20260718130000_add_author_nick_to_themes
+      20260722202612_add_messages_id_cursor_composite_indexes
+      20260724120000_add_services_flavor_to_networks
+      20260725130000_add_perform_list_to_network_credentials
+      20260726120000_add_uploads_user_id_cascade_fk_index
+      20260726130000_add_incognito_to_visitors
+      20260726140000_add_away_state_to_network_credentials
+      20260728120000_add_nickserv_pass_to_network_credentials
+      20260802190000_add_user_totp
+      20260805100000_add_old_nick_to_session_log_events
+    )
+
+    test "every migration on disk classifies, and the HOT set is exactly the pinned one" do
+      files = Path.wildcard(@migrations_glob)
+      assert length(files) > 50, "expected the real migrations dir, found #{length(files)} files"
+
+      hot =
+        for path <- files,
+            Preflight.classify_migration(File.read!(path)) == :hot,
+            do: Path.basename(path, ".exs")
+
+      assert Enum.sort(hot) == Enum.sort(@expected_hot)
+    end
+
+    test "the #618 additive-nullable migration is HOT — #41's thesis, on a real file" do
+      source = File.read!("priv/repo/migrations/20260805100000_add_old_nick_to_session_log_events.exs")
+      assert :hot = Preflight.classify_migration(source)
+    end
+
+    test "an index migration whose down/0 drops it is HOT — down never runs on deploy" do
+      # The measured surprise of the first real run: four migrations
+      # classify HOT that a whole-file grep for `drop` calls contract.
+      # Their up/0 is `create index` and nothing else; the drop lives in
+      # down/0, which `Ecto.Migrator.run(_, :up, _)` never reaches.
+      source =
+        File.read!("priv/repo/migrations/20260726120000_add_uploads_user_id_cascade_fk_index.exs")
+
+      assert :hot = Preflight.classify_migration(source)
+    end
+
+    test "the writable_schema NOT NULL relaxation stays COLD" do
+      source = File.read!("priv/repo/migrations/20260515111331_visitors_expires_at_nullable.exs")
+      assert :cold = Preflight.classify_migration(source)
+    end
+  end
+
+  describe "classify/5 — migration expand/contract enters the verdict" do
+    @expand "priv/repo/migrations/20260901000000_add_thing.exs"
+    @contract "priv/repo/migrations/20260901000001_drop_thing.exs"
+
+    test "an all-expand migration no longer forces COLD" do
+      diff_fn = fn _, _ -> [@expand] end
+      show_fn = fn "to", @expand -> expand_source() end
+
+      for substrate <- @substrates do
+        assert {:hot, []} = Preflight.classify("from", "to", substrate, diff_fn, show_fn)
+      end
+    end
+
+    test "a contract migration still forces COLD, and is named" do
+      diff_fn = fn _, _ -> [@contract] end
+      show_fn = fn "to", @contract -> contract_source() end
+
+      assert {:cold, reasons} = Preflight.classify("from", "to", :jail, diff_fn, show_fn)
+      assert {:migration, [@contract]} = List.keyfind(reasons, :migration, 0)
+    end
+
+    test "mixed diff names ONLY the contract migration" do
+      diff_fn = fn _, _ -> [@expand, @contract] end
+
+      show_fn = fn
+        "to", @expand -> expand_source()
+        "to", @contract -> contract_source()
+      end
+
+      assert {:cold, reasons} = Preflight.classify("from", "to", :docker, diff_fn, show_fn)
+      assert {:migration, [@contract]} = List.keyfind(reasons, :migration, 0)
+    end
+
+    test "a migration whose source cannot be read is COLD (deleted file, unknown rev)" do
+      diff_fn = fn _, _ -> [@expand] end
+      show_fn = fn "to", @expand -> nil end
+
+      assert {:cold, reasons} = Preflight.classify("from", "to", :linux, diff_fn, show_fn)
+      assert {:migration, [@expand]} = List.keyfind(reasons, :migration, 0)
+    end
+
+    test "the source is read at the TARGET rev, never the base" do
+      # A migration ADDED in this range does not exist at `from`; asking
+      # for it there would be nil → a permanent false-COLD.
+      diff_fn = fn _, _ -> [@expand] end
+
+      show_fn = fn
+        "to", @expand -> expand_source()
+        "from", @expand -> raise "classifier must not read the base rev"
+      end
+
+      assert {:hot, []} = Preflight.classify("from", "to", :jail, diff_fn, show_fn)
+    end
+  end
+
+  # A minimal well-formed migration module wrapping `body`.
+  defp migration(body) do
+    """
+    defmodule Grappa.Repo.Migrations.Probe do
+      use Ecto.Migration
+
+    #{body}
+    end
+    """
+  end
+
+  defp body_of(ops), do: migration("def change do\n#{Enum.join(ops, "\n\n")}\nend")
+
+  defp expand_source do
+    migration("def change do\n  alter table(:t) do\n    add :c, :string\n  end\nend")
+  end
+
+  defp contract_source do
+    migration("def change do\n  alter table(:t) do\n    remove :c\n  end\nend")
   end
 end

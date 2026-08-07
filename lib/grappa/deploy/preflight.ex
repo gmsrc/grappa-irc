@@ -77,6 +77,16 @@ defmodule Grappa.Deploy.Preflight do
 
   @type verdict :: {:hot, []} | {:cold, [reason()]}
 
+  @typedoc """
+  Expand-vs-contract class of ONE migration's up-direction body.
+
+  `:hot` means every DDL op is provably **expand**: the currently-loaded
+  (old) code cannot reference what the op adds, so applying it while old
+  code still runs has a ZERO crash window. `:cold` means contract, or
+  "cannot prove expand" — the two are deliberately the same verdict.
+  """
+  @type migration_class :: :hot | :cold
+
   @substrates [:docker, :jail, :linux]
   # CLI-boundary mirror of @substrates — derived, not hand-kept, so a
   # third substrate can't be accepted by classify_paths/2 yet rejected
@@ -84,9 +94,13 @@ defmodule Grappa.Deploy.Preflight do
   @substrate_strings Enum.map(@substrates, &Atom.to_string/1)
 
   @doc """
-  Classify a list of changed paths for the given deploy substrate.
-  Does NOT exercise per-file content diffs for long-lived-module
-  state-shape checks — use `classify/5` with the from/to revs for that.
+  Classify a list of changed paths for the given deploy substrate,
+  WITHOUT any file content. Content-blind, so every touched migration
+  counts as COLD — see `classify_paths/3` for the expand/contract
+  refinement and `classify/5` for the git-backed caller that supplies it.
+
+  Also does NOT exercise per-file content diffs for long-lived-module
+  state-shape checks — again `classify/5`.
 
   Returns `{:hot, []}` when no path triggers a cold class; otherwise
   `{:cold, [reasons]}` enumerating every triggered class. Raises
@@ -94,8 +108,21 @@ defmodule Grappa.Deploy.Preflight do
   never a silent guess.
   """
   @spec classify_paths([String.t()], substrate()) :: verdict()
-  def classify_paths(paths, substrate)
-      when is_list(paths) and substrate in @substrates do
+  def classify_paths(paths, substrate), do: classify_paths(paths, substrate, fn _ -> nil end)
+
+  @doc """
+  `classify_paths/2` plus the migration expand/contract refinement.
+
+  `migration_source_fn.(path)` returns the migration's source at the
+  TARGET rev (`nil` when it cannot be read — deleted file, unknown rev).
+  An unreadable migration classifies COLD, which is exactly why
+  `classify_paths/2` (whose source fn always returns `nil`) is the
+  conservative content-blind shape rather than a special case.
+  """
+  @spec classify_paths([String.t()], substrate(), (String.t() -> String.t() | nil)) :: verdict()
+  def classify_paths(paths, substrate, migration_source_fn)
+      when is_list(paths) and substrate in @substrates and
+             is_function(migration_source_fn, 1) do
     reasons =
       []
       |> add_reason(:mix_deps, Enum.filter(paths, &mix_deps?/1))
@@ -103,7 +130,7 @@ defmodule Grappa.Deploy.Preflight do
       |> add_reason(:image_substrate, filter_on(:docker, substrate, paths, &docker_image?/1))
       |> add_reason(:rc_d, filter_on(:jail, substrate, paths, &rc_d?/1))
       |> add_reason(:systemd_unit, filter_on(:linux, substrate, paths, &systemd_unit?/1))
-      |> add_reason(:migration, Enum.filter(paths, &migration?/1))
+      |> add_reason(:migration, contract_migrations(paths, migration_source_fn))
       |> add_reason(:nginx, filter_on(:linux, substrate, paths, &nginx?/1))
       |> add_reason(:config, Enum.filter(paths, &config?/1))
       |> Enum.reverse()
@@ -111,6 +138,85 @@ defmodule Grappa.Deploy.Preflight do
     case reasons do
       [] -> {:hot, []}
       _ -> {:cold, reasons}
+    end
+  end
+
+  @doc """
+  Classify ONE migration's source as `:hot` (expand) or `:cold`.
+
+  Pure AST inference over the `change/0` / `up/0` body — **no
+  annotation, no opt-in flag**. A migration cannot vouch for itself:
+  the 2026-08-05 `add_old_nick_to_session_log_events` moduledoc
+  declares "HOT" in prose while the classifier of the day cold-tripped
+  it, and prose is not a gate.
+
+  ## The asymmetry this encodes
+
+  An **expand** op has a ZERO crash window: old code never references
+  the column/table/index being added, new code finds it present. A
+  **contract** op has no safe ordering at all — the BEAM and sqlite do
+  not share a clock, so a commit cannot be made atomic with the
+  per-process code switch (a GenServer adopts reloaded code on its NEXT
+  message). Holding the DDL transaction open until every process has
+  switched does not help either: sqlite is single-writer, so the live
+  `Session.Server`s persisting scrollback would starve into
+  `busy_timeout` — a schema crash traded for a write-timeout crash.
+
+  So the cost of the two errors is NOT symmetric. A false-COLD costs
+  one restart. A false-HOT crashes a `Session.Server`, which is linked
+  to its `IRC.Client`, which owns the upstream socket — a visible QUIT
+  on the network. **Hence an ALLOWLIST: `:hot` only when EVERY op is
+  provably expand; `:cold` for contract AND for anything unrecognised.**
+
+  ## HOT (allowlisted)
+
+    * `create table(...)` / `create_if_not_exists table(...)`, with or
+      without a block — a table nothing has ever written to, and the
+      block's contents are irrelevant for the same reason.
+    * `create index(...)` without a `unique:` option (a plain index
+      changes no write's validity).
+    * `create unique_index(...)` / `create constraint(...)` **on a table
+      the same body created** with a plain `create table` — widened
+      past the #41 text, which had not weighed how common the shape is:
+      8 of the 14 create-table migrations in this repo pair the two, so
+      without it "new feature table" stays COLD forever. The proof is
+      structural, not statistical — `create table` raises if the table
+      exists, so reaching the index statement means zero rows and no
+      loaded schema. `create_if_not_exists table(...)` is deliberately
+      NOT enough: it may have found a populated table.
+    * inside `alter table(...)`: `add` / `add_if_not_exists` of a
+      literal column name with a literal type, when the column is
+      nullable (`null: true`, or `null` absent — Ecto's default) or
+      carries a `default:`. Both shapes keep an old-code INSERT that
+      omits the column valid.
+
+  ## COLD (everything else), notably
+
+    * `remove` / `remove_if_exists` / `rename` / `modify` / `drop` /
+      `drop_if_exists` — contract by definition.
+    * `add ..., null: false` with no `default:` — old-code INSERTs that
+      omit the column start failing the moment the DDL commits.
+    * `create unique_index(...)` / `create constraint(...)` on a
+      PRE-EXISTING table — an old write that was legal before can start
+      failing (and a duplicate already in the table fails the DDL).
+    * `execute(raw_sql)` — opaque. Teaching the classifier to read raw
+      SQL would be exactly the false-HOT this design exists to prevent.
+    * `references(...)` or any non-literal type/column/option; local
+      helper calls; `flush/0`; conditionals; anything unparseable.
+    * `@disable_ddl_transaction` — the fail-aborts-reload contract in
+      `Grappa.HotReload.migrate_and_reload/0` rests on the migration
+      rolling back. A migration that opts out of the transaction cannot
+      make that promise.
+    * a module with no `change/0` and no `up/0` — including `def change,
+      do: :ok`, whose body is a literal rather than an op. Provably
+      harmless, deliberately still COLD: the allowlist enumerates OPS,
+      and "harmless non-op" is a second, unrelated proof obligation.
+  """
+  @spec classify_migration(String.t()) :: migration_class()
+  def classify_migration(source) when is_binary(source) do
+    case Code.string_to_quoted(source) do
+      {:ok, ast} -> classify_migration_ast(ast)
+      {:error, _} -> :cold
     end
   end
 
@@ -261,7 +367,7 @@ defmodule Grappa.Deploy.Preflight do
   def classify(from, to, substrate, diff_paths_fn, show_fn) do
     paths = diff_paths_fn.(from, to)
 
-    case classify_paths(paths, substrate) do
+    case classify_paths(paths, substrate, &show_fn.(to, &1)) do
       {:cold, _} = cold ->
         cold
 
@@ -350,9 +456,162 @@ defmodule Grappa.Deploy.Preflight do
   defp systemd_unit?("infra/linux/systemd/grappa.service"), do: true
   defp systemd_unit?(_), do: false
 
-  # Class 5: migrations. The hot path skips `mix ecto.migrate`; new
-  # tables/columns 500 on first query post-reload (REV-B repro'd this).
+  # Class 5: migrations — CONTRACT ones only (GH #41). The class used
+  # to be the path prefix alone, because the hot path ran no migration
+  # at all and a new table/column 500'd on the first query post-reload
+  # (REV-B repro'd this). `GrappaWeb.AdminController.reload/2` now runs
+  # `Ecto.Migrator` in-process before the module reload, so an
+  # all-expand migration no longer needs the restart — only a contract
+  # one does, and for a reason no ordering can fix (see
+  # `classify_migration/1`).
+  defp contract_migrations(paths, source_fn) do
+    Enum.filter(paths, fn path ->
+      migration?(path) and migration_class(source_fn.(path)) == :cold
+    end)
+  end
+
   defp migration?(path), do: String.starts_with?(path, "priv/repo/migrations/")
+
+  # An unreadable migration is indistinguishable from an unclassifiable
+  # one, and gets the same conservative verdict.
+  defp migration_class(nil), do: :cold
+  defp migration_class(source) when is_binary(source), do: classify_migration(source)
+
+  defp classify_migration_ast(ast) do
+    bodies = up_direction_bodies(ast)
+
+    if bodies != [] and not disable_ddl_transaction?(ast) and
+         Enum.all?(bodies, &hot_body?/1) do
+      :hot
+    else
+      :cold
+    end
+  end
+
+  # The bodies that run on `Ecto.Migrator.run(_, :up, _)`: `change/0`
+  # (run forward) and `up/0`. `down/0` is deliberately ignored — it
+  # never executes on the deploy path, so a contract `down` must not
+  # cold-trip an expand `up`.
+  defp up_direction_bodies(ast) do
+    {_, acc} =
+      Macro.prewalk(ast, [], fn
+        {:def, _, [{name, _, args}, [do: body]]} = node, acc
+        when name in [:change, :up] and (is_nil(args) or args == []) ->
+          {node, [body | acc]}
+
+        node, acc ->
+          {node, acc}
+      end)
+
+    acc
+  end
+
+  defp disable_ddl_transaction?(ast) do
+    {_, found} =
+      Macro.prewalk(ast, false, fn
+        {:@, _, [{:disable_ddl_transaction, _, _}]} = node, _ -> {node, true}
+        node, acc -> {node, acc}
+      end)
+
+    found
+  end
+
+  defp hot_body?(body) do
+    stmts = statements(body)
+    fresh = fresh_tables(stmts)
+    Enum.all?(stmts, &hot_op?(&1, fresh))
+  end
+
+  defp statements({:__block__, _, stmts}), do: stmts
+  defp statements(single), do: [single]
+
+  # Tables this body BRINGS INTO EXISTENCE. `create table` fails if the
+  # table is already there, so reaching the next statement proves the
+  # table is empty and that no loaded code has a schema for it.
+  # `create_if_not_exists` proves nothing of the sort and is excluded.
+  defp fresh_tables(stmts) do
+    for {:create, _, [{:table, _, [name | _]} | _]} <- stmts,
+        is_atom(name),
+        into: MapSet.new(),
+        do: name
+  end
+
+  # `create index(...)` — no block.
+  defp hot_op?({create, _, [subject]}, fresh) when create in [:create, :create_if_not_exists],
+    do: creatable?(subject, fresh)
+
+  # `create table(...) do ... end` — the block's ops are unconditionally
+  # safe: nothing has ever written to a table this migration creates.
+  defp hot_op?({create, _, [subject, [do: _]]}, _)
+       when create in [:create, :create_if_not_exists],
+       do: table?(subject)
+
+  defp hot_op?({:alter, _, [{:table, _, _}, [do: block]]}, _),
+    do: Enum.all?(statements(block), &hot_alter_op?/1)
+
+  defp hot_op?(_, _), do: false
+
+  defp creatable?({:table, _, _}, _), do: true
+  defp creatable?({:index, _, args}, _), do: plain_index?(args)
+
+  # A uniqueness rule can turn a write that was legal a moment ago into
+  # a failure — UNLESS the table was created by this same body, where
+  # there is neither a pre-existing row to violate it nor loaded code
+  # that knows the table at all. Structural proof from the AST, not an
+  # inference about what the data looks like.
+  #
+  # THE BOUNDARY IS THE FRESH TABLE, and it does not move. On a
+  # PRE-EXISTING table this is a different animal in two ways at once:
+  # the DDL itself can fail on duplicate rows already stored, and an
+  # old-code write that was legal a moment ago starts failing. Neither
+  # is provable from the AST, so both stay COLD. Do not relax this to
+  # "any unique_index" — that is the false-HOT the allowlist exists for.
+  defp creatable?({guarded, _, [table | _]}, fresh) when guarded in [:unique_index, :constraint],
+    do: is_atom(table) and MapSet.member?(fresh, table)
+
+  defp creatable?(_, _), do: false
+
+  defp table?({:table, _, _}), do: true
+  defp table?(_), do: false
+
+  # `unique_index/2,3` is a DIFFERENT DSL call and never reaches here;
+  # this only has to reject `index(..., unique: true)`. Any other option
+  # (`where:`, `name:`, ...) still describes a plain index, which cannot
+  # invalidate a write that was legal a moment ago.
+  defp plain_index?([_, _]), do: true
+
+  defp plain_index?([_, _, opts]) when is_list(opts),
+    do: not Keyword.has_key?(opts, :unique)
+
+  defp plain_index?(_), do: false
+
+  defp hot_alter_op?({add, _, [column, type]}) when add in [:add, :add_if_not_exists],
+    do: is_atom(column) and literal_type?(type)
+
+  defp hot_alter_op?({add, _, [column, type, opts]}) when add in [:add, :add_if_not_exists],
+    do: is_atom(column) and literal_type?(type) and old_inserts_still_valid?(opts)
+
+  defp hot_alter_op?(_), do: false
+
+  # A quoted `references(...)` / `fragment(...)` / bare variable is a
+  # 3-tuple, never a literal — so this rejects them by construction.
+  defp literal_type?(type) when is_atom(type), do: true
+  defp literal_type?({:array, inner}) when is_atom(inner), do: true
+  defp literal_type?(_), do: false
+
+  # An old-code INSERT omits the new column entirely, so it stays valid
+  # iff the column is nullable or the DDL supplies a default. A
+  # non-literal `null:` value cannot be proven either way → COLD.
+  defp old_inserts_still_valid?(opts) when is_list(opts) do
+    case Keyword.fetch(opts, :null) do
+      :error -> true
+      {:ok, true} -> true
+      {:ok, false} -> Keyword.has_key?(opts, :default)
+      {:ok, _} -> false
+    end
+  end
+
+  defp old_inserts_still_valid?(_), do: false
 
   # Class 6: nginx config + ALL infra/snippets (H20 deeper-paths gap —
   # prior regex was `^infra/(nginx\.conf|snippets/)` which only matched
