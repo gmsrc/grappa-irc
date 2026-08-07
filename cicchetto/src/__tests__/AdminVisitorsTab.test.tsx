@@ -395,17 +395,19 @@ describe("AdminVisitorsTab", () => {
       expect(nick).not.toBe(slug);
     });
 
-    it("renders the connection-state EMOJI (via its aria-label word) alongside the still-present LiveBadge", async () => {
+    it("renders the connection state as a toned dot named by its word, alongside the still-present LiveBadge", async () => {
       const api = await import("../lib/api");
       vi.mocked(api.adminListVisitors).mockResolvedValue([ALIVE]);
 
       render(() => <AdminVisitorsTab />);
 
       // ALIVE.connection_state === "connected" → the label word is the
-      // seam (assert the word the production map emits, not the glyph).
+      // seam (assert the word the production map emits, not the glyph:
+      // the admin redesign renders a theme-derived dot, so there is no
+      // codepoint to look for and no text inside the badge at all).
       const expected = connectionStateEmoji(ALIVE_NET.connection_state);
       const stateEl = await screen.findByLabelText(expected.label, { exact: true });
-      expect(stateEl.textContent).toContain(expected.glyph);
+      expect(stateEl.classList).toContain("adm-badge--ok");
       // The raw state string must NOT leak as text anymore.
       const cell = screen.getByTestId(
         `admin-visitor-network-${ALIVE.id}-${ALIVE_NET.network_slug}`,
@@ -417,7 +419,7 @@ describe("AdminVisitorsTab", () => {
       expect(screen.getByLabelText(/alive on 2 channels/i)).toBeInTheDocument();
     });
 
-    it("maps each connection_state to its own emoji label", async () => {
+    it("maps each connection_state to its own label word and its own tone", async () => {
       const states: ConnectionState[] = ["connected", "parked", "failed"];
       const api = await import("../lib/api");
       vi.mocked(api.adminListVisitors).mockResolvedValue(
@@ -444,10 +446,14 @@ describe("AdminVisitorsTab", () => {
       await waitFor(() => {
         expect(screen.getByTestId("admin-visitors-table")).toBeInTheDocument();
       });
+      // Each state gets its own accessible name AND its own tone, so the
+      // three are distinguishable both by screen reader and by colour —
+      // the two channels the dot has left now that the glyph is gone.
+      const tones = { connected: "ok", parked: "warn", failed: "danger" } as const;
       for (const state of states) {
-        const { label, glyph } = connectionStateEmoji(state);
+        const { label } = connectionStateEmoji(state);
         const el = screen.getByLabelText(label, { exact: true });
-        expect(el.textContent).toContain(glyph);
+        expect(el.classList).toContain(`adm-badge--${tones[state]}`);
       }
     });
   });

@@ -202,19 +202,19 @@ const AdminVisitorsTab: Component = () => {
                   {(v) => (
                     <tr class="admin-visitors-row" data-testid={`admin-visitor-row-${v.id}`}>
                       <td>
-                        {/* A dot, like every other state in the pane. The
-                            word stays as visually-hidden text: a colour
-                            alone is not an accessible answer to a
-                            yes/no question, and it is what the tests
-                            assert. Neutral rather than danger for "no" —
-                            an anonymous visitor is the normal case, not
-                            a fault. */}
+                        {/* A dot, like every other state in the pane. Colour
+                            alone is not an accessible answer to a yes/no
+                            question, so the `aria-label` carries the word —
+                            no visually-hidden copy, same reasoning as
+                            `NetworkStateEmoji` below. Neutral rather than
+                            danger for "no": an anonymous visitor is the
+                            normal case, not a fault. */}
                         <AdminBadge
                           tone={v.identified ? "ok" : "neutral"}
                           class="adm-badge--dot"
                           ariaLabel={v.identified ? "identified" : "not identified"}
                         >
-                          <span class="sr-only">{v.identified ? "yes" : "no"}</span>
+                          {""}
                         </AdminBadge>
                       </td>
                       <td>
@@ -363,11 +363,13 @@ const NetworkStateEmoji: Component<{ state: AdminVisitorNetwork["connection_stat
       class="admin-visitor-network-state adm-badge--dot"
       ariaLabel={label()}
     >
-      {/* The dot alone carries the state; the word would repeat what the
-          colour already says, in a cell that is already dense. It stays
-          in the DOM as visually-hidden text so the accessible name and
-          the vitest seam both survive the visual change. */}
-      <span class="sr-only">{label()}</span>
+      {/* No text child. The dot carries the state visually and the
+          `aria-label` carries it to assistive tech — and since aria-label
+          OVERRIDES the subtree for the accessible name, a visually-hidden
+          copy of the same word would be dead weight that also re-leaks the
+          raw state into `textContent`, which is exactly what the
+          ADMIN-LAYOUT-FIX assertion below forbids. */}
+      {""}
     </AdminBadge>
   );
 };
