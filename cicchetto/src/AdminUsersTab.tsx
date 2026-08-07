@@ -4,7 +4,8 @@ import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
-import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
+import { formatInstant } from "./admin/formatInstant";
+import { useRefreshSlot } from "./admin/refreshSlot";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminUser,
@@ -186,26 +187,24 @@ const AdminUsersTab: Component = () => {
     }
   };
 
+  // The pane header renders this tab's refresh (see
+  // `admin/refreshSlot.ts`): the toolbar that used to hold it said
+  // nothing the nav above does not already say.
+  useRefreshSlot({
+    onRefresh: () => {
+      void refresh();
+    },
+    busy: loading,
+    label: "refresh users list",
+    testId: "admin-users-refresh",
+  });
+
   onMount(() => {
     void refresh();
   });
 
   return (
     <div class="admin-users-tab">
-      <AdminToolbar
-        title="Users"
-        actions={
-          <AdminRefreshButton
-            onClick={() => {
-              void refresh();
-            }}
-            busy={loading()}
-            label="refresh users list"
-            testId="admin-users-refresh"
-          />
-        }
-      />
-
       <div class="adm-scroll">
         <Show when={error() !== null}>
           <AdminError message={error() ?? ""} testId="admin-users-error" />
@@ -317,7 +316,7 @@ const AdminUsersTab: Component = () => {
                           </AdminBadge>
                         </td>
                         <td>{u.live_session_count}</td>
-                        <td>{u.inserted_at}</td>
+                        <td>{formatInstant(u.inserted_at)}</td>
                         <td class="admin-users-actions adm-table-sticky-actions">
                           <button
                             type="button"

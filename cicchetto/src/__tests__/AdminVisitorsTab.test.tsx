@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { refreshSlot } from "../admin/refreshSlot";
 import type { AdminVisitor, ConnectionState } from "../lib/api";
 import { connectionStateEmoji } from "../lib/connectionStateEmoji";
 
@@ -325,7 +326,7 @@ describe("AdminVisitorsTab", () => {
     await waitFor(() => {
       expect(api.adminListVisitors).toHaveBeenCalledTimes(1);
     });
-    fireEvent.click(screen.getByTestId("admin-visitors-refresh"));
+    refreshSlot()?.onRefresh();
     await waitFor(() => {
       expect(api.adminListVisitors).toHaveBeenCalledTimes(2);
     });
@@ -357,7 +358,7 @@ describe("AdminVisitorsTab", () => {
     // The refresh button is the recovery path; MED-3 fix surfaces
     // the hint inside the banner copy.
     expect(screen.getByTestId("admin-visitors-error").textContent).toContain("refresh to retry");
-    expect(screen.getByTestId("admin-visitors-refresh")).toBeInTheDocument();
+    expect(refreshSlot()?.testId).toBe("admin-visitors-refresh");
   });
 
   // ADMIN-LAYOUT-FIX (2026-07-12) — the #211-phase-7 cutover left the

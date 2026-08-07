@@ -2,7 +2,8 @@ import { type Component, createMemo, createSignal, For, onMount, Show } from "so
 import AdminBadge, { type Tone } from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
-import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
+import { formatInstant } from "./admin/formatInstant";
+import { useRefreshSlot } from "./admin/refreshSlot";
 import { ApiError, adminListSessionLog, assertNever } from "./lib/api";
 import { token } from "./lib/auth";
 import { sessionLogEvents } from "./lib/sessionLog";
@@ -66,27 +67,24 @@ const AdminSessionLogTab: Component = () => {
     return Array.from(byId.values()).sort((a, b) => b.id - a.id);
   });
 
+  // The pane header renders this tab's refresh (see
+  // `admin/refreshSlot.ts`): the toolbar that used to hold it said
+  // nothing the nav above does not already say.
+  useRefreshSlot({
+    onRefresh: () => {
+      void refresh();
+    },
+    busy: loading,
+    label: "refresh session log",
+    testId: "admin-session-log-refresh",
+  });
+
   onMount(() => {
     void refresh();
   });
 
   return (
     <div class="admin-session-log-tab" data-testid="admin-session-log-tab">
-      <AdminToolbar
-        title="Session Log"
-        subtitle={`last ${rows().length} entry(ies), newest first`}
-        actions={
-          <AdminRefreshButton
-            onClick={() => {
-              void refresh();
-            }}
-            busy={loading()}
-            label="refresh session log"
-            testId="admin-session-log-refresh"
-          />
-        }
-      />
-
       <div class="adm-scroll">
         <Show when={error() !== null}>
           <AdminError message={error() ?? ""} testId="admin-session-log-error" />
@@ -117,7 +115,7 @@ const AdminSessionLogTab: Component = () => {
               >
                 {(ev) => (
                   <li class="adm-log-row" data-testid={`session-log-row-${ev.event}`}>
-                    <time class="adm-log-at">{ev.at}</time>
+                    <time class="adm-log-at">{formatInstant(ev.at)}</time>
                     <AdminBadge tone={EVENT_TONE[ev.event]} class={`event-${ev.event}`}>
                       {eventLabel(ev.event)}
                     </AdminBadge>
@@ -147,18 +145,33 @@ const AdminSessionLogTab: Component = () => {
 // scanning: the session came up, the session went away, or something is
 // retrying.
 //
-// `disconnected` is NEUTRAL, not danger: a session ending is the normal
-// end of its life, and the log carries a `clean` flag for the case that
-// isn't. `backoff` is the warn — a session actively failing to reconnect
+// The seven values pair off along the lifecycle, and the pairs are what
+// the colours encode — a tone names a KIND of event, the word names the
+// event:
+//
+//   neutral  the link itself       connected / disconnected
+//   info     identity on the wire  registered / nick changed
+//   ok       authenticated         identified
+//   warn     something lost        de-identified / reconnect backoff
+//
+// `connected` is neutral, not ok: a TCP connect has achieved nothing yet
+// — `registered` is the first state that means anything to a user, and
+// `identified` is the only one that means the session is fully itself.
+// (The first cut had connected / registered / identified all on `ok`,
+// which made the three indistinguishable while scrolling.)
+//
+// `disconnected` is neutral, not danger: a session ending is the normal
+// end of its life, and the row carries a `clean` flag for the case that
+// isn't. `backoff` is a warn — a session actively failing to reconnect
 // is the one line worth catching mid-scroll.
 const EVENT_TONE: Record<SessionLogEvent, Tone> = {
-  connected: "ok",
-  registered: "ok",
+  connected: "neutral",
+  registered: "info",
   identified: "ok",
   deidentified: "warn",
   disconnected: "neutral",
   backoff: "warn",
-  nick_changed: "neutral",
+  nick_changed: "info",
 };
 
 // Human label for a lifecycle event kind — cic owns the wording.

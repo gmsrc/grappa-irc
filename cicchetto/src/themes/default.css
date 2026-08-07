@@ -248,6 +248,12 @@
   --adm-accent-bg: color-mix(in oklab, var(--accent), var(--bg) 86%);
   --adm-ok: color-mix(in oklab, #2f9e5e, var(--fg) 22%);
   --adm-ok-bg: color-mix(in oklab, #2f9e5e, var(--bg) 86%);
+  /* `info` is the one semantic tone taken from the THEME's accent rather
+     than a fixed hue: it means "notable", which is exactly what a theme's
+     accent already means, and borrowing it keeps a fourth arbitrary
+     colour out of the palette. */
+  --adm-info: color-mix(in oklab, var(--accent), var(--fg) 22%);
+  --adm-info-bg: color-mix(in oklab, var(--accent), var(--bg) 86%);
   --adm-warn: color-mix(in oklab, #c98a15, var(--fg) 22%);
   --adm-warn-bg: color-mix(in oklab, #c98a15, var(--bg) 86%);
   --adm-danger: color-mix(in oklab, #d24b52, var(--fg) 22%);
@@ -4673,21 +4679,18 @@ html.resize-dragging * {
   cursor: not-allowed;
 }
 
-/* Inline numeric cap editor (Networks). `aria-invalid` drives the
-   error state instead of a `.invalid` class: the attribute is already
-   set for assistive tech, so styling off it keeps one source of truth
-   for "this value doesn't parse" rather than a class that has to be
-   kept in sync with it. */
+/* Inline numeric cap editor (Networks). It inherits the whole look from
+   the `.adm-scroll input` rule above — a cap editor is not a different
+   KIND of control from a bind-form field and should not look like one;
+   this only pins the width, since a cap is a short number and the shared
+   rule leaves width to the container.
+
+   `aria-invalid` drives the error state rather than a parallel
+   `.invalid` class: the attribute is already set for assistive tech, so
+   styling off it leaves one source of truth for "this value doesn't
+   parse" instead of a class that has to be kept in step with it. */
 .adm-cap-input {
   width: 6rem;
-  min-height: var(--tap-min);
-  padding: 0 var(--adm-space-2);
-  background: var(--adm-surface-0);
-  color: var(--adm-text);
-  border: 1px solid var(--adm-line-strong);
-  border-radius: var(--adm-radius-sm);
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
 }
 
 .adm-cap-input[aria-invalid="true"] {
@@ -4901,6 +4904,16 @@ html.resize-dragging * {
   border-color: color-mix(in oklab, var(--adm-ok), transparent 65%);
 }
 
+/* Accent-derived, so it reads as "notable" without claiming a
+   judgement the way ok / warn / danger do. Added for Session Log, where
+   seven lifecycle events have to stay distinguishable while scrolling
+   and four tones put connected and registered on the same colour. */
+.adm-badge--info {
+  color: var(--adm-info);
+  background: var(--adm-info-bg);
+  border-color: color-mix(in oklab, var(--adm-info), transparent 65%);
+}
+
 .adm-badge--warn {
   color: var(--adm-warn);
   background: var(--adm-warn-bg);
@@ -5009,6 +5022,39 @@ html.resize-dragging * {
   font-family: var(--adm-font);
   font-size: 0.7rem;
   color: var(--adm-text-dim);
+}
+
+/* Two-column field rows — label left and vertically centred, control
+   right. The stacked default suits a form whose fields are long text;
+   Settings' are short numbers with long names, so stacking spent a full
+   row on each label and left the card with no vertical rhythm. The
+   divider per row is what gives it that rhythm back. */
+.adm-field-rows .adm-field {
+  display: grid;
+  grid-template-columns: minmax(7rem, 45%) 1fr;
+  align-items: center;
+  gap: var(--adm-space-3);
+  padding: var(--adm-space-3) var(--adm-space-4);
+  border-bottom: 1px solid var(--adm-line);
+}
+
+/* Hint and error belong under the CONTROL, not under the label. */
+.adm-field-rows .adm-field-hint,
+.adm-field-rows .adm-field-error {
+  grid-column: 2;
+}
+
+.adm-field-rows .adm-field-label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.8rem;
+  color: var(--adm-text);
+}
+
+/* Actions sit below the last field row, inside the card's own padding. */
+.adm-card-footer {
+  padding: var(--adm-space-4);
+  align-items: center;
 }
 
 .adm-field-error {

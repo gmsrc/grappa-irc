@@ -574,7 +574,13 @@ const AdminNetworksTab: Component = () => {
               testId="admin-networks-force-reap"
               extraClass="force-reap-btn"
             />
+            {/* Networks KEEPS its toolbar — it carries the Sweep-visitors
+                verb and a line explaining the caps columns, which is more
+                than the tab's own name. So its refresh stays here in full
+                rather than moving to the pane header like the tabs whose
+                toolbar was title-plus-refresh and nothing else. */}
             <AdminRefreshButton
+              compact={false}
               onClick={() => {
                 void refresh();
               }}

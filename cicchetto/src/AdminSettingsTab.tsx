@@ -191,71 +191,82 @@ const AdminSettingsTab: Component = () => {
         <Show when={settings() !== null} fallback={<AdminLoading message="loading settings…" />}>
           <form onSubmit={(e) => void onSave(e)} class="admin-settings-form" noValidate>
             <AdminCard title="Uploads" subtitle="Applies to every network on this server">
-              <AdminField
-                label="Active host"
-                for="admin-settings-active-host"
-                error={fieldError() === "upload.active_host" ? "invalid value" : undefined}
-              >
-                <select
-                  id="admin-settings-active-host"
-                  data-testid="admin-settings-active-host"
-                  value={activeHost()}
-                  onChange={(e) => setActiveHost(e.currentTarget.value as "embedded" | "litterbox")}
-                  disabled={saving()}
-                  classList={{
-                    "admin-settings-field-error": fieldError() === "upload.active_host",
-                  }}
+              {/* Two columns per field — label left, control right —
+                  instead of the stacked default. The fields are short
+                  numbers with long names, so stacking wasted a full row
+                  per field and left the card with no vertical rhythm at
+                  all. See `.adm-field-rows` in default.css. */}
+              <div class="adm-field-rows">
+                <AdminField
+                  label="Active host"
+                  for="admin-settings-active-host"
+                  error={fieldError() === "upload.active_host" ? "invalid value" : undefined}
                 >
-                  <option value="embedded">embedded (this server)</option>
-                  <option value="litterbox">litterbox.catbox.moe</option>
-                </select>
-              </AdminField>
-
-              <For each={capFields}>
-                {(cap) => (
-                  <AdminField
-                    label={cap.label}
-                    for={cap.testid}
-                    error={fieldError() === cap.field ? "must be positive" : undefined}
+                  <select
+                    id="admin-settings-active-host"
+                    data-testid="admin-settings-active-host"
+                    value={activeHost()}
+                    onChange={(e) =>
+                      setActiveHost(e.currentTarget.value as "embedded" | "litterbox")
+                    }
+                    disabled={saving()}
+                    classList={{
+                      "admin-settings-field-error": fieldError() === "upload.active_host",
+                    }}
                   >
-                    <input
-                      id={cap.testid}
-                      data-testid={cap.testid}
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={cap.value()}
-                      onInput={(e) => cap.set(Number(e.currentTarget.value))}
-                      disabled={saving()}
-                      classList={{
-                        "admin-settings-field-error": fieldError() === cap.field,
-                      }}
-                    />
-                  </AdminField>
-                )}
-              </For>
+                    <option value="embedded">embedded (this server)</option>
+                    <option value="litterbox">litterbox.catbox.moe</option>
+                  </select>
+                </AdminField>
 
-              <AdminField
-                label="Global cap (GB)"
-                for="admin-settings-global-cap"
-                error={fieldError() === "upload.global_cap_bytes" ? "must be positive" : undefined}
-              >
-                <input
-                  id="admin-settings-global-cap"
-                  data-testid="admin-settings-global-cap"
-                  type="number"
-                  min="1"
-                  step="1"
-                  value={globalCapGB()}
-                  onInput={(e) => setGlobalCapGB(Number(e.currentTarget.value))}
-                  disabled={saving()}
-                  classList={{
-                    "admin-settings-field-error": fieldError() === "upload.global_cap_bytes",
-                  }}
-                />
-              </AdminField>
+                <For each={capFields}>
+                  {(cap) => (
+                    <AdminField
+                      label={cap.label}
+                      for={cap.testid}
+                      error={fieldError() === cap.field ? "must be positive" : undefined}
+                    >
+                      <input
+                        id={cap.testid}
+                        data-testid={cap.testid}
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={cap.value()}
+                        onInput={(e) => cap.set(Number(e.currentTarget.value))}
+                        disabled={saving()}
+                        classList={{
+                          "admin-settings-field-error": fieldError() === cap.field,
+                        }}
+                      />
+                    </AdminField>
+                  )}
+                </For>
 
-              <div class="adm-toolbar-actions">
+                <AdminField
+                  label="Global cap (GB)"
+                  for="admin-settings-global-cap"
+                  error={
+                    fieldError() === "upload.global_cap_bytes" ? "must be positive" : undefined
+                  }
+                >
+                  <input
+                    id="admin-settings-global-cap"
+                    data-testid="admin-settings-global-cap"
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={globalCapGB()}
+                    onInput={(e) => setGlobalCapGB(Number(e.currentTarget.value))}
+                    disabled={saving()}
+                    classList={{
+                      "admin-settings-field-error": fieldError() === "upload.global_cap_bytes",
+                    }}
+                  />
+                </AdminField>
+              </div>
+
+              <div class="adm-toolbar-actions adm-card-footer">
                 <button
                   type="submit"
                   class="adm-btn"

@@ -3,8 +3,8 @@ import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import { AdminEmpty, AdminError } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
-import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import { connectionTone } from "./admin/connectionTone";
+import { useRefreshSlot } from "./admin/refreshSlot";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminVisitor,
@@ -148,26 +148,24 @@ const AdminVisitorsTab: Component = () => {
     }
   };
 
+  // The pane header renders this tab's refresh (see
+  // `admin/refreshSlot.ts`): the toolbar that used to hold it said
+  // nothing the nav above does not already say.
+  useRefreshSlot({
+    onRefresh: () => {
+      void refresh();
+    },
+    busy: loading,
+    label: "refresh visitors list",
+    testId: "admin-visitors-refresh",
+  });
+
   onMount(() => {
     void refresh();
   });
 
   return (
     <div class="admin-visitors-tab">
-      <AdminToolbar
-        title="Visitors"
-        actions={
-          <AdminRefreshButton
-            onClick={() => {
-              void refresh();
-            }}
-            busy={loading()}
-            label="refresh visitors list"
-            testId="admin-visitors-refresh"
-          />
-        }
-      />
-
       <div class="adm-scroll">
         <Show when={error() !== null}>
           <AdminError message={error() ?? ""} testId="admin-visitors-error" />

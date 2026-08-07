@@ -3,7 +3,7 @@ import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import { AdminEmpty, AdminError } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
-import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
+import { useRefreshSlot } from "./admin/refreshSlot";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminNetwork,
@@ -151,26 +151,24 @@ const AdminSessionsTab: Component = () => {
     }
   };
 
+  // The pane header renders this tab's refresh (see
+  // `admin/refreshSlot.ts`): the toolbar that used to hold it said
+  // nothing the nav above does not already say.
+  useRefreshSlot({
+    onRefresh: () => {
+      void refresh();
+    },
+    busy: loading,
+    label: "refresh sessions list",
+    testId: "admin-sessions-refresh",
+  });
+
   onMount(() => {
     void refresh();
   });
 
   return (
     <div class="admin-sessions-tab">
-      <AdminToolbar
-        title="Sessions"
-        actions={
-          <AdminRefreshButton
-            onClick={() => {
-              void refresh();
-            }}
-            busy={loading()}
-            label="refresh sessions list"
-            testId="admin-sessions-refresh"
-          />
-        }
-      />
-
       <div class="adm-scroll">
         <Show when={error() !== null}>
           <AdminError message={error() ?? ""} testId="admin-sessions-error" />

@@ -4,7 +4,7 @@ import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
-import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
+import { useRefreshSlot } from "./admin/refreshSlot";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminVhost,
@@ -264,27 +264,24 @@ const AdminVhostsTab: Component = () => {
     }
   };
 
+  // The pane header renders this tab's refresh (see
+  // `admin/refreshSlot.ts`): the toolbar that used to hold it said
+  // nothing the nav above does not already say.
+  useRefreshSlot({
+    onRefresh: () => {
+      void refresh();
+    },
+    busy: loading,
+    label: "refresh vhosts list",
+    testId: "admin-vhosts-refresh",
+  });
+
   onMount(() => {
     void refresh();
   });
 
   return (
     <div class="admin-vhosts-tab">
-      <AdminToolbar
-        title="Vhosts"
-        subtitle="per-subject source-bind pool"
-        actions={
-          <AdminRefreshButton
-            onClick={() => {
-              void refresh();
-            }}
-            busy={loading()}
-            label="refresh vhosts list"
-            testId="admin-vhosts-refresh"
-          />
-        }
-      />
-
       <div class="adm-scroll">
         <Show when={error() !== null}>
           <AdminError message={error() ?? ""} testId="admin-vhosts-error" />

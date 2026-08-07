@@ -1,7 +1,7 @@
 import { type Component, For } from "solid-js";
 import AdminCard from "./admin/AdminCard";
 import { AdminEmpty } from "./admin/AdminStatus";
-import AdminToolbar from "./admin/AdminToolbar";
+import { formatInstant } from "./admin/formatInstant";
 import { adminEvents } from "./lib/adminEvents";
 import { assertNever, type WireAdminEvent } from "./lib/api";
 import type {
@@ -37,13 +37,11 @@ import type {
 const AdminEventsTab: Component = () => {
   return (
     <div class="admin-events-tab" data-testid="admin-events-tab">
-      <AdminToolbar
-        title="Events"
-        subtitle={`last ${adminEvents().length} event(s), newest first`}
-      />
-
       <div class="adm-scroll">
-        <AdminCard title="Admin event stream" subtitle="live — no refresh, no fetch">
+        <AdminCard
+          title="Admin event stream"
+          subtitle={`live, no refresh — last ${adminEvents().length} event(s), newest first`}
+        >
           <ul class="adm-log">
             <For
               each={adminEvents()}
@@ -55,7 +53,7 @@ const AdminEventsTab: Component = () => {
             >
               {(ev) => (
                 <li class="adm-log-row" data-testid={`admin-event-${ev.kind}`}>
-                  <time class="adm-log-at">{ev.at}</time>
+                  <time class="adm-log-at">{formatInstant(ev.at)}</time>
                   <span class={`adm-log-kind kind-${ev.kind}`}>{ev.kind}</span>
                   <span class="adm-log-text">{renderEvent(ev)}</span>
                 </li>

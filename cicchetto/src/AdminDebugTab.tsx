@@ -1,5 +1,4 @@
 import { type Component, createSignal, For, onCleanup, onMount } from "solid-js";
-import AdminToolbar from "./admin/AdminToolbar";
 import { isDiagEnabled, setDiagEnabled } from "./DiagFloat";
 
 // UX-6 D12 (2026-05-21) — Admin → Debug tab. Hosts the iOS PWA
@@ -136,7 +135,6 @@ const AdminDebugTab: Component = () => {
           more than ten seconds. What it was actually missing was the same
           frame as the other nine tabs — without it, opening Debug looked
           like landing in the settings drawer by mistake. */}
-      <AdminToolbar title="Debug" subtitle="live viewport + element diagnostics" />
       <div class="adm-scroll">
         <fieldset class="settings-fieldset settings-diag">
           <legend>floating diag overlay</legend>

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { refreshSlot } from "../admin/refreshSlot";
 import type { AdminNetwork, AdminSession } from "../lib/api";
 
 vi.mock("../lib/auth", () => ({
@@ -446,7 +447,7 @@ describe("AdminSessionsTab", () => {
     const btn = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
     fireEvent.click(btn);
     expect(btn.textContent?.trim()).toBe("Confirm disconnect?");
-    fireEvent.click(screen.getByTestId("admin-sessions-refresh"));
+    refreshSlot()?.onRefresh();
     await waitFor(() => {
       expect(api.adminListSessions).toHaveBeenCalledTimes(2);
     });
@@ -502,7 +503,7 @@ describe("AdminSessionsTab", () => {
 
     // Second refresh: networks endpoint fails.
     vi.mocked(api.adminListNetworks).mockRejectedValue(new api.ApiError(500, "internal_error"));
-    fireEvent.click(screen.getByTestId("admin-sessions-refresh"));
+    refreshSlot()?.onRefresh();
 
     await waitFor(() => {
       expect(screen.getByTestId("admin-sessions-error")).toBeInTheDocument();
@@ -639,7 +640,7 @@ describe("AdminSessionsTab", () => {
       expect(api.adminListNetworks).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByTestId("admin-sessions-refresh"));
+    refreshSlot()?.onRefresh();
     await waitFor(() => {
       expect(api.adminListSessions).toHaveBeenCalledTimes(2);
       expect(api.adminListNetworks).toHaveBeenCalledTimes(2);

@@ -11,7 +11,12 @@ import type { Component, JSX } from "solid-js";
 // `classList.contains(...)` — migrating the markup shape must not
 // silently rewrite what a pre-existing assertion targets.
 
-export type Tone = "ok" | "warn" | "danger" | "neutral";
+// `info` was added in the 2026-08-07 review: Session Log needs to tell
+// seven lifecycle events apart, and four tones could not do it without
+// two of them (connected / registered) landing on the same colour — the
+// exact collision the reviewer spotted. It is accent-derived, so it
+// reads as "notable, not a judgement", distinct from ok/warn/danger.
+export type Tone = "ok" | "info" | "warn" | "danger" | "neutral";
 
 export type Props = {
   tone: Tone;

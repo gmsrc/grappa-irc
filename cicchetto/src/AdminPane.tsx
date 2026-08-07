@@ -10,6 +10,8 @@ import AdminUsersTab from "./AdminUsersTab";
 import AdminVhostsTab from "./AdminVhostsTab";
 import AdminVisitorsTab from "./AdminVisitorsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
+import { AdminRefreshButton } from "./admin/AdminToolbar";
+import { refreshSlot } from "./admin/refreshSlot";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
 import { RailOpenerButton } from "./ShellChrome";
 
@@ -131,6 +133,22 @@ const AdminPane: Component<Props> = (props) => {
       <header class="admin-pane-header">
         <RailOpenerButton onOpenRail={props.onOpenRail} />
         <h1>admin console</h1>
+        {/* The active tab's refresh, hoisted out of its own toolbar — see
+            `admin/refreshSlot.ts` for why that toolbar went away. The
+            callback form of `<Show>` so the button exists only when a tab
+            registered one: Events has no fetch to repeat and correctly
+            contributes nothing. */}
+        <Show when={refreshSlot()}>
+          {(reg) => (
+            <AdminRefreshButton
+              compact
+              onClick={reg().onRefresh}
+              busy={reg().busy()}
+              label={reg().label}
+              testId={reg().testId}
+            />
+          )}
+        </Show>
         <button
           type="button"
           class="admin-pane-close"

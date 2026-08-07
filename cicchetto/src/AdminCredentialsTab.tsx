@@ -4,8 +4,8 @@ import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
-import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import { connectionTone } from "./admin/connectionTone";
+import { useRefreshSlot } from "./admin/refreshSlot";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminCredential,
@@ -250,6 +250,18 @@ const AdminCredentialsTab: Component = () => {
     }
   };
 
+  // The pane header renders this tab's refresh (see
+  // `admin/refreshSlot.ts`): the toolbar that used to hold it said
+  // nothing the nav above does not already say.
+  useRefreshSlot({
+    onRefresh: () => {
+      void refresh();
+    },
+    busy: loading,
+    label: "refresh credentials list",
+    testId: "admin-credentials-refresh",
+  });
+
   onMount(() => {
     void refresh();
   });
@@ -261,21 +273,6 @@ const AdminCredentialsTab: Component = () => {
 
   return (
     <div class="admin-credentials-tab">
-      <AdminToolbar
-        title="Credentials"
-        subtitle="one binding per (user, network)"
-        actions={
-          <AdminRefreshButton
-            onClick={() => {
-              void refresh();
-            }}
-            busy={loading()}
-            label="refresh credentials list"
-            testId="admin-credentials-refresh"
-          />
-        }
-      />
-
       <div class="adm-scroll">
         <Show when={sessionActionToast() !== null}>
           <p class="adm-success" data-testid="admin-credentials-session-action-toast">
