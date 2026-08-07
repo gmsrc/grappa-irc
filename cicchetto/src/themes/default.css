@@ -3775,7 +3775,16 @@ html.resize-dragging * {
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
   display: flex;
-  align-items: stretch;
+  /* #987 — `center`, not `stretch`. On a flex backdrop `stretch` forces the
+     child to the full cross-axis extent, so the modal was viewport-tall
+     whatever it held and its own `max-height: var(--viewport-height)` read
+     like a cap that never bit: the box was already at that height because the
+     backdrop had put it there. Centred, the box sizes to content, the
+     max-height becomes a real ceiling, and the `overflow-y: auto` +
+     `touch-action: pan-y` already on the modal start earning their keep in the
+     tall case (large text, keyboard up) instead of being dead weight in the
+     short one. `.confirm-modal-backdrop` (~:3878) has always had this. */
+  align-items: center;
   justify-content: center;
   z-index: 1000;
 }
@@ -3786,7 +3795,14 @@ html.resize-dragging * {
   border: 1px solid #c00;
   width: 100%;
   max-width: 32rem;
-  max-height: var(--viewport-height, 100dvh);
+  /* #987 — the cap has to leave room for the margin below, or a tall dialog
+     (large text size, keyboard up) is exactly 2rem too big for the scrim and
+     centring clips 1rem off each end. `.confirm-modal` (~:3888) never needed
+     this because it carries no max-height at all. */
+  max-height: calc(var(--viewport-height, 100dvh) - 2rem);
+  /* #987 — the scrim has to be visible AROUND the dialog, not just behind it;
+     `.confirm-modal` carries the same margin for the same reason. */
+  margin: 1rem;
   padding: max(0.75rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom));
   font-family: var(--font-mono);
   font-size: var(--font-size);

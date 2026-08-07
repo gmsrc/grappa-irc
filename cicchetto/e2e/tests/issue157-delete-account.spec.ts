@@ -128,6 +128,89 @@ test.describe("issue #157 — delete account", () => {
     }
   });
 
+  // #987 — the dialog must sit ON the screen, not BE the screen. The backdrop
+  // was `align-items: stretch`, which forces a flex child to the full
+  // cross-axis extent, so the modal was viewport-tall whatever it held and its
+  // own `max-height` read like a cap that never bit. Asserted as GEOMETRY, not
+  // computed style: `getComputedStyle` under device emulation has already lied
+  // once (#963), and "is it stretched" is a box question anyway.
+  //
+  // Note which assertion carries the weight. Scrim-above/below is the RED one:
+  // pre-fix the box starts at y=0 and ends at the viewport bottom, so both
+  // legs fail. The centring check is a GUARD, not the proof — a
+  // full-height box is trivially "centred" and would satisfy it alone.
+  test("#987 — the delete-account dialog is centred and sized to its content", async ({ page }) => {
+    const admin = getSeededAdmin();
+    const name = `e2e987-${Date.now()}`;
+    const identifier = `${name}@grappa.test`;
+    let createdId: string | null = null;
+
+    try {
+      createdId = await createThrowawayUser(admin.token, name, PASSWORD);
+      const { token, subject } = await login(identifier, PASSWORD);
+      await page.addInitScript(
+        ([t, subjectJson]) => {
+          localStorage.setItem("grappa-token", t);
+          localStorage.setItem("grappa-subject", subjectJson);
+          localStorage.setItem("cic.installChoice", "browser");
+        },
+        [token, JSON.stringify(subject)] as const,
+      );
+      await page.goto("/");
+      await expectShellReady(page);
+
+      await openSettingsDrawer(page);
+      await page.getByTestId("delete-account-btn").click();
+      const modal = page.getByTestId("delete-account-modal");
+      await expect(modal).toBeVisible();
+
+      // Measure the dialog against its own SCRIM, not against
+      // `page.viewportSize()`. The backdrop is `position: fixed; inset: 0`, and
+      // a fixed box resolves against the nearest transformed ancestor rather
+      // than the viewport — the settings drawer is `transform: translateX(0)`
+      // when open, so pinning the maths to the viewport would be one refactor
+      // (moving the modal inside the drawer) away from measuring the wrong
+      // rectangle and reporting it confidently. The scrim is also what "scrim
+      // above and below" is literally about. A sanity leg below still ties the
+      // scrim to the screen.
+      const backdrop = page.getByTestId("delete-account-backdrop");
+      const scrim = await backdrop.boundingBox();
+      const box = await modal.boundingBox();
+      const viewport = page.viewportSize();
+      expect(scrim, "the backdrop must have a layout box").not.toBeNull();
+      expect(box, "the modal must have a layout box").not.toBeNull();
+      expect(viewport, "the test needs a known viewport").not.toBeNull();
+      if (!scrim || !box || !viewport) return;
+
+      // Sanity: the scrim really is the screen, so the assertions below are
+      // about what the operator sees and not about some inner box.
+      expect(Math.round(scrim.height)).toBe(viewport.height);
+
+      // THE DEFECT: scrim above and below. Pre-fix there is none of either —
+      // `align-items: stretch` pins the dialog to both edges.
+      expect(box.y, "scrim must be visible above the dialog").toBeGreaterThan(scrim.y);
+      expect(box.y + box.height, "scrim must be visible below the dialog").toBeLessThan(
+        scrim.y + scrim.height,
+      );
+
+      // Sized to content: this dialog holds a heading, a warning, one input and
+      // two buttons. Three quarters of the scrim is a generous ceiling that
+      // still fails hard on the stretched box (which is exactly 1.0).
+      expect(box.height, "a short dialog must not claim most of the screen").toBeLessThan(
+        scrim.height * 0.75,
+      );
+
+      // Guard: vertically centred, the `.confirm-modal` contract. Allow a
+      // couple of px for sub-pixel rounding.
+      expect(Math.abs(box.y - scrim.y - (scrim.height - box.height) / 2)).toBeLessThanOrEqual(2);
+
+      // The dialog is only inspected here — never confirmed — so the throwaway
+      // account still exists and the `finally` below reaps it.
+    } finally {
+      if (createdId !== null) await deleteUserBestEffort(admin.token, createdId);
+    }
+  });
+
   test("a minted (anon) visitor is NOT offered delete account — only quit", async ({ browser }) => {
     const visitor = await mintVisitor(`e2e157v-${Date.now()}`);
     const ctx = await browser.newContext();
