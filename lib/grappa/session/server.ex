@@ -3935,6 +3935,21 @@ defmodule Grappa.Session.Server do
 
         state
 
+      # #978 — RESETPASS also commits on-send, and for a stronger reason:
+      # `do_resetpass` de-identifies the user, so the `+r` a staged capture
+      # would rendezvous with can never arrive.
+      {:capture, :reset_passwd, target_nick, new_password} ->
+        commit_reset_passwd(state, target_nick, new_password)
+
+      # #978 — the same posture as the SET PASSWD reject above, for the
+      # sibling verb's own guard chain.
+      {:reject, :reset_passwd, reason} ->
+        Logger.debug("RESETPASS not committed — services would reject it (#{reason})",
+          verb: :ns_reset_passwd
+        )
+
+        state
+
       :passthrough ->
         state
     end
@@ -3990,32 +4005,92 @@ defmodule Grappa.Session.Server do
   # (`Credentials.commit_password/3`). Returns `state` unchanged — the
   # commit is a side-effect (DB write), there's no capture slot to stage.
   @spec commit_set_passwd(t(), String.t()) :: t()
-  defp commit_set_passwd(%{subject: {:visitor, visitor_id}, visitor_password_rotator: rotator} = state, new_password)
-       when is_function(rotator, 2) do
-    log_set_passwd_commit(rotator.(visitor_id, new_password), visitor_id: visitor_id)
+  defp commit_set_passwd(state, new_password) do
+    {result, meta} = rotate_stored_password(state, new_password)
+    log_set_passwd_commit(result, meta)
     state
   end
 
-  defp commit_set_passwd(%{subject: {:user, user_id}, credential_committer: committer} = state, new_password)
-       when is_function(committer, 1) do
-    log_set_passwd_commit(committer.(new_password), user: user_id)
+  # Picks the committer for this subject and runs it, returning the result
+  # plus the Logger metadata naming the credential home. Shared by the two
+  # optimistic on-send rotations (SET PASSWD #131, RESETPASS #978) — they
+  # write the same secret to the same row and differ only in what they log,
+  # so the verb-specific part is the log helper, not the write.
+  #
+  # `{:error, :no_committer}` means no committer in the plan: a test fixture
+  # / Bootstrap path without injection, or a pre-#131 session HOT-reloaded
+  # before the `credential_committer` / `visitor_password_rotator` field
+  # existed (the struct-key patterns fail to match, so we land on the
+  # catch-all rather than crashing). The capture is observed but not
+  # persisted; the operator-visible signal is the caller's log line, and
+  # #124's re-auth recovers the now-stale stored password on the next
+  # identify. A cold restart re-inits with the committer wired.
+  @spec rotate_stored_password(t(), String.t()) :: {{:ok, term()} | {:error, term()}, keyword()}
+  defp rotate_stored_password(%{subject: {:visitor, visitor_id}, visitor_password_rotator: rotator}, new_password)
+       when is_function(rotator, 2),
+       do: {rotator.(visitor_id, new_password), [visitor_id: visitor_id]}
+
+  defp rotate_stored_password(%{subject: {:user, user_id}, credential_committer: committer}, new_password)
+       when is_function(committer, 1),
+       do: {committer.(new_password), [user: user_id]}
+
+  defp rotate_stored_password(_, _), do: {{:error, :no_committer}, []}
+
+  # #978 — RESETPASS names the account it rotates, and it need not be ours:
+  # the code is emailed, so a user holding two nicks can recover the other
+  # one from this session. Committing that would store a secret belonging to
+  # a different account in this credential — strictly worse than the stale
+  # secret #978 exists to replace. The compare is against
+  # `configured_nick/1` (the credential's `nick` column, #885), NOT the live
+  # nick: after a 433 fallback the live nick is precisely the wrong one, and
+  # it is the credential we are about to write.
+  @spec commit_reset_passwd(t(), String.t(), String.t()) :: t()
+  defp commit_reset_passwd(state, target_nick, new_password) do
+    if fold_key(state, target_nick) == fold_key(state, configured_nick(state)) do
+      {result, meta} = rotate_stored_password(state, new_password)
+      log_reset_passwd_commit(result, meta)
+    else
+      Logger.debug(
+        "RESETPASS targets another account (#{target_nick}) — this credential left alone",
+        verb: :ns_reset_passwd
+      )
+    end
+
     state
   end
 
-  # No committer in the plan: a test fixture / Bootstrap path without
-  # injection, or a pre-#131 session HOT-reloaded before the
-  # `credential_committer` / `visitor_password_rotator` field existed (the
-  # struct-key pattern above fails to match, so we land here rather than
-  # crashing). The capture is observed but not persisted; the
-  # operator-visible signal is this log line, and #124's re-auth recovers
-  # the now-stale stored password on the next identify. A cold restart
-  # re-inits with the committer wired.
-  defp commit_set_passwd(state, _) do
-    Logger.error("SET PASSWD captured but no committer in plan — not persisted",
-      verb: :ns_set_passwd
+  defp log_reset_passwd_commit({:ok, _}, meta) do
+    Logger.info(
+      "RESETPASS captured → stored credential updated (optimistic, #978)",
+      Keyword.put(meta, :verb, :ns_reset_passwd)
     )
+  end
 
-    state
+  # A visitor whose credential never held a password. NOT the SET PASSWD
+  # case: services accept a RESETPASS from an unidentified user — that is
+  # what the verb is FOR — so this is not "services would reject it". We
+  # simply have no stored secret to rotate, and `rotate_password/3` refuses
+  # to promote an anon row on an optimistic write. The follow-up IDENTIFY
+  # binds the new secret through the `+r` rendezvous instead.
+  defp log_reset_passwd_commit({:error, :not_identified}, meta) do
+    Logger.debug(
+      "RESETPASS from a visitor with no stored credential — nothing to rotate",
+      Keyword.put(meta, :verb, :ns_reset_passwd)
+    )
+  end
+
+  defp log_reset_passwd_commit({:error, :no_committer}, meta) do
+    Logger.error(
+      "RESETPASS captured but no committer in plan — not persisted",
+      Keyword.put(meta, :verb, :ns_reset_passwd)
+    )
+  end
+
+  defp log_reset_passwd_commit({:error, reason}, meta) do
+    Logger.error(
+      "RESETPASS captured but credential commit failed",
+      meta |> Keyword.put(:reason, inspect(reason)) |> Keyword.put(:verb, :ns_reset_passwd)
+    )
   end
 
   defp log_set_passwd_commit({:ok, _}, meta) do
@@ -4031,6 +4106,13 @@ defmodule Grappa.Session.Server do
   defp log_set_passwd_commit({:error, :not_identified}, meta) do
     Logger.debug(
       "SET PASSWD from unidentified visitor — not committed (services would reject)",
+      Keyword.put(meta, :verb, :ns_set_passwd)
+    )
+  end
+
+  defp log_set_passwd_commit({:error, :no_committer}, meta) do
+    Logger.error(
+      "SET PASSWD captured but no committer in plan — not persisted",
       Keyword.put(meta, :verb, :ns_set_passwd)
     )
   end

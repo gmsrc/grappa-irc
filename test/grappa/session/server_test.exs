@@ -7060,6 +7060,120 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # #978 — account-recovery RESETPASS. The stored secret after a lost
+  # password is by definition the wrong one, so learning the new one is the
+  # whole point. It commits on-send for a reason SET PASSWD does not share:
+  # a successful `do_resetpass` calls `user_remove_id`, so the `+r` a staged
+  # capture would wait for can never arrive.
+  describe "RESETPASS → optimistic commit-on-send (#978)" do
+    test "user session: RESETPASS on our own nick stores the THIRD token" do
+      {server, port} = start_server()
+
+      {user, network, _} =
+        setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, :no_persist} =
+               Session.send_privmsg(
+                 {:user, user.id},
+                 network.id,
+                 "NickServ",
+                 "RESETPASS grappa-test 12345 newpassword"
+               )
+
+      state = SessionStateHelpers.fetch(pid)
+
+      # Before #978 this line was passthrough: the credential kept the dead
+      # secret and every reconnect identified with it.
+      assert Credentials.get_credential!(user, network).password_encrypted == "newpassword"
+
+      # Committed, not staged — no `+r` was fed and none is coming.
+      assert is_nil(SessionStateHelpers.pending_auth(state))
+      assert is_nil(SessionStateHelpers.pending_auth_timer(state))
+      assert is_nil(SessionStateHelpers.pending_registration_secret(state))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "user session: RESETPASS on ANOTHER nick leaves our credential alone" do
+      {server, port} = start_server()
+
+      {user, network, _} =
+        setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, :no_persist} =
+               Session.send_privmsg(
+                 {:user, user.id},
+                 network.id,
+                 "NickServ",
+                 "RESETPASS someoneelse 12345 newpassword"
+               )
+
+      _ = SessionStateHelpers.fetch(pid)
+
+      # RESETPASS names the account it rotates, and that one is not ours:
+      # committing here would store a stranger's secret in our row.
+      assert Credentials.get_credential!(user, network).password_encrypted == "oldpass"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "user session: a RESETPASS Azzurra would refuse is not committed" do
+      {server, port} = start_server()
+
+      {user, network, _} =
+        setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      # Under 5 bytes — CSNS_ERROR_INSECURE_PASSWORD. Services change
+      # nothing, so an optimistic commit would desync the credential.
+      assert {:ok, :no_persist} =
+               Session.send_privmsg(
+                 {:user, user.id},
+                 network.id,
+                 "NickServ",
+                 "RESETPASS grappa-test 12345 abcd"
+               )
+
+      _ = SessionStateHelpers.fetch(pid)
+      assert Credentials.get_credential!(user, network).password_encrypted == "oldpass"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "visitor session: RESETPASS rotates the stored visitor secret" do
+      {server, port} = start_server()
+      {visitor, network} = visitor_with_network(port)
+      # The incident shape: grappa holds a secret that no longer works, and
+      # the visitor recovers the account from inside grappa.
+      {:ok, _} = Grappa.Visitors.commit_password(visitor.id, network.id, "oldpass")
+      pid = start_visitor_session_for(visitor, network)
+      :ok = await_handshake(server)
+
+      assert {:ok, :no_persist} =
+               Session.send_privmsg(
+                 {:visitor, visitor.id},
+                 network.id,
+                 "NickServ",
+                 "RESETPASS #{visitor_nick(visitor)} 12345 newpassword"
+               )
+
+      _ = SessionStateHelpers.fetch(pid)
+
+      assert visitor_password(visitor, network) == "newpassword"
+      assert Credentials.visitor_registered?(visitor.id)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "001 RPL_WELCOME stages pending_auth for :nickserv_identify visitors (Task 16)" do
     test "registered visitor: 001 stages pending_auth + clears one-shot field" do
       nick = "v_t16_#{System.unique_integer([:positive])}"

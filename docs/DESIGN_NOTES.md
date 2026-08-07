@@ -32124,3 +32124,81 @@ Azzurra-shaped rules.
 
 The #131 entry above stands as the record of that day's reasoning; its
 "rest-of-line, may contain spaces" bullet is superseded here.
+## 2026-08-07 — RESETPASS is captured on-send, and it names the account it rotates
+
+`RESETPASS` was not in `NSInterceptor`'s verb set, so recovering a lost
+NickServ password from inside grappa left the credential holding the dead
+secret and every reconnect identified with it (#978). Hit in the wild: a
+visitor went `RECOVER` + `RESETPASS` and grappa kept the old password.
+
+**Third TOKEN, not rest-of-line.** `do_resetpass`
+(`azzurra/services@23473ed src/nickserv.c:3851`) pulls three
+`strtok(NULL, " ")` — nick, code, new password. So runs of spaces collapse,
+a fourth token is never read (services discard it), and the password cannot
+contain a space. That last part makes `do_resetpass`'s own
+`strchr(newpass, ' ')` guard (`:3917`) dead code upstream. This is the
+inverse of the #977 trap on the sibling verb, where the same instinct
+("`strtok` means rest-of-line") stored two concatenated tokens: both verbs
+were read off the source rather than pattern-matched against each other.
+
+**No bare form.** `IDENTIFY`/`ID`/`SIDENTIFY`/`PASS` are captured bare
+because the ircd implements them (`m_identify`, `m_pass`). `RESETPASS` is
+not in `azzurra/bahamut include/msg.h`'s message table at all — it exists
+only as a services command — so a bare `RESETPASS …` reaches nobody and the
+regex requires the `PRIVMSG NickServ` / `NS` / `NICKSERV` prefix.
+
+**On-send, and staging against `+r` is not merely awkward — it is
+impossible.** The obvious move is to copy the `:identify` family's `+r`
+rendezvous, and it is wrong here for a structural reason: `do_resetpass`
+ends with `user_remove_id(ni->nick, FALSE)` (`:3948`), so a SUCCESSFUL reset
+DE-identifies the caller instead of granting `+r`. A staged capture would
+wait for a confirmation that can never arrive, and
+`visitor_r_effects/3` would discard it on the 10s timeout. RESETPASS
+therefore joins `:set_passwd` on the optimistic commit-on-send path (#131).
+
+**The optimistic commit's divergence is accepted, again.** If services
+refuse the line for a reason we cannot see — nick not registered / frozen /
+no `NI_PASSRESET` / the code expired or wrong — we have already written.
+That is the same residue #977 declared for the old password, it is NOT
+closable by staging (see above), and #124's re-auth-on-identify-failure
+prompt remains the backstop. What IS mirrored is the password guard chain
+services apply before committing — and it is the SAME chain in both
+handlers, against the same constants (`:3917`-`:3934` vs `:2210`-`:2226`),
+so #978 folded #977's copy into one shared `vet_new_password/3`: spaces,
+nick-or-under-5, over-`PASSMAX`, control codes, answered as
+`{:reject, kind, reason}` with the line still shipped and the DB untouched.
+Only the nick differs — `callerUser->nick` for SET PASSWD, the nick being
+RESET for RESETPASS — so the caller supplies it. The spaces arm is simply
+unreachable on the RESETPASS path, exactly as it is upstream; shared and
+unreachable beats duplicated and free to drift the next time Azzurra adds
+a rule.
+
+The auth code is deliberately not vetted even for shape.
+`strtoul(codestr, &err, 10)` accepts a leading sign, so a partial mirror
+would reject lines services accept — and the two failure directions are not
+symmetric: a false reject silently reinstates the exact bug #978 closes,
+while a false accept only re-enters a divergence already accepted here.
+
+**The ownership check is new, and it is what keeps the fix from being a
+regression.** RESETPASS is the only captured verb that NAMES the account it
+rotates, and that account need not be ours: the code arrives by email, so a
+user holding two nicks can recover the other one from this session.
+Committing that would store a stranger's secret in this credential —
+strictly worse than the stale secret #978 exists to replace. So the capture
+carries both operands (`{:capture, :reset_passwd, target_nick, password}`,
+the one non-uniform result shape) and `Session.Server` — not the pure
+interceptor — decides ownership, because ownership is session policy and
+needs the casemapping-aware `fold_key/2`. The compare is against
+`configured_nick/1` (the credential's `nick` column, #885), never the live
+nick: after a 433 fallback the live nick is precisely the wrong one, and it
+is the credential we are about to write.
+
+**Its own kind, for the log line.** `:reset_passwd` writes the same secret
+to the same row as `:set_passwd` through the same committers (extracted to
+`rotate_stored_password/2` — one write, two callers), but the two verbs fail
+differently and the SET PASSWD log lines would lie about it. `SET PASSWD`
+from an unidentified visitor is logged "services would reject it", which is
+true there and FALSE here: services accept a RESETPASS from an unidentified
+user — that is what the verb is for. All grappa lacks in that case is a
+stored secret to rotate, and the follow-up IDENTIFY binds the new one
+through the ordinary `+r` rendezvous.

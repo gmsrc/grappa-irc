@@ -238,4 +238,109 @@ defmodule Grappa.Session.NSInterceptorTest do
       assert :passthrough = intercept("PRIVMSG NickServ :HELP SET PASSWD")
     end
   end
+
+  # #978 — the account-recovery sibling. `do_resetpass` takes THREE
+  # `strtok(NULL, " ")` — nick, code, new password — so the secret is the
+  # third TOKEN, and everything after it is discarded by services. The
+  # capture carries the target nick too: RESETPASS names the account it
+  # rotates, and only the host knows whether that account is ours.
+  describe "intercept/2 — RESETPASS (#978)" do
+    test "PRIVMSG NickServ :RESETPASS nick code new → captures the THIRD token" do
+      assert {:capture, :reset_passwd, "vjt", "newpassword"} =
+               intercept("PRIVMSG NickServ :RESETPASS vjt 12345 newpassword")
+    end
+
+    test "NS / NICKSERV RESETPASS server-command form" do
+      assert {:capture, :reset_passwd, "vjt", "newpassword"} =
+               intercept("NS RESETPASS vjt 12345 newpassword")
+
+      assert {:capture, :reset_passwd, "vjt", "newpassword"} =
+               intercept("NICKSERV RESETPASS vjt 12345 newpassword")
+    end
+
+    test "fully-qualified NickServ@services target" do
+      assert {:capture, :reset_passwd, "vjt", "newpassword"} =
+               intercept("PRIVMSG NickServ@services.azzurra.chat :RESETPASS vjt 12345 newpassword")
+    end
+
+    test "case-insensitive verb match" do
+      assert {:capture, :reset_passwd, "vjt", "newpassword"} =
+               intercept("privmsg nickserv :resetpass vjt 12345 newpassword")
+    end
+
+    test "there is NO bare form — RESETPASS is not an ircd command" do
+      assert :passthrough = intercept("RESETPASS vjt 12345 newpassword")
+    end
+
+    test "a fourth token is DISCARDED — strtok stops at the third" do
+      assert {:capture, :reset_passwd, "vjt", "newpassword"} =
+               intercept("NS RESETPASS vjt 12345 newpassword and more")
+    end
+
+    test "runs of spaces collapse — strtok skips its delimiters" do
+      assert {:capture, :reset_passwd, "vjt", "newpassword"} =
+               intercept("NS RESETPASS  vjt   12345   newpassword  ")
+    end
+
+    test "fewer than three tokens is a syntax error upstream — never a capture" do
+      assert {:reject, :reset_passwd, :syntax_error} =
+               intercept("NS RESETPASS")
+
+      assert {:reject, :reset_passwd, :syntax_error} =
+               intercept("NS RESETPASS vjt")
+
+      assert {:reject, :reset_passwd, :syntax_error} =
+               intercept("PRIVMSG NickServ :RESETPASS vjt 12345")
+
+      # Trailing space: services' third `strtok` still returns NULL.
+      assert {:reject, :reset_passwd, :syntax_error} =
+               intercept("PRIVMSG NickServ :RESETPASS vjt 12345 ")
+    end
+
+    test "a password under 5 bytes is refused (CSNS_ERROR_INSECURE_PASSWORD)" do
+      assert {:reject, :reset_passwd, :insecure_password} =
+               intercept("NS RESETPASS vjt 12345 abcd")
+    end
+
+    test "a password equal to the TARGET nick is refused, case-insensitively" do
+      assert {:reject, :reset_passwd, :insecure_password} =
+               intercept("NS RESETPASS vjtvjt 12345 VJTVJT")
+    end
+
+    test "that compare is against the reset TARGET, not the caller's nick" do
+      # `do_resetpass` checks `ni->nick`, the nick being reset — unlike
+      # `do_set_password`, which checks `callerUser->nick` (`@nick` here).
+      assert {:capture, :reset_passwd, "othernick", @nick} =
+               intercept("NS RESETPASS othernick 12345 #{@nick}")
+
+      assert {:reject, :reset_passwd, :insecure_password} =
+               intercept("NS RESETPASS #{@nick} 12345 #{String.upcase(@nick)}")
+    end
+
+    test "a password over PASSMAX=32 bytes is refused" do
+      assert {:reject, :reset_passwd, :password_max_length} =
+               intercept("NS RESETPASS vjt 12345 #{String.duplicate("a", 33)}")
+
+      assert {:capture, :reset_passwd, "vjt", _} =
+               intercept("NS RESETPASS vjt 12345 #{String.duplicate("a", 32)}")
+    end
+
+    test "control codes are refused — including the byte 160 string_has_ccodes rejects" do
+      assert {:reject, :reset_passwd, :password_with_ccodes} =
+               intercept("NS RESETPASS vjt 12345 new\x02pass")
+
+      # A TAB is not a strtok(" ") delimiter, so it lands INSIDE the token —
+      # and services refuse it as a control code.
+      assert {:reject, :reset_passwd, :password_with_ccodes} =
+               intercept("NS RESETPASS vjt 12345 new\tpass")
+
+      assert {:reject, :reset_passwd, :password_with_ccodes} =
+               intercept("NS RESETPASS vjt 12345 new" <> <<160>> <> "pass")
+    end
+
+    test "ANCHORING: a channel message / HELP that merely contains RESETPASS is passthrough" do
+      assert :passthrough = intercept("PRIVMSG #chan :RESETPASS vjt 12345 lolwhat")
+      assert :passthrough = intercept("PRIVMSG NickServ :HELP RESETPASS")
+    end
+  end
 end

@@ -23,15 +23,18 @@ defmodule Grappa.Session.NSInterceptor do
     * `PASS <args>`                                     (ircd `m_pass` -> `m_identify`, post-connect)
     * `PRIVMSG NickServ[@host] :SET PASSWD <old> <new>` / `NS|NICKSERV SET PASSWD <old> <new>` /
       bare `SET PASSWD <old> <new>`                      (#131 — in-session password change)
+    * `PRIVMSG NickServ[@host] :RESETPASS <nick> <code> <new>` /
+      `NS|NICKSERV RESETPASS <nick> <code> <new>`        (#978 — account recovery)
 
   Every pattern is ANCHORED at line start (`^`) so a channel PRIVMSG body that
-  merely CONTAINS "identify"/"pass"/"set passwd" is never captured — raw IRC
+  merely CONTAINS "identify"/"pass"/"set passwd"/"resetpass" is never captured — raw IRC
   frames start with the command verb, PRIVMSGs start with `PRIVMSG`.
 
   Password extraction: last whitespace token for IDENTIFY/ID/SIDENTIFY/GHOST/
   PASS (`IDENTIFY [account] <pass>`, `GHOST <nick> <pass>`, `PASS [nick] <pass>`);
   FIRST token for REGISTER (`REGISTER <pass> <email>`); the SECOND token for
-  SET PASSWD (#977). The Azzurra verb is `SET PASSWD`, NOT `SET PASSWORD`
+  SET PASSWD (#977); the THIRD for RESETPASS (#978). The Azzurra verb is
+  `SET PASSWD`, NOT `SET PASSWORD`
   (`do_set` only routes `PASSWD`; `PASSWORD` errors), so the regex matches
   `PASSWD` exactly and lets `SET PASSWORD …` fall through untouched.
 
@@ -70,6 +73,63 @@ defmodule Grappa.Session.NSInterceptor do
   password from the line alone, so a mistyped one still commits optimistically
   — the #124 re-auth backstop, unchanged by #977).
 
+  ## RESETPASS: the THIRD token, and it names the account (#978)
+
+  Read off `azzurra/services@23473ed`, `src/nickserv.c:3851` (`do_resetpass`),
+  not inferred. The handler pulls three `strtok(NULL, " ")` in order — nick,
+  code, new password — so the secret is the third TOKEN, a fourth is never
+  read (services DISCARD anything after it), and runs of spaces collapse the
+  way `strtok` skips its delimiters. There is no `RESETPASS` in the ircd's
+  message table (`azzurra/bahamut include/msg.h` carries `IDENTIFY` and
+  `PASS`, no `RESETPASS`), so — unlike IDENTIFY/SET PASSWD — a BARE
+  `RESETPASS …` reaches no service and must not be captured.
+
+  The capture carries the TARGET NICK alongside the password, because
+  RESETPASS is the one verb here that names the account it rotates: it can
+  recover a nick that is not this session's. Whether that account is the one
+  this session's credential holds is the host's call (`Session.Server`, which
+  owns `configured_nick/1` and the casemapping-aware fold), so this module
+  reports both operands and judges neither.
+
+  ### It commits on-send and CANNOT stage against `+r`
+
+  `do_resetpass` ends with `user_remove_id(ni->nick, FALSE)` (`:3948`): a
+  SUCCESSFUL reset drops every current identification instead of granting
+  one. No `+r` follows, ever — so the `:identify` family's rendezvous is not
+  merely inconvenient here, it is structurally unreachable, and a staged
+  capture would wait for a confirmation that cannot arrive. RESETPASS
+  therefore commits optimistically on-send, like `:set_passwd` (#131).
+
+  ### Which guards are mirrored, and which cannot be
+
+  Since the commit is optimistic, a value services would refuse must never be
+  captured. `do_resetpass` (`:3917`-`:3934`) applies the SAME four password
+  guards as `do_set_password`, against the same constants, so both verbs run
+  one shared `vet_new_password/3` — spaces / nick-or-under-5 /
+  over-`PASSMAX` / control codes — answered as
+  `{:reject, :reset_passwd, reason}` with the services error constant as the
+  reason. The line still goes out; services notify the user.
+
+  Only the nick differs: `do_set_password` compares the new password against
+  `callerUser->nick`, `do_resetpass` against `ni->nick` — the nick being
+  RESET, which the line itself carries. And the shared spaces arm is dead on
+  this path, exactly as `do_resetpass`'s own `strchr(newpass, ' ')` is dead
+  upstream: `strtok(" ")` already ended the token at the first space.
+
+  Everything `do_resetpass` checks BEFORE the password — nick registered, not
+  forbidden, not frozen, `NI_PASSRESET` set, the code within `ONE_WEEK` of the
+  SENDPASS, and the code matching `ni->auth` — is services-side state this
+  module cannot see, so a doomed RESETPASS still commits optimistically
+  (#124's re-auth prompt is the backstop). The code is deliberately not vetted
+  even for shape: `strtoul(codestr, &err, 10)` accepts a leading sign, so a
+  partial mirror would reject lines services accept — and a false reject
+  silently reinstates the very bug #978 closes, while a false accept only
+  re-enters a divergence that is already accepted here.
+
+  A reject reason is therefore the notice the user receives only when those
+  earlier checks passed; it is a log-line detail, never a claim about what
+  services did.
+
   Boundary: inherits the parent `Grappa.Session` boundary (no `use Boundary`).
   """
 
@@ -85,20 +145,40 @@ defmodule Grappa.Session.NSInterceptor do
   in-session password change (#131): an already-identified session
   rotates its NickServ password, which emits NO `+r` transition — so the
   host commits it OPTIMISTICALLY on-send rather than staging it against a
-  rendezvous. The host maps verb → action; the interceptor only reports
-  which verb it saw.
+  rendezvous. `:reset_passwd` (#978) is the account-recovery sibling: it
+  commits on-send for a STRONGER reason — a successful RESETPASS
+  de-identifies the user, so no `+r` can ever follow — and it is the only
+  kind whose capture carries a second operand, the nick it rotates. The
+  host maps verb → action; the interceptor only reports which verb it saw.
   """
-  @type kind :: :identify | :register | :set_passwd
+  @type kind :: :identify | :register | :set_passwd | :reset_passwd
 
   @typedoc """
-  Why a syntactically-matched SET PASSWD was NOT captured: the name of the
-  services error the line will earn (`do_set_password`, `src/nickserv.c`).
-  `:syntax_error` is the one-token `SET PASSWD <new>` form, which Azzurra
-  rejects outright — services change nothing, so neither may we.
+  The two verbs that ROTATE a stored secret rather than prove one. They are
+  the only kinds that can be REJECTED — an optimistic on-send commit has no
+  take-backs, so a value services would refuse must be caught here, while a
+  wrong IDENTIFY password simply never reaches the DB.
   """
-  @type reject_reason ::
-          :syntax_error
-          | :password_with_spaces
+  @type rotation_kind :: :set_passwd | :reset_passwd
+
+  @typedoc """
+  Why a syntactically-matched rotation verb was NOT captured: the name of the
+  services error the line will earn (`do_set_password` / `do_resetpass`,
+  `src/nickserv.c`) — for RESETPASS, if it gets that far. `:syntax_error` is
+  the one-token `SET PASSWD <new>` form and the under-three-tokens RESETPASS,
+  both refused outright — services change nothing, so neither may we. It is
+  raised while PARSING, which is why it is not a `vet_reject_reason/0`: the
+  shared guard chain only ever sees a line that already tokenised.
+  """
+  @type reject_reason :: :syntax_error | vet_reject_reason()
+
+  @typedoc """
+  The four guards `do_set_password` and `do_resetpass` share, verbatim.
+  `:password_with_spaces` cannot arise on the RESETPASS path: `strtok(" ")`
+  ends the token at the first space, so its third token can never hold one.
+  """
+  @type vet_reject_reason ::
+          :password_with_spaces
           | :insecure_password
           | :password_max_length
           | :password_with_ccodes
@@ -106,10 +186,11 @@ defmodule Grappa.Session.NSInterceptor do
   @type result ::
           :passthrough
           | {:capture, kind(), String.t()}
-          | {:reject, :set_passwd, reject_reason()}
+          | {:capture, :reset_passwd, String.t(), String.t()}
+          | {:reject, rotation_kind(), reject_reason()}
 
   # `azzurra/services@23473ed inc/config.h:96` — `#define PASSMAX 32`, and
-  # `do_set_password` rejects under 5. Compile-time defines, not conf knobs.
+  # both handlers reject under 5. Compile-time defines, not conf knobs.
   @passmax 32
   @passmin 5
 
@@ -140,28 +221,77 @@ defmodule Grappa.Session.NSInterceptor do
   # `SET PASSWD` reaches the same `:syntax_error` verdict as `SET PASSWD x`.
   @set_passwd_re ~r/^(?:PRIVMSG\s+NickServ(?:@\S+)?\s+:|(?:NS|NICKSERV)\s+)?SET +PASSWD(?: (.*))?$/i
 
+  # #978 — account-recovery RESETPASS. Same PRIVMSG-NickServ / NS-NICKSERV
+  # prefix family as `@verb_re`, but the prefix is NOT optional: RESETPASS is
+  # a services command with no ircd counterpart, so a bare line reaches
+  # nobody. The single group is services' argument string, VERBATIM and
+  # untrimmed — `split_resetpass/1` tokenises it the way `strtok(NULL, " ")`
+  # does, which is why the separator here is a LITERAL space rather than
+  # `\s`: a TAB is not a delimiter to services and must not become one here.
+  # The PRIVMSG prefix keeps `\s+` — that part is parsed by the ircd. The
+  # group is optional so a bare `RESETPASS` reaches the same `:syntax_error`
+  # verdict as `RESETPASS vjt`.
+  @resetpass_re ~r/^(?:PRIVMSG\s+NickServ(?:@\S+)?\s+:|(?:NS|NICKSERV)\s+)RESETPASS(?: (.*))?$/i
+
   @doc """
   Inspects one outbound IRC wire line and returns `:passthrough` (no NickServ
   secret-bearing verb detected), `{:capture, kind, password}` with the
   cleartext password lifted out and the verb class (`:identify` / `:register`
-  / `:set_passwd`) for the host to act on, or `{:reject, :set_passwd, reason}`
-  for a SET PASSWD services will refuse (#977).
+  / `:set_passwd`) for the host to act on,
+  `{:capture, :reset_passwd, target_nick, password}` for the one verb that
+  also names the account it rotates (#978), or `{:reject, kind, reason}` for
+  a rotation services will refuse (#977, #978).
 
   `nick` is the sender's CURRENT nick — `callerUser->nick` on the services
   side. `do_set_password` refuses a new password equal to it
   (`str_equals_nocase`), and this module refuses the same, so the nick is an
   input to the verdict rather than something the host re-checks afterwards.
+  It is NOT used on the RESETPASS path: `do_resetpass` compares against the
+  nick being RESET (`ni->nick`), which the line itself carries.
 
   Pure: no side effects. The host (`Grappa.Session.Server`) decides whether
   to stage against `+r` MODE (`:identify`/`:register`), commit optimistically
-  on-send (`:set_passwd`, #131), discard on the pending-auth timeout, or
-  overwrite on a subsequent capture.
+  on-send (`:set_passwd`, #131; `:reset_passwd`, #978 — and for the latter,
+  only when the target nick is this session's own account), discard on the
+  pending-auth timeout, or overwrite on a subsequent capture.
   """
   @spec intercept(String.t(), String.t()) :: result()
   def intercept(line, nick) when is_binary(line) and is_binary(nick) do
     case Regex.run(@verb_re, line, capture: :all_but_first) do
       [verb, rest] -> dispatch(String.upcase(verb), rest)
+      nil -> intercept_resetpass(line, nick)
+    end
+  end
+
+  # #978 — RESETPASS. Shares no verb with its siblings, so this check is
+  # order-independent w.r.t. `@verb_re`/`@set_passwd_re`/`@bare_re`/`@pass_re`.
+  defp intercept_resetpass(line, nick) do
+    case Regex.run(@resetpass_re, line, capture: :all_but_first) do
+      # `:re` TRIMS an unset trailing group, so a bare `RESETPASS` — verb and
+      # nothing else — arrives as `[]` rather than `[""]`.
+      [] -> {:reject, :reset_passwd, :syntax_error}
+      [args] -> split_resetpass(args)
       nil -> intercept_set_passwd(line, nick)
+    end
+  end
+
+  # Three `strtok(NULL, " ")` in a row: runs of spaces are skipped, empty
+  # tokens are never produced, and the third token ENDS at the next space —
+  # so a fourth is unread and the password cannot contain a space. Missing
+  # any of the three is NS_RESETPASS_SYNTAX_ERROR: services change nothing,
+  # so neither may we. The nick vetted against is the line's own first token
+  # (`ni->nick`), NOT the caller's — `do_resetpass` can reset another nick.
+  defp split_resetpass(args) do
+    # nick, code (services' to check), new password, then the discarded tail.
+    case String.split(args, " ", trim: true) do
+      [nick, _, new_password | _] ->
+        case vet_new_password(:reset_passwd, new_password, nick) do
+          :ok -> {:capture, :reset_passwd, nick, new_password}
+          reject -> reject
+        end
+
+      _ ->
+        {:reject, :reset_passwd, :syntax_error}
     end
   end
 
@@ -186,27 +316,48 @@ defmodule Grappa.Session.NSInterceptor do
   defp split_set_passwd(param, nick) do
     case String.split(param, " ", parts: 2) do
       # The head is the OLD password; grappa cannot vet it, services do.
-      [_, new_password] -> vet_new_password(new_password, nick)
-      [_] -> {:reject, :set_passwd, :syntax_error}
+      [_, new_password] ->
+        case vet_new_password(:set_passwd, new_password, nick) do
+          :ok -> {:capture, :set_passwd, new_password}
+          reject -> reject
+        end
+
+      [_] ->
+        {:reject, :set_passwd, :syntax_error}
     end
   end
 
-  # `do_set_password`'s guard chain, in ITS order — same order so the reason
-  # we report is the notice the user actually receives.
-  defp vet_new_password(new_password, nick) do
+  # The guard chain BOTH rotation handlers apply to a new password, in THEIR
+  # order — same order so the reason we report is the notice the user
+  # actually receives. `do_set_password` (`:2210`-`:2226`) and `do_resetpass`
+  # (`:3917`-`:3934`) run the identical four checks against the identical
+  # constants; only the nick they compare against differs, so the caller
+  # supplies it (`callerUser->nick` for SET PASSWD, the nick being RESET for
+  # RESETPASS). One chain, because a second copy would drift from the first
+  # the next time Azzurra adds a rule.
+  #
+  # The spaces arm cannot fire on the RESETPASS path: `strtok(" ")` ends the
+  # token at the first space, so its third token can never hold one — which
+  # is also why `do_resetpass`'s own `strchr(newpass, ' ')` (`:3917`) is dead
+  # code upstream. Shared and unreachable beats duplicated and divergent.
+  @spec vet_new_password(rotation_kind(), String.t(), String.t()) ::
+          :ok | {:reject, rotation_kind(), vet_reject_reason()}
+  defp vet_new_password(kind, new_password, nick) do
     cond do
-      String.contains?(new_password, " ") -> {:reject, :set_passwd, :password_with_spaces}
-      insecure?(new_password, nick) -> {:reject, :set_passwd, :insecure_password}
-      byte_size(new_password) > @passmax -> {:reject, :set_passwd, :password_max_length}
-      ccodes?(new_password) -> {:reject, :set_passwd, :password_with_ccodes}
-      true -> {:capture, :set_passwd, new_password}
+      String.contains?(new_password, " ") -> {:reject, kind, :password_with_spaces}
+      insecure?(new_password, nick) -> {:reject, kind, :insecure_password}
+      byte_size(new_password) > @passmax -> {:reject, kind, :password_max_length}
+      ccodes?(new_password) -> {:reject, kind, :password_with_ccodes}
+      true -> :ok
     end
   end
 
-  # `str_equals_nocase(callerUser->nick, newpass) || (str_len(newpass) < 5)`.
-  # `str_len` is a BYTE count, and the case-insensitive compare is the plain
-  # ASCII one — `Identifier.canonical_target/1`, per the project-wide rule
-  # that no nick comparison uses a bare `String.downcase/1`.
+  # `str_equals_nocase(<nick>, newpass) || (str_len(newpass) < 5)` — the nick
+  # being `callerUser->nick` in `do_set_password` and `ni->nick` (the reset
+  # target, up to case: `findnick` matches case-insensitively) in
+  # `do_resetpass`. `str_len` is a BYTE count, and the case-insensitive
+  # compare is the plain ASCII one — `Identifier.canonical_target/1`, per the
+  # project-wide rule that no nick comparison uses a bare `String.downcase/1`.
   defp insecure?(new_password, nick) do
     byte_size(new_password) < @passmin or
       Identifier.canonical_target(new_password) == Identifier.canonical_target(nick)
