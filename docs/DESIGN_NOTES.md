@@ -33291,3 +33291,36 @@ constant.
   `/motd` injection test was then measured and has the same shape** — it does
   not prove its channel gate either. Left as-is; noted here so the next reader
   does not mistake it for coverage.
+
+**The paragraph above about duplicated closed sets was written while a second
+copy of the same set was still live on the SERVER — and it killed the session.**
+`Grappa.Session.Wire.server_reply/3` guarded `source` with a hand-spelled
+`[:info, :version, :motd]` sitting a few hundred lines below the type union that
+had just grown `:admin`. Nothing caught it: 5482 unit tests, 56 properties, 4599
+vitest tests, Dialyzer and Credo all passed, because every one of them exercised
+a source the guard already knew. The first real 259 off leaf4 raised
+`FunctionClauseError` inside `apply_effects/2`, which is not a rejected frame but
+a **dead `Session.Server`** — the whole IRC connection dropped, for both `/admin`
+shapes. The set now has exactly one spelling (`@server_reply_sources`): the type
+union is derived from it via `unquote`, the guard reads it, and
+`server_reply_sources/0` hands it to the tests that enumerate it — including the
+property allowlist that was quietly becoming copy number three. The generated
+`wireTypes.ts` is byte-identical, because a derived union compiles to the same
+beam typespec `Code.Typespec.fetch_types/1` reads. **Carry this: fixing the copy
+you found is not fixing the class. Grep for the set's other spellings before
+calling it done — the one you cannot see is the one in production.**
+
+**Why the e2e was worth a lane, stated concretely.** Every terminator claim in
+this entry was read out of C and cited by file:line; not one had been observed.
+`cicchetto/e2e/tests/issue992-admin-command.spec.ts` is the first time an ADMIN
+numeric crossed a socket in this repo, and it found the crash above on its first
+run — a defect no synthesised-message test could reach, because the gap was
+between two copies of a set rather than inside any one code path. The spec is
+built to discriminate rather than mirror: it pins the 259 body (`aconf->name`,
+the contact address) as a distinct modal line, because a build that drained on
+259 without folding it still shows a modal with three plausible lines; and it
+drives `/admin <unknown-server>` for a 402, which a bare ADMIN can never produce,
+so the surfaced error is unforgeable proof the target survived cic's parser, the
+channel door and `Client.send_admin/2`. 423 and 447 stay unit-tested — the first
+needs a leaf with no `A:` line, the second a restricted-class user, and neither
+is reachable without reshaping the shared testnet for one spec.
