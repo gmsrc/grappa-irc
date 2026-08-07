@@ -310,14 +310,19 @@ defmodule Grappa.Session.Wire do
         }
 
   @typedoc """
-  #127 — the closed set of server-text-query sources that render a
+  #127/#992 — the closed set of server-text-query sources that render a
   `server_reply` modal. `:info` = /INFO (371/374), `:version` =
-  /VERSION (351), `:motd` = /MOTD (375/372/376/422). The atom is the
+  /VERSION (351), `:motd` = /MOTD (375/372/376/422/402), `:admin` =
+  /ADMIN (256/257/258/259, or 423/402/447). The atom is the
   wire discriminant cic maps to a human title + retro styling — the
   server emits NO display strings (per the no-localized-strings-server
   rule), only the typed source + the raw reply lines.
+
+  Additive per the #447 wire contract: a client that does not know
+  `:admin` ignores the frame rather than breaking, so no
+  `protocol_version` bump is needed.
   """
-  @type server_reply_source :: :info | :version | :motd
+  @type server_reply_source :: :info | :version | :motd | :admin
 
   @typedoc """
   #127 — ephemeral server-text reply for an EXPLICIT `/info`, `/version`

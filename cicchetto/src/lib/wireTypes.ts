@@ -956,7 +956,7 @@ export type SessionWireWhoReplyPayload = {
   users: SessionWireWhoUser[];
 };
 
-export const SESSION_WIRE_SERVER_REPLY_SOURCE = ["info", "version", "motd"] as const;
+export const SESSION_WIRE_SERVER_REPLY_SOURCE = ["info", "version", "motd", "admin"] as const;
 export type SessionWireServerReplySource = (typeof SESSION_WIRE_SERVER_REPLY_SOURCE)[number];
 
 export type SessionWireServerReplyPayload = {
