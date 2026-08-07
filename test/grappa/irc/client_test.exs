@@ -566,6 +566,40 @@ defmodule Grappa.IRC.ClientTest do
       assert {:error, :invalid_line} = Client.send_motd(client, "srv\r\nQUIT")
     end
 
+    # #992 — /admin [<target>] (RFC 2812 §3.4.4 `ADMIN [<target>]`), the
+    # fourth member of the #127/#374 server-text family. Same optional-target
+    # shape as send_motd/2 (bahamut routes both through the same
+    # `hunt_server`, src/s_serv.c m_admin:2683), so the same single-wire-token
+    # gate applies: a space would splice an extra ADMIN slot, CRLF would
+    # inject a follow-up command.
+    test "send_admin/2 with nil emits bare ADMIN framing" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_admin(client, nil)
+
+      assert {:ok, "ADMIN\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "ADMIN\r\n"), 1_000)
+    end
+
+    test "send_admin/2 with a target emits ADMIN <target> framing" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_admin(client, "void.azzurra.chat")
+
+      assert {:ok, "ADMIN void.azzurra.chat\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "ADMIN void.azzurra.chat\r\n"), 1_000)
+    end
+
+    test "send_admin/2 rejects an injection target with {:error, :invalid_line}" do
+      {_, port} = start_server()
+      client = start_client(port)
+
+      assert {:error, :invalid_line} = Client.send_admin(client, "srv a")
+      assert {:error, :invalid_line} = Client.send_admin(client, "srv\r\nQUIT")
+    end
+
     # #571 — /lusers [<mask> [<server>]] (RFC 2812 §3.4.2). Pre-#571
     # send_lusers/1 always emitted a bare `LUSERS`, dropping any mask/server a
     # client supplied — so an oper could never reach bahamut's forced live

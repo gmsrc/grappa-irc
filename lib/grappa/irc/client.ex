@@ -920,6 +920,44 @@ defmodule Grappa.IRC.Client do
   end
 
   @doc """
+  #992 — sends `ADMIN [<target>]\\r\\n` upstream (RFC 2812 §3.4.4). `nil`
+  emits a bare `ADMIN` (the connected server's A-line); a target emits
+  `ADMIN <target>` so the query routes through that server.
+
+  Four reply shapes, all measured in azzurra/bahamut `src/s_serv.c`
+  `m_admin` (`:2676`): the 256/257/258/259 burst when `find_admin()` hits,
+  **423 ERR_NOADMININFO** when it misses (and then NO 256-259 arrives at
+  all), **402 ERR_NOSUCHSERVER** from `hunt_server` on an unknown target,
+  and **447 ERR_RESTRICTED** from `check_restricted_user` (`s_misc.c:1211`)
+  before anything else. When primed by `:send_admin`, `EventRouter` folds
+  the burst into `state.admin_pending` and drains a
+  `{:server_reply, :admin, lines}` modal effect on ANY of the four
+  terminators — 259 included, which unlike 376 RPL_ENDOFMOTD carries the
+  contact address as content and so folds its own line before draining.
+
+  Unlike `/motd` and `/info`, ADMIN is NOT rate-limited upstream:
+  `static time_t last_used` appears in exactly four `s_serv.c` handlers
+  (`m_info:1257`, `m_stats:1607`, `m_help:2029`, `m_motd:5287`) and
+  `m_admin` is not among them. So every ADMIN path answers with a numeric
+  and the four-terminator set is exhaustive — there is no silent-drop case
+  to defend against here.
+
+  The target is gated by `safe_oper_token?/1` (a single wire token — no
+  whitespace/CRLF/NUL) so it cannot splice an extra wire slot or inject a
+  follow-up command; rejection yields `{:error, :invalid_line}`.
+  """
+  @spec send_admin(pid(), String.t() | nil) :: send_result()
+  def send_admin(client, nil) do
+    send_line(client, "ADMIN\r\n")
+  end
+
+  def send_admin(client, target) when is_binary(target) do
+    if Identifier.safe_oper_token?(target),
+      do: send_line(client, "ADMIN #{target}\r\n"),
+      else: reject_invalid_line(:admin)
+  end
+
+  @doc """
   #238 — sends `LINKS [<mask>]\\r\\n` upstream (RFC 2812 §3.4.5). `nil`
   emits a bare `LINKS` (the full server mesh); a mask emits `LINKS <mask>`
   to filter the reply to matching server names. Server replies with the
