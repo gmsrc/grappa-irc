@@ -32464,3 +32464,67 @@ hold at width is the from-empty replay of all 80, which no production path
 performs. The cause is not identified and is deliberately not chased here;
 lowering the constant to make a suite green without the measurement would have
 been the wrong move, so the number is written down instead.
+
+## 2026-08-07 — #41: the pool-width red is a property of multi-migration replay, not of the handler's regime (N=300)
+
+The entry above left the scope question open: the whole-graph replay is red at
+`pool_size: 5` and green at 2, and the handler runs on a pool it did not size
+(prod opens ten). One green run of "one pending expand at 10" is not an answer
+to that — it is one sample of the exact regime whose neighbour is
+deterministically broken. So the width became an experiment rather than a
+constant.
+
+**What was run.** The wide-pool case is now generated over `[5, 10]` — five
+because it is the narrowest width the replay is measured red at, so it is where
+the hazard would surface first if #41's regime shared it. Both widths, one
+pending expand each, driven through `HotReload.migrate_and_reload/2`:
+`mix test …:306 --repeat-until-failure 300` → **301 run summaries, `2 tests, 0
+failures` every one, rc 0**. Not "it passed"; three hundred consecutive times, at
+both widths.
+
+**The measurement had to be made capable of failing first.** Reading the column
+back after the migrate can be served by the very connection the migrator wrote
+on, which is not the question a wide pool asks — and the observed replay failure
+is precisely a statement not seeing an earlier column. With one pending file
+there is no later migration, so the only place that shape can still hide is a
+pool connection that missed the DDL. `columns_from_every_connection/2` therefore
+holds `pool_size` transactions open SIMULTANEOUSLY and reads from each: nothing
+releases until every holder reports in, a connection cannot be in two
+transactions at once, so N concurrent holders are N distinct connections, and a
+pool that cannot serve them all fails the receive instead of quietly measuring
+less.
+
+Both halves were proven by mutation, not by inspection:
+
+* Point the migration at a different column name — both wide tests go red on the
+  column assertion. The test is not passing for free.
+* Start the pool at 2 while still probing at the full width — **only** the two
+  wide tests go red, on `DBConnection.ConnectionError` (request dropped from
+  queue). The per-connection loop genuinely demands the width; it is not a
+  decorative iteration.
+
+**Verdict, and it is a scope claim.** The red belongs to multi-migration replay,
+not to applying a migration on a wide pool. #41's handler is sound in the regime
+it actually runs in, and the replay red stays recorded-with-the-number rather
+than diagnosed.
+
+Two facts narrow the exposure further, both checked rather than assumed. The
+pair that fails (`20260516154723` → `20260516184555`) is `execute`-only in
+`up/0`, and neither appears in `preflight_test.exs`'s pinned HOT set — so the
+refusal gate rejects that pending set before `Ecto.Migrator.run/3` is ever
+reached. The handler cannot apply the migrations that break.
+
+**What is NOT claimed.** The cause of the replay red is still not diagnosed, on
+purpose. And the regime measured here is ONE pending migration: the handler runs
+`:up, all: true`, so a deploy carrying two pending HOT migrations at prod width
+is a shape nobody has measured, and it is the shape the replay red points at.
+The repo has no two adjacent pending HOT migrations to build that case from
+today, so it is flagged here rather than half-built.
+
+**A harness ceiling worth knowing before the next person raises an N.** The first
+attempt repeated the WHOLE file and died at **58 green repetitions** with `no
+more index entries in module_code (max=65536)` — a BEAM limit, not a test
+failure: every `Ecto.Migrator` replay recompiles ~80 migration modules, and
+14 tests × 80 × 58 lands exactly on 65536. Any `--repeat-until-failure` over
+migration-replaying tests is bounded by 65536 / (tests × migrations); scoping to
+the two tests under study is what bought 300.
