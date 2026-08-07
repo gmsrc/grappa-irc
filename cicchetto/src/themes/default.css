@@ -5079,6 +5079,26 @@ html.resize-dragging * {
   min-width: 0;
 }
 
+/* A titled block nested INSIDE an expand row (today: the per-vhost
+   grants disclosure). Not an `AdminCard` — a card inside a card's own
+   table reads as a nesting mistake; this is the flatter, quieter
+   sibling for one level down. */
+.adm-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--adm-space-3);
+}
+
+.adm-subsection-title {
+  margin: 0;
+  font-family: var(--adm-font);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--adm-text-dim);
+}
+
 /* Checkbox + word, side by side — the one form control `AdminField`
    deliberately does not own (it stacks label ABOVE control, which is
    wrong for a checkbox). `min-height` matches `.adm-btn` so the row's

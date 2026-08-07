@@ -1,5 +1,11 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
+import AdminCard from "./admin/AdminCard";
+import AdminExpandRow from "./admin/AdminExpandRow";
+import AdminField from "./admin/AdminField";
+import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
+import AdminTable from "./admin/AdminTable";
+import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
   type AdminVhost,
@@ -86,6 +92,12 @@ export function generallyAvailableLocked(inPool: boolean): boolean {
 }
 
 const IN_POOL_LOCK_TITLE = "in-pool vhosts are always generally available";
+
+// Admin redesign (2026-08-07 plan, Layer 4) — column count of the vhost
+// table, fed to `AdminExpandRow` so the always-mounted grants row's
+// `colspan` follows a column edit instead of staying at the hardcoded
+// `4` it used to carry.
+const VHOST_COLUMNS = 4;
 
 function deleteKey(id: number): string {
   return `delete:${id}`;
@@ -259,183 +271,191 @@ const AdminVhostsTab: Component = () => {
 
   return (
     <div class="admin-vhosts-tab">
-      <header class="admin-vhosts-header">
-        <button
-          type="button"
-          class="admin-refresh-btn"
-          aria-label="refresh vhosts list"
-          aria-busy={loading()}
-          onClick={() => {
-            void refresh();
-          }}
-          data-testid="admin-vhosts-refresh"
-        >
-          ↻ refresh
-        </button>
-      </header>
+      <AdminToolbar
+        title="Vhosts"
+        subtitle="per-subject source-bind pool"
+        actions={
+          <AdminRefreshButton
+            onClick={() => {
+              void refresh();
+            }}
+            busy={loading()}
+            label="refresh vhosts list"
+            testId="admin-vhosts-refresh"
+          />
+        }
+      />
 
-      <form
-        class="admin-vhosts-create-form"
-        onSubmit={(e) => {
-          void onCreateVhost(e);
-        }}
-        data-testid="admin-vhosts-create-form"
-      >
-        <label>
-          address:
-          <select
-            value={createAddress()}
-            onChange={(e) => setCreateAddress((e.currentTarget as HTMLSelectElement).value)}
-            data-testid="vhost-address-select"
-            aria-label="new vhost address"
-            required
+      <div class="adm-scroll">
+        <Show when={error() !== null}>
+          <AdminError message={error() ?? ""} testId="admin-vhosts-error" />
+        </Show>
+
+        <AdminCard
+          title="Create vhost"
+          subtitle="addresses come from the host's bindable literals, not free text"
+        >
+          <form
+            class="admin-vhosts-create-form adm-form-row"
+            onSubmit={(e) => {
+              void onCreateVhost(e);
+            }}
+            data-testid="admin-vhosts-create-form"
           >
-            <option value="">choose an address</option>
-            <For each={hostCandidates()}>{(addr) => <option value={addr}>{addr}</option>}</For>
-          </select>
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={createInPool()}
-            onChange={(e) => setCreateInPool((e.currentTarget as HTMLInputElement).checked)}
-            data-testid="vhost-create-in-pool"
-          />
-          in pool
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={effectiveGenerallyAvailable(createInPool(), createGenerallyAvailable())}
-            disabled={generallyAvailableLocked(createInPool())}
-            onChange={(e) =>
-              setCreateGenerallyAvailable((e.currentTarget as HTMLInputElement).checked)
-            }
-            data-testid="vhost-create-generally-available"
-            title={generallyAvailableLocked(createInPool()) ? IN_POOL_LOCK_TITLE : undefined}
-          />
-          generally available
-        </label>
-        <button
-          type="submit"
-          disabled={creating() || createAddress().trim() === ""}
-          data-testid="vhost-create-submit"
-        >
-          Create vhost
-        </button>
-      </form>
+            <AdminField label="address" for="vhost-address-select">
+              <select
+                id="vhost-address-select"
+                value={createAddress()}
+                onChange={(e) => setCreateAddress((e.currentTarget as HTMLSelectElement).value)}
+                data-testid="vhost-address-select"
+                required
+              >
+                <option value="">choose an address</option>
+                <For each={hostCandidates()}>{(addr) => <option value={addr}>{addr}</option>}</For>
+              </select>
+            </AdminField>
+            <label class="adm-check">
+              <input
+                type="checkbox"
+                checked={createInPool()}
+                onChange={(e) => setCreateInPool((e.currentTarget as HTMLInputElement).checked)}
+                data-testid="vhost-create-in-pool"
+              />
+              in pool
+            </label>
+            <label class="adm-check">
+              <input
+                type="checkbox"
+                checked={effectiveGenerallyAvailable(createInPool(), createGenerallyAvailable())}
+                disabled={generallyAvailableLocked(createInPool())}
+                onChange={(e) =>
+                  setCreateGenerallyAvailable((e.currentTarget as HTMLInputElement).checked)
+                }
+                data-testid="vhost-create-generally-available"
+                title={generallyAvailableLocked(createInPool()) ? IN_POOL_LOCK_TITLE : undefined}
+              />
+              generally available
+            </label>
+            <button
+              type="submit"
+              class="adm-btn"
+              disabled={creating() || createAddress().trim() === ""}
+              data-testid="vhost-create-submit"
+            >
+              Create vhost
+            </button>
+          </form>
+        </AdminCard>
 
-      <Show when={error() !== null}>
-        <p class="admin-error" role="alert" data-testid="admin-vhosts-error">
-          failed: {error()} — click ↻ refresh to retry
-        </p>
-      </Show>
+        <Show when={vhosts() === null && error() === null}>
+          <AdminLoading />
+        </Show>
 
-      <Show when={vhosts() === null && error() === null}>
-        <p class="muted">loading…</p>
-      </Show>
+        <Show when={vhosts() !== null && (vhosts() ?? []).length === 0}>
+          <AdminEmpty message="no vhosts" testId="admin-vhosts-empty" />
+        </Show>
 
-      <Show when={vhosts() !== null && (vhosts() ?? []).length === 0}>
-        <p class="muted" data-testid="admin-vhosts-empty">
-          no vhosts
-        </p>
-      </Show>
-
-      <Show when={vhosts() !== null && (vhosts() ?? []).length > 0}>
-        <table class="admin-vhosts-table" data-testid="admin-vhosts-table">
-          <thead>
-            <tr>
-              <th>address</th>
-              <th>in pool</th>
-              <th>generally available</th>
-              <th>
-                <span class="sr-only">actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <For each={vhosts() ?? []}>
-              {(v) => (
-                <>
-                  <tr class="admin-vhosts-row" data-testid={`admin-vhost-row-${v.id}`}>
-                    <td>{v.address}</td>
-                    <td>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={v.in_pool}
-                          onChange={() => {
-                            void onToggleInPool(v);
-                          }}
-                          data-testid={`vhost-in-pool-toggle-${v.id}`}
-                          aria-label={`in pool for ${v.address}`}
-                        />
-                        {v.in_pool ? "yes" : "no"}
-                      </label>
-                    </td>
-                    <td>
-                      <label>
-                        <input
-                          type="checkbox"
-                          checked={effectiveGenerallyAvailable(v.in_pool, v.generally_available)}
-                          disabled={generallyAvailableLocked(v.in_pool)}
-                          onChange={() => {
-                            void onToggleGeneral(v);
-                          }}
-                          data-testid={`vhost-generally-available-toggle-${v.id}`}
-                          aria-label={`generally available for ${v.address}`}
-                          title={
-                            generallyAvailableLocked(v.in_pool) ? IN_POOL_LOCK_TITLE : undefined
+        <Show when={vhosts() !== null && (vhosts() ?? []).length > 0}>
+          <AdminCard title="Pool" subtitle="each address carries its grants in the row beneath it">
+            <AdminTable data-testid="admin-vhosts-table">
+              <thead>
+                <tr>
+                  <th class="adm-table-grow">address</th>
+                  <th>in pool</th>
+                  <th>generally available</th>
+                  <th class="adm-table-sticky-actions">actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={vhosts() ?? []}>
+                  {(v) => (
+                    <>
+                      <tr class="admin-vhosts-row" data-testid={`admin-vhost-row-${v.id}`}>
+                        <td>{v.address}</td>
+                        <td>
+                          <label class="adm-check">
+                            <input
+                              type="checkbox"
+                              checked={v.in_pool}
+                              onChange={() => {
+                                void onToggleInPool(v);
+                              }}
+                              data-testid={`vhost-in-pool-toggle-${v.id}`}
+                              aria-label={`in pool for ${v.address}`}
+                            />
+                            {v.in_pool ? "yes" : "no"}
+                          </label>
+                        </td>
+                        <td>
+                          <label class="adm-check">
+                            <input
+                              type="checkbox"
+                              checked={effectiveGenerallyAvailable(
+                                v.in_pool,
+                                v.generally_available,
+                              )}
+                              disabled={generallyAvailableLocked(v.in_pool)}
+                              onChange={() => {
+                                void onToggleGeneral(v);
+                              }}
+                              data-testid={`vhost-generally-available-toggle-${v.id}`}
+                              aria-label={`generally available for ${v.address}`}
+                              title={
+                                generallyAvailableLocked(v.in_pool) ? IN_POOL_LOCK_TITLE : undefined
+                              }
+                            />
+                            {effectiveGenerallyAvailable(v.in_pool, v.generally_available)
+                              ? "yes"
+                              : "no"}
+                          </label>
+                        </td>
+                        <td class="admin-vhosts-actions adm-table-sticky-actions">
+                          <InlineConfirmButton
+                            idleLabel="Delete"
+                            confirmLabel="Confirm delete?"
+                            armed={confirmingKey() === deleteKey(v.id)}
+                            onArm={() => setConfirmingKey(deleteKey(v.id))}
+                            onConfirm={() => onDeleteVhost(v)}
+                            testId={`admin-vhost-delete-${v.id}`}
+                            extraClass="delete-btn"
+                          />
+                        </td>
+                      </tr>
+                      <AdminExpandRow
+                        columns={VHOST_COLUMNS}
+                        class="admin-vhosts-grants-row"
+                        data-testid={`admin-vhost-grants-${v.id}`}
+                      >
+                        <GrantsDisclosure
+                          vhost={v}
+                          grants={grantsFor(v.id)}
+                          form={grantForm[v.id] ?? emptyGrantForm()}
+                          onFormChange={(patch) =>
+                            setGrantForm(
+                              produce((draft) => {
+                                const cur = draft[v.id] ?? emptyGrantForm();
+                                draft[v.id] = { ...cur, ...patch };
+                              }),
+                            )
                           }
+                          onAddGrant={(e) => {
+                            void onAddGrant(v, e);
+                          }}
+                          confirmingKey={confirmingKey()}
+                          onArmRevoke={(key) => setConfirmingKey(key)}
+                          onRevoke={(g) => {
+                            void onRevokeGrant(v, g);
+                          }}
                         />
-                        {effectiveGenerallyAvailable(v.in_pool, v.generally_available)
-                          ? "yes"
-                          : "no"}
-                      </label>
-                    </td>
-                    <td class="admin-vhosts-actions">
-                      <InlineConfirmButton
-                        idleLabel="Delete"
-                        confirmLabel="Confirm delete?"
-                        armed={confirmingKey() === deleteKey(v.id)}
-                        onArm={() => setConfirmingKey(deleteKey(v.id))}
-                        onConfirm={() => onDeleteVhost(v)}
-                        testId={`admin-vhost-delete-${v.id}`}
-                        extraClass="delete-btn"
-                      />
-                    </td>
-                  </tr>
-                  <tr class="admin-vhosts-grants-row" data-testid={`admin-vhost-grants-${v.id}`}>
-                    <td colspan="4">
-                      <GrantsDisclosure
-                        vhost={v}
-                        grants={grantsFor(v.id)}
-                        form={grantForm[v.id] ?? emptyGrantForm()}
-                        onFormChange={(patch) =>
-                          setGrantForm(
-                            produce((draft) => {
-                              const cur = draft[v.id] ?? emptyGrantForm();
-                              draft[v.id] = { ...cur, ...patch };
-                            }),
-                          )
-                        }
-                        onAddGrant={(e) => {
-                          void onAddGrant(v, e);
-                        }}
-                        confirmingKey={confirmingKey()}
-                        onArmRevoke={(key) => setConfirmingKey(key)}
-                        onRevoke={(g) => {
-                          void onRevokeGrant(v, g);
-                        }}
-                      />
-                    </td>
-                  </tr>
-                </>
-              )}
-            </For>
-          </tbody>
-        </table>
-      </Show>
+                      </AdminExpandRow>
+                    </>
+                  )}
+                </For>
+              </tbody>
+            </AdminTable>
+          </AdminCard>
+        </Show>
+      </div>
     </div>
   );
 };
@@ -455,10 +475,10 @@ const GrantsDisclosure: Component<{
   onRevoke: (g: AdminVhostGrant) => void;
 }> = (props) => {
   return (
-    <div class="admin-vhost-grants-disclosure">
-      <h4 class="admin-vhost-grants-title">Grants</h4>
+    <div class="admin-vhost-grants-disclosure adm-subsection">
+      <h4 class="admin-vhost-grants-title adm-subsection-title">Grants</h4>
       <form
-        class="admin-vhost-grant-add-form"
+        class="admin-vhost-grant-add-form adm-form-row"
         onSubmit={props.onAddGrant}
         data-testid={`admin-vhost-add-grant-form-${props.vhost.id}`}
       >
@@ -481,6 +501,7 @@ const GrantsDisclosure: Component<{
         />
         <button
           type="submit"
+          class="adm-btn"
           disabled={props.form.subject_id.trim() === ""}
           data-testid={`admin-vhost-grant-submit-${props.vhost.id}`}
         >
@@ -488,22 +509,18 @@ const GrantsDisclosure: Component<{
         </button>
       </form>
       <Show when={props.grants.length === 0}>
-        <p class="muted" data-testid={`admin-vhost-grants-empty-${props.vhost.id}`}>
-          no grants
-        </p>
+        <AdminEmpty message="no grants" testId={`admin-vhost-grants-empty-${props.vhost.id}`} />
       </Show>
       <Show when={props.grants.length > 0}>
-        <table
+        <AdminTable
           class="admin-vhost-grants-table"
           data-testid={`admin-vhost-grants-table-${props.vhost.id}`}
         >
           <thead>
             <tr>
               <th>subject type</th>
-              <th>subject id</th>
-              <th>
-                <span class="sr-only">actions</span>
-              </th>
+              <th class="adm-table-grow">subject id</th>
+              <th>actions</th>
             </tr>
           </thead>
           <tbody>
@@ -527,7 +544,7 @@ const GrantsDisclosure: Component<{
               )}
             </For>
           </tbody>
-        </table>
+        </AdminTable>
       </Show>
     </div>
   );
