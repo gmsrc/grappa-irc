@@ -38,7 +38,13 @@ defmodule GrappaWeb.InvitesControllerTest do
     network
   end
 
+  # `System.unique_integer/1` is monotonic across the whole BEAM run, so under
+  # a full-suite run it blows past 65535 and `Networks.Server`'s port
+  # validation rejects the row. Clamp into the ephemeral range, keeping
+  # unique-per-test behaviour (mirrors `ChannelsControllerTest`).
   defp unique_port, do: 1024 + rem(System.unique_integer([:positive]), 60_000)
+
+  defp u, do: System.unique_integer([:positive])
 
   defp await_handshake(server) do
     {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
@@ -133,11 +139,15 @@ defmodule GrappaWeb.InvitesControllerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "a malformed channel is rejected at the boundary", %{conn: conn, vjt: vjt} do
-      _ = setup_network(vjt, unique_port(), "azzurra-#{u()}")
+    # Boundary rejection precedes the session lookup, so this returns 400 with
+    # no session in play — a name that is not a channel is a malformed
+    # REQUEST, not a missing resource, and collapsing it into the 404 would
+    # lose that distinction for a client debugging its own URL building.
+    test "a malformed channel name is rejected as a bad request", %{conn: conn, vjt: vjt} do
+      network = setup_network(vjt, unique_port(), "azzurra-#{u()}")
 
-      conn = delete(conn, "/networks/azzurra-nope/invites/not-a-channel")
-      assert json_response(conn, 404)["error"] == "not_found"
+      conn = delete(conn, "/networks/#{network.slug}/invites/not-a-channel")
+      assert json_response(conn, 400)["error"] == "bad_request"
     end
 
     # Oracle close, mirroring the channels surface: credential-without-session
