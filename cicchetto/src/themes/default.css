@@ -5006,8 +5006,11 @@ html.resize-dragging * {
   }
 }
 
-/* Nested tables STACK on a phone: one block per row, label beside
-   value, no horizontal scroll at all.
+/* Nested tables STACK when their CONTAINER is narrow: one block per row,
+   label beside value, no horizontal scroll at all. Container, not
+   viewport — a table two levels deep never has the screen's width, so a
+   viewport breakpoint is measuring the wrong box and gets tablets wrong
+   (1180x820 left the Servers table panning).
 
    This is the one place stacked rows are right, and it is not a
    contradiction of the argument that kept the main tables as tables.
@@ -5023,7 +5026,11 @@ html.resize-dragging * {
    at three columns the source editor plus Disable TLS plus Delete
    overflow 402px, and the source editor is the reason the row is
    interactive at all, so it cannot be the thing that defers. */
-@media (max-width: 899px) {
+/* 56rem is what these six columns need before they start panning:
+   host:port ~180px, three yes/no columns ~180px, the source editor plus
+   its Save ~215px, and Disable TLS plus Delete ~200px. Below that the
+   table stacks rather than scrolls. */
+@container (max-width: 56rem) {
   .adm-table--stack,
   .adm-table--stack tbody,
   .adm-table--stack tr,
@@ -5497,6 +5504,19 @@ html.resize-dragging * {
   flex-direction: column;
   gap: var(--adm-space-4);
   padding: var(--adm-space-4);
+  /* Query container for the tables nested inside it. Whether the Servers
+     table fits depends on THIS box, not on the viewport: it sits inside
+     a panel, inside the tab body, beside a 220px rail on desktop, so at
+     1180px of screen it has roughly 860px to work with — which is why a
+     viewport breakpoint got tablets wrong.
+
+     `.whois-card` rejected `container-type: inline-size` (see its rule)
+     because inline-size containment zeroes the element's intrinsic
+     contribution and that card is sized FROM that contribution, in a
+     `fit-content(14rem)` track. Nothing of the sort here: this is a
+     plain block in a flex column that takes its width from the parent,
+     so there is no measurement to poison. */
+  container-type: inline-size;
 }
 
 /* Forms already carry their own padding for the in-card case; inside the
