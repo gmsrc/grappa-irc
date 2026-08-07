@@ -1092,7 +1092,7 @@ const ServersDisclosure: Component<{
                     <td data-label="actions">
                       <button
                         type="button"
-                        class="adm-btn"
+                        class={`adm-btn ${s.tls ? "" : "adm-btn--secure"}`.trim()}
                         onClick={() => props.onToggleTls(s)}
                         data-testid={`admin-network-server-toggle-tls-${props.net.slug}-${s.id}`}
                       >

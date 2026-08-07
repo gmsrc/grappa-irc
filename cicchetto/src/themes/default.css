@@ -4716,6 +4716,25 @@ html.resize-dragging * {
   border-color: color-mix(in oklab, var(--adm-danger), transparent 45%);
 }
 
+/* Cyan, for the one action that turns encryption ON. It is not `--ok`:
+   green here would put "enable TLS" in the same voice as Save and
+   Promote, and this is a security posture, not a confirmation. Cyan is
+   the same anchor the Session Log uses for `connected` — the colour
+   already means "a link, and a good one" in this pane.
+
+   Only the ENABLE direction is tinted. Disable TLS stays neutral rather
+   than taking a warning colour: it is a legitimate thing to do against a
+   plaintext ircd, and colouring it amber would nag every operator who
+   has a reason. (Say the word if you want it warned instead.) */
+.adm-btn--secure {
+  color: color-mix(in oklab, #1f9aa8, var(--fg) 22%);
+  border-color: color-mix(in oklab, #1f9aa8, transparent 45%);
+}
+
+.adm-btn--secure:hover {
+  background: color-mix(in oklab, #1f9aa8, var(--bg) 86%);
+}
+
 .adm-btn:hover {
   background: var(--adm-surface-2);
 }
