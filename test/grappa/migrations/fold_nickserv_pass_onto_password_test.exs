@@ -49,7 +49,7 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
   UPDATE network_credentials
      SET password_encrypted = nickserv_pass_encrypted
    WHERE nickserv_pass_encrypted IS NOT NULL
-     AND auth_method IN ('none', 'nickserv_identify')
+     AND auth_method = 'none'
   """
 
   defp uniq, do: System.unique_integer([:positive])
@@ -74,9 +74,22 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
     cred
   end
 
+  # Read through raw SQL, like `seed_perform_secret/2` writes it: #124 removed
+  # the schema field, so the column is only reachable this way.
+  defp perform_secret_still_stored?(%Credential{id: id}) do
+    %{rows: [[blob]]} =
+      Repo.query!("SELECT nickserv_pass_encrypted FROM network_credentials WHERE id = ?", [id])
+
+    blob != nil
+  end
+
+  # #1028 — FOLD first, then promote. Both statements now match on
+  # `auth_method = 'none'`, so promoting first would consume the fold's own
+  # WHERE match and the copy would reach nothing. Mirrors `up/0`'s order, which
+  # is the whole point of duplicating the SQL here.
   defp run_migration do
-    Repo.query!(@promote_sql)
     Repo.query!(@fold_sql)
+    Repo.query!(@promote_sql)
   end
 
   defp reload(%Credential{id: id}), do: Repo.get!(Credential, id)
@@ -102,7 +115,12 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
       assert Credential.recover_secret(folded) == "perform-secret"
     end
 
-    test "a perform-held secret OVERWRITES an existing password (it won the old precedence)" do
+    # GH #1028 — this test used to assert "winner", i.e. that the fold reached
+    # an ALREADY-`:nickserv_identify` row. The guard is now `auth_method =
+    # 'none'`, so it does not, and the assertion is inverted to say what the
+    # migration actually does. It is pinned rather than deleted BECAUSE the
+    # outcome is a known gap, and a gap nobody can see is a gap nobody fixes.
+    test "an already-:nickserv_identify row is NOT folded — the #1028 gap, pinned on purpose" do
       cred =
         %{auth_method: :nickserv_identify, password: "loser"}
         |> seed()
@@ -110,10 +128,18 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
 
       run_migration()
 
-      # Pre-#124 `recover_secret/1` answered "winner" for this row. Filling in
-      # only where the password was NULL would have silently demoted upstream's
-      # actual secret to the one that was losing.
-      assert Credential.recover_secret(reload(cred)) == "winner"
+      folded = reload(cred)
+
+      # The perform secret stays where it was. Under the old precedence
+      # "winner" is what upstream is REALLY being identified with, but post-#124
+      # nothing reads `nickserv_pass_encrypted` any more, so the identify falls
+      # back to the password below and dies as a silent non-`+r`.
+      assert Credential.recover_secret(folded) == "loser"
+
+      # Not destroyed, only not-yet-moved: the column is EXPAND-only and still
+      # holds the secret, which is why this row stays repairable by whatever
+      # vjt decides — unlike a folded :server_pass row, which does not.
+      assert perform_secret_still_stored?(cred)
     end
 
     test "a row with no perform-held secret is untouched (the already-correct shape)" do

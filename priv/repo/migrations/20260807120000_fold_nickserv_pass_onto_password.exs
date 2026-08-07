@@ -28,21 +28,36 @@ defmodule Grappa.Repo.Migrations.FoldNickservPassOntoPassword do
 
   ## GH #1028 — the fold carries the SAME `auth_method` guard as the promotion
 
-  "Preserves the effective secret" holds only where `password_encrypted` IS the
-  NickServ secret. On `:server_pass` and `:auto` it is the single `PASS` wire
-  token (`AuthFSM.maybe_send_pass/1`), and on `:sasl` and `:auto` it is the
-  SASL PLAIN payload — there the fold does not preserve anything, it DESTROYS a
-  live server password, and `down/0` cannot put it back. Shipped in v0.14.0
-  unguarded; the observed symptom was `Closing Link: wrong password` with no
-  breadcrumb pointing here.
+  The rule the promotion follows is not "do not rewrite `auth_method`". It is
+  **do not rewrite the VALUE on a row whose password is SPENT somewhere else**,
+  and the promotion was only its first half. On `:server_pass` and `:auto`
+  `password_encrypted` is the single `PASS` wire token
+  (`AuthFSM.maybe_send_pass/1`); on `:sasl` and `:auto` it is the SASL PLAIN
+  payload. On none of the three is it the NickServ secret, so there the fold
+  preserves nothing — it DESTROYS a live server password, and `down/0` cannot
+  put it back because the pre-fold value is gone. Shipped unguarded in v0.14.0;
+  what the operator sees is `Closing Link: wrong password`, with nothing
+  pointing back here.
 
-  So the fold is restricted to the two methods where the column really is the
-  NickServ secret: `:none` (about to be promoted to `:nickserv_identify` by the
-  statement above) and `:nickserv_identify` itself. An ALLOWLIST, not a
-  denylist of the three damaged methods: `auth_method` is a closed set
-  (`Credential.auth_methods/0`), and a sixth method added later must earn its
-  way into the fold deliberately rather than inherit it by omission. A NULL
-  `auth_method` matches neither form and is left alone, which is the safe side.
+  So the fold now writes ONLY where the promotion above just acted: rows that
+  were at `:none`. That is deliberately the NARROWEST guard that stops the
+  data loss, and it writes strictly less than the previous statement did.
+
+  ## Known consequence of the narrow guard — open, not resolved here
+
+  A row already at `:nickserv_identify` carrying a perform-held secret is now
+  NOT folded. Under the old precedence `nickserv_pass_encrypted` WON, so that
+  is the secret upstream is really being identified with; post-#124 nothing
+  reads that column any more, so the identify falls back to whatever
+  `password_encrypted` holds and fails SILENTLY (a non-`+r`, not an error).
+
+  That is a real gap and it is left standing on purpose. It is not symmetric
+  with the bug above: nothing is destroyed here. The value is still in
+  `nickserv_pass_encrypted`, which #124 keeps in place (EXPAND only), so this
+  row can be repaired later by any decision — whereas a folded `:server_pass`
+  row cannot be repaired at all. Between "write and maybe have to undo it" and
+  "do not write yet", a data-loss fix takes the second. Where the NickServ
+  secret should live for these rows is vjt's call; see GH #1028.
 
   ## Ciphertext copy, not decrypt-and-re-encrypt
 
@@ -92,23 +107,29 @@ defmodule Grappa.Repo.Migrations.FoldNickservPassOntoPassword do
   use Ecto.Migration
 
   def up do
-    # Order matters: promote FIRST, while `nickserv_pass_encrypted` is still the
-    # marker of "this row carried the second secret". Doing it after the copy
-    # would work too (the guard reads the same column, which the copy does not
-    # touch), but promoting first keeps the two statements independent of each
-    # other's effects.
+    # ORDER REVERSED by #1028, and it is now load-bearing rather than a matter
+    # of taste. Both statements match on `auth_method = 'none'`, so the two are
+    # no longer independent: promoting first flips the row to
+    # `:nickserv_identify` and the fold's own WHERE stops matching it — the copy
+    # then reaches NOTHING and the migration is a silent no-op for exactly the
+    # rows it exists to serve. Caught by
+    # `fold_nickserv_pass_onto_password_test.exs`, which went red on the `:none`
+    # case the moment the guard was added without the swap.
+    #
+    # Folding first is correct and stays idempotent: on a re-run the fold finds
+    # no `:none` row left to copy and the promotion finds none left to flip.
     execute("""
     UPDATE network_credentials
-       SET auth_method = 'nickserv_identify'
+       SET password_encrypted = nickserv_pass_encrypted
      WHERE nickserv_pass_encrypted IS NOT NULL
        AND auth_method = 'none'
     """)
 
     execute("""
     UPDATE network_credentials
-       SET password_encrypted = nickserv_pass_encrypted
+       SET auth_method = 'nickserv_identify'
      WHERE nickserv_pass_encrypted IS NOT NULL
-       AND auth_method IN ('none', 'nickserv_identify')
+       AND auth_method = 'none'
     """)
   end
 
