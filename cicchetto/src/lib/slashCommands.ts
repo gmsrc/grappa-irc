@@ -167,6 +167,9 @@ export type SlashCommand =
   | { kind: "info" }
   | { kind: "version" }
   | { kind: "motd"; target: string | null }
+  // #992 — /admin [<target>] (RFC 2812 §3.4.4). Fourth member of the
+  // server-text family; same optional-single-token grammar as /motd.
+  | { kind: "admin"; target: string | null }
   | { kind: "stats"; query: string | null; target: string | null }
   | { kind: "rehash"; opt: string | null }
   | { kind: "whois"; nick: string | null; server: string | null }
@@ -668,6 +671,14 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
   motd: (_verb, rest) => {
     const [target] = tokens(rest);
     return { kind: "motd", target: target ?? null };
+  },
+  // #992 — /admin [<target>] (RFC 2812 §3.4.4). bahamut's m_admin routes
+  // through the same `hunt_server` as m_motd (src/s_serv.c:2683), so the
+  // grammar is /motd's: bare = the connected server's A:line, one token =
+  // route the query there, trailing tokens ignored (1-slot wire frame).
+  admin: (_verb, rest) => {
+    const [target] = tokens(rest);
+    return { kind: "admin", target: target ?? null };
   },
 
   // #155 — /stats [query] [server]. Native parser sugar over the raw

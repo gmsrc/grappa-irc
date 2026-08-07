@@ -46,6 +46,19 @@ describe("ServerReplyModal (#127)", () => {
     expect(modal.textContent).toContain("1 line");
   });
 
+  // #992 — /admin is the fourth source in the family. The 256-259 burst is
+  // free-text A:line contact info, so it renders through the same surface;
+  // only the title + the data-source hook are new.
+  it("titles /admin from the typed source (#992)", () => {
+    focusNetwork();
+    setServerReply(SLUG, reply("admin", ["Administrative info about irc.azzurra.chat", "vjt"]));
+    render(() => <ServerReplyModal />);
+    const modal = screen.getByTestId("server-reply-modal");
+    expect(modal.getAttribute("data-source")).toBe("admin");
+    expect(modal.textContent).toContain("Server Administrator");
+    expect(modal.textContent).toContain("2 lines");
+  });
+
   it("closes on the × button (dismisses the store entry)", () => {
     focusNetwork();
     setServerReply(SLUG, reply("version", ["bahamut-2.2.1"]));

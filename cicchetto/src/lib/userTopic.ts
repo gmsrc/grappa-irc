@@ -63,11 +63,15 @@ import {
   narrowWhoUsers,
   narrowWindowStateEvent,
 } from "./wireNarrow";
-import type { ServerSettingsWireUploadView } from "./wireTypes";
+import type { ServerSettingsWireUploadView, SessionWireServerReplySource } from "./wireTypes";
 // #410 — the connection_state runtime guard derives from the generated const
 // (mirror of `Grappa.Networks.Credential.connection_state/0`), single-sourced
-// like the leaf-enum allowlists in wireNarrow.ts.
-import { NETWORKS_CREDENTIAL_CONNECTION_STATE } from "./wireTypes";
+// like the leaf-enum allowlists in wireNarrow.ts. #992 adds the server_reply
+// source set on the same footing.
+import {
+  NETWORKS_CREDENTIAL_CONNECTION_STATE,
+  SESSION_WIRE_SERVER_REPLY_SOURCE,
+} from "./wireTypes";
 
 // Per-user PubSub topic subscriber. Module-singleton side-effect:
 // imports for effect, exports nothing public. `main.tsx` imports this
@@ -669,16 +673,23 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       return { kind: "who_reply", network: r.network, target: r.target, users };
     }
     case "server_reply": {
-      // #127 — /info, /version, /motd reply bundle. Validate the typed
-      // `source` discriminant + the raw line array; a malformed payload
+      // #127/#992 — /info, /version, /motd, /admin reply bundle. Validate the
+      // typed `source` discriminant + the raw line array; a malformed payload
       // drops rather than rendering a half-typed modal.
+      //
+      // #992 — the discriminant is checked against the
+      // SESSION_WIRE_SERVER_REPLY_SOURCE SSOT, not a hand-written `!==`
+      // chain. The chain was a second, silent copy of the closed set: adding
+      // `admin` server-side left it rejecting a legitimate reply as "unknown
+      // source", so the modal never opened and the failure was invisible.
       if (typeof r.network !== "string") return null;
-      if (r.source !== "info" && r.source !== "version" && r.source !== "motd") return null;
+      if (!SESSION_WIRE_SERVER_REPLY_SOURCE.includes(r.source as SessionWireServerReplySource))
+        return null;
       if (!Array.isArray(r.lines) || !r.lines.every((l) => typeof l === "string")) return null;
       return {
         kind: "server_reply",
         network: r.network,
-        source: r.source,
+        source: r.source as SessionWireServerReplySource,
         lines: r.lines as string[],
       };
     }

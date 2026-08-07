@@ -758,6 +758,18 @@ export function pushMotd(networkId: number, target: string | null): Promise<void
   );
 }
 
+// #992 — /admin [<target>]. Identical optional-arg shape to pushMotd: bare
+// omits the wire key so grappa emits `ADMIN`, a target sends `{ target }` so
+// grappa emits `ADMIN <target>`. The 256/257/258/259 burst (or 423
+// ERR_NOADMININFO / 402 ERR_NOSUCHSERVER / 447 ERR_RESTRICTED) routes back
+// through the same server_reply modal.
+export function pushAdmin(networkId: number, target: string | null): Promise<void> {
+  return pushUserChannelVerb(
+    "admin",
+    target === null ? { network_id: networkId } : { network_id: networkId, target },
+  );
+}
+
 // #238 — /links [<mask>]. Bare (mask null) omits the wire key so grappa emits
 // `LINKS`; a mask sends `{ mask }` so grappa emits `LINKS <mask>`. The 364/365
 // burst drains ONE ephemeral `links_bundle` event on Topic.user/1 which

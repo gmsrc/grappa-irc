@@ -29,6 +29,7 @@ const SOURCE_TITLE: Record<ServerReplySource, string> = {
   info: "Server Info",
   version: "Version",
   motd: "Message of the Day",
+  admin: "Server Administrator",
 };
 
 const ServerReplyModal: Component = () => {

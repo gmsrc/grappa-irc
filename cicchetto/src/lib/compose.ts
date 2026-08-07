@@ -36,6 +36,7 @@ import { isServicesSender } from "./servicesSender";
 import { requestOpenSettings } from "./settingsNav";
 import { parseSlash } from "./slashCommands";
 import {
+  pushAdmin,
   pushAwaySet,
   pushAwayUnset,
   pushChannelBan,
@@ -1566,6 +1567,15 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // ERR_NOSUCHSERVER for an unknown target surfaces via the same
           // server_reply modal, never a wrong-server MOTD.
           await pushMotd(networkId, cmd.target); // S6 (#364): await verb-ack
+          result = { ok: true };
+          break;
+        }
+        // #992 — /admin [<target>]. Same door as /motd; the reply lands in
+        // the same server_reply modal under the `admin` source.
+        case "admin": {
+          const networkId = networkIdBySlug(networkSlug);
+          if (networkId === undefined) return { error: "/admin: network not found" };
+          await pushAdmin(networkId, cmd.target); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
         }

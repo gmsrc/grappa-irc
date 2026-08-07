@@ -1156,6 +1156,25 @@ describe("userTopic", () => {
       });
     });
 
+    // #992 — /admin is the fourth source. RED before the fix: the arm
+    // hardcoded a three-way `!==` chain instead of reading the
+    // SESSION_WIRE_SERVER_REPLY_SOURCE SSOT, so a legitimate admin reply
+    // was dropped as "unknown source" and the modal never opened.
+    it("accepts source 'admin' (#992)", async () => {
+      const srm = await import("../lib/serverReplyModal");
+      channelMock.fireEvent({
+        kind: "server_reply",
+        network: "azzurra",
+        source: "admin",
+        lines: ["Administrative info about irc.azzurra.chat", "vjt"],
+      });
+      expect(srm.setServerReply).toHaveBeenCalledWith("azzurra", {
+        network: "azzurra",
+        source: "admin",
+        lines: ["Administrative info about irc.azzurra.chat", "vjt"],
+      });
+    });
+
     it("drops a payload with an unknown source (no setServerReply call)", async () => {
       const srm = await import("../lib/serverReplyModal");
       channelMock.fireEvent({

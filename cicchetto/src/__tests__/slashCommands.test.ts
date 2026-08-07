@@ -846,6 +846,29 @@ describe("parseSlash — info verbs (TODO — server-side missing)", () => {
       target: "void.azzurra.chat",
     });
   });
+
+  // #992 — /admin [<target>] (RFC 2812 §3.4.4), the fourth member of the
+  // #127/#374 server-text family. Same optional-single-token grammar as
+  // /motd: bahamut routes both through the same `hunt_server`
+  // (src/s_serv.c m_admin:2683), so bare = the current server's A:line and
+  // a target routes the query through that server.
+  it("/admin bare → admin with no target", () => {
+    expect(parseSlash("/admin")).toEqual({ kind: "admin", target: null });
+  });
+
+  it("/admin <server> → admin carrying the target server", () => {
+    expect(parseSlash("/admin void.azzurra.chat")).toEqual({
+      kind: "admin",
+      target: "void.azzurra.chat",
+    });
+  });
+
+  it("/admin <server> <extra> → only the first token is the target", () => {
+    expect(parseSlash("/admin void.azzurra.chat junk")).toEqual({
+      kind: "admin",
+      target: "void.azzurra.chat",
+    });
+  });
 });
 
 // #581 — /recover [network]: guided "recover my identity". Optional first
