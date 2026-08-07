@@ -42,4 +42,9 @@ else
 fi
 
 echo "[install_nginx] done. probe:"
-curl -fsS -w "HTTP %{http_code}\n" http://10.66.6.7/healthz -o /dev/null || true
+# Probe over the jail's own loopback, never a literal external address: the
+# jail renumbers and a hardcoded address turns this probe into a permanent
+# false negative that nobody reads (the #599 ruling). This runs INSIDE the
+# jail, and nginx now listens wildcard, so 127.0.0.1 is always the right
+# door regardless of which addresses the jail currently holds.
+curl -fsS -w "HTTP %{http_code}\n" http://127.0.0.1/healthz -o /dev/null || true
