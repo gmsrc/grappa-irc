@@ -4894,6 +4894,101 @@ html.resize-dragging * {
   }
 }
 
+/* Secondary columns: on screen at desktop width, dropped on a phone and
+   shown in the row's detail panel instead (`admin/AdminFacts.tsx`).
+
+   Nine columns is fine at 1440px and unreadable at 402px — panning
+   sideways moves the row's own name off screen, so you end up reading a
+   number with no idea whose it is. `display: none` rather than a
+   narrower cell: a squeezed column is still a column, and the point is
+   to get the table under the viewport width, not to make it tighter.
+
+   `ux-6-g-admin-mobile-h-scroll` still holds. It requires pan-x to be
+   PERMITTED on every admin tab, which is untouched, and requires exactly
+   one tab — `DETERMINISTIC_WIDE_TAB`, Networks — to actually be wider
+   than the viewport. Networks therefore keeps all its columns and gets a
+   frozen first column instead (below). */
+.adm-col-detail {
+  display: none;
+}
+
+@media (min-width: 900px) {
+  .adm-col-detail {
+    display: table-cell;
+  }
+}
+
+/* Row identity as a disclosure (`admin/AdminRowName.tsx`), mobile only.
+   Same shape as the Networks slug expander it is modelled on. */
+.adm-row-expand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--adm-space-2);
+  min-height: var(--tap-min);
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--adm-accent);
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.adm-row-expand:focus-visible {
+  outline: 2px solid var(--adm-accent);
+  outline-offset: 2px;
+  border-radius: var(--adm-radius-sm);
+}
+
+.adm-row-name {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+/* Label/value list in a detail panel. Two columns so the labels form a
+   readable left edge; the value column takes the slack and wraps. */
+.adm-facts {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) 1fr;
+  gap: var(--adm-space-2) var(--adm-space-4);
+  margin: 0;
+}
+
+.adm-facts dt {
+  font-family: var(--adm-font);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--adm-text-dim);
+}
+
+.adm-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--adm-text);
+  overflow-wrap: anywhere;
+}
+
+/* Networks keeps every column on a phone — `ux-6-g` pins it as the one
+   tab that must stay wider than the viewport — so it gets the mitigation
+   instead of the fix: the slug freezes at the left edge while the rest
+   pans, mirroring the actions column pinned at the right. Panning a wide
+   table is survivable when you can still see whose row you are reading;
+   it is not when you cannot. */
+@media (max-width: 899px) {
+  .admin-networks-table td:first-child,
+  .admin-networks-table th:first-child {
+    position: sticky;
+    left: 0;
+    background: var(--adm-surface-0);
+    border-right: 1px solid var(--adm-line-strong);
+    box-shadow: 6px 0 6px -6px color-mix(in oklab, var(--fg), transparent 80%);
+  }
+}
+
 /* Truncates a data-heavy cell (e.g. Sessions' UPSTREAM, which can
    carry a full reverse-DNS name plus the raw address in parens) to a
    fixed width with an ellipsis, so it can't crowd every column after

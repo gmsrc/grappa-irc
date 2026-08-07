@@ -1,6 +1,9 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
+import AdminDetailPanel from "./admin/AdminDetailPanel";
+import AdminFacts from "./admin/AdminFacts";
+import AdminRowName from "./admin/AdminRowName";
 import { AdminEmpty, AdminError } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import { connectionTone } from "./admin/connectionTone";
@@ -70,6 +73,10 @@ const AdminVisitorsTab: Component = () => {
   // doesn't fight the Delete arm — different columns, different verbs.
   const [confirmingToggleKey, setConfirmingToggleKey] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
+
+  // Which row's detail panel is open. Mobile-only in effect: on desktop
+  // every column is on screen and the opener is not rendered.
+  const [detailId, setDetailId] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
 
   const refresh = async (): Promise<void> => {
@@ -160,6 +167,9 @@ const AdminVisitorsTab: Component = () => {
     testId: "admin-visitors-refresh",
   });
 
+  const detailVisitor = (): AdminVisitor | undefined =>
+    (visitors() ?? []).find((v) => v.id === detailId());
+
   onMount(() => {
     void refresh();
   });
@@ -179,6 +189,26 @@ const AdminVisitorsTab: Component = () => {
           <AdminEmpty message="no visitors" testId="admin-visitors-empty" />
         </Show>
 
+        <Show when={detailVisitor()}>
+          {(v) => (
+            <AdminDetailPanel
+              title={v().networks[0]?.nick ?? "visitor"}
+              subtitle="the columns the table drops on a phone"
+              onClose={() => setDetailId(null)}
+              closeLabel="close visitor details"
+              data-testid={`admin-visitor-detail-${v().id}`}
+            >
+              <AdminFacts
+                facts={[
+                  { label: "ip", value: v().ip ?? "—" },
+                  { label: "expires", value: renderExpires(v()) },
+                  { label: "joined", value: renderInserted(v().inserted_at) },
+                ]}
+              />
+            </AdminDetailPanel>
+          )}
+        </Show>
+
         <Show when={visitors() !== null && (visitors() ?? []).length > 0}>
           <AdminCard
             hostsRefresh
@@ -191,9 +221,13 @@ const AdminVisitorsTab: Component = () => {
                 <tr>
                   <th>identified</th>
                   <th class="adm-table-grow">networks (state · nick)</th>
-                  <th>ip</th>
-                  <th>expires</th>
-                  <th>joined</th>
+                  {/* Secondary below 900px — into the row's detail panel.
+                      The networks cell IS the visitor's identity here
+                      (there is no name column), so it stays, and the
+                      identified dot is one dot wide. */}
+                  <th class="adm-col-detail">ip</th>
+                  <th class="adm-col-detail">expires</th>
+                  <th class="adm-col-detail">joined</th>
                   <th class="adm-table-sticky-actions">actions</th>
                 </tr>
               </thead>
@@ -241,10 +275,23 @@ const AdminVisitorsTab: Component = () => {
                             </For>
                           </ul>
                         </Show>
+                        {/* The opener sits at the END of this cell, not on
+                            a name column, because a visitor HAS no name
+                            column — its identity is the per-network nick
+                            list above. Mobile-only, like every other
+                            `AdminRowName`. */}
+                        <AdminRowName
+                          open={detailId() === v.id}
+                          onToggle={() => setDetailId(detailId() === v.id ? null : v.id)}
+                          label={`details for visitor ${v.id}`}
+                          testId={`admin-visitor-details-${v.id}`}
+                        >
+                          details
+                        </AdminRowName>
                       </td>
-                      <td>{v.ip ?? "—"}</td>
-                      <td>{renderExpires(v)}</td>
-                      <td>{renderInserted(v.inserted_at)}</td>
+                      <td class="adm-col-detail">{v.ip ?? "—"}</td>
+                      <td class="adm-col-detail">{renderExpires(v)}</td>
+                      <td class="adm-col-detail">{renderInserted(v.inserted_at)}</td>
                       <td class="adm-table-sticky-actions">
                         {/* #269 — the per-network Disconnect ⇄ Reconnect toggle
                             lives HERE, ahead of Delete, so the actions column

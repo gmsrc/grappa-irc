@@ -1,6 +1,9 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
+import AdminDetailPanel from "./admin/AdminDetailPanel";
+import AdminFacts from "./admin/AdminFacts";
+import AdminRowName from "./admin/AdminRowName";
 import { AdminEmpty, AdminError } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import { useRefreshSlot } from "./admin/refreshSlot";
@@ -66,6 +69,11 @@ const AdminSessionsTab: Component = () => {
   const [sessions, setSessions] = createSignal<AdminSession[] | null>(null);
   const [networks, setNetworks] = createSignal<AdminNetwork[] | null>(null);
   const [confirmingKey, setConfirmingKey] = createSignal<string | null>(null);
+
+  // Which row's detail panel is open. Mobile-only in effect: on desktop
+  // every column is on screen, `AdminRowName` renders plain text and
+  // nothing can set this.
+  const [detailId, setDetailId] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
 
@@ -163,6 +171,12 @@ const AdminSessionsTab: Component = () => {
     testId: "admin-sessions-refresh",
   });
 
+  // The session the detail panel is open on. DERIVED from `detailId` +
+  // the fetched list, so a refetch cannot leave the panel showing a
+  // session that is gone — it closes itself instead.
+  const detailSession = (): AdminSession | undefined =>
+    (sessions() ?? []).find((s) => adminSessionId(s) === detailId());
+
   onMount(() => {
     void refresh();
   });
@@ -232,6 +246,37 @@ const AdminSessionsTab: Component = () => {
           <AdminEmpty message="no sessions" testId="admin-sessions-empty" />
         </Show>
 
+        <Show when={detailSession()}>
+          {(s) => (
+            <AdminDetailPanel
+              title={renderWho(s())}
+              subtitle="the columns the table drops on a phone"
+              onClose={() => setDetailId(null)}
+              closeLabel="close session details"
+              data-testid={`admin-session-detail-${adminSessionId(s())}`}
+            >
+              <AdminFacts
+                facts={[
+                  {
+                    label: "network",
+                    value: networkSlugById().get(s().network_id) ?? String(s().network_id),
+                  },
+                  { label: "upstream", value: renderUpstream(s().live_state) },
+                  { label: "mailbox", value: String(s().live_state.mailbox_len) },
+                  { label: "memory", value: renderKb(s().live_state.memory_bytes) },
+                  { label: "last seen", value: renderLastSeen(s().last_seen_at) },
+                  {
+                    label: "degraded",
+                    value: renderDegraded(
+                      s().live_state.introspection_degraded,
+                      adminSessionId(s()),
+                    ),
+                  },
+                ]}
+              />
+            </AdminDetailPanel>
+          )}
+        </Show>
         <Show when={sessions() !== null && (sessions() ?? []).length > 0}>
           <AdminCard
             hostsRefresh
@@ -242,14 +287,19 @@ const AdminSessionsTab: Component = () => {
             <AdminTable data-testid="admin-sessions-table">
               <thead>
                 <tr>
-                  <th>state</th>
+                  {/* who + network merge into one identity cell on mobile
+                      (see `AdminRowName`); the rest carry
+                      `adm-col-detail` and move into the row's panel
+                      below 900px. What survives is what a phone is for:
+                      who, what state, what you can do about it. */}
                   <th>who</th>
-                  <th>network</th>
-                  <th>upstream</th>
-                  <th>mailbox</th>
-                  <th>memory</th>
-                  <th>last seen</th>
-                  <th>degraded</th>
+                  <th>state</th>
+                  <th class="adm-col-detail">network</th>
+                  <th class="adm-col-detail">upstream</th>
+                  <th class="adm-col-detail">mailbox</th>
+                  <th class="adm-col-detail">memory</th>
+                  <th class="adm-col-detail">last seen</th>
+                  <th class="adm-col-detail">degraded</th>
                   {/* Visible, like every other migrated tab: an unlabelled
                       column reads as a rendering bug, and Disconnect and
                       Terminate are destructive enough to deserve naming. */}
@@ -263,21 +313,38 @@ const AdminSessionsTab: Component = () => {
                     return (
                       <tr class="admin-sessions-row" data-testid={`admin-session-row-${id}`}>
                         <td>
+                          <AdminRowName
+                            open={detailId() === id}
+                            onToggle={() => setDetailId(detailId() === id ? null : id)}
+                            label={`details for ${renderWho(s)}`}
+                            testId={`admin-session-details-${id}`}
+                          >
+                            {renderWho(s)}
+                          </AdminRowName>
+                        </td>
+                        <td>
                           <LiveBadge live={s.live_state} />
                         </td>
-                        <td>{renderWho(s)}</td>
-                        <td data-testid={`admin-session-network-${id}`}>
+                        <td class="adm-col-detail" data-testid={`admin-session-network-${id}`}>
                           {networkSlugById().get(s.network_id) ?? String(s.network_id)}
                         </td>
-                        <td class="adm-table-truncate" data-testid={`admin-session-upstream-${id}`}>
+                        <td
+                          class="adm-col-detail adm-table-truncate"
+                          data-testid={`admin-session-upstream-${id}`}
+                        >
                           {renderUpstream(s.live_state)}
                         </td>
-                        <td>{s.live_state.mailbox_len}</td>
-                        <td>{renderKb(s.live_state.memory_bytes)}</td>
-                        <td title={s.last_seen_at ?? "no browser login on record"}>
+                        <td class="adm-col-detail">{s.live_state.mailbox_len}</td>
+                        <td class="adm-col-detail">{renderKb(s.live_state.memory_bytes)}</td>
+                        <td
+                          class="adm-col-detail"
+                          title={s.last_seen_at ?? "no browser login on record"}
+                        >
                           {renderLastSeen(s.last_seen_at)}
                         </td>
-                        <td>{renderDegraded(s.live_state.introspection_degraded, id)}</td>
+                        <td class="adm-col-detail">
+                          {renderDegraded(s.live_state.introspection_degraded, id)}
+                        </td>
                         <td class="admin-sessions-actions adm-table-sticky-actions">
                           <InlineConfirmButton
                             idleLabel="Disconnect"

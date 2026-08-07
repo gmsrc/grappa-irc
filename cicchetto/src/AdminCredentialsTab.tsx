@@ -2,6 +2,8 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import AdminDetailPanel from "./admin/AdminDetailPanel";
+import AdminFacts from "./admin/AdminFacts";
+import AdminRowName from "./admin/AdminRowName";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import { connectionTone } from "./admin/connectionTone";
@@ -99,6 +101,10 @@ const AdminCredentialsTab: Component = () => {
   const [editForm, setEditForm] = createSignal<EditForm | null>(null);
 
   const [confirmingKey, setConfirmingKey] = createSignal<string | null>(null);
+
+  // Which row's detail panel is open. Mobile-only in effect: on desktop
+  // every column is on screen and `AdminRowName` renders plain text.
+  const [detailId, setDetailId] = createSignal<string | null>(null);
   const [sessionActionToast, setSessionActionToast] = createSignal<string | null>(null);
 
   // The binding the edit panel is open on. DERIVED from `editingKey` +
@@ -109,6 +115,9 @@ const AdminCredentialsTab: Component = () => {
   // stomp it.
   const editingCredential = (): AdminCredential | undefined =>
     (credentials() ?? []).find((c) => credKey(c) === editingKey());
+
+  const detailCredential = (): AdminCredential | undefined =>
+    (credentials() ?? []).find((c) => credKey(c) === detailId());
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -428,6 +437,33 @@ const AdminCredentialsTab: Component = () => {
           <AdminEmpty message="no credentials" testId="admin-credentials-empty" />
         </Show>
 
+        <Show when={detailCredential()}>
+          {(c) => (
+            <AdminDetailPanel
+              title={`${userName(c().user_id)} @ ${c().network_slug}`}
+              subtitle="the columns the table drops on a phone"
+              onClose={() => setDetailId(null)}
+              closeLabel="close binding details"
+              data-testid={`admin-credential-detail-${credKey(c())}`}
+            >
+              <AdminFacts
+                facts={[
+                  { label: "nick", value: c().nick },
+                  { label: "auth", value: c().auth_method },
+                  {
+                    label: "connection",
+                    value: (
+                      <AdminBadge tone={connectionTone(c().connection_state)}>
+                        {c().connection_state}
+                      </AdminBadge>
+                    ),
+                  },
+                ]}
+              />
+            </AdminDetailPanel>
+          )}
+        </Show>
+
         <Show when={editForm() !== null && editingCredential()}>
           {(c) => (
             <AdminDetailPanel
@@ -479,11 +515,15 @@ const AdminCredentialsTab: Component = () => {
             <AdminTable data-testid="admin-credentials-table">
               <thead>
                 <tr>
-                  <th>user</th>
-                  <th>network</th>
-                  <th class="adm-table-grow">nick</th>
-                  <th>auth</th>
-                  <th>connection</th>
+                  {/* user + network merge into one identity cell on
+                      mobile; nick, auth and connection move into the
+                      row's detail panel. LIVE stays: it is the U-0
+                      honesty signal, and "the BEAM has no pid for this"
+                      is the one thing worth seeing without a tap. */}
+                  <th class="adm-table-grow">binding</th>
+                  <th class="adm-col-detail">nick</th>
+                  <th class="adm-col-detail">auth</th>
+                  <th class="adm-col-detail">connection</th>
                   <th>live</th>
                   <th class="adm-table-sticky-actions">actions</th>
                 </tr>
@@ -495,11 +535,21 @@ const AdminCredentialsTab: Component = () => {
                       class="admin-credentials-row"
                       data-testid={`admin-credential-row-${credKey(c)}`}
                     >
-                      <td>{userName(c.user_id)}</td>
-                      <td>{c.network_slug}</td>
-                      <td>{c.nick}</td>
-                      <td>{c.auth_method}</td>
                       <td>
+                        <AdminRowName
+                          open={detailId() === credKey(c)}
+                          onToggle={() =>
+                            setDetailId(detailId() === credKey(c) ? null : credKey(c))
+                          }
+                          label={`details for ${userName(c.user_id)} on ${c.network_slug}`}
+                          testId={`admin-credential-details-${credKey(c)}`}
+                        >
+                          {userName(c.user_id)} @ {c.network_slug}
+                        </AdminRowName>
+                      </td>
+                      <td class="adm-col-detail">{c.nick}</td>
+                      <td class="adm-col-detail">{c.auth_method}</td>
+                      <td class="adm-col-detail">
                         <AdminBadge tone={connectionTone(c.connection_state)}>
                           {c.connection_state}
                         </AdminBadge>

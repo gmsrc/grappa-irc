@@ -2,6 +2,8 @@ import { type Component, createSignal, For, onMount, Show } from "solid-js";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import AdminDetailPanel from "./admin/AdminDetailPanel";
+import AdminFacts from "./admin/AdminFacts";
+import AdminRowName from "./admin/AdminRowName";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import { formatInstant } from "./admin/formatInstant";
@@ -83,12 +85,18 @@ const AdminUsersTab: Component = () => {
   // Per-row delete inline-confirm.
   const [confirmingId, setConfirmingId] = createSignal<string | null>(null);
 
+  // Which row's detail panel is open. Mobile-only in effect: on desktop
+  // every column is on screen and `AdminRowName` renders plain text.
+  const [detailId, setDetailId] = createSignal<string | null>(null);
+
   // The row the rotation panel is editing. DERIVED from `rotatingId` +
   // the fetched list, never a second copy of the user: a refetch must
   // not leave the panel showing a stale name, and a row that vanished
   // (deleted by another admin) closes the panel by itself.
   const rotatingUser = (): AdminUser | undefined =>
     (users() ?? []).find((u) => u.id === rotatingId());
+
+  const detailUser = (): AdminUser | undefined => (users() ?? []).find((u) => u.id === detailId());
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -280,6 +288,24 @@ const AdminUsersTab: Component = () => {
           <AdminEmpty message="no users" testId="admin-users-empty" />
         </Show>
 
+        <Show when={detailUser()}>
+          {(u) => (
+            <AdminDetailPanel
+              title={u().name}
+              subtitle="the columns the table drops on a phone"
+              onClose={() => setDetailId(null)}
+              closeLabel="close user details"
+              data-testid={`admin-user-detail-${u().id}`}
+            >
+              <AdminFacts
+                facts={[
+                  { label: "live sessions", value: String(u().live_session_count) },
+                  { label: "inserted", value: formatInstant(u().inserted_at) },
+                ]}
+              />
+            </AdminDetailPanel>
+          )}
+        </Show>
         <Show when={rotatingUser()}>
           {(u) => (
             <AdminDetailPanel
@@ -338,8 +364,10 @@ const AdminUsersTab: Component = () => {
                 <tr>
                   <th class="adm-table-grow">name</th>
                   <th>admin</th>
-                  <th>live sessions</th>
-                  <th>inserted</th>
+                  {/* Secondary below 900px — they move into the row's
+                      detail panel. See `AdminFacts`. */}
+                  <th class="adm-col-detail">live sessions</th>
+                  <th class="adm-col-detail">inserted</th>
                   {/* Visible, like the other migrated tabs: an unlabelled
                       column reads as a rendering bug, and the actions here
                       are destructive enough to deserve naming. */}
@@ -350,7 +378,16 @@ const AdminUsersTab: Component = () => {
                 <For each={users() ?? []}>
                   {(u) => (
                     <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
-                      <td>{u.name}</td>
+                      <td>
+                        <AdminRowName
+                          open={detailId() === u.id}
+                          onToggle={() => setDetailId(detailId() === u.id ? null : u.id)}
+                          label={`details for ${u.name}`}
+                          testId={`admin-user-details-${u.id}`}
+                        >
+                          {u.name}
+                        </AdminRowName>
+                      </td>
                       <td>
                         {/* The WORD stays: admin-users.spec.ts reads this
                               cell as text (`td.nth(1)` matching /yes|no/), and

@@ -720,7 +720,7 @@ const AdminNetworksTab: Component = () => {
             title="Networks"
             subtitle="expand a row for its server pool and featured channels"
           >
-            <AdminTable data-testid="admin-networks-table">
+            <AdminTable class="admin-networks-table" data-testid="admin-networks-table">
               <thead>
                 <tr>
                   <th class="adm-table-grow">slug</th>
