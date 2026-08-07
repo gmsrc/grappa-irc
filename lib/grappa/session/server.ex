@@ -3905,7 +3905,7 @@ defmodule Grappa.Session.Server do
   # rendezvous to stage against).
   @spec capture_outbound_ns_secret(t(), String.t()) :: t()
   defp capture_outbound_ns_secret(state, line) do
-    case NSInterceptor.intercept(line) do
+    case NSInterceptor.intercept(line, state.nick) do
       {:capture, :register, password} ->
         Logger.debug("staged pending NickServ registration secret (untimed, #129)",
           verb: :ns_capture
@@ -3922,6 +3922,18 @@ defmodule Grappa.Session.Server do
 
       {:capture, :set_passwd, new_password} ->
         commit_set_passwd(state, new_password)
+
+      # #977 — a SET PASSWD Azzurra will refuse. Nothing is committed
+      # BECAUSE nothing changes upstream either, so the two stay in sync and
+      # services deliver the error notice to the user themselves; the reason
+      # atom is the services error constant. Debug, not an alarm — same class
+      # as the unidentified-visitor skip below. NEVER log the password.
+      {:reject, :set_passwd, reason} ->
+        Logger.debug("SET PASSWD not committed — services would reject it (#{reason})",
+          verb: :ns_set_passwd
+        )
+
+        state
 
       :passthrough ->
         state

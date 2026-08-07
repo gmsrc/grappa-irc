@@ -632,13 +632,18 @@ defmodule Grappa.Networks.Credentials do
   leaving the wire (optimistic commit-on-send — the change emits no `+r`
   rendezvous, and NOTICE-scraping is banned, so there is no positive
   confirmation signal; the user is already identified and it is their own
-  deliberate change). A rejected change (Azzurra `do_set_password` refuses
-  insecure / over-`PASSMAX` / same-as-current) stores a password that
-  didn't take — recovered by #124's re-auth-on-identify-failure prompt.
+  deliberate change). #977 moved Azzurra's own guard chain (spaces, under 5 /
+  over `PASSMAX` bytes, equal to the nick, control codes) INTO `NSInterceptor`,
+  so a value services would refuse never reaches this function. The one
+  rejection grappa still cannot foresee is a mistyped OLD password — that one
+  stores a password that didn't take, recovered by #124's
+  re-auth-on-identify-failure prompt.
 
   User-bound mirror of the visitor-side `Grappa.Visitors.commit_password/2`.
-  The `password` is the rest-of-line the interceptor lifted, so it may
-  contain spaces; it is stored verbatim. Goes through the narrow
+  The `password` is the SECOND token of `SET PASSWD <old> <new>` (#977 — the
+  first is the old password services authenticate the rotation against), and
+  `NSInterceptor` has already refused anything services would (spaces, under
+  5 / over 32 bytes, equal to the nick, control codes). Goes through the narrow
   `Credential.password_changeset/2` so only `password_encrypted` is
   touched — the operator binding is left intact.
   """

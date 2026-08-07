@@ -491,9 +491,12 @@ defmodule Grappa.Networks.Credential do
     # Same wire-hygiene guard the wide `changeset/2` applies to `:password`
     # (line ~220): the stored value is re-interpolated into PASS /
     # `PRIVMSG NickServ :IDENTIFY` on the next auto-identify, so a CR/LF/NUL
-    # byte would split or truncate the outbound frame. A SET PASSWD password
-    # is rest-of-line (spaces are legal — `safe_line_token?` only rejects
-    # CR/LF/NUL), so this rejects only genuinely wire-unsafe values.
+    # byte would split or truncate the outbound frame. Deliberately NOT the
+    # place for Azzurra's SET PASSWD rules (≤ 32 bytes, ≥ 5, no spaces, ≠ nick,
+    # no control codes): those are one network's services talking, and this
+    # changeset is network-agnostic. They live at the door that speaks Azzurra
+    # — `Grappa.Session.NSInterceptor`, which refuses the line before any
+    # commit (#977). Here, only the wire-hygiene floor every network shares.
     |> validate_change(:password, &Identity.safe_line_token/2)
     |> put_encrypted_password()
   end

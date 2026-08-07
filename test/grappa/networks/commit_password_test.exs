@@ -101,7 +101,10 @@ defmodule Grappa.Networks.CommitPasswordTest do
 
       refute Credential.password_changeset(cred, "new\r\npass").valid?
       refute Credential.password_changeset(cred, "new\x00pass").valid?
-      # A space is legal (SET PASSWD password is rest-of-line).
+      # A space still passes HERE: this changeset is network-agnostic and only
+      # guards the wire. Azzurra's no-spaces rule is enforced one layer up, at
+      # the door that speaks Azzurra (`Session.NSInterceptor`, #977), so a
+      # spaced value never reaches this function on the SET PASSWD path.
       assert Credential.password_changeset(cred, "new pass").valid?
     end
   end

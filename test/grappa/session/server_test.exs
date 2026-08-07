@@ -6921,8 +6921,10 @@ defmodule Grappa.Session.ServerTest do
   # password OPTIMISTICALLY the moment the well-formed line leaves the wire.
   # Both credential homes: the user-bound `Networks.Credential` (via the
   # injected `credential_committer`) and the anon `visitors` row (via the
-  # reused `visitor_committer`).
-  describe "in-session SET PASSWD → optimistic commit-on-send (#131)" do
+  # reused `visitor_committer`). The wire form is `SET PASSWD <old> <new>`
+  # and what gets committed is the SECOND token (#977) — and only when
+  # Azzurra would accept it, since an optimistic commit has no take-backs.
+  describe "in-session SET PASSWD → optimistic commit-on-send (#131, #977)" do
     test "user session: SET PASSWD rotates the bound credential password, no +r needed" do
       {server, port} = start_server()
 
@@ -6937,7 +6939,7 @@ defmodule Grappa.Session.ServerTest do
                  {:user, user.id},
                  network.id,
                  "NickServ",
-                 "SET PASSWD newpass"
+                 "SET PASSWD oldpass newpass"
                )
 
       # Commit is synchronous inside the send handler — no `+r` MODE was fed.
@@ -6952,7 +6954,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "user session: a rest-of-line password with spaces is committed verbatim" do
+    test "#977 user session: a spaced new password is NOT committed — services refuse it" do
       {server, port} = start_server()
 
       {user, network, _} =
@@ -6966,13 +6968,15 @@ defmodule Grappa.Session.ServerTest do
                  {:user, user.id},
                  network.id,
                  "NickServ",
-                 "SET PASSWD correct horse battery staple"
+                 "SET PASSWD oldpass correct horse battery staple"
                )
 
       _ = SessionStateHelpers.fetch(pid)
 
-      assert Credentials.get_credential!(user, network).password_encrypted ==
-               "correct horse battery staple"
+      # `do_set_password` answers CSNS_ERROR_PASSWORD_WITH_SPACES and changes
+      # nothing upstream, so the stored secret must stay the old one — before
+      # #977 this wrote the whole rest-of-line and desynced the credential.
+      assert Credentials.get_credential!(user, network).password_encrypted == "oldpass"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6991,7 +6995,7 @@ defmodule Grappa.Session.ServerTest do
                  {:visitor, visitor.id},
                  network.id,
                  "NickServ",
-                 "SET PASSWD newpass"
+                 "SET PASSWD oldpass newpass"
                )
 
       state = SessionStateHelpers.fetch(pid)
@@ -7019,7 +7023,7 @@ defmodule Grappa.Session.ServerTest do
                  {:visitor, visitor.id},
                  network.id,
                  "NickServ",
-                 "SET PASSWD newpass"
+                 "SET PASSWD oldpass newpass"
                )
 
       _ = SessionStateHelpers.fetch(pid)

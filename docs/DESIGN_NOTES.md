@@ -7249,7 +7249,10 @@ point) gains a third verb class `:set_passwd` matching
   untouched (unit-pinned).
 - The new password is **rest-of-line**, not a token — Azzurra parses
   `strtok(NULL,"")`, so it may contain spaces; never split on the first
-  space.
+  space. **FALSE — superseded 2026-08-07 (#977).** That `strtok` yields the
+  OLD password AND the new one; `do_set_password` splits it at the first
+  space, and Azzurra passwords cannot contain spaces at all. Reading this
+  bullet as gospel is what stored the two concatenated.
 
 cic needs zero changes: `/ns set passwd …` already emits a `PRIVMSG NickServ`
 body the server captures (one-parser invariant). A pre-validating cic
@@ -32059,3 +32062,65 @@ takes down the whole suite, not one spec), and it is curl-fetched at boot by
 `infra/cloud/first-boot.sh:195` behind the `check-drift.sh` CI gate. Three
 live readers, one of them the CI. The rule "if only a dead substrate reads
 it, delete it" is right; its antecedent was simply false here.
+
+## 2026-08-07 — SET PASSWD hands over the OLD password first (#977)
+
+Every in-session NickServ password rotation stored the old and the new
+password **concatenated**. Reported in the wild: a visitor rotated, ended up
+with "a password that was too long", went through `RECOVER` + `RESETPASS`,
+and grappa still auto-identified with the dead secret. The "too long"
+password was the concatenation. This is the #124 split-brain, manufactured by
+grappa itself rather than by an out-of-band change.
+
+**The false premise, and where it came from.** The #131 note above records
+that Azzurra parses the new password with `strtok(NULL, "")` and that it may
+therefore contain spaces. The `strtok` is real; the reading was wrong. In
+`azzurra/services@23473ed`, `do_set` (`src/nickserv.c:2090`) hands
+`do_set_password` everything after the verb, and `do_set_password` (`:2182`)
+then splits THAT at the first space: `newpass = strchr(param, ' ');
+*newpass++ = '\0';`. The head is the OLD password — the comment at `:2204`
+says it outright — checked with `str_equals(param, ni->pass)`. The form is
+`SET PASSWD <old> <new>` and the rotation is AUTHENTICATED. Azzurra passwords
+cannot contain spaces at all: the line right after the split earns
+`CSNS_ERROR_PASSWORD_WITH_SPACES`. So the capture is the SECOND token, and a
+one-token `SET PASSWD <new>` (the Atheme spelling) is not a capture at all —
+services answer a syntax error and change nothing, so neither may we.
+
+**Vetting belongs at the door that speaks Azzurra.** The commit is
+OPTIMISTIC on-send (#131, unchanged: no `+r` fires for a rotation, and
+NOTICE-scraping stays banned), and an optimistic write has no take-backs — so
+a value services would refuse must be refused BEFORE it is written, not
+regretted after. `NSInterceptor` therefore carries `do_set_password`'s own
+guard chain in its order (spaces → nick-or-under-5 → over-`PASSMAX` →
+control codes) and answers a new `{:reject, :set_passwd, reason}`, the reason
+being the services error constant. The line still goes out: services deliver
+their own error notice to the user, grappa's DB is untouched, and the two
+stay in sync — which is the whole point. `Session.Server` logs the refusal at
+debug (never the password) rather than dropping it silently.
+
+Two guards are deliberately NOT mirrored, both because mirroring them buys
+nothing: `str_equals` against the current password (a no-op rotation would
+store the value already stored) and the old-password check itself — grappa
+cannot vet a mistyped OLD password from the line alone, so that one case
+still commits optimistically and still falls to #124's re-auth backstop.
+That is now the ONLY residual divergence on this path, down from "every
+rotation".
+
+**`PASSMAX` = 32 is a constant here on purpose.** It is a compile-time
+`#define` (`azzurra/services inc/config.h:96`), not a services.conf
+directive: there is nothing to learn at runtime from the wire and nothing for
+an operator to tune. It lives in `NSInterceptor` next to its source
+reference. The under-5 floor and `string_has_ccodes` (`src/misc.c:1321` — any
+BYTE below 32, or the byte 160) are the same kind of fact; the ccodes check
+is byte-level on purpose, which is also why an accented password is refused
+(`à` is `C3 A0`, and `A0` is 160).
+
+**Where it does NOT go.** `Credential.password_changeset/2` keeps only the
+CR/LF/NUL wire-hygiene guard. Azzurra's rules are one network's services
+talking, and that changeset is network-agnostic — encoding a 32-byte ceiling
+there would reject passwords other networks accept, for a path they do not
+even reach. One authority per fact: the Azzurra-shaped parser owns the
+Azzurra-shaped rules.
+
+The #131 entry above stands as the record of that day's reasoning; its
+"rest-of-line, may contain spaces" bullet is superseded here.
