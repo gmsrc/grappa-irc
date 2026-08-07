@@ -18,10 +18,9 @@ defmodule GrappaWeb.InvitesControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.IRCServer
+  alias Grappa.{IRCServer, SessionStateHelpers}
   alias Grappa.PubSub.Topic
   alias Grappa.Session.WindowState
-  alias Grappa.SessionStateHelpers
 
   setup %{conn: conn} do
     vjt = user_fixture(name: "vjt-#{u()}")
