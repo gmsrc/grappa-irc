@@ -44,8 +44,9 @@ defmodule Grappa.Session.NumericRouter do
      offending command's argument list (461), an ack (437), or a whole
      server-directed REPORT family whose middles are data, type labels or
      table headers (`@stats_numerics` #184/#911, `@trace_numerics` #908,
-     `@list_numerics` #910, `@admin_numerics` / `@help_numerics` /
-     `@sasl_numerics` / `@monitor_list_numerics` #911, the connect-storm
+     `@list_numerics` #910, `@help_numerics` /
+     `@sasl_numerics` / `@monitor_list_numerics` #911 (`@admin_numerics`
+     left for the delegated set in #992), the connect-storm
      tokens). These ALWAYS go to
      `{:server, nil}`. Without this deny
      list, the param-scan below would happily route 433's "BLEH-as-nick"
@@ -302,12 +303,41 @@ defmodule Grappa.Session.NumericRouter do
   # Nothing about the family says "conversation"; the exposure is purely
   # that a config string happened to be nick-shaped.
   #
-  # 256 RPL_ADMINME carries the server NAME and is saved today only by
+  # 256 RPL_ADMINME carries the server NAME and was saved pre-#992 only by
   # `query_candidate?/2`'s `.`-exclusion — the same accident that saved
   # 262 RPL_ENDOFTRACE and 323 RPL_LISTEND. Covered for the same reason
   # those two are: a family-wide rule must not rest on how a server
   # happens to be spelled.
+  #
+  # #992 — the family MOVED from `@active_numerics` into
+  # `@delegated_numerics`: /admin became a native verb, so EventRouter's
+  # clause owns it. Delegation short-circuits AHEAD of the deny list, and
+  # the clause's unprimed branch persists to `$server`, so the #911
+  # guarantee above is preserved rather than repealed — but it is now
+  # proven at the new owner (`event_router_test.exs`, the DOTLESS A-line
+  # test), because a routing decision that changed rungs is not
+  # automatically still true.
   @admin_numerics Enum.to_list(256..259)
+
+  # #992 — ADMIN's two OWN error terminators. Neither is accompanied by any
+  # 256-259, so an accumulator waiting only on 259 dangles on exactly the
+  # paths that have no other reply:
+  #
+  #   * 423 ERR_NOADMININFO — `m_admin`'s `else` branch (bahamut
+  #     `s_serv.c:2703`) when `find_admin()` misses: no A-line configured.
+  #   * 447 ERR_RESTRICTED — `check_restricted_user` (`s_misc.c:1211`)
+  #     fires and returns BEFORE `hunt_server`, for a non-oper, non-
+  #     `IsKnownNick` client on an `I:`-line with CONF_FLAGS_I_RESTRICTED.
+  #     Reachable by a visitor on a restricted class.
+  #
+  # The fourth terminator, 402 ERR_NOSUCHSERVER, is already delegated by
+  # #374 and is SHARED with `/motd <target>` — see EventRouter's dedicated
+  # 402 clause for how ownership is resolved.
+  #
+  # 447 is itself emitted from several handlers (`m_admin`, `m_links`,
+  # channel.c, s_user.c), so an unprimed one still lands on `$server` via
+  # the clause's nil branch — visible, never silent.
+  @admin_terminators [423, 447]
 
   # HELP reply family (704–706, solanum; bahamut has no 7xx HELP). The
   # topic token sits in `params[1]` on all three —
@@ -400,7 +430,6 @@ defmodule Grappa.Session.NumericRouter do
                      @stats_numerics ++
                        @trace_numerics ++
                        @list_numerics ++
-                       @admin_numerics ++
                        @help_numerics ++
                        @sasl_numerics ++
                        @monitor_list_numerics ++
@@ -783,7 +812,7 @@ defmodule Grappa.Session.NumericRouter do
                         602,
                         604,
                         605
-                      ])
+                      ] ++ @admin_numerics ++ @admin_terminators)
 
   # ---------------------------------------------------------------------------
   # Public API

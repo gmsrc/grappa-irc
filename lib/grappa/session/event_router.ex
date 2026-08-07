@@ -2152,7 +2152,7 @@ defmodule Grappa.Session.EventRouter do
          %Message{command: {:numeric, motd_numeric}} = msg,
          state
        )
-       when motd_numeric in [375, 372, 376, 422, 402] do
+       when motd_numeric in [375, 372, 376, 422] do
     case Map.get(state, :motd_pending) do
       nil ->
         persist_server_notice(state, msg)
@@ -2165,10 +2165,93 @@ defmodule Grappa.Session.EventRouter do
           motd_numeric == 376 ->
             {:cont, %{state | motd_pending: nil}, [{:server_reply, :motd, server_reply_drain(accum)}]}
 
-          motd_numeric in [422, 402] ->
+          motd_numeric == 422 ->
             drained = server_reply_drain(server_reply_fold(accum, msg))
             {:cont, %{state | motd_pending: nil}, [{:server_reply, :motd, drained}]}
         end
+    end
+  end
+
+  # #992 — ADMIN (256 RPL_ADMINME, 257 RPL_ADMINLOC1, 258 RPL_ADMINLOC2,
+  # 259 RPL_ADMINEMAIL) + 423 ERR_NOADMININFO + 447 ERR_RESTRICTED. Fourth
+  # member of the #127 family, gated on `state.admin_pending` (primed by
+  # `:send_admin`); unprimed it falls back to the same `$server` :notice
+  # persist, so an unsolicited burst is visible, never silent.
+  #
+  # WHY the terminator set is four wide and not one. Read out of
+  # azzurra/bahamut `m_admin` (`src/s_serv.c:2676`), which has exactly four
+  # exits and no fifth:
+  #
+  #   * `find_admin()` hit  → 256, 257, 258, 259 in that fixed order.
+  #   * `find_admin()` miss → 423 and NO 256-259 at all (`:2703`).
+  #   * `hunt_server()` non-ISME → 402 (see the dedicated 402 clause).
+  #   * `check_restricted_user()` → 447, returning BEFORE everything else
+  #     (`src/s_misc.c:1211`).
+  #
+  # Waiting only on 259 would leave `admin_pending` armed on three of those
+  # four, and there is NO timeout on these flags — the next explicit /admin
+  # re-arms unconditionally, but this request gets no modal and a later
+  # unsolicited burst folds into the stale lines instead of reaching
+  # `$server`.
+  #
+  # UNLIKE 376 RPL_ENDOFMOTD, the happy-path terminator 259 CARRIES CONTENT
+  # (`":%s 259 %s :%s"`, fed `aconf->name` — the contact address, the single
+  # most useful line in the reply), so every terminator here folds its own
+  # line before draining. Only 256/257/258 are pure accumulation.
+  #
+  # ADMIN is NOT rate-limited upstream: `static time_t last_used` lives in
+  # exactly four `s_serv.c` handlers (`m_info`, `m_stats`, `m_help`,
+  # `m_motd`) and `m_admin` is not one of them. So unlike /motd and /info,
+  # there is no silent-no-reply path here for the accumulator to fall into.
+  defp do_route(
+         %Message{command: {:numeric, admin_numeric}} = msg,
+         state
+       )
+       when admin_numeric in [256, 257, 258, 259, 423, 447] do
+    case Map.get(state, :admin_pending) do
+      nil ->
+        persist_server_notice(state, msg)
+
+      accum ->
+        folded = server_reply_fold(accum, msg)
+
+        if admin_numeric in [256, 257, 258] do
+          {:cont, %{state | admin_pending: folded}, []}
+        else
+          {:cont, %{state | admin_pending: nil},
+           [{:server_reply, :admin, server_reply_drain(folded)}]}
+        end
+    end
+  end
+
+  # #374/#992 — 402 ERR_NOSUCHSERVER, a terminator owned by no single verb.
+  # `/motd <target>` and `/admin <target>` both route through bahamut's
+  # `hunt_server` (`src/s_user.c:267`), which answers an unknown target with
+  # a bare `402 <nick> <target> :No such server`. The wire carries NO
+  # correlation tag — no label, no verb echo — so when both accumulators are
+  # armed there is no way to tell whose 402 this is.
+  #
+  # Ruling: disarm EVERY armed candidate and surface the error ONCE. The
+  # asymmetry is deliberate. An accumulator left armed is a real break (no
+  # modal for the request that asked, AND a later unsolicited burst folds
+  # into the stale lines instead of reaching `$server`), while over-clearing
+  # costs at most one modal that the next explicit request re-arms
+  # unconditionally. The two failure modes do not weigh the same.
+  #
+  # The surfaced `source` is the first armed in @server_reply_402_owners
+  # order. MOTD leads so #374's shipped behaviour is byte-identical whenever
+  # /admin is not in flight.
+  @server_reply_402_owners [{:motd_pending, :motd}, {:admin_pending, :admin}]
+
+  defp do_route(%Message{command: {:numeric, 402}} = msg, state) do
+    case Enum.filter(@server_reply_402_owners, fn {key, _} -> Map.get(state, key) end) do
+      [] ->
+        persist_server_notice(state, msg)
+
+      [{key, source} | _] = armed ->
+        drained = server_reply_drain(server_reply_fold(Map.get(state, key), msg))
+        disarmed = Enum.reduce(armed, state, fn {k, _}, acc -> Map.put(acc, k, nil) end)
+        {:cont, disarmed, [{:server_reply, source, drained}]}
     end
   end
 

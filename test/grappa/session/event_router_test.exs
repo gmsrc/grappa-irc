@@ -1402,6 +1402,148 @@ defmodule Grappa.Session.EventRouterTest do
                  state
                )
     end
+
+    # #992 — ADMIN, the fourth member of the family. Wire shapes measured
+    # from azzurra/bahamut `src/s_err.c`:
+    #   256 `":%s 256 %s :Administrative info about %s"`
+    #   257 `":%s 257 %s :%s"`  (aconf->host)
+    #   258 `":%s 258 %s :%s"`  (aconf->passwd — the A-line's second line)
+    #   259 `":%s 259 %s :%s"`  (aconf->name — the contact email)
+    #
+    # UNLIKE 376 RPL_ENDOFMOTD, the terminator 259 RPL_ADMINEMAIL CARRIES
+    # CONTENT, so it must fold its own line BEFORE draining or the contact
+    # address — the single most useful line in the reply — is dropped.
+    test "primed /admin folds 256/257/258 and drains {:server_reply, :admin, lines} on 259" do
+      state = base_state(%{admin_pending: %{lines: []}})
+
+      {:cont, s1, []} =
+        EventRouter.route(
+          msg({:numeric, 256}, ["vjt", "Administrative info about irc.test"], nil),
+          state
+        )
+
+      {:cont, s2, []} =
+        EventRouter.route(msg({:numeric, 257}, ["vjt", "Azzurra IRC Network"], nil), s1)
+
+      {:cont, s3, []} =
+        EventRouter.route(msg({:numeric, 258}, ["vjt", "Milano, IT"], nil), s2)
+
+      assert {:cont, drained, [{:server_reply, :admin, lines}]} =
+               EventRouter.route(msg({:numeric, 259}, ["vjt", "staff@azzurra.org"], nil), s3)
+
+      assert lines == [
+               "Administrative info about irc.test",
+               "Azzurra IRC Network",
+               "Milano, IT",
+               "staff@azzurra.org"
+             ]
+
+      assert drained.admin_pending == nil
+    end
+
+    # 423 ERR_NOADMININFO — bahamut `m_admin`'s `else` branch (s_serv.c:2703)
+    # when `find_admin()` misses: NO 256-259 is sent at all, so an accumulator
+    # waiting only on 259 never drains. Three params
+    # (`":%s 423 %s %s :No administrative info "`), so the fold takes the
+    # trailing, not the server token.
+    test "primed /admin drains on 423 ERR_NOADMININFO (no 256-259 burst arrives)" do
+      state = base_state(%{admin_pending: %{lines: []}})
+
+      assert {:cont, drained, [{:server_reply, :admin, ["No administrative info available"]}]} =
+               EventRouter.route(
+                 msg({:numeric, 423}, ["vjt", "irc.test", "No administrative info available"], nil),
+                 state
+               )
+
+      assert drained.admin_pending == nil
+    end
+
+    # 447 ERR_RESTRICTED — `check_restricted_user` (s_misc.c:1211) fires
+    # BEFORE `hunt_server` and returns, so again nothing else arrives. Two
+    # params (`":%s 447 %s :You need a registered nick..."`). Reachable by a
+    # visitor on an I-line with CONF_FLAGS_I_RESTRICTED.
+    test "primed /admin drains on 447 ERR_RESTRICTED" do
+      state = base_state(%{admin_pending: %{lines: []}})
+
+      assert {:cont, drained,
+              [{:server_reply, :admin, ["You need a registered nick to issue commands!"]}]} =
+               EventRouter.route(
+                 msg(
+                   {:numeric, 447},
+                   ["vjt", "You need a registered nick to issue commands!"],
+                   nil
+                 ),
+                 state
+               )
+
+      assert drained.admin_pending == nil
+    end
+
+    # #911's property, carried through the new delegated path. 257 RPL_ADMINLOC1
+    # is `":%s 257 %s :%s"` fed the A-line verbatim, so a DOTLESS one-word
+    # A-line ("Azzurra", a nick, "staff") used to be scan-routed as a query
+    # destination. #911 closed that with the active deny-list; #992 moves the
+    # family to delegation, which short-circuits AHEAD of the deny-list — so
+    # the guarantee has to be re-proven at its new owner, not assumed to
+    # survive the move.
+    test "unprimed 257 with a DOTLESS A-line persists to $server, never a query window" do
+      state = base_state()
+
+      assert {:cont, ^state, [{:persist, :notice, attrs}]} =
+               EventRouter.route(
+                 msg({:numeric, 257}, ["vjt", "Azzurra"], {:server, "irc.test"}),
+                 state
+               )
+
+      assert attrs.channel == "$server"
+    end
+
+    test "unprimed 259 RPL_ADMINEMAIL persists to $server, no server_reply" do
+      state = base_state()
+
+      assert {:cont, ^state, [{:persist, :notice, %{channel: "$server"}}]} =
+               EventRouter.route(
+                 msg({:numeric, 259}, ["vjt", "staff@azzurra.org"], {:server, "irc.test"}),
+                 state
+               )
+    end
+
+    # #992 — 402 ERR_NOSUCHSERVER is a SHARED terminator: `/motd <target>`
+    # (#374) and `/admin <target>` both route through bahamut's `hunt_server`
+    # (s_user.c:267) and get the same bare `402 <nick> <target> :No such
+    # server` back. The wire carries NO correlation tag.
+    #
+    # Ruling: disarm EVERY armed candidate, surface the error ONCE. Leaving
+    # an accumulator armed is a real break (no modal now, AND a later
+    # unsolicited burst folds into the stale lines instead of reaching
+    # $server); over-clearing costs one modal that the next explicit request
+    # re-arms unconditionally. The two do not weigh the same.
+    test "402 with only /admin in flight drains {:server_reply, :admin, [error]}" do
+      state = base_state(%{admin_pending: %{lines: []}})
+
+      assert {:cont, drained, [{:server_reply, :admin, ["No such server"]}]} =
+               EventRouter.route(
+                 msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], nil),
+                 state
+               )
+
+      assert drained.admin_pending == nil
+    end
+
+    test "402 with BOTH /motd and /admin in flight disarms both and surfaces once" do
+      state = base_state(%{motd_pending: %{lines: []}, admin_pending: %{lines: []}})
+
+      assert {:cont, drained, [{:server_reply, :motd, ["No such server"]}]} =
+               EventRouter.route(
+                 msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], nil),
+                 state
+               )
+
+      # Exactly ONE effect above, and NEITHER flag survives — the whole point
+      # of the ruling.
+      assert drained.motd_pending == nil
+      assert drained.admin_pending == nil
+    end
   end
 
   describe "route/2 — :join" do

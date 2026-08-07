@@ -75,12 +75,18 @@ defmodule Grappa.Session.NumericRouterTest do
   # `src/s_err.c` and solanum @ 115b1e2 `include/messages.h` — not out of
   # an RFC. The per-family tests below carry the measured wire shape and
   # the emitting file:line; this property pins the MEMBERSHIP.
+  #
+  # #992 — ADMIN (256–259) LEFT this list for `@delegated_numerics`: /admin
+  # became a native verb with an EventRouter clause, and delegation
+  # short-circuits AHEAD of the active deny-list. The #911 guarantee (a
+  # dotless A-line is never a query destination) is unchanged — the unprimed
+  # branch persists to $server — but it is now proven at its new owner, in
+  # `event_router_test.exs`, not here.
   @active_numerics [4, 42, 263, 410, 421, 432, 433, 437, 461, 472, 512, 734] ++
                      (Enum.to_list(211..250) -- [221]) ++
                      Enum.to_list(200..210) ++
                      [261, 262] ++
                      Enum.to_list(321..323) ++
-                     Enum.to_list(256..259) ++
                      Enum.to_list(704..706) ++
                      Enum.to_list(900..908) ++
                      [732, 733]
@@ -133,6 +139,20 @@ defmodule Grappa.Session.NumericRouterTest do
     371,
     374,
     351,
+    # #992 — ADMIN (256/257/258/259) + its two OWN terminators, 423
+    # ERR_NOADMININFO and 447 ERR_RESTRICTED. Delegated so the EventRouter
+    # clause owns the whole family: primed by /admin it drains a
+    # `{:server_reply, :admin, lines}` modal, unprimed it persists to
+    # $server. 423 and 447 are here because on those two paths bahamut sends
+    # NO 256-259 at all (`m_admin`'s find_admin() else-branch, and
+    # `check_restricted_user` returning before hunt_server) — an accumulator
+    # waiting only on 259 would never drain.
+    256,
+    257,
+    258,
+    259,
+    423,
+    447,
     # CP15 B2 — JOIN failure numerics (EventRouter handles them now)
     471,
     473,
@@ -572,22 +592,42 @@ defmodule Grappa.Session.NumericRouterTest do
       assert :delegated = NumericRouter.route(m, state())
     end
 
-    test "257 RPL_ADMINLOC1: a one-word A-line is NOT a query destination" do
-      # bahamut `s_err.c:295` — `":%s 257 %s :%s"` — fed `aconf->host`
-      # verbatim from `s_serv.c:2695`. TWO params, so
-      # `candidate_params/1`'s 2-elem clause (B6.1 HIGH-4) hands the
-      # trailing straight to the scan, and the reply's destination becomes
-      # whatever the operator typed into `admin { }`.
+    # #911 measured that a one-word A-line ("Azzurra", "staff", a nick) fed
+    # verbatim into 257's only middle (`s_err.c:295` — `":%s 257 %s :%s"` —
+    # from `s_serv.c:2695`) would be scan-routed as a query destination, and
+    # closed it with the active deny-list. #992 made /admin a native verb, so
+    # the family moved one rung UP the precedence ladder (label > delegated >
+    # active-deny) into EventRouter's clause. The routing decision here is
+    # therefore `:delegated`, not `{:server, nil}` — but the GUARANTEE is
+    # unchanged, because the clause's unprimed branch persists to $server.
+    # That end of it is pinned in `event_router_test.exs` ("unprimed 257 with
+    # a DOTLESS A-line persists to $server"); flipping this assertion without
+    # that one would have silently reopened #911.
+    test "257 RPL_ADMINLOC1 is delegated (EventRouter owns the A-line, #992)" do
       m = msg(257, ["vjt", "Azzurra"])
-      assert {:server, nil} = NumericRouter.route(m, state())
+      assert :delegated = NumericRouter.route(m, state())
     end
 
-    test "256 RPL_ADMINME: stays on $server even for a DOTLESS server name" do
+    test "256 RPL_ADMINME is delegated even for a DOTLESS server name (#992)" do
       # solanum shape — `"%s :Administrative info"`, so `params[1]` is the
-      # server name. Saved today only by `query_candidate?/2`'s
-      # `.`-exclusion, exactly like 262 RPL_ENDOFTRACE and 323 RPL_LISTEND.
+      # server name. Pre-#992 it was saved only by `query_candidate?/2`'s
+      # `.`-exclusion, exactly like 262 RPL_ENDOFTRACE and 323 RPL_LISTEND;
+      # delegation no longer rests on how a server happens to be spelled.
       m = msg(256, ["vjt", "services", "Administrative info"])
-      assert {:server, nil} = NumericRouter.route(m, state())
+      assert :delegated = NumericRouter.route(m, state())
+    end
+
+    # #992 — the two ADMIN terminators that carry no 256-259 burst with them.
+    # Both must be delegated or a primed /admin dangles on the exact paths
+    # that have no other reply.
+    test "423 ERR_NOADMININFO is delegated (#992)" do
+      m = msg(423, ["vjt", "irc.test", "No administrative info available"])
+      assert :delegated = NumericRouter.route(m, state())
+    end
+
+    test "447 ERR_RESTRICTED is delegated (#992)" do
+      m = msg(447, ["vjt", "You need a registered nick to issue commands!"])
+      assert :delegated = NumericRouter.route(m, state())
     end
 
     test "704 RPL_HELPSTART: the help TOPIC is NOT a query destination" do
