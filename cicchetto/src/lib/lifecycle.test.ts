@@ -44,7 +44,15 @@ vi.mock("./networks", () => ({
 }));
 
 import { acceptConfirm, confirmRequest, dismissConfirm } from "./confirmDialog";
-import { canDetach, confirmDetach, confirmQuit, deleteAccount, detach, quit } from "./lifecycle";
+import {
+  canDetach,
+  confirmDetach,
+  confirmQuit,
+  deleteAccount,
+  deleteAccountBody,
+  detach,
+  quit,
+} from "./lifecycle";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -247,6 +255,40 @@ describe("confirmQuit copy (#986)", () => {
     // The confirm request carries no input contract at all — just a body,
     // an affirmative label, and (unused here) the #816 third door.
     expect(confirmRequest()?.alternative).toBeNull();
+  });
+});
+
+describe("deleteAccountBody copy (#462)", () => {
+  const USER = { kind: "user", id: "u1", name: "alice" } as const;
+  const REGISTERED = { kind: "visitor", id: "v1", nick: "vjt", registered: true } as const;
+
+  const bodyFor = (subject: typeof subjectHolder.current): string => {
+    subjectHolder.current = subject;
+    return deleteAccountBody();
+  };
+
+  it("names the thing each subject actually owns", () => {
+    // The two subjects `showDeleteAccount()` offers this to destroy DIFFERENT
+    // nouns — an account with a password behind it, or a registered nick the
+    // server keeps. Describing both as "your account" would be false for one
+    // of them, which is the failure #986 fixed one door up.
+    expect(bodyFor(USER)).not.toBe(bodyFor(REGISTERED));
+    expect(bodyFor(USER)).toMatch(/account/i);
+    expect(bodyFor(REGISTERED)).toMatch(/nick/i);
+  });
+
+  it("says the word `quit` deliberately does not", () => {
+    // The whole point of the separate affordance: quit PRESERVES a persistent
+    // identity, this one destroys it. Both bodies must say so.
+    for (const subject of [USER, REGISTERED]) {
+      expect(bodyFor(subject)).toMatch(/permanently|cannot be undone/i);
+    }
+  });
+
+  it("never promises survival — that sentence belongs to quit", () => {
+    for (const subject of [USER, REGISTERED]) {
+      expect(bodyFor(subject)).not.toMatch(/survive/i);
+    }
   });
 });
 

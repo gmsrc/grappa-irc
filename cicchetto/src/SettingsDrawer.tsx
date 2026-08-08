@@ -20,7 +20,7 @@ import { syncedSetColoredNicklist, syncedSetTimeFormat } from "./lib/displayPref
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
-import { updateIdentity, updateNetworkPassword } from "./lib/lifecycle";
+import { deleteAccountBody, updateIdentity, updateNetworkPassword } from "./lib/lifecycle";
 import { networks, user } from "./lib/networks";
 import { mirrorNotificationPrefs } from "./lib/notificationPrefs";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
@@ -39,7 +39,7 @@ import {
 import { reconnectConnectedNetworks } from "./lib/reconnect";
 import { selectedChannel } from "./lib/selection";
 import { consumePendingSettingsPage, type SettingsSubPage } from "./lib/settingsNav";
-import { openShareModal } from "./lib/shareModal";
+import { openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
 import { getTimeFormat, type TimeFormatKey } from "./lib/timeFormat";
 import { activeHost } from "./lib/uploadHost";
 import {
@@ -69,7 +69,7 @@ import WatchlistsSettings from "./WatchlistsSettings";
 // `<Show>` blocks whose signals live in this component's body (general =
 // upload retention + visitor identity; display = text size / timestamp /
 // colored nicklist; push = notifications). The main page keeps, BELOW the
-// index, the subject-gated affordances that aren't sub-pages: share session,
+// index, the subject-gated affordances that aren't sub-pages: the share entry,
 // delete account, done. (#986 retired three of them: admin console was an
 // exact duplicate of the rail's admin action, and detach + quit moved into
 // the rail actions menu behind a per-subject confirm modal.)
@@ -82,7 +82,7 @@ import WatchlistsSettings from "./WatchlistsSettings";
 // delete-account modal opened FROM the drawer closes on the first Esc and
 // the drawer itself on the next. (#392 — the share surface is a MODAL again,
 // mounted in Shell and closed via the shared overlay Esc stack, NOT a drawer
-// sub-page; the drawer's "share session" button just calls openShareModal.)
+// sub-page; the drawer's share entry just calls openShareModal.)
 
 export type Props = {
   open: boolean;
@@ -794,7 +794,7 @@ const SettingsDrawer: Component<Props> = (props) => {
             pushes into a dedicated sub-page (a `<Show>`-gated block that
             replaces the index in place); the header × stays visible for both.
             Below the index sit the subject-gated affordances that are NOT
-            sub-pages (share session, delete account, done — #986 moved the
+            sub-pages (the share entry, delete account, done — #986 moved the
             lifecycle verbs to the rail and dropped the duplicate admin
             entry). */}
         <Show when={settingsPage() === "main"}>
@@ -989,9 +989,14 @@ const SettingsDrawer: Component<Props> = (props) => {
               data-testid="share-session-entry"
               onClick={() => openShareModal()}
             >
-              <span class="settings-share-button-label">share session</span>
+              <span class="settings-share-button-label">{SHARE_SESSION_LABEL}</span>
+              {/* #462 — the subtitle used to BE the label ("open this session
+                  on another device") while the label said something else. With
+                  the name settled, the second line earns its place by saying
+                  what the door actually shows: the modal is a QR code plus a
+                  single-use link, not a settings toggle. */}
               <span class="settings-share-button-subtitle muted">
-                open this session on another device
+                scan a QR code, or send yourself a single-use link
               </span>
             </button>
           </Show>
@@ -1014,14 +1019,25 @@ const SettingsDrawer: Component<Props> = (props) => {
             ONLY here. Offered to a registered non-admin user or a registered
             visitor; admins + anon visitors never see it. */}
           <Show when={showDeleteAccount()}>
-            <button
-              type="button"
-              class="delete-account-entry"
-              data-testid="delete-account-btn"
-              onClick={() => setDeleteOpen(true)}
-            >
-              delete account
-            </button>
+            {/* #462 — the button and its consequence are ONE affordance, so
+                they sit in one box: the drawer's own 1rem flex gap would put
+                the sentence as far from its button as from the unrelated
+                control above it. The copy comes from lib/lifecycle, beside the
+                verb, computed per subject — a user and a registered visitor
+                lose different nouns here. */}
+            <div class="settings-danger">
+              <button
+                type="button"
+                class="delete-account-entry"
+                data-testid="delete-account-btn"
+                onClick={() => setDeleteOpen(true)}
+              >
+                delete account
+              </button>
+              <p class="settings-section-blurb" data-testid="delete-account-hint">
+                {deleteAccountBody()}
+              </p>
+            </div>
           </Show>
 
           {/* UX-4 bucket L — bottom "done" button. Same close verb as
@@ -1246,6 +1262,17 @@ const SettingsDrawer: Component<Props> = (props) => {
                     </For>
                   </select>
                 </label>
+                {/* #462 — the select alone answers none of the three questions
+                    it raises. The third one is the load-bearing one: the TTL is
+                    read at UPLOAD time (uploadOrchestrator picks the host token
+                    when it posts the file), so this is not a retention setting
+                    over a library — it applies to the next upload and cannot
+                    reach back to the last one. */}
+                <p class="settings-section-blurb" data-testid="upload-ttl-hint">
+                  The image host deletes an upload when its time is up. This is your own preference
+                  over the site default, and it applies to uploads you make from now on — files you
+                  have already uploaded keep the duration they were sent with.
+                </p>
                 <Show when={uploadTtlSavingError() !== null}>
                   <p class="upload-ttl-error" role="alert" data-testid="upload-ttl-error">
                     {uploadTtlSavingError()}

@@ -230,3 +230,37 @@ export async function deleteAccount(): Promise<void> {
   await apiDeleteAccount(t);
   clearLocalAuth();
 }
+
+// #462 — the sentence under the drawer's `delete account` button, colocated
+// with the verb for the reason #986 gave one screen up: copy that lives away
+// from the teardown it describes drifts from it, and a door that misdescribes
+// what it destroys is worse than an unlabelled one.
+//
+// Per SUBJECT, not per button: `showDeleteAccount()` offers this to two
+// different owners of two different nouns. A user owns an ACCOUNT (a name and
+// a password they log back in with); a registered visitor owns a NICK the
+// server keeps for them. One sentence covering both would be false for one of
+// them. The distinction mirrors QUIT_BODY_USER vs QUIT_BODY_REGISTERED_VISITOR
+// exactly, and for the same reason.
+//
+// What both must say is the thing quit's copy is careful NOT to: this one does
+// not survive.
+
+const DELETE_BODY_USER =
+  "Erase your account and everything on it — networks, settings, scrollback — from the " +
+  "server, permanently. This is not quit: nothing is left to log back into.";
+
+const DELETE_BODY_REGISTERED_VISITOR =
+  "Erase your registered nick and everything on it — networks, settings, scrollback — from " +
+  "the server, permanently. This is not quit: there is nothing left to identify back to.";
+
+/**
+ * deleteAccountBody — the consequence of `delete account` for the current
+ * subject, in one sentence. Keyed off the same subject read `quitBody()`
+ * uses. The admin and anon cases have no string: they are never offered the
+ * affordance (the server 403s them), so the caller renders neither button nor
+ * body and the visitor copy is the honest default for the remaining arm.
+ */
+export function deleteAccountBody(): string {
+  return getSubject()?.kind === "user" ? DELETE_BODY_USER : DELETE_BODY_REGISTERED_VISITOR;
+}

@@ -23,7 +23,7 @@ import { networkIdBySlug, refetchNetworks, refetchUser, user } from "./lib/netwo
 import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
 import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
-import { openShareModal } from "./lib/shareModal";
+import { openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
 import { pushLinks, pushRecover } from "./lib/socket";
 import { umodesForNetwork } from "./lib/umodes";
 import { confirmDisconnectNetwork } from "./lib/windowClose";
@@ -583,7 +583,7 @@ const HomePaneBody: Component = () => {
           <span class="home-pane-share-icon" aria-hidden="true">
             📱
           </span>
-          open on another device
+          {SHARE_SESSION_LABEL}
         </button>
       </Show>
     </div>

@@ -242,12 +242,17 @@ vi.mock("../lib/uploadOrchestrator", () => ({
 }));
 
 // #392 — the share surface is now a MODAL mounted in Shell (not in the
-// drawer). The drawer's "share session" button just flips the shared open
+// drawer). The drawer's share entry just flips the shared open
 // signal via openShareModal(); mock it so the click is observable here
 // without mounting the modal (its own behaviour lives in
 // ShareSessionModal.test.tsx).
 const shareModalHolder = { opened: 0 };
-vi.mock("../lib/shareModal", () => ({
+// #462 — spread the REAL module so `SHARE_SESSION_LABEL` comes from the one
+// place that declares it: a hand-written copy in the factory would be a
+// fourth literal, which is the very drift the constant exists to stop. Only
+// the side-effecting opener is stubbed.
+vi.mock("../lib/shareModal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/shareModal")>()),
   openShareModal: () => {
     shareModalHolder.opened += 1;
   },
@@ -267,6 +272,8 @@ vi.mock("../DeleteAccountModal", async () => {
   };
 });
 
+import { deleteAccountBody } from "../lib/lifecycle";
+import { SHARE_SESSION_LABEL } from "../lib/shareModal";
 import SettingsDrawer from "../SettingsDrawer";
 
 const wrap = (open: boolean, onClose = vi.fn()) =>
@@ -837,12 +844,12 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
   });
 });
 
-// Visitor session-sharing — the "share session" entry is
+// Visitor session-sharing — the share entry is
 // visitor-only. Server still 403s for user subjects, but the cic UI
 // hides the entry point so users never see a button that would just
 // fail. Tests three subject states: user (hide), visitor (show),
 // not-loaded (hide).
-describe("SettingsDrawer (share session — visitor only)", () => {
+describe("SettingsDrawer (share entry — visitor only)", () => {
   it("hides share-session entry when subject is a user", () => {
     subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
     wrap(true);
@@ -895,6 +902,94 @@ describe("SettingsDrawer (share session — visitor only)", () => {
     fireEvent.click(screen.getByTestId("share-session-entry"));
 
     expect(shareModalHolder.opened).toBe(1);
+  });
+});
+
+// #462 — the affordance/copy layer #460's skeleton pass deliberately left
+// undone. Three of its six items are copy the operator reads BEFORE acting,
+// so they are asserted on meaning (does the sentence say the thing) rather
+// than on wording, and on consumption (is the shared source actually worn)
+// rather than on a duplicated literal.
+describe("SettingsDrawer (#462 — share entry copy)", () => {
+  const VISITOR = { kind: "visitor" as const, id: "v1", nick: "alice" };
+
+  it("wears the shared label instead of its own spelling of it", () => {
+    subjectHolder.current = VISITOR;
+    wrap(true);
+    expect(screen.getByTestId("share-session-entry")).toHaveTextContent(SHARE_SESSION_LABEL);
+  });
+
+  it("says something new in the subtitle rather than repeating the label", () => {
+    // The pre-#462 pair was "share session" over "open this session on
+    // another device": the subtitle carried the name and the label carried a
+    // different one. With the label fixed, a subtitle that merely restates it
+    // spends a line saying nothing.
+    subjectHolder.current = VISITOR;
+    wrap(true);
+    const subtitle = screen
+      .getByTestId("share-session-entry")
+      .querySelector(".settings-share-button-subtitle");
+    const text = subtitle?.textContent ?? "";
+    expect(text).not.toBe("");
+    expect(text).not.toContain(SHARE_SESSION_LABEL);
+  });
+});
+
+describe("SettingsDrawer (#462 — upload retention explains itself)", () => {
+  it("answers the three questions the select cannot", () => {
+    subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    wrap(true);
+    openSub("general-settings-entry");
+    const hint = screen.getByTestId("upload-ttl-hint").textContent ?? "";
+    // How long an upload survives, that this is a preference OVER the host
+    // default, and that it is not retroactive. The last one is the fact a
+    // user cannot guess and the only one with a wrong assumption behind it.
+    expect(hint).toMatch(/delete/i);
+    expect(hint).toMatch(/default/i);
+    expect(hint).toMatch(/already uploaded/i);
+  });
+});
+
+describe("SettingsDrawer (#462 — delete account says what it destroys)", () => {
+  const shows = (subject: NonNullable<typeof subjectHolder.current>) => {
+    subjectHolder.current = subject;
+    meHolder.current =
+      subject.kind === "user"
+        ? { kind: "user", id: "u1", name: "alice", is_admin: false, inserted_at: "2026-01-01" }
+        : {
+            kind: "visitor",
+            id: "v1",
+            nick: "vjt",
+            expires_at: "2099-01-01T00:00:00Z",
+            registered: true,
+          };
+    wrap(true);
+  };
+
+  it("carries the body computed for a registered user", () => {
+    shows({ kind: "user", id: "u1", name: "alice" });
+    expect(screen.getByTestId("delete-account-hint")).toHaveTextContent(deleteAccountBody());
+  });
+
+  it("carries the body computed for a registered visitor", () => {
+    shows({ kind: "visitor", id: "v1", nick: "vjt", registered: true });
+    expect(screen.getByTestId("delete-account-hint")).toHaveTextContent(deleteAccountBody());
+  });
+
+  it("says nothing where the button is not offered", () => {
+    // An admin never sees the button; a description of a door that is not
+    // there is worse than silence.
+    subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    meHolder.current = {
+      kind: "user",
+      id: "u1",
+      name: "alice",
+      is_admin: true,
+      inserted_at: "2026-01-01",
+    };
+    wrap(true);
+    expect(screen.queryByTestId("delete-account-btn")).toBeNull();
+    expect(screen.queryByTestId("delete-account-hint")).toBeNull();
   });
 });
 
@@ -1428,7 +1523,7 @@ describe("SettingsDrawer (#460 — settings index)", () => {
     expect(screen.queryByTestId("themes-settings-entry")).toBeNull();
   });
 
-  it("share session + done stay on the main index page (not moved into a sub-page)", () => {
+  it("the share entry + done stay on the main index page (not moved into a sub-page)", () => {
     subjectHolder.current = { kind: "visitor", id: "v1", nick: "alice" };
     wrap(true);
     // These affordances live BELOW the index on the main page. (#986 — quit

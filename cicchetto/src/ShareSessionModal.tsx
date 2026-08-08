@@ -11,11 +11,11 @@ import { mintShareToken } from "./lib/api";
 import { token } from "./lib/auth";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { qrSvg } from "./lib/qr";
-import { closeShareModal, shareModalOpen } from "./lib/shareModal";
+import { closeShareModal, SHARE_SESSION_LABEL, shareModalOpen } from "./lib/shareModal";
 
 // #392 — session-wide "open on another device" modal. ONE instance mounted
 // in Shell; opened by BOTH the home "open on another device" button and the
-// settings "share session" button (openShareModal → shareModalOpen). Reverses
+// settings share entry (openShareModal → shareModalOpen). Reverses
 // #335's sub-page back to a modal so the QR + native-share + countdown live in
 // a focused overlay reachable from home.
 //
@@ -177,7 +177,7 @@ const ShareSessionModal: Component = () => {
           tabIndex={-1}
         >
           <header class="share-modal-header">
-            <h2 id="share-modal-title">open on another device</h2>
+            <h2 id="share-modal-title">{SHARE_SESSION_LABEL}</h2>
             <button
               type="button"
               class="share-modal-close"

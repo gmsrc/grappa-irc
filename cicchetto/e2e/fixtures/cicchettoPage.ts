@@ -945,7 +945,7 @@ export async function openSettingsSection(
 
 // #500 — open the settings drawer ROOT (viewport-aware), returning the drawer
 // dialog locator. The sibling of openSettingsSection for specs that need the
-// drawer's main index itself — to reach a main-page affordance (share session,
+// drawer's main index itself — to reach a main-page affordance (the share entry,
 // delete account) or to assert drawer chrome. (#986 — reaching the ADMIN
 // console is no longer one of those reasons: use openAdminConsole, which goes
 // through the rail.) The cog (aria-label "open settings" /

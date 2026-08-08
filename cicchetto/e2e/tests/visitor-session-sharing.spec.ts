@@ -56,7 +56,7 @@ test("visitor session-sharing — mint on device A, consume on device B, both co
     );
     await pageA.goto("/");
 
-    // Open Settings drawer → click the "share session" button → the share
+    // Open Settings drawer → click the share entry → the share
     // MODAL (#392, reverts #335's sub-page) opens and mints on open.
     await openSettingsDrawer(pageA);
     await expect(pageA.getByRole("dialog", { name: /settings/i })).toBeVisible();

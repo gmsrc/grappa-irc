@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HomePane from "../HomePane";
 import { channelKey } from "../lib/channelKey";
+import { SHARE_SESSION_LABEL } from "../lib/shareModal";
 import { LIST_WINDOW_NAME } from "../lib/windowKinds";
 
 // UX-4 bucket B (2026-05-18). HomePane renders one of two sub-panes
@@ -152,7 +153,10 @@ vi.mock("../lib/registrationWizard", () => ({
   openRegistrationWizard: (slug: string) => openRegistrationWizardMock(slug),
 }));
 
-vi.mock("../lib/shareModal", () => ({
+// #462 — spread the REAL module so the label under test is the declared one,
+// not a copy of it typed into this factory.
+vi.mock("../lib/shareModal", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/shareModal")>()),
   openShareModal: () => openShareModalMock(),
 }));
 
@@ -783,6 +787,8 @@ describe("HomePane", () => {
 
       const btn = screen.getByTestId("home-share-session");
       expect(btn).toBeInTheDocument();
+      // #462 — the name comes from the shared constant, not from this file.
+      expect(btn).toHaveTextContent(SHARE_SESSION_LABEL);
       fireEvent.click(btn);
       expect(openShareModalMock).toHaveBeenCalledTimes(1);
     });

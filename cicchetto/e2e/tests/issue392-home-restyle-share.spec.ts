@@ -3,7 +3,7 @@
 // What this covers (the VISIBLE outcomes jsdom can't see — a real inline
 // <svg> QR + the one-modal-two-triggers wiring across the app shell):
 //   1. The share MODAL (QR + link + countdown) opens from the SETTINGS
-//      "share session" button, and renders a scannable inline-<svg> QR.
+//      share entry, and renders a scannable inline-<svg> QR.
 //   2. The SAME modal opens from the HOME "open on another device" button
 //      (after the network list) — proving one modal, two doors.
 //   3. The home network row's Browse channels CTA is a prominent button.

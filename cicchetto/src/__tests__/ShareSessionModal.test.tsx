@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetForTest } from "../lib/overlayScrollLock";
-import { closeShareModal, openShareModal } from "../lib/shareModal";
+import { closeShareModal, openShareModal, SHARE_SESSION_LABEL } from "../lib/shareModal";
 import ShareSessionModal from "../ShareSessionModal";
 
 // #392 — the session-share modal (QR + native-share + copy + countdown),
@@ -55,6 +55,10 @@ describe("ShareSessionModal (#392)", () => {
     // The link the user sends to themselves.
     const url = (await screen.findByTestId("share-url")) as HTMLInputElement;
     expect(url.value).toContain("/share/SHARETOK");
+
+    // #462 — the dialog's own title is the third rendering of the shared
+    // name, so it comes from the constant like the other two.
+    expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent(SHARE_SESSION_LABEL);
 
     // Spec heading above the QR + the "send yourself a link" alt copy.
     expect(screen.getByText(/scan this code on another device/i)).toBeInTheDocument();

@@ -1,6 +1,6 @@
 // #335 identity card + native-share — migrated to the #392 share MODAL.
 //   1. The "identity" block sits in a titled .settings-section card.
-//   2. The settings "share session" button opens the share MODAL (#392
+//   2. The settings share entry opens the share MODAL (#392
 //      reverted #335's sub-page back to a modal, adding a QR); it mints a
 //      share link on open. The #335 wrapper card is gone — the entry is now
 //      a bare button.
@@ -43,7 +43,7 @@ async function seedVisitor(page: import("@playwright/test").Page, visitor: Visit
   );
 }
 
-// Open Settings → tap the "share session" button → the share MODAL opens
+// Open Settings → tap the share entry → the share MODAL opens
 // (#392), waiting for the mint to resolve into a /share/ URL.
 async function openShareModalFromSettings(page: import("@playwright/test").Page) {
   await openSettingsDrawer(page);
