@@ -33830,3 +33830,49 @@ pre-existing in #866's shape; #950 does not quietly correct it inside a
 duration table. A fix belongs where the skew can be measured (a
 server-supplied `now`, or a duration-not-instant wire shape), which is a
 different change with a different blast radius.
+
+## 2026-08-08 — #1047: `$N-` picks the collapsed list, so `$1-` is `$*` minus the spacing
+
+The alias grammar had `$1..$9` and `$*` and nothing between them, so the
+single most common alias shape — "first argument is a target, the rest is
+free text" — was unwritable. `alias k kick $1 $2-` substituted `$2` and
+left the `-` as literal text, shipping `kick spammer go-`; `$*` handed
+the target back a second time; `$2` truncated the reason to one word.
+mIRC and irssi have had `$N-` for decades, so users arrive expecting it.
+The change is one character on `ALIAS_PLACEHOLDER` (`[1-9]` → `[1-9]-?`)
+plus a join.
+
+**The ruling the issue delegated: `$N-` joins the COLLAPSED tokens.**
+`substituteAlias` already carried a deliberate asymmetry — `$*`
+substitutes the RAW rest (internal spacing preserved), `$1..$9` pull from
+the whitespace-collapsed token list, and the comment there says not to
+"fix" either one to match the other. `$N-` straddles both and had to
+pick. It picks the collapsed list: it reads as the positional form
+EXTENDED, not as a second `$*`. The consequence, stated plainly because
+someone will compare the two and call it a bug: **`$1-` and `$*` select
+exactly the same arguments and differ only in whitespace
+normalisation** — `"one   two"` expands to `one two` under `$1-` and
+`one   two` under `$*`.
+
+The rejected alternative was slicing the RAW string, which would have
+made `$1-` a true synonym of `$*`. It dies on `$2-`: "where does argument
+2 begin in the raw text" has no answer that survives tabs, runs of
+spaces, or a leading space, so the raw form would have needed its own
+tokenizer with its own edge cases to serve a form that is by definition
+about the tail. Consistency with the placeholder it extends beat
+consistency with the placeholder it resembles.
+
+**Out of range is silently empty**, matching the existing "missing →
+empty" rule for `$N` rather than introducing the grammar's first error
+case: `$5-` with two arguments joins nothing.
+
+**The dash is greedy.** `$1-tail` is "every argument" then the literal
+`tail`, never `$1` then `-tail` — the mIRC/irssi reading. `$10` is
+untouched (`$1` then a literal `0`), because the widened group takes a
+dash, not a second digit.
+
+**One regex, two objects.** `.test()` on a `/g` regex is stateful, which
+is why the module already held the pattern twice — a literal in the
+guard and a second literal in the `replace`. #1047 was one character on
+that pattern, i.e. precisely the edit a hand-kept second copy loses, so
+the global variant is now derived from the first's `.source`.

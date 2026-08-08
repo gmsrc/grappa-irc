@@ -1395,6 +1395,96 @@ describe("#385 — expandAlias grammar edge cases", () => {
   });
 });
 
+// #1047 — `$N-` ("argument N and everything after"). The grammar gap that made
+// "first arg is a target, the rest is free text" unwritable: with `$*` the
+// target came twice, with `$2` the reason was truncated to its first word.
+//
+// SPACING RULING (the decision #1047 delegates): `$N-` joins the
+// WHITESPACE-COLLAPSED token list with single spaces — the same list `$1..$9`
+// pull from — NOT the raw tail `$*` substitutes. So `$1-` and `$*` cover the
+// same arguments and differ ONLY in spacing normalisation. Chosen for
+// consistency with the positional form `$N-` extends; the alternative
+// (raw-slice like `$*`) would have made `$1-` a synonym of `$*` and left `$2-`
+// with no defensible spelling of "where does arg 2 start in the raw string".
+// Both spellings are pinned side by side below so the difference is a
+// documented contract, not an accident someone later "fixes".
+describe("#1047 — expandAlias `$N-` range placeholder", () => {
+  it("$2- takes argument 2 and everything after it (the kick motivating example)", () => {
+    expect(expandAlias("k", "spammer go away and stay away", { k: "kick $1 $2-" })).toEqual({
+      verb: "kick",
+      rest: "spammer go away and stay away",
+    });
+  });
+
+  it("$2- is not $2: the tail is whole, not truncated to one word", () => {
+    // Pre-#1047 this yielded "#chan hello-" ($2 substituted, `-` left literal).
+    expect(expandAlias("mm", "#chan hello there world", { mm: "msg $1 $2-" })).toEqual({
+      verb: "msg",
+      rest: "#chan hello there world",
+    });
+  });
+
+  it("$1- and $* cover the same args and differ ONLY in spacing normalisation", () => {
+    const rest = "one   two \t three";
+    expect(expandAlias("a", rest, { a: "cmd $1-" })).toEqual({
+      verb: "cmd",
+      rest: "one two three",
+    });
+    expect(expandAlias("a", rest, { a: "cmd $*" })).toEqual({
+      verb: "cmd",
+      rest: "one   two \t three",
+    });
+  });
+
+  it("an out-of-range $N- expands to the empty string (silent, matching $N)", () => {
+    // Only two args, so `$5-` has nothing to join — no error, no literal left.
+    expect(expandAlias("a", "one two", { a: "cmd $1 $5-" })).toEqual({
+      verb: "cmd",
+      rest: "one",
+    });
+  });
+
+  it("$N- with no args at all is silently empty", () => {
+    expect(expandAlias("a", "", { a: "cmd $1-" })).toEqual({ verb: "cmd", rest: "" });
+  });
+
+  it("$9- reaches the ninth argument and its tail", () => {
+    const rest = "a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11";
+    expect(expandAlias("a", rest, { a: "cmd $9-" })).toEqual({
+      verb: "cmd",
+      rest: "a9 a10 a11",
+    });
+  });
+
+  it("a template whose ONLY placeholder is $N- suppresses the verbatim append", () => {
+    // The no-placeholder rule appends the rest; `$3-` must count as a
+    // placeholder or `/a x y z` would expand to `cmd z x y z`.
+    expect(expandAlias("a", "x y z", { a: "cmd $3-" })).toEqual({ verb: "cmd", rest: "z" });
+  });
+
+  it("$N- is greedy over a following literal dash", () => {
+    // mIRC/irssi shape: the `-` binds to the placeholder, never to the text
+    // after it. `$1-tail` is "all args" then "tail", not "$1" then "-tail".
+    expect(expandAlias("a", "x y", { a: "cmd $1-tail" })).toEqual({
+      verb: "cmd",
+      rest: "x ytail",
+    });
+  });
+
+  it("$10 is still $1 then a literal 0 (the range dash didn't widen the digits)", () => {
+    expect(expandAlias("a", "x", { a: "cmd $10" })).toEqual({ verb: "cmd", rest: "x0" });
+    expect(expandAlias("a", "x y", { a: "cmd $1-0" })).toEqual({ verb: "cmd", rest: "x y0" });
+  });
+
+  it("end-to-end: an alias with $N- reaches DISPATCH with the whole reason", () => {
+    expect(parseSlash("/k spammer go away and stay away", { k: "kick $1 $2-" })).toEqual({
+      kind: "kick",
+      nick: "spammer",
+      reason: "go away and stay away",
+    });
+  });
+});
+
 // #591 — /ctcp <target> <VERB> [args]. Pure-parser shape: first token is the
 // target, second is the CTCP verb (uppercased per convention), the trimmed
 // remainder is the (optional) args. compose.ts builds the \x01VERB args\x01

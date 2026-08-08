@@ -203,7 +203,7 @@ export async function putVhostSelection(
 // ---------------------------------------------------------------------------
 // aliases — user-defined command aliases (#385).
 //
-// A `%{name => expansion}` string map. Expansion grammar ($1..$9 / $* /
+// A `%{name => expansion}` string map. Expansion grammar ($1..$9 / $N- / $* /
 // implicit append), builtin-collision precedence, and recursion depth are
 // all client-side (slashCommands.ts owns the DISPATCH table). The server
 // validates only structural shape and returns the NORMALIZED map (names

@@ -60,8 +60,18 @@
 // command-side repair surface). Expansion is bounded at MAX_ALIAS_DEPTH. The
 // `%{name => expansion}` map is passed into
 // `parseSlash` by compose.ts (from the aliasList store) — this parser stays
-// pure. Grammar: `$1..$9` positional (missing → empty), `$*` all args, and
-// implicit verbatim append when the expansion holds no placeholder.
+// pure. Grammar: `$1..$9` positional (missing → empty), `$N-` the Nth arg and
+// everything after it (#1047 — out of range → empty, same silent rule), `$*`
+// all args, and implicit verbatim append when the expansion holds no
+// placeholder. `$N-` unlocks the "first arg is a target, the rest is free
+// text" shape (`alias k kick $1 $2-`) that `$*` (target twice) and `$2`
+// (reason truncated to one word) both failed to express.
+//   SPACING (#1047 ruling): `$N-` joins the whitespace-COLLAPSED token list —
+//   the list `$1..$9` read from — with single spaces, NOT the raw tail `$*`
+//   substitutes. So `$1-` and `$*` cover the same args and differ only in
+//   spacing normalisation. That is deliberate: `$N-` is the positional form
+//   extended, and for N > 1 "where does arg N start in the raw string" has no
+//   answer that survives tabs and runs of spaces.
 //
 // Services shortcuts (issue #20) — `/<x>s <cmd>` rewrites to
 // {kind: "msg", target}; a BARE `/<x>s` (issue #290) opens the dedicated
@@ -905,13 +915,19 @@ export function expandAlias(
   }
 }
 
-const ALIAS_PLACEHOLDER = /\$(\*|[1-9])/;
+const ALIAS_PLACEHOLDER = /\$(\*|[1-9]-?)/;
+// Same grammar, global — `.test/2` on a /g regex is stateful (lastIndex), so
+// the two uses need distinct objects. Derive rather than repeat the literal:
+// #1047 added one character to this pattern, and a second hand-kept copy is
+// exactly where that edit gets forgotten.
+const ALIAS_PLACEHOLDER_ALL = new RegExp(ALIAS_PLACEHOLDER.source, "g");
 
 // Substitute placeholders in `template` from `rest`. If the template holds
 // ANY placeholder, only substitutions happen ($1..$9 → the Nth arg or empty
-// string; $* → all args verbatim). If it holds NONE, the rest is appended
-// verbatim (space-separated) — one rule serving both `alias w whois` (append)
-// and `alias wii whois $1 $1` (no double-append).
+// string; $N- → the Nth arg and every one after it; $* → all args verbatim).
+// If it holds NONE, the rest is appended verbatim (space-separated) — one rule
+// serving both `alias w whois` (append) and `alias wii whois $1 $1` (no
+// double-append).
 function substituteAlias(template: string, rest: string): string {
   if (!ALIAS_PLACEHOLDER.test(template)) {
     return rest === "" ? template : `${template} ${rest}`;
@@ -919,10 +935,19 @@ function substituteAlias(template: string, rest: string): string {
   // Deliberate asymmetry: `$*` substitutes the RAW rest (internal spacing
   // preserved — "all remaining args verbatim"), while `$1..$9` pull from the
   // whitespace-collapsed token list. Don't "fix" one to match the other.
+  //
+  // #1047 — `$N-` had to pick a side and picks the COLLAPSED one: it joins
+  // `args` from N onward with single spaces, so it reads as "the positional
+  // form, extended" rather than "a second `$*`". Consequence worth knowing
+  // before calling it a bug: `$1-` and `$*` select the SAME arguments and
+  // differ only in that `$1-` normalises internal whitespace. Out of range
+  // joins nothing → empty string, matching the "missing → empty" rule above.
   const args = tokens(rest);
-  return template.replace(/\$(\*|[1-9])/g, (_m, g: string) =>
-    g === "*" ? rest : (args[Number(g) - 1] ?? ""),
-  );
+  return template.replace(ALIAS_PLACEHOLDER_ALL, (_m, g: string) => {
+    if (g === "*") return rest;
+    const from = Number(g[0]) - 1;
+    return g.endsWith("-") ? args.slice(from).join(" ") : (args[from] ?? "");
+  });
 }
 
 // Post-init aliases. Adding to DISPATCH after the literal initializer

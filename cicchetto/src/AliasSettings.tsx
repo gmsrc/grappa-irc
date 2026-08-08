@@ -119,9 +119,10 @@ const AliasSettings: Component<{ onBack: () => void }> = (props) => {
 
       <div class="settings-section" data-testid="aliases-section">
         <p class="settings-section-blurb">
-          define your own slash-commands. use <code>$1</code>..<code>$9</code> for arguments and{" "}
-          <code>$*</code> for all of them; with no placeholder the rest is appended (e.g.{" "}
-          <code>/alias wii whois $1 $1</code>).
+          define your own slash-commands. use <code>$1</code>..<code>$9</code> for arguments,{" "}
+          <code>$2-</code> for an argument and everything after it, and <code>$*</code> for all of
+          them; with no placeholder the rest is appended (e.g. <code>/alias wii whois $1 $1</code>,{" "}
+          <code>/alias k kick $1 $2-</code>).
         </p>
         <ul class="watchlists-list" data-testid="aliases-list">
           <Show
