@@ -172,15 +172,55 @@ export async function readCurrentBundleHash(): Promise<string> {
  * carries the NEW hash.
  */
 export async function swapToBundleB(): Promise<BundleSwapResult> {
+  return swapEntryAsset(
+    (newHash) =>
+      `// UX-6-I.2 synthetic bundle B — fixture-generated.\n` +
+      `console.log("ux-6-i.2 bundle-b loaded: ${newHash}");\n` +
+      `export {};\n`,
+  );
+}
+
+/**
+ * Like `swapToBundleB`, but bundle B is the CURRENT entry's own bytes under a
+ * new name — so the reloaded page is a different bundle that still BOOTS.
+ *
+ * `swapToBundleB`'s stub is deliberately inert, which is enough when the
+ * assertion is the post-reload `<script src>` and nothing more. It is not
+ * enough for anything the SPA has to say about the reload it just came out of:
+ * a page that never boots mounts no components, so a spec waiting for an
+ * on-mount announcement there would wait for a document that cannot produce
+ * one — green only if the assertion were weak enough not to notice.
+ *
+ * Same bytes, different name, so "the bundle moved" is true in the only sense
+ * the client can observe (the hash in the script tag) while the app that comes
+ * back is the real one. The `SYNTH_HASH_PREFIX` is shared with the stub swap on
+ * purpose: `snapshotBundle`'s self-heal detects leftovers by that prefix, and a
+ * second prefix would be a second thing to remember.
+ */
+export async function swapToBootableBundleB(): Promise<BundleSwapResult> {
+  const currentHash = await readCurrentBundleHash();
+  const entry = await fs.readFile(
+    path.join(DIST_DIR, ASSETS_DIR, `index-${currentHash}.js`),
+    "utf8",
+  );
+  return swapEntryAsset(() => entry);
+}
+
+/**
+ * Point `index.html` at a fresh `/assets/index-<newHash>.js` carrying
+ * `contentsFor(newHash)`. Shared by both swaps — they differ only in what
+ * bundle B contains.
+ */
+async function swapEntryAsset(
+  contentsFor: (newHash: string) => string,
+): Promise<BundleSwapResult> {
   const oldHash = await readCurrentBundleHash();
   const newHash = `${SYNTH_HASH_PREFIX}${Date.now().toString(36)}`;
 
-  const stubJs =
-    `// UX-6-I.2 synthetic bundle B — fixture-generated.\n` +
-    `console.log("ux-6-i.2 bundle-b loaded: ${newHash}");\n` +
-    `export {};\n`;
-
-  await fs.writeFile(path.join(DIST_DIR, ASSETS_DIR, `index-${newHash}.js`), stubJs);
+  await fs.writeFile(
+    path.join(DIST_DIR, ASSETS_DIR, `index-${newHash}.js`),
+    contentsFor(newHash),
+  );
 
   const htmlPath = path.join(DIST_DIR, INDEX_HTML);
   const html = await fs.readFile(htmlPath, "utf8");
