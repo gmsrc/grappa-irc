@@ -21,16 +21,24 @@ defmodule Grappa.Release do
   ## Usage
 
       _build/prod/rel/grappa/bin/grappa eval 'Grappa.Release.migrate()'
+      _build/prod/rel/grappa/bin/grappa eval 'Grappa.Release.seed_themes()'
       _build/prod/rel/grappa/bin/grappa eval 'Grappa.Release.rollback(Grappa.Repo, 20260501000000)'
 
   Each entry point loads `@app` (the release boot script does NOT
   start the application — it only loads the .app file so config is
-  available) and starts the SSL + Cloak deps the Repo needs at
-  schema-load time (encrypted columns route through
-  `Grappa.EncryptedBinary`).
+  available) and starts the Cloak vault the Repo needs at schema-load
+  time (encrypted columns route through `Grappa.EncryptedBinary`) —
+  see `start_vault!/0`.
+
+  The deploy scripts name these functions as STRINGS inside `eval`, so
+  nothing at compile time links the two. `Grappa.ReleaseTest` closes
+  that gap by parsing the deploy scripts and asserting every
+  `Grappa.Release.*` they invoke is actually exported here.
   """
 
-  use Boundary, top_level?: true, deps: [Grappa.Repo]
+  use Boundary, top_level?: true, deps: [Grappa.Repo, Grappa.Themes, Grappa.Vault]
+
+  alias Grappa.Themes
 
   @app :grappa
 
@@ -44,6 +52,7 @@ defmodule Grappa.Release do
   @spec migrate() :: :ok
   def migrate do
     load_app()
+    start_vault!()
 
     for repo <- repos() do
       case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true)) do
@@ -69,8 +78,55 @@ defmodule Grappa.Release do
     end
   end
 
+  @doc """
+  Materialises the curated built-in theme gallery as system-owned,
+  published themes. Idempotent upsert, which is what lets the deploy
+  scripts run it unconditionally on every deploy (#440).
+
+  The release-path twin of `mix grappa.seed_themes`: a packaged release
+  ships no Mix, so the substrates that run one — the bastille jail and
+  the published Docker image — reach the seed through here instead.
+  Both doors drive `Grappa.Themes.seed_builtins/0`; there is one
+  implementation, not two.
+  """
+  @spec seed_themes() :: :ok
+  def seed_themes do
+    load_app()
+    start_vault!()
+
+    case Ecto.Migrator.with_repo(Grappa.Repo, fn _repo -> Themes.seed_builtins() end) do
+      {:ok, count, _} -> IO.puts("seeded #{count} curated built-in themes")
+      {:error, reason} -> raise "theme seeding failed: #{inspect(reason)}"
+    end
+
+    :ok
+  end
+
   defp repos do
     Application.fetch_env!(@app, :ecto_repos)
+  end
+
+  # Cloak's Ecto types call into the Vault GenServer at load/dump time, so
+  # reading any schema with an encrypted column raises `:noproc` when it
+  # is not running — which is why the supervision tree starts Vault BEFORE
+  # Repo (see Grappa.Application). A release `eval` starts neither, so the
+  # ordering has to be restated here rather than inherited.
+  #
+  # seed_themes/0 reads the reserved system user, whose `totp_secret_
+  # encrypted` is NULL — and cloak_ecto short-circuits `load(nil)` without
+  # touching the vault, so today it would survive without this. That is an
+  # accident of one column being empty, not a contract; the first encrypted
+  # column that holds a value would break the release path only, on two
+  # substrates, at deploy time.
+  #
+  # `already_started` is the expected steady state whenever the app is up
+  # (a test process, an operator in a live remote shell) — same shape as
+  # load_app/0's `:already_loaded`.
+  defp start_vault! do
+    case Grappa.Vault.start_link() do
+      {:ok, _pid} -> :ok
+      {:error, {:already_started, _pid}} -> :ok
+    end
   end
 
   defp load_app do
