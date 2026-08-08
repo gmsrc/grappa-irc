@@ -34202,3 +34202,73 @@ can no longer tell "swept" from "reported". A third visibility atom would
 have preserved it at the cost of landing on every consumer of a closed
 type, for a diagnostic; instead the `:info` line at the demotion carries
 what the snapshot loses — how long each socket had been silent.
+
+---
+
+## 2026-08-08 — #1059: the send button must stay a mouse-event target across its own activation
+
+A live prod regression, reported in-channel by Fairy on iOS 26.6 with cic
+installed as a PWA: tapping **Send** dismissed the on-screen keyboard,
+pressing **Enter** did not. That asymmetry was the whole diagnosis before a
+line of code was read — the Enter path submits from the textarea's own
+keydown and focus never leaves it; the button path moves focus.
+
+The regression window was #925 (`6cf9529e`), shipped in `0.14.0-ff0511cd`.
+#925 moved the send from `click` to `pointerup` for a good reason (a press
+iOS routes into a long-press synthesises no mouse events at all, so a
+click-carried send silently did nothing — vjt measured that for #366). But
+on a real tap the order is `pointerup` → `mousedown` → `mouseup` → `click`,
+so activation moved from *after* the `mousedown` to *before* it. The send
+empties the draft, the draft drove `disabled`, and the button therefore
+became a disabled form control **between its own activation and the
+`mousedown` that carries the #59 focus-steal cancel**. Focus left the
+textarea; iOS collapsed the keyboard.
+
+**The invariant, written into the code:** the send button must remain a
+mouse-event target across its own activation, because that is where the
+keyboard-preserve cancel lives. `ComposeBox.tsx:565` already carried the
+identical lesson one element over — the textarea is `readOnly`, never
+`disabled`, for exactly this keyboard. The button now matches it: the
+empty-draft refusal is `aria-disabled` plus an early return in the
+activation handler, and `default.css` greys off `[aria-disabled="true"]`
+instead of `:disabled`.
+
+Deferring the `disabled` flip by a frame would also have closed the window
+and was rejected deliberately: it makes the guard timing-dependent, which is
+the shape of this bug rather than of its remedy.
+
+### What was read, what was measured, and what is still owed
+
+The issue was explicit that its steps 3–4 were read off WebKit's documented
+behaviour for disabled form controls, not observed on hardware. Two
+measurements changed what could be claimed:
+
+1. **jsdom does not reproduce the browser-level suppression.**
+   `dispatchEvent(new MouseEvent("mousedown"))` on a `disabled` button runs
+   both the element's own handler and a document-level capture listener;
+   only `.click()` is suppressed. So a regression test phrased as "the
+   mousedown still reaches the cancel" would have passed on the broken code
+   too — a guard that cannot fail, which reads as coverage and is worse than
+   none. Written, run against the unfixed code, and only trusted once red.
+
+2. **The suppression was never only WebKit's.** Solid *delegates*
+   `mousedown` (it is in dom-expressions' `DelegatedEvents`), and its
+   delegated dispatcher skips a node's handler when the node is disabled —
+   `if (handler && !node.disabled)` in `solid-js/web`'s `eventHandler`. The
+   per-button `onMouseDown` was therefore inert on a disabled send button in
+   **every** browser, independently of whether the browser withheld the
+   event. That is reproducible in jsdom, and it is what the regression tests
+   actually pin: the cancel must not be inert at rest, and it must survive
+   the tap replayed in order (pointerup → send → draft empty → mousedown).
+
+Point 2 also settles the Android half #1059 flagged and declined to claim.
+`keepKeyboard`'s document-level listener is `isIos()`-gated, so the
+per-button handler is Android's *only* protection — and Solid's guard is not
+platform-conditional, so Android lost it too. What is shown is that the
+handler did not run; whether an Android keyboard visibly collapsed is not
+claimed.
+
+**Still owed, and not ours:** real-device verification that a tap on Send
+now keeps the iOS keyboard up. No test here observes a keyboard — jsdom has
+none, and Playwright's webkit is not iOS (the same limit that kept #508's
+native-picker fix reasoned rather than device-proven). vjt has the iPhone.
