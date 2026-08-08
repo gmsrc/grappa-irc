@@ -154,7 +154,8 @@ address needs no brackets (`--ircd=::1`) but one **with** a port does
 a positional argument, and the positional it would eat is your password.
 
 It **detaches into the background** once it is up, printing the pid, the log
-path (`~/.local/share/shottino/ircd.log`) and how to stop it. **That log holds
+path (`~/.local/share/shottino/ircd.log`, or under `$XDG_DATA_HOME` when that
+is set — see "Where preferences are kept") and how to stop it. **That log holds
 the session's messages in plain text** — headless there is no screen for them,
 so every line goes there instead. Mode 0600, in a 0700 directory, and never
 rotated: it is the bridge's only diagnostic, and it grows for as long as the
@@ -452,6 +453,14 @@ somebody pressed Tab.
 ### Where preferences are kept
 
 Two files under `~/.local/share/shottino`, both mode 0600:
+
+Everything shottino keeps between runs — these files, the cached tokens, the
+block list and the `--ircd` log — lives in one directory: `$XDG_DATA_HOME/shottino`
+when that variable is set, and `~/.local/share/shottino` when it is not, which
+is what the XDG specification says the fallback is. Setting `XDG_DATA_HOME` is
+how a service unit or a container puts that state somewhere other than a home
+directory it did not choose; an empty value counts as unset.
+
 
 | file | holds |
 | --- | --- |

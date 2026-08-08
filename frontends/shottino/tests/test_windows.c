@@ -115,6 +115,46 @@ TEST(the_case_insensitive_search_is_ours_and_returns_where_it_matched) {
     CHECK(find_ci("caf\xc3\x89", "caf\xc3\xa9") == NULL);
 }
 
+/* Where this client keeps its state is an XDG question, and the name of
+ * the directory it builds says so. Honouring the variable is what lets a
+ * service unit or a container put the token cache and the bridge log
+ * somewhere other than a home directory it does not really have.
+ *
+ * The suite's own temporary HOME is what makes this safe to assert: see
+ * test_use_temp_home, which points BOTH the home and the XDG variable at
+ * a directory it made. */
+TEST(the_state_directory_follows_the_xdg_variable) {
+    /* As the suite starts: XDG_DATA_HOME agrees with HOME, so the answer
+     * is the historical `~/.local/share/shottino` either way. */
+    char *before = shottino_state_dir();
+    CHECK(find_ci(before, "/.local/share/shottino") != NULL);
+    free(before);
+
+    char elsewhere[96];
+    snprintf(elsewhere, sizeof(elsewhere), "%s/somewhere-else", getenv("HOME"));
+    CHECK_LONG(mkdir(elsewhere, 0700), 0);
+    CHECK_LONG(setenv("XDG_DATA_HOME", elsewhere, 1), 0);
+
+    char want[128];
+    snprintf(want, sizeof(want), "%s/shottino", elsewhere);
+    char *moved = shottino_state_dir();
+    CHECK_STR(moved, want);
+    free(moved);
+
+    /* An empty value is not a location. Falling back to HOME beats
+     * creating `/shottino` off the root of the filesystem. */
+    CHECK_LONG(setenv("XDG_DATA_HOME", "", 1), 0);
+    char *empty = shottino_state_dir();
+    CHECK(find_ci(empty, "/.local/share/shottino") != NULL);
+    free(empty);
+
+    /* Put the suite's own value back — every later test that touches
+     * state must keep landing inside the temporary home. */
+    char restore[96];
+    snprintf(restore, sizeof(restore), "%s/.local/share", getenv("HOME"));
+    CHECK_LONG(setenv("XDG_DATA_HOME", restore, 1), 0);
+}
+
 /* contains_ci is the bool face of the same search, and the seven mention
  * and filter callers must keep agreeing with it. */
 TEST(the_bool_face_agrees_with_the_pointer_one) {
@@ -2526,11 +2566,8 @@ TEST(the_context_budget_leaves_room_for_the_fixed_parts) {
  * was a different bug; what they shared was that the damage was instant
  * and total. */
 TEST(a_config_write_leaves_the_previous_version_behind) {
-    char home[] = "/tmp/shottino-backup-XXXXXX";
-    CHECK(mkdtemp(home) != NULL);
-    char *old_home = getenv("HOME");
-    char *saved = old_home ? strdup(old_home) : NULL;
-    setenv("HOME", home, 1);
+    struct test_state_dir sd;
+    CHECK(test_state_dir_take(&sd, "/tmp/shottino-backup-XXXXXX"));
 
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -2577,9 +2614,7 @@ TEST(a_config_write_leaves_the_previous_version_behind) {
     unlink(path);
     unlink(backup);
     free_app(app);
-    if (saved) setenv("HOME", saved, 1);
-    else unsetenv("HOME");
-    free(saved);
+    test_state_dir_release(&sd);
 }
 
 /* An empty system prompt is a STATE, not an absence.
@@ -4423,11 +4458,8 @@ TEST(an_arriving_call_rings_only_where_it_should) {
  * devices and the three display toggles were set-and-lose, while the
  * settings panel presented both halves identically. */
 TEST(a_preference_survives_a_restart) {
-    char home[] = "/tmp/shottino-prefs-test-XXXXXX";
-    CHECK(mkdtemp(home) != NULL);
-    char *old_home = getenv("HOME");
-    char *saved = old_home ? strdup(old_home) : NULL;
-    setenv("HOME", home, 1);
+    struct test_state_dir sd;
+    CHECK(test_state_dir_take(&sd, "/tmp/shottino-prefs-test-XXXXXX"));
 
     struct app *a = window_app();
     /* Through the same door /set uses, so the test cannot pass by
@@ -4458,7 +4490,7 @@ TEST(a_preference_survives_a_restart) {
     /* llm.* is llm.conf's business — writing it here too would give one
      * value two files to disagree from. */
     char path[512];
-    snprintf(path, sizeof(path), "%s/.local/share/shottino/shottino.conf", home);
+    snprintf(path, sizeof(path), "%s/.local/share/shottino/shottino.conf", sd.dir);
     FILE *f = fopen(path, "r");
     CHECK(f != NULL);
     char buf[4096];
@@ -4476,9 +4508,7 @@ TEST(a_preference_survives_a_restart) {
     unlink(path);
     free_app(a);
     free_app(b);
-    if (saved) setenv("HOME", saved, 1);
-    else unsetenv("HOME");
-    free(saved);
+    test_state_dir_release(&sd);
 }
 
 /* A standing grant belongs to a PERSON, not to a nick.
@@ -4509,11 +4539,8 @@ static void identify(struct app *app, const char *nick, const char *account) {
  * upgrading would log everyone out and orphan every bot directory,
  * leaving the notes on disk under a name nothing looks for. */
 TEST(an_identity_keeps_its_notes_across_the_rename) {
-    char home[] = "/tmp/shottino-migrate-XXXXXX";
-    CHECK(mkdtemp(home) != NULL);
-    char *old_home = getenv("HOME");
-    char *saved = old_home ? strdup(old_home) : NULL;
-    setenv("HOME", home, 1);
+    struct test_state_dir sd;
+    CHECK(test_state_dir_take(&sd, "/tmp/shottino-migrate-XXXXXX"));
 
     struct app *app = window_app();
     snprintf(app->url.base, sizeof(app->url.base), "https://grappa.example.net");
@@ -4554,9 +4581,7 @@ TEST(an_identity_keeps_its_notes_across_the_rename) {
     rmdir(now);
     free(state);
     free_app(app);
-    if (saved) setenv("HOME", saved, 1);
-    else unsetenv("HOME");
-    free(saved);
+    test_state_dir_release(&sd);
 }
 
 TEST(a_standing_grant_survives_a_restart) {
@@ -5007,6 +5032,7 @@ int main(void) {
 
     RUN(names_are_compared_under_the_ircds_casemapping);
     RUN(the_case_insensitive_search_is_ours_and_returns_where_it_matched);
+    RUN(the_state_directory_follows_the_xdg_variable);
     RUN(the_bool_face_agrees_with_the_pointer_one);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
     RUN(a_query_answered_in_another_case_reuses_its_window);

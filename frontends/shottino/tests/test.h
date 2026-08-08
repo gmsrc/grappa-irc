@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* mkdir, for the temporary XDG data home built below. */
+#include <sys/stat.h>
 /* mkdtemp lives in stdlib.h on glibc and in unistd.h on macOS. */
 #include <unistd.h>
 
@@ -145,7 +147,78 @@ static inline void test_use_temp_home(void) {
         test_temp_home_remove();
         exit(1);
     }
+    /* XDG_DATA_HOME as well, and for the same reason.
+     *
+     * shottino_state_dir() prefers that variable over $HOME. A developer
+     * who exports it — which is ordinary on a Linux desktop — would
+     * otherwise have every suite that compiles shottino.c write its
+     * settings and tokens into their REAL data directory, with the
+     * temporary HOME above sitting there looking like it prevented
+     * exactly that. Moving HOME alone stopped being enough the moment
+     * the variable was honoured, so the two move together.
+     *
+     * It is SET rather than unset, and set to where $HOME would have put
+     * it, so the suites keep seeing the ordinary layout. */
+    char data_home[sizeof(test_temp_home) + 16];
+    snprintf(data_home, sizeof(data_home), "%s/.local", test_temp_home);
+    mkdir(data_home, 0700);
+    snprintf(data_home, sizeof(data_home), "%s/.local/share", test_temp_home);
+    mkdir(data_home, 0700);
+    if (setenv("XDG_DATA_HOME", data_home, 1) != 0) {
+        fprintf(stderr, "FATAL %s: setenv(XDG_DATA_HOME): %s\n", __FILE__, strerror(errno));
+        test_temp_home_remove();
+        exit(1);
+    }
     atexit(test_temp_home_remove);
+}
+
+/* A state directory of its OWN, for one test that needs to start empty.
+ *
+ * Three tests used to write this by hand as `setenv("HOME", mkdtemp(...))`
+ * and put HOME back at the end. That stopped isolating anything the
+ * moment shottino_state_dir() began preferring XDG_DATA_HOME: the swap
+ * still looked deliberate, and the test went on reading and writing the
+ * suite-wide directory that every other test uses. Two of the three
+ * failed outright; the third would have passed for the wrong reason,
+ * which is the worse outcome. So the swap lives here once, moves BOTH
+ * variables, and there is no hand-rolled fourth copy to get wrong.
+ *
+ * XDG_DATA_HOME is pointed at `<dir>/.local/share` rather than at `<dir>`
+ * so the on-disk layout is the one a real installation has — tests that
+ * name `.local/share/shottino/...` in a path are describing what a user
+ * would find, and should keep doing so. */
+struct test_state_dir {
+    char dir[64];
+    char *saved_home;
+    char *saved_data_home;
+};
+
+static inline bool test_state_dir_take(struct test_state_dir *s, const char *template) {
+    snprintf(s->dir, sizeof(s->dir), "%s", template);
+    s->saved_home = NULL;
+    s->saved_data_home = NULL;
+    if (!mkdtemp(s->dir)) return false;
+    const char *home = getenv("HOME");
+    const char *data_home = getenv("XDG_DATA_HOME");
+    if (home) s->saved_home = strdup(home);
+    if (data_home) s->saved_data_home = strdup(data_home);
+    char under[sizeof(s->dir) + 16];
+    snprintf(under, sizeof(under), "%s/.local", s->dir);
+    mkdir(under, 0700);
+    snprintf(under, sizeof(under), "%s/.local/share", s->dir);
+    mkdir(under, 0700);
+    return setenv("HOME", s->dir, 1) == 0 && setenv("XDG_DATA_HOME", under, 1) == 0;
+}
+
+static inline void test_state_dir_release(struct test_state_dir *s) {
+    if (s->saved_home) setenv("HOME", s->saved_home, 1);
+    else unsetenv("HOME");
+    if (s->saved_data_home) setenv("XDG_DATA_HOME", s->saved_data_home, 1);
+    else unsetenv("XDG_DATA_HOME");
+    free(s->saved_home);
+    free(s->saved_data_home);
+    s->saved_home = NULL;
+    s->saved_data_home = NULL;
 }
 
 /* CAPTURING STDERR, which two suites now need: it is the media helper's

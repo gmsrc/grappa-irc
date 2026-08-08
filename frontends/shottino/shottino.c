@@ -6269,17 +6269,39 @@ static void migrate_identity_path(const char *legacy, const char *current) {
 
 /* The directory this client owns on the machine, created on demand.
  * Everything shottino keeps between runs — cached tokens, the bridge
- * log, the block list — lives here. */
+ * log, the block list — lives here.
+ *
+ * `$XDG_DATA_HOME/shottino` when that variable says something, falling
+ * back to `~/.local/share/shottino` — which is what the specification
+ * says the fallback IS, so the default path does not move.
+ *
+ * The variable is honoured because the path this builds already claims
+ * to obey it: a directory spelled `.local/share` and then chosen by
+ * $HOME alone is a promise the code does not keep, and the surprise
+ * lands on exactly the deployments that set the variable on purpose. A
+ * service unit or a container has a $HOME it did not choose — often a
+ * read-only image path or a bind-mounted source tree — and pointing the
+ * state elsewhere is the whole reason the variable exists.
+ *
+ * An empty value counts as unset: `XDG_DATA_HOME=` in an env block would
+ * otherwise resolve to `/shottino` at the root of the filesystem. */
 static char *shottino_state_dir(void) {
-    const char *home = getenv("HOME");
-    if (!home || !home[0]) home = ".";
-    char *dir = xasprintf("%s/.local", home);
-    mkdir(dir, 0700);
-    free(dir);
-    dir = xasprintf("%s/.local/share", home);
-    mkdir(dir, 0700);
-    free(dir);
-    dir = xasprintf("%s/.local/share/shottino", home);
+    const char *xdg = getenv("XDG_DATA_HOME");
+    char *base;
+    if (xdg && xdg[0]) {
+        base = xasprintf("%s", xdg);
+        mkdir(base, 0700);
+    } else {
+        const char *home = getenv("HOME");
+        if (!home || !home[0]) home = ".";
+        char *parent = xasprintf("%s/.local", home);
+        mkdir(parent, 0700);
+        free(parent);
+        base = xasprintf("%s/.local/share", home);
+        mkdir(base, 0700);
+    }
+    char *dir = xasprintf("%s/shottino", base);
+    free(base);
     mkdir(dir, 0700);
     return dir;
 }
