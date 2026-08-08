@@ -144,7 +144,7 @@ test("M-9b arming Disconnect on one row disarms the same row's Terminate (single
   await expect(term).toHaveText(/^Terminate$/);
 });
 
-test("M-9b admin Disconnect inline-confirm transitions Disconnect → Confirm → fires", async ({
+test("M-9b admin Disconnect inline-confirm transitions Disconnect → Confirm disconnect → fires", async ({
   page,
 }) => {
   // GREEN-CI batch-1 — target m9b-victim's row deterministically (NOT

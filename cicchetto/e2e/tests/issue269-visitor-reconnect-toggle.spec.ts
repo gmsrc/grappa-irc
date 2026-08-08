@@ -10,7 +10,7 @@
 //
 // Per `feedback_cicchetto_browser_smoke`: this Playwright spec IS the
 // browser smoke for #269 — chromium in the e2e harness renders the
-// inline-confirm text flip (Disconnect → Confirm → Reconnect
+// inline-confirm text flip (Disconnect → Confirm disconnect → Reconnect
 // → …) + the live-badge transition that vitest jsdom can't see.
 //
 // Per `feedback_ux_e2e_mandatory`: the OUTCOME asserted is the live-pid
