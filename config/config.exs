@@ -348,6 +348,7 @@ config :logger, :console,
     # re-prefix them. In the allowlist to satisfy the known_keys↔metadata
     # sync test even though no Logger call carries it today.
     :sender_prefix,
+    :sender_kind,
     # #591 — CTCP frame classification (Grappa.IRC.CTCP.verb_args/1) tagged onto
     # a :notice (peer's CTCP reply) or :privmsg (own /ctcp /ping self-echo) row.
     # In the allowlist to satisfy the known_keys↔metadata sync test even though

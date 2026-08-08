@@ -732,7 +732,10 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.channel == "#italia"
       assert attrs.sender == "irc.azzurra.chat"
       assert attrs.body == "auth banner"
-      assert attrs.meta == %{}
+      # #1070 — a server CAN notice a channel, and the sender string alone
+      # cannot be told from a nick. The kind says which it was; nothing
+      # else is added, so the rest of the contract is unchanged.
+      assert attrs.meta == %{sender_kind: "server"}
     end
 
     # BUG2 fix-up: server-origin NOTICEs (target = own nick, not a channel)
@@ -906,12 +909,58 @@ defmodule Grappa.Session.EventRouterTest do
       # \x01 preserved verbatim (round-trip fidelity — CLAUDE.md).
       assert attrs.body == "\x01PING 1706743200000\x01"
       # Typed classification cic reads instead of touching \x01.
-      assert attrs.meta == %{ctcp_verb: "PING", ctcp_args: "1706743200000"}
+      assert attrs.meta ==
+               %{
+                 ctcp_verb: "PING",
+                 ctcp_args: "1706743200000",
+                 sender_kind: "user",
+                 sender_user: "u",
+                 sender_host: "h"
+               }
     end
 
     # #591 — a plain (non-CTCP) peer NOTICE carries empty meta, no ctcp tag.
     # Proves the classification is strictly additive. The OPEN window is what
     # keeps this row in `bob` post-#546; the meta assertion is the point.
+    # #1070 — sender_nick/1 returns the same bare string for a nick and a
+    # server, and that string is all a consumer gets. The `$server` window
+    # is where the two actually collide: MOTD numerics land there with a
+    # SERVER sender while a private notice lands there with a USER one,
+    # same kind, same shape. meta.sender_kind is what tells them apart.
+    test "a server-prefixed NOTICE carries sender_kind = server" do
+      state = base_state()
+      m = msg(:notice, ["#italia", "auth banner"], {:server, "irc.azzurra.chat"})
+
+      assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      assert attrs.meta.sender_kind == "server"
+      # A server prefix has no user@host to report, and none is invented.
+      refute Map.has_key?(attrs.meta, :sender_user)
+      refute Map.has_key?(attrs.meta, :sender_host)
+    end
+
+    test "a nick-prefixed NOTICE carries sender_kind = user and its user@host" do
+      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      m = msg(:notice, ["vjt", "hey"], {:nick, "bob", "u", "h"})
+
+      assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      assert attrs.meta.sender_kind == "user"
+      assert attrs.meta.sender_user == "u"
+      assert attrs.meta.sender_host == "h"
+    end
+
+    # A +x-cloaked prefix drops half the mask. prefix_userhost/1 already
+    # refuses to report a partial one; the KIND is still known, so it is
+    # still reported — the two facts are independent.
+    test "a partial prefix still reports the kind, without a half mask" do
+      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      m = msg(:notice, ["vjt", "hey"], {:nick, "bob", nil, "h"})
+
+      assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
+      assert attrs.meta.sender_kind == "user"
+      refute Map.has_key?(attrs.meta, :sender_user)
+      refute Map.has_key?(attrs.meta, :sender_host)
+    end
+
     test "plain peer NOTICE gets no ctcp meta (additive)" do
       state = base_state(%{query_window_open?: fn _, _, _ -> true end})
 
@@ -921,7 +970,11 @@ defmodule Grappa.Session.EventRouterTest do
                EventRouter.route(m, state)
 
       assert attrs.channel == "bob"
-      assert attrs.meta == %{}
+      # The claim is about ctcp classification, so assert that and not the
+      # whole map: #1070 adds sender_kind here, and an exact-equality
+      # assertion would read as a ctcp regression when it is not one.
+      refute Map.has_key?(attrs.meta, :ctcp)
+      assert attrs.meta.sender_kind == "user"
     end
 
     # #546 — the CTCP short-circuit outranks the open window. A CTCP-framed

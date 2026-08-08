@@ -10892,9 +10892,14 @@ defmodule Grappa.Session.ServerTest do
       refute_receive %Phoenix.Socket.Broadcast{event: "event"}, 100
 
       [row] = Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
-      # MOTD path persists with empty meta — confirms it came from the
-      # delegated handler, not the routed path (which would set numeric+severity).
-      assert row.meta == %{}
+      # Confirms it came from the delegated handler, not the routed path —
+      # which is what `numeric` + `severity` would prove, so assert their
+      # ABSENCE rather than an empty map. #1070 adds `sender_kind` to every
+      # notice row, and an exact-equality assertion here would read as a
+      # routing regression when the discriminator is untouched.
+      refute Map.has_key?(row.meta, :numeric)
+      refute Map.has_key?(row.meta, :severity)
+      assert row.meta.sender_kind == "server"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end

@@ -458,7 +458,9 @@ defmodule Grappa.Session.EventRouter do
        when is_binary(channel) and is_binary(body) and
               byte_size(channel) > 0 and
               binary_part(channel, 0, 1) in ["#", "&", "!", "+"] do
-    {state, eff} = build_persist(state, :notice, channel, Message.sender_nick(msg), body, %{})
+    {state, eff} =
+      build_persist(state, :notice, channel, Message.sender_nick(msg), body, sender_meta(msg))
+
     {:cont, state, [eff]}
   end
 
@@ -2344,7 +2346,16 @@ defmodule Grappa.Session.EventRouter do
     # correlate a PING reply's token back to the /ping it sent (RTT synthesized
     # client-side). A non-CTCP notice (NickServ, MOTD, plain peer notice) is
     # `:none` → empty meta, so this is strictly additive.
-    {state, eff} = build_persist(state, :notice, channel, sender, body_to_persist, ctcp_meta(body))
+    {state, eff} =
+      build_persist(
+        state,
+        :notice,
+        channel,
+        sender,
+        body_to_persist,
+        Map.merge(ctcp_meta(body), sender_meta(msg))
+      )
+
     {:cont, state, [eff]}
   end
 
@@ -3055,6 +3066,34 @@ defmodule Grappa.Session.EventRouter do
 
   defp prefix_userhost(%Message{}), do: %{}
 
+  # #1070 — which SHAPE the sender had on the wire.
+  #
+  # `sender_nick/1` returns the same bare string for `{:nick, …}` and
+  # `{:server, …}`, and that string is all a consumer gets. For anything
+  # rendering scrollback back into IRC that is not enough: the prefix
+  # shape is the ONLY thing telling another client whether a NOTICE came
+  # from a user or a server, and clients route the two differently.
+  #
+  # The `$server` window is where the two become indistinguishable —
+  # `persist_server_notice/2` files MOTD and INFO numerics there as
+  # `:notice` with a SERVER sender, while a private notice to the user's
+  # own nick lands on the same window, same kind, with a USER sender.
+  #
+  # Additive, same contract as `sender_prefix` above: a consumer that does
+  # not know the key behaves exactly as before, and rows persisted earlier
+  # simply lack it.
+  @spec sender_meta(Message.t()) ::
+          %{optional(:sender_kind | :sender_user | :sender_host) => String.t()}
+  defp sender_meta(%Message{prefix: {:server, _}}), do: %{sender_kind: "server"}
+
+  defp sender_meta(%Message{prefix: {:nick, _, _, _}} = msg),
+    do: Map.put(prefix_userhost(msg), :sender_kind, "user")
+
+  # Prefix-less: the line is the local connection's own, and `sender_nick/1`
+  # already reports the `"*"` sentinel. No kind is claimed rather than
+  # guessing one — an absent key is the documented back-compat path.
+  defp sender_meta(%Message{}), do: %{}
+
   # #25: content kinds whose sender shows an irssi-style @/%/+ glyph. The
   # glyph must reflect the sender's grade AT SEND TIME, not their current
   # grade — so it's snapshotted into meta here, not derived live by cic.
@@ -3124,7 +3163,9 @@ defmodule Grappa.Session.EventRouter do
 
     if is_binary(body) do
       sender = Message.sender_nick(msg)
-      {state, eff} = build_persist(state, :notice, "$server", sender, body, %{})
+      # sender_meta/1, not %{}: this is the exact call that makes a server
+      # hostname and a user nick indistinguishable downstream (#1070).
+      {state, eff} = build_persist(state, :notice, "$server", sender, body, sender_meta(msg))
       {:cont, state, [eff]}
     else
       {:cont, state, []}
