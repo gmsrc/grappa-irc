@@ -15,6 +15,25 @@
 // it and installs the new worker regardless — `activate` is new code
 // running on behalf of an old client, and it is the only lever that does
 // not depend on the page having been informed.
+//
+// THE OBJECTION, AND THE MEASUREMENT THAT ANSWERS IT. cic registers with
+// `registerType: "autoUpdate"`, and the generated register code really does
+// carry `addEventListener("controlling", e => e.isUpdate && location.reload())`
+// — read out of the emitted bundle. On that reading the page already
+// reloads itself on a new worker and everything here is a redundant second
+// navigation racing the first. Measured in a real chromium instead: a
+// byte-different worker installed, activated and took control of the page
+// (`controllerchange` fired once, `navigator.serviceWorker.controller`
+// changed) and the page did NOT reload. The claimed tab kept running the
+// bundle it booted with, exactly as #1063 described.
+//
+// The limit of that measurement, so nobody has to re-derive it: the update
+// was driven by an explicit `registration.update()` — the same call
+// `performRefresh` makes — and NOT by the browser's own update check on a
+// navigation. Whether workbox-window flags that path as `isUpdate` and
+// reloads is unmeasured. If someone later finds that it does, the honest
+// consequence is that this pass is redundant for browser-initiated updates
+// and still load-bearing for the refresh path.
 
 /**
  * Minimal shape of the `WindowClient`s `activate` navigates. Structural so
