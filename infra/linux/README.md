@@ -45,7 +45,9 @@ directly and through the locally-installed nginx.
 5. **Secrets bootstrap** — see below.
 6. **First migration** — `Grappa.Release.migrate()` via `release.sh`.
 7. **Theme seed** — idempotently materialises the curated built-in theme
-   gallery in the database.
+   gallery in the database. Since #440 `deploy.sh` runs the same task on
+   every deploy, hot and cold, so a built-in added after this host was
+   installed actually reaches it; a failure there warns and continues.
 8. **`cic_build.sh`** — builds the cicchetto PWA with bun into
    `runtime/cicchetto-dist/`.
 9. **`install_systemd.sh`** — installs + enables (doesn't start) the

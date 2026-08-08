@@ -33607,3 +33607,90 @@ TTL is read at UPLOAD time (`uploadOrchestrator` picks the host token as
 it posts the file), so the preference governs the next upload and cannot
 reach back to the last one — the one fact a user cannot guess and the
 only one with a wrong assumption behind it.
+## 2026-08-08 — #440: the seed set is versioned code, so it seeds every deploy
+
+**The bug is not a missing line in `deploy.sh`.** #435/#437 taught
+`infra/linux/install.sh` to run `mix grappa.seed_themes`, which fixes a
+fresh install and nothing else. The built-in theme gallery is versioned
+CODE materialised into the DB, and it was materialised ONCE — so every
+built-in added afterwards reaches new installs only, forever, on every
+substrate. That is the defect: once-only seeding of a growing set.
+
+**The cure lives in the shared algorithm, not in four scripts.**
+`infra/lib/deploy_common.sh` (#503) exists because three near-identical
+deploy scripts drifting apart caused the 2026-06-11 outage. A new
+`substrate_seed` hook runs on BOTH paths there; each consumer supplies
+only its own door. Those doors mirror `substrate_migrate` one for one,
+which is what makes the rule stateable in a sentence — jail and the
+published image go through `Grappa.Release.seed_themes/0` (a packaged
+release ships no Mix), the systemd host and both compose flavors go
+through `mix grappa.seed_themes` (the release eval boot path crashes the
+BEAM on the systemd substrate — see `install.sh`'s standing comment).
+Seed-mirrors-migrate holds for the next substrate too; "two out of four"
+would have been the same drift #503 was extracted to kill.
+
+**HOT is the path that actually ships themes.** Adding a built-in
+touches `lib/grappa/themes/builtins.ex`, a plain lib module, which
+`Grappa.Deploy.Preflight` classifies HOT. Seeding on the cold path alone
+would have looked correct and missed the common case entirely. Same
+shape as `substrate_reconcile` (#646) one layer down: classification
+sees changed PATHS, and no path announces that the seed set grew.
+
+**Ordering: schema, then data, on BOTH paths — and the hot path is not
+migration-free.** The cold seed sits after `substrate_migrate` and
+before `substrate_restart` (so `--defer-restart` stages a seeded DB).
+The hot seed was first placed BEFORE `POST /admin/reload`, reasoning
+that new code should meet new rows. That reasoning was inherited from
+`substrate_reconcile` and was already obsolete: since #41 the reload is
+not a module swap but `HotReload.migrate_and_reload/0`, which applies
+pending expand migrations on the live pool and only then loads modules.
+A seed ahead of it runs on the pre-migration schema — the exact ordering
+this file rejects on the cold path. It moved after the reload, which
+also means a refused or partly-failed reload seeds nothing: on a
+contract-migration refusal the schema the seed needs never arrived.
+
+**`DEPLOY_FEATURE_SEED` defaults to 1, alone among the toggles.** Every
+other toggle is a CAPABILITY a substrate may legitimately lack (no
+marker, no `--defer-restart`, no re-exec guard), so they default off and
+the consumer opts in. Seeding is a correctness property every substrate
+needs, so a substrate must opt OUT. Defaulting it off would rebuild this
+very defect: a substrate that silently forgets to seed. There is
+deliberately NO fallback `substrate_seed` — a consumer that fails to
+define the hook breaks loudly in CI rather than quietly seeding nothing.
+
+**A failed seed warns and continues.** The gallery is cosmetic, and on
+the cold path an abort would leave a migrated DB, the old daemon still
+up and no restart — trading a stale gallery for a half-applied deploy,
+which on an always-on bouncer is much the worse of the two. #435 argued
+the other way ("a silent partial seed is worse than a loud stop"); the
+answer is that the seed is an upsert, so a partial run leaves the DB
+CONVERGENT rather than corrupt, the completed-deploy marker is written
+only after a 200, and the next deploy re-runs it to completion. Wrapping
+`seed_builtins/0` in a transaction was considered and rejected: it buys
+nothing the retry does not already give. It is not a silent swallow —
+the warning names what was not seeded, carries the substrate's exact
+retry command, and is re-asserted AFTER the ✓ banner, because a warning
+200 lines up a build log is a warning nobody reads.
+
+**`Grappa.Release` now starts the Cloak vault, in both entry points.**
+Cloak's Ecto types call into the Vault GenServer at load/dump time,
+which is why the supervision tree starts Vault before Repo; a release
+`eval` starts neither, so the ordering had to be restated rather than
+inherited. The moduledoc already CLAIMED both entry points did this.
+`seed_themes/0` would have survived without it by accident — it reads
+the reserved system user, whose only encrypted column is NULL, and
+`cloak_ecto` short-circuits `load(nil)` without touching the vault — but
+the first encrypted column holding a value would have broken the release
+path only, on two substrates, at deploy time. `migrate/0` carried the
+same latent defect and was fixed with it rather than left as a second
+pattern in a ninety-line module.
+
+**The test that earns its keep is the cross-reference one.** Deploy
+scripts name these functions as STRINGS inside `eval`; nothing links
+them at compile time, and #440 deliberately makes a failed seed
+non-fatal — so a rotted call would warn once and be swallowed BY DESIGN.
+`Grappa.ReleaseTest` parses the deploy scripts, extracts every
+`Grappa.Release.*()` they invoke and asserts each is exported. It is
+derived, not a hand-kept list, so the next entry point is covered the
+day a script names it; two companion cases keep it from passing
+vacuously if a script moves or the regex rots.

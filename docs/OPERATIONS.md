@@ -382,6 +382,20 @@ downtime):
   hook). Do not add it to a cold class: that would charge a full session
   drop to copy a file, and would still miss the wrapper's prefix config,
   which is rendered from the DB and so has no changed path to classify.
+- `lib/grappa/themes/builtins.ex` (the curated built-in gallery) — HOT,
+  like any lib module, which is exactly why the theme seed is NOT a
+  cold-only step. Since #440 `deploy_common`'s `substrate_seed` hook
+  runs on EVERY deploy, hot and cold, on all four consumers: the seed set
+  is versioned code and used to be materialised once, at install, so
+  anything added later reached new installs only. Each substrate's door
+  mirrors its `substrate_migrate` — jail and the published image via
+  `Grappa.Release.seed_themes()`, systemd and both compose flavors via
+  `mix grappa.seed_themes`. Ordering is schema-then-data on both paths:
+  after `substrate_migrate` on cold, after the reload on hot (since #41
+  the reload itself applies pending expand migrations). A seed failure
+  WARNS and continues — the gallery is cosmetic, the upsert converges,
+  and the next deploy heals it; the warning names the gallery, carries
+  the retry command, and is repeated after the ✓ banner.
   Deploy orchestrators
   (`scripts/deploy.sh`, `infra/freebsd/deploy.sh`),
   operator-on-demand verbs (`infra/freebsd/jail_*.sh`) and
