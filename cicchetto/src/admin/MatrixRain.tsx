@@ -11,8 +11,9 @@ import { type Component, onCleanup, onMount } from "solid-js";
 //
 // Constraints that are NOT preferences, and why:
 //
-//   * `prefers-reduced-motion` turns it OFF, not down. A full-viewport
-//     animation is the exact case that setting exists for.
+//   * `prefers-reduced-motion` turns it OFF, not down, and is watched
+//     LIVE rather than read once at mount — a user who enables it while
+//     this is running is the case the setting most needs to work for.
 //   * One rAF loop at ~15fps, cancelled on cleanup. This shares a phone
 //     with diag readouts that re-render on every resize event.
 //   * Canvas, not DOM — a few hundred animated glyph nodes would fight
@@ -37,8 +38,15 @@ const MatrixRain: Component = () => {
 
     // Off, not slowed — see the moduledoc. `matchMedia` is absent in
     // jsdom, so a missing implementation reads as "no preference".
-    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    if (reduced) return;
+    //
+    // LIVE, not once: read at mount only, a user who turns the setting on
+    // while this is running keeps the animation until they navigate away,
+    // which is the one case the setting most needs to work. The listener
+    // stops the loop in place; turning it back off does not restart it,
+    // because resuming an animation someone just asked to stop is the
+    // wrong side to err on — closing and reopening the panel does that.
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)") ?? null;
+    if (mq?.matches === true) return;
 
     const ctx = el.getContext("2d");
     if (ctx === null) return;
@@ -81,9 +89,15 @@ const MatrixRain: Component = () => {
     };
     raf = requestAnimationFrame(draw);
 
+    const onReducedChange = (e: MediaQueryListEvent): void => {
+      if (e.matches) cancelAnimationFrame(raf);
+    };
+    mq?.addEventListener("change", onReducedChange);
+
     onCleanup(() => {
       cancelAnimationFrame(raf);
       observer.disconnect();
+      mq?.removeEventListener("change", onReducedChange);
     });
   });
 

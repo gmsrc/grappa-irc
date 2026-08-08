@@ -270,6 +270,39 @@
   --adm-shadow: 0 1px 2px color-mix(in oklab, var(--fg), transparent 88%);
 }
 
+/* Flat fallbacks for every `--adm-*` value that is computed with
+   `color-mix`. An unsupported `color-mix` is invalid at computed-value
+   time, so without this the surfaces, the lines and all five semantic
+   tones drop out TOGETHER — not a plainer console, a broken one.
+
+   `color-mix` shipped in Safari 16.2, and this file already carried 30
+   uses of it before the admin work; what changed is that the console's
+   structural colour now runs through it too, which turned a partial
+   degradation into a total one. This block puts the failure back to
+   partial: an old browser gets a console with fixed greys instead of
+   theme-derived ones, which is worse-looking and entirely usable.
+
+   Values are the `irssi-dark` resolutions of the mixes above, since a
+   browser without `color-mix` also cannot follow a custom theme. */
+@supports not (color: color-mix(in oklab, red, blue)) {
+  :root {
+    --adm-surface-1: #1a1d21;
+    --adm-surface-2: #22262b;
+    --adm-line: #2f343a;
+    --adm-line-strong: #4a5158;
+    --adm-accent-bg: #16242c;
+    --adm-ok: #4aa870;
+    --adm-ok-bg: #14251c;
+    --adm-info: #4a8bb8;
+    --adm-info-bg: #142029;
+    --adm-warn: #c89434;
+    --adm-warn-bg: #26200f;
+    --adm-danger: #d4626a;
+    --adm-danger-bg: #2a1618;
+    --adm-shadow: 0 1px 2px rgb(0 0 0 / 45%);
+  }
+}
+
 :root[data-theme="irssi-dark"] {
   --bg: #0a0a0a;
   --bg-alt: #111111;
