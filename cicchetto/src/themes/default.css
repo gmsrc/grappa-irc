@@ -3412,7 +3412,12 @@ html.resize-dragging * {
   cursor: pointer;
 }
 
-.compose-box button:disabled {
+/* #1059 — keyed on `aria-disabled`, not `:disabled`. The send button must
+   never become a disabled form control: one is not a mouse-event target, and
+   the `mousedown` it would stop receiving is where the #59 keyboard-preserve
+   cancel lives (ComposeBox.tsx states the full arc). This selector is the
+   greying half of that swap — `:disabled` no longer matches anything here. */
+.compose-box button[aria-disabled="true"] {
   opacity: 0.5;
   cursor: not-allowed;
 }

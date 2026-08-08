@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // #904 — the send queue lives in the store, keyed on the window, and
 // ComposeBox is a VIEW over it: the spinner, the readOnly refusal and the
@@ -226,71 +226,73 @@ describe("ComposeBox", () => {
   //   synthesize mouse events for still sends. The synthetic click that
   //   follows a normal tap must NOT send a second time.
   //
-  // Needs a non-empty draft throughout — the button is disabled (and so
-  // fires no pointer events at all) while the draft is empty.
+  // Needs a non-empty draft throughout — an empty one is refused at the top
+  // of the activation handler, so no send would go out to assert on. (Before
+  // #1059 the refusal was the `disabled` attribute, and the button was inert
+  // rather than refusing; the sibling block below is why that changed.)
+  // jsdom's getBoundingClientRect returns an all-zero rect, which the
+  // release-inside guard reads as "the pointer came up off the button".
+  // Give the button a real box so the geometry under test is the one the
+  // production predicate sees, not a degenerate one.
+  const BUTTON_RECT = { left: 300, right: 344, top: 500, bottom: 544 };
+
+  function renderBoxedButton(): HTMLElement {
+    render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+    const btn = screen.getByRole("button", { name: /send message/i });
+    Object.defineProperty(btn, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        ...BUTTON_RECT,
+        width: BUTTON_RECT.right - BUTTON_RECT.left,
+        height: BUTTON_RECT.bottom - BUTTON_RECT.top,
+        x: BUTTON_RECT.left,
+        y: BUTTON_RECT.top,
+        toJSON() {},
+      }),
+    });
+    return btn;
+  }
+
+  // jsdom's PointerEvent constructor is unreliable (same workaround as
+  // ResizeHandle.test.tsx): a MouseEvent carries every field the handlers
+  // read — clientX/clientY, pointerId, preventDefault.
+  function pointer(type: string, x: number, y: number): Event {
+    const e = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+    Object.defineProperty(e, "pointerId", { value: 1 });
+    return e;
+  }
+
+  const CENTRE: [number, number] = [322, 522];
+
   describe("#925 — send button activation", () => {
-    // jsdom's getBoundingClientRect returns an all-zero rect, which the
-    // release-inside guard reads as "the pointer came up off the button".
-    // Give the button a real box so the geometry under test is the one the
-    // production predicate sees, not a degenerate one.
-    const BUTTON_RECT = { left: 300, right: 344, top: 500, bottom: 544 };
-
-    function renderWithDraft(): HTMLElement {
-      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
-      const btn = screen.getByRole("button", { name: /send message/i });
-      Object.defineProperty(btn, "getBoundingClientRect", {
-        configurable: true,
-        value: () => ({
-          ...BUTTON_RECT,
-          width: BUTTON_RECT.right - BUTTON_RECT.left,
-          height: BUTTON_RECT.bottom - BUTTON_RECT.top,
-          x: BUTTON_RECT.left,
-          y: BUTTON_RECT.top,
-          toJSON() {},
-        }),
-      });
-      return btn;
-    }
-
-    // jsdom's PointerEvent constructor is unreliable (same workaround as
-    // ResizeHandle.test.tsx): a MouseEvent carries every field the handlers
-    // read — clientX/clientY, pointerId, preventDefault.
-    function pointer(type: string, x: number, y: number): Event {
-      const e = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
-      Object.defineProperty(e, "pointerId", { value: 1 });
-      return e;
-    }
-
-    const CENTRE: [number, number] = [322, 522];
-
     beforeEach(() => {
       vi.mocked(compose_.getDraft).mockReturnValue("hi");
       vi.mocked(compose_.submit).mockResolvedValue({ ok: true });
     });
 
     it("does NOT cancel pointerdown — that is the gesture-start signal", () => {
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
       const e = pointer("pointerdown", ...CENTRE);
       btn.dispatchEvent(e);
       expect(e.defaultPrevented).toBe(false);
     });
 
     it("#59 — cancels mousedown instead, so focus never leaves the textarea", () => {
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
       const e = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
       btn.dispatchEvent(e);
       expect(e.defaultPrevented).toBe(true);
     });
 
     it("sends on pointerup, without waiting for a click", () => {
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
       btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
       btn.dispatchEvent(pointer("pointerup", ...CENTRE));
       expect(compose_.submit).toHaveBeenCalledTimes(1);
     });
 
     it("swallows the synthetic click that follows, so a tap sends ONCE", () => {
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
       btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
       btn.dispatchEvent(pointer("pointerup", ...CENTRE));
       // detail=1 is what a pointer-generated click reports.
@@ -305,7 +307,7 @@ describe("ComposeBox", () => {
       // sent for it, so swallowing it would drop the send outright. Armed
       // first, deliberately: this is the state a click-less pointer send
       // leaves behind, and the one an Enter must survive.
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
       btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
       btn.dispatchEvent(pointer("pointerup", ...CENTRE));
       const click = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 0 });
@@ -316,14 +318,14 @@ describe("ComposeBox", () => {
     });
 
     it("does not send when the finger slides off the button before release", () => {
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
       btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
       btn.dispatchEvent(pointer("pointerup", BUTTON_RECT.left - 60, BUTTON_RECT.top - 60));
       expect(compose_.submit).not.toHaveBeenCalled();
     });
 
     it("re-arms after a press that produced no click, so the next tap still sends", () => {
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
       // First press: sends on pointerup, and iOS synthesizes no click for it.
       btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
       btn.dispatchEvent(pointer("pointerup", ...CENTRE));
@@ -335,7 +337,92 @@ describe("ComposeBox", () => {
     });
 
     it("ignores a pointerup whose pointerdown never landed on the button", () => {
-      const btn = renderWithDraft();
+      const btn = renderBoxedButton();
+      btn.dispatchEvent(pointer("pointerup", ...CENTRE));
+      expect(compose_.submit).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1059 — the invariant #925 broke: the send button must remain a
+  // MOUSE-EVENT TARGET across its own activation, because that is where the
+  // #59 keyboard-preserve cancel lives (`onMouseDown` → preventDefault, plus
+  // the document-level keepKeyboard capture listener on iOS). A tap on iOS
+  // runs `pointerup` → `mousedown` → `mouseup` → `click`; #925 moved the send
+  // from `click` (after the mousedown) to `pointerup` (before it), so the
+  // draft-clear the send performs now lands BETWEEN the two. While the
+  // refusal was spelled `disabled`, that clear turned the button into a
+  // disabled form control mid-tap, and a browser does not dispatch mouse
+  // events to one — the cancel never ran and iOS collapsed the keyboard.
+  //
+  // WHAT THESE TESTS CAN AND CANNOT SEE. jsdom does NOT reproduce the
+  // suppression: measured here, `dispatchEvent(new MouseEvent("mousedown"))`
+  // on a `disabled` button runs both the element's own handler and a
+  // document-level capture listener (only `.click()` is suppressed). So a
+  // test phrased as "the mousedown still reaches the cancel" passes on the
+  // BROKEN code too — a guard that cannot fail. These assert the INVARIANT
+  // instead of the symptom: the button is never a disabled form control, at
+  // rest or at the instant of activation. The symptom itself — a real
+  // keyboard on real WebKit — is device-only and is NOT claimed here.
+  describe("#1059 — the send button stays a mouse-event target", () => {
+    beforeEach(() => {
+      vi.mocked(compose_.submit).mockResolvedValue({ ok: true });
+    });
+
+    afterEach(() => {
+      vi.mocked(compose_.getDraft).mockReturnValue("");
+    });
+
+    it("expresses an empty draft with aria-disabled, never the disabled attribute", () => {
+      vi.mocked(compose_.getDraft).mockReturnValue("");
+      const btn = renderBoxedButton();
+      expect(btn.hasAttribute("disabled")).toBe(false);
+      expect(btn.getAttribute("aria-disabled")).toBe("true");
+    });
+
+    it("drops aria-disabled once the draft has something to send", () => {
+      vi.mocked(compose_.getDraft).mockReturnValue("hi");
+      const btn = renderBoxedButton();
+      expect(btn.hasAttribute("disabled")).toBe(false);
+      expect(btn.getAttribute("aria-disabled")).toBe("false");
+    });
+
+    it("is still a mouse-event target immediately after its own activation empties the draft", () => {
+      // The production pump takes the text out of the draft SYNCHRONOUSLY, at
+      // the head of `submit` (`takeDraft(key)`, ahead of its first await), so
+      // the emptied draft is observable before the pointerup handler returns
+      // — which is precisely why the flip lands inside the tap. Mirror that
+      // here: an async function body runs synchronously up to its first
+      // await, so this write happens inside `doSubmit`'s call to `submit`.
+      const [draft, setDraft_] = createSignal("hi");
+      vi.mocked(compose_.getDraft).mockImplementation(() => draft());
+      vi.mocked(compose_.submit).mockImplementation(async () => {
+        setDraft_("");
+        return { ok: true };
+      });
+
+      const btn = renderBoxedButton();
+      btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
+      btn.dispatchEvent(pointer("pointerup", ...CENTRE));
+
+      // The send went out…
+      expect(compose_.submit).toHaveBeenCalledTimes(1);
+      // …and the draft it emptied greyed the button without withdrawing it
+      // from mouse-event dispatch, so the `mousedown` that follows this
+      // pointerup still reaches the #59 cancel.
+      expect(draft()).toBe("");
+      expect(btn.getAttribute("aria-disabled")).toBe("true");
+      expect(btn.hasAttribute("disabled")).toBe(false);
+    });
+
+    it("refuses an activation on an empty draft at the control, not at the pump", () => {
+      // Keeping the button enabled means a real browser now DOES deliver this
+      // pointerup (before the fix the control was inert), so the refusal has
+      // to be expressed in the handler. The pump would also no-op an empty
+      // body, but a send that reaches it has already burned the swallow flag
+      // and the in-flight slot.
+      vi.mocked(compose_.getDraft).mockReturnValue("   ");
+      const btn = renderBoxedButton();
+      btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
       btn.dispatchEvent(pointer("pointerup", ...CENTRE));
       expect(compose_.submit).not.toHaveBeenCalled();
     });

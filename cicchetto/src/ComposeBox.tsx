@@ -420,6 +420,12 @@ const ComposeBox: Component<Props> = (props) => {
 
   // ---- Submit ------------------------------------------------------
 
+  // #1059 — the send button's empty-draft refusal. It is read TWICE, and the
+  // pair is the whole fix: once to grey the button (`aria-disabled`) and once
+  // to refuse the activation. What it must NEVER drive again is the
+  // `disabled` attribute — see the button below for why.
+  const nothingToSend = (): boolean => getDraft(key()).trim() === "";
+
   // #904 — no component-local in-flight gate any more. The store owns the
   // one-deep queue keyed on the WINDOW, and it is the only thing that can
   // tell a second Enter (queue it) from a third (refuse it) — a `sending()`
@@ -597,7 +603,29 @@ const ComposeBox: Component<Props> = (props) => {
           // of the visual swap. Screen readers announce the busy state instead
           // of only the disabled state.
           aria-busy={isSending(key())}
-          disabled={getDraft(key()).trim() === ""}
+          // #1059 — `aria-disabled`, NEVER `disabled`. A disabled form control
+          // is not a mouse-event target, and #925 moved this button's send
+          // from `click` to `pointerup`, which on a real tap runs BEFORE
+          // `mousedown`: the send empties the draft, an attribute-driven
+          // refusal would flip `disabled` on mid-tap, and the `mousedown`
+          // carrying the #59 focus-steal cancel below would never be
+          // dispatched. Focus leaves the textarea and iOS collapses the
+          // keyboard — tapping Send dismissed it while Enter did not, which is
+          // exactly the asymmetry #1059 was reported with.
+          //
+          // The invariant: THE SEND BUTTON MUST REMAIN A MOUSE-EVENT TARGET
+          // ACROSS ITS OWN ACTIVATION, because that is where the
+          // keyboard-preserve cancel lives. `:565` already carries this lesson
+          // for the textarea (readOnly, not disabled, for the same keyboard).
+          // Deferring the flip by a frame would also close the window and is
+          // deliberately NOT the fix: it makes the guard timing-dependent,
+          // which is the shape of the bug, not of its remedy.
+          //
+          // The refusal it replaces is not lost — it moved into `onPointerUp`,
+          // where an activation is what has to be refused. `.compose-box
+          // button[aria-disabled="true"]` carries the greying that
+          // `:disabled` used to (default.css).
+          aria-disabled={nothingToSend()}
           // #59: keep the textarea focused when sending via the button.
           // Tapping a <button> moves focus off the textarea, which collapses
           // the native on-screen keyboard (Android especially). The cancel
@@ -630,6 +658,12 @@ const ComposeBox: Component<Props> = (props) => {
             if (!releasedInside(e.currentTarget.getBoundingClientRect(), e.clientX, e.clientY)) {
               return;
             }
+            // #1059 — the empty-draft refusal, now that the button is no
+            // longer `disabled` and so genuinely receives this event. The pump
+            // would no-op an empty body anyway, but an activation that reaches
+            // it has already armed the click swallow, so refuse it here where
+            // the control's own affordance says it is refused.
+            if (nothingToSend()) return;
             sentFromPointer = true;
             void doSubmit();
           }}
