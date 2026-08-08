@@ -10565,13 +10565,16 @@ html.resize-dragging * {
   padding: var(--adm-space-4);
   /* Admin redesign follow-up (2026-08-07) — the home window adopts the
      console's dashboard shape: cards on a raised backdrop rather than
-     rules and bare text. Data stays monospace (a slug, a nick, a state
-     are identifiers); the chrome around it goes proportional. */
+     rules and bare text.
+     #1072 — the SHAPE stayed, the TYPE went back: the whole window is
+     monospace at the client's own size again, because "dashboard for the
+     console, irssi for the client" is a line the maintainer redrew after
+     seeing `--adm-font` land here. */
   display: flex;
   flex-direction: column;
   gap: var(--adm-space-4);
   background: var(--adm-surface-1);
-  font-family: var(--adm-font);
+  font-family: var(--font-mono);
   font-size: var(--font-size);
   color: var(--adm-text);
   min-height: 0;
@@ -10743,6 +10746,12 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   gap: 0.4rem;
   color: var(--adm-accent);
   border-color: var(--adm-accent);
+  /* #1072 — `.adm-btn` supplies the metrics AND the console's type. The
+     metrics are wanted (44px, shared radius); the type is not, so it is
+     named back here rather than by dropping the class. */
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  font-weight: bold;
 }
 
 .home-pane-network-browse:hover {
@@ -10781,12 +10790,14 @@ button.home-pane-network-title:hover .home-pane-network-slug {
 
 .home-pane-section-title {
   margin: 0 0 var(--adm-space-3) 0;
-  font-family: var(--adm-font);
   color: var(--adm-text-dim);
-  font-size: 0.68rem;
-  font-weight: 600;
+  /* #1072 — back to the client's own scale: 0.68rem uppercase at 600 is
+     the console's eyebrow label, and it is the single biggest "smaller
+     and less retro" in the window. */
+  font-size: 0.95rem;
+  font-weight: normal;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
 }
 
 /* #496 — one-line intros that precede a list (networks / available /
@@ -11201,11 +11212,11 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   padding: 0.1rem var(--adm-space-2);
   border: 1px solid transparent;
   border-radius: 999px;
-  font-family: var(--adm-font);
   text-transform: uppercase;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  /* #1072 — the badge SHAPE stays; its type goes back to the relative
+     0.8em bold the rest of the client uses for a state label. */
+  font-size: 0.8em;
+  font-weight: bold;
 }
 
 .home-pane-network-row-connected .home-pane-network-state {
@@ -11257,6 +11268,12 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   align-items: center;
   justify-content: center;
   box-sizing: border-box;
+  /* #1072 — the chips all carry `.adm-btn` for its metrics, which also
+     drags the console's sans in. Named back once here, on the class the
+     three chips already share, rather than three times below. Reconnect
+     still overrides the weight it always had. */
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
 }
 
 .home-pane-network-reconnect {
