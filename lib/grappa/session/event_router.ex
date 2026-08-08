@@ -428,7 +428,12 @@ defmodule Grappa.Session.EventRouter do
             else: Identifier.canonical_target(target, casemapping(state))
 
         notice_body = "CTCP VERSION query → grappa #{version}"
-        {state2, persist_eff} = build_persist(state, :notice, dm_channel, sender, notice_body, %{})
+        # sender_meta/1, not %{}: this row's sender is a peer nick off a real
+        # wire prefix, and leaving it bare would make an absent key mean
+        # either "prefix-less" or "a CTCP visibility row" — the ambiguity
+        # #1070 exists to remove, one layer down.
+        {state2, persist_eff} =
+          build_persist(state, :notice, dm_channel, sender, notice_body, sender_meta(msg))
 
         {:cont, state2, [{:reply, reply}, persist_eff]}
 
@@ -2785,8 +2790,16 @@ defmodule Grappa.Session.EventRouter do
         do: state.nick,
         else: Identifier.canonical_target(target, casemapping(state))
 
+    # Same as the VERSION row above: a real peer nick, so the key belongs.
     {state2, persist_eff} =
-      build_persist(state, :notice, dm_channel, sender, "CTCP PING query → answered", %{})
+      build_persist(
+        state,
+        :notice,
+        dm_channel,
+        sender,
+        "CTCP PING query → answered",
+        sender_meta(msg)
+      )
 
     {:cont, state2, [{:reply, reply}, persist_eff]}
   end
@@ -3082,6 +3095,9 @@ defmodule Grappa.Session.EventRouter do
   # Additive, same contract as `sender_prefix` above: a consumer that does
   # not know the key behaves exactly as before, and rows persisted earlier
   # simply lack it.
+  # The value set is closed — "user" | "server" — but Elixir typespecs do
+  # not admit string literals ("unexpected expression in typespec"), so it
+  # cannot be stated here. The two clauses below are what guarantee it.
   @spec sender_meta(Message.t()) ::
           %{optional(:sender_kind | :sender_user | :sender_host) => String.t()}
   defp sender_meta(%Message{prefix: {:server, _}}), do: %{sender_kind: "server"}
