@@ -400,8 +400,13 @@ const RailActions: Component<Props> = (props) => {
                   close();
                 }}
               >
+                {/* #1076 — 📣, not `@`. The icon slot is an emoji slot: a
+                    bare ASCII glyph renders in the text font at the text
+                    font's advance width, so the label after it starts
+                    somewhere no other label starts. 🔔 was unavailable — it
+                    is already the mute toggle's unmuted state below. */}
                 <span class="rail-action-icon" aria-hidden="true">
-                  @
+                  {"\u{1F4E3}"}
                 </span>
                 <span class="rail-action-label">mentions</span>
               </button>

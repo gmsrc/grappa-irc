@@ -496,6 +496,28 @@ describe("RailActions — @ mentions (#986)", () => {
     });
   });
 
+  // #1076 — `.rail-action-icon` is an EMOJI slot: every other action fills it
+  // with a colour-emoji glyph, which carries its own advance width and box. A
+  // bare ASCII `@` renders in the text font at the text font's metrics, so the
+  // label after it does not start where every other label starts. Asserted as
+  // a PROPERTY, not a glyph, so a future re-pick is free — but it must stay
+  // emoji-presentation, and it must not be a glyph another entry in the same
+  // menu already means (🔔 is the mute toggle's unmuted state).
+  it("fills the icon slot with an emoji no other rail entry uses", () => {
+    selHolder.value = channelSel;
+    mentionsBundles.value = { freenode: {} };
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+    const icon = screen.getByTestId("rail-action-mentions").querySelector(".rail-action-icon");
+    if (icon === null) throw new Error("the mentions entry has no icon slot");
+    const glyph = icon.textContent?.trim() ?? "";
+    expect(glyph).toMatch(/\p{Emoji_Presentation}/u);
+    const siblings = Array.from(document.querySelectorAll(".rail-action-icon"))
+      .filter((node) => node !== icon)
+      .map((node) => node.textContent?.trim());
+    expect(siblings).not.toContain(glyph);
+  });
+
   // #473's capability-only rule, applied. The @ was `isMobile()`-gated in
   // ShellChrome to avoid duplicating the desktop Sidebar mentions row (#71
   // INC-2); in the rail that gate would be the one thing this component says
