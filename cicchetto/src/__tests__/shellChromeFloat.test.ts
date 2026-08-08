@@ -45,14 +45,47 @@ describe("#985 the chrome band is out of flow", () => {
 
   it("the floated opener paints above the in-pane scrollback floats", () => {
     // It overflows a zero-height box, so its later-in-DOM siblings (the
-    // scrollback, its pinned overlay, the float stack) would paint over it
-    // without an explicit stacking order. 40 is the tallest in-pane float
-    // (the next-active circle); 89/90 is the members drawer, which must stay
-    // ON TOP of the opener that opens it.
+    // scrollback, the float stack) would paint over it without an explicit
+    // stacking order. 40 is the tallest in-pane float (the next-active
+    // circle); 89/90 is the members drawer, which must stay ON TOP of the
+    // opener that opens it.
+    //
+    // #1051 — the pinned overlay USED to be named in this list and no longer
+    // is. It carries the WHOIS / WHOWAS / LUSERS cards, whose ✕ sits in the
+    // same top-right corner as this float, and 41 > 5 meant the ☰ won the hit
+    // test: on a non-channel window the card could not be dismissed. The card
+    // now wins (`.scrollback-overlay` at 42) — see the sibling test below,
+    // which is the one that fails if that is ever undone.
     const z = /z-index:\s*(\d+)/.exec(ruleBody(".shell-chrome"))?.[1];
     expect(z).toBeDefined();
     expect(Number(z)).toBeGreaterThan(40);
     expect(Number(z)).toBeLessThan(89);
+  });
+
+  // #1051 — the guard the rewritten comment above needs. The numeric assertion
+  // in that test is on `.shell-chrome` ALONE, so raising or dropping the
+  // overlay leaves it green either way: without this, the rule inverts in
+  // silence and the next reader restores the bug on purpose.
+  it("the pinned card overlay paints ABOVE the floated opener, below the toasts", () => {
+    const zOf = (sel: string): number => {
+      const raw = /z-index:\s*(\d+)/.exec(ruleBody(sel))?.[1];
+      expect(raw).toBeDefined();
+      return Number(raw);
+    };
+    const overlay = zOf(".scrollback-overlay");
+    // The whole point of #1051: the card's ✕ has to beat the ☰ that lands on
+    // the same corner. Fails the moment the overlay goes back under.
+    expect(overlay).toBeGreaterThan(zOf(".shell-chrome"));
+    // Ceiling. 89/90 (drawer backdrop + drawers) is the bound the issue names,
+    // but the REAL one is lower: `.toast-stack` at 60 must keep painting over
+    // a card, or a toast raised while a WHOIS is up is invisible.
+    expect(overlay).toBeLessThan(zOf(".toast-stack"));
+    // Consequence the issue did not name, pinned so it stays deliberate: the
+    // overlay now also clears `.scrollback-float-stack` (40, scroll-to-bottom
+    // + next-active). Same ruling applied consistently — while a card is open
+    // the card wins the pane's chrome — and a full-height card can cover those
+    // buttons until it is dismissed.
+    expect(overlay).toBeGreaterThan(zOf(".scrollback-float-stack"));
   });
 
   it("the floated opener brings its own opaque backing", () => {

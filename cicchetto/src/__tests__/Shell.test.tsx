@@ -1051,6 +1051,32 @@ describe("Shell — mobile layout (isMobile = true)", () => {
       expect(container.querySelector(".topic-bar")).toBeNull();
     });
 
+    // #1050 — the /list window is the third exclusion, joining channel (the
+    // TopicBar hosts the ☰ in flow) and admin (AdminPane mounts the same
+    // opener inline in its own header). The directory pane already puts its
+    // close ✕ in the top-right corner, and since #985 the floated ☰ lands
+    // there too at z-index 41 — so the tap that should leave the directory
+    // opened the rail instead. Owner's call: this window does not want the
+    // rail at all, so the ROW goes. Whole-row, not `display: none` on the
+    // glyph: hiding the button would leave `.shell-chrome` in the tree with
+    // its z-index and its zero-height box still over the pane header.
+    it("mobile /list window: the standalone .shell-chrome row is SUPPRESSED (#1050)", async () => {
+      mobileState.value = true;
+      selectionState.setSelSig({
+        networkSlug: "freenode",
+        channelName: LIST_WINDOW_NAME,
+        kind: "list",
+      });
+      const { container } = render(() => <Shell />);
+      // Barrier on the branch actually mounting, so an empty render cannot
+      // pass this by rendering nothing at all.
+      await waitFor(() => {
+        expect(container.querySelector(".directory-pane")).not.toBeNull();
+      });
+      expect(container.querySelector(".shell-chrome")).toBeNull();
+      expect(container.querySelector("[data-testid='shell-chrome-rail-opener']")).toBeNull();
+    });
+
     it("#71 INC-2 — desktop channel window: NO .shell-chrome row (removed); cog lives in the permanent rail; NO launcher footer", async () => {
       mobileState.value = false;
       selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });

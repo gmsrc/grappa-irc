@@ -917,7 +917,21 @@ const Shell: Component = () => {
               header instead, so the opener stays reachable on the admin window
               (bucket L, asserted in ux-4-z-cluster-journey) and the testid stays
               singular — the two mounts are mutually exclusive by this gate. */}
-          <Show when={selectedChannel()?.kind !== "channel" && !isAdminPaneVisible()}>
+          {/* #1050 — `list` is the third exclusion, for the same collision the
+              admin note above describes but with the opposite remedy. The
+              directory pane's close ✕ is the LAST child of its header, i.e. the
+              top-right corner the #985 float lands in at z-index 41, so the ☰
+              won the hit test and the tap that should leave the directory
+              opened the rail instead. Admin re-homed the button into its own
+              pane header; here the owner's call is that this window does not
+              want the rail at all, so the row simply goes. Bucket L ("settings
+              reachable from every window kind") is knowingly relaxed for this
+              ONE kind — every other non-channel kind keeps the float. Whole-row
+              and not a `display: none` on the glyph: the row is what carries
+              the z-index, and its zero-height box would stay over the header.
+              Reads `selKind()` — the same memo the mobile `<Match>` below
+              switches on — rather than re-deriving the kind here. */}
+          <Show when={selKind() !== "channel" && selKind() !== "list" && !isAdminPaneVisible()}>
             <ShellChrome
               onOpenRail={() =>
                 toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })

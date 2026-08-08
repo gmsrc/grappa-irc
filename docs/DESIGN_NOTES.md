@@ -33982,3 +33982,70 @@ bar for that is "same or stronger, never looser":
   (Escape does NOT take the column away, already pinned in unit), and
   the `selectChannel` that follows stays the real proof that nothing
   intercepts.
+
+## 2026-08-08 — #1050 + #1051: one corner, two controls, and two different remedies
+
+Since #985 the non-channel mobile chrome is a zero-height row whose lone ☰
+overflows into the pane's top-RIGHT corner at `z-index: 41`. #1039 then
+retargeted that float's margin onto the shared `--pane-chrome-inset-*`
+tokens so the channel ☰ and the float land on the same rectangle — right,
+and the reason both of these landed at once: the glyph moved `0.25rem`
+down and `0.5rem` inward, off the very corner and onto whatever the pane
+already put there. Two panes already put something there.
+
+**They share a root and do NOT share a remedy**, which is the whole
+content of this note. The gate at `Shell.tsx` decides whether the row
+exists; the question each window has to answer is whether it wants the
+rail at all.
+
+- **/list does not (#1050).** The directory's ✕ is the last child of its
+  header, i.e. that corner, and the ☰ won the hit test — the tap meant to
+  leave the directory opened the rail. Owner's call, 2026-08-08: this
+  window does not want the rail, so the ROW goes — a third exclusion
+  beside `channel` (the TopicBar hosts the ☰ in flow) and `admin` (which
+  re-homed the same button into its own pane header). Bucket L is
+  knowingly relaxed for this one kind. Whole row, not a `display: none`
+  on the glyph: the row is what carries the z-index, and its zero-height
+  box would stay over the header. The gate reads `selKind()`, the memo
+  the mobile `<Match>` already switches on, rather than re-deriving.
+- **A server or query window does (#1051).** On mobile this ☰ is the only
+  door to settings, so the row stays and the CARD is raised instead. The
+  WHOIS / WHOWAS / LUSERS cards live in `.scrollback-overlay` (#133) at
+  `z-index: 5`, each with its ✕ at `margin-left: auto` in the card
+  header — the same corner, and 41 > 5, so the card could not be
+  dismissed at all. vjt's ruling is that the card wins: if a card is open
+  the intent is to close it, and closing it uncovers the ☰ anyway.
+
+**The ceiling is 60, not 89.** The issue bounds the new value below the
+89/90 drawer tier, which is true but not tight: `.toast-stack` sits at
+60 and has to keep painting over a card, or a toast raised while a WHOIS
+is up is invisible. 42 is the value — one above the float.
+
+**A second inversion the issue did not name.** `.scrollback-float-stack`
+(40 — scroll-to-bottom + next-active) carried a comment reading "z-index
+above `.scrollback-overlay` (cards)". Raising the overlay to 42
+necessarily lifts it over that stack too, so a full-height card now
+covers those buttons until it is dismissed. Accepted as the same ruling
+applied consistently, and the comment was corrected in the same change
+rather than left to mislead. The alternative — lifting the float stack
+back over the overlay — cascades: it would then also clear
+`.shell-chrome` at 41, inverting #985's rule instead.
+
+**The guard that could not fail.** `shellChromeFloat.test.ts` asserts
+`40 < z(.shell-chrome) < 89` under the heading "the floated opener paints
+above the in-pane scrollback floats", and its comment named the pinned
+overlay among those floats. That assertion is on `.shell-chrome` ALONE,
+so raising the overlay leaves it green while inverting the rule it
+documents — the next reader restores the bug on purpose. The comment was
+rewritten and a sibling test added that compares the two numbers
+directly (`overlay > .shell-chrome`, `< .toast-stack`, `>
+.scrollback-float-stack`), so the inversion now has something that fails
+for it. A guard that cannot fail is not a guard.
+
+**Test shape, both sides.** For #1050 the outcome asserted is that the
+tap CLOSES the directory, not that the ✕ is visible — visibility is
+exactly what the bug already satisfied, since the float painted over a
+perfectly visible button. For #1051 it is `document.elementFromPoint` at
+the ✕'s own centre, preceded by an assertion that the two boxes still
+INTERSECT: without that precondition a layout change that merely moved
+them apart would keep the spec green while retiring what it guards.

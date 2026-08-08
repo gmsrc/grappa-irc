@@ -2494,14 +2494,18 @@ html.resize-dragging * {
      (UX-3 BIS) and `.shell-main` sits inside that padding box, so the pane's
      top edge is ALREADY below the island; re-adding it would double-count —
      the #913 trap pointed the other way.
-   * `z-index: 41` clears every in-pane scrollback float (the next-active
+   * `z-index: 41` clears the in-pane scrollback float stack (the next-active
      circle at 40 is the tallest) because the later-in-DOM scrollback would
      otherwise paint over a child that overflows a zero-height box; and stays
      below the members drawer (89/90) and the modal tier (1000), which must
      keep covering the opener that summons them. The cost is deliberate and
      narrow: the ☰'s own 48px box overlaps the top-right corner of the
      scrollback, so a link ending exactly there is behind it — accepted,
-     the alternative was the band. */
+     the alternative was the band.
+     #1051 — one exception was carved out of "every in-pane float": the pinned
+     card overlay is at 42 and paints OVER this. Its cards put a ✕ in the very
+     corner this ☰ floats into, and under 41 they could not be dismissed at
+     all. */
 
 .shell-chrome {
   position: relative;
@@ -2589,20 +2593,33 @@ html.resize-dragging * {
    place in the channel buffer (the bug). `pointer-events: none` lets taps
    fall through to the scrollback in the uncovered area below; each direct
    child re-enables pointer events for its own box so the card body and its
-   close affordance stay interactive. z-index sits above the scroll list,
-   below the scroll-to-bottom button (z-index: 10). `max-height: 100%`
+   close affordance stay interactive. `max-height: 100%`
    bounds the layer to `.scrollback-pane` (the ComposeBox is a sibling
    OUTSIDE the pane), so a pathologically tall card — e.g. a WHOIS with
    dozens of channels on a short viewport — can at most cover the whole
    scroll list, never spill over and intercept taps on the compose box;
    `overflow-y: auto` lets such a card's overflow scroll rather than
-   clip the close affordance (which sits in the header, at the top). */
+   clip the close affordance (which sits in the header, at the top).
+
+   #1051 — z-index was 5, under everything in the pane's chrome, and that made
+   the cards undismissable on a non-channel window: `.shell-chrome` floats its
+   lone ☰ over the pane's top-RIGHT corner (#985) at 41, each card puts its ✕
+   in that same corner (`margin-left: auto` in the card header), and 41 > 5, so
+   the ☰ won the hit test. 42 is the whole fix — vjt's ruling is that the card
+   wins, because if a card is open the intent is to close it, and closing it
+   uncovers the ☰ anyway. Ceiling is NOT the 89/90 drawer tier: `.toast-stack`
+   sits at 60 and must keep painting over a card, or a toast raised while a
+   WHOIS is up is invisible. Consequence worth stating, since 42 also clears
+   `.scrollback-float-stack` (40): a full-height card now covers the
+   scroll-to-bottom / next-active buttons until it is dismissed. That is the
+   same ruling applied consistently, not an oversight. Pinned in
+   `__tests__/shellChromeFloat.test.ts`. */
 .scrollback-overlay {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  z-index: 5;
+  z-index: 42;
   display: flex;
   flex-direction: column;
   max-height: 100%;
@@ -3110,8 +3127,11 @@ html.resize-dragging * {
    state (the pane rides above the compose box + soft keyboard) and they
    never overlap. `pointer-events: none` on the box lets taps fall through
    the inter-button gap to the scrollback; each button re-enables its own.
-   z-index above `.scrollback-overlay` (cards) — matches the old mobile
-   next-active circle (z-index 40). */
+   z-index 40 matches the old mobile next-active circle.
+   #1051 — this used to say "above `.scrollback-overlay` (cards)". It is not,
+   any more: the overlay went to 42 so a card's ✕ can beat the floated ☰ at 41,
+   which necessarily lifted it over this stack too. A full-height card covers
+   these buttons until it is dismissed — accepted, same ruling. */
 .scrollback-float-stack {
   position: absolute;
   right: 1rem;
