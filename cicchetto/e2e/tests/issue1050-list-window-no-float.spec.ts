@@ -65,14 +65,88 @@ test("@webkit #1050 — the /list window drops the floating ☰, and its ✕ act
 
   // THE MECHANISM, measured rather than argued: the element under the finger at
   // the ✕'s own centre IS the ✕. Pre-fix this resolved to the floated ☰.
+  //
+  // The probe returns the whole hit stack, not a bare boolean, and it costs
+  // nothing until something fails. The first red here was unreadable: a lone
+  // `false` says a layer won the corner but never names it, and the artifacts
+  // do not settle it either — `elementFromPoint` returns null for a point
+  // outside the viewport, so "covered by an invisible layer" and "pushed
+  // off-screen" produce the identical failure. `elementsFromPoint` names every
+  // layer in the stack, including transparent ones, so the NEXT red diagnoses
+  // itself instead of costing another CI round.
   const closeBtn = pane.locator(".directory-close");
   await expect(closeBtn).toBeVisible();
-  const hit = await closeBtn.evaluate((el) => {
+
+  // BARRIER, and the reason the first run of this spec was red. We reached
+  // /list through the rail, so `openRailMenu` opened the members drawer;
+  // `openListPanel` closes it (the #291/#361 nav mutex), but `.shell-members`
+  // on mobile is `position: fixed; right: 0; z-index: 90` with
+  // `transform: translateX(100%)` and `transition: transform 200ms ease-out`.
+  // Closing is therefore a 200ms SLIDE, and for the first tens of ms the
+  // drawer still covers the pane's top-right corner — the exact point tested
+  // below — at a z-index above everything in the pane. The three `toHaveCount`
+  // assertions above are already satisfied when they run, so they cost almost
+  // nothing and the probe landed inside the slide: the drawer won
+  // `elementFromPoint`, honestly, and the spec read it as a float that had not
+  // been suppressed.
+  //
+  // Nothing about the assertion is relaxed to fix that — the drawer covering
+  // the corner mid-animation is the animation WORKING, and it is not the state
+  // #1050 is about. What was missing is the pre-state, so it is established
+  // here: the drawer is gone AND its box no longer meets the ✕. Polled on the
+  // geometry rather than slept for 200ms, so the barrier does not hardcode the
+  // transition and cannot rot if the duration changes.
+  //
+  // This is NOT webkit-specific, despite only webkit having reported it: the
+  // chromium project `grepInvert`s `@webkit`, so chromium has never run this
+  // spec. The race is in the flow, not the engine.
+  await expect(page.locator(".shell-members.open")).toHaveCount(0);
+  await expect
+    .poll(
+      () =>
+        closeBtn.evaluate((el) => {
+          const drawer = document.querySelector(".shell-members");
+          if (drawer === null) return true;
+          const x = el.getBoundingClientRect();
+          const d = drawer.getBoundingClientRect();
+          return d.left >= x.right || d.right <= x.left || d.top >= x.bottom || d.bottom <= x.top;
+        }),
+      { timeout: 10_000, message: "#1050 — the rail drawer never finished sliding off the ✕" },
+    )
+    .toBe(true);
+
+  const probe = await closeBtn.evaluate((el) => {
+    const describe = (n: Element | null) =>
+      n === null
+        ? "null"
+        : `${n.tagName.toLowerCase()}${[...n.classList].map((c) => `.${c}`).join("")}` +
+          (n.getAttribute("data-testid") ? `[${n.getAttribute("data-testid")}]` : "");
     const r = el.getBoundingClientRect();
-    const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
-    return top === el || el.contains(top);
+    const x = r.x + r.width / 2;
+    const y = r.y + r.height / 2;
+    const top = document.elementFromPoint(x, y);
+    return {
+      hit: top === el || el.contains(top),
+      inViewport: x >= 0 && y >= 0 && x < window.innerWidth && y < window.innerHeight,
+      point: [Math.round(x), Math.round(y)],
+      viewport: [window.innerWidth, window.innerHeight],
+      rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+      stack: document.elementsFromPoint(x, y).slice(0, 6).map(describe),
+    };
   });
-  expect(hit, "#1050 — nothing may paint over the directory's close ✕").toBe(true);
+
+  // Split from the hit test on purpose. A ✕ pushed off-screen fails the hit
+  // test too, for a reason that has nothing to do with anything painting over
+  // it — and #1050 is about the corner collision, not about layout drift. Two
+  // assertions, so the failure says which of the two happened.
+  expect(
+    probe.inViewport,
+    `#1050 — the directory's ✕ must be inside the viewport. ${JSON.stringify(probe)}`,
+  ).toBe(true);
+  expect(
+    probe.hit,
+    `#1050 — nothing may paint over the directory's close ✕. ${JSON.stringify(probe)}`,
+  ).toBe(true);
 
   // THE OUTCOME. Not "the ✕ is visible" — the bug satisfied that. The tap has
   // to LEAVE the directory. Playwright's hit-target check would already fail
