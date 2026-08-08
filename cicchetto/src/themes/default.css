@@ -194,6 +194,35 @@
      floor (feedback_cic_tap_target_rem_pitfall). Theme-independent, so it
      lives on base :root, NOT in the per-theme blocks. */
   --tap-min: 44px;
+  /* #1039 — the inset of the pane's TOP CHROME from `.shell-main`'s edges.
+     ONE pair of numbers, read by BOTH mobile hosts of the ☰ rail opener, which
+     is the same control in the same corner on every window kind:
+
+       * channel     → `.topic-bar`'s own padding (the ☰ is its last flex child)
+       * non-channel → `.shell-chrome .shell-chrome-rail-opener`'s margin (#985
+                       floats the lone ☰ over a zero-height row)
+
+     Both anchor to the same box — on a channel `.shell-main` → `.drop-upload-
+     zone` (no padding) → `.topic-bar`, on every other kind `.shell-main` →
+     `.shell-chrome` — so the two are comparable at the pixel, and before #1039
+     they disagreed (`0.5rem`/`1rem` vs `0.25rem`/`0.5rem`): the ☰ visibly
+     jumped up-and-right when you switched window kind.
+
+     The BAR's numbers won, not the float's. The bar's padding is not a free
+     choice — it is also the only breathing room the channel name and the topic
+     strip get, so retargeting it at the float's tighter values would have
+     squeezed the text against the pane edge, a design change #1039 did not ask
+     for. The float's margin IS free: its own comment calls it "breathing room,
+     NOT a notch allowance" and it has no second consumer. Constrained beats
+     free. Moving the float 0.25rem down / 0.5rem in can only REDUCE the #985
+     corner-overlap it accepted, never grow it.
+
+     Theme-independent, like the sibling chrome tokens above: this is geometry,
+     not palette. Drift between the two readers is pinned by
+     `src/__tests__/hamburgerCorner.test.ts`; the rendered outcome by
+     `e2e/tests/issue1039-hamburger-corner.spec.ts`. */
+  --pane-chrome-inset-block: 0.5rem;
+  --pane-chrome-inset-inline: 1rem;
   /* #913 — the iOS top safe-area inset, as a variable. Everything else in this
      file writes `env(safe-area-inset-top)` inline, which is right for a
      padding: the engine substitutes it and nobody has to read it back. The
@@ -1891,7 +1920,12 @@ html.resize-dragging * {
   /* gap now separates the header block from the hamburger; the intra-column
      namebox↔topic gap lives on `.topic-bar-header`. */
   gap: 0.5rem;
-  padding: 0.5rem 1rem;
+  /* #1039 — computed value UNCHANGED (0.5rem 1rem); it is the literal that is
+     gone. On mobile this padding IS the ☰'s inset from the pane's top-right
+     corner, and the float on every other window kind now reads the same token
+     — so the two cannot drift apart again without one edit changing both. See
+     the `--pane-chrome-inset-*` note on `:root`. */
+  padding: var(--pane-chrome-inset-block) var(--pane-chrome-inset-inline);
   border-bottom: 1px solid var(--border);
   background: var(--bg);
 }
@@ -2428,10 +2462,16 @@ html.resize-dragging * {
    (`:root.theme-has-bg .scrollback-pane::before`). Descendant selector rather
    than order-dependent overriding, matching `.rail-actions .rail-action`.
    The margin is what keeps the glyph off the pane's very corner — it is
-   breathing room, NOT a notch allowance (see above). */
+   breathing room, NOT a notch allowance (see above).
+   #1039 — that breathing room is no longer this rule's to pick. It was
+   `0.25rem 0.5rem`, the TopicBar hosts the same ☰ at `0.5rem`/`1rem`, and
+   nothing registered the two against each other — so the glyph jumped up and
+   to the right the moment you left a channel window. Both now read one token
+   pair; the bar's values won because the bar's padding has a second consumer
+   and this margin does not (see the `--pane-chrome-inset-*` note on `:root`). */
 .shell-chrome .shell-chrome-rail-opener {
   background: var(--bg);
-  margin: 0.25rem 0.5rem 0 0;
+  margin: var(--pane-chrome-inset-block) var(--pane-chrome-inset-inline) 0 0;
 }
 
 .shell-chrome-btn {
@@ -6334,6 +6374,18 @@ html.resize-dragging * {
      hand-rolled 44px box — replaced by the shared 48px token.) */
   .topic-bar .topic-bar-hamburger {
     display: inline-flex;
+    /* #1039 — the ☰ pins to the TOP of the bar; only the text block stays
+       centred. `.topic-bar`'s `align-items: center` (#644) centres BOTH
+       children, which is identical while the 48px ☰ is the tallest child but
+       drifts the moment `.topic-bar-header` outgrows it — a two-line topic
+       (#344/#644) pushes the ☰ down by half the excess, and the float on
+       non-channel windows has no such term. Matching only the single-line case
+       would have left that jump in place. `align-self`, not a padding/margin
+       correction: #644's acceptance bar was "no magic padding constant", and a
+       third offset that evens the score against the float is exactly the
+       band-aid #1039 rules out. Mobile-only because the ☰ is display:none
+       above this breakpoint. */
+    align-self: flex-start;
   }
 
   /* Members drawer slide-in from right (unchanged from pre-C6) */
