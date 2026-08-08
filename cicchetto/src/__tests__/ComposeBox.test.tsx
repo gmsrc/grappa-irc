@@ -414,6 +414,46 @@ describe("ComposeBox", () => {
       expect(btn.hasAttribute("disabled")).toBe(false);
     });
 
+    // The two below reach the MECHANISM, not just the attribute, and they can
+    // do so in jsdom for a reason that is worth stating: Solid DELEGATES
+    // `mousedown` (it is in dom-expressions' DelegatedEvents set) and its
+    // delegated dispatcher skips a node's handler when `node.disabled` —
+    // `if (handler && !node.disabled)`, solid-js/web eventHandler. So the #59
+    // cancel dies on a disabled send button in EVERY browser, not only where
+    // the browser itself withholds the event. That is also the answer to the
+    // Android half #1059 left open: `keepKeyboard` is isIos()-gated, so this
+    // per-button handler is Android's only protection, and Solid's guard is
+    // not platform-conditional. Measured here, not read off a spec.
+    it("still cancels the mousedown with an empty draft — the #59 guard must not be inert at rest", () => {
+      vi.mocked(compose_.getDraft).mockReturnValue("");
+      const btn = renderBoxedButton();
+      const md = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      btn.dispatchEvent(md);
+      expect(md.defaultPrevented).toBe(true);
+    });
+
+    it("still cancels the mousedown that FOLLOWS its own send — the #1059 tap, in order", () => {
+      // The real iOS tap: pointerup → mousedown → mouseup → click. #925 put
+      // the send on the first of those, so by the time the second arrives the
+      // draft is already empty. Replay exactly that and require the cancel to
+      // survive it — this is the sequence the reporter's keyboard died on.
+      const [draft, setDraft_] = createSignal("hi");
+      vi.mocked(compose_.getDraft).mockImplementation(() => draft());
+      vi.mocked(compose_.submit).mockImplementation(async () => {
+        setDraft_("");
+        return { ok: true };
+      });
+
+      const btn = renderBoxedButton();
+      btn.dispatchEvent(pointer("pointerdown", ...CENTRE));
+      btn.dispatchEvent(pointer("pointerup", ...CENTRE));
+      expect(draft()).toBe("");
+
+      const md = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      btn.dispatchEvent(md);
+      expect(md.defaultPrevented).toBe(true);
+    });
+
     it("refuses an activation on an empty draft at the control, not at the pump", () => {
       // Keeping the button enabled means a real browser now DOES deliver this
       // pointerup (before the fix the control was inert), so the refusal has
