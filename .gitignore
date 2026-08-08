@@ -48,6 +48,12 @@ priv/plts/*.plt.hash
 !/runtime/bun-cache/
 /runtime/bun-cache/*
 !/runtime/bun-cache/.gitkeep
+# Same reason for the #1027 bridge: `--profile ircd` bind-mounts this as the
+# shottino XDG data home, and Docker would create it root-owned on a fresh
+# clone. The bridge writes its token cache and ircd.log in there as UID 1000.
+!/runtime/shottino/
+/runtime/shottino/*
+!/runtime/shottino/.gitkeep
 
 # ── Docker / env
 .env

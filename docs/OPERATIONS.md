@@ -1494,7 +1494,9 @@ ssh m42 "curl -fsSL -D - -o /dev/null https://irc.sindro.me/ 2>&1 \
 Committed `compose.yaml` ships deployment-agnostic defaults: grappa
 publishes on `${GRAPPA_PUBLISH:-127.0.0.1:4000}` (loopback only);
 `--profile prod` adds only the `cicchetto-build` oneshot (#485 dropped
-the in-stack nginx — the BEAM self-serves the SPA + owns its headers).
+the in-stack nginx — the BEAM self-serves the SPA + owns its headers);
+`--profile ircd` adds the `shottino-ircd` bridge (#1027, its own section
+below) and nothing else does.
 Anyone can clone + `docker compose up`; nothing depends on a particular
 LAN, hostname, or vlan.
 
@@ -1512,6 +1514,66 @@ the override, NEVER in the committed base. The CSP is host-agnostic —
 `'self'` covers same-origin ws/wss automatically, so
 `GrappaWeb.Plugs.SecurityHeaders` needs no per-host edit; don't
 hardcode hostnames in it.
+
+## The `shottino --ircd` bridge as a compose service (#1027)
+
+For people who want a normal IRC client — irssi, weechat, hexchat,
+goguma — pointed at grappa instead of the web PWA. `shottino --ircd`
+listens as an IRC **server** and translates; this is the supported way
+to run it under compose rather than arranging one by hand.
+
+Opt-in, on its own profile: neither `docker compose up` nor
+`--profile prod` builds it or starts it.
+
+```
+# .env (see .env.example for the whole block)
+SHOTTINO_USER=you
+SHOTTINO_PASSWORD=…            # the grappa login
+SHOTTINO_IRCD_PASS=…           # what downstream clients must send
+
+docker compose --profile ircd up -d
+```
+
+Then, from any IRC client:
+
+```
+/connect 127.0.0.1 6667
+/quote PASS azzurra:<SHOTTINO_IRCD_PASS>
+```
+
+**One service per USER, not per network.** The network is chosen per
+CONNECTION in `PASS <network>:<password>` and held per downstream client
+(`struct ircd_client.network`, eight slots), so one bridge fronts every
+network that grappa account holds: three networks are three `/connect`s
+to this same port, the way people already use a bouncer. What is
+singular here is the LOGIN — a second grappa account needs a second
+service on a second port.
+
+**The bridge password is not optional.** A published port is
+off-loopback from the process's point of view, and off loopback shottino
+refuses to listen without `SHOTTINO_IRCD_PASS`. That is deliberate and
+the service does not work around it: whoever reaches that port owns the
+whole IRC session — every channel, every DM, and the ability to speak as
+you. `SHOTTINO_IRCD_PUBLISH` defaults to `127.0.0.1:6667`; widening it
+is a decision about who that is.
+
+**The log is the sharp edge.** Headless there is no screen, so every
+message of the session goes to `ircd.log` in plain text, mode 0600, and
+it is **never rotated** — it grows for as long as the bridge runs. The
+service mounts `./runtime/shottino` as the bridge's XDG data home, so it
+lands at `runtime/shottino/shottino/ircd.log`, under `runtime/` with the
+rest of the per-env state where a backup or retention policy can see it.
+Two things put it there rather than somewhere worse: the image sets
+`XDG_DATA_HOME`, and — unlike every other service in the stack — this
+one does **not** bind-mount the repo, so the operator's checkout is out
+of reach by construction. Know the file is there before pointing a
+backup at anything.
+
+**When it will not stay up**, check `SHOTTINO_USER` first: unset, it is
+passed through as an empty username and the failure is an authentication
+failure at login, not an argument error, which `restart: unless-stopped`
+turns into a loop. The bridge waits for grappa's healthcheck before it
+starts, so a boot race is not the explanation.
 
 ## Runtime Data
 

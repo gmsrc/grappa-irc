@@ -214,6 +214,107 @@ services:
       GRAPPA_VERSION: ${GRAPPA_VERSION:-}
     command: ["sh", "-c", "bun install --frozen-lockfile && bun run build"]
 
+  # The `shottino --ircd` bridge (#1027) — a real IRC server on a port, so
+  # irssi/weechat/hexchat/goguma can reach grappa without speaking its REST +
+  # Channels protocol. Opt-in: its own profile, so neither `docker compose up`
+  # nor `--profile prod` builds or starts it.
+  #
+  #   docker compose --profile ircd up -d
+  #
+  # ONE SERVICE PER USER, not per network. A downstream client names the
+  # network it wants in `PASS <network>:<password>`, and that name is stored
+  # per CONNECTION (struct ircd_client.network), so one bridge fronts every
+  # network that grappa account holds — three networks are three `/connect`s
+  # to this same port, the way people already use a bouncer. A SECOND grappa
+  # account needs a second service on a second port, because the login is the
+  # thing that is singular here.
+  #
+  # It builds its own small image (Dockerfile.shottino) rather than riding in
+  # the bouncer's: the C client's build dependencies are not the bouncer's,
+  # and most operators will never turn this on.
+  shottino-ircd:
+    profiles: [ircd]
+    build:
+      context: .
+      dockerfile: Dockerfile.shottino
+    image: grappa-shottino:latest
+    pull_policy: never
+    container_name: grappa-shottino-ircd
+    restart: unless-stopped
+    user: "${CONTAINER_UID:-1000}:${CONTAINER_GID:-1000}"
+    networks:
+      - grappa_internal
+    # The bouncer has to be answering before the bridge logs in. Without this
+    # the first start fails its login and `restart: unless-stopped` turns the
+    # boot race into a retry loop that reads like a bad password.
+    depends_on:
+      grappa:
+        condition: service_healthy
+    ports:
+      # Loopback by default, like GRAPPA_PUBLISH. Note what publishing does to
+      # the bridge's own security posture: from the process's point of view a
+      # published port is bound off-loopback, so shottino REFUSES to start
+      # without SHOTTINO_IRCD_PASS. That refusal is deliberate and this service
+      # does not work around it — the bridge hands over the whole IRC session.
+      - "${SHOTTINO_IRCD_PUBLISH:-127.0.0.1:6667}:6667"
+    volumes:
+      # The bridge's XDG data home. shottino creates its own directory inside,
+      # so the state lands in `runtime/shottino/shottino/` on the host — the
+      # cached token and, more to the point, `ircd.log`.
+      #
+      # THE REASON THIS MOUNT EXISTS: headless, every message of the session is
+      # written to that log in plain text, mode 0600 and never rotated, because
+      # there is no screen to put them on. The image's default $HOME would put
+      # it inside the container; the bouncer's shape would put it inside the
+      # operator's checkout. Neither is a place to grow an unbounded plaintext
+      # transcript. It goes under runtime/, where the rest of the per-env state
+      # already lives and where backup policy can see it.
+      #
+      # This service does NOT bind-mount the repo. Every other service here
+      # does, and that is exactly how the log ends up in a source tree; the
+      # bridge needs no source, so the checkout is out of reach by
+      # construction rather than by configuration.
+      - ./runtime/shottino:/state
+    environment:
+      # Both are MANDATORY for this shape and neither has a default: the login
+      # password because headless there is nobody to prompt (and passing it on
+      # the command line would show it to every user on the host via `ps`, for
+      # as long as the bridge runs — which is permanently), and the bridge
+      # password because the published port is off-loopback. They belong in
+      # .env or the host shell with the other prod secrets, never in here.
+      SHOTTINO_PASSWORD: ${SHOTTINO_PASSWORD:-}
+      SHOTTINO_IRCD_PASS: ${SHOTTINO_IRCD_PASS:-}
+    # `--foreground` because compose supervises what it started and reads the
+    # default fork-after-bind as a crash. 0.0.0.0 inside the container is what
+    # makes the published port reachable; the host-side binding above is what
+    # decides who can actually get to it.
+    #
+    # `:-` and not `:?` on SHOTTINO_USER: compose interpolates this file for
+    # EVERY command, including ones that have nothing to do with this profile,
+    # and `:?` would abort them all. Left unset it is passed through as an
+    # empty username and the bridge fails at the LOGIN, not at argument
+    # parsing — an authentication failure rather than a usage message. With
+    # `restart: unless-stopped` that reads as a restart loop, so check this
+    # variable first when the bridge will not stay up.
+    command:
+      - shottino
+      - --ircd=0.0.0.0:6667
+      - --foreground
+      - ${SHOTTINO_GRAPPA_URL:-http://grappa:4000}
+      - ${SHOTTINO_USER:-}
+    # busybox nc, already in the base image — no package added for a probe.
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6667 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
 networks:
   grappa_internal:
     driver: bridge

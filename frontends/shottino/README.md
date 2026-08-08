@@ -167,6 +167,12 @@ is still an error you see and a non-zero exit — not a line in a log file you d
 not know to look at. Pass `--foreground` under a service manager, which
 supervises the process it started and reads a fork as a crash.
 
+Under docker compose there is a supported service for exactly this shape —
+`docker compose --profile ircd up -d`, built from `Dockerfile.shottino`. It
+sets `--foreground`, takes the two passwords from the environment, and puts
+the log under `runtime/` instead of wherever `$HOME` happens to point. See
+"The `shottino --ircd` bridge as a compose service" in `docs/OPERATIONS.md`.
+
 **One connection is one network.** An IRC client has one nick, one MOTD and one
 channel namespace per connection, while grappa has several networks at once and
 `#ops` on two of them is two different rooms. So the client names the network it
