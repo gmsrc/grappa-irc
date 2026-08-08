@@ -1,6 +1,6 @@
 import { type Component, createSignal, ErrorBoundary, type JSX } from "solid-js";
 import { ApiError } from "./lib/api";
-import { performRefresh } from "./lib/bundleHash";
+import { requestBundleRefreshNow } from "./lib/bundleRefreshNotice";
 import { isOffline } from "./lib/connectivity";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { refetchChannels, refetchNetworks, refetchUser } from "./lib/networks";
@@ -111,7 +111,12 @@ const BootFailure: Component<{ error: unknown; onRetry: () => void }> = (props) 
         onClick={() => {
           setReloading(true);
           if (props.error instanceof ApiError && !isOffline()) {
-            void performRefresh();
+            // #1063 — `"user"`, same as the refresh banner: a human pressed
+            // Refresh, so the boot that follows owes them an answer. Here the
+            // bundle very often has NOT moved (this button recovers a failed
+            // boot, it is not an update prompt), which is exactly when the
+            // "Still on X" toast is the only evidence the press did anything.
+            void requestBundleRefreshNow("user");
             return;
           }
           window.location.reload();

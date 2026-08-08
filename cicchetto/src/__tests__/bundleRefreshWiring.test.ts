@@ -23,17 +23,21 @@ const source = (rel: string): string =>
   readFileSync(resolve(process.cwd(), rel), "utf8").replace(/\s+/g, "");
 
 describe("#775 — the marker write in the composition root", () => {
-  it("marks the notice, and only for the deploy branch", () => {
+  // #1063 moved the write itself into `requestBundleRefresh`, so what the root
+  // still owns — and still nothing can import — is the ORIGIN it picks per
+  // branch. That is now the load-bearing half: get it wrong and #695's
+  // age-reload starts announcing itself, or #674's deploy stops.
+  it("routes each reload branch to its own origin", () => {
     expect(source("src/main.tsx")).toContain(
-      'reason==="bundle")markBundleRefreshApplied(Date.now(),bootBundleHashAccessor())',
+      'requestBundleRefresh(Date.now(),bootBundleHashAccessor(),reason==="bundle"?"auto":"silent"',
     );
   });
 
   it("still guards something — the verb it names is the one the notice exports", () => {
-    // Without this, renaming `markBundleRefreshApplied` on both sides would
-    // leave the assertion above passing against a feature that no longer works.
+    // Without this, renaming `requestBundleRefresh` on both sides would leave
+    // the assertion above passing against a feature that no longer works.
     expect(source("src/lib/bundleRefreshNotice.ts")).toContain(
-      "exportfunctionmarkBundleRefreshApplied(now:number,fromHash:string|null)",
+      "exportasyncfunctionrequestBundleRefresh(now:number,fromHash:string|null,origin:BundleRefreshOrigin",
     );
   });
 });

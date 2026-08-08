@@ -81,7 +81,7 @@ describe("Toasts", () => {
   // left a marker, this one boots on a different bundle and says so — and it
   // says so from INSIDE the mounted live region.
   it("announces an auto-refresh that landed, at mount", () => {
-    markBundleRefreshApplied(Date.now(), OLD_BUNDLE);
+    markBundleRefreshApplied(Date.now(), OLD_BUNDLE, "auto");
 
     const { container } = render(() => <Toasts />);
 
@@ -91,7 +91,7 @@ describe("Toasts", () => {
   });
 
   it("says nothing when the reload landed back on the same bundle", () => {
-    markBundleRefreshApplied(Date.now(), NEW_BUNDLE);
+    markBundleRefreshApplied(Date.now(), NEW_BUNDLE, "auto");
 
     const { container } = render(() => <Toasts />);
 
@@ -112,7 +112,7 @@ describe("Toasts", () => {
       initial: false,
       ts: "2026-08-03T12:00:00Z",
     });
-    markBundleRefreshApplied(Date.now(), OLD_BUNDLE);
+    markBundleRefreshApplied(Date.now(), OLD_BUNDLE, "auto");
 
     const { container } = render(() => <Toasts />);
 
@@ -128,7 +128,7 @@ describe("Toasts", () => {
       initial: false,
       ts: "2026-08-03T12:00:00Z",
     });
-    markBundleRefreshApplied(Date.now(), OLD_BUNDLE);
+    markBundleRefreshApplied(Date.now(), OLD_BUNDLE, "auto");
 
     const { container } = render(() => <Toasts />);
     fireEvent.click(container.querySelector(".toast-update")!);

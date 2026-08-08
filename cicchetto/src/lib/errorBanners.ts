@@ -1,5 +1,6 @@
 import { createSignal, untrack } from "solid-js";
-import { performRefresh, refreshBannerMessage, shouldShowRefreshBanner } from "./bundleHash";
+import { refreshBannerMessage, shouldShowRefreshBanner } from "./bundleHash";
+import { requestBundleRefreshNow } from "./bundleRefreshNotice";
 import { acceptInvite, declineInvite } from "./channelJoin";
 import { isOffline } from "./connectivity";
 import { acceptPushOptin, declinePushOptin, shouldShowPushOptinBanner } from "./pushOptin";
@@ -201,7 +202,12 @@ export function activeBanners(): BannerEntry[] {
       source: "bundle-refresh",
       severity: "info",
       message: refreshBannerMessage(),
-      actionHint: { label: "Refresh", onAction: () => void performRefresh() },
+      // #1063 — `"user"` because a human pressed it, and that is what buys the
+      // "Still on X" answer when the reload lands on the same bundle. The
+      // silence this replaces was the complaint: the page comes back looking
+      // identical with the same banner on it, so "it did not work" and "I
+      // mis-tapped" are the same picture.
+      actionHint: { label: "Refresh", onAction: () => void requestBundleRefreshNow("user") },
     });
   }
 

@@ -18,8 +18,8 @@ import "./lib/subscribe";
 import "./lib/userTopic";
 import { isDiagEnabled } from "./DiagFloat";
 import { mountBadgeReconcile, mountBadgeSync } from "./lib/badge";
-import { bootBundleHashAccessor, performRefresh, shouldShowRefreshBanner } from "./lib/bundleHash";
-import { markBundleRefreshApplied } from "./lib/bundleRefreshNotice";
+import { bootBundleHashAccessor, shouldShowRefreshBanner } from "./lib/bundleHash";
+import { requestBundleRefresh } from "./lib/bundleRefreshNotice";
 import { applyCachedCustomTheme, mountCustomThemeSync } from "./lib/customTheme";
 import { diagPush } from "./lib/diagLog";
 import { mountDisplayPrefsSync } from "./lib/displayPrefs";
@@ -279,10 +279,16 @@ moduleRoot(() => {
     isVisible: isDocumentVisible,
     bundleMismatch: shouldShowRefreshBanner,
     now: () => Date.now(),
-    reload: (reason) => {
-      if (reason === "bundle") markBundleRefreshApplied(Date.now(), bootBundleHashAccessor());
-      void performRefresh();
-    },
+    // #1063 — the branch still decides, the notice module still owns the
+    // write. `"auto"` announces only when the bundle actually moved (#674
+    // unchanged); `"silent"` marks nothing at all, because a document thrown
+    // away for AGE (#695) has nothing to tell anyone either way.
+    reload: (reason) =>
+      void requestBundleRefresh(
+        Date.now(),
+        bootBundleHashAccessor(),
+        reason === "bundle" ? "auto" : "silent",
+      ),
     win: window,
   });
   const heartbeat = createVisibilityHeartbeat(() => {

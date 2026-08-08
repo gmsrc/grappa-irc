@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { shouldShowRefreshBanner } from "../lib/bundleHash";
+import { BUNDLE_REFRESH_NOTICE_KEY } from "../lib/bundleRefreshNotice";
 import { acceptInvite, declineInvite } from "../lib/channelJoin";
 import { channelKey } from "../lib/channelKey";
 import { __setConnectivityForTests } from "../lib/connectivity";
@@ -43,6 +44,11 @@ vi.mock("../lib/bundleHash", () => ({
   // in bundleHash.test.ts (formatRefreshBanner).
   refreshBannerMessage: vi.fn(() => "New version available — current 1.0.0 → available 2.0.0."),
   performRefresh: vi.fn(),
+  // #1063 — the Refresh action now goes through `bundleRefreshNotice`, which
+  // reads the departing hash off this same module. Mocked with a KNOWN value
+  // so the marker's `from` can be asserted rather than merely observed.
+  bootBundleHashAccessor: vi.fn(() => "BootHash"),
+  versionLabel: vi.fn((v: string | null, h: string | null) => `${v ?? ""} ${h ?? ""}`),
 }));
 
 // #459 — the push opt-in source is owned by pushOptin.ts (gate + accept/decline
@@ -135,6 +141,24 @@ describe("errorBanners registry", () => {
     expect(bundle?.severity).toBe("info");
     expect(bundle?.actionHint?.label).toBe("Refresh");
     expect(typeof bundle?.actionHint?.onAction).toBe("function");
+  });
+
+  // #1063 — the press has to MARK, and mark as a HUMAN press. That flag is
+  // what buys the "Still on X" answer on the boot after a reload that changed
+  // nothing; an `"auto"` here would silently restore the old silence, which is
+  // the whole complaint. Asserted through the registry's own actionHint, not
+  // through the module the button happens to call, so the wiring is what is
+  // under test.
+  it("marks the notice as a user-origin refresh when its action is pressed", () => {
+    mockShouldShowRefresh.mockReturnValue(true);
+    sessionStorage.removeItem(BUNDLE_REFRESH_NOTICE_KEY);
+
+    activeBanners()
+      .find((e) => e.source === "bundle-refresh")
+      ?.actionHint?.onAction();
+
+    const marker: unknown = JSON.parse(sessionStorage.getItem(BUNDLE_REFRESH_NOTICE_KEY) ?? "null");
+    expect(marker).toMatchObject({ from: "BootHash", origin: "user" });
   });
 
   it("sources the bundle-refresh message from refreshBannerMessage (#292)", () => {
