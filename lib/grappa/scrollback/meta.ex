@@ -165,7 +165,6 @@ defmodule Grappa.Scrollback.Meta do
             | :sender_host
             | :sender_prefix
             | :sender_kind
-            | :sender_kind
             | :ctcp_verb
             | :ctcp_args
             | :ctcp_target
@@ -199,6 +198,7 @@ defmodule Grappa.Scrollback.Meta do
           | :sender_user
           | :sender_host
           | :sender_prefix
+          | :sender_kind
           | :ctcp_verb
           | :ctcp_args
           | :ctcp_target
