@@ -33694,3 +33694,64 @@ non-fatal — so a rotted call would warn once and be swallowed BY DESIGN.
 derived, not a hand-kept list, so the next entry point is covered the
 day a script names it; two companion cases keep it from passing
 vacuously if a script moves or the regex rots.
+
+## 2026-08-08 — #1039: the ☰ had two placers, so one of them had to stop choosing
+
+On mobile the rail opener is one control in one corner, but two containers
+put it there: `.topic-bar`'s own `padding: 0.5rem 1rem` on a channel window,
+and #985's float `margin: 0.25rem 0.5rem` on every other kind. Both anchor to
+the same box — `.shell-main` → `.drop-upload-zone` (no padding) → `.topic-bar`
+on one side, `.shell-main` → `.shell-chrome` on the other — so the two numbers
+were directly comparable and simply disagreed. Switching window kind moved the
+one door into the rail up and to the right.
+
+**The bar's numbers won, and the float adopted them.** Not a coin toss: the
+bar's padding is not a free choice, because it is also the only breathing room
+the channel name and the topic strip get, so retargeting it at the float's
+tighter values would have squeezed the text against the pane edge — a design
+change the issue did not ask for. The float's margin IS free; its own comment
+calls it "breathing room, NOT a notch allowance" and it has no second
+consumer. Constrained beats free. The move also runs the float 0.25rem down
+and 0.5rem in, which can only reduce the corner overlap #985 knowingly
+accepted, never grow it. `.topic-bar`'s computed padding is unchanged — the
+literal is what went away, replaced by the `--pane-chrome-inset-*` pair both
+rules now read.
+
+**The vertical half was never an offset; it was the wrong anchor.** #644's
+`align-items: center` centres BOTH children of the bar, which equals
+top-pinning only while the 48px ☰ is the tallest child. A topic that outgrows
+it pushes the ☰ down by half the excess, and the float has no such term — so
+equalising the two paddings alone would have fixed the single-line case and
+left the jump. `align-self: flex-start` on the mobile hamburger pins it.
+Deliberately not a compensating padding: #644's acceptance bar was "no magic
+padding constant", and a third offset that evens the score against the float
+is the band-aid this issue exists to reject.
+
+**A third host exists and was left alone on purpose.** #1033 landed the day
+before and put the same ☰ in `.admin-pane-header`, top-LEFT, because the admin
+pane's top-right corner is taken by its close × and refresh
+(`ShellChrome.tsx:73-90`). So the glyph still moves when you enter the admin
+window — much further than #1039's 3.5px. That is not an offset to unify but a
+contract nobody has stated: does "top-right corner" bind every window kind, or
+is the admin console a different surface? Reversing a deliberate placement one
+day after merge, without its author, inside a geometry fix, is the thing
+CLAUDE.md calls putting a patch around the problem. Filed as #1042 with the
+measurements, plus a source-derived (unrendered) observation that the admin ☰
+appears to survive into the 769–899px band where Shell is already on its
+desktop branch.
+
+**The guard is source-level and had to be proven able to fail.**
+`hamburgerCorner.test.ts` cannot see geometry — jsdom has no layout engine —
+so it pins the drift instead: the two readers must name the SAME custom
+property per axis, and `:root` must define it. It hardcodes neither `0.5rem`
+nor `1rem`, so a future re-tune of the inset is one edit and stays green while
+a re-hardcode of either side goes red. Five mutants were run against it — the
+float re-hardcoded to its old literal, the `:root` definition renamed out from
+under both readers, the float's collapsed bottom side revived, `align-self`
+deleted, and a mobile `.topic-bar` override injected — and each killed exactly
+one assertion (`1 failed | 4 passed`), so no assertion is doing another's job
+and none of them is asleep. The rendered outcome — the two rectangles actually
+coinciding, and the ☰ holding still on a bar whose text column outgrows it —
+is `e2e/tests/issue1039-hamburger-corner.spec.ts`, whose second leg drops
+#262's clamp inline and asserts the header really did outgrow the button
+before asserting the button did not move, so the leg cannot pass vacuously.
