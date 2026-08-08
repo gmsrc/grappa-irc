@@ -77,6 +77,14 @@ const RAIL_BUTTONS: ReadonlyArray<{ testid: string; label: string }> = [
   { testid: "mobile-panel-archive", label: "archive" },
   { testid: "action-cluster-cog", label: "settings" },
   { testid: "presence-toggle", label: "denoise" },
+  // #950 — the mute/snooze row, added to the CONTRACT deliberately rather than
+  // loosening the count it broke: the rail genuinely hosts one more labelled
+  // row now. Gated on the selected CONVERSATION (channel or query), and both
+  // tests below run on a channel window, so it renders on BOTH engines — which
+  // is why it belongs in the shared table and not behind a form-factor arm.
+  // Its label reads "mute" while the conversation is unmuted, the state every
+  // arm of this file is in (nothing here mutes anything).
+  { testid: "rail-action-mute", label: "mute" },
   // #986 — the lifecycle pair, moved out of the settings drawer. `detach` is
   // canDetach()-gated: vjt is a persistent user, so it renders.
   { testid: "detach-btn", label: "detach" },

@@ -87,6 +87,14 @@ test("a one-hour snooze picked from the rail silences the channel and says how l
     // toggle beside it) — the first observable consequence of the pick.
     await expect(page.locator(".rail-actions-menu")).toHaveCount(0);
 
+    // Re-open the rail: the row itself now reads "muted", because the write
+    // mirrored the SERVER's echo back into the shared prefs signal. This is a
+    // second visible outcome AND the honest barrier for everything below — the
+    // write is two round-trips (GET then PUT) and nothing else in the UI would
+    // otherwise tell the spec it had landed.
+    await openRailMenu(page);
+    await expect(page.getByTestId("rail-action-mute")).toContainText("muted");
+
     await openSettingsSection(page, "push");
 
     // Drawn from the server's echo, so the row's presence proves the PUT landed

@@ -27,7 +27,7 @@ import { friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
 import { deleteAccountBody, updateIdentity, updateNetworkPassword } from "./lib/lifecycle";
 import { networks, user } from "./lib/networks";
-import { mirrorNotificationPrefs } from "./lib/notificationPrefs";
+import { mirrorNotificationPrefs, notificationPrefs } from "./lib/notificationPrefs";
 import { popOverlay, pushOverlay } from "./lib/overlayScrollLock";
 import {
   deletePushSubscription,
@@ -57,6 +57,7 @@ import {
   DEFAULT_NOTIFICATION_PREFS,
   getNotificationPrefs,
   getVhostSettings,
+  type MutedTargets,
   type NotificationPrefs,
   putNotificationPrefs,
   putVhostSelection,
@@ -530,10 +531,20 @@ const SettingsDrawer: Component<Props> = (props) => {
     void savePrefs(next);
   };
 
+  // #950 — the mute map comes from the SHARED mirror, not from this drawer's
+  // private `prefs()` snapshot. The drawer is mounted once and loads its form
+  // at mount (see the moduledoc): that was sound while it was the only writer
+  // of `muted_targets`, but the rail picker is a second one and it feeds the
+  // mirror the server's echo. Reading the snapshot here would show a global
+  // list missing the mute the operator just made — derive, don't duplicate.
+  // Every write still goes through `savePrefs`, whose echo lands in the same
+  // mirror, so this drawer's own picker is unchanged in behaviour.
+  const mutedTargets = (): MutedTargets => notificationPrefs().muted_targets ?? {};
+
   // #866 — the per-conversation mute list, sorted by the stored (folded) key
   // so the rows do not reshuffle when one is added.
   const mutedConversations = (): { key: string; until: number | null }[] =>
-    Object.entries(prefs().muted_targets ?? {})
+    Object.entries(mutedTargets())
       .map(([key, target]) => ({ key, until: target.until }))
       .sort((a, b) => a.key.localeCompare(b.key));
 
@@ -544,7 +555,7 @@ const SettingsDrawer: Component<Props> = (props) => {
   // offering it twice would imply otherwise. Already-muted keys drop out, so
   // the picker cannot re-add a row that is on screen right below it.
   const muteCandidates = (): { key: string; label: string }[] => {
-    const muted = prefs().muted_targets ?? {};
+    const muted = mutedTargets();
     const byKey = new Map<string, string>();
     for (const candidate of windowCandidates()) {
       const key = windowMuteKey(candidate);
@@ -561,18 +572,16 @@ const SettingsDrawer: Component<Props> = (props) => {
   // the same shape via `withConversationMute`.
   const muteConversation = (key: string) => {
     if (key === "") return;
-    const current = prefs();
     void savePrefs({
-      ...current,
-      muted_targets: withConversationMute(current.muted_targets, key, null),
+      ...prefs(),
+      muted_targets: withConversationMute(mutedTargets(), key, null),
     });
   };
 
   const unmuteConversation = (key: string) => {
-    const current = prefs();
     void savePrefs({
-      ...current,
-      muted_targets: withoutConversationMute(current.muted_targets, key),
+      ...prefs(),
+      muted_targets: withoutConversationMute(mutedTargets(), key),
     });
   };
 

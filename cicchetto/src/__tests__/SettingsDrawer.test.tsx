@@ -646,6 +646,34 @@ describe("SettingsDrawer muted conversations — #866", () => {
     expect(screen.queryByTestId("pref-muted-list")).toBeNull();
   });
 
+  // #950 — the drawer stays MOUNTED across open/close and loaded its prefs
+  // once, at mount. That was safe while it was the only writer of
+  // `muted_targets`; the rail picker is a second one, and it feeds the shared
+  // mirror the server's echo. A list still reading the drawer's private
+  // snapshot then shows a mute set that is missing what the operator just did
+  // — this list is the GLOBAL view, so that is a lie, and it is the exact
+  // shape the #950 e2e caught (one PUT, 200, and no row).
+  it("shows a mute another surface wrote after the drawer had already loaded (#950)", async () => {
+    const { mirrorNotificationPrefs } = await import("../lib/notificationPrefs");
+    const userSettings = await import("../lib/userSettings");
+    await openPush();
+
+    // What `applyConversationMute` does on its PUT's echo — no drawer re-open,
+    // no second GET, exactly as the rail leaves things.
+    mirrorNotificationPrefs({
+      ...userSettings.DEFAULT_NOTIFICATION_PREFS,
+      muted_targets: { "#sbiffo": { until: null } },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("pref-muted-#sbiffo")).toBeInTheDocument();
+    });
+    // ...and the picker stops offering what is now muted, from the same map.
+    await waitFor(() => {
+      expect(optionValues()).toEqual(["", "alice"]);
+    });
+  });
+
   // #950 — this list is the GLOBAL view of every mute, and from now on the
   // entries are not all alike: the rail picker writes time-boxed ones. A row
   // that renders a snooze exactly like a permanent mute lies about when the
