@@ -103,9 +103,15 @@ TEST(the_case_insensitive_search_is_ours_and_returns_where_it_matched) {
     /* Empty needle and empty haystack, because callers pass user text. */
     CHECK(find_ci("anything", "") == NULL);
     CHECK(find_ci("", "x") == NULL);
-    /* Bytes above 127 are compared as bytes: `tolower` is locale-aware
-     * and would fold them differently on a different LC_CTYPE, so a
-     * UTF-8 haystack must not depend on where it is run. */
+    /* Two different UTF-8 sequences are two different strings.
+     *
+     * NOT covered here, deliberately said out loud: that the fold is
+     * BYTE-level rather than `tolower`. In the "C" locale the two are
+     * indistinguishable — which is the locale every test run has — so
+     * swapping the implementation for `tolower` leaves this suite green.
+     * It was measured, not assumed. The reason to fold by byte anyway is
+     * a host whose LC_CTYPE is not C, and reproducing that needs a
+     * generated locale this suite is not going to depend on. */
     CHECK(find_ci("caf\xc3\x89", "caf\xc3\xa9") == NULL);
 }
 
