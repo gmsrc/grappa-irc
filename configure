@@ -50,15 +50,25 @@ check_compile() {
   name=$1
   code=$2
   libs=$3
-  tmp_c=$(mktemp /tmp/shottino-conf.XXXXXX.c)
-  tmp_o=$(mktemp /tmp/shottino-conf.XXXXXX)
+  # One temp DIRECTORY, then ordinary names inside it. The templates were
+  # `shottino-conf.XXXXXX.c` — X's with a suffix after them, which GNU
+  # coreutils accepts and busybox refuses outright ("mktemp: Invalid
+  # argument"). On any busybox userland (alpine, most container images,
+  # a fair number of embedded systems) `set -e` then killed configure at
+  # the FIRST compile test, before it could report a single result. The
+  # suffix is what the compiler needs, so it moves into the filename
+  # where no mktemp has an opinion about it. TMPDIR is honoured because
+  # /tmp is not writable everywhere either.
+  tmp_d=$(mktemp -d "${TMPDIR:-/tmp}/shottino-conf.XXXXXX")
+  tmp_c="$tmp_d/conf.c"
+  tmp_o="$tmp_d/conf"
   printf '%s\n' "$code" > "$tmp_c"
   if ! $cc -o "$tmp_o" "$tmp_c" $libs >/dev/null 2>&1; then
-    rm -f "$tmp_c" "$tmp_o"
+    rm -rf "$tmp_d"
     echo "configure: failed compile/link test: $name" >&2
     exit 1
   fi
-  rm -f "$tmp_c" "$tmp_o"
+  rm -rf "$tmp_d"
 }
 
 check_cmd "$cc"
