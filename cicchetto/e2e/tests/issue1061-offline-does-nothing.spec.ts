@@ -26,19 +26,33 @@
 //
 // ── ON STUBBING `navigator.onLine` RATHER THAN GOING REALLY OFFLINE ──
 //
-// Test 2 uses Playwright's REAL `context.setOffline()`: genuinely no network,
-// a genuine `offline` event, a genuinely false `navigator.onLine`. That is the
-// stronger instrument and it is used wherever it can be.
+// Test 2 uses Playwright's REAL `context.setOffline()`: genuinely no network, a
+// genuine `offline` event, a genuinely false `navigator.onLine`.
 //
 // It cannot be used for test 1, because a cold start that BEGINS offline still
 // has to load the app, and the service worker has no `fetch` handler to serve
-// it from cache. A page that never loads tests nothing. So test 1 stubs the
-// one input the guard reads. That stub is not a proxy for the behaviour under
-// test — it IS the guard's input — and its liveness is proved by the paired
-// positive rather than assumed.
+// it from cache. A page that never loads tests nothing. So test 1 stubs the one
+// input the guard reads. That stub is not a proxy for the behaviour under test
+// — it IS the guard's input — and its liveness is proved by the paired positive
+// rather than assumed.
+//
+// ── THE TWO TESTS USE DIFFERENT ORACLES, AND THAT IS A MEASUREMENT ──
+//
+// The first RED probe of this file (fix neutered, `scripts/integration.sh
+// --grep "#1061"`) came back: test 1 FAILED on its first outcome assertion
+// (`Expected: 0 / Received: 1`), test 2 **PASSED**. A real offline context does
+// not surface cic's attempts to `page.on("websocket")` at all — Chromium
+// refuses them below the level Playwright reports — so the browser-level oracle
+// is BLIND in exactly the case test 2 exists to cover, and the test could not
+// have failed however broken the code was.
+//
+// So test 2 now asserts on `connectAttempts` (see the helper), with the socket
+// count kept as a secondary. Test 1 keeps the browser-level oracle, where it
+// demonstrably works. Neither test was weakened to go green: test 2 was made
+// able to go RED at all.
 
 import { expect, test } from "../fixtures/test";
-import { loginAs } from "../fixtures/cicchettoPage";
+import { expectShellReady, loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 
 // Eight rungs of phoenix's default backoff ladder. Long enough that a client
@@ -79,6 +93,34 @@ async function backgroundAndForeground(page: PageLike): Promise<void> {
   await setVisibility(page, "visible");
 }
 
+/**
+ * The monotonic count of connects cic's own door actually made.
+ *
+ * MEASURED, not assumed: with Playwright's real `context.setOffline(true)`,
+ * `page.on("websocket")` does NOT fire for the attempts cic makes — Chromium
+ * refuses the connection below the level Playwright reports. The first RED
+ * probe of test 2 therefore passed with the guard NEUTERED, i.e. the
+ * browser-level oracle is structurally blind in the real-offline case and a
+ * spec resting on it alone could not fail.
+ *
+ * `connectAttempts` is ticked inside `connectUnlessOffline`, on the branch that
+ * dials and never on the suppressed one (pinned by mutation M5). It is an
+ * app-level self-report and therefore the WEAKER oracle — which is why test 1,
+ * where the browser-level count does work, keeps using that instead. Here it is
+ * the only instrument that can see the attempt at all.
+ */
+async function connectAttempts(page: PageLike): Promise<number> {
+  return page.evaluate(() => {
+    const h = (
+      window as unknown as {
+        __cic_socketHealth?: { state: () => { connectAttempts: number } };
+      }
+    ).__cic_socketHealth;
+    if (!h) throw new Error("__cic_socketHealth hook missing");
+    return h.state().connectAttempts;
+  });
+}
+
 test("cold start offline opens no socket at all, across foreground/background transitions (#1061)", async ({
   page,
 }) => {
@@ -92,7 +134,28 @@ test("cold start offline opens no socket at all, across foreground/background tr
   });
   const sockets = countAppSockets(page);
 
-  await loginAs(page, vjt);
+  // NOT `loginAs`. Its last step is `waitForUserTopicReady`, which polls for
+  // the WS user-topic JOIN ack — and an offline client, correctly, never joins
+  // anything. MEASURED: the first GREEN probe of this file failed there with
+  // `page.waitForFunction: Timeout 5000ms exceeded` at
+  // `cicchettoPage.ts:572`, i.e. the FIX working is what the shared fixture's
+  // readiness contract cannot express.
+  //
+  // So the boot is open-coded down to the same REST-driven ready signal
+  // (`expectShellReady` — `.shell-main` visible, "authed shell rendered",
+  // viewport-independent) with the WS gate omitted. That omission is not a
+  // weakened assertion: it is a premise this scenario cannot have, and the
+  // socket count below is precisely the assertion that it does not.
+  await page.addInitScript(
+    ([token, subjectJson]) => {
+      localStorage.setItem("grappa-token", token);
+      localStorage.setItem("grappa-subject", subjectJson);
+      localStorage.setItem("cic.installChoice", "browser");
+    },
+    [vjt.token, vjt.subjectJson] as const,
+  );
+  await page.goto("/");
+  await expectShellReady(page);
 
   // The shell is up — REST is untouched by the stub, which is the point: the
   // app is fully alive and has simply been told the network is dead.
@@ -160,14 +223,20 @@ test("a warm session taken really offline stays silent until the network returns
   await context.setOffline(true);
   await page.waitForTimeout(LADDER_SETTLE_MS);
   const whileOffline = sockets();
+  const attemptsWhileOffline = await connectAttempts(page);
 
   await backgroundAndForeground(page);
   await setVisibility(page, "visible");
   await backgroundAndForeground(page);
   await page.waitForTimeout(LADDER_SETTLE_MS);
-  expect(sockets(), "an offline device must dial nothing, however often it is foregrounded").toBe(
-    whileOffline,
-  );
+
+  // The discriminating assertion. See `connectAttempts` for why the
+  // browser-level count below cannot carry this one on its own.
+  expect(
+    await connectAttempts(page),
+    "an offline device must not even TRY to dial, however often it is foregrounded",
+  ).toBe(attemptsWhileOffline);
+  expect(sockets(), "and no socket reaches the browser either").toBe(whileOffline);
 
   // ── Paired positive again: the real network comes back.
   await context.setOffline(false);
