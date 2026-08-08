@@ -27,7 +27,8 @@ import { jumpToNextActiveWindow, jumpToPrevActiveWindow } from "./lib/activeWind
 import { ownNickForNetwork } from "./lib/api";
 import { token } from "./lib/auth";
 import { channelKey } from "./lib/channelKey";
-import { getDraft, setDraft, tabComplete } from "./lib/compose";
+import { getDraft, tabComplete } from "./lib/compose";
+import { appendToCompose } from "./lib/composeAppend";
 import { install, registerHandlers, uninstall } from "./lib/keybindings";
 import { loadLastFocused } from "./lib/lastFocusedChannel";
 import { mentionsBundleBySlug } from "./lib/mentionsWindow";
@@ -380,25 +381,9 @@ const Shell: Component = () => {
     insertIntoCompose: (char: string) => {
       const sel = selectedChannel();
       if (!sel) return;
-      const key = channelKey(sel.networkSlug, sel.channelName);
-      const next = getDraft(key) + char;
-      setDraft(key, next);
-      const ta = document.querySelector<HTMLTextAreaElement>(".compose-box textarea");
-      if (!ta) return;
-      // UX-6 D9 — `preventScroll: true` short-circuits iOS Safari's
-      // "scroll the focused input into view" auto-scroll path
-      // (WebKit `_zoomToFocusRect` in WKContentView). Baseline since
-      // iOS Safari 15.5 (mid-2022); no fallback needed for our PWA
-      // target. Without this, iOS shifts the layout viewport up by
-      // ~vv.offsetTop to "center" the textarea — which is the
-      // root cause of UX-6-D bugs 1+2 we chased for 8 iterations.
-      ta.focus({ preventScroll: true });
-      // Solid signal write doesn't immediately reflect in the textarea;
-      // schedule the caret placement on the next microtask so the value
-      // update has flushed.
-      queueMicrotask(() => {
-        ta.setSelectionRange(next.length, next.length);
-      });
+      // #1067 extracted the append-focus-caret dance into `composeAppend` so
+      // the reply quote and this off-compose keystroke share ONE verb.
+      appendToCompose(sel.networkSlug, sel.channelName, char);
     },
     closeDrawer: () => {
       setMembersOpen(false);
