@@ -62,3 +62,30 @@ export function windowMuteKey(window: { channelName: string }): string {
 export function isConversationMuted(muted: MutedTargets | undefined, key: string): boolean {
   return muted !== undefined && Object.hasOwn(muted, key);
 }
+
+/**
+ * The map with `key` muted until `until` — unix SECONDS for a snooze (#950),
+ * `null` for a permanent mute. Re-muting an already-muted conversation
+ * REPLACES its expiry, which is what "snooze this again for 8 hours" means.
+ *
+ * The two writers (the drawer's picker and the rail's, #950) share this so the
+ * stored shape is composed in ONE place: `undefined` (a BEAM with no mute
+ * support yet) seeds an empty map rather than spreading into `undefined`.
+ */
+export function withConversationMute(
+  muted: MutedTargets | undefined,
+  key: string,
+  until: number | null,
+): MutedTargets {
+  return { ...(muted ?? {}), [key]: { until } };
+}
+
+/** The map without `key`. Absent key ⇒ unchanged map, never an error. */
+export function withoutConversationMute(
+  muted: MutedTargets | undefined,
+  key: string,
+): MutedTargets {
+  const next = { ...(muted ?? {}) };
+  delete next[key];
+  return next;
+}

@@ -2104,6 +2104,17 @@ html.resize-dragging * {
   color: var(--accent);
 }
 
+/* #950 — the mute/snooze row. LAYOUT ONLY: the <select>'s own chrome (tokens,
+   tap floor, `appearance: none` + our caret, focus ring) is the app-wide
+   form-control rule, and re-declaring any of it here is the drift that rule
+   exists to end. `margin-inline-start: auto` pushes the control to the
+   trailing edge like the launcher's caret; the width cap keeps the longest
+   offer from pushing the row's own label out of the menu. */
+.rail-action-mute .rail-action-mute-select {
+  margin-inline-start: auto;
+  max-width: 55%;
+}
+
 /* #275 — channel name + modes stacked in ONE width-capped clickable box.
    The box opens the /mode viewer/editor modal (reuse openModeModal — the
    same verb `/mode` and the old inline indicator used). `flex-direction:

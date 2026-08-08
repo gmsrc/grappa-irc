@@ -27,11 +27,14 @@
 
 import { createSignal } from "solid-js";
 import { token } from "./auth";
+import { withConversationMute, withoutConversationMute } from "./conversationMute";
 import { identityScopedStore } from "./identityScopedStore";
 import {
   DEFAULT_NOTIFICATION_PREFS,
   getNotificationPrefs,
+  type MutedTargets,
   type NotificationPrefs,
+  putNotificationPrefs,
 } from "./userSettings";
 
 // #866 Q3 — expiry lives in the READ, on both ports. The server drops
@@ -91,3 +94,43 @@ const exports_ = identityScopedStore((onIdentityChange) => {
 export const notificationPrefs = exports_.notificationPrefs;
 export const mirrorNotificationPrefs = exports_.mirrorNotificationPrefs;
 export const refreshNotificationPrefs = exports_.refreshNotificationPrefs;
+
+// #950 — the mute WRITE verb for callers outside the settings drawer (the rail
+// picker). The drawer holds its own hydrated copy of the prefs form and PUTs
+// that; a rail tap holds nothing, so this verb GETs the authoritative map
+// first, merges the one key, and PUTs the result.
+//
+// The GET is not belt-and-braces. `notificationPrefs()` is the DEFAULT map
+// until a user-topic (re)join hydrates it, and the endpoint is a FULL replace:
+// PUTting the un-hydrated mirror would push `channel_mentions: true` and empty
+// whitelists over a subject who had configured otherwise — a rail tap silently
+// undoing their settings. One extra round-trip on a rare, deliberate action
+// buys a write that is additive by construction.
+//
+// Rejects rather than swallowing: the caller decides what to say about a mute
+// that did not land (CLAUDE.md — no silent-swallow at boundaries).
+async function writeMutedTargets(
+  mutate: (muted: MutedTargets | undefined) => MutedTargets,
+): Promise<void> {
+  const t = token();
+  if (t === null) throw new Error("no session");
+  const current = await getNotificationPrefs(t);
+  const saved = await putNotificationPrefs(t, {
+    ...current,
+    muted_targets: mutate(current.muted_targets),
+  });
+  mirrorNotificationPrefs(saved);
+}
+
+/**
+ * Mute `key` (already folded via `conversationMuteKey`) until `until` — unix
+ * seconds for a snooze, `null` for a permanent mute.
+ */
+export function applyConversationMute(key: string, until: number | null): Promise<void> {
+  return writeMutedTargets((muted) => withConversationMute(muted, key, until));
+}
+
+/** Unmute `key`, whatever its expiry was. */
+export function clearConversationMute(key: string): Promise<void> {
+  return writeMutedTargets((muted) => withoutConversationMute(muted, key));
+}

@@ -1,7 +1,8 @@
 import { useNavigate } from "@solidjs/router";
-import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { archiveSlugForSelection } from "./lib/archiveContext";
 import { channelKey } from "./lib/channelKey";
+import { conversationMuteKey, isConversationMuted } from "./lib/conversationMute";
 import { syncedSetChannelPresencePref } from "./lib/displayPrefs";
 import { canDetach, confirmDetach, confirmQuit } from "./lib/lifecycle";
 import { membersByChannel } from "./lib/members";
@@ -17,7 +18,13 @@ import {
   openSettingsPanel,
   openThemesPanel,
 } from "./lib/mobilePanel";
+import { MUTE_SNOOZE_OPTIONS, type MuteSnoozeValue, snoozeUntil } from "./lib/muteSnooze";
 import { isAdmin } from "./lib/networks";
+import {
+  applyConversationMute,
+  clearConversationMute,
+  notificationPrefs,
+} from "./lib/notificationPrefs";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { channelPresenceVisible } from "./lib/presenceFilter";
 import { selectedChannel, setSelectedChannel } from "./lib/selection";
@@ -127,6 +134,11 @@ export type Props = {
 // remains on top of it. Fed to `spaceAbove`.
 const RAIL_MENU_TOP_GAP = 8;
 
+// #950 — the picker's one non-duration row. Outside `MuteSnoozeValue` on
+// purpose: unmuting is not a snooze offer, it is the inverse verb, and giving
+// it a member of that union would let a caller ask `snoozeUntil` for it.
+const UNMUTE_VALUE = "off";
+
 const RailActions: Component<Props> = (props) => {
   // #986 — the two lifecycle verbs land the operator on /login once the
   // teardown resolves. `logout()` nulls the token and main.tsx's RequireAuth
@@ -155,6 +167,18 @@ const RailActions: Component<Props> = (props) => {
     const sel = selectedChannel();
     return sel && sel.kind === "channel"
       ? { networkSlug: sel.networkSlug, channelName: sel.channelName }
+      : null;
+  };
+
+  // #950 — the CONVERSATION this rail is showing: a channel or a query, the
+  // two window kinds a mute can be keyed on. Wider than `channel()` above by
+  // exactly one kind, and deliberately a separate memo: denoise is a
+  // per-CHANNEL presence pref (a query has no join/part traffic), the mute is
+  // per-conversation.
+  const conversation = (): { channelName: string } | null => {
+    const sel = selectedChannel();
+    return sel && (sel.kind === "channel" || sel.kind === "query")
+      ? { channelName: sel.channelName }
       : null;
   };
 
@@ -455,6 +479,87 @@ const RailActions: Component<Props> = (props) => {
                   </span>
                   <span class="rail-action-label">denoise</span>
                 </button>
+              );
+            }}
+          </Show>
+
+          {/* #950 — the mute / snooze picker. #866 shipped the storage, both
+              expiry readers and the tests, and NOTHING ever wrote a non-null
+              `until`: the snooze was unreachable. This is the door.
+
+              Gated on a selected CONVERSATION — channel OR query — because the
+              mute is keyed on the conversation and for a DM that key is the
+              PEER (an inbound DM is stored with `channel = own_nick`, so
+              keying on a row's channel would collapse every DM onto one
+              entry). On a query window `channelName` IS the peer nick, so ONE
+              expression serves both kinds, exactly as `windowMuteKey` does for
+              the sidebar projection.
+
+              A <select> rather than a row of buttons: the offers are a small
+              closed set, and a native control gives the iOS wheel / Android
+              dialog for free inside a menu whose height is already capped
+              (#588). Its CLOSED-state appearance is the app-wide form-control
+              rule — deliberately NOT re-implemented here (see #963/PR #965).
+
+              Unlike `denoise` next to it, this CLOSES the menu: a toggle is
+              flipped in place and watched, a snooze is a choice that resolves
+              and is done. The unmute row appears only when this conversation
+              is muted, so the one door can also undo itself; the settings
+              drawer keeps the GLOBAL list of every mute.
+
+              The write rejects on failure and there is no banner surface in a
+              menu that just closed, so a failed PUT is logged — same posture
+              as the sibling denoise PUT. */}
+          <Show when={conversation()}>
+            {(conv) => {
+              const key = (): string => conversationMuteKey(conv().channelName);
+              const isMuted = (): boolean =>
+                isConversationMuted(notificationPrefs().muted_targets, key());
+              const onPick = (picked: string): void => {
+                if (picked === "") return;
+                const write =
+                  picked === UNMUTE_VALUE
+                    ? clearConversationMute(key())
+                    : applyConversationMute(
+                        key(),
+                        snoozeUntil(picked as MuteSnoozeValue, new Date()),
+                      );
+                write.catch((e: unknown) => console.warn("mute: PUT failed", e));
+                close();
+              };
+              return (
+                // biome-ignore lint/a11y/noLabelWithoutControl: the <select> below IS this label's control (implicit association); biome misses it because the control is nested behind two sibling spans.
+                <label
+                  class="shell-chrome-btn rail-action rail-action-mute"
+                  data-testid="rail-action-mute"
+                >
+                  <span class="rail-action-icon" aria-hidden="true">
+                    {isMuted() ? "\u{1F507}" : "\u{1F514}"}
+                  </span>
+                  <span class="rail-action-label">{isMuted() ? "muted" : "mute"}</span>
+                  <select
+                    class="rail-action-mute-select"
+                    aria-label="mute this conversation"
+                    data-testid="rail-mute-picker"
+                    // Resets to the placeholder after every pick so the same
+                    // offer can be chosen twice in a row (re-snoozing).
+                    value=""
+                    onChange={(e) => {
+                      const el = e.currentTarget as HTMLSelectElement;
+                      const picked = el.value;
+                      el.value = "";
+                      onPick(picked);
+                    }}
+                  >
+                    <option value="">{isMuted() ? "change…" : "silence…"}</option>
+                    <For each={MUTE_SNOOZE_OPTIONS}>
+                      {(option) => <option value={option.value}>{option.label}</option>}
+                    </For>
+                    <Show when={isMuted()}>
+                      <option value={UNMUTE_VALUE}>unmute now</option>
+                    </Show>
+                  </select>
+                </label>
               );
             }}
           </Show>

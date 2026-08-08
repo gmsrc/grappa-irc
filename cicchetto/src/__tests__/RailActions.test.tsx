@@ -21,8 +21,27 @@ import { __resetForTest as resetOverlayLock } from "../lib/overlayScrollLock";
 // the REAL presenceFilter + members stores drive the denoise toggle wiring
 // (use production code, don't re-implement logic).
 
-vi.mock("../lib/channelKey", () => ({
+// #950 — `channelKey` stays stubbed (the denoise pref key), but the REST of the
+// module is real: `conversationMute` folds the mute key through
+// `canonicalChannel`, and that fold is exactly what the picker must emit.
+vi.mock("../lib/channelKey", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/channelKey")>()),
   channelKey: (slug: string, name: string) => `${slug} ${name}`,
+}));
+
+// #950 — the mute WRITE is a server round-trip (GET-then-PUT, see
+// notificationPrefs.ts). Stub the two verbs and the mirrored signal so the
+// picker's gating and its argument are what these tests constrain; the verbs
+// themselves are covered in notificationPrefs.test.ts.
+const applyConversationMute = vi.fn().mockResolvedValue(undefined);
+const clearConversationMute = vi.fn().mockResolvedValue(undefined);
+const mutedHolder = vi.hoisted(() => ({
+  value: {} as Record<string, { until: number | null }> | undefined,
+}));
+vi.mock("../lib/notificationPrefs", () => ({
+  applyConversationMute: (...a: unknown[]) => applyConversationMute(...a),
+  clearConversationMute: (...a: unknown[]) => clearConversationMute(...a),
+  notificationPrefs: () => ({ muted_targets: mutedHolder.value }),
 }));
 
 const adminHolder = { value: false };
@@ -124,6 +143,7 @@ beforeEach(() => {
   roomsSlugHolder.value = "freenode";
   mentionsBundles.value = {};
   subjectHolder.current = null;
+  mutedHolder.value = {};
   dismissConfirm();
 });
 
@@ -610,6 +630,7 @@ describe("RailActions — detach + quit (#986)", () => {
       "action-cluster-cog",
       "mobile-panel-admin",
       "presence-toggle",
+      "rail-action-mute",
       "detach-btn",
       "quit-irc-btn",
     ]);
@@ -619,5 +640,120 @@ describe("RailActions — detach + quit (#986)", () => {
     mountWithSubject(USER);
     fireEvent.click(screen.getByTestId("quit-irc-btn"));
     expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
+  });
+});
+
+// #950 — the mute/snooze picker. #866 shipped the storage, both expiry readers
+// and the tests; NOTHING wrote an integer `until`, so the snooze was
+// unreachable. This is the door.
+//
+// Two properties separate it from its neighbour `denoise`:
+//   * the GATE is a selected CONVERSATION — a channel OR a query — because the
+//     mute is keyed on the conversation, and for a DM that key is the PEER
+//     (#866: an inbound DM is stored with `channel = own_nick`, so keying on
+//     the row's channel would collapse every DM onto one entry).
+//   * a snooze is a CHOICE, not a toggle: it resolves in place and THEN closes
+//     the menu, where denoise deliberately stays open to be re-flipped.
+describe("RailActions — mute snooze picker (#950)", () => {
+  const querySel: Sel = { networkSlug: "freenode", channelName: "Alice", kind: "query" };
+  const NOW_MS = 1_800_000_000_000;
+  const NOW_SECONDS = NOW_MS / 1000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_MS);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const openWith = (sel: Sel): void => {
+    selHolder.value = sel;
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+  };
+
+  const pick = (value: string): void => {
+    const picker = screen.getByTestId("rail-mute-picker") as HTMLSelectElement;
+    picker.value = value;
+    fireEvent.change(picker);
+  };
+
+  it("is absent on a window that is not a conversation (home / server / admin)", () => {
+    openWith({ networkSlug: "$home", channelName: "home", kind: "home" });
+    expect(screen.queryByTestId("rail-mute-picker")).toBeNull();
+  });
+
+  it("offers the snooze durations on a channel window", () => {
+    openWith(channelSel);
+    const picker = screen.getByTestId("rail-mute-picker") as HTMLSelectElement;
+    const values = Array.from(picker.options).map((o) => o.value);
+    expect(values).toEqual(expect.arrayContaining(["1h", "8h", "tomorrow", "forever"]));
+  });
+
+  it("is offered on a QUERY window too — a DM is a conversation", () => {
+    openWith(querySel);
+    expect(screen.getByTestId("rail-mute-picker")).toBeInTheDocument();
+  });
+
+  it("writes now + one hour under the folded channel key", () => {
+    openWith({ ...channelSel, channelName: "#Italia" });
+    pick("1h");
+    expect(applyConversationMute).toHaveBeenCalledWith("#italia", NOW_SECONDS + 3_600);
+  });
+
+  // The DM row of the #866 truth table, at the door: the key is the PEER, and
+  // it is folded. A picker keyed on anything else silences the wrong thing.
+  it("keys a DM snooze on the folded PEER nick", () => {
+    openWith(querySel);
+    pick("8h");
+    expect(applyConversationMute).toHaveBeenCalledWith("alice", NOW_SECONDS + 28_800);
+  });
+
+  it("writes a null until for the permanent offer", () => {
+    openWith(channelSel);
+    pick("forever");
+    expect(applyConversationMute).toHaveBeenCalledWith("#italia", null);
+  });
+
+  it("closes the menu once the choice is made — a snooze is not a toggle", () => {
+    openWith(channelSel);
+    pick("1h");
+    expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
+  });
+
+  it("stays put — and writes nothing — when the placeholder row is re-picked", () => {
+    openWith(channelSel);
+    pick("");
+    expect(applyConversationMute).not.toHaveBeenCalled();
+    expect(screen.getByTestId("action-cluster-cog")).toBeInTheDocument();
+  });
+
+  it("offers unmute only for a conversation that is currently muted", () => {
+    mutedHolder.value = { "#italia": { until: NOW_SECONDS + 60 } };
+    openWith(channelSel);
+    const picker = screen.getByTestId("rail-mute-picker") as HTMLSelectElement;
+    expect(Array.from(picker.options).map((o) => o.value)).toContain("off");
+  });
+
+  it("offers no unmute for a conversation nobody muted", () => {
+    openWith(channelSel);
+    const picker = screen.getByTestId("rail-mute-picker") as HTMLSelectElement;
+    expect(Array.from(picker.options).map((o) => o.value)).not.toContain("off");
+  });
+
+  it("unmuting routes through the clear verb, not a mute with a past expiry", () => {
+    mutedHolder.value = { "#italia": { until: null } };
+    openWith(channelSel);
+    pick("off");
+    expect(clearConversationMute).toHaveBeenCalledWith("#italia");
+    expect(applyConversationMute).not.toHaveBeenCalled();
+  });
+
+  it("says on the row itself whether the conversation is already silenced", () => {
+    mutedHolder.value = { "#italia": { until: NOW_SECONDS + 60 } };
+    openWith(channelSel);
+    expect(screen.getByTestId("rail-action-mute")).toHaveTextContent(/muted/i);
   });
 });

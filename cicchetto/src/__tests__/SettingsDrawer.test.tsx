@@ -645,6 +645,51 @@ describe("SettingsDrawer muted conversations — #866", () => {
     expect(optionValues()).toEqual(["", "#sbiffo", "alice"]);
     expect(screen.queryByTestId("pref-muted-list")).toBeNull();
   });
+
+  // #950 — this list is the GLOBAL view of every mute, and from now on the
+  // entries are not all alike: the rail picker writes time-boxed ones. A row
+  // that renders a snooze exactly like a permanent mute lies about when the
+  // conversation comes back.
+  describe("a snoozed row is distinguishable from a permanent one (#950)", () => {
+    const NOW_SECONDS = 1_800_000_000;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW_SECONDS * 1000);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const openWithMutes = async (
+      muted: Record<string, { until: number | null }>,
+    ): Promise<void> => {
+      const userSettings = await import("../lib/userSettings");
+      (userSettings.getNotificationPrefs as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ...userSettings.DEFAULT_NOTIFICATION_PREFS,
+        muted_targets: muted,
+      });
+      await openPush();
+    };
+
+    it("shows how long a snooze has left", async () => {
+      await openWithMutes({ "#sbiffo": { until: NOW_SECONDS + 3_600 } });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("pref-muted-until-#sbiffo")).toHaveTextContent("1h 0m");
+      });
+    });
+
+    it("shows nothing of the kind for a permanent mute", async () => {
+      await openWithMutes({ "#sbiffo": { until: null } });
+
+      await waitFor(() => {
+        expect(screen.getByTestId("pref-muted-#sbiffo")).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId("pref-muted-until-#sbiffo")).toBeNull();
+    });
+  });
 });
 
 // V6 visitor-parity: the NOTIFICATIONS + theme surface is subject-

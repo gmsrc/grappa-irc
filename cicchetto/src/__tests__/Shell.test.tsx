@@ -1267,7 +1267,7 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
     });
   });
 
-  it("#473/#986 drawer order: home · rooms · mentions · themes · archive · settings · admin · denoise · quit", async () => {
+  it("#473/#986/#950 drawer order: home · rooms · mentions · themes · archive · settings · admin · denoise · mute · quit", async () => {
     mobileState.value = true;
     userHolder.current = {
       kind: "user",
@@ -1309,6 +1309,10 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
       "action-cluster-cog",
       "mobile-panel-admin",
       "presence-toggle",
+      // #950 — the mute/snooze picker joins the per-conversation pair, right
+      // after denoise: both are gated on the selected window, and this fixture
+      // has a channel selected.
+      "rail-action-mute",
       "quit-irc-btn",
     ]);
     // The mobile-only launcher footer is gone entirely.

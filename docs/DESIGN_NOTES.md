@@ -33755,3 +33755,78 @@ coinciding, and the ☰ holding still on a bar whose text column outgrows it —
 is `e2e/tests/issue1039-hamburger-corner.spec.ts`, whose second leg drops
 #262's clamp inline and asserts the header really did outgrow the button
 before asserting the button did not move, so the leg cannot pass vacuously.
+## 2026-08-08 — #950: the snooze had every part except a door
+
+**The gap was declared, not suspected.** #866 shipped the mute
+end-to-end and its `%{folded_target => %{"until" => unix | nil}}` shape
+has carried the snooze field from day one. Both readers already resolve
+it — `UserSettings.get_notification_prefs/1` drops elapsed entries on
+READ (Q3: no sweeper, no clock in `Push.Triggers`), and
+`notificationPrefs.withLiveMutes` is its client twin. What never existed
+was a WRITER: `SettingsDrawer.muteConversation` wrote the literal
+`{ until: null }`, so the whole snooze half was unreachable storage.
+
+**The picker is in the rail, gated on the selected CONVERSATION.** Not
+the settings drawer: the drawer's list stays what it was, the GLOBAL
+view of every mute, and #866's own text says a buried settings pane is
+not where "silence this tab" belongs. `RailActions` already carries the
+context-sensitive precedent next door (`denoise`, channel-gated), so the
+mute row sits beside it. The gate is one kind WIDER than denoise's:
+channel OR query, because a mute is keyed on the conversation and for a
+DM that key is the PEER (`conversationMuteKey`) — denoise is a
+presence-row pref and a query has no join/part traffic to filter.
+
+**A toggle stays, a choice closes.** `denoise` deliberately does NOT
+close the rail menu: the operator flips it and watches the accent. A
+snooze is not flippable — it resolves to one of four answers and is
+done, so it closes the menu the way every other rail entry does. That
+asymmetry is the reason the two rows look alike but behave differently.
+
+**A native `<select>`, and its chrome is NOT ours to write.** The offers
+are a small closed set and a real `<select>` gets the iOS wheel /
+Android dialog for free inside a menu whose height is already capped
+(#588). Its closed-state appearance is the app-wide form-control rule
+being widened by #963 (PR #965) — the `#950` CSS is layout only
+(trailing-edge placement + a width cap). Re-implementing
+`appearance: none` here would be the second copy of exactly the rule
+#963 exists to unify.
+
+**"until tomorrow" is the next LOCAL midnight, not a rolling day.** An
+operator silencing a channel at 23:00 means "until the morning". A
+rolling 24h would hold it through all of tomorrow too.
+
+**The write reads the server first.** `applyConversationMute` GETs the
+authoritative prefs, merges the one key, and PUTs. The mirrored signal
+is the DEFAULT map until a user-topic (re)join hydrates it and the
+endpoint is a FULL replace, so PUTting the mirror would push
+`channel_mentions: true` and empty whitelists over a subject who had
+configured otherwise — a rail tap silently undoing their settings. One
+extra round-trip on a deliberate, rare action buys a write that is
+additive by construction. The drawer keeps its own writer (it holds a
+hydrated form copy and owns the saving/error UI); what the two SHARE is
+the shape, via `conversationMute.withConversationMute/3` +
+`withoutConversationMute/2`.
+
+**The drawer list now distinguishes the two.** Entries are no longer all
+alike, so a snoozed row renders its remaining span ("58m left", via the
+existing `formatDuration`) and a permanent one renders nothing extra. A
+list that painted them identically would lie about when the
+conversation comes back — and it is also the visible outcome the e2e
+asserts, which is what separates a genuine snooze from a picker that
+regressed to `until: null` while leaving the push arms green.
+
+**Two premises from the issue, corrected.** #950 says the first real
+integer would also be "the first real test of that reader" server-side.
+It is not: `test/grappa/user_settings_test.exs` already covers both arms
+of the projection (a future `until` survives, an elapsed one is dropped
+on READ) plus the PUT's rejection of a non-integer / non-positive one.
+No server change was needed for #950 at all — the far side was complete.
+
+**Clock skew: still unexamined, deliberately.** The integer is computed
+on the CLIENT's clock and compared against the SERVER's
+(`System.os_time(:second)`) as well as the client's own (`Date.now()`),
+so a skewed device snoozes for skew ± the chosen span. That is
+pre-existing in #866's shape; #950 does not quietly correct it inside a
+duration table. A fix belongs where the skew can be measured (a
+server-supplied `now`, or a duration-not-instant wire shape), which is a
+different change with a different blast radius.

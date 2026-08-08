@@ -15,8 +15,13 @@ import { windowCandidates } from "./lib/activeWindows";
 import { ApiError, displayNick, type Network, visitorNetworkNick } from "./lib/api";
 import { getSubject, token } from "./lib/auth";
 import { getColoredNicklist } from "./lib/colorNicklist";
-import { windowMuteKey } from "./lib/conversationMute";
+import {
+  windowMuteKey,
+  withConversationMute,
+  withoutConversationMute,
+} from "./lib/conversationMute";
 import { syncedSetColoredNicklist, syncedSetTimeFormat } from "./lib/displayPrefs";
+import { formatDuration } from "./lib/duration";
 import { type FontSizeKey, getFontSize, setFontSize } from "./lib/fontSize";
 import { friendlyApiError } from "./lib/friendlyApiError";
 import { getHideNextActive, setHideNextActive } from "./lib/hideNextActive";
@@ -551,23 +556,24 @@ const SettingsDrawer: Component<Props> = (props) => {
       .sort((a, b) => a.key.localeCompare(b.key));
   };
 
-  // `until: null` — permanent. The shape carries the snooze field from day
-  // one (Q1) but this cut exposes no picker for it, so every mute the UI
-  // creates is permanent until removed.
+  // `until: null` — permanent. This picker mutes indefinitely; the TIME-BOXED
+  // mute is the rail's picker (#950), which writes an integer `until` through
+  // the same shape via `withConversationMute`.
   const muteConversation = (key: string) => {
     if (key === "") return;
     const current = prefs();
     void savePrefs({
       ...current,
-      muted_targets: { ...(current.muted_targets ?? {}), [key]: { until: null } },
+      muted_targets: withConversationMute(current.muted_targets, key, null),
     });
   };
 
   const unmuteConversation = (key: string) => {
     const current = prefs();
-    const next = { ...(current.muted_targets ?? {}) };
-    delete next[key];
-    void savePrefs({ ...current, muted_targets: next });
+    void savePrefs({
+      ...current,
+      muted_targets: withoutConversationMute(current.muted_targets, key),
+    });
   };
 
   const onMasterToggle = async (checked: boolean) => {
@@ -1575,6 +1581,22 @@ const SettingsDrawer: Component<Props> = (props) => {
                     {(muted) => (
                       <li class="watchlists-item" data-testid={`pref-muted-${muted.key}`}>
                         <span class="watchlists-keyword">{muted.key}</span>
+                        {/* #950 — a time-boxed mute (written by the rail
+                            picker) says how long it has left; a permanent one
+                            renders nothing extra. Computed at render from the
+                            client's clock — the same clock the client-side
+                            expiry filter uses — so the number the operator
+                            reads and the moment cic stops silencing agree,
+                            even if the server's clock does not (see
+                            lib/muteSnooze.ts on the unexamined skew). */}
+                        <Show when={muted.until !== null}>
+                          <span class="muted" data-testid={`pref-muted-until-${muted.key}`}>
+                            {formatDuration(
+                              Math.max(0, (muted.until as number) - Math.floor(Date.now() / 1000)),
+                            )}{" "}
+                            left
+                          </span>
+                        </Show>
                         <button
                           type="button"
                           class="watchlists-remove"

@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setToken } from "../lib/auth";
 import {
+  applyConversationMute,
+  clearConversationMute,
   mirrorNotificationPrefs,
   notificationPrefs,
   refreshNotificationPrefs,
@@ -176,5 +178,118 @@ describe("notificationPrefs muted_targets expiry — #866", () => {
 
     expect(notificationPrefs().muted_targets).toBeUndefined();
     expect(notificationPrefs().channel_mentions).toBe(true);
+  });
+});
+
+// #950 — the WRITE side of the mute, reached from outside the settings drawer
+// (the rail picker). The drawer owns a hydrated form copy of the prefs; a rail
+// tap has none, which is the whole reason this verb exists and why it reads the
+// server before it writes.
+describe("conversation mute writer — #950", () => {
+  const SERVER_STATE: NotificationPrefs = {
+    ...DEFAULT_NOTIFICATION_PREFS,
+    channel_mentions: false,
+    channel_messages_only: ["#italia"],
+    muted_targets: { "#already": { until: null } },
+  };
+
+  const mockGetThenPut = () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    spy.mockImplementation((_url, init) => {
+      const method = (init as RequestInit | undefined)?.method ?? "GET";
+      if (method === "GET") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ notification_prefs: SERVER_STATE }), { status: 200 }),
+        );
+      }
+      // The server echoes back what it normalized — the drawer and this writer
+      // both adopt the ECHO, never the locally-composed body. The request body
+      // is the bare prefs map; only the RESPONSE is wrapped.
+      const sent = JSON.parse((init as RequestInit).body as string);
+      return Promise.resolve(
+        new Response(JSON.stringify({ notification_prefs: sent }), { status: 200 }),
+      );
+    });
+    return spy;
+  };
+
+  const putBody = (spy: ReturnType<typeof mockGetThenPut>): NotificationPrefs => {
+    const put = spy.mock.calls.find(
+      (call) => (call[1] as RequestInit | undefined)?.method === "PUT",
+    );
+    if (put === undefined) throw new Error("no PUT was issued");
+    return JSON.parse((put[1] as RequestInit).body as string);
+  };
+
+  it("writes the chosen until as a positive integer under the folded key", async () => {
+    const spy = mockGetThenPut();
+
+    await applyConversationMute("#noisy", 1_800_000_600);
+
+    expect(putBody(spy).muted_targets).toMatchObject({ "#noisy": { until: 1_800_000_600 } });
+  });
+
+  it("keeps the mutes that were already there instead of replacing the map", async () => {
+    const spy = mockGetThenPut();
+
+    await applyConversationMute("#noisy", 1_800_000_600);
+
+    expect(putBody(spy).muted_targets).toMatchObject({ "#already": { until: null } });
+  });
+
+  it("writes a permanent mute when the offer carries no expiry", async () => {
+    const spy = mockGetThenPut();
+
+    await applyConversationMute("#noisy", null);
+
+    expect(putBody(spy).muted_targets).toMatchObject({ "#noisy": { until: null } });
+  });
+
+  it("clearConversationMute drops just that key", async () => {
+    const spy = mockGetThenPut();
+
+    await clearConversationMute("#already");
+
+    const muted = putBody(spy).muted_targets ?? {};
+    expect(Object.hasOwn(muted, "#already")).toBe(false);
+  });
+
+  // The discriminating one. The mirrored signal is DEFAULT until a user-topic
+  // (re)join hydrates it, so a writer that PUT `notificationPrefs()` would ship
+  // `channel_mentions: true` and an EMPTY whitelist over a subject who had
+  // turned both off — silently undoing settings from a rail tap. Reading the
+  // server first is what makes the write additive.
+  it("PUTs the SERVER's prefs, never the un-hydrated mirror", async () => {
+    mirrorNotificationPrefs(DEFAULT_NOTIFICATION_PREFS);
+    const spy = mockGetThenPut();
+
+    await applyConversationMute("#noisy", 1_800_000_600);
+
+    const body = putBody(spy);
+    expect(body.channel_mentions).toBe(false);
+    expect(body.channel_messages_only).toEqual(["#italia"]);
+  });
+
+  it("adopts the server echo so the live beep path honours the new mute at once", async () => {
+    mockGetThenPut();
+
+    await applyConversationMute("#noisy", 1_800_000_600);
+
+    expect(notificationPrefs().muted_targets).toMatchObject({ "#noisy": { until: 1_800_000_600 } });
+    expect(notificationPrefs().channel_mentions).toBe(false);
+  });
+
+  it("without a session it neither fetches nor pretends to have written", async () => {
+    setToken(null);
+    const spy = vi.spyOn(globalThis, "fetch");
+
+    await expect(applyConversationMute("#noisy", 1_800_000_600)).rejects.toThrow("no session");
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("propagates a failed write instead of reporting a mute that never landed", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 500 }));
+
+    await expect(applyConversationMute("#noisy", 1_800_000_600)).rejects.toBeDefined();
   });
 });
