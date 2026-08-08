@@ -34423,3 +34423,102 @@ behaviour was measured, and none is asserted anywhere in the change.
 including the precache the new worker just populated during its install. The
 next navigation falls back to the network, which is fine online, but the PWA has
 no offline shell until the next worker install — i.e. until the next deploy.
+
+## 2026-08-08 — #1067: Reply is a swipe, and the long-press stops selecting for you
+
+vjt's pivot on `#grappa`, mid-issue: `ok vjt-claude pivot usiamo swipe` /
+`sx->dx si`. Reply leaves the long-press menu and becomes a left→right swipe on
+the message row, Telegram-style — the row slides, snaps back, and the compose
+box holds `<nick> quoted message<< ` with the caret at the end. The menu still
+ships and still carries Reply as a second, discoverable door.
+
+**One binder owns both gestures.** A swipe and a hold are the same touch until
+they aren't, and the discriminator ("has the finger moved") is shared state. Two
+binders would each keep their own copy, so a hold that drifted 50px would open
+the menu AND quote the message. `lib/messageGestures.bindMessageGestures` is
+bound ONCE on the scroll container (a listener per rendered row would be
+hundreds of registrations churning on every append) and resolves the row with
+`closest`. It composes the pure gates that already existed — `horizontalClaim`
+(#308's angle gate), `swipeDirection` (the 40px floor), `touchZone` (the 20px
+edge bands) — rather than growing new geometry beside them.
+
+**Zone separation is load-bearing, not tidiness.** #1041 had already given the
+left edge the very same gesture: a right swipe there opens the channel sidebar.
+The reply swipe arms only in `touchZone === "center"`, which also keeps our
+hands off the band iOS reserves for its back-swipe. Without it one finger does
+two things.
+
+**Right→left stays unbound on purpose.** Hypnotize proposed a query, then
+`!addquote`; vjt closed it with "vabe vediamo come viene". So the binder does
+not claim that direction at all — no preventDefault, no slide. Binding it later
+is free; un-eating a gesture (drag-to-select, in this case) is not.
+
+**Both reported symptoms came from #366's own code, and the fix is to delete
+it, not to work around it.** "Selection only works with the keyboard closed" was
+`handleTouchEnd`'s `composeFocusedAtStart` gate: with the keyboard down the
+handler returned early and iOS native selection ran untouched, and with it up
+you got a programmatic whole-row select instead of the char range you aimed at.
+"The endpoints cannot be moved" was `html.is-ios`'s blanket
+`-webkit-touch-callout: none`, never re-enabled anywhere in the repo — a range
+installed via `addRange` under a suppressed callout has no grab handles.
+`keepKeyboard` now owns the KEYBOARD only (#79: tap dismisses, hold keeps).
+
+**Select… lifts the callout kill, scoped in TIME.** An `is-selecting` class on
+`<html>` while a selection is live, dropped on the first `selectionchange` that
+finds it gone. Re-enabling the callout on `.scrollback` permanently — the
+obvious alternative — would put iOS's own long-press menu back on every message
+row, where it would race the menu that just replaced the select-all: two menus,
+one gesture, which is the shape of the bug being fixed. NOT device-verified: the
+callout ⇄ grab-handle link is read from the platform contract and from the code,
+and neither jsdom nor Playwright webkit reproduces iOS selection UI. #1067
+declares its own diagnosis with the same caveat.
+
+The binder also refuses to arm while a selection is live. Dragging a grab handle
+IS a horizontal drag across message text, so without that refusal the escape
+hatch Select… hands back would be unusable — the swipe would eat it.
+
+**`touch-action` had to be DECLARED on the row.** It is not an inherited
+property, so `.scrollback`'s `pan-y` never reached a `.scrollback-line`: every
+message sat at the default `auto`, the iOS chrome-drag hole. `pan-y` on the row
+is also exactly what the swipe wants — vertical scroll stays native, the
+horizontal axis is ours to claim.
+
+**The quote is built from the message, not from the DOM.** The rendered row
+carries the timestamp and the per-message prefix glyph (@/+), and scraping those
+back out is a parser nobody asked for. Only content kinds quote
+(`isContentKind`): a PART carries its reason in `body`, so a bare "body is
+non-empty" check would have produced `<vjt> Leaving<< `. mIRC control bytes are
+stripped with `mircPlainText` — the operator is quoting what they SEE, and a
+control byte round-tripped through compose would be re-sent as formatting they
+never chose.
+
+**Append at the end, not insert at the caret.** With an empty draft that is the
+issue's text literally ("caret at the end"); with a draft in progress it does
+not destroy anything. `pasteRoute.insertPastedText` was the tempting reuse and
+is the wrong verb — PASTE semantics would splice the quote into the middle of a
+half-typed word. The append/focus/caret dance itself was already written inside
+`Shell.insertIntoCompose`, so it moved to `lib/composeAppend` and both call it;
+`preventScroll: true` (the UX-6-D fix) can now only be forgotten in one place.
+
+**Copy's failure is a toast, deliberately not `copyText`'s throw.** That helper
+throws with user-facing copy because it was written for show-once secrets; a
+message copy has different stakes, and the way out its message names — select
+the text and copy it by hand — is literally the next item in the same menu.
+Never silent either way, per the acceptance.
+
+**Coverage moved rather than vanished, with one declared loss.**
+`issue366-longpress-select-all.spec.ts` is deleted: it pinned a contract this
+issue removes. #366's central rationale — grab the WHOLE row, because the sender
+lives outside `.scrollback-body` — is re-asserted through Copy (the copied text
+must contain the sender) and through Select…, and the select-all's ABSENCE is
+now its own test, repeating #366's setup to demand the row is not selected
+behind the menu's back. The loss: #366's spec was `@webkit` and drove the real
+iOS event shape with a bare `new Event("touchstart")`; the replacement is
+chromium, because the new binder reads `e.touches[0].clientX` and webkit's Touch
+constructors are the ones #308/#1041 already ruled unreliable. The keyboard half
+stays covered on real webkit by the untouched `issue79` spec.
+
+**Not established.** The feel — whether the slide reads like Telegram's under a
+real finger, whether the grab handles actually appear once `is-selecting` lifts
+the callout, whether a long-press on Android races Chrome's own native
+selection. All three need a device; none is asserted anywhere in the change.
