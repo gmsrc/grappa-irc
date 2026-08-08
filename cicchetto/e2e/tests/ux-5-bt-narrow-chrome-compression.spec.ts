@@ -76,10 +76,21 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
     timeout: 10_000,
   });
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
-  // #500 — close the launcher menu before switching windows; its full-viewport
-  // backdrop would otherwise intercept the selectChannel sidebar click.
+  // #1040 — on home the rail IS the expanded menu, so there is nothing here to
+  // close and the old `Escape` + count-0 pair asserted the collapsed contract.
+  // Two things it claimed are both false now, and neither was ever the point:
+  // the "full-viewport backdrop" it named does not exist (RailActions dismisses
+  // on an outside pointerdown, with no covering scrim — so nothing has been
+  // intercepting the click below for some time), and Escape is deliberately
+  // INERT on home (a permanent column the operator could close with a keypress
+  // is one they could not bring back). Assert the #1040 contract instead —
+  // Escape does NOT take the column away — which is strictly more than the old
+  // line said, and let the `selectChannel` below keep being the real proof that
+  // nothing intercepts the sidebar click.
   await page.keyboard.press("Escape");
-  await expect(page.locator(".rail-actions-menu")).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator(".rail-actions.expanded .rail-actions-menu")).toHaveCount(1, {
+    timeout: 5_000,
+  });
 
   // Switch to a joined channel — topic-bar mounts (no chrome row above it on
   // desktop anymore; the freed top is the topic's per INC-2).

@@ -242,7 +242,18 @@ test.describe("issue #157 — delete account", () => {
       // delete-account absence keeps a real positive control via the
       // registered cases above.
       await expect(page.getByTestId("delete-account-btn")).toHaveCount(0);
-      await expect(page.getByTestId("quit-irc-btn")).toHaveCount(0);
+      // Scoped to the DRAWER, which is what the paragraph above says this
+      // asserts. It used to be page-wide and passed for a reason that had
+      // nothing to do with the drawer: #986's rail quit was in the DOM only
+      // while the launcher menu was open, so "nowhere on the page" and "not in
+      // the drawer" happened to coincide. #1040 expands the rail on home — the
+      // window a minted visitor lands on — so the rail's quit is now always
+      // rendered and the page-wide count is 1. Narrowing alone would be a
+      // weaker claim, so the count-1 is ACCOUNTED FOR rather than tolerated:
+      // the one quit that exists is the rail's.
+      const drawer = page.getByRole("dialog", { name: /settings/i });
+      await expect(drawer.getByTestId("quit-irc-btn")).toHaveCount(0);
+      await expect(page.locator(".rail-actions").getByTestId("quit-irc-btn")).toHaveCount(1);
       await closeSettings(page);
       await openRailMenu(page);
       await expect(page.getByTestId("quit-irc-btn")).toBeVisible();

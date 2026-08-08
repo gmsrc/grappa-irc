@@ -844,15 +844,6 @@ export async function openRailMenu(page: Page): Promise<void> {
   if (isMobileViewport(page) && (await page.locator(".shell-members.open").count()) === 0) {
     await openMembersDrawer(page);
   }
-  // #1040 — on the HOME window the rail is expanded in flow and no launcher is
-  // rendered: the menu IS the rail's content, so there is no door to open and
-  // the loop below would burn its deadline waiting for a button that does not
-  // exist. This helper's contract is "the rail actions are reachable", which on
-  // home is already true the moment the rail is on screen (on mobile, the
-  // moment the drawer above finishes sliding in). Keyed on the menu being
-  // VISIBLE rather than on the window kind, so a channel window whose launcher
-  // regressed still fails loudly below instead of passing through here.
-  if (await menu.isVisible()) return;
   // #653 — drive the launcher off the app's OWN state, not off a single blind
   // click. `openMembersDrawer` now settles the slide, which removes the biggest
   // source of late movement, but the rail keeps re-laying-out while the stores
@@ -870,6 +861,18 @@ export async function openRailMenu(page: Page): Promise<void> {
   const deadline = Date.now() + 15_000;
   for (;;) {
     try {
+      // #1040 — on HOME the rail is expanded in flow and renders NO launcher:
+      // the menu IS the rail's content, so there is no door to open. Probed
+      // here, inside the loop, and NOT once before it: the rail resolves its
+      // shape only after `selectedChannel()` hydrates, and it renders the
+      // COLLAPSED shape (launcher, no menu) in the meantime — measured on the
+      // #1048 CI traces, two DOM snapshots 128ms apart, the first with a bare
+      // launcher and the second with `.rail-actions.expanded`. A one-shot probe
+      // ahead of the loop reads that first snapshot, finds no menu, and then
+      // waits out the whole deadline on a launcher home is about to unmount.
+      // `isVisible` does not auto-wait, so it is only ever sound when something
+      // else owns the waiting — here, the loop does.
+      if (await menu.isVisible()) return;
       // #752 — the timeout is what makes the deadline reachable. `getAttribute`
       // auto-waits for the element to ATTACH, and `playwright.config.ts` sets no
       // `actionTimeout` (default 0 = no limit), so a launcher that never mounts

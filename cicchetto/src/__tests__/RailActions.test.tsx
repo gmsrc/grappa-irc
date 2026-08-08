@@ -865,4 +865,28 @@ describe("RailActions expanded home rail (#1040)", () => {
     expect(screen.getByTestId(LAUNCHER)).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
   });
+
+  // #1048 — the shape the rail wears BEFORE the selection resolves. Shell lands
+  // on `$home` provisionally so the app is never blank, but it does so in an
+  // effect: for the first paint `selectedChannel()` is still `null`, `expanded()`
+  // is false, and the rail shows #500's COLLAPSED shape — a launcher with no
+  // menu — then swaps. The #1048 CI traces caught it as two DOM snapshots 128ms
+  // apart, and six specs went red because the e2e `openRailMenu` fixture read
+  // that first snapshot ONCE and then waited out its deadline on a launcher home
+  // was about to unmount. Pinned here so the flash is a known, deliberate state
+  // rather than a thing rediscovered from a red gate: any probe of this rail has
+  // to keep looking, which is why that fixture's menu check now lives inside its
+  // retry loop. Remove the flash and that fixture comment goes stale with it.
+  it("wears the collapsed shape until the selection resolves, then expands", () => {
+    selHolder.value = null;
+    const { container } = render(() => <RailActions setters={setters} />);
+    expect(screen.getByTestId(LAUNCHER)).toBeInTheDocument();
+    expect(container.querySelector(".rail-actions-menu")).toBeNull();
+    expect(container.querySelector(".rail-actions")).not.toHaveClass("expanded");
+
+    selHolder.value = homeSel;
+    expect(screen.queryByTestId(LAUNCHER)).toBeNull();
+    expect(container.querySelector(".rail-actions-menu")).not.toBeNull();
+    expect(container.querySelector(".rail-actions")).toHaveClass("expanded");
+  });
 });

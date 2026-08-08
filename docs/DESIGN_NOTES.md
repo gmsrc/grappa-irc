@@ -33946,3 +33946,39 @@ oracle is CONTAINMENT (the menu's box lies inside its container's box —
 true only in flow), because a "the cog is visible on home" assertion
 passes just as well against the default-open overlay this note exists to
 rule out.
+
+**The rail changes shape mid-load, and that is what six specs tripped
+on.** The re-keying above is right; doing it ONCE, before the loop, was
+not. Shell lands on `$home` provisionally so the app is never blank, but
+it does that in an effect: for the first paint `selectedChannel()` is
+still `null`, `expanded()` is false, and the rail paints #500's
+COLLAPSED shape — a launcher, no menu — then swaps. The #1048 CI traces
+caught it exactly, two DOM snapshots 128 ms apart, the first
+`<div class="rail-actions">` with a bare launcher and the second
+`<div class="rail-actions expanded">` with the column. A `isVisible()`
+probe placed ahead of the retry loop reads that first snapshot, finds no
+menu, and then spends the whole 15 s deadline on a launcher home is
+about to unmount. The probe now lives INSIDE the loop, where the
+deadline covers both shapes; `RailActions.test.tsx` pins the transition
+so the flash is a known state and not something a red gate rediscovers.
+
+**Two of the six were the product being right.** They are worth
+separating from the four above, because their fix is a spec edit and the
+bar for that is "same or stronger, never looser":
+
+- `issue157` asserted `quit-irc-btn` page-wide at 0 while the settings
+  drawer was open. Its own comment says what it means — "the drawer must
+  show NEITHER" — and page-wide only ever coincided with that because
+  #986's rail quit was in the DOM solely while the launcher menu was
+  open. On home it is always rendered. Scoping to the drawer alone would
+  be the weaker claim, so the count-1 is ACCOUNTED FOR instead of
+  tolerated: the drawer shows none AND the one quit that exists is the
+  rail's.
+- `ux-5-bt` pressed Escape and asserted `.rail-actions-menu` gone,
+  naming a "full-viewport backdrop" that would otherwise intercept the
+  next click. That scrim does not exist — RailActions dismisses on an
+  outside pointerdown, deliberately without one — so the line had been
+  protecting nothing for a while. It now asserts the #1040 contract
+  (Escape does NOT take the column away, already pinned in unit), and
+  the `selectChannel` that follows stays the real proof that nothing
+  intercepts.
