@@ -515,5 +515,11 @@ EOF
     run_deploy
     [ "$status" -eq 0 ]
     grep -q "seed_themes" "$ARGV_LOG"
+    # BOTH branches, because they print different sentences: the inline
+    # warn ("NOT materialised") and the post-banner re-assert
+    # ("reminder:"). Refuting only the first leaves an always-firing
+    # re-assert undetectable — measured, this test survived that exact
+    # mutation until the second refute was added.
     refute grep -q "NOT materialised" <<<"$output"
+    refute grep -q "reminder:" <<<"$output"
 }
