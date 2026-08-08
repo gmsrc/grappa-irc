@@ -275,7 +275,7 @@ describe("AdminVisitorsTab", () => {
     const btn = await screen.findByTestId(`admin-visitor-delete-${ALIVE.id}`);
     expect(btn.textContent?.trim()).toBe("Delete");
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm");
+    expect(btn.textContent?.trim()).toBe("Confirm delete");
     expect(api.adminDeleteVisitor).not.toHaveBeenCalled();
   });
 
@@ -311,9 +311,9 @@ describe("AdminVisitorsTab", () => {
     const aBtn = await screen.findByTestId(`admin-visitor-delete-${ALIVE.id}`);
     const bBtn = screen.getByTestId(`admin-visitor-delete-${ORPHANED.id}`);
     fireEvent.click(aBtn); // arm A
-    expect(aBtn.textContent?.trim()).toBe("Confirm");
+    expect(aBtn.textContent?.trim()).toBe("Confirm delete");
     fireEvent.click(bBtn); // switch arm to B → disarm A
-    expect(bBtn.textContent?.trim()).toBe("Confirm");
+    expect(bBtn.textContent?.trim()).toBe("Confirm delete");
     expect(aBtn.textContent?.trim()).toBe("Delete");
   });
 
@@ -547,7 +547,7 @@ describe("AdminVisitorsTab", () => {
 
       const btn = await screen.findByTestId(toggleId(TOGGLE_LIVE, "azzurra"));
       fireEvent.click(btn); // arm
-      expect(btn.textContent?.trim()).toBe("Confirm");
+      expect(btn.textContent?.trim()).toBe("Confirm disconnect");
       expect(api.adminDisconnectSession).not.toHaveBeenCalled();
       fireEvent.click(btn); // confirm
 
@@ -576,7 +576,7 @@ describe("AdminVisitorsTab", () => {
 
       const btn = await screen.findByTestId(toggleId(TOGGLE_DOWN, "azzurra"));
       fireEvent.click(btn); // arm
-      expect(btn.textContent?.trim()).toBe("Confirm");
+      expect(btn.textContent?.trim()).toBe("Confirm reconnect");
       expect(api.adminReconnectSession).not.toHaveBeenCalled();
       fireEvent.click(btn); // confirm
 

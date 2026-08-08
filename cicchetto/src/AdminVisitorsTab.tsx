@@ -315,7 +315,9 @@ const AdminVisitorsTab: Component = () => {
                               idleLabel={`${net.live_state !== null ? "Disconnect" : "Reconnect"}${
                                 v.networks.length > 1 ? ` ${net.network_slug}` : ""
                               }`}
-                              confirmLabel="Confirm"
+                              confirmLabel={`Confirm ${
+                                net.live_state !== null ? "disconnect" : "reconnect"
+                              }`}
                               armed={confirmingToggleKey() === toggleKey(v, net)}
                               onArm={() => setConfirmingToggleKey(toggleKey(v, net))}
                               onConfirm={() => runToggle(v, net)}
@@ -328,7 +330,7 @@ const AdminVisitorsTab: Component = () => {
                         </For>
                         <InlineConfirmButton
                           idleLabel="Delete"
-                          confirmLabel="Confirm"
+                          confirmLabel="Confirm delete"
                           armed={confirmingId() === v.id}
                           onArm={() => setConfirmingId(v.id)}
                           onConfirm={() => onDeleteConfirm(v)}

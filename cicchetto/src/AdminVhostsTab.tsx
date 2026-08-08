@@ -410,7 +410,7 @@ const AdminVhostsTab: Component = () => {
                         <td class="admin-vhosts-actions adm-table-sticky-actions">
                           <InlineConfirmButton
                             idleLabel="Delete"
-                            confirmLabel="Confirm"
+                            confirmLabel="Confirm delete"
                             armed={confirmingKey() === deleteKey(v.id)}
                             onArm={() => setConfirmingKey(deleteKey(v.id))}
                             onConfirm={() => onDeleteVhost(v)}
@@ -530,7 +530,7 @@ const GrantsDisclosure: Component<{
                   <td>
                     <InlineConfirmButton
                       idleLabel="Revoke"
-                      confirmLabel="Confirm"
+                      confirmLabel="Confirm revoke"
                       armed={props.confirmingKey === revokeKey(g.id)}
                       onArm={() => props.onArmRevoke(revokeKey(g.id))}
                       onConfirm={() => props.onRevoke(g)}

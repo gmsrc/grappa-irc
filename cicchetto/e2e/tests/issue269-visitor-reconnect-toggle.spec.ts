@@ -72,7 +72,7 @@ test("#269 admin Visitors tab Disconnect ⇄ Reconnect toggles a per-network vis
     // shows live_state: null → the toggle flips to Reconnect + the badge
     // reads the U-0 honesty signal.
     await toggle.click();
-    await expect(toggle).toHaveText(/^Confirm$/);
+    await expect(toggle).toHaveText(/^Confirm disconnect$/);
     await expect(toggle).toHaveClass(/confirming/);
     await toggle.click();
 
@@ -84,7 +84,7 @@ test("#269 admin Visitors tab Disconnect ⇄ Reconnect toggles a per-network vis
     // network. The refetch shows live_state non-null → the toggle flips
     // back to Disconnect + the alive badge returns.
     await toggle.click();
-    await expect(toggle).toHaveText(/^Confirm$/);
+    await expect(toggle).toHaveText(/^Confirm reconnect$/);
     await expect(toggle).toHaveClass(/confirming/);
     await toggle.click();
 

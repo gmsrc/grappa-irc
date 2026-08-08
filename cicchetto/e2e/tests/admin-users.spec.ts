@@ -191,7 +191,7 @@ test("admin deletes a created user via inline-confirm — row spliced", async ({
   const deleteBtn = page.getByTestId(`admin-user-delete-${id}`);
   await expect(deleteBtn).toHaveText(/^Delete$/);
   await deleteBtn.click();
-  await expect(deleteBtn).toHaveText(/^Confirm$/);
+  await expect(deleteBtn).toHaveText(/^Confirm delete$/);
   await deleteBtn.click();
 
   // Row spliced.

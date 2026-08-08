@@ -383,7 +383,7 @@ describe("AdminSessionsTab", () => {
     const btn = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
     expect(btn.textContent?.trim()).toBe("Disconnect");
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm");
+    expect(btn.textContent?.trim()).toBe("Confirm disconnect");
     expect(api.adminDisconnectSession).not.toHaveBeenCalled();
     fireEvent.click(btn);
     await waitFor(() => {
@@ -400,7 +400,7 @@ describe("AdminSessionsTab", () => {
 
     const btn = await screen.findByTestId(`admin-session-terminate-${rowId(USER_SESSION)}`);
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm");
+    expect(btn.textContent?.trim()).toBe("Confirm terminate");
     fireEvent.click(btn);
     await waitFor(() => {
       expect(api.adminTerminateSession).toHaveBeenCalledWith("test-bearer", rowId(USER_SESSION));
@@ -416,10 +416,10 @@ describe("AdminSessionsTab", () => {
     const disc = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
     const term = screen.getByTestId(`admin-session-terminate-${rowId(USER_SESSION)}`);
     fireEvent.click(term); // arm terminate
-    expect(term.textContent?.trim()).toBe("Confirm");
+    expect(term.textContent?.trim()).toBe("Confirm terminate");
     expect(disc.textContent?.trim()).toBe("Disconnect");
     fireEvent.click(disc); // arm disconnect → terminate disarms
-    expect(disc.textContent?.trim()).toBe("Confirm");
+    expect(disc.textContent?.trim()).toBe("Confirm disconnect");
     expect(term.textContent?.trim()).toBe("Terminate");
   });
 
@@ -432,9 +432,9 @@ describe("AdminSessionsTab", () => {
     const aDisc = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
     const bDisc = screen.getByTestId(`admin-session-disconnect-${rowId(VISITOR_SESSION)}`);
     fireEvent.click(aDisc);
-    expect(aDisc.textContent?.trim()).toBe("Confirm");
+    expect(aDisc.textContent?.trim()).toBe("Confirm disconnect");
     fireEvent.click(bDisc);
-    expect(bDisc.textContent?.trim()).toBe("Confirm");
+    expect(bDisc.textContent?.trim()).toBe("Confirm disconnect");
     expect(aDisc.textContent?.trim()).toBe("Disconnect");
   });
 
@@ -446,7 +446,7 @@ describe("AdminSessionsTab", () => {
 
     const btn = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm");
+    expect(btn.textContent?.trim()).toBe("Confirm disconnect");
     refreshSlot()?.onRefresh();
     await waitFor(() => {
       expect(api.adminListSessions).toHaveBeenCalledTimes(2);

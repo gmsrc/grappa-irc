@@ -586,7 +586,7 @@ const AdminCredentialsTab: Component = () => {
                         </button>
                         <InlineConfirmButton
                           idleLabel="Unbind"
-                          confirmLabel="Confirm"
+                          confirmLabel="Confirm unbind"
                           armed={confirmingKey() === credKey(c)}
                           onArm={() => setConfirmingKey(credKey(c))}
                           onConfirm={() => onDelete(c)}

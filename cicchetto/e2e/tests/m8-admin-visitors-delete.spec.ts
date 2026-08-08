@@ -62,7 +62,7 @@ test("M-8 admin Visitors tab lists + deletes a minted visitor (inline confirm tw
     const deleteBtn = page.getByTestId(`admin-visitor-delete-${visitor.id}`);
     await expect(deleteBtn).toHaveText(/^delete$/i);
     await deleteBtn.click();
-    await expect(deleteBtn).toHaveText(/^confirm$/i);
+    await expect(deleteBtn).toHaveText(/^confirm delete$/i);
     await deleteBtn.click();
 
     // Row gone; no error banner.

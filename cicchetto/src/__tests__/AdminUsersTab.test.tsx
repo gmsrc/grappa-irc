@@ -203,7 +203,7 @@ describe("AdminUsersTab — delete flow", () => {
     const btn = screen.getByTestId(`admin-user-delete-${ALICE.id}`);
     expect(btn.textContent).toBe("Delete");
     fireEvent.click(btn);
-    expect(btn.textContent).toBe("Confirm");
+    expect(btn.textContent).toBe("Confirm delete");
     fireEvent.click(btn);
     await waitFor(() => {
       expect(adminDeleteUser).toHaveBeenCalledWith("test-bearer", ALICE.id);

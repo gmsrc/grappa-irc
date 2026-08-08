@@ -348,7 +348,7 @@ const AdminSessionsTab: Component = () => {
                         <td class="admin-sessions-actions adm-table-sticky-actions">
                           <InlineConfirmButton
                             idleLabel="Disconnect"
-                            confirmLabel="Confirm"
+                            confirmLabel="Confirm disconnect"
                             armed={confirmingKey() === confirmKey(id, "disconnect")}
                             onArm={() => setConfirmingKey(confirmKey(id, "disconnect"))}
                             onConfirm={() => runAction(s, "disconnect", adminDisconnectSession)}
@@ -357,7 +357,7 @@ const AdminSessionsTab: Component = () => {
                           />
                           <InlineConfirmButton
                             idleLabel="Terminate"
-                            confirmLabel="Confirm"
+                            confirmLabel="Confirm terminate"
                             armed={confirmingKey() === confirmKey(id, "terminate")}
                             onArm={() => setConfirmingKey(confirmKey(id, "terminate"))}
                             onConfirm={() => runAction(s, "terminate", adminTerminateSession)}
