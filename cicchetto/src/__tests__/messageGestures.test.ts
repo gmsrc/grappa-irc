@@ -52,6 +52,7 @@ beforeEach(() => {
 afterEach(() => {
   dispose();
   document.body.innerHTML = "";
+  vi.restoreAllMocks(); // the live-selection test spies on window.getSelection
   vi.useRealTimers();
 });
 
@@ -143,6 +144,20 @@ describe("bindMessageGestures — swipe left→right = reply", () => {
     swipeRight(link, 90);
     expect(onReply).not.toHaveBeenCalled();
     expect(row.style.transform).toBe("");
+  });
+
+  // Once Select… has handed back a native selection the operator drags its
+  // endpoints — horizontally, across message text. Hijacking that into a reply
+  // would make the escape hatch unusable.
+  it("never arms while a live selection is being adjusted", () => {
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      isCollapsed: false,
+      toString: () => "some selected text",
+    } as unknown as Selection);
+    swipeRight(body, 90);
+    expect(onReply).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(LONG_PRESS_MS + 100);
+    expect(onLongPress).not.toHaveBeenCalled();
   });
 
   it("never arms outside a message row", () => {

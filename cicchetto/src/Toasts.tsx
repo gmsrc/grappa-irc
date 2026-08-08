@@ -6,6 +6,7 @@ import {
   dismissBundleRefreshToast,
 } from "./lib/bundleRefreshNotice";
 import { dismissInviteToast, inviteToasts } from "./lib/inviteLink";
+import { copyToasts, dismissCopyToast } from "./lib/messageMenu";
 import { dismissPresenceToast, presenceToasts } from "./lib/notifyWatch";
 import NickText from "./NickText";
 
@@ -108,6 +109,18 @@ const Toasts: Component = () => {
             <span class="toast-text">
               Invite for {toast.networkSlug} — you are not connected to that network.
             </span>
+          </ToastRow>
+        )}
+      </For>
+      {/* #1067 — the message menu's Copy could not write to the pasteboard
+          (plain-http LAN deploy, denied permission). The issue is explicit that
+          this must never be silent; the message `clipboard.copyText` throws
+          already names the way out, which is the Select… item in the same
+          menu. */}
+      <For each={copyToasts()}>
+        {(toast) => (
+          <ToastRow tone="error" icon="!" onDismiss={() => dismissCopyToast(toast.id)}>
+            <span class="toast-text">{toast.message}</span>
           </ToastRow>
         )}
       </For>

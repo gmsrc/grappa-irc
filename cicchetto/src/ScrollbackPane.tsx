@@ -25,6 +25,8 @@ import {
   mentionsBelowViewport,
   type ScrollbackLineGeom,
 } from "./lib/mentionScroll";
+import { bindMessageGestures } from "./lib/messageGestures";
+import { closeMessageMenu, openMessageMenu } from "./lib/messageMenu";
 import { networks, user } from "./lib/networks";
 import { senderPrefix, snapshotSenderPrefix } from "./lib/nickColor";
 import { nickEquals } from "./lib/nickEquals";
@@ -39,6 +41,7 @@ import {
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
 import { getReadCursor } from "./lib/readCursor";
 import { setReadingAtTailKey } from "./lib/readingAtTail";
+import { replyToMessage } from "./lib/replyQuote";
 import { isSettled, nextFollowMode, resolveIntent, type ScrollIntent } from "./lib/scrollAuthority";
 import {
   dismissFarBehind,
@@ -58,6 +61,7 @@ import { isMobile } from "./lib/theme";
 import { formatTimestamp } from "./lib/timeFormat";
 import { dismissWhoisCard, whoisCardBySlug } from "./lib/whoisCard";
 import { SERVER_WINDOW_NAME, type WindowKind } from "./lib/windowKinds";
+import MessageContextMenu from "./MessageContextMenu";
 import { MircBody } from "./MircText";
 import NextActiveButton from "./NextActiveButton";
 import NickText from "./NickText";
@@ -1222,6 +1226,16 @@ const ScrollbackPane: Component<Props> = (props) => {
 
   const key = () => channelKey(props.networkSlug, props.channelName);
   const messages = () => scrollbackByChannel()[key()];
+  // #1067 — the message behind a gesture's `.scrollback-line`. The row already
+  // carries `data-msg-id` (the settle/cursor walk reads it), so the gesture
+  // hands back a DOM node and this turns it into the typed row the reply quote
+  // and the menu need. Null for a presentational row (separator, unread marker,
+  // the #237 topic line) — those have no message and no id.
+  const messageForRow = (row: HTMLElement): ScrollbackMessage | null => {
+    const id = Number(row.dataset.msgId);
+    if (!Number.isFinite(id)) return null;
+    return messages()?.find((m) => m.id === id) ?? null;
+  };
   // #219-general / #608 (deep-review §6.2) — "is THIS pane frozen under a
   // covering overlay?" DERIVED from the LIVE overlay refcount, not a separately-
   // cleared latch: a covering overlay is up NOW (`overlayCount() > 0`) and the
@@ -1818,6 +1832,37 @@ const ScrollbackPane: Component<Props> = (props) => {
       listRef.addEventListener("touchend", onTouchEndEl, { passive: true });
       listRef.addEventListener("touchcancel", onTouchEndEl, { passive: true });
     }
+
+    // #1067 — the message gestures (left→right swipe = reply, hold = menu),
+    // bound on the SAME container as the #230 rescue above. They coexist because
+    // each claims a disjoint drag: #230 owns a VERTICAL drag on an underfilled
+    // pane, `bindMessageGestures` only ever claims a rightward HORIZONTAL one
+    // (and never in the edge zones #1041/#308 reserve).
+    if (listRef) {
+      const disposeGestures = bindMessageGestures(listRef, {
+        viewportWidth: () => window.innerWidth,
+        onReply: (row) => {
+          const msg = messageForRow(row);
+          if (msg === null) return;
+          replyToMessage(msg, props.networkSlug, props.channelName);
+        },
+        onLongPress: (row, at) => {
+          const msg = messageForRow(row);
+          if (msg === null) return;
+          openMessageMenu({
+            msg,
+            row,
+            networkSlug: props.networkSlug,
+            channelName: props.channelName,
+            at,
+          });
+        },
+      });
+      onCleanup(disposeGestures);
+    }
+    // A menu left open over a row this pane is about to destroy would float
+    // above the next channel, still holding a detached element.
+    onCleanup(closeMessageMenu);
 
     // #285 — ResizeObserver on the scroll container so the gate follows REAL
     // container geometry, not just discrete events. It fires on ANY container
@@ -3788,6 +3833,10 @@ const ScrollbackPane: Component<Props> = (props) => {
           />
         )}
       </Show>
+      {/* #1067 — the long-press message menu. Self-gating: it reads its own
+          open state off the store the gesture writes, so there is nothing to
+          thread through here. */}
+      <MessageContextMenu />
     </div>
   );
 };

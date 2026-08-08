@@ -608,6 +608,27 @@ html.is-ios textarea {
   user-select: text;
 }
 
+/* #1067 — the OTHER half of `html.is-ios`'s blanket kill above:
+   `-webkit-touch-callout: none`. That property is inherited, so it lands on
+   the scrollback too, and a range installed under a suppressed callout has no
+   draggable endpoints — the second symptom #1067 diagnoses ("once text is
+   selected the endpoints cannot be moved"). #366 never re-enabled it, which is
+   why its programmatic select-all produced a selection nobody could adjust.
+
+   The re-enable is scoped in TIME, not in space: `lib/messageMenu`'s Select…
+   puts `is-selecting` on <html> while a selection is live and removes it on the
+   first `selectionchange` that finds the selection gone. Scoping it to
+   `.scrollback` permanently would put iOS's own long-press callout back on
+   every message row, where it would race the long-press menu that replaced the
+   select-all — two menus for one gesture.
+
+   NOT device-verified: the callout ⇄ grab-handle link is read from the platform
+   contract and from the code, and neither jsdom nor Playwright webkit
+   reproduces iOS selection UI. #1067 declares its own diagnosis the same way. */
+html.is-ios.is-selecting .scrollback {
+  -webkit-touch-callout: default;
+}
+
 /* #508 — <select> tap-to-open on iOS. `html.is-ios` sets
    `-webkit-user-select: none` (the blanket kill above) and user-select
    INHERITS, so it lands on every <select>. WebKit then refuses to open the
@@ -1119,6 +1140,12 @@ html.overlay-open #root > div {
   .login-spinner,
   .compose-send-spinner {
     animation: none;
+  }
+  /* #1067 — the swipe-to-reply snap-back. The row still follows the finger
+     (that is the gesture's own feedback, not decoration); only the animated
+     return is dropped, so the row jumps home instead of easing. */
+  .scrollback-line {
+    transition: none;
   }
 }
 
@@ -2692,6 +2719,25 @@ html.resize-dragging * {
   white-space: pre-wrap;
   word-break: break-word;
   padding: 0.05rem 0;
+  /* #1067 — DECLARED, not inherited. `touch-action` is not an inherited
+     property (CSS UI spec), so the `.scrollback` pan-y above does NOT reach a
+     row: every message would otherwise sit at the default `auto`, which is the
+     iOS chrome-drag / back-swipe hole a horizontal drag on a row falls into.
+     pan-y is also exactly what the swipe-to-reply wants — vertical scroll stays
+     native, and the horizontal axis is ours to claim. */
+  touch-action: pan-y;
+  /* The snap-back. The gesture drives `transform` inline while the finger is
+     down and clears it on release; this transition is what animates the return.
+     `transform` only — a compositor property, so a sliding row never reflows
+     the message list behind it. */
+  transition: transform 160ms ease-out;
+}
+
+/* While the finger is driving the row, the transition would ease BEHIND the
+   finger instead of tracking it. The gesture adds this class on claim and drops
+   it on release, so the follow is instant and only the return animates. */
+.scrollback-line.scrollback-line-swiping {
+  transition: none;
 }
 
 .scrollback-line.scrollback-mention {

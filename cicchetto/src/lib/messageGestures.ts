@@ -90,6 +90,12 @@ export function bindMessageGestures(el: HTMLElement, params: MessageGestureParam
     if (t === undefined) return;
     const target = e.target instanceof Element ? e.target : null;
     if (target === null) return;
+    // A live selection means the operator is adjusting it (the escape hatch the
+    // menu's Select… item hands back). Dragging a grab handle is a horizontal
+    // drag across message text — exactly our swipe — so we stay out of the way
+    // until the selection is dismissed.
+    const selection = window.getSelection();
+    if (selection !== null && !selection.isCollapsed) return;
     // The inline controls (#350 link, #354 nick, #648 channel, the [Join] CTA)
     // already own their own press meaning — the same exclude keepKeyboard uses,
     // so the two policies cannot drift.
