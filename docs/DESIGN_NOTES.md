@@ -34272,3 +34272,44 @@ claimed.
 now keeps the iOS keyboard up. No test here observes a keyboard — jsdom has
 none, and Playwright's webkit is not iOS (the same limit that kept #508's
 native-picker fix reasoned rather than device-proven). vjt has the iPhone.
+
+## 2026-08-08 — the far-behind gesture leaves the thumb zone again (#1062)
+
+#997 read the frozen `(199)` badge report as a REACH problem and mounted a
+second dismiss surface in the #280 float stack, first in the column so it
+stacked above the pair. vjt, from the mobile PWA, reported what that cost.
+
+**The float stack is not a place, it is a route.** He navigates far-behind
+windows by repeated tapping of ONE zone, bottom-right: scroll-to-bottom while
+there is tail below, then — the instant it unmounts — the mobile next-active in
+the same spot. One thumb, one place, the whole round trip. The two controls
+were safe to stack because they are never both the target of the next tap; a
+third one, with a third meaning, appearing exactly on the windows that route
+exists for, is not the same kind of neighbour. #997's own note argued the
+corner was "where the thumb already is" — true, and the reason it was the
+wrong place: the thumb was already busy.
+
+**The reach argument had already been answered by #1019.** Leaving a far-behind
+window routes to `dismissFarBehind`, so the operator's own window switch
+unfreezes the cursor with no control to find at all. Between that and the bar's
+×, nothing #997 added is unreachable — which is why this is a removal rather
+than a relocation. What #997 leaves behind and keeps: the ONE-owner shape
+(`dismissFarBehindGesture` with the re-latch inside it) and the finding that
+the re-latch is the half a second caller forgets.
+
+**Two exits, and neither is a button, is fine; two buttons is what was not.**
+The bar keeps the × because it is the surface that can say "you are N behind"
+in words — a bare corner glyph cannot, and that was true in #997's own
+reasoning for keeping the bar as the label.
+
+**Tests, honestly.** The #997 vitest describe asserted the OLD product (the
+corner control exists, is in the stack, fires the verb) and was deleted rather
+than trimmed. Its replacement compares the float stack's child count on a
+far-behind pane against an ORDINARY pane: pinning a literal count would red on
+any legitimately new permanent control, while the difference is exactly what
+the far-behind arm must not contribute. Mutation-measured — re-injecting the
+button reds those two tests and only those two (186 others green). The #997
+e2e spec was REPLACED, not deleted: it was the only e2e that clicked a dismiss
+and watched the frozen badge fall, so that outcome moves onto the surviving
+door (the bar's ×) in `issue1062-far-behind-float-stack.spec.ts`, alongside the
+removal claim scoped to the stack.
