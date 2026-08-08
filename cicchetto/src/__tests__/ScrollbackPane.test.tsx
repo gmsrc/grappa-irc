@@ -2128,81 +2128,60 @@ describe("ScrollbackPane", () => {
       });
     });
 
-    // #997 — the bar is pinned to the TOP edge, and the dismiss is the only
-    // gesture that unfreezes the cursor. An operator sitting at the tail never
-    // looked up: the frozen badge read as a broken counter for as long as they
-    // used the client. The label stays where it is; the gesture also lands in
-    // the #280 corner stack, where the thumb already is.
-    describe("far-behind dismiss in thumb reach (#997)", () => {
+    // #1062 — the #280 float stack belongs to the scroll pair. On mobile it is
+    // navigated by tapping ONE zone: scroll-to-bottom while there is tail
+    // below, then next-active the instant it unmounts. #997 mounted the
+    // far-behind ✓ there and put a third meaning under that thumb, on exactly
+    // the windows the round trip is for; the gesture went back to the bar,
+    // where it has a label, and #1019 makes the reach argument moot anyway
+    // (leaving the window already dismisses).
+    describe("the far-behind state adds nothing to the float stack (#1062)", () => {
       afterEach(() => {
         setFarBehind({});
         jumpToUnreadSpy.mockClear();
         dismissFarBehindSpy.mockClear();
       });
 
-      const renderFarBehindPane = () => {
+      const stackChildCount = (container: HTMLElement): number =>
+        container.querySelector(".scrollback-float-stack")?.childElementCount ?? -1;
+
+      it("leaves the stack exactly as an ordinary pane renders it", () => {
+        // Compared against an ORDINARY pane rather than pinned to a literal
+        // count: a legitimately new PERMANENT control appears in both and must
+        // not read as this regression, while anything the far-behind flag
+        // mounts shows up as a difference.
+        seedReadCursor("freenode", "#grappa", 1);
+        setScrollback({ "freenode #grappa": fixture });
+        const ordinary = render(() => (
+          <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
+        ));
+        const baseline = stackChildCount(ordinary.container);
+        // -1 means the stack itself is gone; the comparison below would then
+        // pass by measuring nothing.
+        expect(baseline).toBeGreaterThanOrEqual(0);
+        ordinary.unmount();
+
+        setFarBehind({ "freenode #grappa": { missed: 3000, resumeFrom: 1 } });
+        const farBehind = render(() => (
+          <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
+        ));
+        // The precondition: this pane really is in the far-behind arm.
+        expect(screen.getByTestId("far-behind-bar")).toBeInTheDocument();
+        expect(stackChildCount(farBehind.container)).toBe(baseline);
+      });
+
+      it("keeps the one dismiss inside the bar, next to the count it clears", () => {
+        // A bare corner glyph cannot say "you are N behind"; the bar can, and
+        // the gesture belongs beside the state it acts on.
         seedReadCursor("freenode", "#grappa", 1);
         setScrollback({ "freenode #grappa": fixture });
         setFarBehind({ "freenode #grappa": { missed: 3000, resumeFrom: 1 } });
         render(() => (
           <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
         ));
-      };
-
-      it("puts the affordance in the corner stack, not only in the top bar", () => {
-        renderFarBehindPane();
-        const corner = screen.getByTestId("far-behind-float-dismiss");
-        // Membership in the stack IS the reach fix: the stack is the
-        // container-anchored lower-right cluster (#280), and a control outside
-        // it inherits neither the anchor nor the pointer-events re-enable.
-        expect(corner.parentElement?.className).toContain("scrollback-float-stack");
-        expect(screen.getByTestId("far-behind-bar").contains(corner)).toBe(false);
-      });
-
-      it("shows nothing in the corner for an ordinary pane", () => {
-        seedReadCursor("freenode", "#grappa", 1);
-        setScrollback({ "freenode #grappa": fixture });
-        render(() => (
-          <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
-        ));
-        expect(screen.queryByTestId("far-behind-float-dismiss")).toBeNull();
-      });
-
-      it("dismisses THIS window's far-behind state, the same verb the × fires", () => {
-        renderFarBehindPane();
-        screen.getByTestId("far-behind-float-dismiss").click();
-        expect(dismissFarBehindSpy).toHaveBeenCalledWith("freenode", "#grappa");
-        // A corner control that navigated instead would leave the cursor
-        // frozen — the badge would stay stuck with the way out now in reach
-        // and still useless, which is worse than the reported defect.
-        expect(jumpToUnreadSpy).not.toHaveBeenCalled();
-      });
-
-      it("re-latches the frozen divider, exactly as the × does", async () => {
-        // The second surface must write the WHOLE state, not the part that is
-        // easy to see. Dismissing without carrying the returned id back into
-        // the frozen marker un-suppresses the divider against a cursor
-        // snapshot thousands of rows old and slams "2 unread" across the top
-        // of the buffer — the two controls would then disagree about what a
-        // dismiss means.
-        renderFarBehindPane();
-        screen.getByTestId("far-behind-float-dismiss").click();
-        // The verb clears the flag server-side; mirror that here.
-        setFarBehind({});
-        await Promise.resolve();
-        expect(screen.queryByTestId("unread-marker")).toBeNull();
-      });
-
-      it("keeps the backwards jump on the bar — opposite directions survive", () => {
-        // jump-to-first-unread goes BACKWARDS, scroll-to-bottom FORWARDS. The
-        // corner gets the dismiss and ONLY the dismiss: a backwards jump one
-        // gap above the forwards scroll would be the collision #280 anchored
-        // this stack to prevent, and it would not unfreeze anything.
-        renderFarBehindPane();
-        expect(screen.getByTestId("far-behind-jump")).toBeInTheDocument();
-        expect(
-          screen.getByTestId("far-behind-bar").contains(screen.getByTestId("far-behind-jump")),
-        ).toBe(true);
+        const dismisses = screen.getAllByTestId(/far-behind.*dismiss/);
+        expect(dismisses).toHaveLength(1);
+        expect(screen.getByTestId("far-behind-bar").contains(dismisses[0] ?? null)).toBe(true);
       });
     });
 

@@ -3482,15 +3482,18 @@ const ScrollbackPane: Component<Props> = (props) => {
   // re-anchor. `defer` skips the mount run; a no-op when no animation runs.
   createEffect(on(key, () => interruptSmoothScroll(), { defer: true }));
 
-  // #693 dismiss — ONE gesture, two surfaces (#997). The bar's × and the
-  // corner affordance in the #280 float stack both call this; neither owns a
-  // handler of its own. The state this writes is the whole point of the
-  // second surface: the dismiss is the ONLY thing that unfreezes the read
-  // cursor, so a corner control that merely scrolled or jumped would leave
-  // the frozen badge exactly as stuck as the operator found it — reachable
-  // and useless is worse than unreachable. Two handlers writing "the same"
-  // state is the #975 twin-structure bug waiting to happen; one owner, one
-  // state, and a drift is a syntax error rather than a UX report.
+  // #693 dismiss — ONE gesture, ONE surface: the bar's ×. #997 mounted a
+  // second surface for it in the #280 float stack; #1062 took that back out
+  // (the corner is a repeated-tap route on mobile — scroll-to-bottom, then
+  // next-active in the same zone — and a third control with a third meaning
+  // broke the round trip). The reach argument #997 opened on is answered by
+  // #1019 instead: leaving a far-behind window already routes to
+  // `dismissFarBehind`, so the operator's own window switch unfreezes the
+  // cursor with no control to find at all.
+  // It stays a named function rather than an inline handler because the
+  // re-latch below is the half a second caller would forget — see #997's
+  // measurement in DESIGN_NOTES: dropping it slams a stale divider across
+  // the top of the buffer.
   const dismissFarBehindGesture = () => {
     // Re-latch the frozen divider to whatever was marked read. Dismiss is an
     // explicit "I've read to here" gesture — the same class as the
@@ -3500,9 +3503,8 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (readTo !== null) setMarkerCursorId(readTo);
   };
 
-  // Both surfaces speak the same sentence, from one string: the corner glyph
-  // has no visible text at all, so its label is the only thing that says
-  // which state it clears.
+  // The × has no text a reader can act on, so this label is the only thing
+  // that says which state it clears.
   const dismissFarBehindLabel = "Dismiss — mark everything up to here as read";
 
   return (
@@ -3735,34 +3737,14 @@ const ScrollbackPane: Component<Props> = (props) => {
           one mobile next-active ever mounts. scroll-to-bottom still shows
           only when NOT at the bottom (C7.4). */}
       <div class="scrollback-float-stack">
-        {/* #997 — the far-behind dismiss, in thumb reach. The bar above stays
-            as the STATUS LABEL ("you are N behind"); the gesture that acts on
-            that state also lives here, where the operator's thumb and
-            attention already are. Reported from IRC: a frozen (199) badge read
-            as a broken counter for as long as the only way out sat pinned to
-            the top edge, unlooked-at.
-            Shares `dismissFarBehindGesture` with the bar's × — see there for
-            why a second surface is only defensible when it writes the same
-            state. The JUMP deliberately does NOT get a twin here: it goes
-            BACKWARDS into the abandoned region and does not unfreeze the
-            cursor, so a corner copy of it would be the "reachable control
-            that leaves the badge frozen" this change exists to remove — and
-            a backwards jump one gap above the forwards scroll-to-bottom is
-            the collision #280 anchored this stack to avoid.
-            Rendered FIRST so it stacks ABOVE the existing pair: scroll-to-
-            bottom keeps the corner position its muscle memory owns, and this
-            transient control never displaces it. */}
-        <Show when={farBehindByChannel()[key()]}>
-          <button
-            type="button"
-            class="far-behind-float-dismiss"
-            data-testid="far-behind-float-dismiss"
-            aria-label={dismissFarBehindLabel}
-            onClick={dismissFarBehindGesture}
-          >
-            ✓
-          </button>
-        </Show>
+        {/* #1062 — this stack holds those TWO controls and nothing else. On
+            mobile it is navigated by repeated tapping of one zone: scroll-to-
+            bottom while there is tail below, then — the instant it unmounts —
+            next-active in the same spot, one thumb for the whole round trip.
+            #997's far-behind ✓ mounted here FIRST (so above the pair) and put
+            a third meaning under that thumb on exactly the windows the round
+            trip is for. Any future transient control lands in the same trap:
+            the far-behind gesture stays on the bar, where it has a label. */}
         <Show when={isMobile()}>
           <NextActiveButton variant="mobile" />
         </Show>

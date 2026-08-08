@@ -69,7 +69,7 @@
 //
 // ── Mechanics ──
 //
-// Seeding mirrors `issue997-far-behind-thumb-reach.spec.ts` (same bar, same
+// Seeding mirrors `issue1062-far-behind-float-stack.spec.ts` (same bar, same
 // precondition): the shared seeder plants 200 rows in #bofh and this needs a
 // gap ABOVE the 200-row page cap, so it re-seeds via the admin
 // `resetSubject(baselineSeed)` surface. The wrapped `test` fixture's afterEach
