@@ -33522,3 +33522,88 @@ became data: `BannerEntry.dismiss` (a `BannerAction`, so it carries the
 `×`'s accessible name too), supplied by the registry that already holds
 each source's context. Push-optin moved onto it as well — no half
 migration — and the owner now has no source-specific branch at all.
+
+## 2026-08-08 — #462: "no small buttons in settings" is a rule, and the last patch of it was killing the armed red
+
+#462 is the affordance/copy layer #460's skeleton pass deliberately left
+undone. Three of its six checklist items were already delivered by work
+that landed while it waited, and saying so is part of the record:
+**detach and quit left the drawer entirely** (#986 moved them to the
+rail behind the shared confirm modal, with the per-subject bodies #462
+asks for), the **reconnect button's alarm-red idle** was already an
+accent (#282), and the **identity inputs are not unstyled** — #497/#508's
+global input treatment gives them their 44px height, `--font-size` and
+theme tokens, and its own moduledoc names that editor as the case that
+motivated it. What #462 actually still owned was smaller and different
+from its text, which is why the census came before the fix.
+
+**The general rule, not the third instance.** vjt's ruling is *no small
+buttons anywhere in settings*, so the question is not "which button is
+small" but "what makes a drawer button small". Answer:
+`:where(.settings-drawer) button` (#735) declares the 44px floor at
+specificity (0,0,1), and ANY control class declaring its own `padding` or
+`font-size` out-specifies it. `.inline-confirm-btn` — sized for a dense
+admin table row — is that class, so every instance of the shared
+two-tap button shrank inside the drawer. #43 and #282 each patched the
+one button they had open; `apply identity` and the #735 passkey-removal
+rows were left compact because nobody had them open at the time. The fix
+is one drawer-scoped rule, so instances not yet written inherit it.
+
+**The patch that had to go was actively breaking something.** The
+retired `.settings-drawer .inline-confirm-btn.vhost-reconnect` sat at
+(0,3,0) and declared `color`, which beats `.inline-confirm-btn.confirming`
+at (0,2,0) — so the **armed red never reached that button at all**, on
+any source order, while the rule's own comment claimed the base supplied
+it. The replacement scopes the idle paint with `:not(.confirming)`,
+which is why the two-tap confirmation gets its only visible signal back.
+A source-order fix would have been silent and one edit from breaking
+again; the guard in `settingsControlSizing.test.ts` asserts no rule
+outside the base declares `color` on an `.inline-confirm-btn` without
+excluding `.confirming`.
+
+**Two controls the census found that the issue does not mention.** The
+header `×` declared `min-height: 2rem` / `min-width: 2.25rem` (28×31px at
+the 14px root) — the last control under the HIG floor, and the first one
+an operator reaches for. `<select>` had **no base rule anywhere in the
+sheet**: #735 covered `<button>`, #497/#508 covered `<input>`/`<textarea>`
+(a denylist that deliberately excludes non-text controls, and `<select>`
+is not an `<input>` at all), so the drawer's three pickers rendered at
+platform default. Both are the same defect as the reported one, found by
+asking what the class is rather than reading the list.
+
+**Deliberately OUT (vjt's ruling), so it is written down rather than
+tacitly excluded.** The themes sub-page keeps `.theme-action` /
+`.theme-slot` at `font-size: 0.8rem` and `.theme-daynight-toggle` at
+`0.85rem`. They are inside the drawer and they are under the rule — but
+they sit in a dense card grid where growing them is a *layout* change,
+not a size change, and #462 is the affordance/copy layer. Also out: the
+theme-editor modal (`.theme-editor-*`), a separate overlay rather than
+drawer content. Still unstyled and named here for the same reason:
+`.settings-identity-hint` / `-error` / `-ok` have no rules, so the
+identity editor's inline validation renders as bare paragraphs while its
+`.vhost-error` sibling is a bordered box.
+
+**One name, three renderings.** The share affordance was spelled by each
+of its call sites: home and the modal title said "open on another
+device", the settings entry said "share session". The issue reports two
+call sites because whoever wrote it had seen two; there are three.
+`SHARE_SESSION_LABEL` lives in `lib/shareModal.ts`, beside the signal
+that opens the surface, and the guard is on the SOURCE
+(`shareSessionLabel.test.ts`) rather than on the rendering: two literals
+that happen to agree today satisfy `toHaveTextContent` and disagree the
+first time one is edited. Comments are stripped before that assertion —
+prose quoting a label is documentation, not a second rendering.
+
+**`delete account` is the one teardown verb still in the drawer, and its
+copy is per-subject like its siblings.** `deleteAccountBody()` sits in
+`lib/lifecycle.ts` next to `deleteAccount()`, for the reason #986 gave
+one screen up: copy that lives away from the teardown it describes
+drifts from it. A user loses an ACCOUNT they log back into; a registered
+visitor loses a NICK the server keeps. One sentence covering both would
+be false for one of them.
+
+**The upload-retention paragraph exists for its third sentence.** The
+TTL is read at UPLOAD time (`uploadOrchestrator` picks the host token as
+it posts the file), so the preference governs the next upload and cannot
+reach back to the last one — the one fact a user cannot guess and the
+only one with a wrong assumption behind it.

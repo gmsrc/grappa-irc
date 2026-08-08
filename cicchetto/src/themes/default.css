@@ -3663,8 +3663,13 @@ html.resize-dragging * {
   font-size: 1.125rem;
   line-height: 1;
   cursor: pointer;
-  min-width: 2.25rem;
-  min-height: 2rem;
+  /* #462 — 2.25rem × 2rem is 31×28px at the 14px root: the one control in the
+     drawer still under the HIG floor, and the one an operator reaches for
+     first. It declares its own min-*, so `:where(.settings-drawer) button`'s
+     44px never applied here. Same ABSOLUTE-px token as the base, for the same
+     reason (a rem floor tracks the text size and under-shoots at S). */
+  min-width: var(--tap-min);
+  min-height: var(--tap-min);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3793,6 +3798,27 @@ html.resize-dragging * {
   cursor: default;
 }
 
+/* #462 — the third control element, which had no base rule ANYWHERE in the
+   sheet. #735 gave <button> a floor and #497/#508 gave <input>/<textarea> one
+   (its denylist deliberately excludes non-text controls, and <select> is not
+   an <input> at all), so the drawer's three pickers — identity network,
+   upload retention, mute — were the last controls rendering at UA default:
+   platform font, platform height, no relation to the chrome around them.
+   Same shape and same `:where()` (0,0,1) floor-not-override posture as the
+   button base above, so `.settings-drawer label.prefs-list select`'s tighter
+   padding still wins where the mute row wants it. */
+:where(.settings-drawer) select {
+  box-sizing: border-box;
+  min-height: var(--tap-min);
+  padding: 0.4rem 0.7rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  cursor: pointer;
+}
+
 .settings-drawer h2 {
   font-size: 1rem;
   font-weight: normal;
@@ -3828,12 +3854,23 @@ html.resize-dragging * {
    because the index above is long enough to overflow in every shipped
    viewport and an auto margin buys nothing in an overflowing flex column.
 
-   #157 — delete-account entry button. Visually DISTINCT from every other
+   #462 — the button and the sentence stating what it destroys are ONE
+   affordance, so they share a box. The drawer's own flex gap is 1rem, which
+   would leave the sentence as far from its button as from the unrelated
+   control above it; this holds the pair at reading distance and takes over
+   the 0.5rem the button used to keep between itself and its neighbour. */
+.settings-danger {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.5rem;
+}
+
+/* #157 — delete-account entry button. Visually DISTINCT from every other
    drawer control: red border + red text (a danger affordance) so the
    operator perceives it as the nuclear option. Sits just above the "done"
    button at the bottom of the stack. */
 .settings-drawer button.delete-account-entry {
-  margin-top: 0.5rem;
   background: transparent;
   color: #c00;
   border: 1px solid #c00;
@@ -4296,6 +4333,41 @@ html.resize-dragging * {
   border-color: #c00;
 }
 
+/* #462 — the same component, worn in the settings drawer, is not a table-row
+   button. The base above is sized for a dense admin row and out-specifies
+   `:where(.settings-drawer) button`'s 44px/--font-size floor (0,1,0 beats
+   0,0,1), so every drawer instance shrank. #43 and #282 each patched the ONE
+   button they had open (`.settings-quit`, since retired with the verb;
+   `.vhost-reconnect`), which left `apply identity` and the #735 passkey-removal
+   rows compact. Scoping the correction to the drawer covers every instance in
+   it, including ones not written yet — vjt's rule is "no small buttons in
+   settings", not "no small quit button".
+
+   Idle paint moves with the size, and for the same reason: a settings action
+   is routine. `--mode-op` reads as a warning on `apply identity`,
+   `Reconnect to apply` and `remove <passkey>` — three things the operator is
+   deliberately doing. The one destructive door left in the drawer is
+   `delete account`, which is a plain button with its own red.
+
+   `:not(.confirming)` is load-bearing. The rule this replaces sat at (0,3,0)
+   and beat `.inline-confirm-btn.confirming` (0,2,0), so the armed red never
+   reached the reconnect button at all — its own comment claimed the base
+   supplied it. Excluding the armed state by selector, rather than by source
+   order, is what hands the two-tap confirmation its signal back. */
+.settings-drawer .inline-confirm-btn {
+  padding: 0.5rem 1rem;
+  font-size: inherit;
+}
+
+.settings-drawer .inline-confirm-btn:not(.confirming) {
+  color: var(--accent);
+}
+
+.settings-drawer .inline-confirm-btn:hover:not(.confirming) {
+  background: var(--accent);
+  color: var(--bg);
+}
+
 /* #473 — the Sidebar `.sidebar-archive-row` / `.sidebar-archive-delete`
    rules were removed with the Sidebar `<details class="sidebar-archive">`
    archive section. ArchiveModal now owns archive; its rows use the
@@ -4650,13 +4722,16 @@ html.resize-dragging * {
   white-space: nowrap;
 }
 
+/* #462 — padding + font-size deleted, not rewritten: without them the rule
+   stops out-specifying `:where(.settings-drawer) button` and the base's 44px
+   floor, 0.4/0.7 padding and --font-size apply. 0.15rem × 0.75rem made this
+   the smallest button in the drawer, on the one row where a mis-tap
+   unsubscribes a device. */
 .settings-drawer .device-remove {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--text);
-  padding: 0.15rem 0.4rem;
   font-family: var(--font-mono);
-  font-size: 0.75rem;
   cursor: pointer;
 }
 
@@ -6406,6 +6481,24 @@ html.resize-dragging * {
   font-size: 0.85rem;
 }
 
+/* #462 — the per-network identity editor had NO rule of its own. What the
+   issue reports as "unstyled inputs" is already fixed: #497/#508's global
+   input treatment gives the three fields their 44px height, the app's
+   --font-size and the theme tokens (its moduledoc names this very editor as
+   the case that motivated it). What was never given was a LAYOUT — the block
+   was bare flow content, so each control kept the UA's ~20ch intrinsic width
+   inside a 22rem drawer and the label/field pairs had no rhythm. Same flex
+   column as `.settings-section` one level up, plus the stretch. */
+.settings-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings-identity :where(input, select) {
+  width: 100%;
+}
+
 .settings-subpage {
   display: flex;
   flex-direction: column;
@@ -6949,21 +7042,12 @@ html.resize-dragging * {
   border-top: 1px solid var(--border);
 }
 
-/* The button is an InlineConfirmButton (two-tap arm, like `quit`); override
-   the compact base sizing + the base reddish idle colour to a full-size
-   accent primary. The base `.inline-confirm-btn.confirming` rule supplies
-   the red armed treatment on the confirm tap. */
-.settings-drawer .inline-confirm-btn.vhost-reconnect {
-  color: var(--accent);
-  border-color: var(--accent);
-  padding: 0.5rem 1rem;
-  font-size: inherit;
-}
-
-.settings-drawer .inline-confirm-btn.vhost-reconnect:hover:not(.confirming) {
-  background: var(--accent);
-  color: var(--bg);
-}
+/* #462 — the button is an InlineConfirmButton and takes its full-size shape,
+   its accent idle paint and its filled hover from the drawer-scoped rules
+   beside the base (search `.settings-drawer .inline-confirm-btn`). This rule
+   used to carry all four declarations itself; the copy is gone, and with it
+   the (0,3,0) `color` that had been silently beating the armed `.confirming`
+   red on every confirm tap. */
 
 .vhost-reconnect-hint {
   color: var(--muted);
