@@ -2049,6 +2049,53 @@ html.resize-dragging * {
   touch-action: pan-y;
 }
 
+/* #1040 — the HOME rail, expanded. Every declaration here undoes one thing the
+   popover shape needs and home does not have.
+
+   The container stops FLOORING itself: `margin-top: auto` pins the launcher to
+   the bottom of the flex rail, which is right for a door and wrong for the
+   window's content — with nothing above it on home, an expanded column pinned
+   to the bottom edge is just the popover wearing a different position. The
+   border-top goes with it: it separated the launcher from the list above, and
+   there is no list.
+
+   It also has to be able to SHRINK. `.shell-members` is `overflow-y: visible`
+   (#500 moved the scroll into `.members-pane`) and home renders no
+   `.members-pane` at all, so a `flex-shrink: 0` column taller than the rail
+   would not scroll — it would spill out of the aside with its bottom rows
+   unreachable, the exact failure #500 fixed at the other end. `flex-shrink: 1`
+   + `min-height: 0` bounds it to the rail and lets the child scroll; the child
+   is the scroller because the base `.rail-actions-menu` already carries
+   `overflow-y: auto` + `overscroll-behavior: contain` + the `pan-y` descendant
+   carve-out (#913) that makes iOS honour the pan. Reuse it, don't re-derive it
+   one level up. */
+.rail-actions.expanded {
+  margin-top: 0;
+  border-top: none;
+  flex-shrink: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* The menu itself leaves the popover coordinate system: in normal flow, no
+   z-index of its own, and NOT capped by `--rail-menu-space-above` — that number
+   is measured only while a transient menu is open (RailActions.tsx gates the
+   measurement on `open()`), so on home the var() would fall through to the
+   pre-measure viewport fallback and cap the column at a height nothing
+   computed. The chrome goes too: the border + padding + background drew a
+   floating panel against the rail behind it, and the container already supplies
+   both. `min-height: 0` is what lets it scroll as a flex child. */
+.rail-actions.expanded .rail-actions-menu {
+  position: static;
+  z-index: auto;
+  max-height: none;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
 /* #500 — the launcher carries the same `.rail-action` full-width row chrome
    (glyph + "actions" label, inherited flex-start). A caret (▸ rotating to ▾)
    trails the label as a lightweight "toggles a menu" affordance; `margin-left:

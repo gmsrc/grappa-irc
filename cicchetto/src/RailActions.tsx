@@ -52,6 +52,23 @@ import {
 // pinned launcher stays in view while a long list scrolls internally, on
 // desktop as it already did on mobile).
 //
+// #1040 — HOME is the exception, and it is an exception to the REASON, not to
+// the rule. #500's cost was a nick-list cost; `RailContext` renders nothing for
+// home, so that window's rail is an empty column with one launcher pinned to
+// its bottom, charging a tap to reach buttons that had nowhere to be pushed to.
+// On home the actions therefore lay out EXPANDED and in flow from the top of
+// the rail, and the launcher is not rendered at all. Every other kind keeps
+// #500 verbatim — the launcher stays the single door everywhere else.
+//
+// The expanded state is not "the overlay, left open": the popover geometry
+// (absolute, `bottom: 100%`, a max-height measured from the space above the
+// launcher) exists to float over a list, and it is switched off in CSS via the
+// `.rail-actions.expanded` container class. The dismiss machinery is switched
+// off with it — no overlay refcount, no Escape, no outside-click — because a
+// permanent column that Escape can close is a column the operator cannot bring
+// back, and a refcount held for the life of a window freezes the scrollback
+// snapshot behind it (#608).
+//
 // Menu open state is a plain local signal — ephemeral UI state, like Shell's
 // `membersOpen` / `settingsOpen`. cic-never-originates-state governs IRC WINDOW
 // state (join/part/kick), NOT a client-local drawer toggle.
@@ -182,11 +199,31 @@ const RailActions: Component<Props> = (props) => {
       : null;
   };
 
+  // #1040 — home is the ONE kind where the actions are not collapsed. #500's
+  // cost was a NICK LIST cost (the column pushed the list below the fold), and
+  // `RailContext` renders nothing for home, so on this window there is no list
+  // to protect and the launcher charges a tap for nothing. Derived from the
+  // selection rather than held as a second signal: "which kind am I showing" is
+  // state that already exists.
+  const expanded = (): boolean => selectedChannel()?.kind === "home";
+
   // #500 — collapsible-menu open state (ephemeral UI-local, see moduledoc).
   const [open, setOpen] = createSignal(false);
   const close = (): void => {
     setOpen(false);
   };
+  // #1040 — a menu opened on a channel is retired on arrival at home. Every
+  // rail action already closes it, and an outside pointerdown closes it too,
+  // but neither covers a selection change the rail did not cause (the #986
+  // demote redirect lands on home on its own). Without this the transient
+  // menu's overlay refcount would stay pushed for as long as the operator sits
+  // on home — a permanent column holding a scroll-lock, which is what freezes
+  // ScrollbackPane's snapshot (#608) — and the menu would be handed back
+  // already open on the way out. One reset at the source beats gating each of
+  // the three popover mechanisms below on `!expanded()` separately.
+  createEffect(() => {
+    if (expanded()) setOpen(false);
+  });
   // Reuse the shared overlay verb: Escape close + refcount scroll-lock (keeps
   // the rail's touch-action/pan-y contract while the menu overlays the list).
   createOverlayLock(() => open(), ".rail-actions-menu", close);
@@ -255,15 +292,28 @@ const RailActions: Component<Props> = (props) => {
 
   return (
     // biome-ignore lint/a11y/useSemanticElements: role="group" gives the button cluster an accessible name; biome suggests <fieldset>, a form-control grouping (needs <legend>, paints a border) — wrong for a rail toolbar of action buttons.
-    <div class="rail-actions" role="group" aria-label="window actions" ref={rootRef}>
-      <Show when={open()}>
+    <div
+      class="rail-actions"
+      classList={{ expanded: expanded() }}
+      role="group"
+      aria-label="window actions"
+      ref={rootRef}
+    >
+      <Show when={expanded() || open()}>
         {/* #500 — the expanded menu overlays the nick area above the launcher.
             Holds every action, unchanged. `createOverlayLock` targets this
             element's selector; outside-click dismiss is the pointerdown listener
-            above (no covering scrim). */}
+            above (no covering scrim).
+            #1040 — on home the SAME element is the rail's own content: the
+            `.expanded` class on the container above takes the absolute /
+            upward / capped geometry back off it (default.css). */}
         <div
           class="rail-actions-menu"
-          role="menu"
+          // #1040 — `menu` describes a popup a menubutton owns. On home there
+          // is no launcher and nothing pops up, so the role would be an orphan
+          // claim; the container's `role="group" aria-label="window actions"`
+          // already names the cluster.
+          role={expanded() ? undefined : "menu"}
           style={
             // #588/#913 — publish the JS-measured space above the launcher; the
             // stylesheet's `max-height` subtracts the safe-area inset from it
@@ -613,22 +663,28 @@ const RailActions: Component<Props> = (props) => {
 
       {/* #500 — the ONE permanently-pinned launcher. Always at the bottom of the
           rail, always reachable (it never shares vertical flow with the nick
-          list). Toggles the overlay menu above. */}
-      <button
-        type="button"
-        class="shell-chrome-btn rail-action rail-actions-launcher"
-        classList={{ open: open() }}
-        aria-haspopup="menu"
-        aria-expanded={open() ? "true" : "false"}
-        aria-label="window actions"
-        data-testid="rail-actions-launcher"
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span class="rail-action-icon" aria-hidden="true">
-          {"\u{2630}"}
-        </span>
-        <span class="rail-action-label">actions</span>
-      </button>
+          list). Toggles the overlay menu above.
+          #1040 — absent on home, where the menu it would open is already the
+          rail's content. A door is only an affordance from outside the room:
+          rendered there it would be a permanent row whose only power is to
+          COLLAPSE the column this issue exists to expand. */}
+      <Show when={!expanded()}>
+        <button
+          type="button"
+          class="shell-chrome-btn rail-action rail-actions-launcher"
+          classList={{ open: open() }}
+          aria-haspopup="menu"
+          aria-expanded={open() ? "true" : "false"}
+          aria-label="window actions"
+          data-testid="rail-actions-launcher"
+          onClick={() => setOpen((v) => !v)}
+        >
+          <span class="rail-action-icon" aria-hidden="true">
+            {"\u{2630}"}
+          </span>
+          <span class="rail-action-label">actions</span>
+        </button>
+      </Show>
     </div>
   );
 };

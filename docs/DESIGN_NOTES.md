@@ -33876,3 +33876,73 @@ is why the module already held the pattern twice — a literal in the
 guard and a second literal in the `replace`. #1047 was one character on
 that pattern, i.e. precisely the edit a hand-kept second copy loses, so
 the global variant is now derived from the first's `.source`.
+---
+
+## 2026-08-08 — #1040: home is the window where #500's collapse buys nothing
+
+vjt, on #grappa: *"in home il menu actions deve essere espanso"*, *"e i
+bottoni visibili"*. The rail actions are collapsed behind one launcher
+everywhere; on the home window they now lay out as an expanded column and
+the launcher is not rendered at all.
+
+**This is an exception to the REASON, not to the rule.** #500 collapsed
+the always-expanded column because on a big channel the nick list
+overflowed and pushed it below the fold — unreachable on desktop,
+squeezed on mobile. That is a nick-list cost. `RailContext` renders
+nothing for home (no MembersPane, no server card, no whois card), so on
+that window the rail is an empty column with a single launcher pinned to
+its bottom, charging a tap to reveal buttons that had nowhere to be
+pushed to in the first place. Home is also the window an operator lands
+on with nothing selected: it is the one place where the actions ARE the
+content. Every other kind keeps #500 verbatim, and the launcher stays
+the single door there.
+
+**Expanded is not "the overlay, left open" — and that distinction is the
+whole implementation.** The menu's geometry is built for a popover
+floating over a list: `position: absolute`, `bottom: 100%` (it opens
+UPWARD), and a `max-height` derived from the JS-measured space above the
+launcher (#588 → #913). Each of those exists *because* a menu opening
+upward over a list has only the space above it. A default-open overlay
+would have kept all three: a column pinned to the bottom edge, floating
+over nothing, capped by a number measured for a launcher that no longer
+exists (the measurement is gated on `open()`, so on home the var() would
+fall through to the pre-measure viewport fallback). So the CSS switches
+the coordinate system off via one container class,
+`.rail-actions.expanded`, and the column lays out in flow from the top.
+
+**The container also has to be able to shrink.** `.shell-members` is
+`overflow-y: visible` — #500 moved the scroll into `.members-pane` — and
+home renders no `.members-pane` at all. A `flex-shrink: 0` column taller
+than the rail would therefore not scroll, it would spill out of the
+aside with its bottom rows unreachable: the #500 defect, re-created at
+the other end. `flex-shrink: 1` + `min-height: 0` bounds it to the rail,
+and the SCROLLER stays the menu element, which already carries
+`overflow-y: auto` + `overscroll-behavior: contain` + the `pan-y`
+descendant carve-out (#913) that makes iOS honour the pan. Reuse the
+machinery, don't re-derive it one level up.
+
+**The dismiss machinery is switched off with the geometry.** A permanent
+column is not a popover: it holds no overlay refcount (a lock held for
+the life of a window freezes ScrollbackPane's overlay snapshot — #608),
+registers no Escape (Escape would close it into a state with no visible
+way back, since the launcher is gone), and registers no outside-click.
+All three follow from ONE reset — `createEffect(() => { if (expanded())
+setOpen(false) })` — rather than three separate `!expanded()` gates.
+That reset also covers the case the rail does not cause: arriving on
+home via the #986 demote redirect with the menu open would otherwise
+strand the refcount, and hand the menu back already open on the way out.
+
+**The launcher's absence is the contract, not a gap.** Rendered on home
+it would be a permanent row whose only power is to COLLAPSE the column
+this issue exists to expand. Two shared test doors had to learn this —
+`openMenu` in RailActions.test.tsx and `openRailMenu` in the e2e
+`cicchettoPage` fixture — and both were re-keyed on "is the menu
+rendered", NOT on the window kind: a channel window whose launcher
+regressed still fails loudly through them.
+
+**Not claimed.** Whether the column reads well under a thumb, and
+whether a short device scrolls it comfortably, are device calls. The e2e
+oracle is CONTAINMENT (the menu's box lies inside its container's box —
+true only in flow), because a "the cog is visible on home" assertion
+passes just as well against the default-open overlay this note exists to
+rule out.

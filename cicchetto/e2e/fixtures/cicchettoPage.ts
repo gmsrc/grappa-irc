@@ -844,6 +844,15 @@ export async function openRailMenu(page: Page): Promise<void> {
   if (isMobileViewport(page) && (await page.locator(".shell-members.open").count()) === 0) {
     await openMembersDrawer(page);
   }
+  // #1040 — on the HOME window the rail is expanded in flow and no launcher is
+  // rendered: the menu IS the rail's content, so there is no door to open and
+  // the loop below would burn its deadline waiting for a button that does not
+  // exist. This helper's contract is "the rail actions are reachable", which on
+  // home is already true the moment the rail is on screen (on mobile, the
+  // moment the drawer above finishes sliding in). Keyed on the menu being
+  // VISIBLE rather than on the window kind, so a channel window whose launcher
+  // regressed still fails loudly below instead of passing through here.
+  if (await menu.isVisible()) return;
   // #653 — drive the launcher off the app's OWN state, not off a single blind
   // click. `openMembersDrawer` now settles the slide, which removes the biggest
   // source of late movement, but the rail keeps re-laying-out while the stores

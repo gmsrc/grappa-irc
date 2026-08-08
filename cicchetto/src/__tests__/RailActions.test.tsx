@@ -1,6 +1,11 @@
 import { cleanup, fireEvent, render, screen } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetForTest as resetOverlayLock } from "../lib/overlayScrollLock";
+import {
+  overlayCount,
+  __resetForTest as resetOverlayLock,
+  runTopmostOverlayEscape,
+} from "../lib/overlayScrollLock";
 
 // #473 — RailActions is the ONE labelled button drawer at the bottom of the
 // members rail. It carries every rail affordance — home · rooms · themes ·
@@ -96,7 +101,21 @@ vi.mock("../lib/api", () => ({
 }));
 
 type Sel = { networkSlug: string; channelName: string; kind: string } | null;
-const selHolder: { value: Sel } = { value: null };
+// #1040 — a REAL signal behind the holder, not the plain object this was. The
+// rail now varies by window KIND (home expands the column, every other kind
+// keeps #500's launcher), so a test that lands on home mid-life has to notify
+// consumers: a plain getter stores the new value and re-renders nothing (the
+// same upgrade Shell.test.tsx made for its selection mock, for the same
+// reason). The `.value` accessor keeps every existing call site untouched.
+const [selSignal, setSelSignal] = createSignal<Sel>(null);
+const selHolder = {
+  get value(): Sel {
+    return selSignal();
+  },
+  set value(v: Sel) {
+    setSelSignal(v);
+  },
+};
 const setSelectedChannel = vi.fn();
 vi.mock("../lib/selection", () => ({
   selectedChannel: () => selHolder.value,
@@ -165,7 +184,13 @@ afterEach(() => {
 // THEN assert the action is reachable + clickable) — proving the #500 bug is
 // fixed instead of photographing the old always-expanded layout.
 const LAUNCHER = "rail-actions-launcher";
+// #1040 — the contract is "the actions are reachable", not "click the
+// launcher": on home they are already expanded in flow and no launcher exists
+// to click. Keyed on the MENU being rendered rather than on the kind, so a
+// channel window whose launcher went missing still fails loudly here instead of
+// silently no-opping. Same adaptation the e2e `openRailMenu` fixture needed.
 function openMenu(): void {
+  if (document.querySelector(".rail-actions-menu") !== null) return;
   fireEvent.click(screen.getByTestId(LAUNCHER));
 }
 
@@ -755,5 +780,89 @@ describe("RailActions — mute snooze picker (#950)", () => {
     mutedHolder.value = { "#italia": { until: NOW_SECONDS + 60 } };
     openWith(channelSel);
     expect(screen.getByTestId("rail-action-mute")).toHaveTextContent(/muted/i);
+  });
+});
+
+// #1040 — HOME is the one window where #500's collapse buys nothing. #500
+// collapsed the column because a big channel's NICK LIST pushed it below the
+// fold; `RailContext` renders nothing for home, so there is no list, no
+// overflow, and the tap the launcher costs buys no space back. vjt: "in home il
+// menu actions deve essere espanso, e i bottoni visibili".
+//
+// The expanded state is NOT "the overlay, left open". These tests pin the three
+// things that separate the two readings, each of which the issue calls out:
+//   * the buttons are in the DOM with no interaction, and the LAUNCHER is gone
+//     (a door is not needed from inside the room),
+//   * no overlay refcount is held — a permanent column is not a popover, and a
+//     stuck refcount freezes ScrollbackPane (#608),
+//   * Escape cannot close it — there would be no visible way to bring it back.
+// The collapsed contract for every OTHER kind is pinned by the #500 describe
+// above, which runs on a channel selection.
+describe("RailActions expanded home rail (#1040)", () => {
+  const homeSel: Sel = { networkSlug: "$home", channelName: "$home", kind: "home" };
+
+  // createOverlayLock defers its push a microtask (the #608 leak-safe shape),
+  // so the refcount must be read after one turn of the loop, not synchronously.
+  const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it("renders every action with no interaction, and no launcher to tap", () => {
+    selHolder.value = homeSel;
+    const { container } = render(() => <RailActions setters={setters} />);
+    // No openMenu() anywhere in this test — that is the point.
+    expect(screen.getByTestId("action-cluster-cog")).toBeInTheDocument();
+    expect(screen.getByTestId("mobile-panel-home")).toBeInTheDocument();
+    expect(screen.getByTestId("mobile-panel-archive")).toBeInTheDocument();
+    expect(screen.queryByTestId(LAUNCHER)).toBeNull();
+    // The CSS switches the popover geometry off this class (position/max-height
+    // /margin — pinned in railExpandedHome.test.ts), so its absence would leave
+    // the column laid out as a bottom-anchored overlay.
+    expect(container.querySelector(".rail-actions")).toHaveClass("expanded");
+  });
+
+  it("an action still fires through the shared mutex, and the column stays up", () => {
+    selHolder.value = homeSel;
+    render(() => <RailActions setters={setters} />);
+    fireEvent.click(screen.getByTestId("action-cluster-cog"));
+    expect(openSettingsPanel).toHaveBeenCalledWith(setters);
+    // `close()` runs on every action; on home it must not empty the rail — the
+    // column is the window's content, not a single-shot popover.
+    expect(screen.getByTestId("action-cluster-cog")).toBeInTheDocument();
+  });
+
+  it("holds no overlay refcount and cannot be closed by Escape", async () => {
+    selHolder.value = homeSel;
+    render(() => <RailActions setters={setters} />);
+    await settle();
+    // A permanent column that pushed the refcount would scroll-lock the app for
+    // as long as the operator stays on home, and freeze the scrollback's
+    // overlay snapshot with it (#608).
+    expect(overlayCount()).toBe(0);
+    // Escape closing it would strand the operator: there is no launcher left to
+    // reopen it with.
+    expect(runTopmostOverlayEscape()).toBe(false);
+    expect(screen.getByTestId("action-cluster-cog")).toBeInTheDocument();
+  });
+
+  it("retires a menu opened on a channel when the operator lands on home", async () => {
+    selHolder.value = channelSel;
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+    await settle();
+    expect(overlayCount()).toBe(1);
+
+    // Arriving on home by a door that is NOT a rail action (the #986 demote
+    // redirect, a sidebar row while the pointerdown dismiss is mid-flight)
+    // would otherwise leave the transient menu's refcount held under a column
+    // that is not transient at all …
+    selHolder.value = homeSel;
+    await settle();
+    expect(overlayCount()).toBe(0);
+    expect(screen.getByTestId("action-cluster-cog")).toBeInTheDocument();
+
+    // … and hand the menu straight back, already expanded, on the way out.
+    selHolder.value = channelSel;
+    await settle();
+    expect(screen.getByTestId(LAUNCHER)).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByTestId("action-cluster-cog")).toBeNull();
   });
 });

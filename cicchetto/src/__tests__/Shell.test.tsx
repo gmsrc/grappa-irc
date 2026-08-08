@@ -10,7 +10,12 @@ import { swipeHorizontally } from "./helpers/touchEvents";
 // both screen- and container-scoped queries find them afterwards. This mirrors
 // the e2e contract (open launcher, THEN assert reachable) — the Shell-level
 // wiring these tests pin is proven THROUGH the real collapse, not around it.
+// #1040 — on the home window the rail is expanded in flow and there is no
+// launcher to click, so the contract is "the actions are reachable", not "tap
+// the door". Keyed on the MENU being rendered, not on the kind: a channel
+// window whose launcher went missing still fails loudly here.
 function openRailMenu(): void {
+  if (document.querySelector(".rail-actions-menu") !== null) return;
   fireEvent.click(screen.getByTestId("rail-actions-launcher"));
 }
 
@@ -700,18 +705,19 @@ describe("Shell — three-pane integration", () => {
     expect(container.querySelector(".settings-drawer")?.classList.contains("open")).toBe(true);
   });
 
-  it("empty-state: the rail launcher renders and reveals the ⚙ settings button", () => {
+  it("cold-load lands on home, where the ⚙ settings button needs no launcher", () => {
     render(() => <Shell />);
-    // #500 — the always-present affordance is now the launcher; the cog is
-    // reachable through it (settings must be reachable from every window kind).
-    expect(screen.getByTestId("rail-actions-launcher")).toBeInTheDocument();
-    openRailMenu();
+    // Cold load lands on home synchronously (UX-4 B/N, asserted above), and
+    // #1040 expands the rail there: settings must be reachable from every
+    // window kind, and on THIS kind it is reachable with no interaction at all.
+    // #500's launcher is the door for every other kind — its absence here is
+    // the contract, not a gap.
     expect(screen.getByLabelText(/open settings/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("rail-actions-launcher")).toBeNull();
   });
 
-  it("clicking empty-state ⚙ opens the settings drawer", () => {
+  it("clicking the home rail's ⚙ opens the settings drawer", () => {
     const { container } = render(() => <Shell />);
-    openRailMenu();
     fireEvent.click(screen.getByLabelText(/open settings/i));
     const settings = container.querySelector(".settings-drawer");
     expect(settings?.classList.contains("open")).toBe(true);
@@ -750,12 +756,11 @@ describe("Shell — three-pane integration", () => {
       selectionState.setSelSig({ networkSlug: "$home", channelName: "$home", kind: "home" });
       const { container } = render(() => <Shell />);
       // #71 INC-2 — desktop has no ShellChrome row anymore; the permanent rail
-      // is present on every desktop window, home included. #500 — its
-      // always-present affordance is the launcher, so anchor the wait on it.
+      // is present on every desktop window, home included. #1040 — on home that
+      // rail's always-present affordance is the EXPANDED action column (the
+      // launcher is #500's door for the other kinds), so anchor the wait on it.
       await waitFor(() => {
-        expect(
-          container.querySelector(".shell-members [data-testid='rail-actions-launcher']"),
-        ).toBeInTheDocument();
+        expect(container.querySelector(".shell-members .rail-actions-menu")).toBeInTheDocument();
       });
       expect(container.querySelectorAll(".shell-chrome-hamburger").length).toBe(0);
       expect(container.querySelectorAll(".topic-bar-hamburger").length).toBe(0);
