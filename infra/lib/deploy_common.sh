@@ -39,6 +39,8 @@
 #   substrate_build           deps/compile/release, or image build
 #   substrate_reconcile       install out-of-repo artifacts (both paths; opt-in
 #                             via DEPLOY_FEATURE_RECONCILE; MUST be idempotent)
+#   substrate_seed            materialise versioned built-in data into the DB
+#                             (both paths; MUST be idempotent; non-fatal)
 #   substrate_reload          echoes /admin/reload HTTP body; nonzero=POST failed
 #   substrate_cic             cic bundle build (cold only)
 #   substrate_migrate         ecto migrate (cold only)
@@ -56,6 +58,19 @@
 #   DEPLOY_FEATURE_MARKER         read/write runtime/last-deployed-sha
 #   DEPLOY_FEATURE_PREV_SHA_CARRY carry DEPLOY_PREV_SHA across re-exec
 #   DEPLOY_FEATURE_RECONCILE      run substrate_reconcile on BOTH paths
+#
+# ── The one toggle that defaults ON ─────────────────────────────────
+#   DEPLOY_FEATURE_SEED           run substrate_seed on BOTH paths (default 1)
+#
+# Every toggle above is a CAPABILITY — a substrate may legitimately have
+# no marker, no --defer-restart, no re-exec guard — so they default OFF
+# and the consumer opts in. Seeding is not a capability, it is a
+# CORRECTNESS property every substrate needs (#440), so it defaults ON
+# and a substrate would have to opt OUT. Defaulting it off would rebuild
+# the very defect #440 reports: a substrate that silently forgets to
+# seed. There is deliberately NO fallback substrate_seed — a consumer
+# that fails to define the hook must break loudly in CI, not quietly
+# seed nothing.
 #
 # ── Mode state exported to hooks ────────────────────────────────────
 #   MODE      auto|hot|cold (resolved before any build/restart hook runs)
@@ -83,6 +98,11 @@ _deploy_cold_sleep()   { printf '%s' "${COLD_HEALTHCHECK_SLEEP:-$HEALTHCHECK_SLE
 : "${DEPLOY_FEATURE_MARKER:=0}"
 : "${DEPLOY_FEATURE_PREV_SHA_CARRY:=0}"
 : "${DEPLOY_FEATURE_RECONCILE:=0}"
+: "${DEPLOY_FEATURE_SEED:=1}"
+
+# Set by _deploy_seed when the seed hook failed, read by the post-banner
+# re-assert. Not a toggle — deploy state.
+DEPLOY_SEED_FAILED=0
 
 # Path (repo-relative) of the consumer deploy script, for the re-exec
 # guard's diff match and the `exec` target. The lib appends its OWN path
@@ -260,6 +280,7 @@ _deploy_healthcheck_loop() {
 			# container recreated vs daemon respawned) — the consumer owns
 			# it; $1 = retries taken.
 			substrate_done_banner "$i"
+			_deploy_seed_reassert
 			exit 0
 		fi
 		i=$((i + 1))
@@ -269,8 +290,55 @@ _deploy_healthcheck_loop() {
 	exit 1
 }
 
+# ---- seed (versioned built-in data) ---------------------------------
+# What the seed set IS, and why this runs every deploy (#440): the
+# built-in gallery is versioned CODE materialised into the DB, but it was
+# materialised ONCE, at install. Anything added to it later reached new
+# installs only — "deploy.sh is missing a line" is the symptom, the
+# once-only seeding is the defect. Adding a built-in touches a plain lib
+# module, which Preflight classifies HOT, so seeding on the cold path
+# alone would miss the very path that ships themes. Same reasoning as
+# substrate_reconcile (#646), one layer down: classification sees changed
+# PATHS, and no path tells it the seed set grew. The hook must therefore
+# be idempotent — it runs on every deploy, forever.
+#
+# The label is shared (one seed set, substrate-independent); only the
+# retry command differs per substrate, so only that is a consumer knob.
+: "${DEPLOY_SEED_LABEL:=the built-in theme gallery}"
+: "${DEPLOY_SEED_RETRY_HINT:=the grappa.seed_themes task on this substrate}"
+
+# NON-FATAL, deliberately. The gallery is cosmetic; on the cold path this
+# runs after the migration and before the restart, so aborting here would
+# leave a migrated DB, the old daemon still up, and no restart — trading a
+# stale gallery for a half-applied deploy. On an always-on bouncer that is
+# the worse of the two by a wide margin. It is not a silent swallow
+# either: the completed-deploy marker is written only after a 200, the
+# upsert converges, so the NEXT deploy re-runs the seed and heals it.
+_deploy_seed() {
+	[ "$DEPLOY_FEATURE_SEED" = 1 ] || return 0
+	deploy_log "seeding ${DEPLOY_SEED_LABEL} (idempotent)"
+	if ! substrate_seed; then
+		DEPLOY_SEED_FAILED=1
+		deploy_error "seeding failed — ${DEPLOY_SEED_LABEL} was NOT materialised. The deploy continues (the box is healthy; the gallery may be missing or stale)."
+		printf '[deploy]   retry with: %s\n' "${DEPLOY_SEED_RETRY_HINT}" >&2
+	fi
+}
+
+# Re-assert after the ✓ banner. A warning 200 lines up a build log is a
+# warning nobody reads, and the last thing on the operator's screen must
+# not be an unqualified success line when something did not get applied.
+# Gated on the OUTCOME: a warning that fires every run means nothing.
+_deploy_seed_reassert() {
+	[ "$DEPLOY_SEED_FAILED" = 1 ] || return 0
+	deploy_error "reminder: ${DEPLOY_SEED_LABEL} was NOT seeded during this deploy — retry with: ${DEPLOY_SEED_RETRY_HINT}"
+}
+
 # ---- hot path -------------------------------------------------------
 _deploy_hot() {
+	# Before the reload, so the new code meets the new rows rather than
+	# the other way round — substrate_reconcile's ordering, same reason.
+	_deploy_seed
+
 	if response=$(substrate_reload); then
 		deploy_log "reload response: $response"
 		# HTTP 200 is NOT success — the endpoint reports per-module
@@ -301,6 +369,11 @@ _deploy_hot() {
 _deploy_cold() {
 	substrate_cic
 	substrate_migrate
+	# AFTER the migrator: a built-in whose payload needs a column added in
+	# the same deploy would crash a seed that ran ahead of the schema.
+	# BEFORE the restart: --defer-restart stops in substrate_restart, and a
+	# staged deploy must stage a seeded DB too.
+	_deploy_seed
 	# substrate_restart may `exit 0` on --defer-restart (staged, not
 	# started) — in which case the marker is deliberately NOT written.
 	substrate_restart

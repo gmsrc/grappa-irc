@@ -45,6 +45,18 @@ exit 0
 EOF
         chmod +x "$UPSTREAM/infra/freebsd/$stub"
     done
+    # jail_release.sh needs a smarter body than the generic recorder: it
+    # carries BOTH the migration and the #440 seed, and the seed must be
+    # independently failable to exercise the warn-and-continue branch.
+    cat > "$UPSTREAM/infra/freebsd/jail_release.sh" <<'EOF'
+#!/bin/sh
+printf 'jail_release.sh %s\n' "$*" >> "$ARGV_LOG"
+case "$*" in
+    *seed_themes*) exit "$SEED_RC" ;;
+esac
+exit 0
+EOF
+    chmod +x "$UPSTREAM/infra/freebsd/jail_release.sh"
     touch "$UPSTREAM/runtime/.gitkeep"
     echo base > "$UPSTREAM/lib/base.txt"
     git -C "$UPSTREAM" add -A
@@ -60,6 +72,9 @@ EOF
     echo "DUMMY=1" > "$ENV_FILE"
     export HEALTHCHECK_RETRIES=2 HEALTHCHECK_SLEEP=0
     export PREFLIGHT_RC=0
+    # #440: SEED_RC injects a failing seed. Default 0 so only the warn-path
+    # assertions below read the failure branch.
+    export SEED_RC=0
     # #541 outcome harness: the preflight oneshot compiles, so on a pull
     # that moved mix.exs/mix.lock it aborts on stale deps UNLESS deps.get
     # ran first. STRICT_PREFLIGHT_DEPS=1 makes the mix stub model that real
@@ -403,4 +418,102 @@ EOF
     [ "$status" -eq 0 ]                                        # deploy completed
     grep -q "cli(\[.*\"jail\"\])" "$ARGV_LOG"                  # preflight reached a verdict
     [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+# --- #440: versioned built-in data is seeded on EVERY deploy ------------------
+#
+# The seed set is versioned CODE materialised into the DB, seeded once at
+# install — so a built-in added later reached new installs only. Adding one
+# touches a plain lib module, which Preflight classifies HOT, so a cold-only
+# seed would miss the path that actually ships themes.
+
+@test "#440 hot: the built-in gallery is seeded, before the reload" {
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "jail_release.sh eval Grappa.Release.seed_themes()" "$ARGV_LOG"
+
+    seed_line=$(grep -n "seed_themes" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    reload_line=$(grep -n "curl .*-X POST.*reload" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    # One guard per line: bash exempts every element of an `A && B` list
+    # from errexit except the last.
+    [ -n "$seed_line" ]
+    [ -n "$reload_line" ]
+    [ "$seed_line" -lt "$reload_line" ]
+}
+
+@test "#440 cold: the seed runs AFTER the migration and BEFORE the stop" {
+    export PREFLIGHT_RC=3
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+
+    mig_line=$(grep -n "Grappa.Release.migrate()" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    seed_line=$(grep -n "seed_themes" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    stop_line=$(grep -n "service grappa stop" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    [ -n "$mig_line" ]
+    [ -n "$seed_line" ]
+    [ -n "$stop_line" ]
+    # Schema first: a built-in needing a column added in the same deploy
+    # would crash a seed that ran ahead of the migrator.
+    [ "$mig_line" -lt "$seed_line" ]
+    [ "$seed_line" -lt "$stop_line" ]
+}
+
+@test "#440: --defer-restart still stages a SEEDED database" {
+    # The staged path stops the BEAM and exits before start/healthcheck/
+    # marker. If the seed sat after the restart hook it would never run on
+    # a deferred deploy, and the one-bounce window would boot a stale
+    # gallery with nothing left to fix it.
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold --defer-restart
+    [ "$status" -eq 0 ]
+    grep -q "seed_themes" "$ARGV_LOG"
+
+    seed_line=$(grep -n "seed_themes" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    stop_line=$(grep -n "service grappa stop" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    [ -n "$seed_line" ]
+    [ -n "$stop_line" ]
+    [ "$seed_line" -lt "$stop_line" ]
+}
+
+@test "#440: a failing seed warns loudly, names the gallery, and does NOT fail the deploy" {
+    export SEED_RC=1
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy
+    # Cosmetic data must never abort a deploy — on the cold path an abort
+    # here leaves a migrated DB, the old daemon up, and no restart.
+    [ "$status" -eq 0 ]
+    grep -q "curl .*-X POST.*reload" "$ARGV_LOG"
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+
+    [[ "$output" == *"theme gallery"* ]]
+    [[ "$output" == *"seed_themes"* ]]
+}
+
+@test "#440: the seed warning is re-asserted AFTER the completion banner" {
+    export SEED_RC=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+
+    banner_line=$(grep -n "deploy complete" <<<"$output" | head -1 | cut -d: -f1)
+    warn_line=$(grep -n "theme gallery" <<<"$output" | tail -1 | cut -d: -f1)
+    [ -n "$banner_line" ]
+    [ -n "$warn_line" ]
+    [ "$warn_line" -gt "$banner_line" ]
+}
+
+@test "#440: a healthy deploy says nothing about a failed seed" {
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "seed_themes" "$ARGV_LOG"
+    refute grep -q "NOT materialised" <<<"$output"
 }

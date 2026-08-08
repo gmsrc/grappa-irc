@@ -654,6 +654,7 @@ cmd_update() {
 	DEPLOY_FEATURE_REEXEC=1
 	DEPLOY_FEATURE_MARKER=1
 	DEPLOY_FEATURE_PREV_SHA_CARRY=1
+	DEPLOY_SEED_RETRY_HINT="${COMPOSE[*]} --profile prod run --rm grappa mix grappa.seed_themes"
 	HOT_HEALTHCHECK_RETRIES="${HOT_HEALTHCHECK_RETRIES:-30}"
 	HOT_HEALTHCHECK_SLEEP="${HOT_HEALTHCHECK_SLEEP:-1}"
 	COLD_HEALTHCHECK_RETRIES="${COLD_HEALTHCHECK_RETRIES:-120}"
@@ -725,6 +726,14 @@ cmd_update() {
 		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa \
 			mix do local.hex --force, local.rebar --force, deps.get
 		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
+	}
+
+	substrate_seed() {
+		# Mirrors substrate_migrate's door. cmd_install already seeds the
+		# gallery (#475); this is the same call on the UPGRADE path, so a
+		# built-in added after the box was installed actually reaches it.
+		say "Seeding the built-in theme gallery"
+		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa mix grappa.seed_themes
 	}
 
 	substrate_restart() {
@@ -932,6 +941,16 @@ release_migrate() {
 		"$GRAPPA_IMAGE" eval 'Grappa.Release.migrate()'
 }
 
+release_seed_themes() {
+	# Same door as release_migrate — the image ships no Mix, so the seed
+	# goes through the release entry point. The entrypoint deliberately
+	# does NOT migrate on an `eval` verb (#867), so this is exactly one
+	# BEAM doing exactly the seed.
+	say "Seeding the built-in theme gallery (release image)"
+	docker run --rm --env-file "$ENV_FILE" -v "${GRAPPA_DATA_VOLUME}:/data" \
+		"$GRAPPA_IMAGE" eval 'Grappa.Release.seed_themes()'
+}
+
 release_healthcheck_wait() {
 	say "Waiting for /healthz"
 	local deadline=$((SECONDS + 300))
@@ -962,6 +981,12 @@ cmd_install_release() {
 	docker volume create "$GRAPPA_DATA_VOLUME" >&2 || true
 
 	release_migrate
+	# Same non-fatal posture as cmd_install's source-flavor seed: an empty
+	# gallery is cosmetic and must not fail an otherwise healthy install.
+	if ! release_seed_themes; then
+		warn "theme seeding failed — the box works, but the gallery starts empty."
+		warn "retry with: docker run --rm --env-file $ENV_FILE -v ${GRAPPA_DATA_VOLUME}:/data $GRAPPA_IMAGE eval 'Grappa.Release.seed_themes()'"
+	fi
 	release_start_container
 	release_healthcheck_wait
 
@@ -997,6 +1022,7 @@ cmd_update_release() {
 	DEPLOY_FEATURE_REEXEC=0
 	DEPLOY_FEATURE_MARKER=0
 	DEPLOY_FEATURE_PREV_SHA_CARRY=0
+	DEPLOY_SEED_RETRY_HINT="docker run --rm --env-file $ENV_FILE -v ${GRAPPA_DATA_VOLUME}:/data $GRAPPA_IMAGE eval 'Grappa.Release.seed_themes()'"
 	COLD_HEALTHCHECK_RETRIES="${COLD_HEALTHCHECK_RETRIES:-120}"
 	COLD_HEALTHCHECK_SLEEP="${COLD_HEALTHCHECK_SLEEP:-2}"
 
@@ -1018,6 +1044,7 @@ cmd_update_release() {
 	substrate_reload()        { :; }          # never reached (COLD-only)
 	substrate_cic()           { :; }          # the cicchetto SPA is baked into the image
 	substrate_migrate()       { release_migrate; }
+	substrate_seed()          { release_seed_themes; }
 	substrate_restart() {
 		if release_container_exists; then
 			say "Removing the running container ($GRAPPA_CONTAINER)"

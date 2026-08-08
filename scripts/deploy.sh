@@ -51,6 +51,7 @@ DEPLOY_FEATURE_NOTHING_TO_DO=0
 DEPLOY_FEATURE_REEXEC=1
 DEPLOY_FEATURE_MARKER=1
 DEPLOY_FEATURE_PREV_SHA_CARRY=1
+DEPLOY_SEED_RETRY_HINT="scripts/mix.sh grappa.seed_themes"
 # Docker's hot healthcheck loop is fast/short; the cold loop is long
 # because a bind-mounted first boot recompiles `mix phx.server` (2-3 min).
 HOT_HEALTHCHECK_RETRIES="${HOT_HEALTHCHECK_RETRIES:-30}"
@@ -171,6 +172,15 @@ substrate_migrate() {
 	# an unapplied migration (S3 crash-loop fix).
 	echo "Running migrations..."
 	docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
+}
+
+substrate_seed() {
+	# Mirrors substrate_migrate's door — a one-shot `run` against the same
+	# image + bind-mounted DB. The task suppresses Bootstrap and the
+	# Endpoint, so it neither dials upstream IRC nor fights the running
+	# container for port 4000.
+	echo "Seeding the built-in theme gallery..."
+	docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa mix grappa.seed_themes
 }
 
 substrate_restart() {

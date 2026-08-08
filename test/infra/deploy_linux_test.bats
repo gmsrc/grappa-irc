@@ -76,6 +76,11 @@ EOF
     export HEALTHCHECK_RETRIES=2 HEALTHCHECK_SLEEP=0
     export PREFLIGHT_RC=0
     export RELOAD_FAILS=0
+    # #440: SEED_RC injects a failing seed task (a busy DB, a bad payload —
+    # all the same shape from out here). Default 0 so every other test's
+    # seed succeeds and the warn-path assertions below are the only ones
+    # reading the failure branch.
+    export SEED_RC=0
     # #541 outcome harness: the preflight oneshot compiles, so on a pull
     # that moved mix.exs/mix.lock it aborts on stale deps UNLESS deps.get
     # ran first. STRICT_PREFLIGHT_DEPS=1 makes the mix stub model that real
@@ -111,6 +116,7 @@ EOF
 printf 'mix %s\n' "$*" >> "$ARGV_LOG"
 case "$*" in
     "deps.get"*) : > "$DEPS_MARKER" ;;
+    "grappa.seed_themes"*) exit "$SEED_RC" ;;
     "run --no-start"*)
         if [ "${STRICT_PREFLIGHT_DEPS:-0}" = 1 ] && [ ! -f "$DEPS_MARKER" ]; then
             echo "** (Mix) Can't continue due to errors on stale dependencies" >&2
@@ -358,4 +364,94 @@ run_deploy() {
     [ "$status" -eq 0 ]                                        # deploy completed
     grep -q "cli(\[.*\"linux\"\])" "$ARGV_LOG"                 # preflight reached a verdict
     [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+}
+
+# --- #440: versioned built-in data is seeded on EVERY deploy ------------------
+#
+# The seed set is versioned CODE materialised into the DB, but seeding only
+# ever happened at install — so a built-in added later reached new installs
+# only. Adding one touches a plain lib module, which Preflight classifies
+# HOT, so a cold-only seed would miss the common case: both paths, or the
+# bug is still open on the path that actually ships themes.
+
+@test "#440 hot: the built-in gallery is seeded, before the reload" {
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "mix grappa.seed_themes" "$ARGV_LOG"
+
+    seed_line=$(grep -n "mix grappa.seed_themes" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    reload_line=$(grep -n "curl .*-X POST.*reload" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    # One guard per line: bash exempts every element of an `A && B` list
+    # from errexit except the last, so a chained guard is the same
+    # can't-fail assertion the `refute` helper exists to kill.
+    [ -n "$seed_line" ]
+    [ -n "$reload_line" ]
+    # New rows before new code, same discipline as substrate_reconcile.
+    [ "$seed_line" -lt "$reload_line" ]
+}
+
+@test "#440 cold: the seed runs AFTER the migration and BEFORE the restart" {
+    export PREFLIGHT_RC=3
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+
+    mig_line=$(grep -n "mix ecto.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    seed_line=$(grep -n "mix grappa.seed_themes" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    stop_line=$(grep -n "systemctl stop grappa" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    [ -n "$mig_line" ]
+    [ -n "$seed_line" ]
+    [ -n "$stop_line" ]
+    # Schema first: a built-in whose payload needs a column added in the
+    # same deploy would crash a seed that ran before the migrator.
+    [ "$mig_line" -lt "$seed_line" ]
+    # Before the restart, so --defer-restart still stages a seeded DB.
+    [ "$seed_line" -lt "$stop_line" ]
+}
+
+@test "#440: a failing seed warns loudly, names the gallery, and does NOT fail the deploy" {
+    export SEED_RC=1
+    new="$(commit_upstream lib/base.txt)"
+
+    run_deploy
+    # Cosmetic data must never abort a deploy — on the cold path an abort
+    # here leaves a migrated DB, the old daemon up, and no restart.
+    [ "$status" -eq 0 ]
+    grep -q "curl .*-X POST.*reload" "$ARGV_LOG"
+    [ "$(cat "$REPO_ROOT/runtime/last-deployed-sha")" = "$new" ]
+
+    # Loud, and it says WHAT was not seeded — not a bare "seed failed".
+    [[ "$output" == *"theme gallery"* ]]
+    # ...and how to fix it by hand.
+    [[ "$output" == *"grappa.seed_themes"* ]]
+}
+
+@test "#440: the seed warning is re-asserted AFTER the completion banner" {
+    # A warn 200 lines up a build log is a warn nobody reads. The last
+    # thing on the operator's screen must not be an unqualified ✓.
+    export SEED_RC=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+
+    banner_line=$(grep -n "deploy complete" <<<"$output" | head -1 | cut -d: -f1)
+    warn_line=$(grep -n "theme gallery" <<<"$output" | tail -1 | cut -d: -f1)
+    [ -n "$banner_line" ]
+    [ -n "$warn_line" ]
+    [ "$warn_line" -gt "$banner_line" ]
+}
+
+@test "#440: a healthy deploy says nothing about a failed seed" {
+    # The re-assert must be gated on the OUTCOME, not printed every run —
+    # a warning that always fires is a warning that means nothing.
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -eq 0 ]
+    grep -q "mix grappa.seed_themes" "$ARGV_LOG"
+    refute grep -q "NOT materialised" <<<"$output"
 }

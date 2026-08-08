@@ -48,6 +48,7 @@ DEPLOY_FEATURE_NOTHING_TO_DO=1
 DEPLOY_FEATURE_REEXEC=1
 DEPLOY_FEATURE_MARKER=1
 DEPLOY_FEATURE_PREV_SHA_CARRY=1
+DEPLOY_SEED_RETRY_HINT="sudo -u ${GRAPPA_USER} -H bash -c \"cd ${REPO_ROOT} && set -a; . ${ENV_FILE}; set +a; MIX_ENV=prod mix grappa.seed_themes\""
 
 run_as_grappa() {
 	sudo -u "${GRAPPA_USER}" -H bash -c "
@@ -150,6 +151,21 @@ substrate_migrate() {
 		set -a; . '${ENV_FILE}'; set +a
 		export MIX_ENV=prod
 		mix ecto.migrate
+	"
+}
+
+substrate_seed() {
+	# Mirrors substrate_migrate above, and for the same substrate reason:
+	# the packaged release's eval boot path crashes the BEAM here, so this
+	# substrate drives the mix task rather than a Grappa.Release entry
+	# point. The task suppresses Bootstrap AND the Endpoint
+	# (Mix.Tasks.Grappa.Boot), so it neither opens upstream IRC connections
+	# nor fights the running daemon for port 4000 — it is safe against a
+	# live host, which is the whole point of seeding on a hot deploy.
+	run_as_grappa "
+		set -a; . '${ENV_FILE}'; set +a
+		export MIX_ENV=prod
+		mix grappa.seed_themes
 	"
 }
 

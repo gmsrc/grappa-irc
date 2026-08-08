@@ -56,6 +56,7 @@ DEPLOY_FEATURE_REEXEC=1
 DEPLOY_FEATURE_MARKER=1
 DEPLOY_FEATURE_PREV_SHA_CARRY=1
 DEPLOY_FEATURE_RECONCILE=1
+DEPLOY_SEED_RETRY_HINT="sudo bastille cmd grappa ${REPO_ROOT}/infra/freebsd/jail_release.sh eval 'Grappa.Release.seed_themes()'"
 
 # All build steps run as the grappa user. `su -l grappa -c` strips the
 # environment (login shell), so MIX_OS_CONCURRENCY_LOCK/PATH/MIX_ENV must
@@ -174,6 +175,20 @@ substrate_migrate() {
 	# entry point; deploy.sh does NOT re-implement env sourcing inline.
 	deploy_log "Grappa.Release.migrate()"
 	"${REPO_ROOT}/infra/freebsd/jail_release.sh" eval 'Grappa.Release.migrate()'
+}
+
+substrate_seed() {
+	# Mirrors substrate_migrate: same jail_release.sh door, same reason —
+	# ONE source-env-then-exec flow, and deploy.sh does not re-implement
+	# env sourcing inline. The release has no Mix, so this is a
+	# Grappa.Release entry point rather than the mix task the systemd
+	# substrate drives.
+	#
+	# A second BEAM against the live DB is already this substrate's proven
+	# shape: substrate_migrate above runs the same way while the daemon is
+	# still up, and a seed is a lighter write than a migration.
+	deploy_log "Grappa.Release.seed_themes()"
+	"${REPO_ROOT}/infra/freebsd/jail_release.sh" eval 'Grappa.Release.seed_themes()'
 }
 
 substrate_restart() {
