@@ -72,11 +72,13 @@ export const BUNDLE_REFRESH_NOTICE_KEY = "cicchetto.bundleRefreshAt";
  * exists to avoid.
  *
  * Marking later — a `beforeReload` hook in `performRefresh`'s `finally` — would
- * measure the navigation alone and allow a much tighter window. Rejected for
- * now: `performRefresh` is shared with the manual banner click, which must not
- * mark, so the hook would put a parameter on a shared verb for one caller's
- * benefit. Five minutes is the cheaper answer while the HASH guard, not this
- * one, is what proves something actually changed.
+ * measure the navigation alone and allow a much tighter window. Still rejected,
+ * though #1063 removed the original reason: the manual banner click DOES mark
+ * now, so "one caller's benefit" no longer applies. What is left is that the
+ * hook would move the write inside the shared SW verb for a tighter fence that
+ * buys nothing — the HASH guard, not this one, is what proves something
+ * actually changed. `requestBundleRefresh` marks around `performRefresh`
+ * instead, which keeps the verb ignorant of the notice entirely.
  */
 export const BUNDLE_REFRESH_NOTICE_WINDOW_MS = 300_000;
 
