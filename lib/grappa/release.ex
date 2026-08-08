@@ -94,7 +94,7 @@ defmodule Grappa.Release do
     load_app()
     start_vault!()
 
-    case Ecto.Migrator.with_repo(Grappa.Repo, fn _repo -> Themes.seed_builtins() end) do
+    case Ecto.Migrator.with_repo(Grappa.Repo, fn _ -> Themes.seed_builtins() end) do
       {:ok, count, _} -> IO.puts("seeded #{count} curated built-in themes")
       {:error, reason} -> raise "theme seeding failed: #{inspect(reason)}"
     end
@@ -124,8 +124,8 @@ defmodule Grappa.Release do
   # load_app/0's `:already_loaded`.
   defp start_vault! do
     case Grappa.Vault.start_link() do
-      {:ok, _pid} -> :ok
-      {:error, {:already_started, _pid}} -> :ok
+      {:ok, _} -> :ok
+      {:error, {:already_started, _}} -> :ok
     end
   end
 

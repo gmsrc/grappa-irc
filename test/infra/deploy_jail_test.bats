@@ -427,7 +427,7 @@ EOF
 # touches a plain lib module, which Preflight classifies HOT, so a cold-only
 # seed would miss the path that actually ships themes.
 
-@test "#440 hot: the built-in gallery is seeded, before the reload" {
+@test "#440 hot: the built-in gallery is seeded, AFTER the reload" {
     commit_upstream lib/base.txt > /dev/null
 
     run_deploy
@@ -440,7 +440,10 @@ EOF
     # from errexit except the last.
     [ -n "$seed_line" ]
     [ -n "$reload_line" ]
-    [ "$seed_line" -lt "$reload_line" ]
+    # Schema before data, exactly as on the cold path: since #41
+    # /admin/reload applies pending expand migrations on the live pool
+    # and only then loads modules, so the hot path is not migration-free.
+    [ "$seed_line" -gt "$reload_line" ]
 }
 
 @test "#440 cold: the seed runs AFTER the migration and BEFORE the stop" {

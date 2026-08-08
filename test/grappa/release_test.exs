@@ -31,7 +31,7 @@ defmodule Grappa.ReleaseTest do
       rel
       |> File.read!()
       |> then(&Regex.scan(@call_re, &1))
-      |> Enum.map(fn [_full, fun] -> {rel, String.to_atom(fun)} end)
+      |> Enum.map(fn [_, fun] -> {rel, String.to_atom(fun)} end)
     end)
     |> Enum.uniq()
   end

@@ -335,10 +335,6 @@ _deploy_seed_reassert() {
 
 # ---- hot path -------------------------------------------------------
 _deploy_hot() {
-	# Before the reload, so the new code meets the new rows rather than
-	# the other way round — substrate_reconcile's ordering, same reason.
-	_deploy_seed
-
 	if response=$(substrate_reload); then
 		deploy_log "reload response: $response"
 		# HTTP 200 is NOT success — the endpoint reports per-module
@@ -362,6 +358,20 @@ _deploy_hot() {
 		printf '[deploy]   (HTTP 409 = a pending migration is CONTRACT → run a cold deploy)\n' >&2
 		exit 1
 	fi
+
+	# AFTER the reload, for the same schema-before-data reason the cold
+	# path seeds after substrate_migrate: since #41 the hot path is not
+	# migration-free — POST /admin/reload applies pending expand
+	# migrations on the live pool and only THEN loads modules
+	# (Grappa.HotReload.migrate_and_reload/0). A seed placed before the
+	# reload would therefore run against the PRE-migration schema, which
+	# is the very ordering this file rejects on the cold path.
+	#
+	# It also lands after the reload-honesty check on purpose: a refused
+	# or partly-failed reload exits above, and seeding into a deploy that
+	# did not take is work at best and confusing at worst.
+	_deploy_seed
+
 	_deploy_healthcheck_loop "$(_deploy_hot_retries)" "$(_deploy_hot_sleep)"
 }
 

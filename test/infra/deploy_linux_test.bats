@@ -374,7 +374,7 @@ run_deploy() {
 # HOT, so a cold-only seed would miss the common case: both paths, or the
 # bug is still open on the path that actually ships themes.
 
-@test "#440 hot: the built-in gallery is seeded, before the reload" {
+@test "#440 hot: the built-in gallery is seeded, AFTER the reload" {
     commit_upstream lib/base.txt > /dev/null
 
     run_deploy
@@ -388,8 +388,24 @@ run_deploy() {
     # can't-fail assertion the `refute` helper exists to kill.
     [ -n "$seed_line" ]
     [ -n "$reload_line" ]
-    # New rows before new code, same discipline as substrate_reconcile.
-    [ "$seed_line" -lt "$reload_line" ]
+    # Schema before data, exactly as on the cold path: since #41 the hot
+    # path is NOT migration-free — /admin/reload applies pending expand
+    # migrations on the live pool and only then loads modules. Seeding
+    # ahead of it would hit the pre-migration schema.
+    [ "$seed_line" -gt "$reload_line" ]
+}
+
+@test "#440 hot: a REFUSED reload seeds nothing" {
+    # A reload reporting per-module failures aborts the deploy. Seeding
+    # into a deploy that did not take is work at best, misleading at
+    # worst — and on a contract-migration refusal the schema the seed
+    # would need never arrived.
+    export RELOAD_FAILS=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -ne 0 ]
+    refute grep -q "mix grappa.seed_themes" "$ARGV_LOG"
 }
 
 @test "#440 cold: the seed runs AFTER the migration and BEFORE the restart" {
