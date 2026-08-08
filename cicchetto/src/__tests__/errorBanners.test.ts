@@ -146,16 +146,52 @@ describe("errorBanners registry", () => {
   });
 
   it("stacks all active sources simultaneously (N sources → N entries)", () => {
+    // #1061 — this used to stack `ws` ON TOP OF `connectivity`, which is no
+    // longer a reachable state and was never a correct one (a WS close code is
+    // a SYMPTOM of being offline, not a second fault). The stacking property
+    // is what this test is for, so it now uses four sources that genuinely
+    // co-occur: the device is online and the WS is failing on its own.
     tripWs(1006, "");
+    recordSwRegError({ name: "SecurityError", message: "denied" });
+    mockShouldShowRefresh.mockReturnValue(true);
+    mockShouldShowPushOptin.mockReturnValue(true);
+    const sources = activeBanners().map((e) => e.source);
+    expect(sources).toContain("ws");
+    expect(sources).toContain("sw-registration");
+    expect(sources).toContain("bundle-refresh");
+    expect(sources).toContain("push-optin");
+    expect(activeBanners()).toHaveLength(4);
+  });
+
+  it("stacks the offline entry with the non-WS sources (N sources → N entries)", () => {
+    // The offline twin of the case above — suppression is scoped to the `ws`
+    // entry alone and must not have collapsed the stack in general.
     __setConnectivityForTests(false);
     recordSwRegError({ name: "SecurityError", message: "denied" });
     mockShouldShowRefresh.mockReturnValue(true);
     const sources = activeBanners().map((e) => e.source);
-    expect(sources).toContain("ws");
+    expect(sources).toEqual(["connectivity", "sw-registration", "bundle-refresh"]);
+  });
+
+  // #1061 defect 3 — the two banners the issue reports stacked on screen.
+  it("suppresses the 'ws' entry while the device is offline", () => {
+    tripWs(1006, "");
+    __setConnectivityForTests(false);
+    const sources = activeBanners().map((e) => e.source);
     expect(sources).toContain("connectivity");
-    expect(sources).toContain("sw-registration");
-    expect(sources).toContain("bundle-refresh");
-    expect(activeBanners()).toHaveLength(4);
+    expect(sources).not.toContain("ws");
+  });
+
+  it("restores the 'ws' entry when the device comes back online and the WS is still failing", () => {
+    // Suppression, not deletion: a genuine server-side failure that outlives
+    // the offline episode must still reach the operator. Nothing about the
+    // socket changes here — only connectivity does.
+    tripWs(1006, "");
+    __setConnectivityForTests(false);
+    expect(activeBanners().some((e) => e.source === "ws")).toBe(false);
+
+    __setConnectivityForTests(true);
+    expect(activeBanners().some((e) => e.source === "ws")).toBe(true);
   });
 
   it("orders sw-registration (warn) after the error sources and before the info prompt", () => {
@@ -247,13 +283,16 @@ describe("errorBanners dismiss", () => {
   });
 
   it("dismissBanner hides only the dismissed source, leaving the rest visible", () => {
+    // #1061 — the second source is sw-registration, not connectivity: `ws` and
+    // `connectivity` no longer co-occur, so pairing them here would assert a
+    // state the derivation cannot produce.
     tripWs(1006, "");
-    __setConnectivityForTests(false);
+    recordSwRegError({ name: "SecurityError", message: "denied" });
     expect(activeBanners()).toHaveLength(2);
 
     dismissBanner("ws");
     const visible = visibleBanners();
-    expect(visible.map((e) => e.source)).toEqual(["connectivity"]);
+    expect(visible.map((e) => e.source)).toEqual(["sw-registration"]);
     // activeBanners (the raw derivation) is unchanged — dismiss is a render
     // filter, not a mutation of the source signals.
     expect(activeBanners()).toHaveLength(2);

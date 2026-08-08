@@ -3,8 +3,14 @@ import { createEffect, on } from "solid-js";
 import { channelPushError } from "./api";
 import { token } from "./auth";
 import { canonicalChannel } from "./channelKey";
+import { isOffline } from "./connectivity";
 import { moduleRoot } from "./moduleRoot";
-import { recordSocketClose, recordSocketError, recordSocketOpen } from "./socketHealth";
+import {
+  recordConnectAttempt,
+  recordSocketClose,
+  recordSocketError,
+  recordSocketOpen,
+} from "./socketHealth";
 
 // Phoenix Channels singleton. Mirrors `auth.ts`'s module-singleton shape:
 // every component that needs the live event-push surface joins via the
@@ -182,10 +188,18 @@ moduleRoot(() => {
         s.disconnect();
         _socket = null;
         _userChannel = null;
-        getSocket().connect();
+        // #1061 — through the gated door. A rotation that lands while the
+        // device is offline must not be the thing that starts the ladder; the
+        // rebuilt socket opens on the next `online` kick with the fresh bearer
+        // already captured at construction.
+        connectUnlessOffline(getSocket());
         return;
       }
-      if (!s.isConnected()) s.connect();
+      // #1061 — the COLD-START arm, and the second half of defect 1: a boot
+      // that begins offline never sees an `offline` event (it already fired,
+      // or never fired at all), so `haltForOffline` cannot save it. Only the
+      // door's own check can.
+      if (!s.isConnected()) connectUnlessOffline(s);
     }),
   );
 });
@@ -223,13 +237,42 @@ export interface ReconnectableSocket {
   disconnect(callback?: () => void, code?: number, reason?: string): void;
 }
 
+// #1061 — THE ONE DOOR to phoenix's `connect()`. Every production open goes
+// through here; nothing else in this module may call `s.connect()`.
+//
+// `navigator.onLine === false` is the one direction the browser guarantees:
+// false means there is demonstrably no network (true means only "maybe"). So
+// suppressing on false can never suppress a connect that would have worked,
+// while NOT suppressing it starts phoenix's whole backoff ladder
+// ([10,50,100,150,200,250,500,1000,2000] then 5s steady) against a network we
+// have been told is dead.
+//
+// WHY THE GUARD LIVES INSIDE THE DOOR AND NOT AT THE CALL SITES: that is the
+// entire #1061 defect 1. `haltForOffline` stops the ladder on `offline`, but
+// the `offline` event fires ONCE — so a single caller that forgets the check
+// re-arms the ladder permanently, with no second event left to halt it. A
+// guard three callers must remember is a guard that will be forgotten; a door
+// that cannot be walked around is not.
+export function connectUnlessOffline(s: ReconnectableSocket | null): void {
+  if (s === null) return;
+  if (isOffline()) return;
+  recordConnectAttempt();
+  s.connect();
+}
+
 export function kickReconnect(s: ReconnectableSocket | null): void {
   if (s === null) return;
+  // #1061 — bail BEFORE the disconnect, not just before the connect. On a
+  // browser that still reports a live socket while `onLine` is false, tearing
+  // it down would trade a possibly-working connection for a suppressed
+  // reconnect: strictly worse than doing nothing, which is what an offline
+  // device has asked us to do.
+  if (isOffline()) return;
   if (s.isConnected()) return; // already up — don't tear a healthy socket
   // Force an immediate reconnect: disconnect() cancels any pending native
   // backoff timer and tears the half-open conn, so connect() opens NOW.
   s.disconnect();
-  s.connect();
+  connectUnlessOffline(s);
 }
 
 export function haltForOffline(s: ReconnectableSocket | null): void {
@@ -241,6 +284,15 @@ export function haltForOffline(s: ReconnectableSocket | null): void {
 }
 
 if (typeof window !== "undefined") {
+  // #1061 — LISTENER ORDER IS LOAD-BEARING, and it is guaranteed rather than
+  // hoped for. `kickReconnect` now reads `isOffline()`, so on the `online`
+  // event connectivity's own listener MUST have flipped the signal before this
+  // one runs, or the kick would suppress itself on the very event that means
+  // "you may dial again". ESM evaluates a module's dependencies before its
+  // body, and this module imports `./connectivity` — so connectivity's
+  // listener is always registered first, and same-target listeners fire in
+  // registration order. Do not move the offline predicate to a lazily-created
+  // module, and do not register these listeners from an importer.
   window.addEventListener("online", () => kickReconnect(_socket));
   window.addEventListener("offline", () => haltForOffline(_socket));
   // #254 — iOS PWA wake reconnect kick. On background→foreground iOS can
@@ -251,6 +303,17 @@ if (typeof window !== "undefined") {
   // message sent right after wake has a live subscription for its echo — the
   // echo stays the sole render path (no optimistic local render). Twin of the
   // `online` handler; `kickReconnect` no-ops on an already-healthy socket.
+  //
+  // #1061 defect 2 — this is a SECOND visibilitychange handler: phoenix 1.8.9
+  // registers its own (phoenix.mjs:1113) which, on visible, runs
+  // `if (!isConnected() && !closeWasClean) teardown(() => connect())`. The
+  // difference that matters is the `closeWasClean` precondition. phoenix's
+  // `disconnect()` SETS `closeWasClean = true` (phoenix.mjs:1223), so after
+  // `haltForOffline()` phoenix's own handler correctly declines to reconnect —
+  // ours, being unconditional, was the one that re-armed the ladder. The
+  // `isOffline()` guard now inside `kickReconnect` closes that; whether the
+  // duplicate handler should exist AT ALL on 1.8.9 is a design call recorded
+  // on #1061, deliberately not taken here.
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") kickReconnect(_socket);
@@ -887,6 +950,11 @@ if (typeof window !== "undefined") {
   };
   // Resume the held socket — phoenix reconnects and auto-rejoins every
   // channel, driving the reconnect-backfill recovery path.
+  //
+  // #1061 — deliberately NOT routed through `connectUnlessOffline`. This is an
+  // explicit test verb ("resume now"), not a production open, and a spec that
+  // stubs `navigator.onLine` to drive some other scenario must still be able
+  // to bring the socket back. Production has no path here.
   window.__cic_resumeSocketForTests = async () => {
     const s = _socket;
     if (!s) return;

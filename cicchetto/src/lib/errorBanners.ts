@@ -158,7 +158,21 @@ export function activeBanners(): BannerEntry[] {
   // WS health — persistent handshake failures (server refused / dropped the
   // upgrade) surfaced with the real close code + reason. Auto-clears on a
   // clean reconnect (errorCount resets to 0 → below threshold).
-  if (shouldShowBanner()) {
+  //
+  // #1061 — SUPPRESSED while the device is offline. The two entries were
+  // independent, so an offline device stacked "WebSocket connection failing —
+  // close code 1006 (15 consecutive errors)" on top of "You appear to be
+  // offline". That is not two faults, it is one fault reported twice, and the
+  // second report is the WRONG one: a raw close code and a frozen error tally
+  // (`errorCount` only resets in `recordSocketOpen`, so offline it can never
+  // come down) describe a symptom of the first. The connectivity entry states
+  // the actual cause, so it is the one that survives.
+  //
+  // This is a SUPPRESSION, not a merge: nothing is lost. When the device comes
+  // back online and the WS is still failing, the entry returns on its own —
+  // and `rearmDismissed` forgets any × taken on it in the meantime, so a
+  // genuine server-side failure can never be silenced by an offline episode.
+  if (!isOffline() && shouldShowBanner()) {
     entries.push({
       source: "ws",
       severity: "error",

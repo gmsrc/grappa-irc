@@ -62,6 +62,44 @@ beforeEach(() => {
   h.mockPush.receive.mockReturnValue(h.mockPush);
 });
 
+// #1061 defect 1, cold-start half — a boot that BEGINS offline gets no
+// `offline` event (it already fired, or never fired at all), so
+// `haltForOffline` cannot save it and the guard has to live on the connect
+// path itself. `vi.resetModules()` in beforeEach re-evaluates connectivity.ts
+// too, so stubbing `navigator.onLine` before the dynamic import is a faithful
+// cold start rather than a signal poked after the fact.
+describe("cold start while the device is offline (#1061)", () => {
+  function stubOnLine(value: boolean): void {
+    Object.defineProperty(window.navigator, "onLine", {
+      configurable: true,
+      get: () => value,
+    });
+  }
+
+  afterEach(() => {
+    stubOnLine(true);
+  });
+
+  it("does not connect on module load when the device is already offline", async () => {
+    stubOnLine(false);
+    localStorage.setItem("grappa-token", "tok-offline-boot");
+    await import("../lib/socket");
+    // The Socket is still CONSTRUCTED (the token effect builds it so the
+    // `online` handler has an instance to kick) — it is just never dialled.
+    expect(h.socketCtor).toHaveBeenCalledTimes(1);
+    expect(h.mockSocketInstance.connect).not.toHaveBeenCalled();
+  });
+
+  // The event-driven half of the scenario (foreground while offline, then
+  // `online`) does NOT live here: socket.ts registers its window/document
+  // listeners at module scope with anonymous handlers, so every
+  // `vi.resetModules()` import in this file leaves a live listener behind that
+  // no test can detach. One dispatch then fires N handlers from N module
+  // instances and the count means nothing. That scenario needs exactly one
+  // module instance per jsdom window, which is a whole FILE —
+  // `socketOffline.test.ts`.
+});
+
 describe("socket singleton", () => {
   it("connects on module load when token is non-null", async () => {
     localStorage.setItem("grappa-token", "tok-init");

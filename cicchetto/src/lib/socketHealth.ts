@@ -38,6 +38,19 @@ export interface SocketHealth {
   lastErrorAt: number | null;
   lastCloseCode: number | null;
   lastCloseReason: string;
+  // #1061 — MONOTONIC tallies, never reset by a healthy open. `errorCount` is
+  // an episode counter (reset in recordSocketOpen), which makes it useless for
+  // "did anything retry during the last N seconds": across a recovery it can
+  // go DOWN, so a delta over a window is not a count of attempts.
+  //
+  // `connectAttempts` counts OUR connect door (`connectUnlessOffline`) only.
+  // `errorsTotal` is the proxy for PHOENIX'S OWN ladder, which calls
+  // `this.connect()` internally and never passes our door — one onError per
+  // failed attempt is the only handle we have on it. The two answer different
+  // questions and neither substitutes for the other: attempts climbing means
+  // WE are kicking, errorsTotal climbing means the native ladder is spinning.
+  connectAttempts: number;
+  errorsTotal: number;
 }
 
 export const ERROR_THRESHOLD = 5;
@@ -48,6 +61,8 @@ const initial: SocketHealth = {
   lastErrorAt: null,
   lastCloseCode: null,
   lastCloseReason: "",
+  connectAttempts: 0,
+  errorsTotal: 0,
 };
 
 const [signal, setSignal] = createSignal<SocketHealth>(initial);
@@ -55,12 +70,15 @@ const [signal, setSignal] = createSignal<SocketHealth>(initial);
 export const socketHealth: Accessor<SocketHealth> = signal;
 
 export function recordSocketOpen(): void {
+  const prev = signal();
   setSignal({
     state: "open",
     errorCount: 0,
     lastErrorAt: null,
     lastCloseCode: null,
     lastCloseReason: "",
+    connectAttempts: prev.connectAttempts,
+    errorsTotal: prev.errorsTotal,
   });
 }
 
@@ -72,7 +90,18 @@ export function recordSocketError(): void {
     lastErrorAt: Date.now(),
     lastCloseCode: prev.lastCloseCode,
     lastCloseReason: prev.lastCloseReason,
+    connectAttempts: prev.connectAttempts,
+    errorsTotal: prev.errorsTotal + 1,
   });
+}
+
+// #1061 — one tick per call to `connectUnlessOffline` that actually opened the
+// socket. Deliberately NOT incremented on a suppressed (offline) call: the
+// number must read as "attempts made", so a flat tally across an offline
+// window IS the evidence that the halt held.
+export function recordConnectAttempt(): void {
+  const prev = signal();
+  setSignal({ ...prev, connectAttempts: prev.connectAttempts + 1 });
 }
 
 // Phoenix's onClose receives the underlying CloseEvent. Capture `code`
@@ -89,6 +118,8 @@ export function recordSocketClose(closeEvent: CloseEvent | undefined): void {
     lastErrorAt: prev.lastErrorAt,
     lastCloseCode: closeEvent?.code ?? prev.lastCloseCode,
     lastCloseReason: closeEvent?.reason ?? prev.lastCloseReason,
+    connectAttempts: prev.connectAttempts,
+    errorsTotal: prev.errorsTotal,
   });
 }
 

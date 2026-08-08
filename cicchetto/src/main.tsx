@@ -26,6 +26,7 @@ import { mountDisplayPrefsSync } from "./lib/displayPrefs";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { applyFontSizeFromStorage } from "./lib/fontSize";
 import { installGlobalPaste } from "./lib/globalPaste";
+import { HIDDEN_TICK_MS, installHiddenProbe } from "./lib/hiddenProbe";
 import { installKeyboardPreserve } from "./lib/keepKeyboard";
 import { applyIosClass, isStandalonePwa } from "./lib/platform";
 import { installPushResubscribe } from "./lib/pushResubscribe";
@@ -33,6 +34,7 @@ import { applyDeepLinkFromUrl, installPushTargetListener } from "./lib/pushTarge
 import { browserProbePerformance, installResumeProbe } from "./lib/resumeProbe";
 import { applySidebarWidthsFromStorage } from "./lib/sidebarWidths";
 import { notifyClientClosing, reportVisibility } from "./lib/socket";
+import { socketHealth } from "./lib/socketHealth";
 import { installStaleResumeReload } from "./lib/staleResume";
 import { recordSwRegError, recordSwRegistered } from "./lib/swRegistration";
 import { applyTheme } from "./lib/theme";
@@ -306,6 +308,25 @@ moduleRoot(() => {
     raf: (cb) => void requestAnimationFrame(cb),
     perf: browserProbePerformance(),
     win: window,
+  });
+  // #1061 — background-burn instrument. The mirror image of the resume probe:
+  // that one measures the transition INTO the foreground, this one measures
+  // the interval spent OUT of it, which is where the reported full-core drain
+  // happens and where neither rAF nor a Web Inspector session can reach
+  // without a Mac. Same gate, same one-line-per-episode discipline.
+  installHiddenProbe({
+    isVisible: isDocumentVisible,
+    enabled: isDiagEnabled,
+    push: diagPush,
+    now: () => performance.now(),
+    counters: () => {
+      const h = socketHealth();
+      return { connectAttempts: h.connectAttempts, errorsTotal: h.errorsTotal };
+    },
+    startTicker: (onTick) => {
+      const id = setInterval(onTick, HIDDEN_TICK_MS);
+      return () => clearInterval(id);
+    },
   });
 });
 

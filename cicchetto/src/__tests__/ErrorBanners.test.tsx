@@ -80,9 +80,13 @@ describe("ErrorBanners", () => {
   });
 
   it("renders one stacked slot per active source (distinct DOM nodes, no overlap)", () => {
+    // #1061 — the third source is push-optin, not connectivity: the `ws` entry
+    // is now suppressed while the device is offline, so a ws+connectivity pair
+    // is a state the registry cannot produce and asserting it would pin the
+    // bug this issue removed. The stacking property under test is unchanged.
     tripWs();
-    __setConnectivityForTests(false);
     mockShouldShowRefresh.mockReturnValue(true);
+    mockShouldShowPushOptin.mockReturnValue(true);
     const { container } = render(() => <ErrorBanners />);
 
     const region = container.querySelector(".error-banners");
@@ -94,8 +98,20 @@ describe("ErrorBanners", () => {
     for (const slot of slots) expect(slot.parentElement).toBe(region);
 
     expect(container.querySelector('.error-banner[data-source="ws"]')).not.toBeNull();
-    expect(container.querySelector('.error-banner[data-source="connectivity"]')).not.toBeNull();
+    expect(container.querySelector('.error-banner[data-source="push-optin"]')).not.toBeNull();
     expect(container.querySelector('.error-banner[data-source="bundle-refresh"]')).not.toBeNull();
+  });
+
+  // #1061 defect 3 — the reported screen: "You appear to be offline" with
+  // "WebSocket connection failing — close code 1006" stacked on top of it.
+  it("renders only the connectivity slot when the device is offline, never the ws one", () => {
+    tripWs();
+    __setConnectivityForTests(false);
+    const { container } = render(() => <ErrorBanners />);
+
+    expect(container.querySelector('.error-banner[data-source="connectivity"]')).not.toBeNull();
+    expect(container.querySelector('.error-banner[data-source="ws"]')).toBeNull();
+    expect(container.querySelectorAll(".error-banner")).toHaveLength(1);
   });
 
   it("removes a source's slot automatically when it recovers (auto-clear)", () => {
@@ -111,8 +127,10 @@ describe("ErrorBanners", () => {
 
   // #207 — clicking the × dismisses one banner client-locally; siblings stay.
   it("dismisses only the clicked banner's slot, leaving siblings visible", () => {
+    // #1061 — the sibling is the bundle-refresh slot, not the connectivity
+    // one: ws + connectivity no longer co-occur.
     tripWs();
-    __setConnectivityForTests(false);
+    mockShouldShowRefresh.mockReturnValue(true);
     const { container } = render(() => <ErrorBanners />);
     expect(container.querySelectorAll(".error-banner")).toHaveLength(2);
 
@@ -123,7 +141,7 @@ describe("ErrorBanners", () => {
     if (wsClose) fireEvent.click(wsClose);
 
     expect(container.querySelector('.error-banner[data-source="ws"]')).toBeNull();
-    expect(container.querySelector('.error-banner[data-source="connectivity"]')).not.toBeNull();
+    expect(container.querySelector('.error-banner[data-source="bundle-refresh"]')).not.toBeNull();
   });
 
   // #207 — dismiss re-arms on recovery: a dismissed source that recovers and
