@@ -93,9 +93,25 @@ test("@webkit #1050 — the /list window drops the floating ☰, and its ✕ act
   // Nothing about the assertion is relaxed to fix that — the drawer covering
   // the corner mid-animation is the animation WORKING, and it is not the state
   // #1050 is about. What was missing is the pre-state, so it is established
-  // here: the drawer is gone AND its box no longer meets the ✕. Polled on the
-  // geometry rather than slept for 200ms, so the barrier does not hardcode the
+  // here, and NOT slept for 200ms: the barrier does not hardcode the
   // transition and cannot rot if the duration changes.
+  //
+  // THE BARRIER POLLS THE HIT STACK, and the first version of it polled
+  // `getBoundingClientRect` instead — which in webkit is a LIE mid-slide.
+  // Measured on the two identical reds of main `346f7c62` (trace.zip, ms on
+  // the trace clock): the rect barrier answered true at `1302140`, the probe
+  // 17ms later at `1302157` found `aside.shell-members` on top, and the
+  // screencast frames bracketing both (`1302132`, `1302174`) show the drawer
+  // PAINTED at `left≈325` then `left≈378` — still over a ✕ that lives at
+  // `[350..379]`. During an accelerated `transform` transition webkit can
+  // already report the FINAL rect from `getBoundingClientRect` while paint and
+  // `elementFromPoint` are still using the interpolated one. Two oracles, one
+  // instant, opposite answers.
+  //
+  // So the barrier now asks the SAME oracle the assertion below asks. It waits
+  // ONLY for the drawer to leave the ✕'s hit stack — deliberately not for the
+  // ✕ to win it, which would fold the #1050 regression itself into a barrier
+  // timeout and cost the diagnostic stack dump that the probe prints.
   //
   // This is NOT webkit-specific, despite only webkit having reported it: the
   // chromium project `grepInvert`s `@webkit`, so chromium has never run this
@@ -107,11 +123,12 @@ test("@webkit #1050 — the /list window drops the floating ☰, and its ✕ act
         closeBtn.evaluate((el) => {
           const drawer = document.querySelector(".shell-members");
           if (drawer === null) return true;
-          const x = el.getBoundingClientRect();
-          const d = drawer.getBoundingClientRect();
-          return d.left >= x.right || d.right <= x.left || d.top >= x.bottom || d.bottom <= x.top;
+          const r = el.getBoundingClientRect();
+          return !document
+            .elementsFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+            .includes(drawer);
         }),
-      { timeout: 10_000, message: "#1050 — the rail drawer never finished sliding off the ✕" },
+      { timeout: 10_000, message: "#1050 — the rail drawer never left the ✕'s hit stack" },
     )
     .toBe(true);
 
