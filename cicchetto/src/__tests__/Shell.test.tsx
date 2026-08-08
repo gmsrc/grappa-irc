@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LIST_WINDOW_NAME } from "../lib/windowKinds";
+import { swipeHorizontally } from "./helpers/touchEvents";
 
 // #500 — RailActions collapsed every rail affordance behind ONE launcher, so a
 // rail action is reachable only after the launcher is tapped. Open it before
@@ -861,6 +862,43 @@ describe("Shell — mobile layout (isMobile = true)", () => {
     mobileState.value = true;
     const { container } = render(() => <Shell />);
     expect(container.querySelector(".shell-sidebar")).toBeNull();
+  });
+
+  // #1041 — the two mobile drawers must never share the screen, and the
+  // RIGHT-edge arm is where that is decided once the left one can be up. The
+  // sidebar's backdrop is a CHILD of `.shell-mobile`, so a touch starting on it
+  // bubbles to the edge listener and arms the right-edge arm with the left
+  // drawer still on screen. vjt's ruling: honour the gesture (a pull toward the
+  // members rail means "show me the members" — refusing it silently is the
+  // surprising reading) and let honouring it RETIRE the sidebar, extending the
+  // panel mutex the members opener already applies to settings + archive.
+  //
+  // The pre-state is asserted as `.open` (translateX(0)), not mere presence: a
+  // sidebar parked off-screen would make the gesture act on nothing and the
+  // guard could not fail. The post-state is asserted as element COUNT, the same
+  // oracle the e2e spec uses for the deferred unmount.
+  describe("#1041 — right-edge swipe while the left sidebar is on screen", () => {
+    it("opens the members drawer AND retires the sidebar (never two drawers)", async () => {
+      mobileState.value = true;
+      const { container } = render(() => <Shell />);
+      const shell = container.querySelector(".shell-mobile") as HTMLElement;
+
+      swipeHorizontally(shell, 5, 200, 300);
+      await waitFor(() => {
+        expect(container.querySelector(".shell-sidebar.open")).not.toBeNull();
+      });
+      expect(container.querySelector(".shell-members.open")).toBeNull();
+
+      // Start the second gesture on the sidebar's backdrop — the element
+      // actually under the finger at the right edge while the drawer is up.
+      const backdrop = container.querySelector(".shell-drawer-backdrop") as HTMLElement;
+      swipeHorizontally(backdrop, window.innerWidth - 5, window.innerWidth - 200, 300);
+
+      expect(container.querySelector(".shell-members.open")).not.toBeNull();
+      await waitFor(() => {
+        expect(container.querySelectorAll(".shell-sidebar").length).toBe(0);
+      });
+    });
   });
 
   // C6.1: on mobile, a .bottom-bar element IS rendered (BottomBar).

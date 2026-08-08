@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { bindEdgeGesture } from "../lib/touchGesture";
+import { fireTouch } from "./helpers/touchEvents";
 
 // #308 INC-A — the edge-swipe directive glue, exercised in jsdom by synthesizing
 // touch events. jsdom can't reproduce real iOS scroll physics (that's the
@@ -12,23 +13,6 @@ import { bindEdgeGesture } from "../lib/touchGesture";
 // preventDefault is never called and native vertical scroll is left alone.
 
 const W = 400; // viewport width fed to the directive (jsdom has no layout)
-
-type Pt = { clientX: number; clientY: number };
-
-// Dispatch a touch-shaped Event. jsdom lacks a full TouchEvent constructor, so
-// we shape a cancelable Event with the .touches/.changedTouches the directive
-// reads — exercising the real listener code path. Returns the event so callers
-// can assert defaultPrevented (the preventDefault-at-claim signal).
-function fireTouch(el: HTMLElement, type: string, ...points: Pt[]): Event {
-  const ev = new Event(type, { bubbles: true, cancelable: true });
-  const list = points as unknown as TouchList;
-  Object.defineProperty(ev, "touches", {
-    value: type === "touchend" ? ([] as unknown as TouchList) : list,
-  });
-  Object.defineProperty(ev, "changedTouches", { value: list });
-  el.dispatchEvent(ev);
-  return ev;
-}
 
 let el: HTMLDivElement;
 let onOpenMembers: Mock<() => void>;

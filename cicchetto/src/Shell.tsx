@@ -827,8 +827,21 @@ const Shell: Component = () => {
           onCleanup(
             bindEdgeGesture(el, {
               viewportWidth: () => window.innerWidth,
-              onOpenMembers: () =>
-                openMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen }),
+              // #1041 — the sidebar joins the panel mutex from THIS side, at the
+              // call site. Once a left drawer can be up, its backdrop is a child
+              // of `.shell-mobile`, so a right-edge touch that lands on it
+              // bubbles here and arms this arm with the other drawer still on
+              // screen. Honour the gesture and retire the sidebar rather than
+              // refuse it (the left arm's posture): a pull toward the members
+              // rail means "show me the members", and a silently dropped
+              // directional gesture is the surprising reading. `closeSidebar` is
+              // a no-op when nothing is mounted, so the plain #308 case is
+              // untouched. It runs FIRST so both animations start on the same
+              // frame — one drawer leaves as the other arrives.
+              onOpenMembers: () => {
+                closeSidebar();
+                openMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen });
+              },
               // #1041 — refuse the gesture while ANY overlay is up rather than
               // teaching the mobilePanel mutex a fourth member. A backdrop or a
               // modal is a child of `.shell-mobile`, so its touches still bubble
@@ -837,6 +850,10 @@ const Shell: Component = () => {
               // already answers "is something covering the shell" for every
               // present AND future overlay — derive it, don't mirror it. Read
               // outside a tracking scope, so this subscribes to nothing.
+              // The asymmetry with the members arm above is deliberate: that arm
+              // faces ONE sibling drawer it can retire, this one faces every
+              // modal in the shell — and "close whatever is covering me" is not
+              // a swipe's decision to make.
               onOpenSidebar: () => {
                 if (overlayCount() > 0) return;
                 openSidebar();
