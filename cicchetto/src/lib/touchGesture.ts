@@ -60,29 +60,40 @@ export const horizontalClaim = (
   return ax >= ay * k;
 };
 
-// Parameters for the right-edge → open-members gesture (INC-A gesture 1).
-// `viewportWidth` is injected (not read off the element) so the geometry is
-// testable in jsdom, which has no layout; the call site passes
-// `() => window.innerWidth`.
+// Parameters for the two edge → open-drawer gestures. `viewportWidth` is
+// injected (not read off the element) so the geometry is testable in jsdom,
+// which has no layout; the call site passes `() => window.innerWidth`.
 export type EdgeGestureParams = {
   viewportWidth: () => number;
   onOpenMembers: () => void;
+  onOpenSidebar: () => void;
 };
 
-// Bind the right-edge swipe (right→center opens the members drawer) on `el`.
-// Additive gesture — the BottomBar stays the primary nav (#71 ruling); this is
-// just a second door onto the existing right rail. Returns a disposer the caller
-// wraps in `onCleanup` (function refs fire only at mount and are NOT re-invoked
-// with undefined at unmount as in React — #308 landmine 3 — so cleanup is
-// explicit). Listeners are bound at ELEMENT level with a non-passive touchmove
-// (Solid delegates touch to a single PASSIVE document listener where
-// preventDefault silently no-ops — #308 landmine 1). The gesture is armed only
-// when the touch begins in the right-edge zone, and it CLAIMS (preventDefault)
-// late — only once horizontal intent is proven — so a vertical drag is left
-// entirely to native scroll (the hard constraint).
+// Bind BOTH edge swipes on `el`: right→center opens the members drawer (#308
+// INC-A gesture 1), left→center opens the channel sidebar (#1041). Additive
+// gestures — the BottomBar stays the primary nav (#71 ruling); each is just a
+// second door onto a rail. Returns a disposer the caller wraps in `onCleanup`
+// (function refs fire only at mount and are NOT re-invoked with undefined at
+// unmount as in React — #308 landmine 3 — so cleanup is explicit). Listeners
+// are bound at ELEMENT level with a non-passive touchmove (Solid delegates
+// touch to a single PASSIVE document listener where preventDefault silently
+// no-ops — #308 landmine 1). The gesture is armed only when the touch begins in
+// an edge zone, and it CLAIMS (preventDefault) late — only once horizontal
+// intent is proven — so a vertical drag is left entirely to native scroll (the
+// hard constraint).
+//
+// Terminal classification only: the drawer is decided at `touchend`, nothing is
+// reported during the drag. Per vjt's #1041 ruling ("non ci formalizziamo,
+// l'animazione può partire a touchend") a follow-the-finger panel is explicitly
+// NOT required, and it is what would force a progress channel through here.
+//
+// The zone AND the direction must agree — a rightward pull from the right edge
+// (or a leftward one from the left edge) points off-screen and opens nothing.
+// Keeping the armed zone rather than a bare boolean is what makes the two arms
+// unable to collapse into one another.
 export function bindEdgeGesture(el: HTMLElement, params: EdgeGestureParams): () => void {
   let start: Point | null = null;
-  let armed = false; // touch began in the right-edge zone
+  let armedZone: "left-edge" | "right-edge" | null = null; // null = not armed
   let claimed = false; // horizontal intent proven → we own the gesture
 
   const onStart = (e: TouchEvent): void => {
@@ -90,15 +101,16 @@ export function bindEdgeGesture(el: HTMLElement, params: EdgeGestureParams): () 
     claimed = false;
     if (t === undefined) {
       start = null;
-      armed = false;
+      armedZone = null;
       return;
     }
     start = { x: t.clientX, y: t.clientY };
-    armed = touchZone(t.clientX, params.viewportWidth()) === "right-edge";
+    const zone = touchZone(t.clientX, params.viewportWidth());
+    armedZone = zone === "center" ? null : zone;
   };
 
   const onMove = (e: TouchEvent): void => {
-    if (!armed || start === null || e.touches.length !== 1) return;
+    if (armedZone === null || start === null || e.touches.length !== 1) return;
     const t = e.touches[0];
     if (t === undefined) return;
     if (!claimed) {
@@ -112,18 +124,20 @@ export function bindEdgeGesture(el: HTMLElement, params: EdgeGestureParams): () 
 
   const onEnd = (e: TouchEvent): void => {
     const s = start;
+    const zone = armedZone;
     const wasClaimed = claimed;
     start = null;
-    armed = false;
+    armedZone = null;
     claimed = false;
-    if (!wasClaimed || s === null) return;
+    if (!wasClaimed || s === null || zone === null) return;
     const t = e.changedTouches[0];
     if (t === undefined) return;
-    // right→center is a LEFT swipe (x decreases); swipeDirection floors the
-    // travel at SWIPE_MIN_PX, so a claimed-but-short pull does not open.
-    if (swipeDirection(s, { x: t.clientX, y: t.clientY }) === "left") {
-      params.onOpenMembers();
-    }
+    // right→center is a LEFT swipe (x decreases), left→center a RIGHT one;
+    // swipeDirection floors the travel at SWIPE_MIN_PX, so a claimed-but-short
+    // pull does not open either drawer.
+    const direction = swipeDirection(s, { x: t.clientX, y: t.clientY });
+    if (zone === "right-edge" && direction === "left") params.onOpenMembers();
+    if (zone === "left-edge" && direction === "right") params.onOpenSidebar();
   };
 
   el.addEventListener("touchstart", onStart, { passive: true });
