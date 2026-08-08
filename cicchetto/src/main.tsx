@@ -112,7 +112,10 @@ moduleRoot(() => mountDisplayPrefsSync());
 mountBadgeReconcile(async () => {
   const t = token();
   if (!t) return null;
-  return (await me(t)).badge_count ?? 0;
+  // #394 — "shared": this fires on every visibilitychange with no user
+  // gesture behind it, so it is exactly the caller that must fan out from a
+  // `/me` already on the wire instead of adding one.
+  return (await me(t, "shared")).badge_count ?? 0;
 });
 
 // UX-3 PENT — VisualViewport-driven height tracking. Writes

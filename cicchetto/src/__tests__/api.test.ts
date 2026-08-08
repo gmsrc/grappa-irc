@@ -33,7 +33,7 @@ describe("api 401 handler", () => {
     const handler = vi.fn();
     api.setOn401Handler(handler);
     stubFetch(401, { error: "unauthorized" });
-    await expect(api.me("dead-token")).rejects.toBeInstanceOf(api.ApiError);
+    await expect(api.me("dead-token", "shared")).rejects.toBeInstanceOf(api.ApiError);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
@@ -41,7 +41,7 @@ describe("api 401 handler", () => {
     const handler = vi.fn();
     api.setOn401Handler(handler);
     stubFetch(404, { errors: { detail: "not_found" } });
-    await expect(api.me("any-token")).rejects.toBeInstanceOf(api.ApiError);
+    await expect(api.me("any-token", "shared")).rejects.toBeInstanceOf(api.ApiError);
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -49,7 +49,7 @@ describe("api 401 handler", () => {
     const handler = vi.fn();
     api.setOn401Handler(handler);
     stubFetch(200, { kind: "user", id: "u1", name: "alice", is_admin: false, inserted_at: "x" });
-    await expect(api.me("good-token")).resolves.toBeDefined();
+    await expect(api.me("good-token", "shared")).resolves.toBeDefined();
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -58,7 +58,7 @@ describe("api 401 handler", () => {
     api.setOn401Handler(handler);
     api.setOn401Handler(null);
     stubFetch(401, { error: "unauthorized" });
-    await expect(api.me("any-token")).rejects.toBeInstanceOf(api.ApiError);
+    await expect(api.me("any-token", "shared")).rejects.toBeInstanceOf(api.ApiError);
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -82,7 +82,7 @@ describe("api 401 handler", () => {
     api.setOn401Handler(() => {});
     stubFetch(401, { error: "unauthorized" });
     try {
-      await api.me("dead-token");
+      await api.me("dead-token", "shared");
       expect.unreachable();
     } catch (e) {
       expect(e).toBeInstanceOf(api.ApiError);
@@ -895,7 +895,7 @@ describe("#739 — an UNAUTHENTICATED endpoint's 401 must not wipe the shared be
     const handler = vi.fn();
     api.setOn401Handler(handler);
     stubFetch(401, { error: "unauthorized" });
-    await expect(api.me("dead-token")).rejects.toBeInstanceOf(api.ApiError);
+    await expect(api.me("dead-token", "shared")).rejects.toBeInstanceOf(api.ApiError);
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });
@@ -927,5 +927,119 @@ describe("#739 — startPasskeyModeChange only offers modes the server accepts",
       "disabled",
     ];
     expect(modes).toHaveLength(2);
+  });
+});
+
+// #394 — single-flight on the unattended `GET /me` door.
+//
+// `/me` has two callers that fire with no user gesture behind them: the boot
+// `user` resource (lib/networks.ts) and the badge reconcile, which re-pulls on
+// EVERY `visibilitychange` → visible (main.tsx). Each goes through `bootFetch`,
+// so one logical `/me` can occupy the wire for up to 26.5s (3 × 8s attempt
+// ceiling + 2.5s backoff). A second trigger inside that window used to put a
+// second request on the wire for the same answer.
+//
+// The property under test is the request COUNT at the transport boundary. That
+// is not a mirror of an internal call sequence — it is the observable the issue
+// is about (the edge counted requests), and the pile-up is made of exactly it.
+// The fan-out half is asserted alongside, so a "coalescer" that strands a
+// caller cannot pass.
+//
+// `fresh` is the read-after-write escape: a caller that has just written (the
+// HomePane connect-a-network refetch, the BootErrorBoundary retry) must not be
+// served an answer that was already on the wire before its write.
+
+const ME_BODY = {
+  kind: "user",
+  id: "u1",
+  name: "alice",
+  is_admin: false,
+  inserted_at: "x",
+} as const;
+
+type DeferredWire = {
+  /** How many requests reached the wire. THE number under test. */
+  count: () => number;
+  /** Settles the nth request. Throws if it was never issued — an absent
+   *  request must read as a failure, never as a silently skipped assertion. */
+  settle: (nth: number, status: number, body: unknown) => void;
+};
+
+/** Stubs `fetch` with one that never settles on its own, so a test can hold
+ *  requests in flight and count what the transport actually saw. */
+function stubDeferredFetch(): DeferredWire {
+  const resolvers: Array<(res: Response) => void> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => new Promise<Response>((resolve) => resolvers.push(resolve))),
+  );
+  return {
+    count: () => resolvers.length,
+    settle: (nth, status, body) => {
+      const resolve = resolvers[nth];
+      if (!resolve) throw new Error(`no request #${nth} on the wire (saw ${resolvers.length})`);
+      resolve(
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    },
+  };
+}
+
+describe("api.me single-flight (#394)", () => {
+  it("serves two concurrent shared callers from ONE request", async () => {
+    const wire = stubDeferredFetch();
+    const boot = api.me("tok-shared", "shared");
+    const resume = api.me("tok-shared", "shared");
+    expect(wire.count()).toBe(1);
+    wire.settle(0, 200, { ...ME_BODY, badge_count: 3 });
+    expect((await boot).badge_count).toBe(3);
+    expect((await resume).badge_count).toBe(3);
+  });
+
+  it("does not let a `fresh` caller inherit an answer that predates its write", async () => {
+    const wire = stubDeferredFetch();
+    const unattended = api.me("tok-raw", "shared");
+    const afterWrite = api.me("tok-raw", "fresh");
+    expect(wire.count()).toBe(2);
+    wire.settle(0, 200, { ...ME_BODY, badge_count: 1 });
+    wire.settle(1, 200, { ...ME_BODY, badge_count: 7 });
+    expect((await unattended).badge_count).toBe(1);
+    expect((await afterWrite).badge_count).toBe(7);
+  });
+
+  it("coalesces, it does not cache: a settled answer is never replayed", async () => {
+    const wire = stubDeferredFetch();
+    const first = api.me("tok-settled", "shared");
+    wire.settle(0, 200, { ...ME_BODY, badge_count: 1 });
+    expect((await first).badge_count).toBe(1);
+    const second = api.me("tok-settled", "shared");
+    expect(wire.count()).toBe(2);
+    wire.settle(1, 200, { ...ME_BODY, badge_count: 4 });
+    expect((await second).badge_count).toBe(4);
+  });
+
+  it("never hands one bearer's in-flight answer to another bearer", async () => {
+    const wire = stubDeferredFetch();
+    const alice = api.me("tok-a", "shared");
+    const bob = api.me("tok-b", "shared");
+    expect(wire.count()).toBe(2);
+    wire.settle(0, 200, { ...ME_BODY, id: "u-alice" });
+    wire.settle(1, 200, { ...ME_BODY, id: "u-bob" });
+    expect((await alice).id).toBe("u-alice");
+    expect((await bob).id).toBe("u-bob");
+  });
+
+  it("clears the shared slot when the request fails", async () => {
+    const wire = stubDeferredFetch();
+    const failing = api.me("tok-fail", "shared");
+    wire.settle(0, 500, { errors: { detail: "boom" } });
+    await expect(failing).rejects.toBeInstanceOf(api.ApiError);
+    const retry = api.me("tok-fail", "shared");
+    expect(wire.count()).toBe(2);
+    wire.settle(1, 200, { ...ME_BODY, badge_count: 2 });
+    expect((await retry).badge_count).toBe(2);
   });
 });

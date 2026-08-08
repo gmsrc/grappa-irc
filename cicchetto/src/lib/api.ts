@@ -1617,12 +1617,58 @@ export async function deletePasskey(token: string, id: string, password: string)
   if (!res.ok) throw await readError(res, false);
 }
 
-// #717 — one of the three BOOT-CRITICAL GETs (with `listNetworks` and
-// `listChannels`). They feed the resource chain the CRT splash gates on, so
-// they go through `bootFetch`: per-attempt timeout + bounded retry on a
-// transport failure. See lib/bootFetch.ts for why the other ~100 call sites
-// in this module deliberately do NOT.
-export async function me(token: string): Promise<MeResponse> {
+/**
+ * #394 — how a `/me` caller wants its answer.
+ *
+ * `"shared"` — unattended read. May be served by a request already on the
+ * wire for the same bearer. Every caller that fires without a user gesture
+ * behind it (boot, resume) belongs here.
+ *
+ * `"fresh"` — read-after-write. Always puts its own request on the wire,
+ * because an answer that left before the write cannot contain it. Every
+ * caller that has just mutated server state belongs here.
+ */
+export type MeFreshness = "shared" | "fresh";
+
+// #394 — the one `/me` currently on the wire for `token`, or null.
+// Cleared on settle, success or failure: this coalesces, it does not cache.
+// Keyed by bearer so a rotation can never hand identity A's answer to B —
+// the #818 class of bug, one layer down.
+let sharedMe: { token: string; response: Promise<MeResponse> } | null = null;
+
+/**
+ * `GET /me`.
+ *
+ * #717 — one of the three BOOT-CRITICAL GETs (with `listNetworks` and
+ * `listChannels`). They feed the resource chain the CRT splash gates on, so
+ * they go through `bootFetch`: per-attempt timeout + bounded retry on a
+ * transport failure. See lib/bootFetch.ts for why the other ~100 call sites
+ * in this module deliberately do NOT.
+ *
+ * #394 — and therefore one logical `/me` can hold the wire for up to 26.5s
+ * (3 × 8s attempt ceiling + 2.5s backoff). Two callers fire unattended: the
+ * boot `user` resource, and the badge reconcile on every `visibilitychange`
+ * → visible. Nothing stopped a second trigger inside that window from
+ * issuing a second request for the same answer, and each duplicate makes
+ * the next one slower — the loop #394 describes. `"shared"` callers now fan
+ * out from a single request. NOT extended to `listNetworks` /
+ * `listChannels`: they carry the same shape but no repeating unattended
+ * trigger, and BootErrorBoundary's recovery spec deliberately pins a
+ * `listNetworks` double.
+ */
+export function me(token: string, freshness: MeFreshness): Promise<MeResponse> {
+  if (freshness === "shared" && sharedMe?.token === token) return sharedMe.response;
+
+  const response = fetchMe(token).finally(() => {
+    // Only the slot THIS call installed may be cleared: a `fresh` call, or a
+    // rotation, replaces the slot while an older request is still settling.
+    if (sharedMe?.response === response) sharedMe = null;
+  });
+  sharedMe = { token, response };
+  return response;
+}
+
+async function fetchMe(token: string): Promise<MeResponse> {
   const res = await bootFetch("/me", {
     headers: buildHeaders(token),
   });

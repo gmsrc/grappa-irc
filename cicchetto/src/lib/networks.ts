@@ -65,9 +65,13 @@ const exports = identityScopedStore((onIdentityChange) => {
   const [user, { mutate: mutateUserResource, refetch: refetchUserResource }] = createResource<
     MeResponse | null,
     string | null
-  >(token, async (t) => {
+  >(token, async (t, info) => {
     if (!t) return null;
-    const m = await me(t);
+    // #394 — an explicit `refetchUser()` is a read-after-write (HomePane's
+    // connect-a-network, the BootErrorBoundary retry): it must not be served
+    // an answer that left before the write. A source-driven load (boot, token
+    // rotation) is unattended and may share one.
+    const m = await me(t, info.refetching ? "fresh" : "shared");
     // #818 — refuse to hydrate for an identity that is no longer current.
     // `createResource` discards the stale VALUE (a rotation refetches and only
     // the latest promise feeds `user()`), but it cannot cancel an await: the
