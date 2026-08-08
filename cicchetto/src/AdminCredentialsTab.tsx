@@ -87,6 +87,10 @@ function credKey(c: AdminCredential): string {
   return `${c.user_id}:${c.network_id}`;
 }
 
+// binding + nick + auth + connection + live + actions. Feeds the
+// detail row's `colspan`.
+const CREDENTIAL_COLUMNS = 6;
+
 const AdminCredentialsTab: Component = () => {
   const [credentials, setCredentials] = createSignal<AdminCredential[] | null>(null);
   const [users, setUsers] = createSignal<AdminUser[]>([]);
@@ -107,17 +111,11 @@ const AdminCredentialsTab: Component = () => {
   const [detailId, setDetailId] = createSignal<string | null>(null);
   const [sessionActionToast, setSessionActionToast] = createSignal<string | null>(null);
 
-  // The binding the edit panel is open on. DERIVED from `editingKey` +
-  // the fetched list rather than stored a second time, so a refetch
-  // cannot leave the panel titled with a stale nick, and a binding
-  // unbound by another admin closes it by itself. `editForm` still holds
-  // the DRAFT — that is the operator's typing, and a refetch must not
-  // stomp it.
-  const editingCredential = (): AdminCredential | undefined =>
-    (credentials() ?? []).find((c) => credKey(c) === editingKey());
-
-  const detailCredential = (): AdminCredential | undefined =>
-    (credentials() ?? []).find((c) => credKey(c) === detailId());
+  // Both panels render INSIDE the `<For>`, beneath the row they belong
+  // to (#1074), so neither needs a derived "which binding is this
+  // about": the row is right there, and a binding unbound by another
+  // admin takes its own panel with it. `editForm` still holds the DRAFT
+  // — that is the operator's typing, and a refetch must not stomp it.
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -437,75 +435,6 @@ const AdminCredentialsTab: Component = () => {
           <AdminEmpty message="no credentials" testId="admin-credentials-empty" />
         </Show>
 
-        <Show when={detailCredential()}>
-          {(c) => (
-            <AdminDetailPanel
-              title={`${userName(c().user_id)} @ ${c().network_slug}`}
-              subtitle="the columns the table drops on a phone"
-              onClose={() => setDetailId(null)}
-              closeLabel="close binding details"
-              data-testid={`admin-credential-detail-${credKey(c())}`}
-            >
-              <AdminFacts
-                facts={[
-                  { label: "nick", value: c().nick },
-                  { label: "auth", value: c().auth_method },
-                  {
-                    label: "connection",
-                    value: (
-                      <AdminBadge tone={connectionTone(c().connection_state)}>
-                        {c().connection_state}
-                      </AdminBadge>
-                    ),
-                  },
-                ]}
-              />
-            </AdminDetailPanel>
-          )}
-        </Show>
-
-        <Show when={editForm() !== null && editingCredential()}>
-          {(c) => (
-            <AdminDetailPanel
-              title={`Edit ${userName(c().user_id)} @ ${c().network_slug}`}
-              subtitle="only changed fields are sent; a password or auth-method change stops the live session"
-              onClose={onCancelEdit}
-              closeLabel="cancel credential edit"
-              data-testid={`admin-credential-edit-form-${credKey(c())}`}
-            >
-              <form
-                class="adm-form-grid"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void onSubmitEdit(c());
-                }}
-              >
-                <CredentialEditFields
-                  form={editForm() as EditForm}
-                  onChange={(next) => setEditForm(next)}
-                  credKey={credKey(c())}
-                />
-                <div class="adm-form-grid-actions">
-                  <button
-                    type="submit"
-                    class="adm-btn adm-btn--ok"
-                    data-testid={`admin-credential-edit-submit-${credKey(c())}`}
-                  >
-                    Save
-                  </button>
-                  <button
-                    type="button"
-                    class="adm-btn adm-btn--danger"
-                    onClick={onCancelEdit}
-                    data-testid={`admin-credential-edit-cancel-${credKey(c())}`}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </AdminDetailPanel>
-          )}
-        </Show>
         <Show when={credentials() !== null && (credentials() ?? []).length > 0}>
           <AdminCard
             hostsRefresh
@@ -531,31 +460,32 @@ const AdminCredentialsTab: Component = () => {
               <tbody>
                 <For each={credentials() ?? []}>
                   {(c) => (
-                    <tr
-                      class="admin-credentials-row"
-                      data-testid={`admin-credential-row-${credKey(c)}`}
-                    >
-                      <td>
-                        <AdminRowName
-                          open={detailId() === credKey(c)}
-                          onToggle={() =>
-                            setDetailId(detailId() === credKey(c) ? null : credKey(c))
-                          }
-                          label={`details for ${userName(c.user_id)} on ${c.network_slug}`}
-                          testId={`admin-credential-details-${credKey(c)}`}
-                        >
-                          {userName(c.user_id)} @ {c.network_slug}
-                        </AdminRowName>
-                      </td>
-                      <td class="adm-col-detail">{c.nick}</td>
-                      <td class="adm-col-detail">{c.auth_method}</td>
-                      <td class="adm-col-detail">
-                        <AdminBadge tone={connectionTone(c.connection_state)}>
-                          {c.connection_state}
-                        </AdminBadge>
-                      </td>
-                      <td>
-                        {/* The three live-pid readings were a bare ternary
+                    <>
+                      <tr
+                        class="admin-credentials-row"
+                        data-testid={`admin-credential-row-${credKey(c)}`}
+                      >
+                        <td>
+                          <AdminRowName
+                            open={detailId() === credKey(c)}
+                            onToggle={() =>
+                              setDetailId(detailId() === credKey(c) ? null : credKey(c))
+                            }
+                            label={`details for ${userName(c.user_id)} on ${c.network_slug}`}
+                            testId={`admin-credential-details-${credKey(c)}`}
+                          >
+                            {userName(c.user_id)} @ {c.network_slug}
+                          </AdminRowName>
+                        </td>
+                        <td class="adm-col-detail">{c.nick}</td>
+                        <td class="adm-col-detail">{c.auth_method}</td>
+                        <td class="adm-col-detail">
+                          <AdminBadge tone={connectionTone(c.connection_state)}>
+                            {c.connection_state}
+                          </AdminBadge>
+                        </td>
+                        <td>
+                          {/* The three live-pid readings were a bare ternary
                               emitting raw text (one arm even carrying its own
                               "●"). They are the U-0 honesty signal, so they get
                               the same badge vocabulary as every other state —
@@ -563,50 +493,122 @@ const AdminCredentialsTab: Component = () => {
                               verbatim by AdminCredentialsTab.test.tsx, and it
                               says something a colour cannot. The "●" is gone
                               because `.adm-badge` already draws the dot. */}
-                        <AdminBadge
-                          tone={
-                            c.live_state === null ? "neutral" : c.live_state.alive ? "ok" : "danger"
-                          }
+                          <AdminBadge
+                            tone={
+                              c.live_state === null
+                                ? "neutral"
+                                : c.live_state.alive
+                                  ? "ok"
+                                  : "danger"
+                            }
+                          >
+                            {c.live_state === null
+                              ? "BEAM has no pid"
+                              : c.live_state.alive
+                                ? "alive"
+                                : "pid dead"}
+                          </AdminBadge>
+                        </td>
+                        <td class="admin-credentials-actions adm-table-sticky-actions">
+                          <button
+                            type="button"
+                            class="adm-btn"
+                            onClick={() => onArmEdit(c)}
+                            data-testid={`admin-credential-edit-${credKey(c)}`}
+                          >
+                            Edit
+                          </button>
+                          <InlineConfirmButton
+                            idleLabel="Unbind"
+                            confirmLabel="Confirm unbind"
+                            armed={confirmingKey() === credKey(c)}
+                            onArm={() => setConfirmingKey(credKey(c))}
+                            onConfirm={() => onDelete(c)}
+                            testId={`admin-credential-unbind-${credKey(c)}`}
+                            extraClass="delete-btn"
+                          />
+                        </td>
+                      </tr>
+                      <Show when={detailId() === credKey(c)}>
+                        <AdminDetailPanel
+                          title={`${userName(c.user_id)} @ ${c.network_slug}`}
+                          subtitle="the columns the table drops on a phone"
+                          onClose={() => setDetailId(null)}
+                          closeLabel="close binding details"
+                          columns={CREDENTIAL_COLUMNS}
+                          data-testid={`admin-credential-detail-${credKey(c)}`}
                         >
-                          {c.live_state === null
-                            ? "BEAM has no pid"
-                            : c.live_state.alive
-                              ? "alive"
-                              : "pid dead"}
-                        </AdminBadge>
-                      </td>
-                      <td class="admin-credentials-actions adm-table-sticky-actions">
-                        <button
-                          type="button"
-                          class="adm-btn"
-                          onClick={() => onArmEdit(c)}
-                          data-testid={`admin-credential-edit-${credKey(c)}`}
+                          <AdminFacts
+                            facts={[
+                              { label: "nick", value: c.nick },
+                              { label: "auth", value: c.auth_method },
+                              {
+                                label: "connection",
+                                value: (
+                                  <AdminBadge tone={connectionTone(c.connection_state)}>
+                                    {c.connection_state}
+                                  </AdminBadge>
+                                ),
+                              },
+                            ]}
+                          />
+                        </AdminDetailPanel>
+                      </Show>
+                      {/* Both halves of the guard matter, and the pre-#1074
+                        expand row had them for the same reason:
+                        `editingKey` names the row and `editForm` holds the
+                        draft, and `onArmEdit` sets them in that order.
+                        Gating on the row alone renders the panel for one
+                        tick with a null draft, and `CredentialEditFields`
+                        reads `props.form.nick` unconditionally. */}
+                      <Show when={editForm() !== null && editingKey() === credKey(c)}>
+                        <AdminDetailPanel
+                          title={`Edit ${userName(c.user_id)} @ ${c.network_slug}`}
+                          subtitle="only changed fields are sent; a password or auth-method change stops the live session"
+                          onClose={onCancelEdit}
+                          closeLabel="cancel credential edit"
+                          columns={CREDENTIAL_COLUMNS}
+                          data-testid={`admin-credential-edit-form-${credKey(c)}`}
                         >
-                          Edit
-                        </button>
-                        <InlineConfirmButton
-                          idleLabel="Unbind"
-                          confirmLabel="Confirm unbind"
-                          armed={confirmingKey() === credKey(c)}
-                          onArm={() => setConfirmingKey(credKey(c))}
-                          onConfirm={() => onDelete(c)}
-                          testId={`admin-credential-unbind-${credKey(c)}`}
-                          extraClass="delete-btn"
-                        />
-                      </td>
-                    </tr>
+                          <form
+                            class="adm-form-grid"
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              void onSubmitEdit(c);
+                            }}
+                          >
+                            <CredentialEditFields
+                              form={editForm() as EditForm}
+                              onChange={(next) => setEditForm(next)}
+                              credKey={credKey(c)}
+                            />
+                            <div class="adm-form-grid-actions">
+                              <button
+                                type="submit"
+                                class="adm-btn adm-btn--ok"
+                                data-testid={`admin-credential-edit-submit-${credKey(c)}`}
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                class="adm-btn adm-btn--danger"
+                                onClick={onCancelEdit}
+                                data-testid={`admin-credential-edit-cancel-${credKey(c)}`}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        </AdminDetailPanel>
+                      </Show>
+                    </>
                   )}
                 </For>
               </tbody>
             </AdminTable>
           </AdminCard>
         </Show>
-        {/* Both halves of the guard matter, and the original expand row
-            had them for the same reason: `editingKey` names the row and
-            `editForm` holds the draft, and `onArmEdit` sets them in that
-            order. Gating on the row alone renders the panel for one tick
-            with a null draft, and `CredentialEditFields` reads
-            `props.form.nick` unconditionally. */}
       </div>
     </div>
   );

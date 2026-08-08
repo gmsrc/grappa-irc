@@ -5088,11 +5088,10 @@ html.resize-dragging * {
    narrower cell: a squeezed column is still a column, and the point is
    to get the table under the viewport width, not to make it tighter.
 
-   `ux-6-g-admin-mobile-h-scroll` still holds. It requires pan-x to be
-   PERMITTED on every admin tab, which is untouched, and requires exactly
-   one tab — `DETERMINISTIC_WIDE_TAB`, Networks — to actually be wider
-   than the viewport. Networks therefore keeps all its columns and gets a
-   frozen first column instead (below). */
+   `ux-6-g-admin-mobile-h-scroll` still holds, in its #1074 form: pan-x
+   stays PERMITTED on every admin tab (a table that fits must still not
+   trap a horizontal gesture), and no tab is wider than its panel on a
+   phone. Networks was the one exemption and is not one any more. */
 .adm-col-detail {
   display: none;
 }
@@ -5157,22 +5156,13 @@ html.resize-dragging * {
   overflow-wrap: anywhere;
 }
 
-/* Networks keeps every column on a phone — `ux-6-g` pins it as the one
-   tab that must stay wider than the viewport — so it gets the mitigation
-   instead of the fix: the slug freezes at the left edge while the rest
-   pans, mirroring the actions column pinned at the right. Panning a wide
-   table is survivable when you can still see whose row you are reading;
-   it is not when you cannot. */
-@media (max-width: 899px) {
-  .admin-networks-table td:first-child,
-  .admin-networks-table th:first-child {
-    position: sticky;
-    left: 0;
-    background: var(--adm-surface-0);
-    border-right: 1px solid var(--adm-line-strong);
-    box-shadow: 6px 0 6px -6px color-mix(in oklab, var(--fg), transparent 80%);
-  }
-}
+/* Networks used to freeze its slug column at the left edge while the
+   rest panned — the mitigation for being the one tab `ux-6-g` pinned as
+   deliberately wider than a phone. #1074 removed the reason: its six
+   secondary columns now move into the row's detail like every other
+   tab's (a JSX branch in `AdminNetworksTab`, not `.adm-col-detail`,
+   because three of them are live cap EDITORS and the detail has to host
+   the control itself). Nothing pans, so nothing needs pinning. */
 
 /* Nested tables STACK when their CONTAINER is narrow: one block per row,
    label beside value, no horizontal scroll at all. Container, not
@@ -5431,8 +5421,17 @@ html.resize-dragging * {
    and the two scroll contexts fought — panning the outer one clipped the
    nested Servers table, while panning the nested one directly worked
    fine. Trading a swipe for a rendering glitch is a bad trade, and the
-   real fix is structural (don't nest scroll containers), which is more
-   than a CSS tweak. */
+   real fix is structural (don't nest scroll containers).
+   #1074 took the structural route: on a phone the table is no wider than
+   the panel, so the cell needs neither a pin nor a cap. */
+
+/* The detail row (`admin/AdminDetailPanel.tsx`) is prose and forms, not
+   table data, so it opts out of `.adm-table`'s blanket `nowrap`. Without
+   this a long title or fact value would set the TABLE's width from
+   inside the very cell that exists to avoid that. */
+.adm-detail-row td {
+  white-space: normal;
+}
 
 /* Every button inside an admin table or form is the same size. The
    InlineConfirmButton family (Delete / Unbind / Revoke / Reset Circuit)

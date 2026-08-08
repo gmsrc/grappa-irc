@@ -52,6 +52,10 @@ import { token } from "./lib/auth";
 // in parallel on every refresh + post-action; the summary is a
 // read-only at-a-glance signal, not a separate state model.
 
+// who + state + the six `adm-col-detail` columns + actions. Feeds the
+// detail row's `colspan`.
+const SESSION_COLUMNS = 9;
+
 type ActionKind = "disconnect" | "terminate";
 
 function confirmKey(id: string, kind: ActionKind): string {
@@ -171,12 +175,6 @@ const AdminSessionsTab: Component = () => {
     testId: "admin-sessions-refresh",
   });
 
-  // The session the detail panel is open on. DERIVED from `detailId` +
-  // the fetched list, so a refetch cannot leave the panel showing a
-  // session that is gone — it closes itself instead.
-  const detailSession = (): AdminSession | undefined =>
-    (sessions() ?? []).find((s) => adminSessionId(s) === detailId());
-
   onMount(() => {
     void refresh();
   });
@@ -246,37 +244,6 @@ const AdminSessionsTab: Component = () => {
           <AdminEmpty message="no sessions" testId="admin-sessions-empty" />
         </Show>
 
-        <Show when={detailSession()}>
-          {(s) => (
-            <AdminDetailPanel
-              title={renderWho(s())}
-              subtitle="the columns the table drops on a phone"
-              onClose={() => setDetailId(null)}
-              closeLabel="close session details"
-              data-testid={`admin-session-detail-${adminSessionId(s())}`}
-            >
-              <AdminFacts
-                facts={[
-                  {
-                    label: "network",
-                    value: networkSlugById().get(s().network_id) ?? String(s().network_id),
-                  },
-                  { label: "upstream", value: renderUpstream(s().live_state) },
-                  { label: "mailbox", value: String(s().live_state.mailbox_len) },
-                  { label: "memory", value: renderKb(s().live_state.memory_bytes) },
-                  { label: "last seen", value: renderLastSeen(s().last_seen_at) },
-                  {
-                    label: "degraded",
-                    value: renderDegraded(
-                      s().live_state.introspection_degraded,
-                      adminSessionId(s()),
-                    ),
-                  },
-                ]}
-              />
-            </AdminDetailPanel>
-          )}
-        </Show>
         <Show when={sessions() !== null && (sessions() ?? []).length > 0}>
           <AdminCard
             hostsRefresh
@@ -311,61 +278,91 @@ const AdminSessionsTab: Component = () => {
                   {(s) => {
                     const id = adminSessionId(s);
                     return (
-                      <tr class="admin-sessions-row" data-testid={`admin-session-row-${id}`}>
-                        <td>
-                          <AdminRowName
-                            open={detailId() === id}
-                            onToggle={() => setDetailId(detailId() === id ? null : id)}
-                            label={`details for ${renderWho(s)}`}
-                            testId={`admin-session-details-${id}`}
+                      <>
+                        <tr class="admin-sessions-row" data-testid={`admin-session-row-${id}`}>
+                          <td>
+                            <AdminRowName
+                              open={detailId() === id}
+                              onToggle={() => setDetailId(detailId() === id ? null : id)}
+                              label={`details for ${renderWho(s)}`}
+                              testId={`admin-session-details-${id}`}
+                            >
+                              {renderWho(s)}
+                            </AdminRowName>
+                          </td>
+                          <td>
+                            <LiveBadge live={s.live_state} />
+                          </td>
+                          <td class="adm-col-detail" data-testid={`admin-session-network-${id}`}>
+                            {networkSlugById().get(s.network_id) ?? String(s.network_id)}
+                          </td>
+                          <td
+                            class="adm-col-detail adm-table-truncate"
+                            data-testid={`admin-session-upstream-${id}`}
                           >
-                            {renderWho(s)}
-                          </AdminRowName>
-                        </td>
-                        <td>
-                          <LiveBadge live={s.live_state} />
-                        </td>
-                        <td class="adm-col-detail" data-testid={`admin-session-network-${id}`}>
-                          {networkSlugById().get(s.network_id) ?? String(s.network_id)}
-                        </td>
-                        <td
-                          class="adm-col-detail adm-table-truncate"
-                          data-testid={`admin-session-upstream-${id}`}
-                        >
-                          {renderUpstream(s.live_state)}
-                        </td>
-                        <td class="adm-col-detail">{s.live_state.mailbox_len}</td>
-                        <td class="adm-col-detail">{renderKb(s.live_state.memory_bytes)}</td>
-                        <td
-                          class="adm-col-detail"
-                          title={s.last_seen_at ?? "no browser login on record"}
-                        >
-                          {renderLastSeen(s.last_seen_at)}
-                        </td>
-                        <td class="adm-col-detail">
-                          {renderDegraded(s.live_state.introspection_degraded, id)}
-                        </td>
-                        <td class="admin-sessions-actions adm-table-sticky-actions">
-                          <InlineConfirmButton
-                            idleLabel="Disconnect"
-                            confirmLabel="Confirm disconnect"
-                            armed={confirmingKey() === confirmKey(id, "disconnect")}
-                            onArm={() => setConfirmingKey(confirmKey(id, "disconnect"))}
-                            onConfirm={() => runAction(s, "disconnect", adminDisconnectSession)}
-                            testId={`admin-session-disconnect-${id}`}
-                            extraClass="disconnect-btn"
-                          />
-                          <InlineConfirmButton
-                            idleLabel="Terminate"
-                            confirmLabel="Confirm terminate"
-                            armed={confirmingKey() === confirmKey(id, "terminate")}
-                            onArm={() => setConfirmingKey(confirmKey(id, "terminate"))}
-                            onConfirm={() => runAction(s, "terminate", adminTerminateSession)}
-                            testId={`admin-session-terminate-${id}`}
-                            extraClass="terminate-btn"
-                          />
-                        </td>
-                      </tr>
+                            {renderUpstream(s.live_state)}
+                          </td>
+                          <td class="adm-col-detail">{s.live_state.mailbox_len}</td>
+                          <td class="adm-col-detail">{renderKb(s.live_state.memory_bytes)}</td>
+                          <td
+                            class="adm-col-detail"
+                            title={s.last_seen_at ?? "no browser login on record"}
+                          >
+                            {renderLastSeen(s.last_seen_at)}
+                          </td>
+                          <td class="adm-col-detail">
+                            {renderDegraded(s.live_state.introspection_degraded, id)}
+                          </td>
+                          <td class="admin-sessions-actions adm-table-sticky-actions">
+                            <InlineConfirmButton
+                              idleLabel="Disconnect"
+                              confirmLabel="Confirm disconnect"
+                              armed={confirmingKey() === confirmKey(id, "disconnect")}
+                              onArm={() => setConfirmingKey(confirmKey(id, "disconnect"))}
+                              onConfirm={() => runAction(s, "disconnect", adminDisconnectSession)}
+                              testId={`admin-session-disconnect-${id}`}
+                              extraClass="disconnect-btn"
+                            />
+                            <InlineConfirmButton
+                              idleLabel="Terminate"
+                              confirmLabel="Confirm terminate"
+                              armed={confirmingKey() === confirmKey(id, "terminate")}
+                              onArm={() => setConfirmingKey(confirmKey(id, "terminate"))}
+                              onConfirm={() => runAction(s, "terminate", adminTerminateSession)}
+                              testId={`admin-session-terminate-${id}`}
+                              extraClass="terminate-btn"
+                            />
+                          </td>
+                        </tr>
+                        <Show when={detailId() === id}>
+                          <AdminDetailPanel
+                            title={renderWho(s)}
+                            subtitle="the columns the table drops on a phone"
+                            onClose={() => setDetailId(null)}
+                            closeLabel="close session details"
+                            columns={SESSION_COLUMNS}
+                            data-testid={`admin-session-detail-${id}`}
+                          >
+                            <AdminFacts
+                              facts={[
+                                {
+                                  label: "network",
+                                  value:
+                                    networkSlugById().get(s.network_id) ?? String(s.network_id),
+                                },
+                                { label: "upstream", value: renderUpstream(s.live_state) },
+                                { label: "mailbox", value: String(s.live_state.mailbox_len) },
+                                { label: "memory", value: renderKb(s.live_state.memory_bytes) },
+                                { label: "last seen", value: renderLastSeen(s.last_seen_at) },
+                                {
+                                  label: "degraded",
+                                  value: renderDegraded(s.live_state.introspection_degraded, id),
+                                },
+                              ]}
+                            />
+                          </AdminDetailPanel>
+                        </Show>
+                      </>
                     );
                   }}
                 </For>

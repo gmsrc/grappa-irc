@@ -1,8 +1,9 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createSignal, For, type JSX, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import AdminDetailPanel from "./admin/AdminDetailPanel";
+import AdminFacts from "./admin/AdminFacts";
 import { AdminEmpty, AdminError, AdminLoading } from "./admin/AdminStatus";
 import AdminTable from "./admin/AdminTable";
 import AdminToolbar, { AdminRefreshButton } from "./admin/AdminToolbar";
@@ -30,6 +31,7 @@ import {
   adminUpdateServer,
 } from "./lib/api";
 import { token } from "./lib/auth";
+import { isMobile } from "./lib/theme";
 
 // M-cluster M-10 — Networks admin tab. Operator surface for the
 // admission caps + circuit-breaker recovery + on-demand visitor reap.
@@ -103,6 +105,10 @@ const FIELD_TEST_ID_SLUG: Record<keyof RowEdit, string> = {
   max_concurrent_user_sessions: "max-user-sessions",
   max_per_ip: "max-per-ip",
 };
+
+// slug + the six secondary columns + actions. Feeds the detail row's
+// `colspan` at desktop width; on a phone only slug + actions survive.
+const NETWORK_COLUMNS = 8;
 
 function reapKey(): string {
   return "force-reap";
@@ -195,12 +201,42 @@ const AdminNetworksTab: Component = () => {
     );
   };
 
-  // The network the detail panel is open on. DERIVED from
-  // `expandedNetworkId` + the fetched list, so a refetch cannot leave
-  // the panel titled with a stale slug and a network deleted by another
-  // admin closes it by itself.
-  const expandedNetwork = (): AdminNetwork | undefined =>
-    (networks() ?? []).find((n) => n.id === expandedNetworkId());
+  // The detail renders INSIDE the `<For>`, beneath the row it belongs
+  // to (#1074), so it needs no derived "which network is this about":
+  // the row is right there, and a network deleted by another admin
+  // takes its own panel with it.
+
+  // Column count for the detail row's `colspan`. On a phone the six
+  // secondary columns are gone, so the row is slug + actions.
+  const networkColumns = (): number => (isMobile() ? 2 : NETWORK_COLUMNS);
+
+  // The two cells that move between the row and the detail depending on
+  // width. ONE definition each: the cap editor is a live control, and a
+  // second copy of it would mean two elements answering to one test id
+  // and two inputs writing the same draft.
+  const capEditor = (net: AdminNetwork, field: keyof RowEdit): JSX.Element => (
+    <CapInput
+      slug={net.slug}
+      field={field}
+      value={edits[net.slug]?.[field] ?? ""}
+      onInput={(v) => onEditCap(net.slug, field, v)}
+    />
+  );
+
+  const liveCount = (net: AdminNetwork, kind: "visitors" | "users"): JSX.Element => {
+    const cap = (): number | null =>
+      kind === "visitors" ? net.max_concurrent_visitor_sessions : net.max_concurrent_user_sessions;
+    return (
+      <span
+        data-testid={`admin-network-live-${kind}-${net.slug}`}
+        title={`${effectiveLive(net)[kind]} live ${
+          kind === "visitors" ? "visitor" : "user"
+        } sessions of ${renderCap(cap())} cap`}
+      >
+        {effectiveLive(net)[kind]}/{renderCap(cap())}
+      </span>
+    );
+  };
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -640,96 +676,30 @@ const AdminNetworksTab: Component = () => {
           <AdminEmpty message="no networks" testId="admin-networks-empty" />
         </Show>
 
-        <Show when={expandedNetwork()}>
-          {(n) => (
-            <AdminDetailPanel
-              title={n().slug}
-              subtitle="server pool and featured channels for this network"
-              onClose={() => setExpandedNetworkId(null)}
-              closeLabel={`collapse ${n().slug}`}
-              data-testid={`admin-network-servers-${n().slug}`}
-            >
-              <ServersDisclosure
-                net={n()}
-                servers={serversByNetworkId[n().id] ?? []}
-                form={
-                  serverForm[n().id] ?? {
-                    host: "",
-                    port: "6697",
-                    tls: true,
-                    source: "",
-                  }
-                }
-                onFormChange={(patch) =>
-                  setServerForm(
-                    produce((draft) => {
-                      const cur = draft[n().id] ?? {
-                        host: "",
-                        port: "6697",
-                        tls: true,
-                        source: "",
-                      };
-                      draft[n().id] = { ...cur, ...patch };
-                    }),
-                  )
-                }
-                onAddServer={(e) => {
-                  void onAddServer(n(), e);
-                }}
-                onToggleTls={(s) => {
-                  void onToggleServerTls(n(), s);
-                }}
-                onSaveSource={(s, raw) => {
-                  void onSaveServerSource(n(), s, raw);
-                }}
-                confirmingServerKey={serverConfirmKey()}
-                onArmServerDelete={(key) => setServerConfirmKey(key)}
-                onDeleteServer={(s) => {
-                  void onDeleteServer(n(), s);
-                }}
-              />
-              <FeaturedChannelsDisclosure
-                net={n()}
-                featured={featuredByNetworkId[n().id] ?? []}
-                form={featuredForm[n().id] ?? emptyFeaturedForm()}
-                onFormChange={(patch) =>
-                  setFeaturedForm(
-                    produce((draft) => {
-                      const cur = draft[n().id] ?? emptyFeaturedForm();
-                      draft[n().id] = { ...cur, ...patch };
-                    }),
-                  )
-                }
-                onAddFeatured={(e) => {
-                  void onAddFeaturedChannel(n(), e);
-                }}
-                onToggleEnabled={(fc) => {
-                  void onToggleFeaturedEnabled(n(), fc);
-                }}
-                confirmingFeaturedKey={featuredConfirmKey()}
-                onArmFeaturedDelete={(key) => setFeaturedConfirmKey(key)}
-                onDeleteFeatured={(fc) => {
-                  void onDeleteFeaturedChannel(n(), fc);
-                }}
-              />
-            </AdminDetailPanel>
-          )}
-        </Show>
         <Show when={networks() !== null && (networks() ?? []).length > 0}>
           <AdminCard
             title="Networks"
             subtitle="expand a row for its server pool and featured channels"
           >
-            <AdminTable class="admin-networks-table" data-testid="admin-networks-table">
+            <AdminTable data-testid="admin-networks-table">
               <thead>
                 <tr>
                   <th class="adm-table-grow">slug</th>
-                  <th>visitors (live/cap)</th>
-                  <th>max visitor sessions</th>
-                  <th>users (live/cap)</th>
-                  <th>max user sessions</th>
-                  <th>max per ip</th>
-                  <th>circuit</th>
+                  {/* #1074 — dropped on a phone and shown in the row's
+                      detail instead, like every other tab. A JSX branch
+                      rather than the `.adm-col-detail` display:none the
+                      read-only tabs use: three of these cells are cap
+                      EDITORS, and the detail has to render the control
+                      itself, not a copy of its value. Two live controls
+                      with one test id is not a layout, it is a bug. */}
+                  <Show when={!isMobile()}>
+                    <th>visitors (live/cap)</th>
+                    <th>max visitor sessions</th>
+                    <th>users (live/cap)</th>
+                    <th>max user sessions</th>
+                    <th>max per ip</th>
+                    <th>circuit</th>
+                  </Show>
                   <th class="adm-table-sticky-actions">actions</th>
                 </tr>
               </thead>
@@ -751,52 +721,16 @@ const AdminNetworksTab: Component = () => {
                             {expandedNetworkId() === net.id ? "▾" : "▸"} {net.slug}
                           </button>
                         </td>
-                        <td
-                          data-testid={`admin-network-live-visitors-${net.slug}`}
-                          title={`${effectiveLive(net).visitors} live visitor sessions of ${renderCap(
-                            net.max_concurrent_visitor_sessions,
-                          )} cap`}
-                        >
-                          {effectiveLive(net).visitors}/
-                          {renderCap(net.max_concurrent_visitor_sessions)}
-                        </td>
-                        <td>
-                          <CapInput
-                            slug={net.slug}
-                            field="max_concurrent_visitor_sessions"
-                            value={edits[net.slug]?.max_concurrent_visitor_sessions ?? ""}
-                            onInput={(v) =>
-                              onEditCap(net.slug, "max_concurrent_visitor_sessions", v)
-                            }
-                          />
-                        </td>
-                        <td
-                          data-testid={`admin-network-live-users-${net.slug}`}
-                          title={`${effectiveLive(net).users} live user sessions of ${renderCap(
-                            net.max_concurrent_user_sessions,
-                          )} cap`}
-                        >
-                          {effectiveLive(net).users}/{renderCap(net.max_concurrent_user_sessions)}
-                        </td>
-                        <td>
-                          <CapInput
-                            slug={net.slug}
-                            field="max_concurrent_user_sessions"
-                            value={edits[net.slug]?.max_concurrent_user_sessions ?? ""}
-                            onInput={(v) => onEditCap(net.slug, "max_concurrent_user_sessions", v)}
-                          />
-                        </td>
-                        <td>
-                          <CapInput
-                            slug={net.slug}
-                            field="max_per_ip"
-                            value={edits[net.slug]?.max_per_ip ?? ""}
-                            onInput={(v) => onEditCap(net.slug, "max_per_ip", v)}
-                          />
-                        </td>
-                        <td>
-                          <CircuitBadge net={net} />
-                        </td>
+                        <Show when={!isMobile()}>
+                          <td>{liveCount(net, "visitors")}</td>
+                          <td>{capEditor(net, "max_concurrent_visitor_sessions")}</td>
+                          <td>{liveCount(net, "users")}</td>
+                          <td>{capEditor(net, "max_concurrent_user_sessions")}</td>
+                          <td>{capEditor(net, "max_per_ip")}</td>
+                          <td>
+                            <CircuitBadge net={net} />
+                          </td>
+                        </Show>
                         <td class="admin-networks-actions adm-table-sticky-actions">
                           <button
                             type="button"
@@ -831,6 +765,106 @@ const AdminNetworksTab: Component = () => {
                           />
                         </td>
                       </tr>
+                      <Show when={expandedNetworkId() === net.id}>
+                        <AdminDetailPanel
+                          title={net.slug}
+                          subtitle="server pool and featured channels for this network"
+                          onClose={() => setExpandedNetworkId(null)}
+                          closeLabel={`collapse ${net.slug}`}
+                          columns={networkColumns()}
+                          data-testid={`admin-network-servers-${net.slug}`}
+                        >
+                          {/* The columns the row drops on a phone. The cap
+                              editors are the SAME controls, relocated —
+                              there is no read-only copy of them anywhere,
+                              so editing a cap stays possible on a phone
+                              and Save stays up on the row. */}
+                          <Show when={isMobile()}>
+                            <AdminFacts
+                              facts={[
+                                {
+                                  label: "visitors (live/cap)",
+                                  value: liveCount(net, "visitors"),
+                                },
+                                {
+                                  label: "max visitor sessions",
+                                  value: capEditor(net, "max_concurrent_visitor_sessions"),
+                                },
+                                { label: "users (live/cap)", value: liveCount(net, "users") },
+                                {
+                                  label: "max user sessions",
+                                  value: capEditor(net, "max_concurrent_user_sessions"),
+                                },
+                                { label: "max per ip", value: capEditor(net, "max_per_ip") },
+                                { label: "circuit", value: <CircuitBadge net={net} /> },
+                              ]}
+                            />
+                          </Show>
+                          <ServersDisclosure
+                            net={net}
+                            servers={serversByNetworkId[net.id] ?? []}
+                            form={
+                              serverForm[net.id] ?? {
+                                host: "",
+                                port: "6697",
+                                tls: true,
+                                source: "",
+                              }
+                            }
+                            onFormChange={(patch) =>
+                              setServerForm(
+                                produce((draft) => {
+                                  const cur = draft[net.id] ?? {
+                                    host: "",
+                                    port: "6697",
+                                    tls: true,
+                                    source: "",
+                                  };
+                                  draft[net.id] = { ...cur, ...patch };
+                                }),
+                              )
+                            }
+                            onAddServer={(e) => {
+                              void onAddServer(net, e);
+                            }}
+                            onToggleTls={(s) => {
+                              void onToggleServerTls(net, s);
+                            }}
+                            onSaveSource={(s, raw) => {
+                              void onSaveServerSource(net, s, raw);
+                            }}
+                            confirmingServerKey={serverConfirmKey()}
+                            onArmServerDelete={(key) => setServerConfirmKey(key)}
+                            onDeleteServer={(s) => {
+                              void onDeleteServer(net, s);
+                            }}
+                          />
+                          <FeaturedChannelsDisclosure
+                            net={net}
+                            featured={featuredByNetworkId[net.id] ?? []}
+                            form={featuredForm[net.id] ?? emptyFeaturedForm()}
+                            onFormChange={(patch) =>
+                              setFeaturedForm(
+                                produce((draft) => {
+                                  const cur = draft[net.id] ?? emptyFeaturedForm();
+                                  draft[net.id] = { ...cur, ...patch };
+                                }),
+                              )
+                            }
+                            onAddFeatured={(e) => {
+                              void onAddFeaturedChannel(net, e);
+                            }}
+                            onToggleEnabled={(fc) => {
+                              void onToggleFeaturedEnabled(net, fc);
+                            }}
+                            confirmingFeaturedKey={featuredConfirmKey()}
+                            onArmFeaturedDelete={(key) => setFeaturedConfirmKey(key)}
+                            onDeleteFeatured={(fc) => {
+                              void onDeleteFeaturedChannel(net, fc);
+                            }}
+                          />
+                        </AdminDetailPanel>
+                      </Show>
                     </>
                   )}
                 </For>

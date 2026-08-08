@@ -64,6 +64,10 @@ import { connectionStateEmoji } from "./lib/connectionStateEmoji";
 // admins delete or visitors reap; until then a refresh button is
 // the only re-fetch surface.
 
+// id + networks + ip + expires + joined + actions. Feeds the detail
+// row's `colspan`.
+const VISITOR_COLUMNS = 6;
+
 const AdminVisitorsTab: Component = () => {
   const [visitors, setVisitors] = createSignal<AdminVisitor[] | null>(null);
   const [confirmingId, setConfirmingId] = createSignal<string | null>(null);
@@ -167,9 +171,6 @@ const AdminVisitorsTab: Component = () => {
     testId: "admin-visitors-refresh",
   });
 
-  const detailVisitor = (): AdminVisitor | undefined =>
-    (visitors() ?? []).find((v) => v.id === detailId());
-
   onMount(() => {
     void refresh();
   });
@@ -187,26 +188,6 @@ const AdminVisitorsTab: Component = () => {
 
         <Show when={visitors() !== null && (visitors() ?? []).length === 0}>
           <AdminEmpty message="no visitors" testId="admin-visitors-empty" />
-        </Show>
-
-        <Show when={detailVisitor()}>
-          {(v) => (
-            <AdminDetailPanel
-              title={v().networks[0]?.nick ?? "visitor"}
-              subtitle="the columns the table drops on a phone"
-              onClose={() => setDetailId(null)}
-              closeLabel="close visitor details"
-              data-testid={`admin-visitor-detail-${v().id}`}
-            >
-              <AdminFacts
-                facts={[
-                  { label: "ip", value: v().ip ?? "—" },
-                  { label: "expires", value: renderExpires(v()) },
-                  { label: "joined", value: renderInserted(v().inserted_at) },
-                ]}
-              />
-            </AdminDetailPanel>
-          )}
         </Show>
 
         <Show when={visitors() !== null && (visitors() ?? []).length > 0}>
@@ -237,66 +218,69 @@ const AdminVisitorsTab: Component = () => {
               <tbody>
                 <For each={visitors() ?? []}>
                   {(v) => (
-                    <tr class="admin-visitors-row" data-testid={`admin-visitor-row-${v.id}`}>
-                      <td>
-                        {/* A dot, like every other state in the pane. Colour
+                    <>
+                      <tr class="admin-visitors-row" data-testid={`admin-visitor-row-${v.id}`}>
+                        <td>
+                          {/* A dot, like every other state in the pane. Colour
                             alone is not an accessible answer to a yes/no
                             question, so the `aria-label` carries the word —
                             no visually-hidden copy, same reasoning as
                             `NetworkStateEmoji` below. Neutral rather than
                             danger for "no": an anonymous visitor is the
                             normal case, not a fault. */}
-                        <AdminBadge
-                          tone={v.identified ? "ok" : "neutral"}
-                          class="adm-badge--dot"
-                          ariaLabel={v.identified ? "identified" : "not identified"}
-                        >
-                          {""}
-                        </AdminBadge>
-                      </td>
-                      <td>
-                        {/* #211 phase 7 — a visitor is multi-network; render
+                          <AdminBadge
+                            tone={v.identified ? "ok" : "neutral"}
+                            class="adm-badge--dot"
+                            ariaLabel={v.identified ? "identified" : "not identified"}
+                          >
+                            {""}
+                          </AdminBadge>
+                        </td>
+                        <td>
+                          {/* #211 phase 7 — a visitor is multi-network; render
                             one line per attached network with its own
                             live-state badge + nick + slug. Empty = a
                             credential-less identity. */}
-                        <Show
-                          when={v.networks.length > 0}
-                          fallback={<span class="muted">no networks</span>}
-                        >
-                          <ul class="admin-visitor-networks">
-                            <For each={v.networks}>
-                              {(net) => (
-                                <li
-                                  data-testid={`admin-visitor-network-${v.id}-${net.network_slug}`}
-                                >
-                                  <LiveBadge live={net.live_state} />
-                                  <span class="admin-visitor-network-nick">{net.nick}</span>
-                                  <span class="admin-visitor-network-slug">{net.network_slug}</span>
-                                  <NetworkStateEmoji state={net.connection_state} />
-                                </li>
-                              )}
-                            </For>
-                          </ul>
-                        </Show>
-                        {/* The opener sits at the END of this cell, not on
+                          <Show
+                            when={v.networks.length > 0}
+                            fallback={<span class="muted">no networks</span>}
+                          >
+                            <ul class="admin-visitor-networks">
+                              <For each={v.networks}>
+                                {(net) => (
+                                  <li
+                                    data-testid={`admin-visitor-network-${v.id}-${net.network_slug}`}
+                                  >
+                                    <LiveBadge live={net.live_state} />
+                                    <span class="admin-visitor-network-nick">{net.nick}</span>
+                                    <span class="admin-visitor-network-slug">
+                                      {net.network_slug}
+                                    </span>
+                                    <NetworkStateEmoji state={net.connection_state} />
+                                  </li>
+                                )}
+                              </For>
+                            </ul>
+                          </Show>
+                          {/* The opener sits at the END of this cell, not on
                             a name column, because a visitor HAS no name
                             column — its identity is the per-network nick
                             list above. Mobile-only, like every other
                             `AdminRowName`. */}
-                        <AdminRowName
-                          open={detailId() === v.id}
-                          onToggle={() => setDetailId(detailId() === v.id ? null : v.id)}
-                          label={`details for visitor ${v.id}`}
-                          testId={`admin-visitor-details-${v.id}`}
-                        >
-                          details
-                        </AdminRowName>
-                      </td>
-                      <td class="adm-col-detail">{v.ip ?? "—"}</td>
-                      <td class="adm-col-detail">{renderExpires(v)}</td>
-                      <td class="adm-col-detail">{renderInserted(v.inserted_at)}</td>
-                      <td class="adm-table-sticky-actions">
-                        {/* #269 — the per-network Disconnect ⇄ Reconnect toggle
+                          <AdminRowName
+                            open={detailId() === v.id}
+                            onToggle={() => setDetailId(detailId() === v.id ? null : v.id)}
+                            label={`details for visitor ${v.id}`}
+                            testId={`admin-visitor-details-${v.id}`}
+                          >
+                            details
+                          </AdminRowName>
+                        </td>
+                        <td class="adm-col-detail">{v.ip ?? "—"}</td>
+                        <td class="adm-col-detail">{renderExpires(v)}</td>
+                        <td class="adm-col-detail">{renderInserted(v.inserted_at)}</td>
+                        <td class="adm-table-sticky-actions">
+                          {/* #269 — the per-network Disconnect ⇄ Reconnect toggle
                             lives HERE, ahead of Delete, so the actions column
                             reads the same as the Sessions tab's.
 
@@ -309,36 +293,55 @@ const AdminVisitorsTab: Component = () => {
                             The affordance keys off LIVE truth (net.live_state),
                             NOT the DB connection_state, so a `:connected` row
                             whose pid is gone correctly offers Reconnect. */}
-                        <For each={v.networks}>
-                          {(net) => (
-                            <InlineConfirmButton
-                              idleLabel={`${net.live_state !== null ? "Disconnect" : "Reconnect"}${
-                                v.networks.length > 1 ? ` ${net.network_slug}` : ""
-                              }`}
-                              confirmLabel={`Confirm ${
-                                net.live_state !== null ? "disconnect" : "reconnect"
-                              }`}
-                              armed={confirmingToggleKey() === toggleKey(v, net)}
-                              onArm={() => setConfirmingToggleKey(toggleKey(v, net))}
-                              onConfirm={() => runToggle(v, net)}
-                              testId={`admin-visitor-toggle-${v.id}-${net.network_slug}`}
-                              extraClass={
-                                net.live_state !== null ? "disconnect-btn" : "reconnect-btn"
-                              }
-                            />
-                          )}
-                        </For>
-                        <InlineConfirmButton
-                          idleLabel="Delete"
-                          confirmLabel="Confirm delete"
-                          armed={confirmingId() === v.id}
-                          onArm={() => setConfirmingId(v.id)}
-                          onConfirm={() => onDeleteConfirm(v)}
-                          testId={`admin-visitor-delete-${v.id}`}
-                          extraClass="delete-btn"
-                        />
-                      </td>
-                    </tr>
+                          <For each={v.networks}>
+                            {(net) => (
+                              <InlineConfirmButton
+                                idleLabel={`${net.live_state !== null ? "Disconnect" : "Reconnect"}${
+                                  v.networks.length > 1 ? ` ${net.network_slug}` : ""
+                                }`}
+                                confirmLabel={`Confirm ${
+                                  net.live_state !== null ? "disconnect" : "reconnect"
+                                }`}
+                                armed={confirmingToggleKey() === toggleKey(v, net)}
+                                onArm={() => setConfirmingToggleKey(toggleKey(v, net))}
+                                onConfirm={() => runToggle(v, net)}
+                                testId={`admin-visitor-toggle-${v.id}-${net.network_slug}`}
+                                extraClass={
+                                  net.live_state !== null ? "disconnect-btn" : "reconnect-btn"
+                                }
+                              />
+                            )}
+                          </For>
+                          <InlineConfirmButton
+                            idleLabel="Delete"
+                            confirmLabel="Confirm delete"
+                            armed={confirmingId() === v.id}
+                            onArm={() => setConfirmingId(v.id)}
+                            onConfirm={() => onDeleteConfirm(v)}
+                            testId={`admin-visitor-delete-${v.id}`}
+                            extraClass="delete-btn"
+                          />
+                        </td>
+                      </tr>
+                      <Show when={detailId() === v.id}>
+                        <AdminDetailPanel
+                          title={v.networks[0]?.nick ?? "visitor"}
+                          subtitle="the columns the table drops on a phone"
+                          onClose={() => setDetailId(null)}
+                          closeLabel="close visitor details"
+                          columns={VISITOR_COLUMNS}
+                          data-testid={`admin-visitor-detail-${v.id}`}
+                        >
+                          <AdminFacts
+                            facts={[
+                              { label: "ip", value: v.ip ?? "—" },
+                              { label: "expires", value: renderExpires(v) },
+                              { label: "joined", value: renderInserted(v.inserted_at) },
+                            ]}
+                          />
+                        </AdminDetailPanel>
+                      </Show>
+                    </>
                   )}
                 </For>
               </tbody>

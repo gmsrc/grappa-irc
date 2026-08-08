@@ -34522,3 +34522,52 @@ stays covered on real webkit by the untouched `issue79` spec.
 real finger, whether the grab handles actually appear once `is-selecting` lifts
 the callout, whether a long-press on Android races Chrome's own native
 selection. All three need a device; none is asserted anywhere in the change.
+
+## 2026-08-09 — #1074: the panel is out of the table because the table is too wide
+
+Two complaints from the admin brief, and the issue is right that they are one
+knot: the row detail sends the viewport to the top of the tab, and the tables
+pan sideways on a phone. The second is the cause of the first.
+
+**The panel sat outside the table because a `<td colspan>` inherits the TABLE's
+width.** `AdminDetailPanel` was a sibling of the table card, rendered BEFORE it,
+with `scrollIntoView({block: "nearest"})` on mount — the panel had to be
+somewhere the operator could see it, and out there it was viewport-wide. Tap a
+row far down the list and the viewport travelled. Both halves were deliberate
+and both are gone: kill the width and the cell is viewport-wide by itself, so
+the panel is an `AdminExpandRow` beneath its own row and there is nothing to
+scroll to. The previously-reverted mitigation (`position: sticky; left: 0` on
+the cell with a `92vw` cap) is NOT what was retried — it fought two scroll
+contexts against each other; this removes the outer one instead.
+
+**Networks was the last wide tab, and its secondary cells could not use the
+`.adm-col-detail` mechanism.** The other four tabs hide their secondary columns
+with `display: none` and re-render the same VALUES as facts in the panel. Three
+of Networks' six are live cap EDITORS, and the panel has to host the control
+itself, not a copy of its value — two `<input>`s answering to one test id, both
+writing the same draft, is a bug wearing a layout's clothes. So Networks
+branches on `isMobile()` in JSX and the cells are REMOVED, not hidden, with one
+definition of each (`capEditor` / `liveCount`) rendered into whichever host the
+width picked. Save stays on the row: the editors moved, the verb that commits
+them must not be a second scroll away. That is a second mechanism for the same
+outcome, on purpose — the boundary is read-only value vs. live control, and it
+is named in both files.
+
+**The `ux-6-g` contract inverted rather than died.** Pan-x PERMISSION survives
+verbatim on `.admin-pane` + `.admin-tab-panel` — a table that fits must still
+not trap a horizontal swipe, and re-tightening either declaration back to
+`pan-y` is still a silent regression. What flipped is the positive twin: the
+spec used to name Networks `DETERMINISTIC_WIDE_TAB` and assert it was WIDER than
+its panel; it now asserts no tab is. The programmatic `scrollLeft = 100` case
+inverted the same way — it must clamp back to 0. The frozen first column that
+mitigated Networks' width went with the width.
+
+**Not established.** Nothing here was seen on a phone. The vitest oracles are
+DOM position (the detail row is its row's `nextElementSibling`) and DOM
+presence (the editors are in the panel, absent from the row); the width claims
+and the "the row does not move" claim live only in the e2e spec, which was not
+run — the e2e stack is single-tenant per docker daemon and was not free. The
+spec's width assertion also covers Networks only: Visitors and Sessions are
+empty in the baseline seed, and Users/Credentials are populated but were never
+measured at 393px, so "no admin tab scrolls horizontally" is asserted for the
+one tab the issue scoped and believed for the rest on the strength of `a669e8cf`.
