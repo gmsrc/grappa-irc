@@ -154,8 +154,10 @@ tests/test_media: tests/test_media.c tests/test.h media.c media.h termcolor.c te
 
 # The only suite that needs the app's own build environment: it includes
 # shottino.c, so it takes the same feature-test macros ($(CFLAGS_DEPS),
-# which is what puts strcasestr and cfmakeraw in scope) and links what
-# shottino links.
+# which is what puts cfmakeraw in scope) and links what shottino links.
+# Those macros are NOT something configure detects — they ride in from
+# `pkg-config --cflags ncursesw` and differ per distribution, so no source
+# file may rely on a particular one being set.
 tests/test_layout: tests/test_layout.c tests/test.h shottino.c call/whip.c call/whip.h json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c
 	$(CC) $(CPPFLAGS) $(TEST_CFLAGS) $(CFLAGS_DEPS) -o $@ tests/test_layout.c call/whip.c json.c wire.c alias.c mirc.c termcolor.c http.c media.c ircd.c ws.c llm.c $(LDLIBS)
 

@@ -227,7 +227,12 @@ jobs:
       # fail CI, while a user building from source on a newer compiler
       # that emits some novel diagnostic should still get a client.
       # CFLAGS_DEPS is re-appended because overriding CFLAGS drops the
-      # feature-test macros configure detected (strcasestr, cfmakeraw).
+      # feature-test macros that come in with it — cfmakeraw needs one.
+      # configure does not DETECT those: they arrive verbatim from
+      # `pkg-config --cflags ncursesw`, which is `-D_DEFAULT_SOURCE
+      # -D_XOPEN_SOURCE=600` on Debian/Ubuntu and something else on other
+      # distributions. Nothing here may depend on a particular one being
+      # present — that is why the client no longer calls strcasestr.
       - name: Build (warnings are errors)
         run: |
           make -C frontends/shottino clean

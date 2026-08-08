@@ -71,6 +71,52 @@ TEST(names_are_compared_under_the_ircds_casemapping) {
     CHECK(!irc_name_eq("#caf\xc3\x89", "#caf\xc3\xa9"));
 }
 
+/* The other case-insensitive match in this file, and the one that is not
+ * about IRC names: `find_ci` is what the HTTP and HTML paths use to look
+ * for a header or a closing tag whose case they do not control.
+ *
+ * It is hand-written for the same reason `irc_name_eq` is — `strcasestr`
+ * is a GNU/BSD extension, declared only when a feature-test macro happens
+ * to be in scope, and which macros are in scope here is decided by the
+ * Cflags of whatever ncursesw.pc the build host ships. That is not a
+ * contract, so the search is ours. */
+TEST(the_case_insensitive_search_is_ours_and_returns_where_it_matched) {
+    const char *headers = "HTTP/1.1 302 Found\r\nlocation: https://example.net/x\r\n";
+    /* The POINT of returning a pointer rather than a bool: two callers
+     * read the bytes that follow the match. */
+    const char *at = find_ci(headers, "Location:");
+    CHECK(at != NULL);
+    CHECK_STR(at, "location: https://example.net/x\r\n");
+    /* Folding runs in both directions, not just needle-to-haystack. */
+    CHECK(find_ci("TRANSFER-ENCODING: CHUNKED", "transfer-encoding: chunked") != NULL);
+    CHECK(find_ci("transfer-encoding: chunked", "Transfer-Encoding: chunked") != NULL);
+    /* Absent is NULL, and a near-miss is absent. */
+    CHECK(find_ci(headers, "Content-Type:") == NULL);
+    CHECK(find_ci("abc", "abcd") == NULL);
+    /* The match must be found at the very end of the haystack too — an
+     * off-by-one in the scan bound is exactly what a "close enough"
+     * hand-rolled search gets wrong. */
+    CHECK_STR(find_ci("xxYYY", "yyy"), "YYY");
+    /* Overlapping candidates: the first real match wins, not the first
+     * character that happened to agree. */
+    CHECK_STR(find_ci("aab", "AB"), "ab");
+    /* Empty needle and empty haystack, because callers pass user text. */
+    CHECK(find_ci("anything", "") == NULL);
+    CHECK(find_ci("", "x") == NULL);
+    /* Bytes above 127 are compared as bytes: `tolower` is locale-aware
+     * and would fold them differently on a different LC_CTYPE, so a
+     * UTF-8 haystack must not depend on where it is run. */
+    CHECK(find_ci("caf\xc3\x89", "caf\xc3\xa9") == NULL);
+}
+
+/* contains_ci is the bool face of the same search, and the seven mention
+ * and filter callers must keep agreeing with it. */
+TEST(the_bool_face_agrees_with_the_pointer_one) {
+    CHECK(contains_ci("hello VJT there", "vjt"));
+    CHECK(!contains_ci("hello there", "vjt"));
+    CHECK(!contains_ci("anything", ""));
+}
+
 TEST(a_channel_opened_twice_in_two_spellings_is_one_window) {
     struct app *app = window_app();
     CHECK(app != NULL);
@@ -4954,6 +5000,8 @@ int main(void) {
     test_use_temp_home();
 
     RUN(names_are_compared_under_the_ircds_casemapping);
+    RUN(the_case_insensitive_search_is_ours_and_returns_where_it_matched);
+    RUN(the_bool_face_agrees_with_the_pointer_one);
     RUN(a_channel_opened_twice_in_two_spellings_is_one_window);
     RUN(a_query_answered_in_another_case_reuses_its_window);
     RUN(a_row_files_under_its_windows_canonical_key);

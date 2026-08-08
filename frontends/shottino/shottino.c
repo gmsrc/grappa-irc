@@ -2743,6 +2743,41 @@ static char *read_all(struct tls_conn *conn, size_t *out_len) {
     return buf;
 }
 
+/* Case-insensitive substring search — ours, not the libc's.
+ *
+ * `strcasestr` is a GNU/BSD extension: it is declared only when a
+ * feature-test macro puts it in scope, and nothing in this build asks for
+ * one. What the compiler saw instead came from `pkg-config --cflags
+ * ncursesw`, which ships `-D_DEFAULT_SOURCE` on Debian and Ubuntu and
+ * something else elsewhere — so whether a declaration existed at all was
+ * decided by a third-party .pc file. That is not a contract to build on,
+ * and termcolor.c had already written the loop by hand for this reason.
+ *
+ * ASCII-only by construction: `tolower` is locale-aware and would fold
+ * bytes above 127 according to LC_CTYPE, so the same haystack would match
+ * differently on two hosts. Header names and HTML tags are ASCII; the
+ * text around them need not be.
+ *
+ * Returns where the match starts, because two callers read the bytes that
+ * follow it; `contains_ci` is the bool face for the ones that do not. */
+static char fold_ascii_byte(char c) {
+    return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static const char *find_ci(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !needle[0]) return NULL;
+    for (const char *p = haystack; *p; p++) {
+        size_t i = 0;
+        while (needle[i] && p[i] && fold_ascii_byte(p[i]) == fold_ascii_byte(needle[i])) i++;
+        if (!needle[i]) return p;
+    }
+    return NULL;
+}
+
+static bool contains_ci(const char *haystack, const char *needle) {
+    return find_ci(haystack, needle) != NULL;
+}
+
 /* Generalised request: an explicit content type and an explicit body
  * length, so a body containing NUL bytes (a file upload) survives. The
  * JSON wrapper below is the common case and keeps its old signature. */
@@ -2786,7 +2821,7 @@ static struct http_response http_read_response(struct tls_conn *conn) {
     size_t blen = raw_len >= hdr_len ? raw_len - hdr_len : 0;
     char *payload = NULL;
     size_t payload_len = 0;
-    if (strcasestr(raw, "Transfer-Encoding: chunked")) {
+    if (find_ci(raw, "Transfer-Encoding: chunked")) {
         payload = http_decode_chunked(body_start, blen, &payload_len);
         if (!payload) die("out of memory");
     } else {
@@ -4577,17 +4612,6 @@ static enum media_kind media_kind_of(const char *url) {
     /* The convention, and only where the path stayed silent. */
     if (strstr(lower, "/uploads/") && !url_token_has_extension(lower)) return MEDIA_IMAGE;
     return MEDIA_NONE;
-}
-
-static bool contains_ci(const char *haystack, const char *needle) {
-    if (!needle || !needle[0]) return false;
-    size_t nlen = strlen(needle);
-    for (const char *p = haystack; *p; p++) {
-        size_t i = 0;
-        while (i < nlen && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) i++;
-        if (i == nlen) return true;
-    }
-    return false;
 }
 
 /* Nick identity, under the SAME casemapping windows use: strcasecmp
@@ -11030,7 +11054,7 @@ static char *html_to_text(const char *html) {
             if (strncasecmp(html + i, "<script", 7) == 0) skip = "</script";
             else if (strncasecmp(html + i, "<style", 6) == 0) skip = "</style";
             if (skip) {
-                const char *end = strcasestr(html + i, skip);
+                const char *end = find_ci(html + i, skip);
                 i = end ? (size_t)(end - html) : n;
             }
             while (i < n && html[i] != '>') i++;
@@ -16409,7 +16433,7 @@ static void fetch_result_free(struct fetch_result *r) {
 /* Copy a header's value out of a NUL-terminated header block. */
 static void header_value(const char *headers, const char *name, char *out, size_t out_sz) {
     out[0] = 0;
-    const char *p = strcasestr(headers, name);
+    const char *p = find_ci(headers, name);
     if (!p) return;
     p += strlen(name);
     while (*p == ' ' || *p == '\t') p++;
@@ -16491,7 +16515,7 @@ static bool http_fetch(struct app *app, const char *url, struct fetch_result *ou
     out->status = status_sp ? atoi(status_sp + 1) : 0;
     header_value(buf, "Location:", out->location, sizeof(out->location));
     header_value(buf, "Content-Type:", out->content_type, sizeof(out->content_type));
-    bool chunked = strcasestr(buf, "Transfer-Encoding: chunked") != NULL;
+    bool chunked = find_ci(buf, "Transfer-Encoding: chunked") != NULL;
     char *body_start = sep + 4;
     size_t hdr_len = (size_t)(body_start - buf);
     size_t blen = len >= hdr_len ? len - hdr_len : 0;
