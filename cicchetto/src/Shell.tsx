@@ -34,7 +34,7 @@ import { mentionsBundleBySlug } from "./lib/mentionsWindow";
 import { openMembersPanel, toggleMembersPanel } from "./lib/mobilePanel";
 import { channelsBySlug, isAdmin, networkBySlug, networks, user } from "./lib/networks";
 import { nickEquals } from "./lib/nickEquals";
-import { createOverlayLock } from "./lib/overlayScrollLock";
+import { createOverlayLock, overlayCount } from "./lib/overlayScrollLock";
 import { queryWindowsByNetwork } from "./lib/queryWindows";
 import { closeToPreviousWindow, selectedChannel, setSelectedChannel } from "./lib/selection";
 import { settingsOpenTick } from "./lib/settingsNav";
@@ -77,10 +77,18 @@ import WhoModal from "./WhoModal";
 //
 // UX-5 bucket A (2026-05-19) — the left `sidebarOpen` drawer was
 // dropped. The desktop sidebar is always visible (no toggle needed);
-// the mobile branch doesn't render `.shell-sidebar` at all (channels
+// the mobile branch didn't render `.shell-sidebar` at all (channels
 // live in BottomBar). The ShellChrome hamburger that toggled this
 // signal is removed end-to-end — it duplicated TopicBar's members
 // hamburger on mobile and toggled a no-op `.open` class on desktop.
+//
+// #1041 (2026-08-08) brings a left drawer BACK on mobile, but not the
+// dropped shape: there is no hamburger and no always-mounted panel.
+// The only door is the left-edge swipe, and the sidebar is mounted on
+// the gesture and destroyed on hide (`sidebarMounted` / `sidebarSlidIn`
+// below). BottomBar remains the primary channel nav — this is an
+// additive second door, the same framing as #308 INC-A's right-edge
+// swipe.
 //
 // Mobile layout (≤768px, isMobile() reactive signal from theme.ts):
 //   * JSX branches on isMobile() — NOT just CSS display toggling.
@@ -94,9 +102,85 @@ import WhoModal from "./WhoModal";
 // printable key off-compose), and tab-complete (Tab in compose textarea).
 // install() is idempotent; uninstall fires on unmount.
 
+// #1041 — hard floor for the mobile sidebar's exit before it is disposed.
+// Deliberately LONGER than the CSS `transition: transform 200ms` (default.css,
+// `.shell-mobile .shell-sidebar`) rather than equal to it: `transitionend` is
+// the primary dispose edge and this is only the backstop for the cases where it
+// never fires (the element was never painted, or the transition was
+// interrupted). Pinning the two to the same number would make a CSS tweak
+// silently truncate the animation instead of merely shortening the slack.
+const SIDEBAR_EXIT_FLOOR_MS = 400;
+
 const Shell: Component = () => {
   const [membersOpen, setMembersOpen] = createSignal(false);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+
+  // #1041 — the mobile left-edge swipe opens the channel sidebar, and that
+  // sidebar is ABSENT from the DOM whenever it is not on screen: mounted when
+  // the gesture commits, disposed at the end of the exit transition.
+  //
+  // Why unmount at all, when `.shell-members` (the right drawer) stays mounted
+  // behind the edge: `Sidebar` owns no local state — zero createSignal /
+  // createEffect / createMemo / onMount of its own — so a remount rebuilds it
+  // identically from the same global stores, and nothing is lost. What
+  // unmounting removes is not DOM nodes but the LIVE reactive subscriptions
+  // (channelsBySlug, queryWindowsByNetwork, windowStateByChannel, the unread
+  // badges…) that would otherwise re-run on every message on every network to
+  // repaint something behind the left edge. That is the weight #1041 refuses to
+  // add to the mobile app. It also sidesteps #782's failure mode on the right
+  // drawer: an always-mounted pane needed an `onScreen` prop threaded in purely
+  // to stop invisible work, and a prop can be forgotten — an absent component
+  // cannot.
+  //
+  // TWO signals, deliberately out of phase at both ends. `sidebarMounted` gates
+  // existence (the `<Show>`); `sidebarSlidIn` drives the `.open` transform.
+  //   * ENTER: a node that mounts and gets `.open` in the same task never
+  //     paints at `translateX(-100%)`, so the transition has no start value and
+  //     the bar appears with no animation. Two rAFs buy one painted frame at
+  //     the closed transform first.
+  //   * EXIT: dropping the node the instant the class flips kills the exit
+  //     animation, so disposal waits for the transform's `transitionend` — with
+  //     SIDEBAR_EXIT_FLOOR_MS as the backstop, because that event does not fire
+  //     for an unpainted or interrupted transition.
+  const [sidebarMounted, setSidebarMounted] = createSignal(false);
+  const [sidebarSlidIn, setSidebarSlidIn] = createSignal(false);
+  let sidebarExitTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const disposeSidebar = (): void => {
+    if (sidebarExitTimer !== undefined) {
+      clearTimeout(sidebarExitTimer);
+      sidebarExitTimer = undefined;
+    }
+    setSidebarMounted(false);
+    setSidebarSlidIn(false);
+  };
+
+  const openSidebar = (): void => {
+    if (sidebarExitTimer !== undefined) {
+      clearTimeout(sidebarExitTimer);
+      sidebarExitTimer = undefined;
+    }
+    setSidebarMounted(true);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        // Re-check on the far side of two frames: a close that landed in the
+        // meantime armed the exit timer, and sliding in now would flash the bar
+        // open on its way out. An open→close→open inside those two frames
+        // cleared the timer again, so this correctly slides in for the reopen.
+        if (sidebarMounted() && sidebarExitTimer === undefined) setSidebarSlidIn(true);
+      }),
+    );
+  };
+
+  const closeSidebar = (): void => {
+    if (!sidebarMounted()) return;
+    setSidebarSlidIn(false);
+    sidebarExitTimer = setTimeout(disposeSidebar, SIDEBAR_EXIT_FLOOR_MS);
+  };
+
+  onCleanup(() => {
+    if (sidebarExitTimer !== undefined) clearTimeout(sidebarExitTimer);
+  });
 
   // #356 — cross-module "open settings" request. A bare watch-family compose
   // verb (/notify, /watch, /hilight, …) can't reach the local setSettingsOpen,
@@ -167,6 +251,12 @@ const Shell: Component = () => {
     ".shell-mobile .shell-members .members-pane",
   );
   createOverlayLock(() => isMobile() && isAdminPaneVisible(), ".admin-pane");
+  // #1041 — same treatment for the mobile left drawer: it is `position: fixed`
+  // and owns its own scroll, so it needs the lock for its whole on-screen life.
+  // Keyed on `sidebarMounted` rather than `sidebarSlidIn` so the lock survives
+  // the exit transition, dropping only when the node actually goes away. No
+  // onEscape — like the two above it is a scroll-lock-only drawer.
+  createOverlayLock(() => isMobile() && sidebarMounted(), ".shell-mobile .shell-sidebar");
 
   // UX-4 bucket N — admin pane lifecycle is now selection-driven.
   // `selectedChannel.kind === "admin"` is the SINGLE source of truth
@@ -714,26 +804,43 @@ const Shell: Component = () => {
             BottomBar (window picker, horizontal scroll, UNDER compose)
           Members pane: slide-in-from-right drawer toggled by the single
           hamburger in TopicBar (aria-label "open members sidebar").
-          Channel sidebar (.shell-sidebar) is NOT rendered on mobile —
+          Channel sidebar (.shell-sidebar) is not part of this layout —
           channels are navigated via BottomBar. This is a full JSX branch,
           not a CSS-display toggle, so the sidebar DOM is absent entirely.
+          #1041 mounts it TRANSIENTLY below, as a `position: fixed` left
+          drawer that exists only while the left-edge swipe has it on
+          screen: it never takes a grid track and it is gone again the
+          moment it hides, so "absent unless on screen" still holds.
       */}
       <div
         class="shell shell-mobile"
-        // #308 INC-A — right-edge swipe (right→center) opens the members drawer,
-        // an ADDITIVE second door onto the permanent right rail (the BottomBar
-        // stays the primary nav — #71 ruling). Bound at element level with a
-        // non-passive touchmove + explicit onCleanup (Solid delegates touch to a
-        // passive document listener, and function refs are not re-invoked at
-        // unmount — #308 landmines 1 + 3). Claims late, so a vertical drag is
-        // left entirely to native scroll (the hard constraint). Mobile-only: the
-        // ref lives in the isMobile() JSX branch, so it attaches only here.
+        // #308 INC-A — right-edge swipe (right→center) opens the members drawer;
+        // #1041 — left-edge swipe (left→center) opens the channel sidebar. Both
+        // are ADDITIVE second doors onto a rail (the BottomBar stays the primary
+        // nav — #71 ruling). Bound at element level with a non-passive touchmove
+        // + explicit onCleanup (Solid delegates touch to a passive document
+        // listener, and function refs are not re-invoked at unmount — #308
+        // landmines 1 + 3). Claims late, so a vertical drag is left entirely to
+        // native scroll (the hard constraint). Mobile-only: the ref lives in the
+        // isMobile() JSX branch, so it attaches only here.
         ref={(el) =>
           onCleanup(
             bindEdgeGesture(el, {
               viewportWidth: () => window.innerWidth,
               onOpenMembers: () =>
                 openMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen }),
+              // #1041 — refuse the gesture while ANY overlay is up rather than
+              // teaching the mobilePanel mutex a fourth member. A backdrop or a
+              // modal is a child of `.shell-mobile`, so its touches still bubble
+              // to this listener and a left swipe would otherwise stack a second
+              // drawer under an open one. `overlayCount()` is the state that
+              // already answers "is something covering the shell" for every
+              // present AND future overlay — derive it, don't mirror it. Read
+              // outside a tracking scope, so this subscribes to nothing.
+              onOpenSidebar: () => {
+                if (overlayCount() > 0) return;
+                openSidebar();
+              },
             }),
           )
         }
@@ -919,6 +1026,43 @@ const Shell: Component = () => {
             RailActions drawer archive button; self-gated on `archiveModalOpen()`
             — renders nothing when closed. */}
         <ArchiveModal />
+
+        {/* #1041 — the mobile channel sidebar, opened by the left-edge swipe.
+            Its own backdrop instance (the members drawer above has a separate
+            one): each drawer owns the surface that dismisses IT, so a tap can
+            never close the wrong one. Rendered only while the sidebar exists,
+            and it fades on the same 200ms as the panel. */}
+        <Show when={sidebarMounted()}>
+          <div
+            class="shell-drawer-backdrop"
+            classList={{ open: sidebarSlidIn() }}
+            onClick={closeSidebar}
+            aria-hidden="true"
+          />
+          {/* Same `.shell-sidebar` element the desktop grid mounts — the mobile
+              @media block turns it into a fixed left drawer. `<Sidebar />` is
+              mounted BARE here: NextActiveButton already has a mobile variant
+              elsewhere in this branch, and ResizeHandle is desktop-only.
+              #1041 restores Sidebar's `onSelect` prop, dropped in UX-5 bucket A
+              on the grounds that no drawer was left to close — a premise this
+              issue expires. Picking a window dismisses the drawer; the prop
+              fires on EVERY row activation, including a re-tap of the already
+              selected row (which a selection-watching effect would miss). */}
+          <aside
+            class="shell-sidebar"
+            classList={{ open: sidebarSlidIn() }}
+            onTransitionEnd={(e) => {
+              // Dispose at the END of the exit slide, never at the class flip.
+              // Descendants bubble their own transitions through here, hence
+              // the target check; the timer in closeSidebar covers the case
+              // where this never fires at all.
+              if (e.target !== e.currentTarget || e.propertyName !== "transform") return;
+              if (!sidebarSlidIn()) disposeSidebar();
+            }}
+          >
+            <Sidebar onSelect={closeSidebar} />
+          </aside>
+        </Show>
 
         {/* #473 — the mobile members drawer IS the right rail, reachable on
             EVERY window (channel: TopicBar ☰; non-channel: ShellChrome ☰ above —

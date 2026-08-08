@@ -51,6 +51,16 @@ import WindowBadges from "./WindowBadges";
 // branch never mounts Sidebar (uses BottomBar instead). The prop
 // had no remaining consumer.
 //
+// #1041 (2026-08-08) — restored, because that premise expired: the
+// mobile branch now mounts Sidebar inside a left drawer opened by the
+// left-edge swipe, and picking a window has to dismiss it. Optional
+// (the desktop mount passes nothing — there is no drawer there), the
+// same shape BottomBar's `onSelect` already carries. It fires on every
+// row activation, INCLUDING a re-tap of the already-selected row: a
+// Shell-side effect watching `selectedChannel()` would look like the
+// same thing but silently no-ops on that tap, leaving the drawer stuck
+// open over the window the operator just asked to see.
+//
 // CP15 B5 — windowState visual cues:
 //   * Channel/query rows whose state ∈ {failed, kicked, parked} get
 //     `.sidebar-window-greyed` so the operator sees the row is no
@@ -94,9 +104,9 @@ const RowState: Component<{ state: string | null }> = (props) => (
   <Show when={props.state}>{(state) => <span class="sr-only"> ({state()})</span>}</Show>
 );
 
-export type Props = Record<string, never>;
+export type Props = { onSelect?: () => void };
 
-const Sidebar: Component<Props> = () => {
+const Sidebar: Component<Props> = (props) => {
   const isSelected = (slug: string, name: string): boolean => {
     const s = selectedChannel();
     return s !== null && s.networkSlug === slug && s.channelName === name;
@@ -167,6 +177,9 @@ const Sidebar: Component<Props> = () => {
     // windows leaves existing behaviour untouched.
     if (isActiveSelection(target)) requestScrollToBottom();
     setSelectedChannel(target);
+    // #1041 — after the selection, so the mobile drawer's exit runs against the
+    // window the operator just landed on rather than the one they left.
+    props.onSelect?.();
   };
 
   // #229 — compact umode string for the network-header indicator, e.g.

@@ -6250,8 +6250,10 @@ html.resize-dragging * {
 
 @media (max-width: 768px) {
   /* C6.1: mobile grid shape — scrollback expands, compose + bottom-bar
-     take min content height. shell-sidebar is NOT rendered in the mobile
-     JSX branch; only .shell-mobile (+ .shell-main, .shell-members) exist.
+     take min content height. The mobile JSX branch renders .shell-mobile
+     (+ .shell-main, .shell-members); #1041 added .shell-sidebar, but ONLY
+     for the life of the left-edge-swipe drawer, and as `position: fixed`
+     — so it never takes a grid track and this shape is unchanged.
      grid-template-rows: 1fr auto auto = scrollback | compose | bottom-bar */
   .shell-mobile {
     display: grid;
@@ -6386,6 +6388,61 @@ html.resize-dragging * {
        band-aid #1039 rules out. Mobile-only because the ☰ is display:none
        above this breakpoint. */
     align-self: flex-start;
+  }
+
+  /* #1041 — the mobile channel sidebar: the SAME `.shell-sidebar` aside the
+     desktop grid mounts, turned into a fixed drawer that slides in from the
+     LEFT. Written as the mirror of `.shell-members` below on purpose — a fixed
+     mobile drawer has exactly one set of geometry problems (keyboard-shrunk
+     viewport, safe areas, the `touch-action: none` blanket) and they get the
+     same answers here.
+     The one real difference: this element is in the DOM only while it is on
+     screen (Shell.tsx mounts it on the left-edge swipe and disposes it at the
+     end of the exit transition), so `translateX(-100%)` below is a transition
+     START value, not a parking spot for a permanently mounted panel. Base
+     `.shell-sidebar` already supplies background / border-right / overflow-y /
+     flex column; only the fixed-drawer geometry is bespoke. */
+  .shell-mobile .shell-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    /* UX-5 bucket BV — iOS lies about 100vh (and dvh/svh) while the on-screen
+       keyboard is up; `--viewport-height` tracks `visualViewport.height` via
+       lib/viewportHeight.ts and shrinks in lockstep. Same fallback chain as
+       `.shell-members`: `100dvh` for the boot window before the JS sets the var
+       and for browsers without VisualViewport. */
+    height: var(--viewport-height, 100dvh);
+    /* #205 — `position: fixed` puts this OUTSIDE `.shell`'s padding box, so it
+       owns its notch / Dynamic-Island and home-indicator clearance. The 1.5rem
+       bottom floor mirrors UX-5 BD on the members drawer: env() is 0px on
+       non-notched iPhones, which left the last row cramped under the Safari
+       chrome / gesture indicator. */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+    width: 80vw;
+    max-width: 18rem;
+    z-index: 90;
+    transform: translateX(-100%);
+    transition: transform 200ms ease-out;
+    overscroll-behavior: contain;
+  }
+
+  /* UX-6 bucket A v2 — `touch-action` is NOT inherited (CSS UI L4). The drawer
+     is `position: fixed`, so it escapes `.shell-mobile { touch-action: none }`
+     and must re-assert `pan-y` or its window list cannot scroll — but setting
+     it on the scroller ALONE leaves the `<ul>` / `<li>` / `<button>` rows at
+     `auto`, and iOS routes a drag whose hit-test target is a row to a different
+     scroll ancestor, so the scroller's `pan-y` never fires. Same
+     universal-selector carve-out the members pane needs, same specificity
+     guard: a future horizontal gesture inside the window list (swipe-to-close a
+     row, say) MUST be declared more specific than this (0,3,0). */
+  .shell-mobile .shell-sidebar,
+  .shell-mobile .shell-sidebar * {
+    touch-action: pan-y;
+  }
+
+  .shell-mobile .shell-sidebar.open {
+    transform: translateX(0);
   }
 
   /* Members drawer slide-in from right (unchanged from pre-C6) */
