@@ -5370,7 +5370,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       # 2 effects: members_seeded (always) + names_reply (gated on the
       # pending entry). NOT persisted notices — the modal is ephemeral.
-      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", roster}] = effects
+      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", roster, nil}] = effects
 
       # Arrival-order, prefix-split {nick, modes} tuples. The mIRC-tier
       # sort happens in server.ex apply_effects, NOT here.
@@ -5387,8 +5387,8 @@ defmodule Grappa.Session.EventRouterTest do
       {:cont, _, effects_nj} = EventRouter.route(m, not_joined)
       {:cont, _, effects_j} = EventRouter.route(m, joined)
 
-      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", roster_nj}] = effects_nj
-      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", roster_j}] = effects_j
+      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", roster_nj, nil}] = effects_nj
+      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", roster_j, nil}] = effects_j
       assert roster_nj == [{"alice", ["@"]}, {"bob", ["+"]}]
       assert roster_j == roster_nj
     end
@@ -5413,7 +5413,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       {:cont, new_state, effects} = EventRouter.route(m, state)
       assert new_state.names_pending == %{}
-      assert [{:members_seeded, "#ghost", _}, {:names_reply, "#ghost", []}] = effects
+      assert [{:members_seeded, "#ghost", _}, {:names_reply, "#ghost", [], nil}] = effects
     end
 
     test "366 lookup is case-insensitive on target channel — names_reply carries the canonical channel (RFC 2812 §2.2)" do
@@ -5432,7 +5432,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       {:cont, new_state, effects} = EventRouter.route(m, state)
       assert new_state.names_pending == %{}
-      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", [{"alice", []}]}] = effects
+      assert [{:members_seeded, "#bofh", _}, {:names_reply, "#bofh", [{"alice", []}], nil}] = effects
     end
   end
 

@@ -270,6 +270,7 @@ defmodule GrappaWeb.UserSocket do
         # the session implicitly (it is read off the socket that carried the
         # command), so it never rides the wire in either direction.
         |> assign(:socket_ref, Ecto.UUID.generate())
+
       # S3.1 + CP24 bucket E web/S5: register every WS pid (user AND
       # visitor) with WSPresence. The transport process (self() at
       # connect time) is the pid that owns the WS connection; when it

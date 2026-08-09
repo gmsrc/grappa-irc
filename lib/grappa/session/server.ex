@@ -1911,13 +1911,11 @@ defmodule Grappa.Session.Server do
   # the request to the reply burst that answers it. The drain lifts it back
   # out into the effect; `apply_effects` addresses the bundle with it.
   def handle_call({:send_info, reply_to}, _, state) do
-    {:reply, Client.send_info(state.client),
-     %{state | info_pending: %{lines: [], reply_to: reply_to}}}
+    {:reply, Client.send_info(state.client), %{state | info_pending: %{lines: [], reply_to: reply_to}}}
   end
 
   def handle_call({:send_version, reply_to}, _, state) do
-    {:reply, Client.send_version(state.client),
-     %{state | version_pending: %{lines: [], reply_to: reply_to}}}
+    {:reply, Client.send_version(state.client), %{state | version_pending: %{lines: [], reply_to: reply_to}}}
   end
 
   # #374 — /motd [<target>]. The optional target routes the query through a
@@ -1925,8 +1923,7 @@ defmodule Grappa.Session.Server do
   # /motd. Priming motd_pending is target-independent — the reply burst (or
   # 402 terminator) drains the modal either way.
   def handle_call({:send_motd, target, reply_to}, _, state) do
-    {:reply, Client.send_motd(state.client, target),
-     %{state | motd_pending: %{lines: [], reply_to: reply_to}}}
+    {:reply, Client.send_motd(state.client, target), %{state | motd_pending: %{lines: [], reply_to: reply_to}}}
   end
 
   # #992 — /admin [<target>]. Same optional-target shape as /motd (bahamut
@@ -1934,8 +1931,7 @@ defmodule Grappa.Session.Server do
   # target-independent priming: whichever of the four terminators comes back
   # — 259, 423, 402 or 447 — drains the modal and clears the flag.
   def handle_call({:send_admin, target, reply_to}, _, state) do
-    {:reply, Client.send_admin(state.client, target),
-     %{state | admin_pending: %{lines: [], reply_to: reply_to}}}
+    {:reply, Client.send_admin(state.client, target), %{state | admin_pending: %{lines: [], reply_to: reply_to}}}
   end
 
   # #238/#513 — /links [<mask>]. Prime the accumulator BEFORE the send so the

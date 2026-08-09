@@ -198,11 +198,9 @@ defmodule Grappa.Session.EventRouter do
           | {:channel_created, String.t(), DateTime.t()}
           | {:away_confirmed, :present | :away}
           | {:members_seeded, String.t(), %{(nick :: String.t()) => modes :: [String.t()]}}
-          | {:names_reply, channel :: String.t(), roster :: [{String.t(), [String.t()]}],
-             Grappa.Session.reply_to()}
+          | {:names_reply, channel :: String.t(), roster :: [{String.t(), [String.t()]}], Grappa.Session.reply_to()}
           | {:who_reply, target :: String.t(), users :: [map()], Grappa.Session.reply_to()}
-          | {:server_reply, source :: :info | :version | :motd, lines :: [String.t()],
-             Grappa.Session.reply_to()}
+          | {:server_reply, source :: :info | :version | :motd, lines :: [String.t()], Grappa.Session.reply_to()}
           | {:joined, String.t()}
           | {:join_failed, channel :: String.t(), reason :: String.t(), numeric :: pos_integer()}
           | {:parted, String.t()}
@@ -1309,10 +1307,10 @@ defmodule Grappa.Session.EventRouter do
     case Map.fetch(pending, nick_key) do
       {:ok, accum} ->
         next_state = %{state | whois_pending: Map.delete(pending, nick_key)}
+
         {:cont, next_state,
          [
-           {:whois_bundle, Map.get(accum, :target_display, target), accum,
-            Map.get(accum, :reply_to)}
+           {:whois_bundle, Map.get(accum, :target_display, target), accum, Map.get(accum, :reply_to)}
          ]}
 
       :error ->
@@ -2015,8 +2013,7 @@ defmodule Grappa.Session.EventRouter do
 
         {:cont, next_state,
          [
-           {:whowas_bundle, Map.get(accum, :target_display, target), accum,
-            Map.get(accum, :reply_to)}
+           {:whowas_bundle, Map.get(accum, :target_display, target), accum, Map.get(accum, :reply_to)}
          ]}
 
       :error ->
@@ -2099,10 +2096,10 @@ defmodule Grappa.Session.EventRouter do
     case Map.fetch(pending, chan_key) do
       {:ok, accum} ->
         next_state = %{state | banlist_pending: Map.delete(pending, chan_key)}
+
         {:cont, next_state,
          [
-           {:banlist_bundle, Map.get(accum, :channel_display, channel), accum,
-            Map.get(accum, :reply_to)}
+           {:banlist_bundle, Map.get(accum, :channel_display, channel), accum, Map.get(accum, :reply_to)}
          ]}
 
       :error ->
@@ -2156,8 +2153,7 @@ defmodule Grappa.Session.EventRouter do
         {:cont, state, []}
 
       accum when is_map(accum) ->
-        {:cont, %{state | links_pending: nil},
-         [{:links_bundle, accum, Map.get(accum, :reply_to)}]}
+        {:cont, %{state | links_pending: nil}, [{:links_bundle, accum, Map.get(accum, :reply_to)}]}
     end
   end
 
@@ -2204,8 +2200,7 @@ defmodule Grappa.Session.EventRouter do
           motd_numeric == 422 ->
             drained = server_reply_drain(server_reply_fold(accum, msg))
 
-            {:cont, %{state | motd_pending: nil},
-             [{:server_reply, :motd, drained, Map.get(accum, :reply_to)}]}
+            {:cont, %{state | motd_pending: nil}, [{:server_reply, :motd, drained, Map.get(accum, :reply_to)}]}
         end
     end
   end
@@ -2334,8 +2329,7 @@ defmodule Grappa.Session.EventRouter do
       accum ->
         line = rest |> Enum.filter(&is_binary/1) |> Enum.join(" ")
 
-        {:cont, %{state | version_pending: nil},
-         [{:server_reply, :version, [line], Map.get(accum, :reply_to)}]}
+        {:cont, %{state | version_pending: nil}, [{:server_reply, :version, [line], Map.get(accum, :reply_to)}]}
     end
   end
 

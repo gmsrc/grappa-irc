@@ -50,7 +50,12 @@ defmodule GrappaWeb.GrappaChannelRequestBudgetTest do
       |> socket("user_socket:#{user_name}", %{
         user_name: user_name,
         current_subject: {:user, user.id},
-        current_session_id: session.id
+        current_session_id: session.id,
+        # #1088 — `UserSocket.connect/3` mints a socket_ref per connection on
+        # both branches, and `GrappaChannel.join/3` reads it to subscribe to
+        # the addressed topic, so a fixture without one is not a production
+        # socket.
+        socket_ref: Ecto.UUID.generate()
       })
       |> subscribe_and_join(GrappaChannel, Topic.user(user_name))
 

@@ -2710,12 +2710,20 @@ defmodule GrappaWeb.GrappaChannelTest do
   # by SUBJECT and has no per-connection dimension, so one question produced a
   # modal on every device of that subject.
   #
-  # The oracle here is a REAL second connection, not a bare PubSub subscriber:
-  # a bystander socket joined to the same user topic, in its own process (the
-  # transport pid is whoever calls `subscribe_and_join/3`, so a second socket
-  # in THIS process would be indistinguishable from the first). It reports
-  # what it saw; the requesting socket must see the reply and the bystander
-  # must see nothing.
+  # The oracle is the FAN-OUT ITSELF, observed as a plain `Phoenix.PubSub`
+  # subscriber on the user topic — which is structurally what a second device
+  # is, since the fan-out reaches other clients precisely by being published
+  # there. Two shapes arrive in this one mailbox and they are distinguishable:
+  # the joined channel delivers `%Phoenix.Socket.Message{}` (what the asking
+  # socket sees), the plain subscription delivers `%Phoenix.Socket.Broadcast{}`
+  # (what every other device would have seen).
+  #
+  # A second REAL socket is deliberately NOT used here:
+  # `Phoenix.ChannelTest.socket/3` may only be called from the test process, so
+  # a bystander cannot own its own mailbox, and a second socket in THIS process
+  # is indistinguishable from the first. The two-real-clients demonstration
+  # lives in `cicchetto/e2e/tests/issue1088-addressed-informational-replies.spec.ts`,
+  # which drives two browser contexts on one account.
   describe "#1088 — addressed informational replies" do
     setup do
       {irc_server, port} = start_irc_server()
@@ -2727,17 +2735,19 @@ defmodule GrappaWeb.GrappaChannelTest do
         |> build_socket(subject: {:user, user.id})
         |> subscribe_and_join(Topic.user(user.name), %{})
 
+      # The bystander's ear. Subscribed AFTER the join so it cannot swallow the
+      # after-join snapshot, and BEFORE any verb is issued so it cannot miss a
+      # reply for having arrived late.
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
       %{irc_server: irc_server, socket: socket, user: user, network: network}
     end
 
-    test "a /who reply reaches the requesting connection only", %{
+    test "a /who reply reaches the asking socket and is NOT fanned out", %{
       irc_server: irc_server,
       socket: socket,
-      user: user,
       network: network
     } do
-      bystander = start_bystander(user)
-
       ref = push(socket, "who", %{"network_id" => network.id, "channel" => "#snap"})
       assert_reply(ref, :ok)
       {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "WHO #snap\r\n"), 1_000)
@@ -2752,33 +2762,30 @@ defmodule GrappaWeb.GrappaChannelTest do
       # The operator who typed it gets the modal…
       assert_push("event", %{kind: :who_reply, target: "#snap"})
 
-      # …and the other device of the same account gets nothing. Removing the
-      # addressing turns exactly this assertion red: the bystander's join is
-      # a plain second socket, which is what the report describes.
-      assert bystander_verdict(bystander) == :nothing
+      # …and nothing was published where the other devices are listening. This
+      # is the assertion the defect killed: pre-#1088 the same reply arrived
+      # here too, on every connection of the account.
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :who_reply}}, 200
     end
 
-    test "a /whois bundle reaches the requesting connection only", %{
+    test "a /whois bundle reaches the asking socket and is NOT fanned out", %{
       irc_server: irc_server,
       socket: socket,
-      user: user,
       network: network
     } do
-      bystander = start_bystander(user)
-
       ref = push(socket, "whois", %{"network_id" => network.id, "nick" => "alice"})
       assert_reply(ref, :ok)
       {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "WHOIS alice\r\n"), 1_000)
 
-      IRCServer.feed(
-        irc_server,
-        ":irc.test.org 311 grappa-snap alice user host * :Alice\r\n"
-      )
-
+      IRCServer.feed(irc_server, ":irc.test.org 311 grappa-snap alice user host * :Alice\r\n")
       IRCServer.feed(irc_server, ":irc.test.org 318 grappa-snap alice :End of /WHOIS list.\r\n")
 
+      # #606 survives: the bundle still carries `source: :user`, so the
+      # scrollback card and the rail cache stay disjoint on the client that
+      # asked. Addressing is a different axis from origin.
       assert_push("event", %{kind: :whois_bundle, target: "alice", source: :user})
-      assert bystander_verdict(bystander) == :nothing
+
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :whois_bundle}}, 200
     end
 
     # The addressed topic must never be reachable by typing it. It is
@@ -2792,39 +2799,6 @@ defmodule GrappaWeb.GrappaChannelTest do
                |> subscribe_and_join(Topic.socket(user.name, socket.assigns.socket_ref), %{})
     end
   end
-
-  # Joins a second socket for `user` on the user topic, from its own process
-  # so its pushes land in ITS mailbox rather than the test's. Returns a task
-  # that resolves to `:leaked` if any informational reply arrived, `:nothing`
-  # otherwise. Blocks until the join has completed, so the caller can issue
-  # the command knowing the bystander was already listening — a bystander that
-  # joined late would report `:nothing` for the wrong reason.
-  defp start_bystander(user) do
-    parent = self()
-
-    task =
-      Task.async(fn ->
-        {:ok, _, _} =
-          user.name
-          |> build_socket(subject: {:user, user.id})
-          |> subscribe_and_join(Topic.user(user.name), %{})
-
-        send(parent, {:bystander_joined, self()})
-
-        receive do
-          %Phoenix.Socket.Message{event: "event", payload: %{kind: kind}}
-          when kind in [:who_reply, :whois_bundle, :names_reply, :whowas_bundle] ->
-            :leaked
-        after
-          300 -> :nothing
-        end
-      end)
-
-    assert_receive {:bystander_joined, _}, 2_000
-    task
-  end
-
-  defp bystander_verdict(task), do: Task.await(task, 2_000)
 
   describe "join rejects malformed topics" do
     test "rejects Phase 1 grappa:network: shape (regression check)" do
