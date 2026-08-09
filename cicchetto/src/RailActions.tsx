@@ -199,20 +199,30 @@ const RailActions: Component<Props> = (props) => {
       : null;
   };
 
-  // #1040 — home is the ONE kind where the actions are not collapsed. #500's
-  // cost was a NICK LIST cost (the column pushed the list below the fold), and
+  // #1040 — home is a kind where the actions are not collapsed. #500's cost was
+  // a NICK LIST cost (the column pushed the list below the fold), and
   // `RailContext` renders nothing for home, so on this window there is no list
   // to protect and the launcher charges a tap for nothing. Derived from the
   // selection rather than held as a second signal: "which kind am I showing" is
   // state that already exists.
-  const expanded = (): boolean => selectedChannel()?.kind === "home";
+  //
+  // #1073 — admin joins it on the same test, not by analogy: `RailContext` has
+  // no admin arm either, and `MembersPane` is gated on
+  // `isActiveChannelJoined()`, so the admin window's rail is as empty above the
+  // actions as home's. It also carries more weight here than on home — the
+  // console's close × was deleted, so this menu IS the way out of it.
+  const expanded = (): boolean => {
+    const kind = selectedChannel()?.kind;
+    return kind === "home" || kind === "admin";
+  };
 
   // #500 — collapsible-menu open state (ephemeral UI-local, see moduledoc).
   const [open, setOpen] = createSignal(false);
   const close = (): void => {
     setOpen(false);
   };
-  // #1040 — a menu opened on a channel is retired on arrival at home. Every
+  // #1040 — a menu opened on a channel is retired on arrival at an expanded
+  // kind (home, and admin since #1073). Every
   // rail action already closes it, and an outside pointerdown closes it too,
   // but neither covers a selection change the rail did not cause (the #986
   // demote redirect lands on home on its own). Without this the transient

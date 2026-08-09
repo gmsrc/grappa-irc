@@ -911,4 +911,26 @@ describe("RailActions expanded home rail (#1040)", () => {
     expect(container.querySelector(".rail-actions-menu")).not.toBeNull();
     expect(container.querySelector(".rail-actions")).toHaveClass("expanded");
   });
+
+  // #1073 — admin is the SECOND kind, on the same reasoning rather than by
+  // analogy: `RailContext` has no admin arm and `MembersPane` is gated on
+  // `isActiveChannelJoined()`, so on the admin window the rail carries nothing
+  // above the actions either. There is no list to protect, and the launcher
+  // charges a tap for nothing. vjt asked for the rail to open with the menu
+  // "already expanded, as on home", which is what the door out of the console
+  // is now made of — #1073 deleted the pane's close ×.
+  //
+  // Only the shape and the refcount are re-asserted here. The three popover
+  // mechanisms are gated on the same `expanded()` this widens, so the home arm
+  // above already pins that they stay off; a second copy of those tests would
+  // measure the gate twice and the kind not at all.
+  it("gives the admin console the same expanded rail (#1073)", async () => {
+    selHolder.value = { networkSlug: "$admin", channelName: "$admin", kind: "admin" };
+    const { container } = render(() => <RailActions setters={setters} />);
+    expect(container.querySelector(".rail-actions")).toHaveClass("expanded");
+    expect(screen.queryByTestId(LAUNCHER)).toBeNull();
+    expect(screen.getByTestId("mobile-panel-home")).toBeInTheDocument();
+    await settle();
+    expect(overlayCount()).toBe(0);
+  });
 });
