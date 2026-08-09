@@ -89,6 +89,22 @@ describe("appendToCompose", () => {
     expect(document.activeElement).toBe(ta);
   });
 
+  // #1105 — the caret is placed at the end, but the rows=1 textarea is an
+  // internal scroll container: a draft that wraps leaves it pinned at
+  // scrollTop 0 with the caret below the fold. jsdom does no layout, so
+  // `scrollHeight` is 0 on every element and a bare assertion here would pass
+  // vacuously — the overflow is stubbed so this pins the assignment itself.
+  // That a real viewport then shows the caret is the e2e spec's job.
+  it("scrolls the overflowing textarea down to the caret", async () => {
+    const ta = mountCompose();
+    Object.defineProperty(ta, "scrollHeight", { value: 75, configurable: true });
+    setDraft(KEY, "x".repeat(110));
+    appendToCompose(NET, CHAN, "coda");
+    ta.value = getDraft(KEY);
+    await Promise.resolve();
+    expect(ta.scrollTop).toBe(75);
+  });
+
   it("is a no-op when no compose textarea is mounted", () => {
     setDraft(KEY, "resta");
     appendToCompose(NET, CHAN, "x");

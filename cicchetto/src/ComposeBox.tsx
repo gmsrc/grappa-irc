@@ -12,6 +12,7 @@ import {
   submit,
   tabComplete,
 } from "./lib/compose";
+import { placeCaretAtEndInView } from "./lib/composeCaret";
 import { composePlaceholder } from "./lib/composePlaceholder";
 import { diagPush } from "./lib/diagLog";
 import { networkBySlug } from "./lib/networks";
@@ -188,14 +189,12 @@ const ComposeBox: Component<Props> = (props) => {
   // ONE helper, both recall entry points (swipe touchend + keydown ArrowUp/
   // ArrowDown) — the defect and the fix are identical for both, so this is the
   // general "after any recall the caret is visible" rule, not a gesture patch.
+  // #1105 moved the body itself out to `lib/composeCaret`: the reply quote hit
+  // the same defect because it kept a second, incomplete copy of it.
   const scrollRecallCaretIntoView = (): void => {
     const el = textareaEl;
     if (el === undefined) return;
-    queueMicrotask(() => {
-      const end = el.value.length;
-      el.setSelectionRange(end, end);
-      el.scrollTop = el.scrollHeight;
-    });
+    placeCaretAtEndInView(el);
   };
 
   // #178 + #203 — gesture recall gating, split by direction.

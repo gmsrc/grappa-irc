@@ -1,5 +1,6 @@
 import { channelKey } from "./channelKey";
 import { getDraft, setDraft } from "./compose";
+import { placeCaretAtEndInView } from "./composeCaret";
 
 // Append `text` to a window's compose draft and leave the caret at the very
 // end, focused and ready to keep typing.
@@ -26,9 +27,8 @@ export function appendToCompose(networkSlug: string, channelName: string, text: 
   // layout viewport up by ~vv.offsetTop to "centre" the textarea — the root
   // cause of the UX-6-D bugs chased for 8 iterations.
   ta.focus({ preventScroll: true });
-  // A Solid signal write does not immediately reflect in the textarea; place
-  // the caret on the next microtask, once the controlled value has flushed.
-  queueMicrotask(() => {
-    ta.setSelectionRange(next.length, next.length);
-  });
+  // #1105 — the caret must also be REVEALED: a quote that wraps leaves the
+  // rows=1 textarea scrolled to the top with the caret underneath. Shared with
+  // the history-recall path so the two cannot drift again.
+  placeCaretAtEndInView(ta);
 }
