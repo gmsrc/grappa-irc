@@ -23,6 +23,7 @@ import type {
 import {
   ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_DOOR,
   ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_SCOPE,
+  ADMISSION_FLOW,
   SCROLLBACK_MESSAGE_KIND,
   SESSION_LOG_EVENT,
   WINDOW_COUNTS_SEVERITY,
@@ -484,13 +485,12 @@ export function narrowChannelEvent(raw: unknown): WireChannelEvent | null {
 // The narrower's default-arm returning null is the runtime mirror of
 // `assertNever` — unknown server kinds drop instead of crashing.
 
-const VALID_ADMISSION_FLOWS: ReadonlySet<AdmissionFlow> = new Set([
-  "login_fresh",
-  "login_existing",
-  "bootstrap_user",
-  "bootstrap_visitor",
-  "patch_network_connect",
-]);
+// #448 — the allowlist derives from the codegen-emitted `ADMISSION_FLOW`
+// const (the #410 posture), not a hand copy. The hand copy this replaces
+// had silently gone stale: it was missing `visitor_reconnect`, so every
+// capacity_reject raised by the visitor-reconnect door was dropped here
+// and never reached the Events tab.
+const VALID_ADMISSION_FLOWS: ReadonlySet<AdmissionFlow> = new Set(ADMISSION_FLOW);
 
 const VALID_SUBJECT_KINDS: ReadonlySet<"user" | "visitor"> = new Set(["user", "visitor"]);
 

@@ -35054,3 +35054,55 @@ spelled the boot verbs out with flags, advertising an `--host`/`--port` pair
 `bind-network`'s required `--server`. An operator following the runbook hit
 exactly the #1086 crash. Rather than gate a third surface, the copy is deleted:
 the runbook now lists the verb names and points at `--help`.
+## 2026-08-09 — #448: a faithful mirror of a too-wide type propagates the hole
+
+Four wire fields modelled a closed set and were typed `String.t()` or a bare
+`atom()`: `Vhosts.AdminWire.grant_json.subject_type`,
+`SubjectSearch.AdminWire.result_json.type`,
+`Admission.NetworkCircuit.AdminWire.t.state`, and
+`AdminEvents.Wire.capacity_reject_event.flow`. `mix grappa.gen_wire_types`
+mirrors the server typespec faithfully, so each arrived in `wireTypes.ts` as a
+generic `string`, and `api.ts` re-narrowed it by hand with an
+`Omit<…, field> & { field: <union> }`. That hand-narrowing is precisely what
+#428 set out to delete. **Codegen cannot be tighter than its source: mirroring
+an over-wide type propagates the hole instead of closing it.**
+
+**The renderers now put the atom, not an eager string.** `Atom.to_string/1`
+(and the literal `"user"`/`"visitor"` in `base_grant_json/3`) were doing the
+work Jason does anyway, and doing it one layer too early: the string erased the
+closed set before the typespec could name it. The wire is unchanged — measured,
+not assumed: the seven representative shapes encode to byte-identical JSON
+before and after (same SHA-256 per shape), because Jason serializes `:user` to
+exactly `"user"`. The vhost-grant controller test, which asserts
+`body["subject_type"] == "user"` on the real HTTP response, is the end-to-end
+witness that the additive-only contract was not touched.
+
+**`flow` references the union rather than restating it.** The
+`capacity_reject_event` type now reads `Admission.flow()`. `Grappa.Admission`
+is outside the wire glob, so the codegen's external-type resolver emits it once
+as `ADMISSION_FLOW` + `AdmissionFlow` in `wireTypes.ts`; a future flow arm
+reaches cic by regenerating, with no edit in the wire module.
+
+**The hand copy this replaced had already gone stale, silently and with teeth.**
+`api.ts`'s hand-written `AdmissionFlow` listed five arms; the server's
+`Admission.flow/0` has had six since `:visitor_reconnect` was added.
+`wireNarrow.ts` built its runtime allowlist from that same five-item list, so
+every `capacity_reject` raised by the visitor-reconnect door was dropped at the
+narrower and never reached the admin Events tab — the operator lost exactly the
+rejections they would most want to see. The `api.test.ts` "regression pin" that
+was supposed to catch this could not: its list was typed
+`satisfies readonly api.AdmissionFlow[]`, and `api.AdmissionFlow` *was* the hand
+copy, so the pin only ever compared the copy to itself. A pin whose oracle is
+the thing under test is not a pin. It is deleted; the allowlist now derives from
+the generated `ADMISSION_FLOW` const (the #410 posture), and the behavioural
+assertion that survives lives in `wireNarrow.test.ts`, table-driven off that
+same const — a new server arm arrives in the test by regenerating.
+
+**What is still not enforced at runtime.** `Wire.capacity_reject/5`'s guard
+stays `is_atom(flow)`. The tightened `@spec` is a dialyzer gate on *static*
+call sites; the live path enters through `from_telemetry/3`'s metadata map,
+which is `map()`, so no static check reaches it. Closing that would mean a
+second copy of the flow set in a module that has no business owning one —
+worse than the gap. The set is closed by construction upstream:
+`Admission.check_capacity/1` takes a `capacity_input` whose `flow` is typed
+`flow()`.

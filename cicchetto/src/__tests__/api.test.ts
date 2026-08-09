@@ -760,22 +760,15 @@ describe("REV-A C1 — WireAdminEvent superset of server event_kind/0", () => {
   });
 });
 
-describe("REV-A C2 — capacity_reject.flow superset of server Admission.flow/0", () => {
-  // Mirror of `lib/grappa/admission.ex:53-58`. Server emits the bare
-  // atom verbatim via `Wire.capacity_reject/5` (Jason stringifies);
-  // cic MUST accept every value.
-  const SERVER_ADMISSION_FLOWS = [
-    "login_fresh",
-    "login_existing",
-    "bootstrap_user",
-    "bootstrap_visitor",
-    "patch_network_connect",
-  ] as const satisfies readonly api.AdmissionFlow[];
-
-  it("AdmissionFlow includes every server-emitted flow arm", () => {
-    expect(SERVER_ADMISSION_FLOWS.length).toBe(5);
-  });
-});
+// #448 — the REV-A C2 hand-mirror of `Grappa.Admission.flow/0` used to
+// live here. It could not do the job it claimed: the list was typed
+// `satisfies readonly api.AdmissionFlow[]`, and `api.AdmissionFlow` was
+// itself the hand copy — so the pin only ever compared the copy to
+// itself, and both sat at 5 arms while the server had 6. `AdmissionFlow`
+// is now codegen-emitted from the server typespec, so the drift the pin
+// was watching for is unrepresentable; what remains worth testing is the
+// runtime narrower's behaviour, pinned in `wireNarrow.test.ts` off the
+// generated `ADMISSION_FLOW` const.
 
 describe("REV-K M20 — channelPushError extractor", () => {
   // The WS Channel error envelope is `%{error: "<token>"}` post-REV-K

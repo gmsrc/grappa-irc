@@ -1274,26 +1274,19 @@ export type WireUserEvent =
 // distinct topic (`grappa:admin:events`) with its own authz gate
 // (`is_admin: true`); folding onto WireUserEvent would tie the admin
 // stream to the per-user routing.
-// REV-A C2 — closed union mirroring server-side `Grappa.Admission.flow/0`
-// (lib/grappa/admission.ex:53-58). Pre-REV-A this surface lived inline on
-// the `capacity_reject` arm as `"user" | "visitor"` — a type lie: server
-// emits the bare atom verbatim (Jason stringifies → 5 possible string
-// values) so cic was tsc-blind to 3 of 5. A 5-arm regression pin lives
-// in `__tests__/api.test.ts` to fail loudly if server's `flow/0` grows
-// a 6th arm.
-export type AdmissionFlow =
-  | "login_fresh"
-  | "login_existing"
-  | "bootstrap_user"
-  | "bootstrap_visitor"
-  | "patch_network_connect";
+// #448 — re-export of the codegen-emitted mirror of `Grappa.Admission.flow/0`.
+// REV-A C2 hand-wrote this union because the server typed the wire field
+// `atom()`, so codegen could only emit `string`; the hand copy then went
+// stale silently — it listed 5 arms while the server had grown a 6th
+// (`:visitor_reconnect`), which `wireNarrow` was dropping on the floor.
+// Deriving it from the server typespec is what makes that class of drift
+// unrepresentable.
+export type { AdmissionFlow } from "./wireTypes";
 
-// #428 — mirror of AdminEventsWireEvent; capacity_reject.flow kept tight (AdmissionFlow) until the server closes the atom() set (follow-up).
-export type WireAdminEvent =
-  | Exclude<AdminEventsWireEvent, { kind: "capacity_reject" }>
-  | (Omit<Extract<AdminEventsWireEvent, { kind: "capacity_reject" }>, "flow"> & {
-      flow: AdmissionFlow;
-    });
+// #448 — the server now types `capacity_reject.flow` as the closed
+// `Admission.flow()` union, so the generated mirror is already tight and
+// this is a bare re-export (was: an `Omit<…, "flow"> &` hand-narrowing).
+export type WireAdminEvent = AdminEventsWireEvent;
 
 export type AdminSnapshotPayload = { events: WireAdminEvent[] };
 
@@ -1844,15 +1837,13 @@ export async function adminListSessionLog(
 // typed; cic owns rendering ("never tripped" / "OPEN, retry in 12s" / etc).
 //
 // `state` is a typed string-literal union per CLAUDE.md "Atoms or
-// `@type t :: literal | literal` — never untyped strings". Server-side
-// `NetworkCircuit` emits only `:open | :closed` today; a future
-// `:half_open` would be a deliberate edit here + a new arm in the
-// renderer.
-export type AdminCircuitStateKind = "open" | "closed";
-
-export type AdminCircuitState = Omit<AdmissionNetworkCircuitAdminWireT, "state"> & {
-  state: AdminCircuitStateKind;
-};
+// `@type t :: literal | literal` — never untyped strings". #448: the
+// server's wire typespec now carries that union itself, so the generated
+// mirror is already tight and this is a bare re-export (was: a hand
+// `Omit<…, "state"> &` re-narrowing plus an `AdminCircuitStateKind` alias
+// with no reader left). A future `:half_open` arrives here by
+// regenerating, not by editing.
+export type AdminCircuitState = AdmissionNetworkCircuitAdminWireT;
 
 // U-3 (UD4): per-network live-session counts split by subject_kind.
 // Mirrors `Grappa.Admission.live_counts/0`. Always present on every
@@ -1922,9 +1913,10 @@ export async function adminPatchNetworkCaps(
 // (loopback/link-local pre-filtered) the admin picks from when creating a vhost.
 export type AdminVhost = VhostsAdminWireVhostJson;
 
-export type AdminVhostGrant = Omit<VhostsAdminWireGrantJson, "subject_type"> & {
-  subject_type: "user" | "visitor";
-};
+// #448 — bare re-export: the server types `subject_type` as the closed
+// `:user | :visitor` atom union, so the generated mirror already narrows
+// it (was: a hand `Omit<…, "subject_type"> &`).
+export type AdminVhostGrant = VhostsAdminWireGrantJson;
 
 export type AdminVhostsResponse = {
   vhosts: AdminVhost[];
@@ -2019,9 +2011,8 @@ export async function adminRevokeVhostGrant(token: string, grantId: number): Pro
 // ("network - nick"); it is null for a user (no single network). Nests
 // under `/admin/vhosts/` so it rides the existing nginx allowlist alt (no
 // proxy change). Server shape: `Grappa.SubjectSearch.AdminWire`.
-export type AdminSubjectSearchResult = Omit<SubjectSearchAdminWireResultJson, "type"> & {
-  type: "user" | "visitor";
-};
+// #448 — bare re-export, same reason as `AdminVhostGrant`.
+export type AdminSubjectSearchResult = SubjectSearchAdminWireResultJson;
 
 export type AdminSubjectSearchResponse = { results: AdminSubjectSearchResult[] };
 

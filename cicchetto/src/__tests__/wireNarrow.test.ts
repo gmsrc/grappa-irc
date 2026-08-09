@@ -5,6 +5,7 @@ import {
   narrowChannelEvent,
   narrowWindowStateEvent,
 } from "../lib/wireNarrow";
+import { ADMISSION_FLOW } from "../lib/wireTypes";
 
 // Bucket G H4+U3 — runtime narrower for per-channel WS events.
 // Mirror of `narrowUserEvent` (cic M1) on the per-channel boundary.
@@ -719,6 +720,15 @@ describe("narrowAdminEvent (REV-G H24)", () => {
     });
     it("rejects unknown flow", () => {
       expect(narrowAdminEvent({ ...valid, flow: "made_up" })).toBeNull();
+    });
+    // #448 — the allowlist used to be a hand copy of the server's flow
+    // set and had gone stale: `visitor_reconnect` was missing, so every
+    // capacity_reject from the visitor-reconnect door was dropped here
+    // and never reached the Events tab. Driving the table off the
+    // codegen-emitted const is what makes that unrepresentable — a new
+    // server flow arm arrives in this test by regenerating wireTypes.
+    it.each(ADMISSION_FLOW)("survives the narrower for server flow %s", (flow) => {
+      expect(narrowAdminEvent({ ...valid, flow })).toEqual({ ...valid, flow });
     });
   });
 
