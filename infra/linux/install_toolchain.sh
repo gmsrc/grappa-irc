@@ -4,27 +4,14 @@
 # the grappa user. Run as root (this script sudo's into grappa for
 # every step).
 #
-# Why asdf over distro packages or raw kerl: Debian/Ubuntu apt repos
-# don't reliably carry the exact pinned elixir 1.19.5-otp-28 / erlang
-# 28.5 from .tool-versions — a drifted version here silently diverges
-# from what CI (erlef/setup-beam, same pin) and the FreeBSD jail
-# (also pinned) actually run. The repo already ships .tool-versions in
-# asdf's native format, so a bare `asdf install` inside the checkout
-# installs everything it lists with zero extra config — one pin, every
-# consumer reads it. asdf over raw kerl specifically because kerl would
-# need a second, hand-maintained version pin instead of reading the
-# one that's already checked in.
+# asdf reads .tool-versions directly, so the pin CI and the FreeBSD jail
+# run is the pin installed here. It goes into ~grappa's scope, not
+# system-wide: builds run as grappa. The asdf binary is downloaded from
+# the latest release and verified against the published md5.
 #
-# asdf itself ships as a single Go binary since v0.16 (no more
-# git-clone-the-repo-and-source-a-shell-function) — this downloads the
-# latest release binary + shims, verified against the published md5.
-# Installed into ~grappa's scope, not system-wide — builds run as
-# grappa (isolation-without-root).
-#
-# Erlang is built from source (no prebuilt asdf-erlang binary for an
-# arbitrary pin) — expect ~10-20 minutes on first run. This is a
-# one-time cost, not a bug; install.sh warns the operator before
-# calling this.
+# Erlang is built from source — expect ~10-20 minutes on the first run.
+# install.sh warns the operator before calling this.
+# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)".
 #
 # Usage: infra/linux/install_toolchain.sh [repo_root]
 # Idempotent — skips the asdf binary download if already present,
@@ -41,10 +28,8 @@ run_as_grappa() {
 	sudo -u "${GRAPPA_USER}" -H bash -c "$1"
 }
 
-# PATH exported for every run_as_grappa call below: the asdf binary
-# itself, plus its shims dir (where `asdf install` links tool
-# executables — this is what makes `mix`/`elixir`/`erl` resolve once
-# installed).
+# PATH for every run_as_grappa call below: the asdf binary plus its shims
+# dir, which is what makes `mix`/`elixir`/`erl` resolve once installed.
 asdf_path_export="export PATH=\"${ASDF_BIN_DIR}:\${HOME}/.asdf/shims:\${PATH}\""
 
 if [ ! -x "${ASDF_BIN_DIR}/asdf" ]; then
@@ -88,10 +73,9 @@ echo "[install_toolchain] ensuring erlang + elixir asdf plugins"
 run_as_grappa "${asdf_path_export}; asdf plugin add erlang 2>/dev/null || true; asdf plugin add elixir 2>/dev/null || true"
 
 echo "[install_toolchain] asdf install (reads .tool-versions — can take 10-20 min for erlang, building from source)"
-# KERL_CONFIGURE_OPTIONS: headless host, skip wx/observer's X11/GTK
-# dependency chain and the debugger/javac interop — none of it is
-# used (scripts/observer.sh-equivalent tooling is observer_cli, not
-# OTP's :wx-based observer).
+# KERL_CONFIGURE_OPTIONS: headless host — skip wx/observer's X11/GTK
+# chain, the debugger and javac interop. Runtime introspection here is
+# observer_cli, not OTP's :wx-based observer.
 run_as_grappa "
 	${asdf_path_export}
 	export KERL_CONFIGURE_OPTIONS='--without-wx --without-javac --without-debugger --without-observer'

@@ -7,9 +7,6 @@
 #   infra/linux/release.sh eval 'Grappa.Release.migrate()'
 #   infra/linux/release.sh remote
 #   infra/linux/release.sh stop
-#
-# Port of infra/freebsd/jail_release.sh. Simpler here: no bastille-cmd
-# argv-eating quirk to work around, so no $0-vs-$@ reconstruction dance.
 
 set -euo pipefail
 

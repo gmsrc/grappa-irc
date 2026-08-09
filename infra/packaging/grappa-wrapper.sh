@@ -15,9 +15,7 @@
 #   sudo grappa eval '<expr>'    evaluate an Elixir expression in release ctx
 #
 # `migrate` is sugar for `eval 'Grappa.Release.migrate()'` — the same
-# Ecto.Migrator the FreeBSD/Docker deploy paths call, reachable WITHOUT a
-# dev toolchain. That is the #419 "migrate command": a packaged host has
-# only the compiled release + boot scripts, no mix, no project source.
+# Ecto.Migrator the other deploy paths call, reachable WITHOUT mix.
 
 set -euo pipefail
 
@@ -39,7 +37,7 @@ if [ "$cmd" = "gen-secrets" ]; then
 	exec "$GEN_SECRETS"
 fi
 
-# `migrate` → eval the release migrator (the #419 packaged migrate path).
+# `migrate` → eval the release migrator.
 if [ "$cmd" = "migrate" ]; then
 	set -- eval 'Grappa.Release.migrate()'
 fi

@@ -2,22 +2,18 @@
 # Installed to /usr/lib/systemd/system/grappa.service (vendor unit dir;
 # operator overrides go in /etc/systemd/system/grappa.service.d/).
 #
-# Unlike infra/linux/systemd/grappa.service (a sed-templated unit for the
-# build-from-source substrate), this ships with fixed FHS paths — the
-# package owns them:
+# Fixed FHS paths — the package owns them:
 #   /usr/lib/grappa      the mix release (self-contained ERTS + app)
 #   /usr/share/grappa    the cicchetto SPA dist (CIC_DIST_ROOT)
 #   /etc/grappa          the env file (secrets, PHX_HOST)
 #   /var/lib/grappa      state: sqlite DB, uploads, run_erl tmp
 #
-# Design note (see infra/linux/README.md for the full rationale):
-# `ExecStart=... bin/grappa start` runs the release in the FOREGROUND
-# (not `daemon`). Under Type=exec systemd tracks that PID directly:
-# `systemctl stop`/`restart` send SIGTERM and BLOCK until the process
-# exits (bounded by TimeoutStopSec) before proceeding.
-# lib/grappa/session/server.ex's terminate/2 handles SIGTERM with a
-# clean upstream QUIT (#215) — so this closes the FreeBSD defect #9
-# stop/start race at the root cause, no custom ExecStop wrapper needed.
+# `bin/grappa start` runs the release in the FOREGROUND (not `daemon`), so
+# Type=exec tracks the real PID: stop/restart send SIGTERM and BLOCK until
+# it exits (bounded by TimeoutStopSec), letting the app QUIT upstream
+# cleanly. Do NOT switch to `daemon` — a detached PID reintroduces the
+# stop/start race and needs a custom ExecStop wrapper.
+# Why: docs/OPERATIONS.md § "Packaging (infra/packaging/)".
 
 [Unit]
 Description=Grappa IRC bouncer
@@ -39,8 +35,7 @@ EnvironmentFile=/etc/grappa/grappa.env
 # no LANG by default, and without a UTF-8 locale Elixir warns "the VM is
 # running with native name encoding of latin1 which may cause Elixir to
 # malfunction" — real risk here since IRC nicks/channels/filenames are
-# UTF-8. C.UTF-8 is always present on glibc (no locale-gen). Surfaced by
-# the #419 R1 migrate-proof boot in a locale-less container.
+# UTF-8. C.UTF-8 is always present on glibc (no locale-gen).
 Environment=LANG=C.UTF-8
 
 # run_erl (only used by `bin/grappa daemon`/`remote`) + any transient

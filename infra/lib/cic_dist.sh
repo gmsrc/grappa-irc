@@ -1,18 +1,14 @@
 # shellcheck shell=sh
 # infra/lib/cic_dist.sh — build BESIDE the served cic bundle, then swap (#1020).
 #
-# Every substrate used to point vite's `outDir` straight at the directory the
-# running BEAM serves (`Grappa.Cic.Bundle.root/0` → Plug.Static + the SPA
-# history-fallback, resolved per REQUEST). Vite empties `outDir` before it
-# writes anything, so the served tree went EMPTY at the start of the build and
-# stayed incomplete until it finished: for that whole window the SPA did not
-# load at all, and a build that FAILED left it empty for good.
+# NEVER aim a builder at the directory the running BEAM serves: vite empties
+# `outDir` before it writes, so the served tree is EMPTY for the whole build.
+# Build into `<served>.next` instead, then promote with two renames.
+# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (#1020).
 #
-# `--emptyOutDir` is not the defect — the cleanup is wanted (vite emits
-# content-hashed chunks; without it every deploy accretes the previous bundle's
-# assets forever) and the flag is only vite's consent prompt for an out-of-root
-# `outDir`. The TIMING is the defect. So: build into a sibling nobody serves,
-# then rename it into place.
+# The staging path must stay a SIBLING of the served one (both inside
+# `runtime/`): rename(2) cannot cross filesystems, and a cross-device `mv`
+# degrades to copy-then-delete, which is neither atomic nor fast.
 #
 # This file is SOURCED, never executed — POSIX sh, no `local`, no bashisms, so
 # the FreeBSD jail's /bin/sh build body can source it as-is (same contract as
@@ -26,33 +22,7 @@
 #   - infra/docker/deploy.sh            the compose oneshot, standalone install
 #
 # infra/packaging/build.sh is NOT a consumer: it already builds into a staging
-# tree under `staging/usr/share/grappa/` that no server is serving. It is the
-# shape this lib generalises.
-#
-# ## The swap, and its failure window
-#
-# `mv` is rename(2) — atomic per call, but there is no portable two-directory
-# EXCHANGE (Linux's RENAME_EXCHANGE is not reachable from sh, and FreeBSD has
-# no equivalent), so the promote is two renames:
-#
-#     mv <served> <served>.prev     # served path momentarily ABSENT
-#     mv <staged> <served>
-#
-# Between them the served path does not EXIST — Plug.Static's `from:` misses
-# and requests fall through to the SPA history-fallback / 404. That window is
-# two syscalls wide against the whole vite build it replaces, and it is
-# ENOENT rather than a half-written tree, so a client either gets the old
-# bundle or the new one, never a mix of both.
-#
-# Die mid-swap and nothing is lost: `<served>.prev` holds the complete previous
-# bundle and `<served>.next` the complete new one; whichever rename landed, the
-# next run starts by clearing `.prev` and re-staging `.next`. Only a crash in
-# the ~microsecond gap leaves the served path missing, and the fix is to re-run
-# the build.
-#
-# Both paths are siblings inside `runtime/` on purpose: rename(2) cannot cross
-# filesystems, and a cross-device `mv` degrades to copy-then-delete, which is
-# neither atomic nor fast. A consumer that stages somewhere else loses that.
+# tree under `staging/usr/share/grappa/` that no server is serving.
 
 # Echo the staging path for a served bundle directory. ONE derivation, because
 # every consumer needs the name twice — once to aim the builder at it, once to
@@ -87,22 +57,19 @@ cic_dist_promote() {
 		return 1
 	fi
 
-	# A vite build can exit 0 having written nothing reachable (wrong outDir,
-	# a plugin that swallowed its own failure). Promoting that would swap an
-	# EMPTY tree into the served path — the exact outage this lib exists to
-	# stop, just moved later. index.html is the one file the server must find:
-	# Bundle.current_hash/0 parses it and the history-fallback serves it.
+	# A vite build can exit 0 having written nothing reachable, and promoting
+	# that would swap an EMPTY tree into the served path. index.html is the
+	# one file the server must find: Bundle.current_hash/0 parses it and the
+	# history-fallback serves it.
 	if [ ! -f "${_cic_staged}/index.html" ]; then
 		echo "cic_dist_promote: ${_cic_staged}/index.html is missing — refusing to promote a tree that is not a bundle; the previous one keeps serving" >&2
 		return 1
 	fi
 
-	# `runtime/cicchetto-dist/.gitkeep` is TRACKED (it bakes the bind-mount
-	# target so a fresh clone does not get it auto-created root-owned — see
-	# .gitignore). It belongs to the tree that LANDS, planted BEFORE the swap
-	# rather than restored after it: a post-hoc `touch` is a repair with its
-	# own window, and the tracked path missing for even an instant is what
-	# left a `D .gitkeep` stalling `git pull --ff-only` on a deploy once.
+	# `runtime/cicchetto-dist/.gitkeep` is TRACKED (see .gitignore), so it
+	# belongs to the tree that LANDS: plant it BEFORE the swap, never restore
+	# it after.
+	# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (#1020).
 	touch "${_cic_staged}/.gitkeep"
 
 	_cic_prev="${_cic_served}.prev"
@@ -115,8 +82,8 @@ cic_dist_promote() {
 		mv "${_cic_served}" "${_cic_prev}"
 	fi
 	mv "${_cic_staged}" "${_cic_served}"
-	# Only now is the previous bundle disposable. Dropping it is what keeps
-	# `--emptyOutDir`'s stale-chunk cleanup: the old content-hashed assets go
-	# with the old directory instead of accreting in the served one.
+	# Only now is the previous bundle disposable. Dropping it is the
+	# stale-chunk cleanup: the old content-hashed assets go with the old
+	# directory instead of accreting in the served one.
 	rm -rf "${_cic_prev}"
 }

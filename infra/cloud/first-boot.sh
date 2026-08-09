@@ -1,20 +1,17 @@
 #!/usr/bin/env bash
 # first-boot.sh — the ONE provider-agnostic bootstrap for a cloud grappa box
-# (#665). Everything that happens on the machine AFTER it boots — install the
-# release .deb, force the operator's domain into the env file, stand up nginx,
-# start the unit, and terminate TLS itself — lives HERE, consumed VERBATIM by:
+# (#665): install the release .deb, force the operator's domain into the env
+# file, stand up nginx, start the unit, terminate TLS. Consumed VERBATIM by:
 #
 #   - infra/aws/grappa-cloudformation.yaml  (today — CFN UserData curls this
 #     script at a git ref and execs it; it is NOT inlined into the template)
 #   - infra/terraform/*.tf                  (later — the same curl-at-ref+exec
 #     from a Terraform `user_data`)
 #
-# So the "second cloud" costs a wrapper, not a rewrite. The two doors share
-# THIS script + the parameter names in infra/cloud/params.contract, and
-# nothing else; the resource graph (CFN YAML vs Terraform HCL) stays two
-# hand-written files. The CI drift-guard (infra/cloud/check-drift.sh) proves
-# both doors INVOKE this script from their bootstrap block, bind every knob
-# marker to a real parameter, and export exactly the env this script requires.
+# The doors share THIS script + the parameter names in
+# infra/cloud/params.contract, and nothing else; infra/cloud/check-drift.sh is
+# the CI guard that keeps them in step.
+# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)". (#665)
 #
 # UNLIKE infra/linux/ (which sits BEHIND an upstream TLS box and runs a dumb
 # HTTP reverse proxy), a cloud box is the whole world: it terminates TLS
@@ -25,39 +22,30 @@
 #   GRAPPA_DOMAIN       public hostname → PHX_HOST + nginx server_name + the
 #                       Let's Encrypt cert SAN.
 #   GRAPPA_ADMIN_EMAIL  admin contact → the ACME registration email AND
-#                       VAPID_SUBJECT (mailto:), the two places grappa needs a
-#                       human to reach.
+#                       VAPID_SUBJECT (mailto:).
 # The other three shared knobs (instance type, SSH CIDR, disk size) shape the
 # provider's resource graph, not this script — see params.contract.
 #
 # ── Version pin: LATEST, on purpose ─────────────────────────────────────────
 # The .deb exists ONLY as a GitHub release asset (there is no apt repo), so
-# first boot fetches the LATEST release's grappa_<ver>_amd64.deb. "Pinned
-# version" therefore means *latest at launch time* — there is no pin. Same
-# story as infra/docker/get.sh. amd64 only (the .deb is amd64-only).
+# first boot fetches the LATEST release's grappa_<ver>_amd64.deb — "pinned"
+# here means latest at launch time. amd64 only.
 #
-# Idempotent: re-running re-applies the same config (apt install of the same
-# deb is a no-op, the env force-set writes the same values). The nginx site is
-# rewritten only until certbot has taken it over — once it is certbot-managed a
-# re-run leaves the TLS vhost intact (see write_nginx_site). bash,
-# `set -euo pipefail`, shellcheck -x clean.
-# Ubuntu always ships bash, so this is bash (not the strict-POSIX sh of the
-# shared deploy lib) for readable string handling.
+# Idempotent: re-running re-applies the same config. The nginx site is
+# rewritten only until certbot has taken it over (see write_nginx_site).
 #
 # The uppercase paths below are genuine config defaults (correct in
-# production); they exist as seams so test/infra/cloud_first_boot_test.bats can
-# sandbox the filesystem, mirroring gen-secrets.sh's GRAPPA_ENV_FILE and
-# get.sh's GRAPPA_HOME.
+# production) that double as seams for
+# test/infra/cloud_first_boot_test.bats to sandbox the filesystem.
 
 set -euo pipefail
 
 # ── Required operator knobs ─────────────────────────────────────────────────
-# The SHAPE below is load-bearing, not style: check-drift.sh reads the
+# The SHAPE below is load-bearing, not style (#746): check-drift.sh reads the
 # required-env set off these assignments — `GRAPPA_X="${GRAPPA_X:-}"`, an empty
 # default, means every provider door must export it, while the non-empty
-# defaults further down are config/test seams no door passes. It then fails CI
-# unless each door exports exactly this set. A new required knob written any
-# other way silently drops out of the handshake the guard defends (#746).
+# defaults further down are config/test seams no door passes. A required knob
+# written any other way drops out of that handshake silently.
 GRAPPA_DOMAIN="${GRAPPA_DOMAIN:-}"
 GRAPPA_ADMIN_EMAIL="${GRAPPA_ADMIN_EMAIL:-}"
 
@@ -82,27 +70,26 @@ die() { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 require_env() {
 	[ -n "$GRAPPA_DOMAIN" ] || die "GRAPPA_DOMAIN is required (the public hostname → PHX_HOST). Refusing to boot a grappa with no host — it would mint dead links and reject every WebSocket."
 	[ -n "$GRAPPA_ADMIN_EMAIL" ] || die "GRAPPA_ADMIN_EMAIL is required (ACME registration + VAPID_SUBJECT)."
-	# Validate format in the SHARED script, not only in a provider's param
-	# constraints — both doors consume this verbatim, and the values are
-	# interpolated into an nginx server_name and the baked grappa-tls heredoc,
-	# so a value carrying a quote/space/'$'/backtick must be rejected HERE.
+	# Validate here, not only in a provider's param constraints: both doors
+	# consume this script verbatim, and these values are interpolated into an
+	# nginx server_name and the baked grappa-tls heredoc, so a quote, space,
+	# '$' or backtick must be rejected on this side.
 	[[ "$GRAPPA_DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$ ]] \
 		|| die "GRAPPA_DOMAIN ('$GRAPPA_DOMAIN') is not a valid fully-qualified domain name."
 	[[ "$GRAPPA_ADMIN_EMAIL" =~ ^[^@[:space:]\'\"\$\`]+@[^@[:space:]\'\"\$\`]+\.[^@[:space:]\'\"\$\`]+$ ]] \
 		|| die "GRAPPA_ADMIN_EMAIL ('$GRAPPA_ADMIN_EMAIL') is not a valid email address."
 }
 
-# No test escape hatch here on purpose: an env var that skips the privilege
-# check ships to production, where anything able to set it walks straight past
-# the check — and because the suite set it unconditionally, the check itself
-# was never once exercised (#747). The suite stubs `id` on PATH like it stubs
-# apt-get and systemctl, so this runs verbatim under test.
+# No test escape hatch here on purpose (#747): an env var that skips the
+# privilege check ships to production, where anything able to set it walks
+# past the check. The suite stubs `id` on PATH instead, so this runs verbatim
+# under test.
 require_root() {
 	[ "$(id -u)" -eq 0 ] || die "first-boot.sh must run as root (apt, systemctl, /etc/grappa all need it)."
 }
 
 # fetch URL DEST — download to a temp then move into place, so a failed
-# download never leaves a half-written file behind (mirrors get.sh).
+# download never leaves a half-written file behind.
 fetch() {
 	say "Fetching $1"
 	curl -fsSL "$1" -o "$2.tmp" || die "download failed: $1"
@@ -111,16 +98,13 @@ fetch() {
 
 # ── Package install (.deb = LATEST release asset) ───────────────────────────
 # The latest release's amd64 .deb download URL, grep+sed (no jq on stock
-# Ubuntu). Empty stdout ⇒ no matching asset (caller dies). curl is consumed
-# fully into a var FIRST (not piped) so no early-terminating stage can SIGPIPE
-# the download under `set -o pipefail`; `sed -n '1p'` reads all input, so it
-# picks the first match without closing the pipe early either.
-# Non-zero means "could not read the API"; empty stdout means "read it, no
-# such asset". Keeping those apart needs the trailing `|| true`: no match makes
-# grep exit 1, `set -o pipefail` promotes that to the pipeline's status, and in
-# the caller's command substitution `set -e` then killed the whole script — so
-# the die naming the problem was unreachable and a release without an amd64
-# asset aborted first boot with exit 1 and not one word of explanation (#748).
+# Ubuntu). curl is consumed fully into a var FIRST (not piped) so no
+# early-terminating stage can SIGPIPE the download under `set -o pipefail`;
+# `sed -n '1p'` reads all input for the same reason.
+#
+# Non-zero means "could not read the API", empty stdout means "read it, no
+# such asset" — the trailing `|| true` is what keeps those two apart, and
+# without it the caller's die is unreachable (#748).
 latest_deb_url() {
 	local json
 	json="$(curl -fsSL "$GITHUB_API")" || return 1
@@ -134,10 +118,9 @@ install_grappa_deb() {
 	export DEBIAN_FRONTEND=noninteractive
 	say "apt-get update + TLS/proxy prerequisites"
 	apt-get update -q
-	# nginx + certbot are only Recommends of the .deb (the bouncer self-serves
-	# without them); on a single TLS-terminating box we need them, so install
-	# explicitly. ca-certificates + curl are pulled by the .deb Depends too,
-	# but a minbase cloud image may lack curl before the .deb lands.
+	# nginx + certbot are only Recommends of the .deb, but a single
+	# TLS-terminating box needs them. ca-certificates + curl are .deb Depends
+	# too — a minbase cloud image may lack curl before the .deb lands.
 	apt-get install -y -q nginx certbot python3-certbot-nginx ca-certificates curl
 
 	deb_url="$(latest_deb_url)" || die "could not read the latest release from $GITHUB_API"
@@ -154,11 +137,10 @@ install_grappa_deb() {
 }
 
 # ── Env file: force the operator's domain + contact in ──────────────────────
-# The .deb postinstall created $GRAPPA_ENV_FILE from the template (PHX_HOST left
-# REPLACE_ME) and filled the secrets via gen-secrets.sh. We force-set the two
+# The .deb postinstall created $GRAPPA_ENV_FILE from the template (PHX_HOST
+# left REPLACE_ME) and filled the secrets via gen-secrets.sh. Force-set the two
 # operator knobs, then RE-LOCK: a tmp+mv rewrite is born 0644 root:root under
-# root's umask, which would drop the 0640 root:grappa lock and leak secrets
-# (same discipline as gen-secrets.sh).
+# root's umask, which would drop the 0640 root:grappa lock and leak secrets.
 relock_env() {
 	chown "root:${GRAPPA_USER}" "$GRAPPA_ENV_FILE" 2>/dev/null \
 		|| chown root:root "$GRAPPA_ENV_FILE" 2>/dev/null || true
@@ -185,17 +167,15 @@ configure_env() {
 # ── nginx: single-box HTTP front (certbot upgrades it to HTTPS) ──────────────
 # The proxy surface is the #485 SSOT snippet, FETCHED at the same git ref this
 # script came from (the .deb does not ship it). certbot --nginx later injects
-# the 443 server + the 80→443 redirect INTO this same site file (marking its
-# edits `# managed by Certbot`). So a re-run must NOT blindly overwrite the site
-# once certbot owns it — that would strip TLS until maybe_issue_cert re-runs.
-# The included snippet is always safe to refresh (certbot never touches it).
+# the 443 server + the 80→443 redirect INTO this same site file, marking its
+# edits `# managed by Certbot` — so a re-run must NOT overwrite the site once
+# certbot owns it, or TLS is stripped until maybe_issue_cert runs again. The
+# included snippet is always safe to refresh; certbot never touches it.
 write_nginx_site() {
 	local site="$NGINX_SITES_AVAILABLE/grappa"
 	mkdir -p "$NGINX_SNIPPETS" "$NGINX_SITES_AVAILABLE" "$NGINX_SITES_ENABLED"
 	fetch "$GRAPPA_RAW_BASE/infra/snippets/locations-api.conf" "$NGINX_SNIPPETS/grappa-locations-api.conf"
 
-	# Idempotency vs certbot: once the site is certbot-managed, leave its TLS
-	# vhost intact rather than reverting to HTTP-only.
 	if grep -q "managed by Certbot" "$site" 2>/dev/null; then
 		say "nginx site is certbot-managed — leaving the TLS vhost intact (refreshed snippet only)"
 		nginx -t
@@ -254,11 +234,10 @@ start_grappa() {
 
 # ── TLS: helper + boot oneshot + conditional first issue ────────────────────
 # The Elastic IP is not known until the stack's Outputs show it, so DNS cannot
-# resolve at first boot. Issuing certbot blind would burn Let's Encrypt's
-# 5-failed-validations-per-hour quota, so we DEFER: install grappa-tls (domain
-# + email baked in), enable a boot oneshot that runs it best-effort (so a
-# reboot AFTER the operator points DNS self-issues), and issue NOW only if DNS
-# already resolves.
+# resolve at first boot, and issuing certbot blind burns Let's Encrypt's
+# 5-failed-validations-per-hour quota. So: install grappa-tls (domain + email
+# baked in), enable a boot oneshot that runs it best-effort (a reboot AFTER
+# the operator points DNS self-issues), and issue NOW only if DNS resolves.
 install_tls_helper() {
 	say "Installing $TLS_HELPER"
 	mkdir -p "$(dirname "$TLS_HELPER")"

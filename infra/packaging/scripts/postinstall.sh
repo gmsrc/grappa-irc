@@ -1,14 +1,13 @@
 #!/bin/sh
-# nfpm postinstall — the .deb postinst AND the .rpm %post scriptlet. nfpm
-# embeds this script VERBATIM into both, but the two package managers pass
-# DIFFERENT $1 conventions:
+# nfpm postinstall — the .deb postinst AND the .rpm %post scriptlet, embedded
+# VERBATIM in both. The two managers pass DIFFERENT $1 conventions:
 #   dpkg:  $1 = configure (install/upgrade) | abort-* (rollback)
 #   rpm:   $1 = 1 (install) | 2 (upgrade)   [a NUMBER, never "configure"]
-# A bare `case $1 in configure)` would therefore NEVER match on rpm — the
-# package would install and do nothing (no dirs, no secrets, no migrate).
-# The body is idempotent (mkdir -p, chown, gen-secrets fills only REPLACE_ME,
-# Ecto.Migrator applies only PENDING), so we run it on every install/upgrade
-# under EITHER manager and skip only dpkg's abort-* rollback. POSIX /bin/sh.
+# So do NOT match on "configure": the body is idempotent (mkdir -p, chown,
+# gen-secrets fills only REPLACE_ME, Ecto.Migrator applies only PENDING) and
+# runs on every install/upgrade under EITHER manager, skipping only dpkg's
+# abort-* rollback. POSIX /bin/sh.
+# Why: docs/OPERATIONS.md § "Packaging (infra/packaging/)".
 set -e
 
 case "${1:-configure}" in
@@ -37,12 +36,11 @@ abort-*)
 	# ── Secrets: openssl-only, idempotent (fills REPLACE_ME) ───────────
 	/usr/share/grappa/gen-secrets.sh
 
-	# ── Migrate: the #419 packaged migrate path ────────────────────────
+	# ── Migrate ────────────────────────────────────────────────────────
 	# Reaches Ecto.Migrator through the release, no mix/toolchain. Runs on
-	# every (re)configure — Ecto.Migrator applies only PENDING migrations,
-	# so this keeps the schema current across upgrades too. FAIL LOUD: a
-	# broken migrate must surface as a failed package configuration, not a
-	# silently half-migrated install (CLAUDE.md "no silent-swallow").
+	# every (re)configure — only PENDING migrations apply, so upgrades stay
+	# current too. FAIL LOUD: a broken migrate must surface as a failed
+	# package configuration, not a silently half-migrated install.
 	if ! /usr/bin/grappa migrate; then
 		echo "grappa: database migration FAILED (see error above)." >&2
 		echo "        The package is installed but the schema is not applied." >&2

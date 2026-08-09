@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Install the dumb reverse-proxy nginx config + shared snippet on a native
-# Linux host, enable/reload the service. (#485 — the BEAM self-serves the
-# SPA, so there is no cicchetto-dist symlink.)
+# Linux host, enable/reload the service. The BEAM self-serves the SPA and
+# owns every header (#485), so there is no cicchetto-dist symlink and no
+# security-headers snippet — only the substrate-agnostic proxy snippet.
 #
-# Idempotent — re-run
-# after `git pull` (or to change LISTEN_ADDR/TRUSTED_UPSTREAM_CIDR) to
-# refresh the config.
+# Idempotent — re-run after `git pull` (or to change
+# LISTEN_ADDR/TRUSTED_UPSTREAM_CIDR) to refresh the config.
 #
 # Env overrides:
 #   REPO_ROOT              default /home/grappa/grappa
@@ -25,11 +25,6 @@ TRUSTED_UPSTREAM_CIDR="${TRUSTED_UPSTREAM_CIDR:-}"
 
 NGINX_ETC="/etc/nginx"
 
-# #485 — this host's nginx is a dumb reverse proxy now (the BEAM self-serves
-# the SPA + owns all headers), so there is no cicchetto-dist symlink and no
-# security-headers snippet to install; only the substrate-agnostic proxy
-# snippet.
-
 echo "[install_nginx] rendering nginx.conf (listen=${LISTEN_ADDR})"
 if [ -n "${TRUSTED_UPSTREAM_CIDR}" ]; then
 	trusted_block="        allow ${TRUSTED_UPSTREAM_CIDR};
@@ -41,11 +36,9 @@ fi
 
 tmp_conf="$(mktemp)"
 trap 'rm -f "${tmp_conf}"' EXIT
-# Bash string substitution, not sed: @TRUSTED_UPSTREAM_BLOCK@ is
-# multi-line (the allow/deny pair), and sed's `s|find|replace|`
-# chokes on an unescaped embedded newline in the replacement text
-# ("unterminated `s' command" — found live on a native-Linux install,
-# 2026-07-22). `${var//find/replace}` handles multi-line values fine.
+# Bash string substitution, not sed: @TRUSTED_UPSTREAM_BLOCK@ expands to a
+# multi-line allow/deny pair, and sed's `s|find|replace|` chokes on an
+# embedded newline in the replacement.
 template_content="$(cat "${REPO_ROOT}/infra/linux/nginx.conf")"
 template_content="${template_content//@LISTEN_ADDR@/${LISTEN_ADDR}}"
 template_content="${template_content//@TRUSTED_UPSTREAM_BLOCK@/${trusted_block}}"

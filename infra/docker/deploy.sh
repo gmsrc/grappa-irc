@@ -1,33 +1,25 @@
 #!/usr/bin/env bash
-# grappa — verb-dispatched standalone Docker deploy (#503 unit B).
+# grappa — verb-dispatched standalone Docker deploy for the vanilla
+# single-host box. Config via env vars (PHX_HOST, HTTP_BIND, SEED_*,
+# FRONTEND_SSL_*); re-running any verb is safe.
 #
-# One entry point for the vanilla single-host Docker box, replacing the
-# three quickstart scripts (now thin forwarders — see scripts/quickstart*.sh):
-#
-#   deploy.sh install   fresh clones-and-goes bring-up: generate secrets,
-#                       write .env, build the toolchain image, migrate,
-#                       optionally seed a user+network, start the prod
-#                       profile, wait for /healthz, render a front-door
-#                       config. Config via env vars (PHX_HOST, HTTP_BIND,
-#                       SEED_*, FRONTEND_SSL_*) — see the block below.
-#   deploy.sh update    pull, then let the SHARED deploy algorithm
-#                       (infra/lib/deploy_common.sh, the same lib driving
-#                       the jail + linux + operator-docker substrates)
-#                       classify hot-vs-cold via Grappa.Deploy.Preflight:
-#                       HOT → POST /admin/reload (sessions preserved), COLD
-#                       → recreate. This is the #503 win — quickstart-update
-#                       ALWAYS recreated, on a hand-maintained regex table.
+#   deploy.sh install   fresh bring-up: generate secrets, write .env, build
+#                       the toolchain image, migrate, optionally seed a
+#                       user+network, start the prod profile, wait for
+#                       /healthz, render a front-door config.
+#   deploy.sh update    pull, then let the shared deploy algorithm
+#                       (infra/lib/deploy_common.sh) classify hot-vs-cold via
+#                       Grappa.Deploy.Preflight: HOT → POST /admin/reload
+#                       (sessions preserved), COLD → recreate.
 #   deploy.sh stop      take the prod profile all the way down
 #                       (--profile prod down --remove-orphans [--volumes]).
-#   deploy.sh           (bare) idempotent "make it so": no .env on disk →
-#                       install, otherwise update. The single command a
-#                       curl|bash one-liner (unit D) can always run.
+#   deploy.sh           (bare) no .env on disk → install, otherwise update.
 #
-# This is the STANDALONE path — deliberately plain `docker compose -f
-# compose.yaml`, NO scripts/_lib.sh, NO compose.override.yaml, NO per-host
-# machinery. It is independent of the operator deploy tooling
-# (scripts/deploy.sh, deploy-m42.sh) which targets a specific production
-# host. Re-running any verb is safe.
+# The STANDALONE path: plain `docker compose -f compose.yaml`, NO
+# scripts/_lib.sh, NO compose.override.yaml, NO per-host machinery, and
+# independent of the operator deploy tooling (scripts/deploy.sh,
+# deploy-m42.sh) which targets a specific production host.
+# Why: docs/OPERATIONS.md § "The Docker deploy driver (infra/docker/)" (#503).
 #
 # ---- Serving it under a real hostname (staging box) -------------------
 #
@@ -38,11 +30,10 @@
 #
 #   PHX_HOST=grappa.example.org infra/docker/deploy.sh install
 #
-# PHX_HOST is load-bearing: it is the source of the host-alias set the app
-# derives upload links and origin checks from (lib/grappa/http_hosts.ex).
-# Leaving it at `localhost` while serving under a real name mints links
-# pointing at the wrong host, silently (#468). Pass it explicitly and it
-# overwrites a previously-written value in .env.
+# Pass PHX_HOST explicitly — it overwrites a previously-written value in
+# .env. It is the source of the host-alias set the app derives upload links
+# and origin checks from, so leaving it at `localhost` while serving under a
+# real name mints links pointing at the wrong host, silently (#468).
 #
 # ---- Seeding a network + user (optional) ------------------------------
 #
@@ -70,23 +61,19 @@ say()  { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!!\033[0m  %s\n' "$*" >&2; }
 die()  { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
-# ---- detect deploy mode (F5, #503 unit D) -----------------------------
-# ONE script, two substrates. A real checkout runs the SOURCE-mode path
-# (bind-mount dev image, compose, hot-on-HOT). A checkout-less host (the
-# `curl|bash` one-liner / a `docker run` of the published ghcr image) runs
-# the RELEASE-IMAGE path: no source, no compose, no mix — plain `docker`
-# against ghcr.io/vjt/grappa, COLD-only updates (hot-on-image is #503 unit
-# E). The source tree next to this script is the discriminator: a real
-# checkout has compose.yaml two levels up (infra/docker/ → repo root); a
-# curl'd copy sitting in $GRAPPA_HOME does not. GRAPPA_DEPLOY_MODE forces
-# it (source|release) for tests + operators who want no guessing.
+# ---- detect deploy mode -----------------------------------------------
+# ONE script, two substrates. A real checkout runs the SOURCE path (compose,
+# bind-mounted dev image, hot-on-HOT); a checkout-less host — the `curl|bash`
+# one-liner — runs the RELEASE-IMAGE path (plain `docker` against
+# ghcr.io/vjt/grappa, COLD-only updates). The discriminator is compose.yaml
+# two levels up, which a curl'd copy in $GRAPPA_HOME does not have.
+# GRAPPA_DEPLOY_MODE=source|release forces it.
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANDIDATE_ROOT="$(cd "$SELF_DIR/../.." 2>/dev/null && pwd)" || CANDIDATE_ROOT=""
 
 # The ONE secret generator (#862), shared with the .deb/.rpm postinstall and
-# the release image's first-boot bootstrap. Resolved relative to THIS script
-# so it works from a checkout and from the $GRAPPA_HOME mirror get.sh lays
-# down — both keep the repo's infra/docker + infra/packaging layout.
+# the release image's first-boot bootstrap. Resolved relative to THIS script,
+# so a checkout and the $GRAPPA_HOME mirror get.sh lays down both find it.
 GEN_SECRETS="$SELF_DIR/../packaging/gen-secrets.sh"
 
 case "${GRAPPA_DEPLOY_MODE:-}" in
@@ -107,14 +94,12 @@ if [ "$DEPLOY_MODE" = source ]; then
 	REPO_ROOT="$CANDIDATE_ROOT"
 	cd "$REPO_ROOT"
 	# Pin to the committed compose file only — no override auto-merge.
-	# Every compose invocation reuses this array.
 	COMPOSE=(docker compose -f compose.yaml)
 else
 	# ---- release-image mode: checkout-less, docker-only ---------------
-	# State (the prod env file, with every secret) lives per-user so the
-	# `update` verb finds the box `install` created. /data is a named
-	# docker volume — nothing is written into a checkout, because there is
-	# none. All knobs are env-overridable for testing + odd hosts.
+	# The prod env file (every secret) lives per-user so `update` finds the
+	# box `install` created; /data is a named docker volume. All knobs are
+	# env-overridable for testing + odd hosts.
 	GRAPPA_HOME="${GRAPPA_HOME:-$HOME/.grappa}"
 	ENV_FILE="$GRAPPA_HOME/grappa.env"
 	GRAPPA_IMAGE="${GRAPPA_IMAGE:-ghcr.io/vjt/grappa:latest}"
@@ -146,19 +131,13 @@ require_docker() {
 	docker compose version >/dev/null 2>&1 || die "docker compose v2 not found — install the Compose plugin."
 }
 
-# ---- the cic build's version input (#538/#652, #692) ------------------
+# ---- the cic build's version input ------------------------------------
 # vite bakes GRAPPA_VERSION into <meta cicchetto-version> and REFUSES to build
-# without it rather than ship a bundle that lies about its version. The
-# cicchetto-build container mounts only ./cicchetto, so it cannot read the
-# repo-root VERSION file itself: this wrapper derives it and compose passes it
-# through (`GRAPPA_VERSION: ${GRAPPA_VERSION:-}`).
-#
-# Called AT each launch point rather than once at startup, for two reasons.
-# `update` pulls before it builds, so a startup derive would stamp the bundle
-# with the version the box was ALREADY on — the exact staleness #652 exists to
-# prevent, and invisible because the build still succeeds. And `stop` must not
-# depend on a readable VERSION: a box you cannot bring down because a file went
-# missing is the trap cmd_stop is written to avoid.
+# without it. The cicchetto-build container mounts only ./cicchetto, so it
+# cannot read the repo-root VERSION itself: this derives it and compose passes
+# it through. Call it AT each launch point, never once at startup — `update`
+# pulls before it builds, and `stop` must not depend on a readable VERSION.
+# Why: docs/OPERATIONS.md § "The Docker deploy driver (infra/docker/)" (#652).
 export_cic_version() {
 	GRAPPA_VERSION="$(infra/packaging/version.sh)" \
 		|| die "could not derive the version from $REPO_ROOT/VERSION — is this a complete checkout?"
@@ -166,13 +145,11 @@ export_cic_version() {
 }
 
 # ---- one-box-per-host ownership guard ---------------------------------
-# compose.yaml pins `container_name`, so those names belong to the docker
-# daemon and not to a compose project: a second checkout that operates its
-# own box collides with the first — "The container name /grappa is already
-# in use" — which names neither the owner nor the fix. Ask the running
-# container who owns it (docker's own compose label) and refuse if the
-# answer is not us, while nothing has happened yet. Sets BOX_RUNNING=1 if
-# any pinned container exists (so `stop` can report a genuine no-op).
+# compose.yaml pins `container_name`, so a second checkout operating its own
+# box collides with the first. Ask each running container who owns it
+# (docker's own compose label) and refuse if the answer is not us, while
+# nothing has happened yet. Sets BOX_RUNNING=1 if any pinned container
+# exists, so `stop` can report a genuine no-op.
 assert_box_ownership() {
 	BOX_RUNNING=0
 	# shellcheck disable=SC2013  # container_name values are single tokens; word-split is intended
@@ -204,9 +181,8 @@ set_env() {
 }
 
 # force_env KEY VALUE — set KEY unconditionally, replacing any existing
-# value. Used only for what the caller passed on this run: a second run
-# with a different PHX_HOST must actually move the box, not silently keep
-# the first run's hostname (the #468 failure mode).
+# value. Only for what the caller passed on THIS run: a second run with a
+# different PHX_HOST must move the box, not keep the first run's hostname.
 force_env() {
 	local key="$1" val="$2"
 	if grep -qE "^${key}=" .env 2>/dev/null; then
@@ -215,13 +191,11 @@ force_env() {
 	printf '%s=%s\n' "$key" "$val" >> .env
 }
 
-# migrate_publish_env — a box created by a pre-#485 checkout carries
-# NGINX_PUBLISH=<host>:80 (the LAN-facing nginx container) and
-# GRAPPA_PUBLISH=127.0.0.1:4000 (grappa behind nginx). nginx is gone;
-# grappa must take over that LAN binding. Rewrite .env in place, mapping
-# the container side :80 → :4000 (compose re-appends :4000). Deprecated
-# alias honoured once, with a one-line warning. Idempotent — a no-op once
-# NGINX_PUBLISH is gone.
+# migrate_publish_env — a box created before #485 dropped the nginx container
+# carries NGINX_PUBLISH=<host>:80 plus GRAPPA_PUBLISH=127.0.0.1:4000. Rewrite
+# .env in place so grappa takes over that LAN binding, mapping the container
+# side :80 → :4000 (compose re-appends :4000). Honours the deprecated alias
+# once, with a warning. Idempotent — a no-op once NGINX_PUBLISH is gone.
 migrate_publish_env() {
 	grep -qE '^NGINX_PUBLISH=' .env || return 0
 
@@ -243,8 +217,8 @@ migrate_publish_env() {
 }
 
 # published_bind — echo the host:port GRAPPA_PUBLISH actually publishes,
-# loopback-normalised for display (a wildcard/bare-port bind is shown as
-# loopback, since a URL nobody listens on is the #469 failure mode).
+# normalising a wildcard/bare-port bind to loopback: a printed URL nobody
+# listens on is worse than none (#469).
 published_bind() {
 	local p
 	p="$(sed -n 's/^GRAPPA_PUBLISH=//p' .env 2>/dev/null | tail -n1)"
@@ -263,9 +237,9 @@ published_bind() {
 cmd_install() {
 	[ $# -eq 0 ] || usage
 
-	# Host port the PWA is served on (grappa, directly — #485 dropped
-	# nginx). A value passed on this run must win over what a previous run
-	# (or .env.example) left behind, else the box quietly serves elsewhere.
+	# Host port the PWA is served on. A value passed on THIS run must win
+	# over what a previous run (or .env.example) left behind, else the box
+	# quietly serves elsewhere — hence the *_EXPLICIT flags.
 	local HTTP_BIND_EXPLICIT=0
 	[ -n "${HTTP_BIND+x}" ] && HTTP_BIND_EXPLICIT=1
 	local HTTP_BIND="${HTTP_BIND:-127.0.0.1:3000}"
@@ -284,10 +258,9 @@ cmd_install() {
 	local SEED_AUTH="${SEED_AUTH:-none}"
 	local SEED_NICK_PASSWORD="${SEED_NICK_PASSWORD:-}"
 	local SEED_AUTOJOIN="${SEED_AUTOJOIN:-}"
-	# #475 — the seeded account is an admin by DEFAULT: the admin console
-	# is the only place some install-level switches live (visitor access),
-	# so a box seeded without it cannot be finished from the UI it hands
-	# you. SEED_ADMIN=0 for a box that should start with no administrator.
+	# Admin by DEFAULT: the admin console is the only place some
+	# install-level switches live, so a box seeded without it cannot be
+	# finished from the UI it hands you (#475).
 	local SEED_ADMIN="${SEED_ADMIN:-1}"
 
 	# ---- 0. preflight -------------------------------------------------
@@ -314,18 +287,17 @@ cmd_install() {
 	set_env CONTAINER_GID "$(id -g)"
 	if [ "$PHX_HOST_EXPLICIT" -eq 1 ] || [ "$ENV_CREATED_NOW" -eq 1 ]; then
 		# A .env just copied from the example carries the example's
-		# hostname, which is someone else's host — inheriting it is the
-		# copy-trap that mints upload links pointing away from this box
-		# (#468). Whatever this run resolved to wins over it.
+		# hostname — inheriting it mints upload links pointing away from
+		# this box (#468), so this run's value wins.
 		force_env PHX_HOST "$PHX_HOST"
 	else
 		set_env PHX_HOST "$PHX_HOST"
 		PHX_HOST="$(sed -n 's/^PHX_HOST=//p' .env | tail -n1)"
 		PHX_HOST="${PHX_HOST:-localhost}"
 	fi
-	# #485 — grappa is the LAN-facing service now (no nginx in front), so
-	# it publishes on HTTP_BIND. compose.yaml appends :4000, so
-	# GRAPPA_PUBLISH carries only the host side (addr:port, or a bare port).
+	# grappa is the LAN-facing service (no nginx in front since #485), so it
+	# publishes on HTTP_BIND. compose.yaml appends :4000, so GRAPPA_PUBLISH
+	# carries only the host side (addr:port, or a bare port).
 	if [ "$HTTP_BIND_EXPLICIT" -eq 1 ] || [ "$ENV_CREATED_NOW" -eq 1 ]; then
 		force_env GRAPPA_PUBLISH "${HTTP_BIND}"
 	else
@@ -339,10 +311,9 @@ cmd_install() {
 		esac
 	fi
 
-	# #485 — a pre-change box carries NGINX_PUBLISH. `install` does NOT
-	# migrate it (only `update` does): re-installing here would leave
-	# grappa on the loopback default and silently orphan the old LAN URL.
-	# Warn and point at the upgrade path rather than half-migrate.
+	# `install` does NOT migrate a pre-#485 NGINX_PUBLISH — only `update`
+	# does. Half-migrating here would leave grappa on the loopback default
+	# and silently orphan the old LAN URL, so warn and point at `update`.
 	if grep -qE '^NGINX_PUBLISH=' .env; then
 		warn "This box predates #485 (NGINX_PUBLISH is set — the nginx container was dropped)."
 		warn "install does NOT migrate the port binding; run 'infra/docker/deploy.sh update'"
@@ -394,8 +365,7 @@ cmd_install() {
 	# ---- 6b. seed an account + network (optional) ---------------------
 	# Runs BEFORE the stack comes up: Bootstrap reads the binding at boot,
 	# so the very first `up` already dials out. Neither task is destructive
-	# on a second run (duplicate name / existing credential both fail), so
-	# both failures downgrade to a note instead of aborting a healthy box.
+	# on a second run, so both failures downgrade to a warning.
 	local SEED_ACCOUNT_EXISTED=0
 	if [ -n "$SEED_USER" ]; then
 		local SEED_PASSWORD="${SEED_PASSWORD:-}"
@@ -403,9 +373,8 @@ cmd_install() {
 			SEED_PASSWORD="$(head -c 18 /dev/urandom | base64 | tr -d '\n/+=' | cut -c1-20)"
 		fi
 
-		# #475 — `--admin` is part of the same command: create_user grants
-		# the bit right after creation, only on CREATION (an existing
-		# account keeps its flags).
+		# `--admin` rides on the create: the bit is granted only on
+		# CREATION, an existing account keeps its flags.
 		local create_args=(mix grappa.create_user --name "$SEED_USER" --password "$SEED_PASSWORD")
 		[ "$SEED_ADMIN" != "0" ] && create_args+=(--admin)
 
@@ -434,10 +403,9 @@ cmd_install() {
 	fi
 
 	# ---- 6c. seed the built-in theme gallery --------------------------
-	# #475 — OUTSIDE the SEED_USER block: the curated gallery is a property
-	# of the install, so a box with no seeded user still ships its themes.
-	# Idempotent (upsert on (system owner, name)); not fatal (an empty
-	# gallery is cosmetic, not worth failing a healthy install over).
+	# OUTSIDE the SEED_USER block: the gallery is a property of the install,
+	# so a box with no seeded user still ships its themes. Idempotent, and
+	# not fatal — an empty gallery is cosmetic.
 	say "Seeding the built-in theme gallery"
 	if ! "${COMPOSE[@]}" run --rm --no-deps -T grappa mix grappa.seed_themes; then
 		warn "theme seeding failed — the box works, but the gallery starts empty."
@@ -445,8 +413,8 @@ cmd_install() {
 	fi
 
 	# ---- 7. bring up the stack ----------------------------------------
-	# cicchetto-build is IN the prod profile, so this `up` starts it — the
-	# bundle is built here, not by a separate step, and it needs the version.
+	# cicchetto-build is IN the prod profile, so this `up` builds the bundle
+	# too — and it needs the version.
 	export_cic_version
 	say "Starting the stack (grappa + cicchetto build)"
 	"${COMPOSE[@]}" --profile prod up -d --remove-orphans
@@ -551,8 +519,8 @@ cmd_stop() {
 		*) die "usage: infra/docker/deploy.sh stop [--volumes]" ;;
 	esac
 
-	# Deliberately NOT requiring .env: a box you cannot stop because its
-	# config went missing is a trap, and the containers exist either way.
+	# Deliberately NOT requiring .env: the containers exist either way, and
+	# a box you cannot stop because its config went missing is a trap.
 	require_compose_file
 	require_docker
 	assert_box_ownership
@@ -563,9 +531,8 @@ cmd_stop() {
 		say "Stopping the stack (prod profile: grappa + cicchetto-build)"
 	fi
 
-	# --remove-orphans: drop a stale grappa-nginx from a pre-#485 box
-	# (removed from compose.yaml but not stopped by a plain down) so the
-	# project network frees.
+	# --remove-orphans: drop a stale grappa-nginx from a pre-#485 box, which
+	# a plain `down` leaves running and holding the project network.
 	local down=("${COMPOSE[@]}" --profile prod down --remove-orphans)
 	[ "$DROP_VOLUMES" -eq 1 ] && down+=(--volumes)
 	"${down[@]}"
@@ -611,9 +578,8 @@ cmd_update() {
 	assert_box_ownership   # sets BOX_RUNNING
 
 	if [ "$no_pull" -eq 0 ]; then
-		# A fast-forward onto a dirty tree either fails halfway or silently
-		# carries local edits into "the latest revision". Refuse, and say
-		# which files.
+		# A fast-forward onto a dirty tree either fails halfway or carries
+		# local edits into "the latest revision". Refuse, naming the files.
 		if ! git diff --quiet || ! git diff --cached --quiet; then
 			warn "uncommitted changes in the checkout:"
 			git status --short >&2
@@ -621,18 +587,15 @@ cmd_update() {
 		fi
 	fi
 
-	# #485 — migrate a pre-change .env in place (idempotent; a no-op once
-	# NGINX_PUBLISH is gone). This is where the deprecated alias is honoured,
+	# `update` is where the deprecated NGINX_PUBLISH alias is honoured,
 	# unlike `install` which only warns.
 	migrate_publish_env
 
 	# ---- resolve the mode the operator did NOT force ----------------
 	# Two docker-specific reasons to force cold when the operator left it to
-	# auto: a stopped stack cannot be hot-reloaded (this is the
-	# start-again-after-stop path — quickstart-stop points here), and
-	# --no-pull deploys the working tree, whose empty prev..new range
-	# preflight cannot classify. A recreate is never wrong (unlike a hot
-	# reload), so force cold in both cases.
+	# auto: a stopped stack cannot be hot-reloaded, and --no-pull deploys the
+	# working tree, whose empty prev..new range preflight cannot classify. A
+	# recreate is never wrong (unlike a hot reload).
 	if [ "$forced" -eq 0 ]; then
 		if [ "$no_pull" -eq 1 ]; then
 			say "no-pull: deploying the working tree cold (empty range; a recreate is never wrong)"
@@ -680,40 +643,38 @@ cmd_update() {
 	substrate_changed_files() { git diff --name-only "$1..$2"; }
 
 	substrate_preflight() {
-		# Classify via Grappa.Deploy.Preflight (substrate "docker") — the
-		# same SoT the operator + native substrates use. 0=HOT, 3=COLD,
-		# anything else is a crash the lib aborts on.
+		# Classify via Grappa.Deploy.Preflight (substrate "docker"), the
+		# same SoT every substrate uses: 0=HOT, 3=COLD, anything else is a
+		# crash the lib aborts on.
 		"${COMPOSE[@]}" run --rm --no-deps -e MIX_ENV=dev grappa \
 			mix run --no-start -e "Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"docker\"])"
 	}
 
 	substrate_build() {
-		# Hot needs no build — the pulled commit is already in the
-		# bind-mounted tree (compose.yaml mounts ./:/app). Cold rebuilds the
-		# toolchain image.
+		# Hot needs no build — compose.yaml bind-mounts ./:/app, so the
+		# pulled commit is already in place. Cold rebuilds the image.
 		[ "$MODE" = cold ] || return 0
 		say "Rebuilding the grappa image"
 		"${COMPOSE[@]}" --profile prod build grappa
 	}
 
 	substrate_reload() {
-		# The lib captures this hook's stdout as the reload response body, so
-		# the pre-reload chatter must go to stderr — else it pollutes the
-		# JSON the "failed":[] honesty glob inspects.
+		# The lib captures this hook's stdout as the reload response body,
+		# so pre-reload chatter MUST go to stderr or it pollutes the JSON
+		# the lib inspects.
 		say "Reloading modules in the live BEAM" >&2
 		"${COMPOSE[@]}" exec -T grappa curl -fsS -X POST http://localhost:4000/admin/reload
 	}
 
 	substrate_cic() {
-		# #1020 — build into a staging sibling and rename it in. The BEAM
-		# serves runtime/cicchetto-dist per request and vite empties its
-		# outDir first, so building in place blanked the SPA for the whole
-		# build — on a box that is UPDATING, i.e. one that is already live.
+		# Build into a staging sibling and rename it in — never in place.
+		# Why: docs/OPERATIONS.md § "The Docker deploy driver
+		# (infra/docker/)" (#1020).
 		local cic_served="runtime/cicchetto-dist"
 		local cic_build_out
 		cic_build_out="$(cic_dist_docker_stage "$cic_served")"
 		# AFTER substrate_pull, so the bundle carries the version the box is
-		# moving TO, not the one it is on (the pull may have bumped VERSION).
+		# moving TO — the pull may have bumped VERSION.
 		export_cic_version
 		say "Rebuilding the cicchetto bundle"
 		CIC_BUILD_OUT="$cic_build_out" "${COMPOSE[@]}" --profile prod run --rm cicchetto-build
@@ -729,9 +690,8 @@ cmd_update() {
 	}
 
 	substrate_seed() {
-		# Mirrors substrate_migrate's door. cmd_install already seeds the
-		# gallery (#475); this is the same call on the UPGRADE path, so a
-		# built-in added after the box was installed actually reaches it.
+		# The same seed cmd_install runs, on the UPGRADE path — so a
+		# built-in theme added after install actually reaches the box.
 		say "Seeding the built-in theme gallery"
 		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa mix grappa.seed_themes
 	}
@@ -760,10 +720,9 @@ EOF
 
 	# shellcheck source=infra/lib/deploy_common.sh
 	. "$REPO_ROOT/infra/lib/deploy_common.sh"
-	# #1020 build-beside-then-swap, used by substrate_cic above. Sourced HERE
-	# and not at the top of the file: only source mode builds a bundle (the
-	# release path ships a prebuilt image), so the get.sh mirror — which
-	# reproduces exactly what a checkout-less host sources — needs no new file.
+	# The build-beside-then-swap helpers substrate_cic uses. Sourced HERE and
+	# not at the top of the file: only source mode builds a bundle, so the
+	# get.sh mirror needs no extra file.
 	# shellcheck source=infra/lib/cic_dist.sh
 	. "$REPO_ROOT/infra/lib/cic_dist.sh"
 	# Empty-array-safe expansion for bash 3.2 under `set -u`.
@@ -774,10 +733,8 @@ EOF
 # verb: (bare) idempotent — install if not yet installed, else update
 # ======================================================================
 cmd_bare() {
-	# A checkout-less host or a fresh clone has no .env — that IS what "not
-	# installed" means to this stack. Install it; otherwise bring it current
-	# and up via update. This is the single command a curl|bash one-liner
-	# (unit D) can always run.
+	# No .env IS what "not installed" means to this stack. The single
+	# command a curl|bash one-liner can always run.
 	if [ -f .env ]; then
 		say "existing .env — updating this box"
 		cmd_update "$@"
@@ -788,13 +745,12 @@ cmd_bare() {
 }
 
 # ======================================================================
-# RELEASE-IMAGE mode (#503 unit D) — checkout-less, docker-only
+# RELEASE-IMAGE mode — checkout-less, docker-only
 # ======================================================================
-# The published ghcr image (Dockerfile.release) is self-contained: mix
-# release, no source, no mix, no CodeReloader. These verbs bring it up and
-# keep it current with plain `docker`. Updates are COLD-only (recreate) —
-# hot-on-image is #503 unit E. All config + prod secrets live in $ENV_FILE
-# (mode 0600); /data is a named docker volume.
+# The published ghcr image (Dockerfile.release) is self-contained: no source,
+# no mix, no CodeReloader. These verbs bring it up and keep it current with
+# plain `docker`, COLD-only (recreate). All config + prod secrets live in
+# $ENV_FILE (mode 0600); /data is a named docker volume.
 
 usage_release() {
 	cat >&2 <<EOF
@@ -821,23 +777,19 @@ require_docker_release() {
 
 release_container_exists() { docker inspect "$GRAPPA_CONTAINER" >/dev/null 2>&1; }
 
-# resolve_phx_host — echo the hostname PHX_HOST is configured to. Priority:
-# the PHX_HOST env var (the non-interactive path a piped one-liner uses),
-# else an interactive prompt on the CONTROLLING TERMINAL ($GRAPPA_TTY,
-# default /dev/tty). A `curl … | bash` one-liner binds stdin to the SCRIPT,
-# so a bare `read` would eat the script text (or hit EOF) — the prompt MUST
-# come from the tty, not stdin. With neither a value nor a usable tty (CI,
-# a non-interactive pipeline) we FAIL LOUD with the exact fix rather than
-# silently defaulting to localhost — a wrong PHX_HOST mints dead upload
-# links + rejects every WebSocket handshake on Origin (#468).
+# resolve_phx_host — echo the configured hostname: the PHX_HOST env var, else
+# an interactive prompt on the CONTROLLING TERMINAL ($GRAPPA_TTY, default
+# /dev/tty) — a `curl … | bash` one-liner binds stdin to the SCRIPT, so a bare
+# `read` would eat the script text. With neither, FAIL LOUD: a wrong PHX_HOST
+# mints dead upload links and rejects every WebSocket handshake on Origin
+# (#468), so defaulting to localhost is not an option.
 resolve_phx_host() {
 	if [ -n "${PHX_HOST:-}" ]; then
 		printf '%s' "$PHX_HOST"
 		return 0
 	fi
-	# The prompt goes to stderr (which still reaches the terminal even when
-	# stdin is a pipe, e.g. curl|bash); the ANSWER is read from the tty, NOT
-	# stdin — stdin is the piped script itself.
+	# The prompt goes to stderr (still the terminal under curl|bash); the
+	# ANSWER is read from the tty, never from stdin.
 	local tty="${GRAPPA_TTY:-/dev/tty}"
 	if [ -r "$tty" ]; then
 		local ans=''
@@ -853,23 +805,14 @@ resolve_phx_host() {
 }
 
 # write_env_file — generate the prod env ONCE, into $ENV_FILE at mode 0600.
-# Idempotent BY DESIGN: an existing file is NEVER regenerated — rotating
-# SECRET_KEY_BASE / GRAPPA_ENCRYPTION_KEY under a live box invalidates every
-# session and makes stored (Cloak-encrypted) credentials undecryptable. So
-# install on an existing box reuses it untouched.
+# An existing file is NEVER regenerated: rotating SECRET_KEY_BASE /
+# GRAPPA_ENCRYPTION_KEY under a live box invalidates every session and makes
+# stored (Cloak-encrypted) credentials undecryptable.
 #
-# The secrets themselves come from infra/packaging/gen-secrets.sh — the ONE
-# generator (#862), shared with the .deb/.rpm postinstall and the release
-# image's first-boot bootstrap. This function only lays down the non-secret
-# lines and hands the file over; it never touches argv (`ps`-visible) or
-# stdout, because the generator writes straight into the file.
-#
-# It used to transcribe four `openssl rand` calls here and spend a throwaway
-# --env-file plus a whole `docker run … eval` on the VAPID pair, on the stated
-# grounds that "host openssl cannot safely reproduce a raw P-256 point". That
-# was false: test/infra/gen_secrets_test.bats re-derives the public point from
-# the generator's own scalar and requires a byte-exact match. Two openssl
-# transcriptions of the same six secrets is exactly the drift #862 removed.
+# The secrets come from infra/packaging/gen-secrets.sh, the ONE generator
+# (#862). This function only lays down the non-secret lines and hands the file
+# over; the secrets never touch argv (`ps`-visible) or stdout, because the
+# generator writes straight into the file.
 write_env_file() {
 	if [ -f "$ENV_FILE" ]; then
 		say "reusing the existing env file at $ENV_FILE (secrets are NOT regenerated)"
@@ -882,15 +825,15 @@ write_env_file() {
 	local phx_host
 	phx_host="$(resolve_phx_host)"
 
-	# umask BEFORE any create, so the file is never world-readable — not
-	# even for the instant between create and an explicit chmod.
+	# umask BEFORE any create: never world-readable, not even for the
+	# instant between create and an explicit chmod.
 	umask 077
 	mkdir -p "$GRAPPA_HOME"
 
 	# Build in a temp beside the target and mv into place only once the
-	# secrets are in. A half-written $ENV_FILE would be WORSE than none: the
-	# next run sees a file, takes the "reusing the existing env file" branch,
-	# and starts a container that dies on a missing SECRET_KEY_BASE.
+	# secrets are in. A half-written $ENV_FILE is WORSE than none: the next
+	# run takes the "reusing the existing env file" branch and starts a
+	# container that dies on a missing SECRET_KEY_BASE.
 	local tmp="$ENV_FILE.partial"
 	{
 		printf '# grappa production env — release-image install (#503 unit D).\n'
@@ -915,14 +858,9 @@ write_env_file() {
 # container name is free (caller removed any prior one). All env (secrets +
 # runtime knobs) rides in via --env-file, so nothing lands on argv.
 #
-# GRAPPA_AUTO_MIGRATE=0 (#867): the image's entrypoint migrates on boot by
-# default, because a bare `docker run` has no other door. THIS path does have
-# one and already uses it — release_migrate runs from the host, before the
-# container is recreated, which is the ordering a schema change needs. Saying
-# so explicitly keeps the decision in ONE place per path: without it a
-# crash-looping old container could restart INTO a migration while
-# release_migrate is running, and two BEAMs migrating one sqlite file is
-# corruption, not contention.
+# GRAPPA_AUTO_MIGRATE=0 is load-bearing: this path migrates itself from the
+# host (release_migrate), before the container is recreated. Two BEAMs
+# migrating one sqlite file is corruption, not contention (#867).
 release_start_container() {
 	say "Starting $GRAPPA_CONTAINER from $GRAPPA_IMAGE"
 	docker run -d \
@@ -942,10 +880,8 @@ release_migrate() {
 }
 
 release_seed_themes() {
-	# Same door as release_migrate — the image ships no Mix, so the seed
-	# goes through the release entry point. The entrypoint deliberately
-	# does NOT migrate on an `eval` verb (#867), so this is exactly one
-	# BEAM doing exactly the seed.
+	# Same door as release_migrate: the image ships no Mix, so the seed goes
+	# through the release entry point, which does not migrate on `eval`.
 	say "Seeding the built-in theme gallery (release image)"
 	docker run --rm --env-file "$ENV_FILE" -v "${GRAPPA_DATA_VOLUME}:/data" \
 		"$GRAPPA_IMAGE" eval 'Grappa.Release.seed_themes()'
@@ -969,8 +905,8 @@ cmd_install_release() {
 	[ $# -eq 0 ] || usage_release
 	require_docker_release
 
-	# One box per host on this container name (parallels the source-mode
-	# ownership guard). An existing container means an existing install.
+	# One box per host on this container name — the release-mode twin of
+	# assert_box_ownership. An existing container means an existing install.
 	if release_container_exists; then
 		die "a container named '$GRAPPA_CONTAINER' already exists — this box looks installed. Run 'update', or 'stop' first."
 	fi
@@ -981,8 +917,7 @@ cmd_install_release() {
 	docker volume create "$GRAPPA_DATA_VOLUME" >&2 || true
 
 	release_migrate
-	# Same non-fatal posture as cmd_install's source-flavor seed: an empty
-	# gallery is cosmetic and must not fail an otherwise healthy install.
+	# Non-fatal, like cmd_install's seed: an empty gallery is cosmetic.
 	if ! release_seed_themes; then
 		warn "theme seeding failed — the box works, but the gallery starts empty."
 		warn "retry with: docker run --rm --env-file $ENV_FILE -v ${GRAPPA_DATA_VOLUME}:/data $GRAPPA_IMAGE eval 'Grappa.Release.seed_themes()'"
@@ -1002,9 +937,9 @@ EOF
 }
 
 cmd_update_release() {
-	# Release-image update is COLD-only (hot-on-image is #503 unit E): the
-	# image ships no CodeReloader, so a recreate is the only safe verdict.
-	# --force-cold is accepted (redundant) for symmetry with the source path.
+	# COLD-only: the image ships no CodeReloader, so a recreate is the only
+	# safe verdict. --force-cold is accepted (redundant) for symmetry with
+	# the source path.
 	case "${1:-}" in
 		''|--force-cold) ;;
 		*) usage_release ;;
@@ -1031,7 +966,8 @@ cmd_update_release() {
 		say "Pulling $GRAPPA_IMAGE" >&2
 		docker pull "$GRAPPA_IMAGE" >&2 || die "docker pull $GRAPPA_IMAGE failed — check the tag + your ghcr access."
 		# marker/preflight are OFF (no git range to classify); PREV/NEW are
-		# set only because the lib reads them. The image ref keeps any log honest.
+		# set only because the lib reads them, and the image ref keeps the
+		# log honest.
 		PREV_SHA="$GRAPPA_IMAGE"
 		NEW_SHA="$GRAPPA_IMAGE"
 	}
@@ -1101,8 +1037,7 @@ EOF
 }
 
 cmd_bare_release() {
-	# A checkout-less host with no env file has never been installed; one
-	# with an env file is an existing box. The single command a curl|bash
+	# No env file means never installed. The single command a curl|bash
 	# one-liner always runs.
 	if [ -f "$ENV_FILE" ]; then
 		say "existing env file — updating this box"

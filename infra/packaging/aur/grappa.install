@@ -32,11 +32,10 @@ _bootstrap() {
 	# values). A packaged host has no mix, so generation stays off the BEAM.
 	/usr/share/grappa/gen-secrets.sh
 
-	# The #419 packaged migrate: Ecto.Migrator via the release eval, no
-	# mix/toolchain. FAIL LOUD — a broken migrate must surface as a failed
-	# transaction, not a silently half-migrated install (CLAUDE.md
-	# "no silent-swallow at boundaries"). Applies only PENDING migrations,
-	# so it is also correct to run on every upgrade.
+	# Packaged migrate: Ecto.Migrator via the release eval, no mix/toolchain.
+	# FAIL LOUD — a broken migrate must surface as a failed transaction, not
+	# a silently half-migrated install. Applies only PENDING migrations, so
+	# it is also correct to run on every upgrade.
 	if ! /usr/bin/grappa migrate; then
 		echo "grappa: database migration FAILED (see error above)." >&2
 		echo "        The package is installed but the schema is not applied." >&2
@@ -81,15 +80,13 @@ post_upgrade() {
 	# Re-run the SAME idempotent bootstrap as first install: sysusers/tmpfiles
 	# no-op when present, the env file is never clobbered (its `[ ! -f ]`
 	# guard also self-heals a deleted one), gen-secrets fills only NEW keys a
-	# version introduces, migrate applies only PENDING migrations. Crucially
-	# it inherits the SAME fail-loud posture — no `|| true` swallow — so a
-	# broken secret-fill or migrate aborts the transaction, exactly like the
-	# .deb postinstall (which runs identical code on install + upgrade under
-	# `set -e`). CLAUDE.md "no silent-swallow at boundaries".
+	# version introduces, migrate applies only PENDING migrations. Keep the
+	# fail-loud posture — no `|| true` swallow — so a broken secret-fill or
+	# migrate aborts the transaction.
 	_bootstrap || return 1
 
 	# Never auto-restart: leave it to the operator, so the epmd-name
-	# stop/start race (FreeBSD defect #9) stays off the upgrade path.
+	# stop/start race stays off the upgrade path.
 	if command -v systemctl >/dev/null 2>&1; then
 		systemctl daemon-reload || true
 	fi
@@ -111,9 +108,9 @@ post_remove() {
 		systemctl daemon-reload || true
 	fi
 	# Data preservation: NEVER auto-delete state or config — losing the DB /
-	# uploads / GRAPPA_ENCRYPTION_KEY is unrecoverable (CLAUDE.md
-	# delete-discipline). The grappa system user is left in place so a
-	# reinstall re-adopts the same uid and /var/lib/grappa ownership.
+	# uploads / GRAPPA_ENCRYPTION_KEY is unrecoverable. The grappa system
+	# user is left in place so a reinstall re-adopts the same uid and
+	# /var/lib/grappa ownership.
 	echo "grappa: removed. State left in /var/lib/grappa (DB + uploads) and"
 	echo "        config in /etc/grappa. Remove manually for a clean slate:"
 	echo "        sudo rm -rf /var/lib/grappa /etc/grappa"

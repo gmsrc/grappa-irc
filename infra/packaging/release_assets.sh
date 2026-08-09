@@ -1,47 +1,32 @@
 #!/usr/bin/env bash
 # release_assets.sh — the single source of truth for grappa's EXPECTED
-# release asset set, and the completeness audit derived from it (#573).
+# release asset set, and the completeness audit derived from it. The
+# release `publish` job reads both from here, so they cannot drift.
 #
-# The release `publish` job used to inline its "collect what built" find
-# glob and had NO notion of what SHOULD have built. So two releases
-# (v0.8.0, v0.9.0) shipped without their .rpm — the rpm leg died, publish
-# attached whatever downloaded, and the artifact list was
-# INDISTINGUISHABLE from a complete one. Red-and-ignored: the run was red
-# both times and nobody looked. See #573.
-#
-# This script closes the hole by deriving BOTH the attach glob (`found`)
-# and the audit (`missing`/`notice`/`apply-body`) from ONE expected-kinds
-# table, so the two can never drift. It is pure filesystem + string logic
-# (no docker, no network, no mix), which is exactly why it can live under
-# bats (test/infra/release_assets_test.bats) rather than untested inside
-# release.yml — the bug lived in the untested inline YAML.
-#
-# Subcommands (the bats suite pins the contract — fit the script to it):
+# Subcommands (contract pinned by test/infra/release_assets_test.bats —
+# fit the script to it):
 #   found <dir>       every file under <dir> matching an expected kind BY
 #                     NAME at ANY depth, sorted, one per line. Name-, not
-#                     path-matched: download-artifact has unpacked the tree
-#                     flat before (run 30399152630), which a path-coupled
-#                     glob missed.
+#                     path-matched: download-artifact sometimes unpacks the
+#                     tree flat.
 #   missing <dir>     the human LABEL of each expected kind with no matching
 #                     file, one per line. Empty output = complete set.
 #   notice <dir>      nothing if complete; else a sentinel-delimited markdown
 #                     block naming the gap.
 #   apply-body <dir>  read a release body from STDIN, strip any existing
 #                     sentinel block, and — only if the set is incomplete —
-#                     PREPEND a fresh one. Print the result. Idempotent (run
-#                     twice = one block); the converse holds too, a
-#                     now-complete set REMOVES a stale block (the #573 (b)
-#                     repair reconciles the body back to clean).
+#                     PREPEND a fresh one. Print the result. Idempotent both
+#                     ways: run twice = one block, and a now-complete set
+#                     REMOVES a stale block.
 #   anything else     usage error (non-zero exit).
 #
-# Follows the sibling packaging scripts' shape (build.sh / version.sh):
-# bash, `set -euo pipefail`, self-locating, loud on misuse.
+# Why: docs/OPERATIONS.md § "Packaging (infra/packaging/)" (#573).
 set -euo pipefail
 
 # The EXPECTED release asset kinds: one `find -name` pattern + its human
-# label per line, TAB-separated. This table IS the contract — the attach
-# glob and the audit both read it, so a new package kind is added in ONE
-# place and both halves follow. Keep it byte-aligned with the bats suite.
+# label per line, TAB-separated. This table IS the contract — a new package
+# kind is added HERE and both the attach glob and the audit follow. Keep it
+# byte-aligned with the bats suite.
 expected_kinds() {
 	printf '%s\n' \
 		'*.deb	Debian package (.deb)' \

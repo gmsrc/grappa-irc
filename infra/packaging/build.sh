@@ -1,34 +1,26 @@
 #!/usr/bin/env bash
-# build.sh — assemble the grappa .deb from a mix release + the cicchetto
-# SPA dist, via nfpm.
+# build.sh — assemble the grappa .deb/.rpm from a mix release + the
+# cicchetto SPA dist, via nfpm.
 #
-# Runs in a Debian/glibc environment with the Elixir 1.19 / OTP 28
-# toolchain + bun on PATH — i.e. the release CI runner (setup-beam), or,
-# for a local isolated build, inside the official `elixir:1.19-otp-28`
-# image (Debian-based; NOT the alpine dev image — alpine/musl ERTS will
-# not run on a glibc target). See infra/packaging/README.md for the
-# one-liner docker invocation.
-#
-# It deliberately does NOT use scripts/*.sh (the dev compose stack): those
-# share the MAIN repo's _build via the ./:/app bind mount, so building
-# here would contend with concurrent dev/CI compiles. This build wants its
-# OWN, throwaway _build.
+# Run on a Debian/glibc host with the Elixir 1.19 / OTP 28 toolchain + bun
+# on PATH: the release CI runner (setup-beam), or the official
+# `elixir:1.19-otp-28` image for a local isolated build. NOT the alpine dev
+# image — musl ERTS will not run on a glibc target. See
+# infra/packaging/README.md for the one-liner docker invocation.
 #
 # Env knobs (all optional):
 #   GRAPPA_VERSION    package version (default: the repo-root VERSION file)
 #   GRAPPA_PKG_ARCH   deb-style arch (default: dpkg --print-architecture /
 #                     uname map). nfpm translates it per format (amd64 ->
 #                     x86_64 for rpm), so the SAME value drives both.
-#   GRAPPA_PKG_FORMAT deb | rpm — the nfpm output format (default: deb; #438).
-#                     The staging tree is format-agnostic; the ONLY constraint
-#                     is that the bundled ERTS + shottino must link the TARGET
-#                     distro's glibc/libssl — so rpm builds run in a Fedora
-#                     container (release.yml `rpm` job), never on the Debian
-#                     runner that builds the deb.
+#   GRAPPA_PKG_FORMAT deb | rpm — the nfpm output format (default: deb).
+#                     Build each format on its OWN distro: the bundled ERTS
+#                     + shottino link the build host's glibc/libssl.
 #   OUT_DIR           where the package lands (default: <repo>/dist)
 #   NFPM_BIN          path to nfpm (default: on PATH, else downloaded pinned)
 #   SKIP_RELEASE=1    reuse an existing _build/prod/rel/grappa
 #   SKIP_CIC=1        reuse an existing staged cicchetto-dist
+#   SKIP_SHOTTINO=1   skip the terminal-client build
 
 set -euo pipefail
 
@@ -44,8 +36,8 @@ say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
 
 # ── Version ────────────────────────────────────────────────────────────────
-# Single source of truth: the repo-root VERSION file, read via version.sh
-# (#538/#652). The env override stays for a one-off build of a pinned version.
+# Single source of truth: the repo-root VERSION file, read via version.sh.
+# The env override is for a one-off build of a pinned version.
 if [ -z "${GRAPPA_VERSION:-}" ]; then
 	GRAPPA_VERSION="$("${SCRIPT_DIR}/version.sh")" || die "could not read the VERSION file — set GRAPPA_VERSION"
 fi
@@ -66,8 +58,8 @@ fi
 export GRAPPA_PKG_ARCH
 
 # ── Package format ───────────────────────────────────────────────────────────
-# deb (default) or rpm. Rejected at the boundary so a typo fails here, not
-# with an opaque nfpm error. The value doubles as the output file extension.
+# deb (default) or rpm; also the output file extension. Rejected here so a
+# typo fails at the boundary, not with an opaque nfpm error.
 GRAPPA_PKG_FORMAT="${GRAPPA_PKG_FORMAT:-deb}"
 case "${GRAPPA_PKG_FORMAT}" in
 deb | rpm) ;;
@@ -114,30 +106,15 @@ mkdir -p "${STAGING}/usr/lib/grappa"
 cp -a "${REL_DIR}/." "${STAGING}/usr/lib/grappa/"
 
 # ── shottino (terminal client) ─────────────────────────────────────────────
-# The C client ships in the same package as the bouncer. Its runtime deps
-# (ncursesw, libssl) are ALREADY in nfpm.yaml's `depends` — the bundled ERTS
-# links the same two — so shipping it costs one ~180 KB binary and adds no
-# new dependency.
-#
-# Built here rather than shipped prebuilt because it links the BUILD host's
-# ncurses/openssl, exactly like the ERTS payload. That is the same
-# constraint that makes this a valid .deb and not a valid .rpm.
-#
-# SKIP_SHOTTINO=1 opts out (mirrors SKIP_RELEASE / SKIP_CIC). Without the
-# opt-out a build failure FAILS the package build: a package that silently
-# ships without a binary it advertises is worse than one that refuses to
-# build.
+# The C client ships in the same package as the bouncer, built here so it
+# links the BUILD host's ncurses/openssl like the ERTS payload does.
+# Unless SKIP_SHOTTINO=1, a build failure FAILS the package build.
 SHOTTINO_BIN="${STAGING}/usr/bin/shottino"
 if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
 	say "building shottino → ${SHOTTINO_BIN}"
-	# ./configure rewrites ${REPO_ROOT}/config.mk, which is a TRACKED file.
-	# Leaving it modified makes `git status --porcelain` non-empty, and
-	# Grappa.Version treats a dirty tree as unreleased — it appends
-	# -<shortsha> instead of reporting the bare tag, which would fail the
-	# release workflow's version proof. The mix release runs earlier so
-	# the CURRENT step order happens to be safe, but silently depending on
-	# that ordering is a trap for whoever reorders this next. Snapshot and
-	# restore so the build leaves the tree exactly as it found it.
+	# ./configure rewrites ${REPO_ROOT}/config.mk, a TRACKED file. Snapshot
+	# and restore it so the build leaves the tree exactly as it found it.
+	# Why: docs/OPERATIONS.md § "Packaging (infra/packaging/)".
 	cfg="${REPO_ROOT}/config.mk"
 	cfg_backup=""
 	if [ -f "${cfg}" ]; then
@@ -154,8 +131,7 @@ if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
 	(
 		cd "${REPO_ROOT}"
 		# configure probes ncursesw + openssl through pkg-config and writes
-		# config.mk, which the Makefile reads. It fails loudly on a missing
-		# dep rather than producing a half-linked binary.
+		# config.mk, which the Makefile reads. Fails loudly on a missing dep.
 		./configure --prefix=/usr
 		make -C frontends/shottino clean
 		make -C frontends/shottino
@@ -163,8 +139,7 @@ if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
 	mkdir -p "${STAGING}/usr/bin"
 	install -m 0755 "${REPO_ROOT}/frontends/shottino/shottino" "${SHOTTINO_BIN}"
 	# Prove the staged artifact RUNS before packaging it. `--help` needs no
-	# server, no terminal and no config, so it exercises the dynamic links
-	# for real instead of just asserting the file exists.
+	# server, terminal or config, so it exercises the dynamic links for real.
 	"${SHOTTINO_BIN}" --help >/dev/null 2>&1 || die "staged shottino does not run (link error?)"
 	[ -x "${SHOTTINO_BIN}" ] || die "shottino missing at ${SHOTTINO_BIN}"
 	# Put config.mk back now that the compile is done, and drop the trap so

@@ -1,18 +1,11 @@
 # shellcheck shell=sh
 # infra/lib/beam_wait.sh — shared BEAM shutdown / epmd name-release wait (#923).
 #
-# The SINGLE implementation of the stop/start race killer for defect #9
-# (2026-06-11 prod outage: a `service grappa restart` started the new
-# BEAM while the old node was still draining WS connections; the new
-# node died at boot with "the name grappa@grappa seems to be in use by
-# another Erlang node" and rc.d walked away silent).
-#
-# Extracted here for the same reason deploy_common.sh was (#503): it had
-# been copy-pasted per substrate, and the copy had already begun to
-# drift — infra/linux/grappa_beam_wait.sh described itself as a "trimmed
-# port" and had lost the two escalation-safety comments that say WHY
-# pkill'ing epmd is only safe once the BEAM is confirmed dead. One
-# algorithm, one test suite, no second place to fix a bug in.
+# The SINGLE implementation of the stop/start race killer: a restart must
+# not start the new BEAM until the old one has exited AND epmd has
+# released the node name, or the new node dies at boot with "the name
+# grappa@grappa seems to be in use by another Erlang node".
+# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (defect #9).
 #
 # This file is SOURCED, never executed. Strict POSIX sh — no bash
 # arrays, no `[[ ]]`, no `local`. Consumers keep their own shebangs
@@ -32,10 +25,7 @@
 #                                    <timeout>s; restart epmd if the
 #                                    name is still listed <timeout>s
 #                                    after the BEAM is gone (safe ONLY
-#                                    then — pkill'ing epmd under a
-#                                    live BEAM makes the BEAM respawn
-#                                    it and re-races the registration,
-#                                    live-repro 2026-05-31).
+#                                    then — see beam_wait_stopped).
 #   wait-name-free <node> <timeout>  Block until epmd no longer lists
 #                                    <node>. NO escalation — used as
 #                                    the pre-start guard, where the
@@ -53,10 +43,9 @@ beam_wait_name_registered() {
 	printf '%s\n' "${out}" | grep -q "^name $1 at "
 }
 
-# Single-tenant host: the only BEAM that ever runs on either substrate
-# is grappa's, so matching on the emulator binary name is unambiguous
-# (and survives pid file staleness, which a crashed run_erl leaves
-# behind).
+# Single-tenant host: the only BEAM that ever runs on either substrate is
+# grappa's, so matching on the emulator binary name is unambiguous — and
+# it survives the stale pid file a crashed run_erl leaves behind.
 beam_wait_beam_alive() {
 	pgrep -q beam.smp 2>/dev/null
 }
@@ -81,9 +70,9 @@ beam_wait_stopped() {
 	while beam_wait_name_registered "${node}"; do
 		if [ "${i}" -ge "${timeout}" ]; then
 			# BEAM confirmed gone yet epmd still lists the name — a
-			# stale registration. Restarting epmd is safe now: no BEAM
-			# is alive to respawn it mid-kill, and the next release
-			# start spawns a fresh one.
+			# stale registration. Restarting epmd is safe ONLY here:
+			# no BEAM is alive to respawn it mid-kill.
+			# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)".
 			echo "[beam-wait] WARNING: epmd still lists '${node}' ${timeout}s after BEAM exit — restarting epmd" >&2
 			pkill epmd 2>/dev/null || true
 			sleep 1
@@ -119,10 +108,9 @@ beam_wait_usage() {
 	exit 64
 }
 
-# Entry point. Called by the consumer AFTER it has set up its substrate
-# config — the epmd probe below must see the final PATH, which is why it
-# lives here and not at source time (a lib that warns when merely sourced
-# is a footgun).
+# Entry point. Call it AFTER the consumer has set up its substrate config:
+# the epmd probe below must see the final PATH, so it lives here and not
+# at source time.
 beam_wait_main() {
 	# If epmd is not on PATH every name_registered() check reads as
 	# "free" — warn loudly rather than degrade the wait to BEAM-exit-only

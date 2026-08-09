@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # check-drift.sh — the CI drift-guard for the #665 shared-ground layout.
 #
-# The design deliberately does NOT generate the provider templates from one
-# source (that would be CDK/cdktf — a Node toolchain + synthesized artifacts
-# committed anyway, to save ~30 lines of resource graph). Instead the two
-# doors are hand-written and a CHECK keeps them honest. Every provider wrapper
-# must:
+# The provider templates are hand-written, not generated from one source, so
+# this CHECK is what keeps them honest. Every provider wrapper must:
 #
 #   (1) INVOKE the shared bootstrap `first-boot.sh` from its bootstrap block
 #       (CFN `UserData:` / Terraform `user_data`), not merely mention it;
@@ -13,29 +10,20 @@
 #       `grappa-knob: <name>` marker BOUND to the parameter it annotates;
 #   (3) export exactly the env vars first-boot.sh requires.
 #
-# All three checks read the EXECUTABLE surface, because that is the surface
-# that breaks a launched stack. The first two used to be satisfied by a
-# comment: the whole-file grep for `first-boot.sh` was satisfied by the four
-# prose mentions that survive deleting the real UserData bootstrap, and a knob
-# marker left behind by a deleted parameter passed as a detached comment. (3)
-# did not exist at all, and it is the drift that actually happens — rename
-# GRAPPA_DOMAIN on one side and every launched stack dies in UserData while
-# both files stay individually valid. See #746.
+# All three read the EXECUTABLE surface, never prose: a comment satisfies a
+# whole-file grep while the real bootstrap is gone (#746).
+# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)". (#665)
 #
-# This is a guard, NOT a generator: it never edits a template, it only fails
-# loud when the doors drift. It runs against whatever doors exist today
-# (infra/aws/) and starts covering infra/terraform/ the day that lands — an
-# absent provider directory is not drift, so it is tolerated silently.
+# A guard, NOT a generator: it never edits a template, it only fails loud when
+# the doors drift. An absent provider directory is not drift and is tolerated
+# silently. Pure filesystem + grep/awk, no network, no cloud CLI — so
+# test/infra/cloud_drift_guard_test.bats can prove it goes RED by mutating the
+# REAL shipped template, one defect at a time.
 #
 # Exit 0 = every present door invokes first-boot.sh, binds every knob, and
 #          hands over exactly the required env.
 # Exit 1 = drift.
 # Exit 2 = misuse / missing contract / missing bootstrap.
-#
-# Pure filesystem + grep/awk, no network, no cloud CLI — so it lives under bats
-# (test/infra/cloud_drift_guard_test.bats), which proves it goes RED on drift
-# by mutating the REAL shipped template, one defect at a time.
-# bash, `set -euo pipefail`, shellcheck-clean.
 
 set -euo pipefail
 
@@ -79,8 +67,7 @@ read_knobs() {
 # The env handshake, read off the bootstrap's own code: a knob it reads with an
 # EMPTY default (`GRAPPA_X="${GRAPPA_X:-}"`) is REQUIRED from the door, while a
 # non-empty default is a production config default / test seam that no door
-# passes. Derived from the assignment itself, never from a comment — a comment
-# is the thing this guard exists to stop trusting.
+# passes. Read from the assignment itself, never from a comment.
 # awk with a whole-line string compare, not a sed backreference: `sed -E` only
 # honours \1 inside the pattern as a GNU extension, and silently matched
 # nothing on BSD sed.
@@ -107,8 +94,7 @@ door_files() {
 
 # The body of a door's bootstrap block — CFN `UserData:` or Terraform
 # `user_data = <<-EOT` — delimited by indentation: everything indented DEEPER
-# than the key, up to the first line that is not. This is the door's executable
-# surface; prose elsewhere in the file is not part of it.
+# than the key, up to the first line that is not.
 door_bootstrap_block() {
 	awk '
 		{

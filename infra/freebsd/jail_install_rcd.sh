@@ -7,13 +7,6 @@
 #                                rendered from the DB — delegated to
 #                                jail_install_source_alias.sh, #646)
 #
-# The grappa_ndp_keepalive service was retired 2026-08-02 (GH #628, the VNET
-# jail cutover): the routed-/64 jail has no proxy-NDP neighbour cache to keep
-# warm. #923 deleted its three files (ndp_keepalive.{pl,sh} +
-# rc.d/grappa_ndp_keepalive) after confirming nothing copied, installed,
-# enabled, started or tested them — recover them from the #628 commit if the
-# service is ever needed again.
-#
 # Invoke from m42 host:
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/jail_install_rcd.sh
 #
@@ -33,10 +26,9 @@ BEAM_WAIT_SRC="${REPO_ROOT}/infra/freebsd/jail_beam_wait.sh"
 echo "[install_rcd] copying ${RC_SRC} -> ${RC_DST}"
 install -o root -g wheel -m 0555 "${RC_SRC}" "${RC_DST}"
 
-# The wrapper's stop/start synchronization delegates to this helper
-# straight from the repo checkout — a checkout with a lost exec bit
-# would silently degrade stop back to async, so re-assert it on every
-# install.
+# The rc.d wrapper runs this helper straight from the checkout, so
+# re-assert its exec bit on every install.
+# Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)".
 echo "[install_rcd] chmod +x ${BEAM_WAIT_SRC}"
 chmod 0555 "${BEAM_WAIT_SRC}"
 
@@ -57,13 +49,10 @@ fi
 
 # ── grappa-source-alias (mode-2 privilege wrapper, #543/#609/#610) ──────
 #
-# Delegated to a sibling script (#646) because the deploy invokes THIS
-# script only from substrate_restart, i.e. on the cold path — while the
-# wrapper must be reconciled on every deploy, hot included. The sibling is
-# therefore called directly by deploy.sh too; on a cold deploy it simply
-# runs twice, which is free (a copy and a rendered file, idempotent by
-# construction). Keeping the call here means the fresh-jail bootstrap
-# stays one command.
+# deploy.sh calls the sibling directly too (on every path, not just the
+# cold one); the duplicate run on a cold deploy is free. Keeping the call
+# here is what makes the fresh-jail bootstrap one command.
+# Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)" (#646).
 "${REPO_ROOT}/infra/freebsd/jail_install_source_alias.sh"
 
 # ── status ─────────────────────────────────────────────────────────────

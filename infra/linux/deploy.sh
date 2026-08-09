@@ -4,12 +4,9 @@
 #
 # Thin consumer of the shared deploy algorithm in
 # infra/lib/deploy_common.sh (#503) — the same lib that drives
-# infra/freebsd/deploy.sh (jail) and scripts/deploy.sh (Docker), so the
-# hot-vs-cold DECISION logic can no longer drift between substrates. This
-# script sets config, flips the feature toggles this substrate has today
-# (re-exec guard + last-deployed marker; NOT --force-* / nothing-to-do /
-# prev-sha-carry — those arrive with #503's enrich step), and defines the
-# systemd-specific hooks.
+# infra/freebsd/deploy.sh (jail) and scripts/deploy.sh (Docker). This
+# script only sets config, flips the feature toggles below, and defines
+# the systemd-specific hooks.
 #
 # Hot path (preflight returns HOT):
 #   git pull -> mix release --overwrite -> POST /admin/reload
@@ -71,15 +68,13 @@ substrate_read_marker() {
 }
 
 substrate_write_marker() {
-	# mkdir -p: the marker owns its dir (no-op on a checkout where runtime/
-	# already holds the DB; required for any checkout-less reuse).
+	# mkdir -p: the marker owns its dir, runtime/ may not exist yet.
 	run_as_grappa "mkdir -p runtime && printf '%s\n' '${NEW_SHA}' > runtime/last-deployed-sha"
 }
 
 substrate_commit_exists() {
-	# Boolean predicate — the lib evaluates this inside `base=$(...)`, so
-	# suppress stdout too (not just stderr) to keep the captured range base
-	# clean of any run_as subshell noise.
+	# Boolean predicate. The lib evaluates it inside `base=$(...)`, so
+	# suppress stdout too — not just stderr.
 	run_as_grappa "git cat-file -e '$1^{commit}'" >/dev/null 2>&1
 }
 
@@ -93,14 +88,12 @@ substrate_preflight() {
 	# DATABASE_PATH & co, and `sudo -u ... bash -c` does not inherit the
 	# systemd unit's EnvironmentFile.
 	#
-	# deps.get runs BEFORE the oneshot (#541, Co-authored-by abonforti): a
-	# pull that moved mix.exs/mix.lock leaves deps stale, and `mix run`
-	# aborts on that — preflight would then exit 1 (a crash, not a 0/3
-	# verdict) and the deploy would strand before ever reaching the build
-	# step's own deps.get. `&&` so a deps.get failure surfaces as a
-	# non-verdict abort rather than a silently-misclassified deploy;
-	# idempotent + cheap when in sync, and build re-runs it so the
-	# preflight-skipping --force-* paths still fetch before compile.
+	# deps.get runs BEFORE the oneshot, `&&`-chained (#541): a pull that
+	# moved mix.exs/mix.lock leaves deps stale and `mix run` aborts, so
+	# preflight would exit 1 — a crash, not a 0/3 verdict — and strand the
+	# deploy. A deps.get failure must surface as that abort, never as a
+	# misclassified deploy.
+	# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)".
 	run_as_grappa "
 		set -a; . '${ENV_FILE}'; set +a
 		export MIX_ENV=prod
@@ -111,9 +104,9 @@ substrate_preflight() {
 
 substrate_build() {
 	# MIX_ENV=prod required — without it mix defaults to :dev and compile
-	# fails on missing dev-only deps that --only prod never fetched. mix
-	# release --overwrite runs on BOTH paths: it writes fresh .beam into
-	# the daemon's code path, which the hot reload POST then loads.
+	# fails on the dev-only deps `--only prod` never fetched. The release
+	# is rebuilt on BOTH paths: it writes fresh .beam into the daemon's
+	# code path, which the hot reload POST then loads.
 	deploy_log "mix deps.get --only prod / compile / release --overwrite"
 	run_as_grappa '
 		export MIX_ENV=prod
@@ -125,13 +118,12 @@ substrate_build() {
 
 substrate_reload() {
 	# Hot path: tell the live BEAM to md5-walk the release's ebin and
-	# reload changed modules (Grappa.HotReload). No systemctl and no cic
+	# reload changed modules (Grappa.HotReload). No systemctl, no cic
 	# rebuild — preflight only returns HOT when neither changed. It DOES
-	# migrate (#41): the handler applies pending EXPAND migrations on the
-	# live pool before reloading, and 409s if any pending one is
-	# contract. The lib captures this hook's stdout as the reload
-	# response body, so the pre-reload log goes to stderr (else it
-	# pollutes the JSON the "failed":[] honesty glob inspects).
+	# migrate (#41): pending EXPAND migrations are applied on the live
+	# pool before the reload, and a pending contract one 409s. The lib
+	# captures this hook's stdout as the reload response body, so the
+	# pre-reload log must go to stderr.
 	deploy_log "POST ${RELOAD_URL}" >&2
 	curl -fsS -X POST "${RELOAD_URL}"
 }
@@ -142,10 +134,8 @@ substrate_cic() {
 }
 
 substrate_migrate() {
-	# Plain `mix ecto.migrate`, not release eval — see install.sh's
-	# matching comment: the packaged release's eval boot path crashes the
-	# BEAM on this substrate (isolated to start_clean boot; systemd's own
-	# `bin/grappa start` path is unaffected).
+	# Plain `mix ecto.migrate`, not release eval — the packaged release's
+	# eval boot path crashes the BEAM on this substrate (see install.sh).
 	deploy_log "migrate"
 	run_as_grappa "
 		set -a; . '${ENV_FILE}'; set +a
@@ -155,13 +145,11 @@ substrate_migrate() {
 }
 
 substrate_seed() {
-	# Mirrors substrate_migrate above, and for the same substrate reason:
-	# the packaged release's eval boot path crashes the BEAM here, so this
-	# substrate drives the mix task rather than a Grappa.Release entry
-	# point. The task suppresses Bootstrap AND the Endpoint
-	# (Mix.Tasks.Grappa.Boot), so it neither opens upstream IRC connections
-	# nor fights the running daemon for port 4000 — it is safe against a
-	# live host, which is the whole point of seeding on a hot deploy.
+	# A mix task, not a Grappa.Release entry point, for the same reason as
+	# substrate_migrate. Mix.Tasks.Grappa.Boot suppresses Bootstrap AND the
+	# Endpoint, so it opens no upstream IRC connection and does not fight
+	# the running daemon for port 4000 — safe against a live host, which is
+	# the whole point of seeding on a hot deploy.
 	run_as_grappa "
 		set -a; . '${ENV_FILE}'; set +a
 		export MIX_ENV=prod

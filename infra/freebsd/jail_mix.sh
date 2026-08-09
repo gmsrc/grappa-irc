@@ -6,9 +6,9 @@
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/jail_mix.sh compile --warnings-as-errors
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/jail_mix.sh release --overwrite
 #
-# `MIX_OS_CONCURRENCY_LOCK=0` because jail /tmp can't take cross-uid
-# hard links; mix only uses them as a build lock — harmless to disable
-# for serialized deploy runs.
+# `MIX_OS_CONCURRENCY_LOCK=0` because jail /tmp cannot take the cross-uid
+# hard links mix uses as a build lock; safe while deploy runs are
+# serialized.
 
 set -eu
 
@@ -16,9 +16,9 @@ set -eu
 ARGS_FILE=$(mktemp /tmp/jail_mix_args.XXXXXX)
 chmod 0644 "${ARGS_FILE}"
 trap 'rm -f "${ARGS_FILE}"' EXIT
-# `bastille cmd <jail> <script> a b c` invokes the script with
-# a as $0 (eaten as script name), b as $1, etc. Restore the real
-# argv by prepending $0 unless it looks like our own script path.
+# `bastille cmd <jail> <script> a b c` invokes the script with a as $0
+# (eaten as the script name), b as $1, etc. Restore the real argv by
+# prepending $0 unless it already looks like this script's own path.
 case "$0" in
 	*/jail_mix.sh|jail_mix.sh)
 		: # invoked normally

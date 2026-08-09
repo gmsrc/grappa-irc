@@ -5,22 +5,15 @@
 # config of its own, so the file is just the stable path
 # grappa.service's ExecStartPre refers to.
 #
-# On FreeBSD this was the PRIMARY stop/start sync mechanism because
-# rc.d's `service grappa stop` is asynchronous (defect #9, 2026-06-11
-# outage: a restart raced the still-draining old node into an epmd
-# name collision). On Linux, `ExecStart=.../bin/grappa start` runs the
-# release in the FOREGROUND under systemd `Type=exec` — systemd tracks
-# that PID directly and `systemctl stop`/`restart` natively block until
-# it exits (bounded by TimeoutStopSec). That closes the defect #9 race
-# at the root cause, so this script is no longer load-bearing for the
-# stop path.
-#
-# It's kept for two narrower purposes:
-#   - `wait-name-free` wired into grappa.service as ExecStartPre — a
-#     defense-in-depth guard against a restart-cycling edge case
-#     where epmd hasn't yet reacted to a just-exited node.
-#   - `wait-stopped` kept as a standalone operator tool for manually
-#     troubleshooting a stuck stop (not invoked by any script here).
+# systemd `Type=exec` makes `systemctl stop`/`restart` block until the
+# release exits, so this is NOT load-bearing for the stop path here. Two
+# narrower uses remain:
+#   - `wait-name-free` as grappa.service's ExecStartPre — defense in
+#     depth against a restart cycle where epmd has not yet reacted to a
+#     just-exited node.
+#   - `wait-stopped` as a standalone operator tool for a stuck stop
+#     (invoked by no script here).
+# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)".
 
 set -euo pipefail
 

@@ -4,22 +4,10 @@
 #
 # Runs as ROOT inside the jail. Idempotent by construction — a copy, a
 # chmod and a rendered config file — which is what lets the deploy run it
-# on EVERY path (hot AND cold) instead of only when something is
-# classified as needing a restart.
-#
-# #646 — this used to live inside jail_install_rcd.sh, which the deploy
-# only invokes from substrate_restart, i.e. on COLD. No Preflight class
-# covers `infra/freebsd/bin/*`, so a wrapper-only change classifies HOT
-# and the installer never ran: shipping #610 (whose `arm_check` calls the
-# new `probe` subcommand) left the pre-#610 wrapper installed, every probe
-# exited 64, mode 2 disarmed, and 44 visitors were rejected in production.
-#
-# The cure is RECONCILIATION, not classification. Widening the cold
-# classification would (a) pay a full session drop to copy one file and
-# (b) still miss the other half of the incident: the config file is
-# derived from the DB, not from a changed path, so no file-based verdict
-# can ever detect that it drifted. Running this every deploy makes the
-# installed artifacts a function of the checkout + the DB, full stop.
+# on EVERY path, hot AND cold, rather than only on a restart. The
+# installed artifacts are a function of the checkout + the DB, not of any
+# file-based deploy classification.
+# Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)" (#646).
 #
 # Invoke by hand (fresh jail, or after editing the wrapper in place):
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/jail_install_source_alias.sh
@@ -36,16 +24,12 @@ SA_CONF="${SA_CONF:-/usr/local/etc/grappa/source-alias.conf}"
 echo "[install_source_alias] copying ${SA_SRC} -> ${SA_DST}"
 install -o root -g wheel -m 0555 "${SA_SRC}" "${SA_DST}"
 
-# The wrapper reads its privilege SCOPE — the prefix it may alias inside, and
-# refuses to alias outside of — from a root-owned config file, and fails
-# closed without it. That prefix MUST equal ServerSettings'
-# `addressing.static_mapping_prefix`: a drift does not misbehave quietly, it
-# refuses the arm probe with exit 65, i.e. it surfaces as an outage. Render it
-# from the DB so the two cannot be kept in sync by hand.
-#
-# No prefix in the DB (mode 1, or a fresh install) → leave any existing file
-# alone rather than truncate it: in that configuration the wrapper is never
-# invoked, and a half-written scope is worse than a stale one.
+# The wrapper reads its privilege SCOPE — the prefix it may alias inside,
+# and refuses to alias outside of — from this root-owned config file, and
+# fails closed without it. Render it from the DB so it cannot drift from
+# ServerSettings' `addressing.static_mapping_prefix`; with no prefix in
+# the DB, leave any existing file alone rather than truncate it.
+# Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)".
 # shellcheck source=/dev/null  # runtime env file, not in the repo
 DB_PATH=$(. "${ENV_FILE}" 2>/dev/null; printf '%s' "${DATABASE_PATH:-}")
 SA_PREFIX=""

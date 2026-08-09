@@ -31,7 +31,6 @@ if [ -r "${PID_FILE}" ] && kill -0 "$(cat "${PID_FILE}")" 2>/dev/null; then
 	exit 1
 fi
 
-# Backup current DB if present.
 if [ -f "${DST}" ]; then
 	BACKUP="${DST}.before-import-$(date -u +%Y%m%dT%H%M%SZ)"
 	echo "[import_db] backing up current DB -> ${BACKUP}"
@@ -39,9 +38,8 @@ if [ -f "${DST}" ]; then
 	chown grappa:grappa "${BACKUP}"
 fi
 
-# WAL + SHM sidecars from the previous DB MUST be removed before
-# importing — sqlite would otherwise mix the new main DB with the
-# old WAL frames (corruption).
+# The previous DB's WAL + SHM sidecars MUST go before the import, or
+# sqlite mixes the new main DB with the old WAL frames (corruption).
 rm -f "${DST}-wal" "${DST}-shm"
 
 echo "[import_db] installing ${SRC} -> ${DST}"

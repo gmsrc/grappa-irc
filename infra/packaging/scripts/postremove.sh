@@ -6,13 +6,11 @@
 # POSIX /bin/sh.
 #
 # Data preservation: NEVER auto-delete /var/lib/grappa (the sqlite DB +
-# uploads) — losing it is unrecoverable, and CLAUDE.md's delete-discipline
-# says look before you destroy. Only dpkg `purge` removes the generated
-# config; rpm has no purge, and its plain uninstall (0) maps to the same
-# conservative "keep the secrets" path as dpkg `remove` (the env file is not
-# a packaged file, so rpm never touches it either way). The grappa system
-# user is left in place (harmless, and re-adopting the same uid on reinstall
-# keeps /var/lib/grappa ownership consistent).
+# uploads) — losing it is unrecoverable. Only dpkg `purge` removes the
+# generated config; rpm has no purge, so its plain uninstall (0) takes the
+# same conservative "keep the secrets" path as dpkg `remove`. The grappa
+# system user is left in place, so a reinstall re-adopts the same uid and
+# /var/lib/grappa ownership stays consistent.
 set -e
 
 case "${1:-remove}" in

@@ -7,20 +7,16 @@
 #   sudo bastille cmd grappa /home/grappa/grappa/infra/freebsd/jail_deploy_cic.sh
 #
 # What it does (mirrors scripts/deploy-cic.sh for Docker):
-#   1. git pull --ff-only (so the working tree matches what we're about
-#      to build — operator can skip the separate jail_git_pull.sh step)
+#   1. git pull --ff-only (no separate jail_git_pull.sh step needed)
 #   2. npm ci + vite build into runtime/cicchetto-dist/ (jail_cic_build.sh)
-#   3. POST /admin/cic-bundle-changed so the live BEAM re-reads the
-#      new index.html and broadcasts the bundle hash on every
-#      user-topic. cic clients compare against the hash baked into
-#      their currently-loaded page and surface the refresh banner on
-#      mismatch.
+#   3. POST /admin/cic-bundle-changed so the live BEAM re-reads the new
+#      index.html and broadcasts the bundle hash on every user-topic;
+#      cic clients compare it against the hash baked into their loaded
+#      page and surface the refresh banner on mismatch.
 #
 # What it does NOT do: touch the BEAM. No mix compile, no mix release,
-# no service restart. Use for cic-only changes (cicchetto/src/,
-# cicchetto/index.html, vite.config.ts manifest tweaks) where rebooting
-# the bouncer is unacceptable. Server-side changes still go through
-# deploy.sh (which auto-classifies hot vs cold).
+# no service restart. Use for cic-only changes; server-side changes go
+# through deploy.sh, which auto-classifies hot vs cold.
 #
 # Exit codes: 0 ok, non-zero on any failure (set -e).
 
@@ -42,14 +38,10 @@ echo "[deploy-cic] vite build (cicchetto bundle)"
 
 echo "[deploy-cic] POST ${RELOAD_URL}"
 if hash=$(curl -fsS -X POST "${RELOAD_URL}"); then
-	# #526: an empty body is HTTP 204 — the BEAM built the dist but could
-	# NOT read it back to broadcast the hash, so NO refresh banner fired.
-	# That is a FAILED cic deploy, not a success (the broadcast IS the
-	# point). The old code printed a ✓ here, so the 2026-07-28 prod
-	# incident degraded silently: CIC_DIST_ROOT was unset in the jail env,
-	# so the relative default resolved against the BEAM's CWD (NOT the repo
-	# root — rc.d/grappa sets no WorkingDirectory) and File.read missed the
-	# freshly-built dist sitting on disk. Fail loud and name the fix.
+	# An empty body is HTTP 204: the dist was built but could not be read
+	# back, so no hash was broadcast and no refresh banner fired. That is
+	# a FAILED cic deploy — the broadcast IS the point.
+	# Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)" (#526).
 	if [ -z "${hash}" ]; then
 		echo "[deploy-cic] ERROR: /admin/cic-bundle-changed returned 204 (empty) — grappa built the dist but could NOT read it back to broadcast the hash, so NO refresh banner fired. Set CIC_DIST_ROOT=/home/grappa/grappa/runtime/cicchetto-dist in /usr/local/etc/grappa/grappa.env and COLD-restart the BEAM. See issue #526." >&2
 		exit 1

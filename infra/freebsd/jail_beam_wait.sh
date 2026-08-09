@@ -1,27 +1,22 @@
 #!/bin/sh
 # FreeBSD-jail entry point for the shared BEAM stop/start synchronization
-# helper. The algorithm, the verbs and the escalation rules live in
-# infra/lib/beam_wait.sh (#923); this file is the jail's substrate config
-# plus the call sites' stable path.
+# helper. The algorithm, verbs and escalation rules live in
+# infra/lib/beam_wait.sh; this file is the jail's substrate config.
 #
 # Two call sites, one implementation:
 #   - infra/freebsd/rc.d/grappa     grappa_stop (wait-stopped) and
 #                                   grappa_start (wait-name-free)
-#   - infra/freebsd/deploy.sh       cold path, after `service grappa
-#                                   stop` (covers transition deploys
-#                                   that stopped via a previously
-#                                   installed, still-async wrapper)
+#   - infra/freebsd/deploy.sh       cold path, after `service grappa stop`
 #
-# Both reach this path from rc.conf.d / the repo checkout, so the path
-# is a contract with the INSTALLED wrapper of the previous deploy — it
-# is deliberately unchanged by the #923 dedupe.
+# This PATH is a contract with the wrapper the PREVIOUS deploy installed —
+# do not move or rename the file.
+# Why: docs/OPERATIONS.md § "The FreeBSD jail rails (infra/freebsd/)" (#923).
 
 set -eu
 
-# epmd ships with the pkg-installed Erlang; rc(8) and root shells don't
-# have /usr/local paths (same pin as deploy.sh's run_as_grappa). If the
-# pkg moves (erlang29) the binary vanishes from PATH and the lib's probe
-# warns instead of silently degrading to BEAM-exit-only.
+# epmd ships with the pkg-installed Erlang, and rc(8) / root shells have
+# no /usr/local paths. If the pkg moves (erlang29) the binary leaves PATH
+# and the lib's probe warns instead of silently degrading.
 PATH="/usr/local/lib/erlang28/bin:${PATH}"
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)

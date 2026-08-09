@@ -7,8 +7,7 @@
 #   PHX_HOST=irc.example.org infra/linux/install.sh
 #
 # Required env:
-#   PHX_HOST          public hostname (no default — fails loudly, same
-#                      hard-require as config/runtime.exs itself)
+#   PHX_HOST          public hostname (no default — fails loudly)
 #
 # Optional env (defaults shown):
 #   REPO_ROOT=/home/grappa/grappa
@@ -46,8 +45,8 @@ run_as_grappa() {
 	sudo -u "${GRAPPA_USER}" -H bash -c "$1"
 }
 
-# $HOME resolves to grappa's own home once run_as_grappa's `sudo -u
-# ... -H` has switched user — no need to look it up here.
+# $HOME is left unexpanded here: it resolves to grappa's own home once
+# run_as_grappa's `sudo -u ... -H` has switched user.
 # shellcheck disable=SC2016  # deferred expansion is the point (see above)
 asdf_path_export='export PATH="$HOME/.local/bin:$HOME/.asdf/shims:$PATH"'
 
@@ -56,9 +55,8 @@ say "1/11 install_prereqs.sh"
 
 say "2/11 clone / update checkout at ${REPO_ROOT}"
 if [ ! -d "${REPO_ROOT}/.git" ]; then
-	# The target may sit below a root-owned parent (the default is
-	# /home/grappa/grappa). Create the checkout directory itself with the
-	# runtime user's ownership before cloning as that user.
+	# Create the checkout dir owned by the runtime user before cloning as
+	# that user — its parent may be root-owned.
 	install -d -o "${GRAPPA_USER}" -g "${GRAPPA_USER}" -m 0755 "${REPO_ROOT}"
 	run_as_grappa "git clone '${GIT_REMOTE_URL}' '${REPO_ROOT}'"
 else
@@ -70,19 +68,9 @@ say "3/11 install_toolchain.sh (erlang build from source — can take 10-20 min)
 "${SCRIPT_DIR}/install_toolchain.sh" "${REPO_ROOT}"
 
 say "4/11 first build (mix deps.get / compile / release)"
-# Full `mix deps.get` (NOT --only prod) — the secrets bootstrap below
-# (step 5) runs several mix tasks under MIX_ENV=dev (the FreeBSD/
-# Docker-proven chicken-and-egg workaround: a prod-env mix task reads
-# config/runtime.exs, which raises on the very secrets being created).
-# Those dev-env invocations need dev-only deps (credo, dialyxir,
-# sobelow, ...) on disk; `--only prod` would skip them and every one
-# of those tasks fails with "the dependency is not available, run
-# mix deps.get" (found live on a fresh native-Linux install, 2026-07-22 — this is
-# exactly what INSTALL.md's Docker quickstart.sh already does: a full
-# deps.get once, then MIX_ENV=dev for secret generation). The
-# MIX_ENV=prod compile/release steps below only use the prod subset
-# of what's fetched; the extra dev/test deps on disk are otherwise
-# unused by the release, just harmless bytes.
+# Full `mix deps.get`, NOT --only prod: step 5's secrets bootstrap runs
+# mix tasks under MIX_ENV=dev, which need the dev-only deps on disk.
+# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)".
 run_as_grappa "
 	${asdf_path_export}
 	cd '${REPO_ROOT}'
@@ -110,62 +98,38 @@ set_env_if_blank() {
 		grep -v "^${key}=" "${ENV_FILE}" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "${ENV_FILE}"
 	fi
 	printf '%s=%s\n' "${key}" "${val}" >> "${ENV_FILE}"
-	# The grep -v >tmp && mv above replaces ENV_FILE with a fresh inode born
-	# under root's umask (0644 root:root), dropping the 0640 root:grappa set
-	# at creation — re-lock, or the secrets this file holds go world-readable
-	# (chmod alone is not enough: the grappa daemon reads it via the group).
+	# Re-lock: the grep -v >tmp && mv above births a fresh inode 0644
+	# root:root under root's umask, world-readable secrets and all. Both
+	# chown and chmod — the daemon reads this file via the group.
 	chown "root:${GRAPPA_USER}" "${ENV_FILE}"
 	chmod 0640 "${ENV_FILE}"
 }
 
-# Unlike secrets (never silently regenerate — set_env_if_blank), these
-# are install.sh-computed config values that must always reflect THIS
-# invocation's parameters. grappa.env.example ships non-blank,
-# non-REPLACE_ME example values for readability (e.g.
-# PHX_HOST=grappa.example.org) — set_env_if_blank would see those as
-# "already set" and never overwrite them with the real PHX_HOST/PORT
-# the operator actually passed in (found live on a native-Linux install,
-# 2026-07-22: PHX_HOST stayed at the template's example.org forever).
+# Always overwrite, unlike the secrets above: these are config values that
+# must reflect THIS invocation. grappa.env.example ships non-blank example
+# values (PHX_HOST=grappa.example.org), which set_env_if_blank would read
+# as "already set" and never replace with what the operator passed in.
 force_set_env() {
 	local key="$1" val="$2"
 	if grep -qE "^${key}=" "${ENV_FILE}"; then
 		grep -v "^${key}=" "${ENV_FILE}" > "${ENV_FILE}.tmp" && mv "${ENV_FILE}.tmp" "${ENV_FILE}"
 	fi
 	printf '%s=%s\n' "${key}" "${val}" >> "${ENV_FILE}"
-	# Re-lock after the tmp+mv rewrite (see set_env_if_blank). force_set_env
-	# runs last (config values, after the secrets), so without this the final
-	# ENV_FILE is left 0644 root:root with every secret world-readable.
+	# Re-lock after the tmp+mv rewrite (see set_env_if_blank). This runs
+	# last, so it decides the permissions the env file is left with.
 	chown "root:${GRAPPA_USER}" "${ENV_FILE}"
 	chmod 0640 "${ENV_FILE}"
 }
 
-# Generated under MIX_ENV=dev on purpose: prod-env mix tasks read
-# config/runtime.exs, which raises on the very secrets being created
-# (chicken-and-egg) — same workaround as INSTALL.md/quickstart.sh and
-# the FreeBSD deploy comment block.
+# Secrets are generated under MIX_ENV=dev on purpose: a prod-env mix task
+# reads config/runtime.exs, which raises on the very secrets being created.
 #
-# Captures stderr instead of discarding it: with `set -e` active, a
-# failing mix task inside this command substitution aborts the whole
-# script immediately — and with stderr thrown away, that abort was
-# SILENT (found live on a native-Linux install, 2026-07-22: three secrets got
-# written as empty strings with zero indication anything had failed).
-# Fail loud instead: print the captured error and exit non-zero rather
-# than let a blank secret slip into the env file.
-#
-# `gen_raw` is the shared run+fail-loud+strip-warnings step; `gen`
-# additionally takes only the LAST line, which is correct for the
-# single-line generators (phx.gen.secret, gen_encryption_key) but
-# WRONG for `mix grappa.gen_vapid` — that task prints FOUR lines
-# (VAPID_PUBLIC_KEY=, VAPID_PRIVATE_KEY=, then two comment lines), so
-# routing it through `gen`'s `tail -n1` silently kept only the last
-# comment line and discarded BOTH keys — found live 2026-07-24:
-# VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY ended up empty in grappa.env,
-# `Grappa.Push.boot/0`'s `System.get_env(...) || raise` didn't catch
-# it either (an env var set to `""` is not `nil`, so the `||` never
-# fires), so the app booted "fine" with a broken Web Push config —
-# no crash, no log line, subscriptions just silently never worked.
-# VAPID generation now calls `gen_raw` directly and greps each key
-# out of the full multi-line output instead of going through `gen`.
+# gen_raw runs the task, prints the captured error and exits non-zero on
+# failure, and strips `warning:` lines. `gen` additionally keeps only the
+# LAST line — correct for the single-line generators, WRONG for any
+# multi-line one (mix grappa.gen_vapid prints four lines), which must call
+# gen_raw and grep each key out of the full output.
+# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)".
 gen_raw() {
 	local out
 	if ! out="$(run_as_grappa "${asdf_path_export}; cd '${REPO_ROOT}'; MIX_ENV=dev $1" 2>&1)"; then
@@ -180,22 +144,11 @@ gen() {
 	gen_raw "$1" | tail -n1
 }
 
-# Capture, CHECK, then write — never `set_env_if_blank KEY "$(gen ...)"`.
-#
-# In argument position a command substitution's failure cannot stop this
-# script: `gen_raw`'s `exit 1` exits the SUBSHELL, and the enclosing command's
-# status is `set_env_if_blank`'s, so neither `set -e` nor `pipefail` ever sees
-# it. So the loud ERROR the comment above promises got printed and the blank
-# was written anyway. Worse than the noise: if the failing generator was not
-# the VAPID one (whose explicit empty-check below is OUTSIDE a substitution,
-# and is the only reason any of this ever aborted), the run continued to
-# `systemctl start` and exited 0 announcing a healthy host — with
-# GRAPPA_ENCRYPTION_KEY set to the empty string, i.e. a Cloak vault keyed on
-# nothing. Measured, #441.
-#
-# Assigning first makes the failure real (`set -euo pipefail` fires on the
-# assignment), and the emptiness check additionally catches a generator that
-# exits 0 with nothing to say — the shape that killed VAPID in 2026-07-24.
+# Capture, CHECK, then write — never `set_env_if_blank KEY "$(gen ...)"`
+# (#441). In argument position a generator's failure cannot stop this script,
+# so the blank gets written and the install still exits 0. Assigning first
+# makes the failure real; the emptiness check catches the other shape, a
+# generator that exits 0 with nothing to say.
 require_nonempty() {
 	local key="$1" what="$2" value="$3"
 	if [ -z "${value}" ]; then
@@ -219,11 +172,9 @@ if ! grep -qE "^GRAPPA_ENCRYPTION_KEY=.+$" "${ENV_FILE}" || grep -qE "^GRAPPA_EN
 	require_nonempty GRAPPA_ENCRYPTION_KEY 'mix grappa.gen_encryption_key' "${encryption_key}"
 	set_env_if_blank GRAPPA_ENCRYPTION_KEY "${encryption_key}"
 fi
-# Regeneration trigger checks BOTH keys, not just the public one — a
-# guard on VAPID_PUBLIC_KEY alone would leave a
-# public-set/private-blank state (however it arose) permanently stuck,
-# since install.sh's idempotency means this block would never run
-# again once the public half looked fine.
+# The trigger below checks BOTH keys: guarding on the public one alone
+# would leave a public-set/private-blank pair permanently stuck, since this
+# block never runs again once the public half looks fine.
 vapid_key_needs_gen() {
 	! grep -qE "^${1}=.+$" "${ENV_FILE}" || grep -qE "^${1}=REPLACE_ME$" "${ENV_FILE}"
 }
@@ -232,27 +183,21 @@ if vapid_key_needs_gen VAPID_PUBLIC_KEY || vapid_key_needs_gen VAPID_PRIVATE_KEY
 	vapid="$(gen_raw 'mix grappa.gen_vapid')"
 	vapid_public="$(printf '%s\n' "${vapid}" | sed -n 's/^VAPID_PUBLIC_KEY=//p')"
 	vapid_private="$(printf '%s\n' "${vapid}" | sed -n 's/^VAPID_PRIVATE_KEY=//p')"
-	# Belt-and-braces: `gen_raw` already fails loud on a non-zero exit,
-	# but a future change to gen_vapid's output shape (or a truncated
-	# capture) could still hand back exit 0 with an empty match here —
-	# catch that explicitly rather than silently writing a blank key.
+	# gen_raw fails loud on a non-zero exit; this catches the other shape —
+	# exit 0 with an output neither sed above matched.
 	if [ -z "${vapid_public}" ] || [ -z "${vapid_private}" ]; then
 		echo "[install] ERROR: 'mix grappa.gen_vapid' produced an empty key — raw output:" >&2
 		echo "${vapid}" >&2
 		exit 1
 	fi
-	# force_set_env (not set_env_if_blank): once regeneration is
-	# triggered, the fresh pair MUST land as a matched unit. If only one
-	# key needed regenerating, set_env_if_blank would skip the
-	# already-valid half and keep it paired with a brand-new,
-	# unrelated other half — a mismatched public/private pair is
-	# unusable, worse than either being blank.
+	# force_set_env, not set_env_if_blank: once regeneration is triggered
+	# the fresh pair must land as a matched unit — set_env_if_blank would
+	# keep an already-valid half paired with an unrelated new one.
 	force_set_env VAPID_PUBLIC_KEY "${vapid_public}"
 	force_set_env VAPID_PRIVATE_KEY "${vapid_private}"
 fi
 if ! grep -qE "^RELEASE_COOKIE=.+$" "${ENV_FILE}" || grep -qE "^RELEASE_COOKIE=REPLACE_ME$" "${ENV_FILE}"; then
-	# Same capture-check-write shape as the mix generators above: openssl in
-	# argument position could fail into a blank cookie just as silently.
+	# Same capture-check-write shape as the mix generators above.
 	release_cookie="$(openssl rand -hex 32)"
 	require_nonempty RELEASE_COOKIE 'openssl rand -hex 32' "${release_cookie}"
 	set_env_if_blank RELEASE_COOKIE "${release_cookie}"
@@ -266,23 +211,11 @@ mkdir -p "${REPO_ROOT}/runtime/uploads"
 chown -R "${GRAPPA_USER}:${GRAPPA_USER}" "${REPO_ROOT}/runtime"
 
 say "6/11 first migration"
-# Plain `mix ecto.migrate`, NOT `release.sh eval 'Grappa.Release.migrate()'`.
-# Found live on a native-Linux install (2026-07-22): the packaged release's `eval`
-# (and `remote`/`rpc`, which share the same `--boot
-# "$REL_VSN_DIR/$RELEASE_BOOT_SCRIPT_CLEAN"` code path in the
-# mix-release-generated bin/grappa script) crashes the BEAM at kernel
-# boot — "Kernel pid terminated (logger)", a persistent_term/code_server
-# badarg — even for a trivial `eval '1 + 1'`. This is NOT a Grappa
-# problem: raw `erl -eval` and, critically, `bin/grappa start` (the
-# FULL boot, i.e. exactly what systemd's ExecStart uses) both work
-# fine — it's isolated to the release's minimal "start_clean" boot
-# variant specifically. Root cause not yet fully identified (see
-# infra/linux/README.md "Day-2 operations"); `mix ecto.migrate` sidesteps it entirely and matches
-# what Docker's own deploy path already does (docs/OPERATIONS.md:
-# "Docker via `mix ecto.migrate`, the jail via
-# `Grappa.Release.migrate()`") — this substrate keeps the full mix
-# toolchain around (unlike a minimal prod container), so there's no
-# reason to route through the release's eval mechanism at all here.
+# Plain `mix ecto.migrate`, NOT `release.sh eval 'Grappa.Release.migrate()'`:
+# the packaged release's eval/remote/rpc boot path crashes the BEAM on this
+# substrate (systemd's own `bin/grappa start` is unaffected). This host keeps
+# the full mix toolchain, so nothing is lost by not using it.
+# Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)".
 run_as_grappa "
 	${asdf_path_export}
 	set -a; . '${ENV_FILE}'; set +a

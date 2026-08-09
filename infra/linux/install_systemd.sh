@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # Install/refresh the grappa systemd unit + grappa_beam_wait.sh.
-# Enables the unit but does NOT start it — starting is the caller's
-# job (install.sh / deploy.sh), keeping this script idempotent and
-# reusable from both (same separation-of-concerns as
-# infra/freebsd/jail_install_rcd.sh).
+# Enables the unit but does NOT start it — starting is the caller's job
+# (install.sh / deploy.sh), which keeps this reusable from both.
 #
 # Env overrides:
 #   REPO_ROOT      default /home/grappa/grappa
@@ -16,10 +14,9 @@ REPO_ROOT="${REPO_ROOT:-/home/grappa/grappa}"
 RELEASE_ROOT="${RELEASE_ROOT:-${REPO_ROOT}/_build/prod/rel/grappa}"
 ENV_FILE="${ENV_FILE:-/etc/grappa/grappa.env}"
 
-# grappa_beam_wait.sh is invoked directly from its checked-in repo
-# path (grappa.service's ExecStartPre references
-# @REPO_ROOT@/infra/linux/grappa_beam_wait.sh) — nothing to copy, just
-# re-assert it's executable after a fresh clone/pull.
+# grappa.service's ExecStartPre runs grappa_beam_wait.sh from its
+# checked-in repo path — nothing to copy, just re-assert the exec bit
+# after a fresh clone/pull.
 chmod 0755 "${REPO_ROOT}/infra/linux/grappa_beam_wait.sh"
 
 echo "[install_systemd] rendering grappa.service (REPO_ROOT=${REPO_ROOT} RELEASE_ROOT=${RELEASE_ROOT} ENV_FILE=${ENV_FILE})"

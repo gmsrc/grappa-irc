@@ -4,15 +4,13 @@
 # The SINGLE source of truth for the hot-vs-cold deploy ALGORITHM shared
 # by every production substrate: infra/freebsd/deploy.sh (bastille jail),
 # infra/linux/deploy.sh (systemd host), scripts/deploy.sh (operator
-# Docker). Extracted to KILL copy-paste drift — the 2026-06-11 outage
-# root cause was three near-identical deploy scripts drifting apart
-# (defects #7/#8/#9, all "fixed in one script, still live in another").
+# Docker).
+# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (#503).
 #
 # This file is SOURCED, never executed. It is strict POSIX sh — no bash
-# arrays, no `[[ ]]`, no `local`. Consumers keep their own shebangs
-# (jail = /bin/sh, linux/docker = bash) and may use bashisms in their
-# OWN hooks; the shared algorithm below stays POSIX so `dash`/`sh` can
-# run it on the jail.
+# arrays, no `[[ ]]`, no `local`, so `dash`/`sh` can run it on the jail.
+# Consumers keep their own shebangs (jail = /bin/sh, linux/docker = bash)
+# and may use bashisms in their OWN hooks.
 #
 # ── Contract ────────────────────────────────────────────────────────
 # A consumer script:
@@ -26,8 +24,7 @@
 # across re-exec, the re-exec guard, the marker base-select + validate,
 # the nothing-to-do predicate, the preflight verdict→mode mapping, the
 # reload "failed":[] honesty check, the healthcheck loop, and the marker
-# write. Every one of those is a documented invariant that previously
-# lived — and drifted — per script.
+# write.
 #
 # The consumer OWNS (substrate hooks — the 20% that genuinely differ):
 #   substrate_pull            sets PREV_SHA + NEW_SHA globals (git pull)
@@ -46,9 +43,8 @@
 #   substrate_migrate         ecto migrate (cold only)
 #   substrate_restart         stop/start the daemon (cold only; may exit on defer)
 #   substrate_healthcheck     one /healthz probe; 0=200, nonzero=not yet
-#   substrate_done_banner N   print the success line (N = retries taken); the
-#                             wording is substrate-specific (sessions preserved
-#                             vs container recreated vs daemon respawned)
+#   substrate_done_banner N   print the success line (N = retries taken);
+#                             the wording is substrate-specific
 #
 # ── Feature toggles (consumer sets to 1 to enable; default OFF) ──────
 #   DEPLOY_FEATURE_FORCE_FLAGS    accept --force-hot / --force-cold
@@ -62,15 +58,11 @@
 # ── The one toggle that defaults ON ─────────────────────────────────
 #   DEPLOY_FEATURE_SEED           run substrate_seed on BOTH paths (default 1)
 #
-# Every toggle above is a CAPABILITY — a substrate may legitimately have
-# no marker, no --defer-restart, no re-exec guard — so they default OFF
-# and the consumer opts in. Seeding is not a capability, it is a
-# CORRECTNESS property every substrate needs (#440), so it defaults ON
-# and a substrate would have to opt OUT. Defaulting it off would rebuild
-# the very defect #440 reports: a substrate that silently forgets to
-# seed. There is deliberately NO fallback substrate_seed — a consumer
-# that fails to define the hook must break loudly in CI, not quietly
-# seed nothing.
+# Every toggle above is a CAPABILITY a substrate may legitimately lack, so
+# it defaults OFF and the consumer opts in. Seeding is a CORRECTNESS
+# property (#440): it defaults ON, a substrate must opt OUT, and there is
+# deliberately NO fallback substrate_seed — an undefined hook must break
+# loudly in CI, not quietly seed nothing.
 #
 # ── Mode state exported to hooks ────────────────────────────────────
 #   MODE      auto|hot|cold (resolved before any build/restart hook runs)
@@ -82,10 +74,9 @@
 : "${HEALTHCHECK_RETRIES:=30}"
 : "${HEALTHCHECK_SLEEP:=2}"
 
-# Per-mode healthcheck override (Docker's hot loop is fast/short, its
-# cold loop long — jail/linux leave these unset and fall back to the
-# shared defaults above). Resolved at loop time so a consumer only sets
-# what actually diverges.
+# Per-mode healthcheck override, resolved at loop time so a consumer only
+# sets what actually diverges from the shared defaults above (jail/linux
+# leave these unset; Docker's hot loop is short and its cold loop long).
 _deploy_hot_retries()  { printf '%s' "${HOT_HEALTHCHECK_RETRIES:-$HEALTHCHECK_RETRIES}"; }
 _deploy_hot_sleep()    { printf '%s' "${HOT_HEALTHCHECK_SLEEP:-$HEALTHCHECK_SLEEP}"; }
 _deploy_cold_retries() { printf '%s' "${COLD_HEALTHCHECK_RETRIES:-$HEALTHCHECK_RETRIES}"; }
@@ -106,17 +97,15 @@ DEPLOY_SEED_FAILED=0
 
 # Path (repo-relative) of the consumer deploy script, for the re-exec
 # guard's diff match and the `exec` target. The lib appends its OWN path
-# so a change to the shared algorithm re-execs too (behavior-preserving:
-# the extracted bytes must reload exactly as the inlined bytes did).
+# so a change to the shared algorithm re-execs too.
 : "${DEPLOY_SELF_REL:=}"
 DEPLOY_LIB_REL="infra/lib/deploy_common.sh"
 
 # Argument(s) the re-exec guard must PREPEND when it re-invokes the
 # consumer script. Empty for a verb-less consumer (jail/linux/operator
-# docker: `deploy.sh --force-hot`), so re-exec replays the argv verbatim.
-# A verb-dispatched consumer (infra/docker/deploy.sh `update …`) sets this
-# to its verb so re-exec replays `deploy.sh update …` — else the guard
-# would drop the verb and the re-exec'd run would fall through to a usage
+# docker), so re-exec replays the argv verbatim. A verb-dispatched
+# consumer (infra/docker/deploy.sh `update …`) sets its verb here — else
+# the guard drops the verb and the re-exec'd run falls through to a usage
 # error. Word-split on purpose (a single verb token).
 : "${DEPLOY_REEXEC_PREFIX:=}"
 
@@ -171,10 +160,9 @@ _deploy_marker_valid() {
 }
 
 # Echo the preflight range base: the marker when valid, else the pre-pull
-# HEAD. A present-but-garbage marker aborts LOUDLY here — a silent
-# fallback to prev_sha would re-open the range hole the marker closes
-# (defect #7), and feeding garbage to `git diff` would crash the oneshot
-# with an opaque exit 1 the verdict case-statement can't interpret.
+# HEAD. A present-but-garbage marker aborts LOUDLY here rather than
+# falling back to prev_sha.
+# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (defect #7).
 _deploy_preflight_base() {
 	base="$PREV_SHA"
 	if [ "$DEPLOY_FEATURE_MARKER" = 1 ] && [ -n "$LAST_DEPLOYED" ]; then
@@ -191,9 +179,9 @@ _deploy_preflight_base() {
 
 # ---- nothing-to-do (marker-gated) -----------------------------------
 # Exits 0 ONLY when auto + no new commits + the last deploy COMPLETED
-# (marker == HEAD). "No new commits" alone lies when a prior deploy died
-# mid-flight (defect #8), and an explicit --force-* is an operator order,
-# not a heuristic input. Fast paths state what they OBSERVED.
+# (marker == HEAD). "No new commits" alone is not enough, and an explicit
+# --force-* is an operator order, not a heuristic input.
+# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (defect #8).
 _deploy_nothing_to_do() {
 	if [ "$PREV_SHA" = "$NEW_SHA" ] && [ "$LAST_DEPLOYED" = "$NEW_SHA" ]; then
 		if [ "$MODE" = auto ]; then
@@ -207,14 +195,11 @@ _deploy_nothing_to_do() {
 }
 
 # ---- re-exec guard (self-modifying script) --------------------------
-# git pull replaces files by rename, so the running interpreter keeps
-# executing PRE-PULL bytes from the old inode — a fix to the deploy
-# pipeline would silently no-op on the first deploy that ships it
-# (live-repro 2026-05-31). Re-exec so the NEW bytes run downstream of
-# the pull. Detection is by DIFF RANGE touching the consumer script OR
-# this shared lib. Keyed on the PRE-PULL range (prev..new), NOT the
-# marker range — this answers "did THIS pull change the bytes I am
-# running?", to which the marker is irrelevant.
+# Re-exec so the POST-pull bytes run, when the pull's DIFF RANGE touched
+# the consumer script OR this shared lib. Keyed on the PRE-PULL range
+# (prev..new), NOT the marker range — the question is "did THIS pull
+# change the bytes I am running?".
+# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)".
 _deploy_reexec_guard() {
 	[ -z "${DEPLOY_REEXECED:-}" ] || return 0
 	changed=$(substrate_changed_files "$PREV_SHA" "$NEW_SHA")
@@ -276,9 +261,6 @@ _deploy_healthcheck_loop() {
 			if [ "$DEPLOY_FEATURE_MARKER" = 1 ]; then
 				substrate_write_marker
 			fi
-			# Substrate-specific success wording (sessions preserved vs
-			# container recreated vs daemon respawned) — the consumer owns
-			# it; $1 = retries taken.
 			substrate_done_banner "$i"
 			_deploy_seed_reassert
 			exit 0
@@ -291,29 +273,18 @@ _deploy_healthcheck_loop() {
 }
 
 # ---- seed (versioned built-in data) ---------------------------------
-# What the seed set IS, and why this runs every deploy (#440): the
-# built-in gallery is versioned CODE materialised into the DB, but it was
-# materialised ONCE, at install. Anything added to it later reached new
-# installs only — "deploy.sh is missing a line" is the symptom, the
-# once-only seeding is the defect. Adding a built-in touches a plain lib
-# module, which Preflight classifies HOT, so seeding on the cold path
-# alone would miss the very path that ships themes. Same reasoning as
-# substrate_reconcile (#646), one layer down: classification sees changed
-# PATHS, and no path tells it the seed set grew. The hook must therefore
-# be idempotent — it runs on every deploy, forever.
+# Materialise the versioned built-in data (the theme gallery) into the DB
+# on EVERY deploy, BOTH paths. The hook must be idempotent.
+# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (#440).
 #
 # The label is shared (one seed set, substrate-independent); only the
 # retry command differs per substrate, so only that is a consumer knob.
 : "${DEPLOY_SEED_LABEL:=the built-in theme gallery}"
 : "${DEPLOY_SEED_RETRY_HINT:=the grappa.seed_themes task on this substrate}"
 
-# NON-FATAL, deliberately. The gallery is cosmetic; on the cold path this
-# runs after the migration and before the restart, so aborting here would
-# leave a migrated DB, the old daemon still up, and no restart — trading a
-# stale gallery for a half-applied deploy. On an always-on bouncer that is
-# the worse of the two by a wide margin. It is not a silent swallow
-# either: the completed-deploy marker is written only after a 200, the
-# upsert converges, so the NEXT deploy re-runs the seed and heals it.
+# NON-FATAL, deliberately: aborting here would leave a migrated DB and no
+# restart. Not a silent swallow either — the upsert converges, so the NEXT
+# deploy re-runs the seed and heals it.
 _deploy_seed() {
 	[ "$DEPLOY_FEATURE_SEED" = 1 ] || return 0
 	deploy_log "seeding ${DEPLOY_SEED_LABEL} (idempotent)"
@@ -324,10 +295,9 @@ _deploy_seed() {
 	fi
 }
 
-# Re-assert after the ✓ banner. A warning 200 lines up a build log is a
-# warning nobody reads, and the last thing on the operator's screen must
-# not be an unqualified success line when something did not get applied.
-# Gated on the OUTCOME: a warning that fires every run means nothing.
+# Re-assert after the ✓ banner, gated on the OUTCOME: the last thing on
+# the operator's screen must not be an unqualified success line when
+# something did not get applied.
 _deploy_seed_reassert() {
 	[ "$DEPLOY_SEED_FAILED" = 1 ] || return 0
 	deploy_error "reminder: ${DEPLOY_SEED_LABEL} was NOT seeded during this deploy — retry with: ${DEPLOY_SEED_RETRY_HINT}"
@@ -351,25 +321,18 @@ _deploy_hot() {
 	else
 		# Every substrate_reload uses `curl -f`, which discards the
 		# response body on a non-2xx — so this branch knows the POST
-		# failed and NOTHING about why. State the two live causes rather
-		# than assert the one we used to guess (#41 added the second).
+		# failed and NOTHING about why. Name both live causes.
 		deploy_error "POST /admin/reload failed"
 		printf '[deploy]   the daemon is down/unreachable, OR it refused the hot reload\n' >&2
 		printf '[deploy]   (HTTP 409 = a pending migration is CONTRACT → run a cold deploy)\n' >&2
 		exit 1
 	fi
 
-	# AFTER the reload, for the same schema-before-data reason the cold
-	# path seeds after substrate_migrate: since #41 the hot path is not
-	# migration-free — POST /admin/reload applies pending expand
-	# migrations on the live pool and only THEN loads modules
-	# (Grappa.HotReload.migrate_and_reload/0). A seed placed before the
-	# reload would therefore run against the PRE-migration schema, which
-	# is the very ordering this file rejects on the cold path.
-	#
-	# It also lands after the reload-honesty check on purpose: a refused
-	# or partly-failed reload exits above, and seeding into a deploy that
-	# did not take is work at best and confusing at worst.
+	# AFTER the reload: since #41 the hot path is not migration-free —
+	# POST /admin/reload applies pending expand migrations and only THEN
+	# loads modules, so a seed before it would run against the
+	# PRE-migration schema. After the reload-honesty check too: a reload
+	# that did not take must not be seeded into.
 	_deploy_seed
 
 	_deploy_healthcheck_loop "$(_deploy_hot_retries)" "$(_deploy_hot_sleep)"
@@ -438,15 +401,12 @@ deploy_main() {
 
 	substrate_build
 
-	# Artifacts the substrate installs OUTSIDE the repo (privilege
-	# wrappers and the config they read) drift from the checkout unless
-	# something reconciles them. Classification cannot do it: it only sees
-	# changed PATHS, so it misses a config rendered from the DB, and it
-	# would charge a session-dropping cold restart just to copy a file
-	# (#646 — shipping #610 left the old wrapper installed and disarmed
-	# mode 2 in prod). So it runs on BOTH paths, after the build and
+	# Install the artifacts the substrate keeps OUTSIDE the repo (privilege
+	# wrappers and the config they read) on BOTH paths, after the build and
 	# before either the reload or the restart, so the new code never meets
-	# the old artifact. The hook must be idempotent: it runs every deploy.
+	# the old artifact. Classification cannot do it: it only sees changed
+	# PATHS. The hook must be idempotent: it runs every deploy.
+	# Why: docs/OPERATIONS.md § "The shared deploy library (infra/lib/)" (#646).
 	if [ "$DEPLOY_FEATURE_RECONCILE" = 1 ]; then
 		substrate_reconcile
 	fi

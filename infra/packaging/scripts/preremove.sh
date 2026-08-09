@@ -4,9 +4,9 @@
 #   dpkg:  $1 = remove | upgrade | deconfigure | failed-upgrade
 #   rpm:   $1 = 0 (final uninstall) | 1 (upgrade — old pkg's %preun)
 # Stop + disable the service ONLY on a real removal (dpkg remove/deconfigure,
-# rpm 0); on upgrade the new package's postinstall leaves the operator to
-# `systemctl restart grappa` (we never auto-restart, to keep the stop/start
-# epmd-name race — FreeBSD defect #9 — off the upgrade path). POSIX /bin/sh.
+# rpm 0). An upgrade never auto-restarts — that keeps the stop/start
+# epmd-name race off the upgrade path; the operator restarts. POSIX /bin/sh.
+# Why: docs/OPERATIONS.md § "Packaging (infra/packaging/)".
 set -e
 
 case "${1:-remove}" in

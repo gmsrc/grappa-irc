@@ -3,20 +3,10 @@
 # toolchain, no host hex) that renders the SAME staging tree into either
 # format; build.sh picks the format via GRAPPA_PKG_FORMAT and nfpm's `-p`.
 #
-# The FORMAT is just a flag — the PAYLOAD is not. The release bundles ERTS
-# + crypto NIFs linked against the BUILD host's glibc/libssl, so a
-# Debian-built payload is a valid .deb but not a valid .rpm. That is why
-# the .rpm builds in a Fedora container (release.yml `rpm` job) with its own
-# Fedora ERTS, not on the Debian runner that builds the .deb (#438). See
-# build.sh + the packaging README.
-#
-# Per-format package DEPENDENCIES live under `overrides.{deb,rpm}` below —
-# ONE config, no duplicate file: the Debian and RPM runtime-lib package
-# names are disjoint (libssl3 vs openssl-libs, …), and nfpm's `overrides`
-# exists for exactly this. Everything else (contents, scripts, metadata) is
-# shared, because the FHS layout and the maintainer scripts are — the
-# scripts are written to handle both dpkg (string $1) and rpm (numeric $1)
-# argument conventions (see scripts/*.sh).
+# The FORMAT is just a flag — the PAYLOAD is not. The release bundles ERTS +
+# crypto NIFs linked against the BUILD host's glibc/libssl, so a Debian-built
+# payload is a valid .deb but not a valid .rpm: build each format on its own
+# distro (the .rpm in a Fedora container, the .deb on the Debian runner).
 #
 # ${GRAPPA_VERSION} / ${GRAPPA_PKG_ARCH} are expanded from the environment
 # build.sh exports.
@@ -45,7 +35,7 @@ description: |
 # which nfpm would apply to BOTH formats. The bundled ERTS links these
 # system libs; shottino links the same libssl + the WIDE ncurses.
 #
-# recommends: the media-metadata strip (#39) shells out to exiftool/ffmpeg
+# recommends: the media-metadata strip shells out to exiftool/ffmpeg
 # fail-closed (without them uploads 422), and nginx is the recommended
 # TLS/static front. All soft — the bouncer boots and serves without any of
 # them, and a Recommends whose package is absent from the enabled repos is
@@ -94,8 +84,8 @@ overrides:
       # package providing BOTH libncurses.so.6 (ERTS) and libncursesw.so.6
       # (shottino) — no wide/narrow split like Debian, so a single entry
       # covers both consumers. shadow-utils provides useradd/groupadd (the
-      # deb's `passwd`); ca-certificates is the system CA trust store that
-      # #89's verify_peer / :public_key.cacerts_get/0 reads.
+      # deb's `passwd`); ca-certificates is the system CA trust store the
+      # upstream-TLS verify_peer path reads.
       - openssl-libs
       - ncurses-libs
       - libstdc++
@@ -123,14 +113,8 @@ contents:
     dst: /usr/lib/grappa
 
   # shottino — the terminal client (frontends/shottino), compiled by
-  # build.sh into the staging tree.
-  #
-  # Ships in the SAME package as the bouncer rather than a separate
-  # grappa-shottino: it is one ~180 KB binary whose runtime deps (libssl3,
-  # libncurses6) are ALREADY in `depends` above for the bundled ERTS, so
-  # splitting it would add a package to maintain and buy nothing. It is a
-  # client for THIS server; installing grappa and getting a way to talk to
-  # it is the expected shape.
+  # build.sh into the staging tree. Ships in the SAME package as the
+  # bouncer: its runtime deps are already in `depends` above.
   - src: ./staging/usr/bin/shottino
     dst: /usr/bin/shottino
     file_info:

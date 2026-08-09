@@ -3,24 +3,15 @@
 # a native Linux (Debian/Ubuntu) grappa host. Run as root.
 #
 # Package notes:
-#   - libimage-exiftool-perl: the Debian/Ubuntu name for exiftool.
-#     NOT p5-Image-ExifTool (that's the FreeBSD pkg name — different
-#     package manager, different naming convention).
-#   - ca-certificates: this is the ENTIRE Linux upstream-TLS-trust
-#     story for Grappa.IRC.Client.tls_connect_opts/1
-#     (:public_key.cacerts_get/0 reads the OS CA store). No
-#     ca_root_nss-equivalent extra step needed, unlike FreeBSD.
-#   - The autoconf/m4/libncurses-dev/libssl-dev/unzip/zlib1g-dev group
-#     are Erlang build deps for install_toolchain.sh's asdf-erlang
-#     source build (Debian/Ubuntu apt has no pinned 28.5 package).
-#   - sudo: NOT preinstalled on a minimal Debian netinst/LXC template
-#     (found live on a fresh native-Linux host, 2026-07-22) — every
-#     other script here (release.sh, cic_build.sh, install_toolchain.sh,
-#     install.sh, deploy.sh) runs build/runtime steps as the grappa
-#     user via `sudo -u grappa`. Without this package those all fail
-#     with "sudo: command not found" before install_prereqs.sh even
-#     finishes, so it's installed FIRST, before anything else below
-#     could need it.
+#   - libimage-exiftool-perl is the Debian/Ubuntu name for exiftool
+#     (p5-Image-ExifTool is the FreeBSD one).
+#   - ca-certificates is the ENTIRE Linux upstream-TLS-trust story for
+#     Grappa.IRC.Client.tls_connect_opts/1 — :public_key.cacerts_get/0
+#     reads the OS CA store.
+#   - autoconf/m4/libncurses-dev/libssl-dev/unzip/zlib1g-dev are Erlang
+#     build deps for install_toolchain.sh's asdf-erlang source build.
+#   - sudo is installed FIRST: every other script here runs its steps as
+#     the grappa user, and a minimal Debian image does not ship it.
 
 set -euo pipefail
 
