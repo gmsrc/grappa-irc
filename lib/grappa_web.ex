@@ -17,6 +17,7 @@ defmodule GrappaWeb do
         Grappa.Accounts.Revocations,
         Grappa.Admission,
         Grappa.AdminEvents,
+        Grappa.AdminOverview,
         Grappa.Auth.IdentifierClassifier,
         Grappa.ChannelDirectory,
         Grappa.Cic.Bundle,

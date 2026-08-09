@@ -107,6 +107,43 @@ defmodule Grappa.LiveIntrospection do
     |> Enum.frequencies()
   end
 
+  @doc """
+  Scalar live counts for the admin top bar (#1075): total registered
+  `Session.Server` pids, and how many DISTINCT visitors hold at least one
+  of them.
+
+  Deliberately does NOT reuse `list_sessions/0`. That verb messages every
+  pid (joined channels + peer address, 250ms budget each) to enrich its
+  rows; a bar refreshing two integers on a timer must not pay
+  `O(N × 250ms)` of session-mailbox traffic. One `Registry.select/2`, no
+  pid touched — but the SAME registry `list_sessions/0` enumerates, so the
+  bar and the Sessions tab can never disagree about which pids exist.
+
+  Visitors are counted distinct because a visitor is multi-network: two
+  credentials means two pids but one visitor, which is exactly how the
+  Visitors tab renders it (one row per visitor, carrying a per-network
+  live list).
+
+  Same match-spec discipline as `list_sessions/0` — the literal `:session`
+  key tag is pinned, so a future registration with a different key shape
+  is skipped rather than miscounted.
+  """
+  @spec count_live() :: %{sessions: non_neg_integer(), visitors: non_neg_integer()}
+  def count_live do
+    subjects =
+      Registry.select(Grappa.SessionRegistry, [
+        {{{:session, :"$1", :_}, :_, :_}, [], [:"$1"]}
+      ])
+
+    live_visitors =
+      subjects
+      |> Enum.filter(&match?({:visitor, _}, &1))
+      |> Enum.uniq()
+      |> length()
+
+    %{sessions: length(subjects), visitors: live_visitors}
+  end
+
   defp build_entry(subject, network_id, pid) do
     info = Process.info(pid, [:message_queue_len, :memory]) || []
     {channels, channels_degraded} = fetch_joined_channels(subject, network_id)

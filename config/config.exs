@@ -569,4 +569,14 @@ config :logger, :console,
     :silent_for_ms
   ]
 
+# #1075 — os_mon is loaded for `:cpu_sup.avg1/0` alone (the admin top bar's
+# loadavg). Its two other services are started by default and are pure noise
+# here: `memsup` polls system memory and raises `system_memory_high_watermark`
+# alarms, `disksup` does the same for filesystem occupancy. Nothing in grappa
+# subscribes to those alarms or acts on them, so all they can do is log at the
+# operator. One sampler in, no alarm traffic.
+config :os_mon,
+  start_memsup: false,
+  start_disksup: false
+
 import_config "#{config_env()}.exs"

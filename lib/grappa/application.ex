@@ -6,6 +6,8 @@ defmodule Grappa.Application do
     deps: [
       Grappa.Admission,
       Grappa.AdminEvents,
+      # #1075 — start/2 calls AdminOverview.boot/0 (admin-bar cadence DI-seam).
+      Grappa.AdminOverview,
       Grappa.Bootstrap,
       Grappa.Cic.Bundle,
       Grappa.Health,
@@ -67,6 +69,12 @@ defmodule Grappa.Application do
     # lock-free on the push hot path instead of a runtime `Application.get_env/2`
     # read (banned by CLAUDE.md). Mirrors `Grappa.Admission.Config.boot/0`.
     :ok = Grappa.Push.BadgeSource.boot()
+
+    # #1075 — stash the admin-bar push cadence in `:persistent_term` so
+    # `GrappaWeb.AdminChannel` reads it lock-free on every tick instead of a
+    # runtime `Application.get_env/2` (banned by CLAUDE.md). Mirrors
+    # `Grappa.Admission.Config.boot/0`.
+    :ok = Grappa.AdminOverview.boot()
 
     # #364 J/cross-module-S2: stash the #267 per-message window_counts push
     # DI-seam impl in `:persistent_term` so `WindowCounts.PushSource.impl/0`

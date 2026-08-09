@@ -599,6 +599,18 @@ defmodule Grappa.Visitors do
   end
 
   @doc """
+  How many visitor rows exist, regardless of expiry state — the DB half of
+  the admin bar's visitor pair (#1075).
+
+  Deliberately the same population `list_all/0` returns (the M-4 admin
+  view, expired-but-not-yet-reaped sliver included) so the bar's `total`
+  and the Visitors tab's row count are the same number by construction.
+  The live half comes from the registry, never from this count.
+  """
+  @spec count_all() :: non_neg_integer()
+  def count_all, do: Repo.aggregate(Visitor, :count, :id)
+
+  @doc """
   Every visitor row, regardless of expiry state, ordered by
   `inserted_at` ascending. Operator-facing — the M-4 admin console
   needs the not-yet-reaped expired sliver too, to answer "why is

@@ -120,7 +120,13 @@ defmodule Grappa.MixProject do
   def application do
     [
       mod: {Grappa.Application, []},
-      extra_applications: [:logger, :runtime_tools, :ssl, :crypto, :inets]
+      # #1075 — `:os_mon` is here for ONE function: `:cpu_sup.avg1/0`, the
+      # loadavg on the admin top bar. Not `/proc/loadavg`: production is a
+      # FreeBSD jail, which has no `/proc`; cpu_sup shells out to a per-OS
+      # port program, which is the whole reason to pay for the dependency.
+      # `config/config.exs` keeps os_mon's memsup + disksup off — they are
+      # chatty about thresholds nothing here acts on.
+      extra_applications: [:logger, :os_mon, :runtime_tools, :ssl, :crypto, :inets]
     ]
   end
 
