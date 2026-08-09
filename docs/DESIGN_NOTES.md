@@ -35107,3 +35107,109 @@ second copy of the flow set in a module that has no business owning one —
 worse than the gap. The set is closed by construction upstream:
 `Admission.check_capacity/1` takes a `capacity_input` whose `flow` is typed
 `flow()`.
+
+---
+
+## 2026-08-09 — #429: the runtime half of the mirror, and what a typespec cannot say
+
+`wireTypes.ts` has been the generated mirror of the server's `Grappa.*.Wire`
+typespecs since #364, and `tsc` erases every line of it. So the thing actually
+standing at the WS/REST boundary was `wireNarrow.ts` + `wireTypesAssert.ts` +
+the inline narrowers in `api.ts`: roughly 1250 hand-written lines
+re-transcribing, by hand, the very typespecs the codegen already reads. Two
+hand-maintained copies of one authoritative source. #448 had just closed the
+STATIC half of that gap (`atom()` → declared union in four typespecs, so the
+mirror stops saying `string`); this is the RUNTIME half.
+
+**The fix is a second artifact, not a second generator.** `mix
+grappa.gen_wire_types` now emits `cicchetto/src/lib/wireSchema.ts` from the
+same walk that writes `wireTypes.ts`: one `as const` schema per Wire type,
+tree-shakeable, under the same `--check` drift gate. Type and schema cannot
+disagree, because one run writes both — visible immediately when #448 landed
+mid-branch and the three sets it closed appeared in the schema as
+`{ e: [...] }` on the next regeneration, with no second edit. `wireValidate.ts`
+is the ~230 lines that interpret it, and its `Infer<>` lets a call site assert
+at compile time that the schema it validates against and the type it claims to
+return are one shape.
+
+Three emitter constraints worth remembering, because each was found the hard
+way:
+
+- **Topological order, not module order.** A schema is an object literal
+  evaluated at module init, so a forward reference is a TDZ error at runtime
+  rather than a `tsc` error. The emitter sorts by dependency and raises on a
+  cycle. A pure alias (`@type a :: b()`) emits `export const S_A = S_B;`
+  WITHOUT `as const` — `as const` on an identifier is TS1355.
+- **The printer has to be biome's printer.** A generated file no human may
+  edit must already be in the formatter's normal form, or `bun run check` fails
+  on a file with no legal fix. Inline-iff-it-fits-at-this-column reproduces
+  biome's layout exactly; named imports need a CASE-INSENSITIVE sort, which
+  diverges from ASCII only where `_` meets a letter (`CREDENTIAL_…` sorts
+  before `CREDENTIALS_…` because `_` < `s` but `_` > `S`).
+- **`Infer<>` needs fuel.** `WireNode` is recursive, so `Infer<N>` under an
+  `N extends WireNode` constraint is too, and TS2589s. A depth counter bounds
+  it; nine levels is far past any JSON wire shape.
+
+**The derivable/human boundary — the actual result.** What a typespec CAN say
+turns out to be all of the mechanical part: field presence, primitive kinds,
+closed sets, nullability, arrays, nesting, and (via `optional(:k)`) whether the
+server may omit a key. Across the whole admin-channel surface — 27 event arms
+plus the overview and session-log rows — exactly three things did not derive,
+and all three are statements about something other than shape:
+
+1. **`login_throttled`'s `door`/`scope`.** `optional(:k)` says the server may
+   omit them. It cannot say what to do when a NEWER server sends a member this
+   build has not heard of. The event is a security alert and those fields are
+   its attribution: dropping the alert to protect the detail inverts the
+   priority, and the admin ring is mirrored to disk and replayed at boot, so
+   rows minted by another vintage genuinely arrive.
+2. **`session_log`'s `old_nick`.** Declared required and always sent, so the
+   typespec is right to demand it — but it was added after the shape shipped,
+   and cic deploys independently of the server (`deploy-m42.sh --cic`).
+   "Required of a current server, tolerated absent from an older one" is a
+   statement about DEPLOY SKEW, not about the shape.
+3. **`narrowAdminSnapshot`'s atomicity.** One malformed element drops the whole
+   snapshot rather than admitting a partial ring — a call about what a corrupt
+   audit trail is worth.
+
+The rule that falls out: **shape is derivable; tolerance is not.** A tolerance
+is always a claim about a PEER (a newer server, an older server, a replayed
+row), and a typespec describes one side only.
+
+**What the transcription had already lost.** `wireNarrow.ts` had no
+`web_session_severed` arm at all. `request_budget.ex` records it into the admin
+ring, `wireTypes.ts` has the type, `adminEvents.ts` dispatches it — only the
+hand copy missed it. Every flood-sever row was dropped on the live push, and
+because the snapshot narrower is atomic, one such row in the ring blanked the
+entire Events tab on reconnect. This is the same failure mode #448 found one
+layer up in `AdmissionFlow`, and it is the argument for the whole exercise: a
+transcription can lose an arm, and nobody can see it in the diff that omits it.
+
+**The measurement, and the oracle that was blind.** A narrower is the defence
+at the boundary, so the swap is only safe if you can say what changed for every
+malformed shape, not just the ones someone wrote a test for.
+`__tests__/wireAdminBoundary.test.ts` walks the generated schema, synthesises a
+valid payload per arm, mutates every field (drop / null / wrong type / unknown
+extra key) and snapshots the verdicts; the snapshot was taken against the HAND
+narrowers first, so the diff in the swap commit IS the before/after. It moved by
+exactly two cells, both on `web_session_severed`, both `reject → accept`. No
+field entered a `survives…` list: the generated boundary is nowhere more
+permissive than the one it replaced.
+
+But the first version of that corpus was **an oracle made of the thing under
+test** — the sampler reads the generated schema and the narrower now validates
+against the same schema, so the two move together. Flipping
+`circuit_open.network_id` to `String.t()` upstream, regenerating and re-running
+left all six tests passing. Recording the sampled payload's SHAPE alongside the
+verdicts gives the snapshot an anchor outside that loop; the same mutation now
+fails on exactly one line. **General rule: a pin whose expected value is
+computed from the thing it pins is green forever.**
+
+**Scope.** This slice took the admin-channel boundary only (~570 hand lines out,
+~110 in, plus the emitter and the interpreter). `narrowChannelEvent`,
+`narrowUserEvent` and the `api.ts` inline narrowers are the same mechanical
+exercise against the same emitted schemas and are deliberately left for
+follow-up slices — the machinery, the gate and the measurement pattern are what
+this one had to establish. `wireTypesAssert.ts` is NOT in that count: it is a
+compile-time bridge between `api.ts` hand-mirrors and `wireTypes.ts`, and it
+disappears when those mirrors do, not when the narrowers do.
