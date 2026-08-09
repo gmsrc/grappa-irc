@@ -35642,6 +35642,7 @@ this: it triggers on pushes to `master` while the repository's default branch is
 `main`, and no run of it appears in the repository's history. That is a
 plausible reason the fatal stayed invisible, not a measured one — nobody has
 re-pointed the trigger and watched it go red.
+
 ---
 
 ## 2026-08-09 — #1123: a quote is what the sender wrote, and the shape is the only safe knife
