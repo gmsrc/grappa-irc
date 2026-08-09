@@ -15,17 +15,21 @@ defmodule Mix.Tasks.Grappa.UnbindNetwork do
   """
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.Networks, Mix.Tasks.Grappa.Boot]
+    deps: [Grappa.Accounts, Grappa.Networks, Mix.Tasks.Grappa.Boot, Mix.Tasks.Grappa.OptionParsing]
 
   use Mix.Task
 
   alias Grappa.{Accounts, Networks}
   alias Grappa.Networks.Credentials
-  alias Mix.Tasks.Grappa.Boot
+  alias Mix.Tasks.Grappa.{Boot, OptionParsing}
+
+  @switches [user: :string, network: :string]
+
+  @required [:user, :network]
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: [user: :string, network: :string])
+    opts = OptionParsing.parse!(args, @switches, @required)
     user_name = Keyword.fetch!(opts, :user)
     slug = Keyword.fetch!(opts, :network)
 

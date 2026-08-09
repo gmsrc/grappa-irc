@@ -44,9 +44,11 @@ defmodule Mix.Tasks.Grappa.UpdateNetworkCredential do
     sasl_user: :string
   ]
 
+  @required [:user, :network]
+
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: @switches)
+    opts = OptionParsing.parse!(args, @switches, @required)
 
     user_name = Keyword.fetch!(opts, :user)
     slug = Keyword.fetch!(opts, :network)

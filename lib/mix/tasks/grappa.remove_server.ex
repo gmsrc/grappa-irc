@@ -24,9 +24,13 @@ defmodule Mix.Tasks.Grappa.RemoveServer do
   alias Grappa.Networks.Servers
   alias Mix.Tasks.Grappa.{Boot, OptionParsing}
 
+  @switches [network: :string, server: :string]
+
+  @required [:network, :server]
+
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: [network: :string, server: :string])
+    opts = OptionParsing.parse!(args, @switches, @required)
     slug = Keyword.fetch!(opts, :network)
     server = Keyword.fetch!(opts, :server)
 

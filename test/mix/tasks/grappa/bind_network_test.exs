@@ -206,10 +206,65 @@ defmodule Mix.Tasks.Grappa.BindNetworkTest do
     end
   end
 
-  test "raises KeyError when --user is missing" do
-    assert_raise KeyError, fn ->
-      BindNetwork.run(["--network", "azzurra", "--server", "h:6697", "--nick", "n"])
-    end
+  # #1086 — this used to assert `KeyError`, pinning the very defect the
+  # issue reports: `Keyword.fetch!` on an option the strict parse had
+  # already discarded dumped a raw Elixir traceback at an operator. The
+  # test encoded the bug, which is why the bug survived.
+  test "a missing required option names it, without a traceback" do
+    error =
+      assert_raise Mix.Error, fn ->
+        BindNetwork.run(["--network", "azzurra", "--server", "h:6697", "--nick", "n"])
+      end
+
+    assert error.message =~ "--user"
+    assert error.message =~ "--auth"
+  end
+
+  # The typo case from the issue. Reporting the unknown switch takes
+  # precedence over the required option it failed to set: telling the
+  # operator "--network is missing" would send them hunting for a flag
+  # they did type.
+  test "an unknown switch is reported, naming it, rather than discarded" do
+    error =
+      assert_raise Mix.Error, fn ->
+        BindNetwork.run([
+          "--user",
+          "vjt",
+          "--nework",
+          "azzurra",
+          "--server",
+          "h:6697",
+          "--nick",
+          "n",
+          "--auth",
+          "none"
+        ])
+      end
+
+    assert error.message =~ "--nework"
+    refute error.message =~ "missing required"
+  end
+
+  test "a known switch with an unparseable value names the switch and the value" do
+    error =
+      assert_raise Mix.Error, fn ->
+        BindNetwork.run([
+          "--user",
+          "vjt",
+          "--network",
+          "azzurra",
+          "--server",
+          "h:6697",
+          "--nick",
+          "n",
+          "--auth",
+          "none",
+          "--tls=maybe"
+        ])
+      end
+
+    assert error.message =~ "--tls"
+    assert error.message =~ "maybe"
   end
 
   test "--services-flavor sets the network's services flavor on create", %{user: _user} do

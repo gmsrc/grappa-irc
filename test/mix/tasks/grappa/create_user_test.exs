@@ -55,15 +55,24 @@ defmodule Mix.Tasks.Grappa.CreateUserTest do
     assert Accounts.get_user_by_name!("pleb").is_admin == false
   end
 
-  test "raises when --name is missing" do
-    assert_raise KeyError, fn ->
-      CreateUser.run(["--password", "correct horse battery staple"])
-    end
+  # #1086 — both of these asserted `KeyError`, pinning the defect the
+  # issue reports rather than the behaviour an operator needs. A test
+  # that encodes the bug is why the bug survived.
+  test "a missing --name names it, without a traceback" do
+    error =
+      assert_raise Mix.Error, fn ->
+        CreateUser.run(["--password", "correct horse battery staple"])
+      end
+
+    assert error.message =~ "--name"
   end
 
-  test "raises when --password is missing" do
-    assert_raise KeyError, fn ->
-      CreateUser.run(["--name", "vjt"])
-    end
+  test "a missing --password names it, without a traceback" do
+    error =
+      assert_raise Mix.Error, fn ->
+        CreateUser.run(["--name", "vjt"])
+      end
+
+    assert error.message =~ "--password"
   end
 end

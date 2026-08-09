@@ -73,6 +73,23 @@ defmodule Mix.Tasks.Grappa.SetNetworkCapsTest do
     end
   end
 
+  # #1086 — this task has no required options, so the KeyError from the
+  # issue never reached it, but the silent half of the defect did: a
+  # misspelled cap flag was discarded by the strict parse and surfaced
+  # as "no changes specified", which names the wrong thing. The operator
+  # DID specify a change; they misspelled it.
+  test "a misspelled cap flag names the switch, not 'no changes'" do
+    error =
+      assert_raise Mix.Error, fn ->
+        capture_io(fn ->
+          SetNetworkCaps.run(["--network", "azzurra", "--max-visitor-session", "3"])
+        end)
+      end
+
+    assert error.message =~ "--max-visitor-session"
+    refute error.message =~ "no changes specified"
+  end
+
   test "raises when no cap flag is supplied" do
     assert_raise Mix.Error, ~r/no changes specified/, fn ->
       capture_io(fn ->

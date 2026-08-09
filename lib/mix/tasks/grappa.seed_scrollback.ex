@@ -36,13 +36,14 @@ defmodule Mix.Tasks.Grappa.SeedScrollback do
       Grappa.Networks,
       Grappa.Scrollback,
       Mix.Tasks.Grappa.Boot,
+      Mix.Tasks.Grappa.OptionParsing,
       Mix.Tasks.Grappa.Output
     ]
 
   use Mix.Task
 
   alias Grappa.{Accounts, Networks, Scrollback}
-  alias Mix.Tasks.Grappa.{Boot, Output}
+  alias Mix.Tasks.Grappa.{Boot, OptionParsing, Output}
 
   @switches [
     user: :string,
@@ -52,12 +53,14 @@ defmodule Mix.Tasks.Grappa.SeedScrollback do
     sender: :string
   ]
 
+  @required [:user, :network, :channel, :count, :sender]
+
   @max_count 2_000
   @gap_ms 100
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: @switches)
+    opts = OptionParsing.parse!(args, @switches, @required)
     user_name = Keyword.fetch!(opts, :user)
     network_slug = Keyword.fetch!(opts, :network)
     channel = Keyword.fetch!(opts, :channel)

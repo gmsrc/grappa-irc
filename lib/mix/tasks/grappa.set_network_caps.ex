@@ -45,13 +45,14 @@ defmodule Mix.Tasks.Grappa.SetNetworkCaps do
     deps: [
       Grappa.Networks,
       Mix.Tasks.Grappa.Boot,
+      Mix.Tasks.Grappa.OptionParsing,
       Mix.Tasks.Grappa.Output
     ]
 
   use Mix.Task
 
   alias Grappa.Networks
-  alias Mix.Tasks.Grappa.{Boot, Output}
+  alias Mix.Tasks.Grappa.{Boot, OptionParsing, Output}
 
   @switches [
     network: :string,
@@ -63,9 +64,11 @@ defmodule Mix.Tasks.Grappa.SetNetworkCaps do
     clear_max_per_ip: :boolean
   ]
 
+  @required []
+
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: @switches)
+    opts = OptionParsing.parse!(args, @switches, @required)
 
     validate_mutual_exclusion!(opts)
     attrs = build_attrs(opts)

@@ -39,6 +39,36 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
   @auth_strings Map.keys(@auth_map)
 
   @doc """
+  Parses `args` against `switches`, returning the option keyword list.
+
+  Raises `Mix.Error` — one line, no traceback — when a switch is
+  unrecognised, when its value will not parse, or when one of `required`
+  is absent.
+
+  `OptionParser.parse(args, strict: ...)` reports none of that on its
+  own (GH #1086): an unrecognised switch lands in the `invalid` element
+  every caller here was discarding, so `--nework azzurra` silently
+  became no `--network` at all, and the first `Keyword.fetch!` for the
+  option it failed to set dumped a raw `KeyError` traceback at the
+  operator.
+
+  An unrecognised switch is reported IN PREFERENCE to the required
+  option it failed to set. `--nework azzurra` names the typo; saying
+  `--network` is missing would send the operator hunting for a flag
+  they believe they typed.
+  """
+  @spec parse!([String.t()], keyword(), [atom()]) :: keyword()
+  def parse!(args, switches, required)
+      when is_list(args) and is_list(switches) and is_list(required) do
+    {opts, _rest, invalid} = OptionParser.parse(args, strict: switches)
+
+    reject_invalid!(invalid, switches)
+    reject_missing!(opts, required)
+
+    opts
+  end
+
+  @doc """
   Parses a `host:port` server spec into `{host, port}`. Raises on
   malformed input.
   """
@@ -84,4 +114,41 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
   end
+
+  defp reject_invalid!([], _switches), do: :ok
+
+  defp reject_invalid!(invalid, switches) do
+    known = Enum.map(switches, fn {name, _type} -> flag(name) end)
+
+    Mix.raise(Enum.map_join(invalid, "; ", &invalid_message(&1, known)))
+  end
+
+  # `OptionParser` reports an unrecognised switch and a known switch
+  # whose value will not parse through the SAME `invalid` element, so
+  # the two are told apart by whether the reported spelling appears in
+  # the caller's own switch table.
+  defp invalid_message({switch, nil}, known) do
+    if switch in known,
+      do: "missing value for #{switch}",
+      else: "unknown option #{switch}"
+  end
+
+  defp invalid_message({switch, value}, known) do
+    if switch in known,
+      do: "invalid value #{inspect(value)} for #{switch}",
+      else: "unknown option #{switch}"
+  end
+
+  defp reject_missing!(opts, required) do
+    case Enum.reject(required, &Keyword.has_key?(opts, &1)) do
+      [] -> :ok
+      [one] -> Mix.raise("missing required option #{flag(one)}")
+      many -> Mix.raise("missing required options #{Enum.map_join(many, ", ", &flag/1)}")
+    end
+  end
+
+  # `services_flavor:` in the switch table is `--services-flavor` on the
+  # command line. Derived from the atom's string form only — never the
+  # reverse direction, for the reason the `@auth_map` note above gives.
+  defp flag(name), do: "--" <> String.replace(Atom.to_string(name), "_", "-")
 end

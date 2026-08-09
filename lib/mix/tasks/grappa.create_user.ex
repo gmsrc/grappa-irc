@@ -25,15 +25,24 @@ defmodule Mix.Tasks.Grappa.CreateUser do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Mix.Tasks.Grappa.Boot, Mix.Tasks.Grappa.Output]
+    deps: [
+      Grappa.Accounts,
+      Mix.Tasks.Grappa.Boot,
+      Mix.Tasks.Grappa.OptionParsing,
+      Mix.Tasks.Grappa.Output
+    ]
 
   use Mix.Task
 
-  alias Mix.Tasks.Grappa.{Boot, Output}
+  alias Mix.Tasks.Grappa.{Boot, OptionParsing, Output}
+
+  @switches [name: :string, password: :string, admin: :boolean]
+
+  @required [:name, :password]
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: [name: :string, password: :string, admin: :boolean])
+    opts = OptionParsing.parse!(args, @switches, @required)
     name = Keyword.fetch!(opts, :name)
     password = Keyword.fetch!(opts, :password)
     admin? = Keyword.get(opts, :admin, false)

@@ -80,12 +80,14 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
     source: :string
   ]
 
+  @required [:user, :network, :server, :nick, :auth]
+
   # De-facto IRC-over-TLS port per RFC 7194 + ircv3 conventions.
   @tls_port 6697
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: @switches)
+    opts = OptionParsing.parse!(args, @switches, @required)
 
     user_name = Keyword.fetch!(opts, :user)
     slug = Keyword.fetch!(opts, :network)

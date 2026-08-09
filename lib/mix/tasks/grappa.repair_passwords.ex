@@ -70,15 +70,17 @@ defmodule Mix.Tasks.Grappa.RepairPasswords do
   """
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Networks, Grappa.Session, Mix.Tasks.Grappa.Boot]
+    deps: [Grappa.Networks, Grappa.Session, Mix.Tasks.Grappa.Boot, Mix.Tasks.Grappa.OptionParsing]
 
   use Mix.Task
 
   alias Grappa.Networks.{Credential, Credentials}
   alias Grappa.Session.NSInterceptor
-  alias Mix.Tasks.Grappa.Boot
+  alias Mix.Tasks.Grappa.{Boot, OptionParsing}
 
   @switches [write: :boolean]
+
+  @required []
 
   @typedoc """
   Why a row is reported instead of repaired. Every one of these means the
@@ -168,7 +170,7 @@ defmodule Mix.Tasks.Grappa.RepairPasswords do
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: @switches)
+    opts = OptionParsing.parse!(args, @switches, @required)
     # Dry run is the default, and the default is the safe direction: writing
     # is the irreversible half, so it is the half that has to be asked for.
     write? = Keyword.get(opts, :write, false)

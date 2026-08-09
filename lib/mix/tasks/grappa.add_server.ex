@@ -60,12 +60,14 @@ defmodule Mix.Tasks.Grappa.AddServer do
 
   @switches [network: :string, server: :string, tls: :boolean, priority: :integer, source: :string]
 
+  @required [:network, :server]
+
   # De-facto IRC-over-TLS port per RFC 7194 + ircv3 conventions.
   @tls_port 6697
 
   @impl Mix.Task
   def run(args) do
-    {opts, _, _} = OptionParser.parse(args, strict: @switches)
+    opts = OptionParsing.parse!(args, @switches, @required)
     slug = Keyword.fetch!(opts, :network)
     server = Keyword.fetch!(opts, :server)
 
