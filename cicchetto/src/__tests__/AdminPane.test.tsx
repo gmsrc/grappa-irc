@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 // M-cluster M-8 / M-9b / M-10 / M-11 + UX-6-B2 — AdminPane mounts
 // Visitors + Sessions + Networks + Events + Settings tabs inside
 // their respective tabpanels. Mock all five so this suite stays
-// focused on the OUTER PANE contract (header + close + tab nav +
+// focused on the OUTER PANE contract (header + tab nav +
 // active-tab switching + admin-events subscription lifecycle).
 vi.mock("../AdminVisitorsTab", () => ({
   default: () => <div data-testid="admin-visitors-tab-mock">visitors-tab</div>,
@@ -50,12 +50,12 @@ import AdminPane from "../AdminPane";
 
 describe("AdminPane", () => {
   it("renders the 'admin console' header", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     expect(screen.getByRole("heading", { name: /admin console/i })).toBeInTheDocument();
   });
 
   it("renders all five tabs with Sessions as the default-active tab", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     const visitorsTab = screen.getByTestId("admin-tab-visitors");
     const sessionsTab = screen.getByTestId("admin-tab-sessions");
     const networksTab = screen.getByTestId("admin-tab-networks");
@@ -77,7 +77,7 @@ describe("AdminPane", () => {
   });
 
   it("mounts AdminSessionsTab inside the active tabpanel by default", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     expect(screen.getByTestId("admin-sessions-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
@@ -86,7 +86,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Visitors tab swaps the active panel + flips aria-selected", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-visitors"));
     expect(screen.getByTestId("admin-visitors-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
@@ -97,7 +97,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Networks tab swaps the active panel + flips aria-selected", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-networks"));
     expect(screen.getByTestId("admin-networks-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-events-tab-mock")).toBeNull();
@@ -105,7 +105,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Events tab swaps the active panel + flips aria-selected", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-events"));
     expect(screen.getByTestId("admin-events-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
@@ -116,7 +116,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Session Log tab swaps the active panel + flips aria-selected (#215)", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-session_log"));
     expect(screen.getByTestId("admin-session-log-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
@@ -127,7 +127,7 @@ describe("AdminPane", () => {
   });
 
   it("clicking the Settings tab swaps the active panel + flips aria-selected (UX-6-B2)", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-settings"));
     expect(screen.getByTestId("admin-settings-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
@@ -138,23 +138,22 @@ describe("AdminPane", () => {
   });
 
   it("clicking back to Visitors after Sessions returns the original panel", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-sessions"));
     fireEvent.click(screen.getByTestId("admin-tab-visitors"));
     expect(screen.getByTestId("admin-visitors-tab-mock")).toBeInTheDocument();
     expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
   });
 
-  it("close button fires onClose", () => {
-    const onClose = vi.fn();
-    render(() => <AdminPane onClose={onClose} onOpenRail={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("admin-pane-close"));
-    expect(onClose).toHaveBeenCalledTimes(1);
-  });
-
-  it("close button carries an a11y label", () => {
-    render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
-    expect(screen.getByLabelText(/close admin console/i)).toBeInTheDocument();
+  // #1073 — vjt: *"la x sparisce"*. Not relocated: DELETED. Selection is what
+  // mounts and unmounts this pane, and the rail the ☰ opens already carries
+  // `home` and `rooms`, so a "close admin" verb would be a second name for the
+  // work `home` already does. The pane consequently has no `onClose` prop at
+  // all — there is no caller left to hand one to.
+  it("carries no close ×: leaving the console is the rail's job", () => {
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
+    expect(screen.queryByTestId("admin-pane-close")).toBeNull();
+    expect(screen.queryByLabelText(/close admin console/i)).toBeNull();
   });
 
   // #1073 — the band is the channel windows' bar, not a lookalike. vjt: *"la
@@ -164,7 +163,7 @@ describe("AdminPane", () => {
   // disagreed about which side the ☰ sits on.
   describe("#1073 — the band is the shared pane top bar", () => {
     it("renders `.topic-bar`, and the private `.admin-pane-header` is gone", () => {
-      const { container } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+      const { container } = render(() => <AdminPane onOpenRail={vi.fn()} />);
       expect(container.querySelector(".topic-bar")).not.toBeNull();
       expect(container.querySelector(".admin-pane-header")).toBeNull();
     });
@@ -172,14 +171,14 @@ describe("AdminPane", () => {
     // The side is not a CSS override, it is the child order — the same fact
     // `TopicBar.test.tsx` pins for the channel host.
     it("puts the ☰ LAST, which is what places it on the right", () => {
-      const { container } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+      const { container } = render(() => <AdminPane onOpenRail={vi.fn()} />);
       const bar = container.querySelector(".topic-bar");
       expect(bar?.lastElementChild).toHaveClass("topic-bar-hamburger");
     });
 
     it("the ☰ opens the rail", () => {
       const onOpenRail = vi.fn();
-      const { container } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={onOpenRail} />);
+      const { container } = render(() => <AdminPane onOpenRail={onOpenRail} />);
       const ham = container.querySelector(".topic-bar-hamburger");
       expect(ham).not.toBeNull();
       fireEvent.click(ham as Element);
@@ -191,7 +190,7 @@ describe("AdminPane", () => {
     // one "open members sidebar". `ux-4-z-cluster-journey` reaches this door on
     // the admin window, and eight specs reach the channel one by its own name.
     it("keeps the admin door's accessible name", () => {
-      render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+      render(() => <AdminPane onOpenRail={vi.fn()} />);
       expect(screen.getByLabelText(/open actions/i)).toBeInTheDocument();
     });
   });
@@ -199,7 +198,7 @@ describe("AdminPane", () => {
   it("starts admin-events subscription on mount, tears down on unmount (M-11)", () => {
     startSub.mockClear();
     uninstall.mockClear();
-    const { unmount } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+    const { unmount } = render(() => <AdminPane onOpenRail={vi.fn()} />);
     expect(startSub).toHaveBeenCalledTimes(1);
     expect(uninstall).toHaveBeenCalledTimes(0);
     unmount();

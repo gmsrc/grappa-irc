@@ -641,19 +641,13 @@ const Shell: Component = () => {
             <Switch fallback={<CrtSplash />}>
               <Match when={isAdminPaneVisible()}>
                 {/* UX-4 bucket N — AdminPane mount driven by selection +
-                    isAdmin guard. onClose navigates back to home, mirroring
-                    the demote-redirect effect; both paths terminate at the
-                    same landing window. */}
+                    isAdmin guard. #1073 deleted the pane's close × and its
+                    `onClose` with it: selection is what unmounts this pane,
+                    and the rail the ☰ opens already carries `home`. The
+                    demote-redirect effect still lands on that same window. */}
                 <AdminPane
                   onOpenRail={() =>
                     toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
-                  }
-                  onClose={() =>
-                    setSelectedChannel({
-                      networkSlug: HOME_WINDOW_SLUG,
-                      channelName: HOME_WINDOW_NAME,
-                      kind: "home",
-                    })
                   }
                 />
               </Match>
@@ -930,13 +924,6 @@ const Shell: Component = () => {
               <AdminPane
                 onOpenRail={() =>
                   toggleMembersPanel({ membersOpen, setMembersOpen, setSettingsOpen })
-                }
-                onClose={() =>
-                  setSelectedChannel({
-                    networkSlug: HOME_WINDOW_SLUG,
-                    channelName: HOME_WINDOW_NAME,
-                    kind: "home",
-                  })
                 }
               />
             </Match>

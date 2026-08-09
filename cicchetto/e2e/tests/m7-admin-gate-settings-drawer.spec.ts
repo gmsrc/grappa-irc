@@ -89,9 +89,14 @@ for (const c of cases) {
       await expect(pane).toBeVisible();
       await expect(pane.getByRole("heading", { name: /admin console/i })).toBeVisible();
 
-      // Close button returns to the channel/empty state — pane
-      // unmounts entirely (not just hidden via CSS).
-      await page.getByTestId("admin-pane-close").click();
+      // #1073 — the close × is gone (vjt: *"la x sparisce"*). What it did was
+      // set selection to home, and the rail already carries that row, so the
+      // exit path asserted here is the one that remains: open the rail from the
+      // console's own ☰, pick home. The post-condition is unchanged and is what
+      // this arm was ever about — the pane unmounts entirely, not just hidden
+      // via CSS.
+      await openRailMenu(page);
+      await page.getByTestId("mobile-panel-home").click();
       await expect(page.getByTestId("admin-pane")).toHaveCount(0);
     } else {
       // Non-admin: the launcher MUST be absent from the DOM (the Show

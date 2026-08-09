@@ -1407,7 +1407,14 @@ describe("Shell — M-7/N admin pane lifecycle", () => {
     expect(container.querySelector(".scrollback-pane")).toBeNull();
   });
 
-  it("clicking admin pane close button returns to home (selection-driven)", async () => {
+  // #1073 — this used to click the pane's × and assert selection landed on
+  // home. The × was deleted (vjt: *"la x sparisce"*) and `onClose` with it, so
+  // there is no Shell-owned close wiring left to pin. What replaces it is the
+  // assertion that Shell hands the pane no such door of its own: the way out is
+  // the rail's `home` row acting on selection, driven end to end by
+  // `m7-admin-gate-settings-drawer`. The OTHER path to the same landing window
+  // — the demote-mid-session redirect — keeps its own test, immediately below.
+  it("mounts the admin pane with no close affordance of its own (#1073)", async () => {
     userHolder.current = { kind: "user", id: "u1", name: "vjt", is_admin: true, inserted_at: "x" };
     // Start on admin window directly — equivalent to the post-launcher
     // state. Avoids re-asserting the rail wiring here (covered by the
@@ -1415,13 +1422,7 @@ describe("Shell — M-7/N admin pane lifecycle", () => {
     selectionState.setSelSig({ networkSlug: "$admin", channelName: "$admin", kind: "admin" });
     const { container } = render(() => <Shell />);
     await waitFor(() => expect(container.querySelector(".admin-pane")).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId("admin-pane-close"));
-    // UX-4 bucket N — onClose navigates selection to home.
-    expect(selectionState.setSelectedChannelMock).toHaveBeenCalledWith({
-      networkSlug: "$home",
-      channelName: "$home",
-      kind: "home",
-    });
+    expect(screen.queryByTestId("admin-pane-close")).toBeNull();
   });
 
   it("UX-4 N — demote-mid-session redirects selection to home when on admin window", async () => {

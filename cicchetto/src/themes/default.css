@@ -4362,32 +4362,6 @@ html.resize-dragging * {
   color: var(--adm-text-dim);
 }
 
-.admin-pane-close {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  color: var(--adm-text-dim);
-  border: 1px solid var(--adm-line);
-  border-radius: var(--adm-radius-sm);
-  font-family: var(--adm-font);
-  font-size: 1.1rem;
-  width: var(--tap-min);
-  height: var(--tap-min);
-  cursor: pointer;
-  line-height: 1;
-}
-
-.admin-pane-close:hover {
-  background: var(--adm-surface-2);
-  color: var(--adm-text);
-}
-
-.admin-pane-close:focus-visible {
-  outline: 2px solid var(--adm-accent);
-  outline-offset: 2px;
-}
-
 /* Admin redesign Layer 2/3 — `AdminNav` (cicchetto/src/admin/AdminNav.tsx).
    Mobile-first: a horizontal scrolling chip strip (`.adm-nav` row +
    `.adm-nav-group` row), grouped by a non-interactive label. The

@@ -17,8 +17,15 @@ import PaneTopBar from "./PaneTopBar";
 
 // M-7 — Admin console pane. Replaces the channel content in
 // Shell.tsx when an admin operator clicks "admin console" in
-// SettingsDrawer. Outer pane = header + close + tab nav + active
-// tab body.
+// SettingsDrawer. Outer pane = top bar + tab nav + active tab body.
+//
+// #1073 — the pane has no close × and no `onClose`. vjt: *"la x
+// sparisce"*. Mount is selection-driven (below), so picking any
+// window from the rail the ☰ opens already leaves the console; the
+// rail carries `home` and `rooms`, and "close admin" would have been
+// a second verb for the work `home` already does. The demote-redirect
+// effect in Shell.tsx is now the ONLY programmatic way out, and it
+// lands on the same window the deleted button did.
 //
 // M-8 added Visitors; M-9b added Sessions; M-10 added Networks;
 // M-11 adds Events (real-time stream of admin-relevant events
@@ -55,7 +62,6 @@ import PaneTopBar from "./PaneTopBar";
 // action/overflow-x/max-height CSS contract 4 specs depend on (#2/#3/#5).
 
 export type Props = {
-  onClose: () => void;
   /**
    * Admin redesign (2026-08-07) — opens the right rail (`.shell-members`), the
    * mobile door to settings. Rendered inline in this pane's own band so the
@@ -166,15 +172,6 @@ const AdminPane: Component<Props> = (props) => {
             />
           )}
         </Show>
-        <button
-          type="button"
-          class="admin-pane-close"
-          aria-label="close admin console"
-          onClick={props.onClose}
-          data-testid="admin-pane-close"
-        >
-          ×
-        </button>
       </PaneTopBar>
       <AdminNav
         groups={GROUPS}

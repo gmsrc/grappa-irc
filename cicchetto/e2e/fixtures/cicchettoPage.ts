@@ -791,9 +791,16 @@ export async function openMembersDrawer(page: Page): Promise<void> {
   for (;;) {
     if (await drawer.isVisible().catch(() => false)) break;
     try {
-      const topicHamburger = page.getByLabel(/open members sidebar/i);
-      if ((await topicHamburger.count()) > 0) {
-        await topicHamburger.first().click({ timeout: 3_000 });
+      // #1073 — located by CLASS, not by accessible name. The bar itself is
+      // now shared: the channel window and the admin console both render
+      // `PaneTopBar`, and its ☰ is deliberately named differently by each host
+      // ("open members sidebar" vs "open actions") because the two doors mean
+      // different things to a screen reader. The class is what they have in
+      // common, and it is the thing this helper actually needs — the in-flow
+      // opener, whichever pane is mounted.
+      const paneHamburger = page.locator(".topic-bar-hamburger");
+      if ((await paneHamburger.count()) > 0) {
+        await paneHamburger.first().click({ timeout: 3_000 });
       } else {
         await page.getByTestId("shell-chrome-rail-opener").click({ timeout: 3_000 });
       }
