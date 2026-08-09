@@ -351,8 +351,17 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # `check` is biome check src && tsc --noEmit — the same gate the
-      # local pre-commit path runs, so CI and the developer see one rule.
+      # #484 — `check` also typechecks `e2e/`, whose `@playwright/test` and
+      # `@types/node` are declared by e2e/package.json rather than cicchetto's,
+      # so the install above does not provide them. No `--frozen-lockfile`:
+      # e2e tracks no lockfile on purpose (see cicchetto/e2e/.gitignore — the
+      # runner image installs from package.json alone), and its three devDeps
+      # are exact-pinned, so the resolution is deterministic without one.
+      - name: Install e2e type dependencies
+        run: bun install --cwd e2e
+
+      # `check` is biome check (src + e2e) && tsc --noEmit for both projects —
+      # the same gate the local path runs, so CI and the developer see one rule.
       - name: Biome + typecheck
         run: bun run check
 

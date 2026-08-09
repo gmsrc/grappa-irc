@@ -8,8 +8,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "check": "biome check src && tsc --noEmit",
-    "check:fix": "biome check --write src",
+    "check": "biome check && tsc --noEmit && tsc --noEmit -p e2e/tsconfig.json",
+    "check:fix": "biome check --write",
     "test": "vitest run",
     "test:watch": "vitest",
     "gen:emoji": "bun scripts/gen-emoji.ts"

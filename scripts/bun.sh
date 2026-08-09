@@ -5,7 +5,7 @@
 #   scripts/bun.sh install
 #   scripts/bun.sh add phoenix
 #   scripts/bun.sh run build
-#   scripts/bun.sh run check                    # biome + tsc (lint + typecheck)
+#   scripts/bun.sh run check                    # biome + tsc over src AND e2e (#484)
 #   scripts/bun.sh run test                     # vitest (cic unit tests in jsdom)
 #
 # Canonical "which test runner do I use?" docs: docs/TESTING.md.
@@ -88,12 +88,23 @@ run_bun() {
 # check` would die with `vitest: command not found` (exit 127). Install
 # on demand. The install-family verbs manage node_modules themselves —
 # skip the pre-install for those (no point, and avoids double work).
+#
+# e2e/node_modules is the same story since #484: `run check` now also
+# typechecks cicchetto/e2e, whose @playwright/test + @types/node + the
+# irc-framework runtime are declared by e2e/package.json, not cicchetto's. A
+# fresh worktree would fail the gate on "Cannot find type definition file for
+# 'node'" — an absent toolchain reported as a type error. Same self-heal, same
+# reason. (e2e tracks no lockfile by design; see cicchetto/e2e/.gitignore.)
 case "${1:-}" in
     install | add | remove | update | outdated | pm | ci | link | unlink) ;;
     *)
         if [ ! -d "$CICCHETTO_DIR/node_modules" ]; then
             printf 'scripts/bun.sh: cicchetto/node_modules missing — running bun install...\n' >&2
             run_bun "$BUN_IMAGE" bun install >&2
+        fi
+        if [ ! -d "$CICCHETTO_DIR/e2e/node_modules" ]; then
+            printf 'scripts/bun.sh: cicchetto/e2e/node_modules missing — running bun install --cwd e2e...\n' >&2
+            run_bun "$BUN_IMAGE" bun install --cwd e2e >&2
         fi
         ;;
 esac
