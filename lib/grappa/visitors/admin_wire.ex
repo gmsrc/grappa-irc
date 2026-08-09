@@ -67,6 +67,7 @@ defmodule Grappa.Visitors.AdminWire do
           identified: boolean(),
           ip: String.t() | nil,
           inserted_at: DateTime.t(),
+          last_seen_at: DateTime.t() | nil,
           networks: [network_json()]
         }
 
@@ -76,15 +77,30 @@ defmodule Grappa.Visitors.AdminWire do
   from `Grappa.Visitors.list_all_with_live_state/0`; each `live` is `nil`
   when no `Session.Server` is registered for `{:visitor, v.id} ×
   credential.network_id` — the U-0 honesty signal.
+
+  `last_seen_at` is the visitor's newest browser-session touch
+  (`Grappa.Accounts.max_last_seen_by_subject_ids/2`), identity-wide like
+  `expires_at` — it is a property of the subject, not of one network.
+  `nil` means no `accounts_sessions` row has ever been seen for it.
+
+  #1157 — the field is here because the admin's unified session list is
+  ROW-backed: it must show a last-seen for a parked or expired visitor,
+  which by construction has no registry entry and so never appears in
+  `GET /admin/sessions`, where this value used to live alone. A column
+  reading `—` for every inactive row would say "never used", which is
+  not what the server observed — it is what the server never asked.
   """
   @spec visitor_to_admin_json(
           Visitor.t(),
-          [{Credential.t(), SessionEntry.t() | nil}]
+          [{Credential.t(), SessionEntry.t() | nil}],
+          DateTime.t() | nil
         ) :: t()
-  def visitor_to_admin_json(%Visitor{} = v, per_network) when is_list(per_network) do
+  def visitor_to_admin_json(%Visitor{} = v, per_network, last_seen_at)
+      when is_list(per_network) do
     %{
       id: v.id,
       expires_at: v.expires_at,
+      last_seen_at: last_seen_at,
       # #211 phase 7 — "identified/registered" is DERIVED from the
       # credentials (any network holds a committed NickServ secret), not a
       # `visitors.expires_at`-nil flag. The per_network list is already

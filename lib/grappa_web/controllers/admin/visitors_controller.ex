@@ -51,7 +51,7 @@ defmodule GrappaWeb.Admin.VisitorsController do
   """
   use GrappaWeb, :controller
 
-  alias Grappa.{AdminEvents, Operator, Visitors}
+  alias Grappa.{Accounts, AdminEvents, Operator, Visitors}
   alias Grappa.AdminEvents.Wire, as: EventsWire
   alias Grappa.Networks.Credentials
   alias Grappa.Visitors.{AdminWire, Visitor}
@@ -66,9 +66,17 @@ defmodule GrappaWeb.Admin.VisitorsController do
   """
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, _) do
+    entries = Visitors.list_all_with_live_state()
+
+    # #1157 — one batched query for the whole page, the same shape
+    # `SessionsController.index/2` already uses. Resolved HERE rather
+    # than inside the wire so the render stays a pure projection.
+    visitor_ids = Enum.map(entries, fn {v, _} -> v.id end)
+    last_seen = Accounts.max_last_seen_by_subject_ids(:visitor, visitor_ids)
+
     rows =
-      for {v, per_network} <- Visitors.list_all_with_live_state(),
-          do: AdminWire.visitor_to_admin_json(v, per_network)
+      for {v, per_network} <- entries,
+          do: AdminWire.visitor_to_admin_json(v, per_network, Map.get(last_seen, v.id))
 
     json(conn, %{visitors: rows})
   end

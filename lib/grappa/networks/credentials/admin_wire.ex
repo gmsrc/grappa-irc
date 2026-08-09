@@ -90,6 +90,7 @@ defmodule Grappa.Networks.Credentials.AdminWire do
           connection_state_changed_at: DateTime.t() | nil,
           inserted_at: DateTime.t(),
           updated_at: DateTime.t(),
+          last_seen_at: DateTime.t() | nil,
           live_state: live_state_json() | nil
         }
 
@@ -131,12 +132,27 @@ defmodule Grappa.Networks.Credentials.AdminWire do
   JSON shape. `live` is `nil` when no `Session.Server` is registered
   for `{:user, user_id} × network_id` — the U-0 honesty signal.
 
+  `last_seen_at` is the OWNING USER's newest browser-session touch
+  (`Grappa.Accounts.max_last_seen_by_subject_ids/2`). It is a property
+  of the subject, not of this network, so a user bound to three networks
+  reports the same value on all three rows — the same subject-wide grain
+  `GET /admin/sessions` already publishes. `nil` = no
+  `accounts_sessions` row on record.
+
+  #1157 — see the twin note on `Grappa.Visitors.AdminWire`: the admin's
+  unified session list is ROW-backed, so a parked credential (no pid, no
+  registry entry, absent from `GET /admin/sessions`) still owes the
+  operator a truthful last-seen instead of a `—` that reads "never
+  used".
+
   Crashes loudly when `:network` association isn't preloaded — the
   wire carries `network_slug`, not `network_id` alone.
   """
-  @spec credential_to_admin_json(Credential.t(), SessionEntry.t() | nil) :: t()
-  def credential_to_admin_json(%Credential{network: %Network{slug: slug}} = c, live) do
+  @spec credential_to_admin_json(Credential.t(), SessionEntry.t() | nil, DateTime.t() | nil) ::
+          t()
+  def credential_to_admin_json(%Credential{network: %Network{slug: slug}} = c, live, last_seen_at) do
     %{
+      last_seen_at: last_seen_at,
       user_id: c.user_id,
       network_id: c.network_id,
       network_slug: slug,

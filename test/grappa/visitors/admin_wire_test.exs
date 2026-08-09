@@ -9,7 +9,7 @@ defmodule Grappa.Visitors.AdminWireTest do
   ## #211 phase 7 — multi-network shape
 
   A visitor is multi-network; per-network identity (nick) + connection
-  state live on the credential. So `visitor_to_admin_json/2` takes a
+  state live on the credential. So `visitor_to_admin_json/3` takes a
   `[{%Credential{}, live_state | nil}]` list and renders a `:networks`
   list — one entry per credential.
 
@@ -30,7 +30,7 @@ defmodule Grappa.Visitors.AdminWireTest do
   alias Grappa.Visitors
   alias Grappa.Visitors.{AdminWire, Visitor}
 
-  describe "visitor_to_admin_json/2" do
+  describe "visitor_to_admin_json/3" do
     test "includes operator-visible fields + per-network live_state and never password_encrypted" do
       network = network_fixture(slug: "azzurra-#{System.unique_integer([:positive])}")
 
@@ -55,7 +55,7 @@ defmodule Grappa.Visitors.AdminWireTest do
         introspection_degraded: []
       }
 
-      json = AdminWire.visitor_to_admin_json(v, [{cred, live}])
+      json = AdminWire.visitor_to_admin_json(v, [{cred, live}], nil)
 
       assert json.id == v.id
       assert json.ip == "10.0.0.5"
@@ -86,7 +86,7 @@ defmodule Grappa.Visitors.AdminWireTest do
       {:ok, v} = Visitors.find_or_provision_anon("solo", network.slug, "10.0.0.5")
       [cred] = Credentials.list_visitor_credentials(v.id)
 
-      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}])
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil)
 
       assert [net] = json.networks
       assert net.live_state == nil
@@ -97,7 +97,7 @@ defmodule Grappa.Visitors.AdminWireTest do
       # A bare visitor row whose slug does not resolve → no credential.
       v = visitor_fixture(nick: "bare", network_slug: "no-such-network")
 
-      json = AdminWire.visitor_to_admin_json(v, [])
+      json = AdminWire.visitor_to_admin_json(v, [], nil)
 
       assert json.networks == []
     end
@@ -111,10 +111,36 @@ defmodule Grappa.Visitors.AdminWireTest do
       # holds a committed secret), so the credential list must be passed in.
       [cred] = Credentials.list_visitor_credentials(v.id)
 
-      json = AdminWire.visitor_to_admin_json(identified, [{cred, nil}])
+      json = AdminWire.visitor_to_admin_json(identified, [{cred, nil}], nil)
 
       assert json.identified == true
       refute Map.has_key?(json, :password_encrypted)
+    end
+
+    # #1157 — the field exists so a row with NO live session can still
+    # report a truthful last-seen. Assert it on exactly that row: no
+    # `live_state`, so the value cannot have leaked in from the registry.
+    test "carries last_seen_at on a row with no live session" do
+      network = network_fixture(slug: "azzurra-#{System.unique_integer([:positive])}")
+      {:ok, v} = Visitors.find_or_provision_anon("parked", network.slug, "10.0.0.5")
+      [cred] = Credentials.list_visitor_credentials(v.id)
+      seen = DateTime.truncate(DateTime.utc_now(), :second)
+
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], seen)
+
+      assert json.last_seen_at == seen
+      assert [%{live_state: nil}] = json.networks
+    end
+
+    test "renders last_seen_at: nil when the subject has never been seen" do
+      network = network_fixture(slug: "azzurra-#{System.unique_integer([:positive])}")
+      {:ok, v} = Visitors.find_or_provision_anon("never", network.slug, "10.0.0.5")
+      [cred] = Credentials.list_visitor_credentials(v.id)
+
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil)
+
+      assert Map.has_key?(json, :last_seen_at)
+      assert json.last_seen_at == nil
     end
   end
 end

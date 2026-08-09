@@ -213,6 +213,53 @@ defmodule GrappaWeb.Admin.VisitorsControllerTest do
       refute Map.has_key?(net, "password_encrypted")
       refute Map.has_key?(row, "password_encrypted")
     end
+
+    # #1157 — the whole point of putting last_seen_at on THIS wire.
+    #
+    # This visitor has a browser session but no `Session.Server`, so it
+    # never appears in `GET /admin/sessions`, where last-seen used to
+    # live alone. Before the change the admin's unified list could only
+    # render `—` here, which reads "never used" — false. Note the pairing
+    # asserted below: `live_state: nil` AND a non-null `last_seen_at`.
+    test "200 + last_seen_at for a visitor with no Session.Server", %{conn: conn} do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      {:ok, _} = Grappa.Networks.find_or_create_network(%{slug: slug})
+
+      visitor =
+        visitor_fixture(
+          network_slug: slug,
+          nick: "seen-#{System.unique_integer([:positive])}"
+        )
+
+      _ = visitor_session_fixture(visitor)
+      session = admin_session()
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/visitors")
+      row = Enum.find(json_response(conn, 200)["visitors"], &(&1["id"] == visitor.id))
+
+      assert [%{"live_state" => nil}] = row["networks"]
+      assert row["last_seen_at"] != nil
+      assert {:ok, %DateTime{}, _} = DateTime.from_iso8601(row["last_seen_at"])
+    end
+
+    test "200 + last_seen_at: null for a visitor that never had a browser session", %{conn: conn} do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      {:ok, _} = Grappa.Networks.find_or_create_network(%{slug: slug})
+
+      visitor =
+        visitor_fixture(
+          network_slug: slug,
+          nick: "unseen-#{System.unique_integer([:positive])}"
+        )
+
+      session = admin_session()
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/visitors")
+      row = Enum.find(json_response(conn, 200)["visitors"], &(&1["id"] == visitor.id))
+
+      assert Map.has_key?(row, "last_seen_at")
+      assert row["last_seen_at"] == nil
+    end
   end
 
   describe "POST /admin/visitors/:id/share-token — auth gate (#982)" do

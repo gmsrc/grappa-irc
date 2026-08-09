@@ -37,7 +37,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
     }
   end
 
-  describe "credential_to_admin_json/2" do
+  describe "credential_to_admin_json/3" do
     test "projects operator-relevant fields + nil live_state when no session" do
       now = DateTime.utc_now()
       c = %{credential_fixture() | inserted_at: now, updated_at: now}
@@ -57,7 +57,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
                inserted_at: ^now,
                updated_at: ^now,
                live_state: nil
-             } = AdminWire.credential_to_admin_json(c, nil)
+             } = AdminWire.credential_to_admin_json(c, nil, nil)
     end
 
     test "projects live_state when a SessionEntry is supplied" do
@@ -92,7 +92,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
                  joined_channels: ["#bofh"],
                  introspection_degraded: []
                }
-             } = AdminWire.credential_to_admin_json(c, entry)
+             } = AdminWire.credential_to_admin_json(c, entry, nil)
 
       assert is_binary(pid_str)
       assert String.starts_with?(pid_str, "#PID<")
@@ -105,8 +105,26 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
       assert live_nick == c.nick <> "_"
     end
 
+    # #1157 — pinned on a row with `live_state: nil`, i.e. a parked
+    # credential that never appears in `GET /admin/sessions`. That is the
+    # whole reason the field was added: the unified admin list is
+    # row-backed and owes those rows a truthful last-seen.
+    test "carries last_seen_at on a row with no live session" do
+      seen = DateTime.truncate(DateTime.utc_now(), :second)
+
+      assert %{last_seen_at: ^seen, live_state: nil} =
+               AdminWire.credential_to_admin_json(credential_fixture(), nil, seen)
+    end
+
+    test "renders last_seen_at: nil when the user has never been seen" do
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil)
+
+      assert Map.has_key?(json, :last_seen_at)
+      assert json.last_seen_at == nil
+    end
+
     test "NEVER includes password_encrypted or password (credential material exclusion)" do
-      json = AdminWire.credential_to_admin_json(credential_fixture(), nil)
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil)
 
       refute Map.has_key?(json, :password)
       refute Map.has_key?(json, :password_encrypted)

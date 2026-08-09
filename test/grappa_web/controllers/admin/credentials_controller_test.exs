@@ -94,6 +94,42 @@ defmodule GrappaWeb.Admin.CredentialsControllerTest do
       assert row["live_state"] == nil
     end
 
+    # #1157 — twin of the visitors-wire pin. This credential has no live
+    # session, so it never shows up in `GET /admin/sessions`; the admin's
+    # unified row-backed list still owes it a truthful last-seen instead
+    # of a `—` that reads "never used".
+    test "200 + last_seen_at for a credential with no live session", %{conn: conn} do
+      {user, network, _} = bound_credential()
+      _ = session_fixture(user)
+
+      session = admin_session()
+      conn = conn |> put_bearer(session.id) |> get("/admin/credentials")
+
+      row =
+        Enum.find(json_response(conn, 200)["credentials"], fn r ->
+          r["user_id"] == user.id and r["network_id"] == network.id
+        end)
+
+      assert row["live_state"] == nil
+      assert row["last_seen_at"] != nil
+      assert {:ok, %DateTime{}, _} = DateTime.from_iso8601(row["last_seen_at"])
+    end
+
+    test "200 + last_seen_at: null for a user that never had a browser session", %{conn: conn} do
+      {user, network, _} = bound_credential()
+
+      session = admin_session()
+      conn = conn |> put_bearer(session.id) |> get("/admin/credentials")
+
+      row =
+        Enum.find(json_response(conn, 200)["credentials"], fn r ->
+          r["user_id"] == user.id and r["network_id"] == network.id
+        end)
+
+      assert Map.has_key?(row, "last_seen_at")
+      assert row["last_seen_at"] == nil
+    end
+
     test "200 + NEVER includes password_encrypted or password (defense-in-depth)", %{conn: conn} do
       _ = bound_credential()
 

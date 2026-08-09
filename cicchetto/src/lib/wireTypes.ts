@@ -570,6 +570,7 @@ export type NetworksCredentialsAdminWireT = {
   connection_state_changed_at: string | null;
   inserted_at: string;
   updated_at: string;
+  last_seen_at: string | null;
   live_state: NetworksCredentialsAdminWireLiveStateJson | null;
 };
 
@@ -1394,6 +1395,7 @@ export type VisitorsAdminWireT = {
   identified: boolean;
   ip: string | null;
   inserted_at: string;
+  last_seen_at: string | null;
   networks: VisitorsAdminWireNetworkJson[];
 };
 

@@ -60,13 +60,27 @@ defmodule GrappaWeb.Admin.CredentialsController do
   """
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, _) do
+    creds = Credentials.list_all_credentials()
+
+    # #1157 — one batched query for the page. A user bound to N networks
+    # yields N rows sharing one subject-wide last-seen, so resolve per
+    # USER, not per row.
+    user_ids = creds |> Enum.map(& &1.user_id) |> Enum.uniq()
+    last_seen = Accounts.max_last_seen_by_subject_ids(:user, user_ids)
+
     rows =
-      for cred <- Credentials.list_all_credentials() do
+      for cred <- creds do
         live = LiveIntrospection.lookup_session({:user, cred.user_id}, cred.network_id)
-        AdminWire.credential_to_admin_json(cred, live)
+        AdminWire.credential_to_admin_json(cred, live, Map.get(last_seen, cred.user_id))
       end
 
     json(conn, %{credentials: rows})
+  end
+
+  # Single-row twin of the batch above, for the create / update replies.
+  @spec user_last_seen(Ecto.UUID.t()) :: DateTime.t() | nil
+  defp user_last_seen(user_id) do
+    Map.get(Accounts.max_last_seen_by_subject_ids(:user, [user_id]), user_id)
   end
 
   @doc """
@@ -93,7 +107,7 @@ defmodule GrappaWeb.Admin.CredentialsController do
       json(
         conn,
         updated
-        |> AdminWire.credential_to_admin_json(live)
+        |> AdminWire.credential_to_admin_json(live, user_last_seen(updated.user_id))
         |> AdminWire.with_session_action(action)
       )
     end
@@ -129,7 +143,7 @@ defmodule GrappaWeb.Admin.CredentialsController do
       |> put_status(:created)
       |> json(
         cred
-        |> AdminWire.credential_to_admin_json(live)
+        |> AdminWire.credential_to_admin_json(live, user_last_seen(cred.user_id))
         |> AdminWire.with_bind_outcome(outcome)
       )
     end
