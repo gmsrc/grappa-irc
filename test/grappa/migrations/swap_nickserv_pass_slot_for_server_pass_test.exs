@@ -38,9 +38,7 @@ defmodule Grappa.Migrations.SwapNickservPassSlotForServerPassTest do
 
     test "the new slot starts empty — no data is carried across the rename" do
       %{rows: [[count]]} =
-        Repo.query!(
-          "SELECT count(*) FROM network_credentials WHERE server_pass_encrypted IS NOT NULL"
-        )
+        Repo.query!("SELECT count(*) FROM network_credentials WHERE server_pass_encrypted IS NOT NULL")
 
       assert count == 0
     end
