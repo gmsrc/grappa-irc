@@ -75,6 +75,14 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   use Mix.Task
 
   @output_path "cicchetto/src/lib/wireTypes.ts"
+
+  # #429 — the RUNTIME half of the same mirror. `wireTypes.ts` is erased at
+  # `tsc` time, so a hand-written narrower was the only thing standing at the
+  # WS/REST boundary. This second artifact emits the SAME typespecs as runtime
+  # schema literals, so `wireValidate.ts` can enforce at runtime what
+  # `wireTypes.ts` enforces at compile time — from one source, under one
+  # `--check` drift gate.
+  @schema_output_path "cicchetto/src/lib/wireSchema.ts"
   # #428 — `**/wire.ex` matched ONLY files named exactly `wire.ex`, silently
   # skipping the 10 `admin_wire.ex` modules. `**/*wire.ex` catches every
   # `*wire.ex` (`wire.ex` + `admin_wire.ex` + any future `*_wire.ex`) so the
@@ -95,12 +103,12 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     {opts, _, _} = OptionParser.parse(argv, switches: [check: :boolean])
     Mix.Task.run("loadpaths")
     Mix.Task.run("compile")
-    generated = generate()
+    artifacts = [{@output_path, generate()}, {@schema_output_path, generate_schema()}]
 
     if opts[:check] do
-      verify_committed(generated)
+      Enum.each(artifacts, fn {path, content} -> verify_committed(content, path) end)
     else
-      write_committed(generated)
+      Enum.each(artifacts, fn {path, content} -> write_committed(content, path) end)
     end
   end
 
@@ -114,11 +122,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     Process.put(:wire_external_refs, %{})
 
     body =
-      (Path.wildcard(@wire_glob) ++ Enum.flat_map(@extra_globs, &Path.wildcard/1))
-      |> Enum.sort()
-      |> Enum.map(&module_from_path/1)
-      |> Enum.reject(&is_nil/1)
-      |> Enum.sort_by(&inspect/1)
+      wire_modules()
       |> Enum.map(&render_module/1)
       |> Enum.reject(&(&1 == ""))
       |> Enum.join("\n\n")
@@ -130,6 +134,14 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
     |> wrap_with_header()
+  end
+
+  defp wire_modules do
+    (Path.wildcard(@wire_glob) ++ Enum.flat_map(@extra_globs, &Path.wildcard/1))
+    |> Enum.sort()
+    |> Enum.map(&module_from_path/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.sort_by(&inspect/1)
   end
 
   defp render_external_section do
@@ -289,19 +301,19 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     """
   end
 
-  defp write_committed(content) do
-    File.write!(@output_path, content)
-    Mix.shell().info("Wrote #{@output_path}")
+  defp write_committed(content, path) do
+    File.write!(path, content)
+    Mix.shell().info("Wrote #{path}")
   end
 
-  defp verify_committed(generated) do
-    case File.read(@output_path) do
+  defp verify_committed(generated, path) do
+    case File.read(path) do
       {:ok, committed} when committed == generated ->
-        Mix.shell().info("#{@output_path} is in sync.")
+        Mix.shell().info("#{path} is in sync.")
 
       {:ok, _} ->
         Mix.shell().error("""
-        #{@output_path} is OUT OF SYNC with the Wire typespecs.
+        #{path} is OUT OF SYNC with the Wire typespecs.
 
         Run `scripts/mix.sh grappa.gen_wire_types` and commit the
         result.
@@ -310,7 +322,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
         exit({:shutdown, 1})
 
       {:error, :enoent} ->
-        Mix.shell().error("#{@output_path} does not exist — run `mix grappa.gen_wire_types`")
+        Mix.shell().error("#{path} does not exist — run `mix grappa.gen_wire_types`")
         exit({:shutdown, 1})
     end
   end
@@ -825,6 +837,387 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   defp mod_to_event_union_name(mod) do
     short = mod |> Module.split() |> tl() |> hd()
     "Wire#{short}Event"
+  end
+
+  ## ----- Runtime schema renderer (#429) ------------------------------------
+  #
+  # `wireTypes.ts` is erased by `tsc`, so before #429 the ONLY thing standing
+  # at the WS/REST boundary was ~1250 hand-written lines that re-transcribed
+  # the very typespecs the generator above already reads. This pass emits the
+  # SAME typespecs a second time, as runtime data, so `wireValidate.ts` can
+  # interpret them. Two artifacts, one source, one `--check` gate: the type
+  # and its schema cannot drift, because a single run writes both.
+  #
+  # Node grammar (see `wireValidate.ts` for the interpreter + `Infer<>`):
+  #
+  #   "s" string | "i" number | "b" boolean | "x" unknown | "z" null
+  #   { l: "lit" }        atom literal / true / false
+  #   { e: [...] }        closed set of atom literals
+  #   { a: node }         array
+  #   { r: node }         Record<string, node>
+  #   { p: [node, …] }    tuple
+  #   { u: [node, …] }    union (first matching arm wins)
+  #   { o: {k: node}, q: ["optional", …] }   object
+  #
+  # Consts are emitted in TOPOLOGICAL order, not module order: a schema is a
+  # plain object literal evaluated at module init, so a forward reference
+  # would hit the TDZ at runtime rather than at `tsc`. A reference cycle
+  # (impossible in JSON, but a real bug if a typespec grows one) RAISES here
+  # with the offending name instead of emitting code that stack-overflows.
+
+  @doc false
+  @spec generate_schema() :: String.t()
+  def generate_schema do
+    Process.put(:wire_schema_enum_imports, MapSet.new())
+    entries = collect_schema_entries()
+    imports = Process.get(:wire_schema_enum_imports, MapSet.new())
+    Process.delete(:wire_schema_enum_imports)
+
+    body =
+      entries
+      |> topo_sort_schema()
+      |> Enum.map_join("\n\n", &render_schema_const(&1, entries))
+
+    wrap_schema_header(render_schema_imports(imports), body)
+  end
+
+  defp collect_schema_entries do
+    seeds =
+      for mod <- wire_modules(),
+          {name, _, _} <- module_typedefs(mod),
+          do: {mod, name}
+
+    resolve_schema_entries(seeds, %{}, 1, 8)
+  end
+
+  # Fixpoint like `do_render_external_section/3`: rendering an entry can
+  # surface refs to modules outside the wire glob, which must themselves be
+  # emitted (a dangling ref would be a `tsc` error in a GENERATED file — the
+  # worst place to discover it).
+  defp resolve_schema_entries(_, _, depth, max_depth) when depth > max_depth do
+    raise "gen_wire_types: schema ref resolution exceeded depth #{max_depth} — likely cycle"
+  end
+
+  defp resolve_schema_entries(pending, acc, depth, max_depth) do
+    fresh = pending |> Enum.uniq() |> Enum.reject(fn key -> Map.has_key?(acc, key) end)
+
+    if fresh == [] do
+      acc
+    else
+      {acc, next} =
+        Enum.reduce(fresh, {acc, []}, fn {mod, name}, {a, queue} ->
+          {ir, deps} = render_schema_entry(mod, name)
+          {Map.put(a, {mod, name}, {ir, deps}), deps ++ queue}
+        end)
+
+      resolve_schema_entries(next, acc, depth + 1, max_depth)
+    end
+  end
+
+  defp module_typedefs(mod) do
+    case Code.Typespec.fetch_types(mod) do
+      {:ok, types} -> exported_typedefs(types)
+      :error -> []
+    end
+  end
+
+  defp render_schema_entry(mod, name) do
+    typedefs = module_typedefs(mod)
+
+    case Enum.find(typedefs, fn {n, _, _} -> n == name end) do
+      nil ->
+        raise "gen_wire_types: #{inspect(mod)}.#{name}/0 is referenced by a Wire typespec but " <>
+                "has no exported @type — a generated schema cannot reference it"
+
+      {_, ast, _} ->
+        stripped = strip_typespec_metadata(ast)
+        Process.put(:wire_schema_deps, [])
+
+        ir =
+          case schema_enum_const(mod, name, stripped, typedefs) do
+            {:ok, const_name} -> enum_schema_ir(const_name)
+            :error -> schema_ir(stripped, mod)
+          end
+
+        deps = Enum.uniq(Process.get(:wire_schema_deps, []))
+        Process.delete(:wire_schema_deps)
+        {ir, deps}
+    end
+  end
+
+  # An enum's runtime allowlist is the `as const` array ALREADY emitted into
+  # wireTypes.ts — the schema spreads it rather than re-listing the literals,
+  # so the closed set has exactly one runtime home. The enum test must match
+  # the type generator's clause-for-clause: a wire module has a sibling
+  # registry (`classify_enum/2` follows same-module refs), an external one is
+  # rendered alias-at-a-time and only pure atom unions become consts there.
+  defp schema_enum_const(mod, name, stripped, typedefs) do
+    alias_name = render_alias_name(mod, name)
+
+    enum? =
+      if wire_module?(mod) do
+        types_by_name = Map.new(typedefs, fn {n, ast, _} -> {n, strip_typespec_metadata(ast)} end)
+        match?({:enum, _}, classify_enum(name, types_by_name))
+      else
+        match?({:ok, _}, pure_atom_union_arms(stripped))
+      end
+
+    if enum? do
+      const_name = screaming_const_name(alias_name)
+      imports = Process.get(:wire_schema_enum_imports, MapSet.new())
+      Process.put(:wire_schema_enum_imports, MapSet.put(imports, const_name))
+      {:ok, const_name}
+    else
+      :error
+    end
+  end
+
+  defp enum_schema_ir(const_name), do: {:obj, [{"e", {:arr, [{:raw, "..." <> const_name}]}}]}
+
+  ## ----- Schema node IR ----------------------------------------------------
+
+  defp schema_ir(nil, _mod), do: {:raw, ~s("z")}
+  defp schema_ir({:atom, _, [nil]}, _mod), do: {:raw, ~s("z")}
+  defp schema_ir({:atom, _, [true]}, _mod), do: {:obj, [{"l", {:raw, "true"}}]}
+  defp schema_ir({:atom, _, [false]}, _mod), do: {:obj, [{"l", {:raw, "false"}}]}
+
+  defp schema_ir({:atom, _, [a]}, _mod) when is_atom(a) do
+    {:obj, [{"l", {:raw, ~s("#{Atom.to_string(a)}")}}]}
+  end
+
+  defp schema_ir({:|, _, _} = union, mod) do
+    arms = flatten_union(union, [])
+
+    if Enum.all?(arms, &atom_literal_arm?/1) do
+      {:obj, [{"e", {:arr, Enum.map(arms, fn {:atom, _, [a]} -> {:raw, ~s("#{a}")} end)}}]}
+    else
+      {:obj, [{"u", {:arr, Enum.map(arms, &schema_ir(&1, mod))}}]}
+    end
+  end
+
+  defp schema_ir({:remote_type, _, [String, :t]}, _mod), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [DateTime, :t]}, _mod), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [Date, :t]}, _mod), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [NaiveDateTime, :t]}, _mod), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [Ecto.UUID, :t]}, _mod), do: {:raw, ~s("s")}
+
+  defp schema_ir({:remote_type, _, [mod, type]}, _mod) when is_atom(mod) and is_atom(type) do
+    if elixir_module?(mod) do
+      schema_ref(mod, type)
+    else
+      {:raw, erlang_schema_scalar(mod, type)}
+    end
+  end
+
+  defp schema_ir({:user_type, _, [name]}, mod) when is_atom(name), do: schema_ref(mod, name)
+
+  defp schema_ir({:integer, _, []}, _mod), do: {:raw, ~s("i")}
+  defp schema_ir({:non_neg_integer, _, []}, _mod), do: {:raw, ~s("i")}
+  defp schema_ir({:pos_integer, _, []}, _mod), do: {:raw, ~s("i")}
+  defp schema_ir({:float, _, []}, _mod), do: {:raw, ~s("i")}
+  defp schema_ir({:boolean, _, []}, _mod), do: {:raw, ~s("b")}
+  defp schema_ir({:binary, _, []}, _mod), do: {:raw, ~s("s")}
+  defp schema_ir({:atom, _, []}, _mod), do: {:raw, ~s("s")}
+  defp schema_ir({:term, _, []}, _mod), do: {:raw, ~s("x")}
+  defp schema_ir({:any, _, []}, _mod), do: {:raw, ~s("x")}
+
+  # Bare `map()` — the type side warns and falls back to
+  # `Record<string, unknown>`; the runtime side accepts any JSON object.
+  defp schema_ir({:map, _, []}, _mod), do: {:obj, [{"r", {:raw, ~s("x")}}]}
+
+  defp schema_ir({:tuple, _, members}, mod) do
+    {:obj, [{"p", {:arr, Enum.map(members, &schema_ir(&1, mod))}}]}
+  end
+
+  defp schema_ir([inner], mod), do: {:obj, [{"a", schema_ir(inner, mod)}]}
+
+  defp schema_ir({:open_map, _, [_key, value]}, mod), do: {:obj, [{"r", schema_ir(value, mod)}]}
+
+  defp schema_ir({:%{}, _, fields}, mod) do
+    props =
+      Enum.map(fields, fn
+        {{:optional, k}, v} when is_atom(k) -> {Atom.to_string(k), schema_ir(v, mod), true}
+        {k, v} when is_atom(k) -> {Atom.to_string(k), schema_ir(v, mod), false}
+      end)
+
+    shape = {:obj, Enum.map(props, fn {k, ir, _} -> {ts_object_key(k), ir} end)}
+    optional = for {k, _, true} <- props, do: {:raw, ~s("#{k}")}
+
+    case optional do
+      [] -> {:obj, [{"o", shape}]}
+      keys -> {:obj, [{"o", shape}, {"q", {:arr, keys}}]}
+    end
+  end
+
+  defp schema_ref(mod, name) do
+    Process.put(:wire_schema_deps, [{mod, name} | Process.get(:wire_schema_deps, [])])
+    {:raw, schema_const_name(render_alias_name(mod, name))}
+  end
+
+  defp schema_const_name(alias_name), do: "S_" <> alias_name
+
+  defp erlang_schema_scalar(:inet, :port_number), do: ~s("i")
+
+  defp erlang_schema_scalar(mod, type) do
+    raise "gen_wire_types: unmapped Erlang remote type #{inspect(mod)}.#{type}() in a Wire " <>
+            "typespec — add an erlang_schema_scalar/2 clause"
+  end
+
+  defp ts_object_key(key) do
+    if Regex.match?(~r/^[A-Za-z_$][A-Za-z0-9_$]*$/, key), do: key, else: ~s("#{key}")
+  end
+
+  ## ----- Schema emission ---------------------------------------------------
+
+  defp topo_sort_schema(entries) do
+    {order, _perm} =
+      entries
+      |> Map.keys()
+      |> Enum.sort_by(&schema_sort_key/1)
+      |> Enum.reduce({[], MapSet.new()}, fn key, {acc, perm} ->
+        visit_schema(key, entries, perm, MapSet.new(), acc)
+      end)
+
+    Enum.reverse(order)
+  end
+
+  defp schema_sort_key({mod, name}), do: "#{inspect(mod)}.#{name}"
+
+  defp visit_schema(key, entries, perm, path, acc) do
+    cond do
+      MapSet.member?(perm, key) ->
+        {acc, perm}
+
+      MapSet.member?(path, key) ->
+        raise "gen_wire_types: cyclic wire schema reference at #{schema_sort_key(key)}"
+
+      true ->
+        {_ir, deps} = Map.fetch!(entries, key)
+        path = MapSet.put(path, key)
+
+        {acc, perm} =
+          deps
+          |> Enum.sort_by(&schema_sort_key/1)
+          |> Enum.reduce({acc, perm}, fn dep, {a, p} ->
+            visit_schema(dep, entries, p, path, a)
+          end)
+
+        {[key | acc], MapSet.put(perm, key)}
+    end
+  end
+
+  defp render_schema_const({mod, name} = key, entries) do
+    {ir, _deps} = Map.fetch!(entries, key)
+    const = schema_const_name(render_alias_name(mod, name))
+    prefix = "export const #{const} = "
+
+    # A pure alias (`@type a :: b()`) renders to the referenced const, and
+    # `as const` on an identifier is a TS1355 error — the reference already
+    # carries the frozen literal type of its target.
+    suffix = if match?({:raw, _}, ir), do: ";", else: " as const;"
+    value = emit_ts(ir, String.length(prefix), 0, String.length(suffix))
+
+    "// #{inspect(mod)}.#{name}/0\n#{prefix}#{value}#{suffix}"
+  end
+
+  # biome's import organiser sorts named specifiers CASE-INSENSITIVELY, which
+  # only diverges from a plain ASCII sort where `_` meets a letter
+  # (`CREDENTIAL_…` vs `CREDENTIALS_…`: `_` > `S` but `_` < `s`). Sorting the
+  # ASCII way emits a file biome would rewrite, and a generated file no human
+  # may edit must already be in biome's normal form.
+  defp render_schema_imports(imports) do
+    case Enum.sort_by(imports, &String.downcase/1) do
+      [] -> ""
+      names -> emit_import_line(names)
+    end
+  end
+
+  defp emit_import_line(names) do
+    inline = "import { #{Enum.join(names, ", ")} } from \"./wireTypes\";"
+
+    if String.length(inline) <= 100 do
+      inline
+    else
+      body = Enum.map_join(names, "\n", &"  #{&1},")
+      "import {\n#{body}\n} from \"./wireTypes\";"
+    end
+  end
+
+  defp wrap_schema_header(imports, body) do
+    """
+    // GENERATED FILE — DO NOT EDIT
+    // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
+    // Source: lib/grappa/**/*wire.ex + lib/grappa_web/error_tokens.ex
+    //
+    // #429 — the RUNTIME twin of `wireTypes.ts`: the same typespecs, emitted
+    // as schema literals `wireValidate.ts` interprets. `wireTypes.ts` is
+    // erased by tsc; these survive to the WS/REST boundary. Consts are in
+    // topological order because a forward reference would hit the TDZ.
+    //
+    // Node grammar: see `wireValidate.ts`.
+
+    #{imports}
+
+    #{body}
+    """
+  end
+
+  ## ----- biome-compatible TypeScript literal printer -----------------------
+  #
+  # The committed file has to be byte-identical to what `biome format` would
+  # produce, or `bun run check` fails on a file no human may edit. biome
+  # (like prettier) keeps a construct on one line iff it FITS in the print
+  # width, and preserves an object's line break once broken — so "inline iff
+  # it fits at this column" reproduces its output exactly. `suffix` is the
+  # text that will follow on the same line (a trailing comma, ` as const;`)
+  # and counts toward the fit, as it does in biome's own fit check.
+
+  @print_width 100
+
+  defp emit_ts(ir, col, indent, suffix) do
+    inline = inline_ts(ir)
+
+    if col + String.length(inline) + suffix <= @print_width do
+      inline
+    else
+      block_ts(ir, indent)
+    end
+  end
+
+  defp inline_ts({:raw, s}), do: s
+  defp inline_ts({:obj, []}), do: "{}"
+
+  defp inline_ts({:obj, kvs}) do
+    "{ " <> Enum.map_join(kvs, ", ", fn {k, v} -> "#{k}: #{inline_ts(v)}" end) <> " }"
+  end
+
+  defp inline_ts({:arr, items}), do: "[" <> Enum.map_join(items, ", ", &inline_ts/1) <> "]"
+
+  defp block_ts({:raw, s}, _indent), do: s
+
+  defp block_ts({:obj, kvs}, indent) do
+    inner = indent + 2
+    pad = String.duplicate(" ", inner)
+
+    body =
+      Enum.map_join(kvs, "\n", fn {k, v} ->
+        prefix = "#{pad}#{k}: "
+        prefix <> emit_ts(v, String.length(prefix), inner, 1) <> ","
+      end)
+
+    "{\n#{body}\n#{String.duplicate(" ", indent)}}"
+  end
+
+  defp block_ts({:arr, items}, indent) do
+    inner = indent + 2
+    pad = String.duplicate(" ", inner)
+
+    body =
+      Enum.map_join(items, "\n", fn item ->
+        pad <> emit_ts(item, inner, inner, 1) <> ","
+      end)
+
+    "[\n#{body}\n#{String.duplicate(" ", indent)}]"
   end
 
   ## ----- Test seams --------------------------------------------------------
