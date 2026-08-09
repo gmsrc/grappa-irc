@@ -157,6 +157,45 @@ describe("AdminPane", () => {
     expect(screen.getByLabelText(/close admin console/i)).toBeInTheDocument();
   });
 
+  // #1073 — the band is the channel windows' bar, not a lookalike. vjt: *"la
+  // top bar admin dev'esser possibilmente la stessa barra che abbiamo per i
+  // canali, solo con dentro roba diversa"*. `.admin-pane-header` was a second
+  // implementation of the same idea on the `--adm-*` layer, and the two
+  // disagreed about which side the ☰ sits on.
+  describe("#1073 — the band is the shared pane top bar", () => {
+    it("renders `.topic-bar`, and the private `.admin-pane-header` is gone", () => {
+      const { container } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+      expect(container.querySelector(".topic-bar")).not.toBeNull();
+      expect(container.querySelector(".admin-pane-header")).toBeNull();
+    });
+
+    // The side is not a CSS override, it is the child order — the same fact
+    // `TopicBar.test.tsx` pins for the channel host.
+    it("puts the ☰ LAST, which is what places it on the right", () => {
+      const { container } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+      const bar = container.querySelector(".topic-bar");
+      expect(bar?.lastElementChild).toHaveClass("topic-bar-hamburger");
+    });
+
+    it("the ☰ opens the rail", () => {
+      const onOpenRail = vi.fn();
+      const { container } = render(() => <AdminPane onClose={vi.fn()} onOpenRail={onOpenRail} />);
+      const ham = container.querySelector(".topic-bar-hamburger");
+      expect(ham).not.toBeNull();
+      fireEvent.click(ham as Element);
+      expect(onOpenRail).toHaveBeenCalledTimes(1);
+    });
+
+    // The accessible name is UNCHANGED from the inline `RailOpenerButton` this
+    // replaces: the admin door has always been "open actions" and the channel
+    // one "open members sidebar". `ux-4-z-cluster-journey` reaches this door on
+    // the admin window, and eight specs reach the channel one by its own name.
+    it("keeps the admin door's accessible name", () => {
+      render(() => <AdminPane onClose={vi.fn()} onOpenRail={vi.fn()} />);
+      expect(screen.getByLabelText(/open actions/i)).toBeInTheDocument();
+    });
+  });
+
   it("starts admin-events subscription on mount, tears down on unmount (M-11)", () => {
     startSub.mockClear();
     uninstall.mockClear();

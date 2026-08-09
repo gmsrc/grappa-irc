@@ -4329,43 +4329,30 @@ html.resize-dragging * {
   overscroll-behavior: contain;
 }
 
-.admin-pane-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--adm-space-3);
-  border-bottom: 1px solid var(--adm-line);
-  padding-bottom: 0.5rem;
-  margin-bottom: 1rem;
+/* #1073 — the band is `.topic-bar` now (`PaneTopBar`), so everything the old
+   `.admin-pane-header` block declared to BE a band — the flex row, the gap, the
+   bottom border — comes from the channel bar's own rule and is deliberately not
+   restated here. Nor is the ☰'s `--adm-*` restyle: the glyph is
+   `.topic-bar-hamburger`, and looking like the channel one is the point.
+
+   What is left is the two facts that belong to the HOST rather than to the bar.
+   `.admin-pane` carries `padding: 1rem`, which would inset the band and stop
+   its border short of both edges — the channel bar is flush with its pane, so
+   the negative inline/block-start margins cancel that padding for this one
+   child. The `1rem` block-end margin is the old header's, kept verbatim: it is
+   the gap to `.adm-nav`. */
+.admin-pane > .topic-bar {
+  margin: -1rem -1rem 1rem;
 }
 
-/* Admin redesign (2026-08-07) — the ☰ rail opener, hosted here on mobile so
-   the admin window carries ONE chrome band instead of the `.shell-chrome` row
-   stacked above this header (Shell suppresses that row for the admin kind).
-   Restyled onto the `--adm-*` layer so it reads as part of the pane's chrome
-   rather than the IRC client's; the base `.shell-chrome-btn` rule keeps the tap
-   floor and the focus ring, and this (0,2,0) selector lands after it. */
-.admin-pane-header .shell-chrome-rail-opener {
-  color: var(--adm-text-dim);
-  border-color: var(--adm-line);
-  border-radius: var(--adm-radius-sm);
-}
-
-/* The refresh sits with the close ×, not adrift between the title and
-   it. The header is `space-between` over four children (☰, title,
-   refresh, ×), which spread the middle two evenly and left refresh
-   floating in the gap; pushing it right groups the two controls into one
-   cluster at the corner where controls belong. */
-.admin-pane-header .adm-refresh-btn {
+/* The refresh sits at the band's trailing edge, not adrift after the title.
+   Transitional: #1073 moves this button into the rail's actions on mobile,
+   which is when this rule and its consumer both go. */
+.admin-pane .topic-bar .adm-refresh-btn {
   margin-left: auto;
 }
 
-.admin-pane-header .shell-chrome-rail-opener:hover {
-  background: var(--adm-surface-2);
-  color: var(--adm-text);
-}
-
-.admin-pane-header h1 {
+.admin-pane .topic-bar h1 {
   font-family: var(--adm-font);
   font-size: 0.85rem;
   font-weight: 600;
@@ -4488,17 +4475,14 @@ html.resize-dragging * {
     column-gap: 0;
   }
 
-  .admin-pane-header {
+  .admin-pane > .topic-bar {
     grid-column: 1 / -1;
   }
 
-  /* The ☰ is a MOBILE door: Shell's desktop branch renders no `ShellChrome`
-     at all and the rail is permanent there, so there is nothing to open. Same
-     posture as `.topic-bar-hamburger`, which is CSS-hidden above this
-     breakpoint for the same reason. */
-  .admin-pane-header .shell-chrome-rail-opener {
-    display: none;
-  }
+  /* The desktop hide of the ☰ is NOT restated here. #1073 made the admin door
+     `.topic-bar-hamburger`, and that glyph is already `display: none` above
+     this breakpoint for exactly the same reason — the rail is permanent on
+     desktop, so there is nothing to open. One rule, both hosts. */
 
   .adm-nav {
     grid-column: 1;

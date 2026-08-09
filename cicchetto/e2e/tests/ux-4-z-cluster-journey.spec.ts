@@ -506,9 +506,14 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     // rail tap.)
     await openAdminConsole(adminPage);
     // Settings STILL reachable on the admin window (bucket L rule extends to
-    // the admin kind). #71 INC-2 — on mobile the door is the ☰ rail opener
-    // (admin is a non-channel kind, so ShellChrome renders it).
-    await expect(adminPage.getByTestId("shell-chrome-rail-opener")).toBeVisible();
+    // the admin kind). #71 INC-2 — on mobile the door is the ☰ rail opener.
+    // #1073 — that door is no longer the `shell-chrome-rail-opener` testid:
+    // `ShellChrome` never rendered on the admin window (Shell suppresses the
+    // row for this kind), the pane hosted the button inline, and the pane's
+    // band is now the shared `.topic-bar`, whose own trailing ☰ replaced it.
+    // The ACCESSIBLE NAME is unchanged, so the door is named rather than
+    // located by a testid that always belonged to the other host.
+    await expect(adminPage.getByLabel(/open actions/i)).toBeVisible();
     await adminPage.close();
   }
 });

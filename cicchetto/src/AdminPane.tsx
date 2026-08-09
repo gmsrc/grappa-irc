@@ -13,7 +13,7 @@ import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav
 import { AdminRefreshButton } from "./admin/AdminToolbar";
 import { refreshInCardHead, refreshSlot } from "./admin/refreshSlot";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
-import { RailOpenerButton } from "./ShellChrome";
+import PaneTopBar from "./PaneTopBar";
 
 // M-7 — Admin console pane. Replaces the channel content in
 // Shell.tsx when an admin operator clicks "admin console" in
@@ -58,11 +58,16 @@ export type Props = {
   onClose: () => void;
   /**
    * Admin redesign (2026-08-07) — opens the right rail (`.shell-members`), the
-   * mobile door to settings. Rendered as the header's leading ☰ so the admin
-   * window shows ONE band of chrome instead of the near-empty `.shell-chrome`
-   * row stacked above the pane's own title; Shell suppresses that row for the
-   * admin kind. CSS-hidden at ≥900px, where the desktop Shell branch renders no
-   * `ShellChrome` at all and the rail is permanent.
+   * mobile door to settings. Rendered inline in this pane's own band so the
+   * admin window shows ONE band of chrome instead of the near-empty
+   * `.shell-chrome` row stacked above the pane's own title; Shell suppresses
+   * that row for the admin kind. CSS-hidden at ≥900px, where the desktop Shell
+   * branch renders no `ShellChrome` at all and the rail is permanent.
+   *
+   * #1073 — the glyph is now `PaneTopBar`'s trailing ☰ rather than an inline
+   * `RailOpenerButton`, which is what moves it from the band's left edge to its
+   * right one. Same door, same accessible name ("open actions"), one fewer
+   * mount of the same button.
    */
   onOpenRail: () => void;
 };
@@ -135,8 +140,11 @@ const AdminPane: Component<Props> = (props) => {
 
   return (
     <section class="admin-pane" data-testid="admin-pane">
-      <header class="admin-pane-header">
-        <RailOpenerButton onOpenRail={props.onOpenRail} />
+      {/* #1073 — the SAME band the channel windows use, not a clone of it on
+          the `--adm-*` layer. Everything admin-shaped goes in the content slot;
+          the ☰ comes with the band, and comes LAST, which is what finally puts
+          it on the same side as the channel bar's. */}
+      <PaneTopBar onOpenRail={props.onOpenRail} railLabel="open actions">
         <h1>admin console</h1>
         {/* The active tab's refresh, hoisted out of its own toolbar — see
             `admin/refreshSlot.ts` for why that toolbar went away. The
@@ -167,7 +175,7 @@ const AdminPane: Component<Props> = (props) => {
         >
           ×
         </button>
-      </header>
+      </PaneTopBar>
       <AdminNav
         groups={GROUPS}
         tabs={TABS}

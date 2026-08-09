@@ -22,11 +22,15 @@
 // 768px), so this runs on webkit-iphone-15 alone — the @webkit tag; the
 // chromium project grepInverts it.
 //
-// NOT covered here: the third host. `.admin-pane-header` (#1033, 2026-08-07)
-// puts the same ☰ at the pane's top-LEFT, deliberately — the top-right corner
-// of the admin pane is taken by its close × and refresh. That is a contract to
-// settle, not an offset to unify, and it is filed separately; asserting it here
-// would encode a decision nobody has made.
+// The third host used to be the open question here: `.admin-pane-header`
+// (#1033, 2026-08-07) put the same ☰ at the pane's top-LEFT, deliberately,
+// because the top-right corner was taken by its close × and refresh. #1073
+// settled it by deleting the disagreement rather than unifying an offset — the
+// admin pane now renders `.topic-bar` itself, so its ☰ is the same trailing
+// child measured below and lands in the same corner by construction. No arm is
+// added here for it: this spec's two hosts differ in their BOX (a floated
+// zero-height row vs a real band), which is the thing that could drift apart,
+// and admin is no longer a third box.
 //
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: this is a UI shape
 // contract, subject-shape-agnostic. The registered seed suffices.
