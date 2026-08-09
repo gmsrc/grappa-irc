@@ -34718,11 +34718,36 @@ change's red, where the auth-gate assertions failed on "expected 403, got
 nginx `try_files` produced; different owner. Not addressed here — it is a
 router catch-all question, not an admin-bar one.
 
-**Not established.** That any of this works inside the FreeBSD jail. The
-issue's "Done when" asks for it explicitly and it has not been done: `cpu_sup`
-was exercised only in the Linux dev container, and its FreeBSD port program
-is a different binary. Whether `avg1/0` answers inside a jail is an
-expectation here, not a measurement.
+**Since measured, in the production jail (vjt, 2026-08-09).** This paragraph
+originally recorded the jail as unverified — true when written, and the reason
+the probe happened. Probed with the jail's native Erlang, os_mon started by
+hand:
+
+- **It works, and the 256 divisor is confirmed at the right end.** `avg1=135`
+  / `avg5=165` against `sysctl vm.loadavg` reporting `{0.45 0.62 0.69}` on the
+  same box: `165/256 = 0.64` against `0.62` lands on the nose, while
+  `135/256 = 0.53` against `0.45` drifts because the two reads are not
+  simultaneous. The 5-minute agreement is what identifies the scale — the
+  divisor is a measurement now, not an inherited constant.
+- **`:os_mon` is absent from the release.** Not in
+  `_build/prod/rel/grappa/lib` in prod OR in the dryrun; it lives only in the
+  jail's system Erlang, so a release-run node answers `undef` on
+  `cpu_sup:avg1`. `extra_applications` is what puts it in the artifact — which
+  is why the feature works at all, and why it cannot ship hot.
+- **This is a COLD deploy, for three independent reasons.**
+  `Grappa.Deploy.Preflight` trips on `mix.exs` (`mix_deps?`),
+  `lib/grappa/application.ex` (`application?`, the `boot/0` call site) and
+  `config/config.exs` (`config?`). Dropping any one of them would not make it
+  hot.
+- **`memsup` off is a necessity.** Started whole, os_mon raises
+  `{set,{system_memory_high_watermark,[]}}` in that jail immediately.
+- **The host-load reading is confirmed.** `sysctl vm.loadavg` returns the same
+  value inside the jail and on the host, so the label #1073 owes its reader is
+  correctness, not courtesy.
+
+**Still not established.** The full integration and e2e suites, which were not
+run for this change.
+
 ## 2026-08-09 — #1088: an informational reply belongs to a connection, not a subject
 
 The report is an operator whose IRC client kept opening the WHO modal in

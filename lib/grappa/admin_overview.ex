@@ -51,13 +51,35 @@ defmodule Grappa.AdminOverview do
 
   `:cpu_sup.avg1/0` (os_mon) rather than `/proc/loadavg`: production is a
   FreeBSD jail, which has no `/proc`. cpu_sup shells out to a per-OS port
-  program, which is the reason to pay for the dependency. `:os_mon` is in
-  `extra_applications`; `config/config.exs` keeps `memsup`/`disksup` off,
-  since they raise alarms on thresholds nothing here acts on.
+  program, which is the reason to pay for the dependency.
+
+  **The 256 divisor is measured, not folklore.** `avg1/0` returns the load
+  as a fixed-point integer scaled by 256, and that scaling was checked
+  inside the production jail against `sysctl vm.loadavg` on the same box at
+  the same moment (vjt, 2026-08-09): `avg1=135` against a reported `0.45`
+  (135/256 = 0.53), and `avg5=165` against `0.62` (165/256 = 0.64). The 1
+  minute figure drifts because the two reads are not simultaneous; the 5
+  minute one lands on the nose, which is what identifies the scale.
+
+  **`:os_mon` is not in the release without `extra_applications`.** The
+  same probe found os_mon absent from `_build/prod/rel/grappa/lib` in both
+  prod and the dryrun — it exists only in the jail's system Erlang, so a
+  release-run node answers `undef` on `cpu_sup:avg1`. Adding it to
+  `extra_applications` in `mix.exs` is what puts it in the artifact, and
+  that makes this feature a **COLD deploy** — see
+  `Grappa.Deploy.Preflight`, which trips on `mix.exs` (`mix_deps`),
+  `lib/grappa/application.ex` (`application`, the `boot/0` call site) and
+  `config/config.exs` (`config`). Three independent reasons; none of them
+  is hot-reloadable.
+
+  `config/config.exs` keeps `memsup`/`disksup` off, and that is a
+  necessity rather than tidiness: with os_mon started whole, that jail
+  raises `{set,{system_memory_high_watermark,[]}}` immediately.
 
   A jail shares the host kernel, so the number is the **host's** load, not
-  grappa's. Clients must label it accordingly or an operator will read it
-  as "grappa is busy".
+  grappa's — confirmed by the same probe, `sysctl vm.loadavg` reading
+  identically inside the jail and on the host. Clients must label it
+  accordingly or an operator will read it as "grappa is busy".
 
   An unavailable sampler yields `nil`, never `0.0` — "we cannot measure"
   and "the box is idle" are different facts, and only one of them should

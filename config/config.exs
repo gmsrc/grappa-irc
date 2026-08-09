@@ -575,6 +575,11 @@ config :logger, :console,
 # alarms, `disksup` does the same for filesystem occupancy. Nothing in grappa
 # subscribes to those alarms or acts on them, so all they can do is log at the
 # operator. One sampler in, no alarm traffic.
+#
+# This is a necessity, not a preference, and it was measured: starting os_mon
+# whole inside the production jail raises
+# `{set,{system_memory_high_watermark,[]}}` IMMEDIATELY (vjt, 2026-08-09).
+# Turning the two services off is what keeps that alarm out of the log.
 config :os_mon,
   start_memsup: false,
   start_disksup: false
