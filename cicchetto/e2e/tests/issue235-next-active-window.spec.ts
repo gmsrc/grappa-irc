@@ -68,14 +68,14 @@ async function seedTwoTierUnread(
     token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: peerNick,
+    sender: peer.nick,
     body: CHANNEL_LINE,
   });
   await expect(sidebarMessageBadge(page, NETWORK_SLUG, CHANNEL)).toBeVisible({ timeout: 10_000 });
 
   // Tier 0 — a DM opens the peer's query window (unfocused → unread).
   peer.privmsg(NETWORK_NICK, DM_LINE);
-  await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toBeVisible({ timeout: 10_000 });
+  await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
 
   return peer;
 }
@@ -97,7 +97,7 @@ test("desktop: Alt+A / button jumps DM (tier 0) before channel (tier 1), then au
     // Jump 1 (button click) → the DM window wins on tier, though it
     // arrived AFTER the channel line.
     await page.locator(NEXT_ACTIVE_BTN).click();
-    await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toHaveClass(/selected/, {
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveClass(/selected/, {
       timeout: 10_000,
     });
 
@@ -127,7 +127,7 @@ test("@webkit mobile: bottom-bar affordance jumps DM before channel, then auto-h
 
     // Mobile uses the button for both jumps (no physical Alt+A chord).
     await page.locator(NEXT_ACTIVE_BTN).click();
-    await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toHaveClass(/selected/, {
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveClass(/selected/, {
       timeout: 10_000,
     });
 

@@ -87,10 +87,10 @@ test("members pane renders @-prefix + full op nick (not clipped)", async ({ page
     await peer.join(CHANNEL);
 
     const plainBtn = page.locator(".members-pane .member-plain .member-name", {
-      hasText: PEER_NICK,
+      hasText: peer.nick,
     });
     await expect(plainBtn).toBeVisible({ timeout: 5_000 });
-    await expect(plainBtn).toHaveText(` ${PEER_NICK}`);
+    await expect(plainBtn).toHaveText(` ${peer.nick}`);
 
     const plainBox = await plainBtn.boundingBox();
     expect(plainBox).not.toBeNull();

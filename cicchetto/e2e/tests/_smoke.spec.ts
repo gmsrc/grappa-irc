@@ -34,7 +34,7 @@ test("peer PRIVMSG to #bofh persists in grappa scrollback", async () => {
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: CHANNEL,
-      sender: PEER_NICK,
+      sender: peer.nick,
       body: MESSAGE_BODY,
     });
   } finally {

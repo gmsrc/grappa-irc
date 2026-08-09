@@ -76,8 +76,8 @@ test("CP14 B3 — DM query window shows both inbound and outbound history after 
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: PEER_TO_VJT,
     });
 
@@ -86,7 +86,7 @@ test("CP14 B3 — DM query window shows both inbound and outbound history after 
     // the scrollback for PEER_NICK via REST (loadInitialScrollback).
     // With CP14 B3 the server returns the inbound row even though it
     // persisted under channel = own_nick (dm_with = peer matches).
-    await selectChannel(page, NETWORK_SLUG, PEER_NICK);
+    await selectChannel(page, NETWORK_SLUG, peer.nick);
 
     // Outbound: vjt → peer (typed in the now-focused query window).
     // Server persists with channel = peer AND dm_with = peer (the
@@ -96,7 +96,7 @@ test("CP14 B3 — DM query window shows both inbound and outbound history after 
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
+      channel: peer.nick,
       sender: NETWORK_NICK,
       body: VJT_TO_PEER,
     });
@@ -109,7 +109,7 @@ test("CP14 B3 — DM query window shows both inbound and outbound history after 
   // history alone — this is the bug we're fixing.
   await page.reload();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, PEER_NICK);
+  await selectChannel(page, NETWORK_SLUG, peer.nick);
 
   // Both directions must be visible in the freshly-opened query
   // window. Pre-CP14-B3 only the outbound row would show.

@@ -58,13 +58,13 @@ test("#140 — /names renders the grouped NamesModal; clicking a nick opens a qu
     await expect(modal.locator(".names-modal-footer")).toContainText("End of /NAMES list");
 
     // The peer renders as a clickable nick button in the roster.
-    const peerNick = modal.locator(".names-modal-nick", { hasText: PEER_NICK });
+    const peerNick = modal.locator(".names-modal-nick", { hasText: peer.nick });
     await expect(peerNick).toBeVisible();
 
     // Clicking the nick opens a query window for it AND dismisses the modal.
     await peerNick.click();
     await expect(modal).toBeHidden({ timeout: 2_000 });
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1);
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1);
   } finally {
     await peer.disconnect("#140 done");
   }

@@ -75,13 +75,13 @@ test("P-0a — /whois shows 'registered' tag for a NickServ-identified peer (307
     await peer.join(CHANNEL);
 
     // Issue /whois from cic.
-    await composeSend(page, `/whois ${PEER_NICK}`);
+    await composeSend(page, `/whois ${peer.nick}`);
 
     const card = page.getByTestId("whois-card");
     await expect(card).toBeVisible({ timeout: 5_000 });
 
     // Header carries the target nick.
-    await expect(card.locator(".whois-card-target")).toHaveText(PEER_NICK);
+    await expect(card.locator(".whois-card-target")).toHaveText(peer.nick);
 
     // P-0a — the "registered" tag chip is the proof: it's only
     // rendered when `is_registered: true` arrives in the wire

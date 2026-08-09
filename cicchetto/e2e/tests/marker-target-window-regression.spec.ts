@@ -69,13 +69,13 @@ test("focused-window send+reply does NOT spawn unread marker", async ({ page }) 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
     // Open the DM by typing /query — the window gains focus.
-    await composeSend(page, `/query ${PEER_NICK}`);
+    await composeSend(page, `/query ${peer.nick}`);
     // Gate the own send on the query-window subscription: the server
     // broadcasts the own `/msg` echo on the (slug, peer) topic, and a
     // send before that phx.join ack fastlanes past the socket → the
     // own line never renders (the ~2/4 suite flake). No self-JOIN line
     // exists for a DM to selectChannel-await, hence the seam.
-    await waitForQueryWindowReady(page, NETWORK_SLUG, PEER_NICK);
+    await waitForQueryWindowReady(page, NETWORK_SLUG, peer.nick);
     // Send an own-PRIVMSG in the focused DM.
     await composeSend(page, own);
     // Wait for own-msg to land in the scrollback.
@@ -112,10 +112,10 @@ test("switching to tall window after focused send scrolls target to bottom", asy
   try {
     // Set up the bug pre-condition: a DM with own-msg + peer-reply
     // (this is the path that leaks markerRef on the source window).
-    await composeSend(page, `/query ${PEER_NICK}`);
+    await composeSend(page, `/query ${peer.nick}`);
     // Gate own send on the query-window subscription (own echo topic);
     // gate the peer reply on the DM-listener (own-nick topic) — see T1.
-    await waitForQueryWindowReady(page, NETWORK_SLUG, PEER_NICK);
+    await waitForQueryWindowReady(page, NETWORK_SLUG, peer.nick);
     await composeSend(page, own);
     await expect(page.locator('[data-testid="scrollback-line"]', { hasText: own })).toBeVisible({
       timeout: 5_000,

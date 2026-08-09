@@ -37,14 +37,17 @@ test("M5 — inbound DM to focused query window renders inline, no unread", asyn
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
-  // /query opens the window AND focuses it without sending anything.
-  // After this, cicchetto is on the (slug, PEER_NICK) query window, sidebar
-  // shows the entry, no scrollback yet (no DM exchanged).
-  await composeSend(page, `/query ${PEER_NICK}`);
-  await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 5_000 });
-
+  // Connect FIRST so the /query below names the nick the server GRANTED
+  // (#944). The peer is idle until the privmsg inside the try, so the window
+  // is still opened before any DM exists — which is what M5 pins.
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
+    // /query opens the window AND focuses it without sending anything.
+    // After this, cicchetto is on the (slug, peer.nick) query window, sidebar
+    // shows the entry, no scrollback yet (no DM exchanged).
+    await composeSend(page, `/query ${peer.nick}`);
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
+
     peer.privmsg(NETWORK_NICK, MESSAGE_BODY);
 
     // Probe via REST against channel = PEER_NICK (peer-DM aggregation
@@ -54,8 +57,8 @@ test("M5 — inbound DM to focused query window renders inline, no unread", asyn
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: MESSAGE_BODY,
     });
 
@@ -64,7 +67,7 @@ test("M5 — inbound DM to focused query window renders inline, no unread", asyn
 
     // The M5 invariant: focused query window does NOT bump unread.
     // Mirror of M1's focused-channel rule for the query topic.
-    await expect(sidebarMessageBadge(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(0);
+    await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toHaveCount(0);
   } finally {
     await peer.disconnect("M5 done");
   }

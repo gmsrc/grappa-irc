@@ -56,6 +56,11 @@ import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i532-peer";
+// The nick the server GRANTED, published to afterEach (#944). The cleanup runs
+// outside the test body where `peer` is out of scope, and a cursor restore
+// aimed at the nick we merely ASKED for would leave the real window's cursor
+// behind after a 433 retry.
+let grantedPeerNick = PEER_NICK;
 const DM_FIRST = "#532 B: first DM — read, so the cursor sits here";
 const DM_SECOND = "#532 B: second DM — the unread that the archive badge must show";
 
@@ -66,7 +71,7 @@ test.afterEach(async () => {
   // retries. Both are idempotent / no-ops for the test that didn't touch
   // them, and guarded so a mid-test failure can't cascade.
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
-  await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, PEER_NICK).catch(() => {});
+  await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, grantedPeerNick).catch(() => {});
 });
 
 test("#532 A — a self-PART leaves NO stale event badge on the archived channel row", async ({
@@ -128,6 +133,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
+  grantedPeerNick = peer.nick;
   try {
     // First inbound DM → cic auto-opens the query window (server-owned,
     // #422). Focus it so the DM renders, then focus away so selection.ts's
@@ -136,13 +142,13 @@ test("#532 B — a closed DM window holding an unread message shows the message 
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: DM_FIRST,
     });
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 5_000 });
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
-    await selectChannel(page, NETWORK_SLUG, PEER_NICK, { awaitWsReady: false });
+    await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });
     // `.last()` — under `--repeat-each` the DM rows accumulate in the shared
     // backend (afterEach resets the cursor, not the scrollback), so this
     // matches every prior run's copy too; we only need the newest one
@@ -154,7 +160,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
     // pre-D the cursor could fork per-casing, but cic sends one spelling so
     // this asserts the DM cursor is set at all before we add the unread.
     await expect
-      .poll(() => getReadCursor(vjt.token, NETWORK_SLUG, PEER_NICK), {
+      .poll(() => getReadCursor(vjt.token, NETWORK_SLUG, peer.nick), {
         timeout: 5_000,
         intervals: [100, 200, 500],
       })
@@ -166,8 +172,8 @@ test("#532 B — a closed DM window holding an unread message shows the message 
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: DM_SECOND,
     });
 
@@ -175,8 +181,8 @@ test("#532 B — a closed DM window holding an unread message shows the message 
     // the server `query_windows` row (non-destructive, no confirm modal for
     // query windows) — so on the next cold load the peer is no longer an
     // active window and surfaces in Archive with its unread intact.
-    await sidebarCloseButton(page, NETWORK_SLUG, PEER_NICK).click();
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(0, { timeout: 5_000 });
+    await sidebarCloseButton(page, NETWORK_SLUG, peer.nick).click();
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(0, { timeout: 5_000 });
   } finally {
     await peer.disconnect("#532 B done");
   }
@@ -189,7 +195,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
   const group = await expandArchiveGroup(page, NETWORK_SLUG);
 
   // The peer's closed DM is archived (rows exist, window no longer active).
-  await expect(group.locator(".archive-modal-row", { hasText: PEER_NICK })).toHaveCount(1, {
+  await expect(group.locator(".archive-modal-row", { hasText: peer.nick })).toHaveCount(1, {
     timeout: 5_000,
   });
 
@@ -197,7 +203,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
   // from the cold `/me` unread envelope. Pre-B no badge rendered at all;
   // post-B the same `.sidebar-msg-unread` the sidebar draws appears, reading
   // "1" (the single unread second DM; the first was read before close).
-  const unread = page.getByTestId(`archive-unread-${NETWORK_SLUG}-${PEER_NICK}`);
+  const unread = page.getByTestId(`archive-unread-${NETWORK_SLUG}-${peer.nick}`);
   await expect(unread.locator(".sidebar-msg-unread")).toHaveText("1", { timeout: 5_000 });
 
   await closeArchive(page);

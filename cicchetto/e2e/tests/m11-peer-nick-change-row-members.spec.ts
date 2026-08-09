@@ -38,11 +38,16 @@ test("M11 — peer NICK change renders nick_change row + updates members list", 
   await expect(composeTextarea(page)).toBeVisible();
 
   const peer = await IrcPeer.connect({ nick: PEER_OLD_NICK });
+  // The nick the server GRANTED, captured BEFORE the rename (#944):
+  // `peer.nick` is mutable and follows `changeNick`, so the pre-rename
+  // identity has to be held here or the post-rename asserts below would
+  // both name the NEW nick and the "old gone" check would be vacuous.
+  const grantedOldNick = peer.nick;
   try {
     await peer.join(CHANNEL);
 
     // Old nick visible in members before the rename.
-    await expect(page.locator(".members-pane li", { hasText: PEER_OLD_NICK })).toBeVisible({
+    await expect(page.locator(".members-pane li", { hasText: grantedOldNick })).toBeVisible({
       timeout: 5_000,
     });
 
@@ -55,7 +60,7 @@ test("M11 — peer NICK change renders nick_change row + updates members list", 
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: CHANNEL,
-      sender: PEER_OLD_NICK,
+      sender: grantedOldNick,
       kind: "nick_change",
     });
 
@@ -67,7 +72,7 @@ test("M11 — peer NICK change renders nick_change row + updates members list", 
     });
 
     // Members list updated atomically: old gone, new present.
-    await expect(page.locator(".members-pane li", { hasText: PEER_OLD_NICK })).toHaveCount(0, {
+    await expect(page.locator(".members-pane li", { hasText: grantedOldNick })).toHaveCount(0, {
       timeout: 5_000,
     });
     await expect(page.locator(".members-pane li", { hasText: PEER_NEW_NICK })).toBeVisible({

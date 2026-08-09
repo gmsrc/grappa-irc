@@ -100,11 +100,11 @@ test("#221 — WHOIS of an account+TLS user shows registered/SSL badges + accoun
     // Real /whois from the compose box → real upstream WHOIS → server folds
     // 311/312/318 → emits the real `whois_bundle` frame → our route enriches
     // it with the solanum fields → cic decodes/narrows/renders.
-    await composeSend(page, `/whois ${PEER_NICK}`);
+    await composeSend(page, `/whois ${peer.nick}`);
 
     const card = page.getByTestId("whois-card");
     await expect(card).toBeVisible({ timeout: 8_000 });
-    await expect(card.locator(".whois-card-target")).toHaveText(PEER_NICK);
+    await expect(card.locator(".whois-card-target")).toHaveText(peer.nick);
 
     // Badges: "registered" derives from the injected account (330), "SSL"
     // from the injected secure (671). Pre-fix these read ONLY is_registered

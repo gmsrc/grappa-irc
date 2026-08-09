@@ -85,13 +85,13 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK_DM,
-      sender: PEER_NICK_DM,
+      channel: peer.nick,
+      sender: peer.nick,
       body: DM_BODY,
     });
 
     // Step 2: cic-side sidebar — proves DM-listener handler fired.
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK_DM)).toHaveCount(1, {
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, {
       timeout: 5_000,
     });
 
@@ -134,7 +134,7 @@ test("channel mention fires in-app beep on a non-focused mention target", async 
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: MENTION_CHANNEL,
-      sender: PEER_NICK_MENTION,
+      sender: peer.nick,
       body: mentionBody,
     });
 
@@ -168,7 +168,7 @@ test("PRIVMSG without nick mention does NOT fire beep on a non-focused channel",
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: AUTOJOIN_CHANNELS[0],
-      sender: PEER_NICK_MENTION,
+      sender: peer.nick,
       body: nonMentionBody,
     });
 

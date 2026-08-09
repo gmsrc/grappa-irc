@@ -46,6 +46,11 @@ import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i576-peer";
+// The nick the server GRANTED, published to afterEach (#944). The cleanup runs
+// outside the test body where `peer` is out of scope, and a cursor restore
+// aimed at the nick we merely ASKED for would leave the real window's cursor
+// behind after a 433 retry.
+let grantedPeerNick = PEER_NICK;
 const OPENER = "#576: peer opener — read, cursor baseline sits here";
 const OWN_A = "#576: my own line A — read by definition, must not badge";
 const OWN_B = "#576: my own line B — read by definition, must not badge";
@@ -56,7 +61,7 @@ test.afterEach(async () => {
   // Restore the DM cursor to the tail so the own/peer rows this spec leaves
   // in the shared backend don't poison a later spec (or a --repeat-each
   // rerun) via a stale backward cursor. Idempotent + guarded.
-  await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, PEER_NICK).catch(() => {});
+  await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, grantedPeerNick).catch(() => {});
 });
 
 test("#576 — own content lines don't badge; a later peer line does", async ({ page }) => {
@@ -69,6 +74,7 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
+  grantedPeerNick = peer.nick;
   try {
     // Peer opens the DM. Focus it so it renders (the send-time advance's
     // anti-poison gate #50 needs a non-empty pane), and read it — the
@@ -77,12 +83,12 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: OPENER,
     });
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 5_000 });
-    await selectChannel(page, NETWORK_SLUG, PEER_NICK, { awaitWsReady: false });
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
+    await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });
     await expect(scrollbackLine(page, "privmsg", OPENER).last()).toBeVisible({ timeout: 5_000 });
 
     // Send two OWN lines in the focused DM. They echo back over WS and
@@ -94,7 +100,7 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
       await assertMessagePersisted({
         token: vjt.token,
         networkSlug: NETWORK_SLUG,
-        channel: PEER_NICK,
+        channel: peer.nick,
         sender: NETWORK_NICK,
         body,
       });
@@ -111,17 +117,17 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
     // `read_cursor_set` the last-write-wins client adopts). Now the only
     // rows past the cursor are the operator's own — pre-fix a "2" badge the
     // operator can't clear by reading; post-fix nothing at all.
-    const rows = await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, PEER_NICK);
+    const rows = await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, peer.nick);
     const openerRows = rows.filter((r) => r.body === OPENER);
     const openerId = openerRows[openerRows.length - 1]?.id;
     expect(openerId, "peer opener row must exist to seed the cursor baseline").toBeTruthy();
-    await setReadCursorToId(vjt.token, NETWORK_SLUG, PEER_NICK, openerId as number);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, peer.nick, openerId as number);
 
     // #576 assertion: NO message badge on the DM window whose only unread
     // rows are the operator's own lines. Pre-fix `perChannelUnread` counted
     // them → `.sidebar-msg-unread` rendered "2"; post-fix own content is
     // excluded → the badge element is absent.
-    await expect(sidebarMessageBadge(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(0, {
+    await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toHaveCount(0, {
       timeout: 5_000,
     });
 
@@ -132,11 +138,11 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: REPLY,
     });
-    await expect(sidebarMessageBadge(page, NETWORK_SLUG, PEER_NICK)).toHaveText("1", {
+    await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toHaveText("1", {
       timeout: 5_000,
     });
   } finally {

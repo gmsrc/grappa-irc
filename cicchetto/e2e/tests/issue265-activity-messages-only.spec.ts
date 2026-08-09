@@ -74,8 +74,8 @@ async function seedEventOnlyAndMessageWindows(
   // Message window — a DM opens the peer's query window (unfocused →
   // unread content).
   peer.privmsg(NETWORK_NICK, DM_LINE);
-  await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toBeVisible({ timeout: 10_000 });
-  await expect(sidebarMessageBadge(page, NETWORK_SLUG, peerNick)).toBeVisible({ timeout: 10_000 });
+  await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
+  await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
 
   return peer;
 }
@@ -100,7 +100,7 @@ test("desktop: #265 next-active count includes the message (DM) window, excludes
     // And the ONE active window is the DM — a button jump lands there,
     // never on the presence-only #bofh.
     await page.locator(NEXT_ACTIVE_BTN).click();
-    await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toHaveClass(/selected/, {
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveClass(/selected/, {
       timeout: 10_000,
     });
 
@@ -124,7 +124,7 @@ test("@webkit mobile: #265 bottom-bar next-active count excludes the event-only 
     await expect(page.locator(NEXT_ACTIVE_COUNT)).toHaveText("1", { timeout: 10_000 });
 
     await page.locator(NEXT_ACTIVE_BTN).click();
-    await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toHaveClass(/selected/, {
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveClass(/selected/, {
       timeout: 10_000,
     });
 

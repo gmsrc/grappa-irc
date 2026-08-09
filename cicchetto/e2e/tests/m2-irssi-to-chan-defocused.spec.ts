@@ -52,7 +52,7 @@ test("M2 — peer PRIVMSG to defocused channel bumps msg-unread badge by 1", asy
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: CHANNEL,
-      sender: PEER_NICK,
+      sender: peer.nick,
       body: MESSAGE_BODY,
     });
 

@@ -45,7 +45,7 @@ test("C2 — /whois <nick> renders WhoisCard in the scrollback overlay layer", a
     await peer.join(CHANNEL);
 
     // Issue /whois from the compose box.
-    await composeSend(page, `/whois ${PEER_NICK}`);
+    await composeSend(page, `/whois ${peer.nick}`);
 
     // #133 — the card floats in the overlay layer, not inline in the
     // scroll flow. Scope the locator THROUGH `.scrollback-overlay` so a
@@ -54,7 +54,7 @@ test("C2 — /whois <nick> renders WhoisCard in the scrollback overlay layer", a
     await expect(card).toBeVisible({ timeout: 5_000 });
 
     // Header carries the target nick.
-    await expect(card.locator(".whois-card-target")).toHaveText(PEER_NICK);
+    await expect(card.locator(".whois-card-target")).toHaveText(peer.nick);
 
     // userhost field present — the peer's user/host should round-trip
     // from 311 RPL_WHOISUSER. Don't pin the exact host string (testnet

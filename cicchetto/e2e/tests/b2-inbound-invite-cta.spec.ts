@@ -84,7 +84,7 @@ test("B2 — inbound INVITE raises a banner naming the inviter; its [Join] mount
     // leg: the nick reaches cic on the `window_invited` payload, because the
     // banner renders before the channel's buffer is ever fetched and cannot
     // read it off the persisted INVITE row.
-    await expect(banner).toContainText(PEER_NICK);
+    await expect(banner).toContainText(peer.nick);
     await expect(banner).toContainText(TARGET_CHANNEL);
 
     // NOT auto-focused, and NOT a sidebar row: the operator is still on the
@@ -112,7 +112,7 @@ test("B2 — inbound INVITE raises a banner naming the inviter; its [Join] mount
     // the channel now, so it must be on screen with its inline CTA.
     const row = page
       .locator('[data-testid="scrollback-line"]')
-      .filter({ hasText: PEER_NICK })
+      .filter({ hasText: peer.nick })
       .filter({ hasText: TARGET_CHANNEL })
       .first();
     await expect(row).toBeVisible({ timeout: 5_000 });

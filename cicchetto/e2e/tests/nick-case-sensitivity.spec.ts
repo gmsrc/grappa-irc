@@ -33,7 +33,6 @@ import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../
 import { expect, test } from "../fixtures/test";
 
 const PEER_NICK_LOWER = "casepeer";
-const PEER_NICK_UPPER = "CASEPEER";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test("nick case-sensitivity: /q with different casing focuses existing window, no duplicate", async ({
@@ -49,11 +48,17 @@ test("nick case-sensitivity: /q with different casing focuses existing window, n
   // keeps the scenario realistic + matches the bug's original
   // reproduction context.)
   const peer = await IrcPeer.connect({ nick: PEER_NICK_LOWER });
+  // Both casings derive from the nick the server GRANTED, not the one we
+  // asked for (#944). Hand-writing the uppercase twin off the constant would
+  // address a different nick after a 433 retry, and the "same nick, other
+  // casing" premise this spec rests on would quietly stop holding.
+  const lower = peer.nick;
+  const upper = peer.nick.toUpperCase();
   try {
     await peer.join(CHANNEL);
 
     // STEP 1 — Open a query window with the lowercase nick.
-    await composeSend(page, `/q ${PEER_NICK_LOWER}`);
+    await composeSend(page, `/q ${lower}`);
 
     // FLAKE-C bucket 7 (2026-05-23) — selector drift: pre-bucket
     // `.sidebar` was the outer wrapper class; UX-5 BH dropped the
@@ -65,16 +70,16 @@ test("nick case-sensitivity: /q with different casing focuses existing window, n
     // need a different scope; this spec is desktop-only via the
     // single chromium project below).
     const sidebar = page.locator(".shell-sidebar");
-    const queryRows = sidebar.locator(`.sidebar-channel-name:has-text("${PEER_NICK_LOWER}")`);
+    const queryRows = sidebar.locator(`.sidebar-channel-name:has-text("${lower}")`);
     await expect(queryRows).toHaveCount(1, { timeout: 5_000 });
     // First row's text MUST be the lowercase casing (stored canonical).
-    await expect(queryRows.first()).toHaveText(PEER_NICK_LOWER);
+    await expect(queryRows.first()).toHaveText(lower);
 
     // STEP 2 — Type /q with UPPERCASE casing. Pre-fix this would
     // have spawned a second dead row labeled "CASEPEER"; post-fix
     // the existing lowercase row stays selected and the sidebar
     // row count remains 1.
-    await composeSend(page, `/q ${PEER_NICK_UPPER}`);
+    await composeSend(page, `/q ${upper}`);
 
     // Wait for cic to react to the slash dispatch via an event-driven
     // gate rather than a hard waitForTimeout (audit 2026-05-26): the
@@ -85,7 +90,7 @@ test("nick case-sensitivity: /q with different casing focuses existing window, n
     // consecutive reads ≥100ms apart. If a phantom shows up, one of
     // the reads catches count=2 and the spec fails.
     const allCaseRows = sidebar.locator(".sidebar-channel-name", {
-      hasText: new RegExp(`^${PEER_NICK_LOWER}$`, "i"),
+      hasText: new RegExp(`^${lower}$`, "i"),
     });
     await expect.poll(async () => allCaseRows.count(), { timeout: 3_000 }).toBe(1);
     // Stability gate — re-check after a microtask flush to catch a
@@ -93,7 +98,7 @@ test("nick case-sensitivity: /q with different casing focuses existing window, n
     expect(await allCaseRows.count()).toBe(1);
     // And the existing row's display text is still the lowercase
     // canonical (NOT the user's uppercase input).
-    await expect(allCaseRows.first()).toHaveText(PEER_NICK_LOWER);
+    await expect(allCaseRows.first()).toHaveText(lower);
 
     // STEP 3 — A round-trip PRIVMSG from the peer lands in the
     // existing row's scrollback. If the bug had recurred, the

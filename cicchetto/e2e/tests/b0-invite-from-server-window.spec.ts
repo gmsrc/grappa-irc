@@ -66,7 +66,7 @@ test("B0 — /invite from $server window (no channel context) reaches upstream +
     // body, causing composeSend's `toHaveValue("", ...)` to time
     // out. After B0 the line passes through to /invite handler →
     // upstream INVITE → 341 ack → invite-ack row.
-    await composeSend(page, `/invite ${PEER_NICK} ${CHANNEL}`);
+    await composeSend(page, `/invite ${peer.nick} ${CHANNEL}`);
 
     // The invite-ack row mounts only after the FULL round-trip:
     // composeSend → grappa → upstream INVITE → 341 RPL_INVITING →
@@ -80,7 +80,7 @@ test("B0 — /invite from $server window (no channel context) reaches upstream +
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row).toContainText("→");
     await expect(row).toContainText("invited");
-    await expect(row).toContainText(PEER_NICK);
+    await expect(row).toContainText(peer.nick);
     await expect(row).toContainText(CHANNEL);
   } finally {
     await peer.disconnect("B0 done");

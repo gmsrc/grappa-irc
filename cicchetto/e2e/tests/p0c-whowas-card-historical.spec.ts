@@ -38,13 +38,13 @@ test("P-0c — /whowas after peer disconnect surfaces WhowasCard with historical
 
   // Issue /whowas. Bahamut returns 314 (user/host/realname) + 312
   // (server + ctime logoff_time) + 369 (terminator).
-  await composeSend(page, `/whowas ${PEER_NICK}`);
+  await composeSend(page, `/whowas ${peer.nick}`);
 
   const card = page.getByTestId("whowas-card");
   await expect(card).toBeVisible({ timeout: 5_000 });
 
   // Header carries the target nick.
-  await expect(card.locator(".whowas-card-target")).toHaveText(PEER_NICK);
+  await expect(card.locator(".whowas-card-target")).toHaveText(peer.nick);
 
   // Userhost row renders from 314 RPL_WHOWASUSER (user@host).
   // Bahamut sets user from the connect-time USER line; we don't pin

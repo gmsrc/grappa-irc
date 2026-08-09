@@ -39,7 +39,6 @@ import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
-const PEER_NICK = "i247-watched";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
 // Body is ~6 condition-waits (each fast in isolation) + one reload +
@@ -51,9 +50,18 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
   const vjt = getSeededVjt();
   let peer: IrcPeer | null = null;
 
+  // #944 — this spec is the one shape `peer.nick` cannot serve: the whole
+  // point is that the nick is WATCHED while nobody holds it, so it must be
+  // named before any peer exists. A per-run-unique nick removes the ghost the
+  // #604 retry exists to survive, and the equality assert at the connect below
+  // turns a residual collision into a one-line failure instead of a toast
+  // timeout. Computed in the test body, not at module scope, so a
+  // `--repeat-each` rerun inside one worker gets a fresh nick per repeat.
+  const peerNick = `i247w${crypto.randomUUID().replace(/-/g, "").slice(0, 6)}`;
+
   const entryRow = page
     .getByTestId(`watchlists-notify-${NETWORK_SLUG}`)
-    .locator(".watchlists-item", { hasText: PEER_NICK });
+    .locator(".watchlists-item", { hasText: peerNick });
   const dot = entryRow.locator(".watchlists-dot");
 
   // #356 — the list lives in the settings "watch lists" sub-page now.
@@ -71,7 +79,7 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
     // Compose lives on channel windows — issue the add from the seed
     // channel, then open the settings watch-lists section to observe it.
     await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
-    await composeSend(page, `/notify ${PEER_NICK}`);
+    await composeSend(page, `/notify ${peerNick}`);
     await openWatchLists();
 
     // 1. Entry present; dot settles OFFLINE via the 605 baseline (the
@@ -83,9 +91,12 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
     // 2. Peer connects → 600 RPL_LOGON → genuine transition: toast +
     //    dot flip. Arm the toast wait BEFORE connecting so the 6s
     //    self-expiry can't outrace the first poll.
-    const onlineToast = page.locator(".toast-online", { hasText: PEER_NICK });
+    const onlineToast = page.locator(".toast-online", { hasText: peerNick });
     const onlineToastSeen = expect(onlineToast).toBeVisible({ timeout: 15_000 });
-    peer = await IrcPeer.connect({ nick: PEER_NICK });
+    peer = await IrcPeer.connect({ nick: peerNick });
+    // The watch list already names `peerNick`; if the server granted anything
+    // else the 600 would never match and step 2 would time out unexplained.
+    expect(peer.nick).toBe(peerNick);
     await onlineToastSeen;
     await expect(dot).toHaveAttribute("data-state", "online", { timeout: 10_000 });
 
@@ -100,7 +111,7 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
     await expect(dot).toHaveAttribute("data-state", "online", { timeout: 10_000 });
 
     // 4. Peer quits → 601 RPL_LOGOFF → offline transition toast + flip.
-    const offlineToast = page.locator(".toast-offline", { hasText: PEER_NICK });
+    const offlineToast = page.locator(".toast-offline", { hasText: peerNick });
     const offlineToastSeen = expect(offlineToast).toBeVisible({ timeout: 15_000 });
     await peer.disconnect("gone (#247 e2e)");
     peer = null;
@@ -110,7 +121,7 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
     // 5. Remove from the settings list — server round-trip, list re-renders
     //    from the notify_list broadcast (cic never edits its own store).
     await entryRow
-      .getByRole("button", { name: `Stop watching ${PEER_NICK} on ${NETWORK_SLUG}` })
+      .getByRole("button", { name: `Stop watching ${peerNick} on ${NETWORK_SLUG}` })
       .click();
     await expect(entryRow).toHaveCount(0, { timeout: 10_000 });
   } finally {

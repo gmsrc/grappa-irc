@@ -60,7 +60,7 @@ test("@webkit BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input"
     // iOS-shape: tap to focus (triggers virtual-keyboard show on a
     // real device), per-keystroke type, tap send button.
     await ta.tap();
-    await ta.pressSequentially(`/msg ${PEER_NICK} ${MESSAGE_BODY}`, { delay: 20 });
+    await ta.pressSequentially(`/msg ${peer.nick} ${MESSAGE_BODY}`, { delay: 20 });
 
     const sendButton = page.getByRole("button", { name: /send message/i });
     await sendButton.tap();
@@ -68,13 +68,13 @@ test("@webkit BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input"
 
     // Sidebar entry for the DM target appears (auto-open via
     // openQueryWindowState in compose.ts /msg handler).
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 5_000 });
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
     // First door: server persistence — same as M6 chromium.
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
+      channel: peer.nick,
       sender: NETWORK_NICK,
       body: MESSAGE_BODY,
     });

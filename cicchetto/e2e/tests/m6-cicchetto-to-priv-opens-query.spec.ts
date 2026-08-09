@@ -62,12 +62,12 @@ test("M6 — cicchetto /msg opens query window, focuses, renders own-msg", async
     // (observed 7.5s on the Raspberry Pi dev box — same timing flake as
     // cp15-b6-archive-query-revival; bisected to load, not state). See
     // DESIGN_NOTES 2026-06-09 "cp15-b6 / m6 e2e timing flake".
-    await composeSend(page, `/msg ${PEER_NICK} ${MESSAGE_BODY}`);
+    await composeSend(page, `/msg ${peer.nick} ${MESSAGE_BODY}`);
 
     // Sidebar gains an entry for the peer-nick (the DM target).
     // sidebarWindow scopes by network section, so a hypothetical
     // PEER_NICK string elsewhere doesn't false-match.
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 15_000 });
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 15_000 });
 
     // Server-side: DM row persisted at channel = PEER_NICK with
     // sender = NETWORK_NICK. The wire shape mirrors a regular
@@ -76,7 +76,7 @@ test("M6 — cicchetto /msg opens query window, focuses, renders own-msg", async
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
+      channel: peer.nick,
       sender: NETWORK_NICK,
       body: MESSAGE_BODY,
     });
@@ -85,7 +85,7 @@ test("M6 — cicchetto /msg opens query window, focuses, renders own-msg", async
     await expect(scrollbackLine(page, "privmsg", MESSAGE_BODY)).toBeVisible({ timeout: 15_000 });
 
     // Focused query window: no unread bump on own send.
-    await expect(sidebarMessageBadge(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(0);
+    await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toHaveCount(0);
   } finally {
     await peer.disconnect("M6 done");
   }

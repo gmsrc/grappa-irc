@@ -57,7 +57,7 @@ test("M10 — peer ACTION renders as '* peer body' in focused channel", async ({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: CHANNEL,
-      sender: PEER_NICK,
+      sender: peer.nick,
       body: PERSISTED_BODY,
       kind: "action",
     });

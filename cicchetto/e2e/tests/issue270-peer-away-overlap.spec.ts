@@ -73,11 +73,11 @@ test("#270 — peer-away banner does not overlap the first DM message row", asyn
     // Operator /msg's the away peer. compose.ts auto-opens + focuses the DM
     // window and sends the first line; bahamut replies 301 with AWAY_MESSAGE,
     // so the banner mounts at the top of this fresh, near-empty DM.
-    await composeSend(page, `/msg ${PEER_NICK} ${FIRST_DM_LINE}`);
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 15_000 });
+    await composeSend(page, `/msg ${peer.nick} ${FIRST_DM_LINE}`);
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 15_000 });
 
     // Focus the DM window — the banner mounts only when (slug, peer) match.
-    await selectChannel(page, NETWORK_SLUG, PEER_NICK, { awaitWsReady: false });
+    await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });
 
     // Anti-false-green: BOTH the banner AND the first DM row must be present
     // and visible BEFORE any geometry is measured. A missing row (or a hidden

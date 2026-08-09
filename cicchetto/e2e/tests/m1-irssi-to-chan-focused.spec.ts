@@ -56,7 +56,7 @@ test("M1 — peer PRIVMSG to focused channel renders inline, no unread", async (
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: CHANNEL,
-      sender: PEER_NICK,
+      sender: peer.nick,
       body: MESSAGE_BODY,
     });
 

@@ -58,10 +58,10 @@ test("#222 — per-channel toggle hides join/part rows, persists across reload, 
 
     const joinRow = page
       .locator('[data-testid="scrollback-line"][data-kind="join"]')
-      .filter({ hasText: peerNick });
+      .filter({ hasText: peer.nick });
     const partRow = page
       .locator('[data-testid="scrollback-line"][data-kind="part"]')
-      .filter({ hasText: peerNick });
+      .filter({ hasText: peer.nick });
     const privmsgRow = page
       .locator('[data-testid="scrollback-line"][data-kind="privmsg"]')
       .filter({ hasText: privmsgBody });

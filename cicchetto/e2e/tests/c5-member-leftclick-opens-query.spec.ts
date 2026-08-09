@@ -27,27 +27,30 @@ test("C5 — left-click on member nick opens query window + switches focus", asy
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
 
-  // Pre-condition: no query window yet for the peer.
-  await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(0);
-
+  // Connect BEFORE the pre-condition so every locator below is keyed on the
+  // nick the server GRANTED (#944). A connected-but-idle peer creates no
+  // query window, so the pre-condition still observes the same state.
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
+    // Pre-condition: no query window yet for the peer.
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(0);
+
     await peer.join(CHANNEL);
 
     // Wait for the peer to appear in the members list.
-    const memberBtn = page.locator(`.members-pane .member-name`, { hasText: PEER_NICK });
+    const memberBtn = page.locator(`.members-pane .member-name`, { hasText: peer.nick });
     await expect(memberBtn).toBeVisible({ timeout: 5_000 });
 
     // Click the nick — should open the query window AND switch focus.
     await memberBtn.click();
 
     // Query window appears in sidebar.
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 5_000 });
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
     // Focus switched to the query window — sidebar entry has the
     // selection class. The exact selector matches Sidebar.tsx's
     // `.sidebar-channel-selected` (or whichever) — check the live DOM.
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveClass(/selected/, {
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveClass(/selected/, {
       timeout: 5_000,
     });
   } finally {

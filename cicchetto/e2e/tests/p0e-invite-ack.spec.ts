@@ -73,7 +73,7 @@ test("P-0e + P-0f — /invite to a peer surfaces invite-ack row in the $server w
     // Issue /invite from $server. compose.ts:447-454 tolerates
     // non-channel-window context when channel arg is explicit
     // (P-0f no-silent-drops bucket 0).
-    await composeSend(page, `/invite ${PEER_NICK} ${CHANNEL}`);
+    await composeSend(page, `/invite ${peer.nick} ${CHANNEL}`);
 
     // Invite-ack row mounts inline in $server scrollback via
     // ScrollbackPane.tsx:1252-1254 `<Show when={props.kind ===
@@ -82,7 +82,7 @@ test("P-0e + P-0f — /invite to a peer surfaces invite-ack row in the $server w
     await expect(row).toBeVisible({ timeout: 10_000 });
     await expect(row).toContainText("→");
     await expect(row).toContainText("invited");
-    await expect(row).toContainText(PEER_NICK);
+    await expect(row).toContainText(peer.nick);
     // P-0f — row text includes the target channel since $server
     // aggregates invites issued to any channel.
     await expect(row).toContainText(CHANNEL);

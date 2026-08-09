@@ -53,15 +53,17 @@ test("M7 — peer JOIN on unbound channel does NOT add sidebar entry", async ({ 
     //
     // The line renders irssi-style: `nick [user@host] has joined`. We
     // assert ALL THREE components, not a tolerant `nick ... has joined`
-    // (that would pass even if the user@host regressed). The peer
-    // registers with `username: nick` (ircClient fixture), so the ident
-    // is `${PEER_NICK}` with the leading `~` Bahamut prefixes when no
-    // identd answers; the host is the peer's non-empty resolved address.
+    // (that would pass even if the user@host regressed). The two halves are
+    // NOT the same string (#944): the nick is whatever the server GRANTED,
+    // while `username` is sent once at registration from the nick we ASKED
+    // for (ircClient fixture), so a 433 retry moves the nick and leaves the
+    // ident behind. The ident carries the leading `~` Bahamut prefixes when
+    // no identd answers; the host is the peer's non-empty resolved address.
     await expect(
       scrollbackLine(
         page,
         "join",
-        new RegExp(`${PEER_NICK} \\[~?${PEER_NICK}@[^\\]]+\\] has joined`),
+        new RegExp(`${peer.nick} \\[~?${PEER_NICK}@[^\\]]+\\] has joined`),
       ),
     ).toBeVisible({
       timeout: 5_000,

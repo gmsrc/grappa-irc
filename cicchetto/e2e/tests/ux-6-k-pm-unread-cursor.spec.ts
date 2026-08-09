@@ -72,13 +72,16 @@ test("UX-6 K — focus-leave on a peer DM window advances the server-side read c
   // spec times out at the `sidebarWindow.toHaveCount(1)` check.
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
-  // Pre-condition: no cursor exists for the peer window yet (fresh
-  // stack, vjt never DM'd ux6k-peer before).
-  const preCursor = await getReadCursor(vjt.token, NETWORK_SLUG, PEER_NICK);
-  expect(preCursor).toBeNull();
-
+  // Connect BEFORE the pre-condition so every lookup below is keyed on the
+  // nick the server GRANTED (#944). A connected-but-idle peer writes no read
+  // cursor, so the pre-condition observes the same state it did above.
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
+    // Pre-condition: no cursor exists for the peer window yet (fresh
+    // stack, vjt never DM'd this peer before).
+    const preCursor = await getReadCursor(vjt.token, NETWORK_SLUG, peer.nick);
+    expect(preCursor).toBeNull();
+
     // Peer sends an INBOUND DM to vjt. Persisted server-side at
     // `channel = NETWORK_NICK, dm_with = PEER_NICK` — the storage
     // shape that exposed the K bug.
@@ -91,20 +94,20 @@ test("UX-6 K — focus-leave on a peer DM window advances the server-side read c
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: PM_BODY,
     });
 
     // The dm-listener handler in subscribe.ts auto-opens the query
     // window for PEER_NICK on inbound DM. Wait for the sidebar entry.
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 5_000 });
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
     // Step 1 — focus the peer window. selection.ts's on(selectedChannel)
     // effect runs; the leave-arm fires for the OLD selection (#bofh),
     // not the new one. No cursor is set for the peer YET (focus
     // alone doesn't set; only LEAVING a window does).
-    await selectChannel(page, NETWORK_SLUG, PEER_NICK, { awaitWsReady: false });
+    await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });
 
     // The DM body must be visible before we leave — guards against a
     // race where we leave before loadInitialScrollback resolves and
@@ -136,7 +139,7 @@ test("UX-6 K — focus-leave on a peer DM window advances the server-side read c
     // (assertMessagePersisted doesn't return it), and the integer
     // shape is the meaningful contract.
     await expect
-      .poll(() => getReadCursor(vjt.token, NETWORK_SLUG, PEER_NICK), {
+      .poll(() => getReadCursor(vjt.token, NETWORK_SLUG, peer.nick), {
         timeout: 5_000,
         intervals: [100, 200, 500],
       })

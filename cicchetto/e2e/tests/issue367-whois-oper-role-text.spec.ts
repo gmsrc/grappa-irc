@@ -51,11 +51,11 @@ test("issue #367 — /whois of an opered peer renders the 313 role text row", as
     await peer.oper(OPER_NAME, OPER_PASS);
 
     // Issue /whois from cic's compose box.
-    await composeSend(page, `/whois ${PEER_NICK}`);
+    await composeSend(page, `/whois ${peer.nick}`);
 
     const card = page.getByTestId("whois-card");
     await expect(card).toBeVisible({ timeout: 5_000 });
-    await expect(card.locator(".whois-card-target")).toHaveText(PEER_NICK);
+    await expect(card.locator(".whois-card-target")).toHaveText(peer.nick);
 
     // #367 — the "oper" badge signals operator status at a glance...
     await expect(card.locator(".whois-card-tag-oper")).toBeVisible({ timeout: 5_000 });

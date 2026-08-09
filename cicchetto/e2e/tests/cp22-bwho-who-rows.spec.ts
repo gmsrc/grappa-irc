@@ -63,7 +63,7 @@ test("#169 — /who renders the WhoModal with parsed rows; scrollback stays clea
 
     // The peer renders as a per-user ROW carrying a PARSED user@host — proof
     // the 352 fields were parsed into the typed row, not dumped as text.
-    const peerRow = modal.locator(".who-modal-row", { hasText: PEER_NICK });
+    const peerRow = modal.locator(".who-modal-row", { hasText: peer.nick });
     await expect(peerRow).toBeVisible();
     await expect(peerRow.locator(".who-modal-userhost")).toContainText("@");
 
@@ -73,13 +73,13 @@ test("#169 — /who renders the WhoModal with parsed rows; scrollback stays clea
     // Scrollback stays CLEAN — the pre-#169 N+1 :notice dump is gone.
     await expect(scrollbackLine(page, "notice", "End of /WHO list")).toHaveCount(0);
     await expect(
-      scrollbackLine(page, "notice", `[${CHANNEL}]`).filter({ hasText: PEER_NICK }),
+      scrollbackLine(page, "notice", `[${CHANNEL}]`).filter({ hasText: peer.nick }),
     ).toHaveCount(0);
 
     // Clicking the peer nick opens a query window for it AND dismisses the modal.
-    await modal.locator(".who-modal-nick", { hasText: PEER_NICK }).click();
+    await modal.locator(".who-modal-nick", { hasText: peer.nick }).click();
     await expect(modal).toBeHidden({ timeout: 2_000 });
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1);
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1);
   } finally {
     await peer.disconnect("#169 done");
   }

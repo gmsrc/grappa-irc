@@ -47,14 +47,18 @@ test("M4 — inbound DM auto-opens query window with unread, clears on focus", a
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
-  // Pre-condition: no query window for the peer yet (fresh stack
-  // guarantees it; assert anyway so a future cross-test contamination
-  // surfaces here loudly instead of as a confusing "1 already there
-  // before peer sent" flake).
-  await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(0);
-
+  // Connect BEFORE the pre-condition so every locator below is keyed on the
+  // nick the server GRANTED, not the one we asked for (#944). A connected-
+  // but-idle peer opens no query window, so the pre-condition observes the
+  // same state it did when it ran above the connect.
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
+    // Pre-condition: no query window for the peer yet (fresh stack
+    // guarantees it; assert anyway so a future cross-test contamination
+    // surfaces here loudly instead of as a confusing "1 already there
+    // before peer sent" flake).
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(0);
+
     peer.privmsg(NETWORK_NICK, MESSAGE_BODY);
 
     // Server-side: row persisted at channel = NETWORK_NICK (the
@@ -70,25 +74,25 @@ test("M4 — inbound DM auto-opens query window with unread, clears on focus", a
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
-      channel: PEER_NICK,
-      sender: PEER_NICK,
+      channel: peer.nick,
+      sender: peer.nick,
       body: MESSAGE_BODY,
     });
 
     // Sidebar gains exactly one entry for the sender nick.
-    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(1, { timeout: 5_000 });
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
     // Unread badge "1" — cicchetto still on #bofh, query window is
     // unfocused by definition. Asserted BEFORE the click-to-inspect
     // because clicking would clear it (selection.ts isSelected gate).
-    await expect(sidebarMessageBadge(page, NETWORK_SLUG, PEER_NICK)).toHaveText("1", {
+    await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toHaveText("1", {
       timeout: 5_000,
     });
 
     // Focus the DM window: scrollback shows the body, badge clears.
-    await selectChannel(page, NETWORK_SLUG, PEER_NICK, { awaitWsReady: false });
+    await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });
     await expect(scrollbackLine(page, "privmsg", MESSAGE_BODY)).toBeVisible({ timeout: 5_000 });
-    await expect(sidebarMessageBadge(page, NETWORK_SLUG, PEER_NICK)).toHaveCount(0);
+    await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toHaveCount(0);
   } finally {
     await peer.disconnect("M4 done");
   }

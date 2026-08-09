@@ -57,7 +57,7 @@ async function seedOneUnreadDm(
 
   const peer = await IrcPeer.connect({ nick: peerNick });
   peer.privmsg(NETWORK_NICK, DM_LINE);
-  await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toBeVisible({ timeout: 10_000 });
+  await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
   return peer;
 }
 
@@ -81,12 +81,12 @@ test("desktop: the toggle hides the button and Alt+A STILL jumps", async ({ page
     // The button is gone while the window is STILL unread — i.e. hidden by the
     // preference, not by #235's auto-hide.
     await expect(page.locator(NEXT_ACTIVE_BTN)).toHaveCount(0, { timeout: 10_000 });
-    await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).not.toHaveClass(/selected/);
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).not.toHaveClass(/selected/);
 
     // THE assertion. The button is hidden; the verb must be untouched, so the
     // keybinding still jumps to the unread DM window.
     await page.keyboard.press("Alt+a");
-    await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).toHaveClass(/selected/, {
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveClass(/selected/, {
       timeout: 10_000,
     });
   } finally {
@@ -111,7 +111,7 @@ test("@webkit mobile: the same toggle hides the overlay placement", async ({ pag
     // Same single preference, other mount site: the overlay is gone while the
     // DM window is still unread.
     await expect(page.locator(NEXT_ACTIVE_BTN)).toHaveCount(0, { timeout: 10_000 });
-    await expect(sidebarWindow(page, NETWORK_SLUG, peerNick)).not.toHaveClass(/selected/);
+    await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).not.toHaveClass(/selected/);
   } finally {
     await peer.disconnect("914 mobile done");
   }
