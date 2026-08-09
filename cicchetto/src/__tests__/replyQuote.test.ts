@@ -70,9 +70,41 @@ describe("replyQuote", () => {
     expect(replyQuote(msg({ sender: "" }))).toBeNull();
   });
 
-  it("quotes a notice and an action — both have an author and a body", () => {
+  it("quotes a notice like speech — it has an author and a body", () => {
     expect(replyQuote(msg({ kind: "notice" }))).toBe("<vjt> ciao mondo<< ");
-    expect(replyQuote(msg({ kind: "action" }))).toBe("<vjt> ciao mondo<< ");
+  });
+
+  // #1126 — a real action row carries the wire envelope (`\x01ACTION …\x01`);
+  // the server stores it verbatim per the CLAUDE.md "preserved as-is" rule.
+  // The pre-#1126 quote ran the raw body through `mircPlainText`, which leaves
+  // \x01 alone by design, so BOTH the `ACTION` verb and the two delimiters
+  // ended up in the compose box and from there onto the wire.
+  it("quotes an action in ACTION form, envelope stripped — #1126", () => {
+    expect(replyQuote(msg({ kind: "action", body: "\x01ACTION si dà alla fuga\x01" }))).toBe(
+      "* vjt si dà alla fuga<< ",
+    );
+  });
+
+  // The delimiters are the protocol half of the defect: a \x01 we generated
+  // inside an ordinary PRIVMSG. Asserted separately from the shape above so a
+  // future reshaping of the quote cannot quietly take the guard with it.
+  it("leaves no \\x01 in the quote of an action — #1126", () => {
+    const quote = replyQuote(msg({ kind: "action", body: "\x01ACTION waves\x01" })) ?? "";
+    expect(quote).not.toContain("\x01");
+    expect(quote).not.toContain("ACTION");
+  });
+
+  // `stripCtcpAction` is deliberately defensive about a missing envelope (a
+  // future server-side pre-strip, or a row persisted before the wire form was
+  // stored). The action SHAPE must not depend on the envelope being there.
+  it("still uses action form when the envelope is absent — #1126", () => {
+    expect(replyQuote(msg({ kind: "action", body: "ciao mondo" }))).toBe("* vjt ciao mondo<< ");
+  });
+
+  // An envelope with nothing inside is not a quotable action: after the strip
+  // the body is empty, and `* vjt << ` is not a reply to anything.
+  it("refuses an action whose envelope is empty — #1126", () => {
+    expect(replyQuote(msg({ kind: "action", body: "\x01ACTION \x01" }))).toBeNull();
   });
 });
 

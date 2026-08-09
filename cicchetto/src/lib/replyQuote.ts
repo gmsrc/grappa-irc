@@ -1,5 +1,6 @@
 import { isContentKind, type ScrollbackMessage } from "./api";
 import { appendToCompose } from "./composeAppend";
+import { stripCtcpAction } from "./ctcpAction";
 import { mircPlainText } from "./mircFormat";
 
 // #1067 — the reply verb, shared by the left→right swipe on a message row and
@@ -22,12 +23,23 @@ export const REPLY_QUOTE_TAIL = "<< ";
 export function replyQuote(msg: ScrollbackMessage): string | null {
   if (!isContentKind(msg.kind)) return null;
   if (msg.sender === "") return null;
+  // #1126 — an action's stored body is the raw `\x01ACTION …\x01` wire form.
+  // Unwrap it FIRST, with the same helper the render layer uses, so the quote
+  // holds the text the operator actually saw. `mircPlainText` deliberately
+  // leaves \x01 alone (its call sites need the envelope to round-trip), so
+  // stripping there would have been the wrong door.
+  const raw = msg.kind === "action" ? stripCtcpAction(msg.body) : (msg.body ?? "");
   // The wire body can carry mIRC control bytes (\x02 bold, \x03 colour…). The
   // operator is quoting what they SEE, and a control byte round-tripped through
   // compose would be re-sent as formatting they never chose.
-  const body = mircPlainText(msg.body ?? "").trim();
+  const body = mircPlainText(raw).trim();
   if (body === "") return null;
-  return `<${msg.sender}> ${body}${REPLY_QUOTE_TAIL}`;
+  // #1126 — an action is NOT speech. Quoting `* vjt waves` as `<vjt> waves`
+  // puts a sentence in someone's mouth that they never said, so the quote keeps
+  // the `* nick …` form the scrollback renders. Ruled on the least-surprise
+  // tiebreak; privmsg/notice keep the `<nick> …` shape unchanged.
+  const head = msg.kind === "action" ? `* ${msg.sender}` : `<${msg.sender}>`;
+  return `${head} ${body}${REPLY_QUOTE_TAIL}`;
 }
 
 // Drop the quote into the window's compose box with the caret at the end. A
