@@ -3022,11 +3022,30 @@ defmodule Grappa.ScrollbackTest do
 
       migrated = Repo.get!(Message, row.id)
       # `channel` is the window KEY → FOLDED (`Repo.update_all` bypasses the
-      # changeset fold, #537). `dm_with` is DISPLAY → the RAW new nick.
-      # `sender` is testimony about who spoke and is NOT touched.
+      # changeset fold, #537). `dm_with` and `sender` are DISPLAY → the RAW
+      # new nick. All three name the same person — us — and the row has to
+      # stay internally consistent or it stops being recognisable as a self
+      # row (see the round-trip test below).
       assert migrated.channel == "newme"
       assert migrated.dm_with == "NewMe"
-      assert migrated.sender == "oldme"
+      assert migrated.sender == "NewMe"
+    end
+
+    # WHY `sender` moves, and the flow that proves it must. A migration whose
+    # UPDATE does not preserve the shape its predicate matches on is one-shot:
+    # it destroys the evidence it identified the row by. The round trip is not
+    # hypothetical — services enforcement parks us on a Guest nick and
+    # `GhostRecovery` renames us straight back.
+    test "a second rename follows too — the UPDATE preserves the shape the predicate matches",
+         %{user: user, network: net} do
+      {:ok, row} =
+        Scrollback.persist_event(sample(user, net, 100, %{channel: "vjt", sender: "vjt", dm_with: "vjt"}))
+
+      assert {:ok, 1} = Scrollback.rename_self_window({:user, user.id}, net.id, "vjt", "Guest12345")
+      assert {:ok, 1} = Scrollback.rename_self_window({:user, user.id}, net.id, "Guest12345", "vjt")
+
+      assert [%{id: id}] = read_dm(user, net, "vjt", "vjt")
+      assert id == row.id
     end
 
     # Guard 1 of 3, the `sender` conjunct. I was `alice`, I DM'd `carol`,

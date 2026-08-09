@@ -5830,6 +5830,14 @@ defmodule Grappa.Session.Server do
   # zero count means "no self conversation here" and we touch neither the
   # window nor the cursor — following the rename would otherwise file the
   # peer's identity under our new nick.
+  #
+  # The gate cuts the other way too, and that is accepted rather than
+  # overlooked: a GENUINE self window whose history was purged (or which was
+  # opened and never written to) also counts zero, so its tab stays at the
+  # nick we just vacated. With no rows there is no history to strand and no
+  # evidence to decide on, and the alternative — moving every window at our
+  # old nick — is the corruption above. An empty orphan tab is the cheaper
+  # of the two wrongs.
   @spec migrate_self_window(t(), String.t(), String.t()) :: :ok
   defp migrate_self_window(state, old_nick, new_nick) do
     {:ok, migrated} =
@@ -5840,23 +5848,26 @@ defmodule Grappa.Session.Server do
       # (no cursor row → `WindowCounts` counts from 0), the #373 lesson.
       :ok = ReadCursor.rename_dm_peer(state.subject, state.network_id, old_nick, new_nick)
 
-      case QueryWindows.rename(state.subject, state.network_id, old_nick, new_nick) do
-        {:ok, :renamed} ->
-          # LAST, and only when a window actually moved: the event is the
-          # truthful "rename fully applied" barrier (#373 rename-order fix).
-          :ok = QueryWindows.broadcast_windows_list(state.subject, state.subject_label)
+      {:ok, window} = QueryWindows.rename(state.subject, state.network_id, old_nick, new_nick)
 
-        {:ok, :noop} ->
-          # Rows but no window: the self window was closed and its history
-          # lives in Archive. It still had to follow, or the archive entry
-          # reads as a stranded query with our old nick.
-          :ok
+      # Broadcast LAST, and only when a window actually moved: the event is
+      # the truthful "rename fully applied" barrier (#373 rename-order fix).
+      # `:noop` is a real state — the self window can be CLOSED while its
+      # history lives in Archive. The rows still had to follow, or the
+      # archive entry reads as a stranded query bearing our old nick; but
+      # no window moved, so announcing one would be a lie.
+      if window == :renamed do
+        :ok = QueryWindows.broadcast_windows_list(state.subject, state.subject_label)
       end
 
+      # `window:` rides the line because the two outcomes are different
+      # events for an operator reading this back, and a bare "followed"
+      # would describe work the `:noop` branch did not do.
       Logger.info("self window followed our own NICK",
         old_nick: old_nick,
         new_nick: new_nick,
-        rows_migrated: migrated
+        rows_migrated: migrated,
+        window: window
       )
     end
 

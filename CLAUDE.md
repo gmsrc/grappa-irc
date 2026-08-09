@@ -173,8 +173,16 @@ Key invariants — break only with deliberate cause + DESIGN_NOTES entry:
   arm, which gates on the window). A window at our old nick is EITHER
   our self window OR a leftover query with a peer who bore that nick
   before us, and the fold-unique index makes those ONE row — only the
-  scrollback's `sender` separates them, folded to MATCH and never
-  written. #514's `rename_own_nick/4` is the sibling that moves the
+  scrollback's `sender` separates them (folded to MATCH; the fold is
+  never STORED). **On a SELF row `sender` MIGRATES** (raw new nick),
+  unlike a peer's frozen `sender`: all three columns name the same
+  person, an UPDATE that does not preserve the shape its predicate
+  matches is one-shot (`a→b→a` via GhostRecovery would strand the
+  window for good), and `Push.Triggers.own_row?/2` reads `sender` as a
+  LIVE identity test. **General rule: a DISPLAY column migrates when a
+  consumer reads it as the LIVE identity** — why #514 re-keys the
+  own-nick TAG in `channel` (#498), and why a peer's `sender` does not
+  move. #514's `rename_own_nick/4` is the sibling that moves the
   inbound-DM own-nick TAG (not a window key), disjoint by the `dm_with`
   conjunct. cic does NOT mirror the self-window rename: the
   `own_nick_changed` event carries neither the old nick nor whether the

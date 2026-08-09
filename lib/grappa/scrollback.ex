@@ -1434,29 +1434,48 @@ defmodule Grappa.Scrollback do
       it drops out on SQL three-valued logic (`lower(NULL) = 'x'` is NULL,
       which `WHERE` rejects) rather than on an explicit `not is_nil`.
 
-  Folding `sender` here is a MATCH, not a key derivation: `sender` is
-  never written by this migration, because it is testimony about who
-  spoke. `channel` is the KEY column → set FOLDED (`Repo.update_all`
-  bypasses `Message.canonicalize_channel/1`, the #537 trap);
-  `dm_with` is DISPLAY → set to the RAW `new_nick`.
+  Folding `sender` here is a MATCH, not a key derivation — the fold is
+  never STORED. `channel` is the KEY column → set FOLDED (`Repo.update_all`
+  bypasses `Message.canonicalize_channel/1`, the #537 trap); `dm_with` and
+  `sender` are DISPLAY → set to the RAW `new_nick`.
+
+  ## Why `sender` moves, unlike on a peer rename
+
+  `rename_dm_peer/4` deliberately freezes `sender`: a peer's line keeps the
+  name they spoke under, because it is testimony about somebody else. On a
+  SELF row all three columns name the SAME person — us — so freezing one of
+  them does not preserve history, it makes the row internally inconsistent,
+  and two things break on that inconsistency:
+
+    * **the UPDATE would not be closed under its own predicate.** A row
+      migrated to `b` with `sender` left at `a` is byte-identical to an
+      outbound DM to a peer named `b`, so the NEXT rename cannot recognise
+      it and the window strands for good. That round trip is routine, not
+      exotic: services enforcement parks us on a Guest nick and
+      `Session.GhostRecovery` renames us straight back. Writing all three
+      keeps the shape the predicate matches on, and cannot collide with a
+      peer row — `channel == dm_with == sender` is unreachable for any peer
+      conversation, because you cannot DM a peer bearing your own nick.
+    * **`Push.Triggers.own_row?/2` reads `sender` as a LIVE identity test**
+      (#532 C), not as a historical record — it is the first arm of
+      `should_notify?/4`, and `Push.BadgeCount` folds that same predicate
+      back over the unread tail. A stale `sender` drops the row out of
+      own-row suppression while the migrated `channel` puts it INTO the DM
+      branch, so notes we wrote to ourselves start counting as unread DMs.
+
+  The general rule this follows: a DISPLAY column must migrate when a
+  consumer reads it as the LIVE identity. That is exactly why
+  `rename_own_nick/4` re-keys the own-nick TAG in `channel` (#498 reads it
+  against the live nick) and why a peer's `sender` stays put (nothing does).
 
   ## What stays ambiguous
 
-  Two row shapes cannot be recovered, and both are the SAME ambiguity read
-  from two sides — the shape a self row takes once its `sender` no longer
-  folds to the window key:
-
-    * a self row already migrated ONCE (now `channel == dm_with == b,
-      sender == a`) is byte-identical to an outbound DM to a peer named
-      `b`, so a SECOND rename `b -> c` leaves it behind. No predicate over
-      `(channel, dm_with, sender)` can separate them; only a durable
-      self-marker written at persist time could, which is a schema change
-      and a different unit of work.
-    * a pre-CP14-B3 self row (`dm_with IS NULL`) is byte-identical to the
-      peer NOTICE the third conjunct exists to protect.
-
-  In both cases the migration declines rather than corrupting a peer's
-  history — incompleteness, never a wrong move.
+  One shape cannot be recovered: a pre-CP14-B3 self row carries
+  `dm_with IS NULL` (inbound rows predate the column) and is byte-identical
+  to the peer NOTICE the third conjunct exists to protect. The migration
+  declines rather than corrupting the peer's history — incompleteness,
+  never a wrong move. Separating them would need a durable self-marker
+  written at persist time, which is a schema change and a different unit.
 
   Returns `{:ok, count}` of migrated rows; `{:ok, 0}` on a case-only
   change (`fold(old) == fold(new)`) or an empty match.
@@ -1485,7 +1504,7 @@ defmodule Grappa.Scrollback do
             Identifier.nick_fold(m.dm_with) == ^folded_old and
             Identifier.nick_fold(m.sender) == ^folded_old
         )
-        |> Repo.update_all(set: [channel: folded_new, dm_with: new_nick])
+        |> Repo.update_all(set: [channel: folded_new, dm_with: new_nick, sender: new_nick])
 
       {:ok, count}
     end

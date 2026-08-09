@@ -35715,11 +35715,35 @@ except for `sender`. `rename_self_window/4` therefore folds three columns to
 MATCH, and each conjunct excludes a real shape sharing the other two: `sender`
 excludes the outbound DM to such a peer, `channel` excludes an inbound DM FROM
 one, `dm_with` excludes the `channel = sender, dm_with = NULL` NOTICE that
-`route_non_channel_notice_non_chanserv/3` leaves in an open query. Folding
-`sender` is a MATCH, never a write: it is testimony about who spoke, and the
-migration sets only `channel` (folded, the KEY) and `dm_with` (raw, DISPLAY).
-The predicate is disjoint from `#514`'s by the `dm_with` conjunct (`!=` there,
-`==` here), so no row moves twice.
+`route_non_channel_notice_non_chanserv/3` leaves in an open query. The fold is
+a MATCH and is never STORED. The predicate is disjoint from `#514`'s by the
+`dm_with` conjunct (`!=` there, `==` here), so no row moves twice.
+
+**`sender` moves, and the first version of this was wrong not to move it.**
+The migration was written to set `channel` and `dm_with` only, on the rule that
+`sender` is testimony about who spoke — the rule `rename_dm_peer/4` correctly
+applies to a PEER's lines. Review killed it on a flow that is routine here:
+services enforcement parks us on a Guest nick and `Session.GhostRecovery`
+renames us straight back, and with `sender` left behind the round trip
+`a -> b -> a` ended with the scratchpad stranded at `b` FOR GOOD — worse than
+`origin/main`, which moved nothing and healed. The defect is general: **an
+UPDATE that does not preserve the shape its own predicate matches on is
+one-shot, because it destroys the evidence it identified the row by.** On a
+self row all three columns name the same person, so freezing one does not
+preserve history, it makes the row internally inconsistent — and a second
+consumer was reading that inconsistency: `Push.Triggers.own_row?/2` (#532 C)
+compares `sender` to the LIVE nick as the first arm of `should_notify?/4`, and
+`Push.BadgeCount` folds that predicate back over the unread tail. Stale
+`sender` + migrated `channel` = own notes counting as unread DMs. Writing all
+three cannot collide with a peer row: `channel == dm_with == sender` is
+unreachable for any peer conversation, because you cannot DM a peer bearing
+your own nick.
+
+The rule to carry forward, which also explains the apparent inconsistency with
+`rename_dm_peer/4`: **a DISPLAY column must migrate when a consumer reads it as
+the LIVE identity.** `#514` re-keys the own-nick TAG in `channel` for exactly
+that reason (#498 reads it against the live nick); a peer's `sender` stays put
+because nothing does.
 
 **The gate is inverted relative to #373, and that is the design.** The peer arm
 gates on `QueryWindows.rename/4`: there the window row alone identifies what is
@@ -35733,20 +35757,21 @@ touch nothing, rather than dragging a peer's identity to our new name.
 whose history lives in Archive still has to follow, or the archive entry reads
 as a stranded query bearing our old nick.
 
-**What it declines, and why no predicate can do better.** Once a self row has
-migrated once it is `channel == dm_with == b, sender == a`, which is byte-
-identical to an outbound DM to a peer named `b`. A second rename `b -> c`
-therefore leaves it behind. The same collision closes the other end: a
-pre-CP14-B3 self row carries `dm_with IS NULL` and is byte-identical to the peer
-NOTICE the third conjunct exists to protect. Both are the SAME ambiguity — a
-self row whose `sender` no longer folds to its own window key — and no predicate
-over `(channel, dm_with, sender)` can resolve it. Only a durable self-marker
-written at persist time could, and the backfill for it is available today
-(`fold(channel) == fold(dm_with) == fold(sender)` identifies every un-migrated
-self row exactly). That is a schema change, a read-path change, and a rework of
-archive grouping and `delete_for_dm/3`; it is deliberately not this unit. The
-migration declines rather than corrupting a peer's history: incompleteness,
-never a wrong move.
+The gate cuts the other way too, and that is accepted rather than overlooked: a
+GENUINE self window whose history was purged, or which was opened and never
+written to, also counts zero, so its tab stays at the nick we just vacated.
+With no rows there is nothing to strand and no evidence to decide on, and the
+alternative is the corruption above. An empty orphan tab is the cheaper wrong.
+
+**What it declines.** One shape stays unrecoverable: a pre-CP14-B3 self row
+carries `dm_with IS NULL` (inbound rows predate the column) and is
+byte-identical to the peer NOTICE the third conjunct exists to protect. Only a
+durable self-marker written at persist time could separate them, and its
+backfill predicate is already known — `fold(channel) == fold(dm_with) ==
+fold(sender)` identifies every self row exactly. That is a schema change, a
+read-path change, and a rework of archive grouping and `delete_for_dm/3`; it is
+deliberately not this unit. The migration declines rather than corrupting the
+peer's history: incompleteness, never a wrong move.
 
 **The client half needs a wire signal, so it is not here.** cic's caches are
 keyed by the own nick exactly like any query window (`channelKey(slug, ownNick)`
