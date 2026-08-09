@@ -35985,6 +35985,7 @@ null", not "absent".
 `protocol_version` bump, and a client that ignores it is unaffected.
 
 _Deploy: **HOT** — server logic + `--cic`. No migration._
+
 ## 2026-08-09 — a NICK with a blank parameter is not a rename
 
 `NICK` with no parameter has always fallen through `EventRouter`'s catch-all
