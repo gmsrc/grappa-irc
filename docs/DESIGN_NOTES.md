@@ -35054,6 +35054,7 @@ spelled the boot verbs out with flags, advertising an `--host`/`--port` pair
 `bind-network`'s required `--server`. An operator following the runbook hit
 exactly the #1086 crash. Rather than gate a third surface, the copy is deleted:
 the runbook now lists the verb names and points at `--help`.
+
 ## 2026-08-09 — #448: a faithful mirror of a too-wide type propagates the hole
 
 Four wire fields modelled a closed set and were typed `String.t()` or a bare
