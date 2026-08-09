@@ -25,10 +25,11 @@
 //      the channel would read `joined: false`, and the credential stayed
 //      `:connected` while the pid was gone — the desync).
 //
-// The user-detach test uses a FRESH vjt bearer (grappaApi.login), NOT the
-// shared seeded token, so revoking it on detach can't 401 downstream vjt
-// specs. The afterEach reconnects vjt's network defensively (a pre-#126
-// RED run of this spec would tear the seeded session down).
+// The user-detach test mints a SECOND bearer for this spec's own subject
+// (grappaApi.login), NOT the one the fixture handed it, so revoking it on
+// detach still leaves the test a live token to probe with. The afterEach
+// reconnects the subject's network defensively (a pre-#126 RED run of
+// this spec would tear its session down).
 
 import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import {
@@ -38,31 +39,29 @@ import {
   patchNetworkConnectionState,
   reapVisitors,
 } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  NETWORK_SLUG,
-  VJT_IDENTIFIER,
-  VJT_PASSWORD,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
-// Build a loginAs-shaped seed from a FRESH user login (own bearer +
-// subject), so detach revokes only this token — not the shared seeded
-// one every other vjt spec rides on.
-async function freshVjtSeed(): Promise<{
+// Build a loginAs-shaped seed from a FRESH login of THIS spec's subject
+// (own bearer + subject), so detach revokes only this token and not the
+// one the fixture minted at provision time — the test asserts the
+// session outlives a revoked bearer, so it needs a second, disposable
+// one.
+async function freshSubjectSeed(): Promise<{
   name: string;
   password: string;
   identifier: string;
   token: string;
   subjectJson: string;
 }> {
-  const { token, subject } = await login(specUser().identifier, specUser().password);
+  const spec = specUser();
+  const { token, subject } = await login(spec.identifier, spec.password);
   return {
     name: subject.name,
-    password: VJT_PASSWORD,
-    identifier: VJT_IDENTIFIER,
+    password: spec.password,
+    identifier: spec.identifier,
     token,
     subjectJson: JSON.stringify(subject),
   };
@@ -79,20 +78,20 @@ async function channelJoined(token: string, slug: string, channel: string): Prom
 
 test.describe("issue #126 — detach lifecycle", () => {
   test.afterEach(async () => {
-    // A pre-#126 (RED) run of the user-detach test tears the seeded vjt
-    // Session.Server down (stop_all_user_sessions). Reconnect defensively
-    // so the next spec inherits a live autojoin. Post-#126 detach keeps
-    // the session, so this is a no-op (already connected → :not_connected,
-    // swallowed).
-    const vjt = specUser();
-    await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
+    // A pre-#126 (RED) run of the user-detach test tears this spec
+    // subject's Session.Server down (stop_all_user_sessions). Reconnect
+    // defensively so the rest of THIS test's body still has a live
+    // autojoin. Post-#126 detach keeps the session, so this is a no-op
+    // (already connected → :not_connected, swallowed).
+    const subject = specUser();
+    await patchNetworkConnectionState(subject.token, NETWORK_SLUG, {
       connection_state: "connected",
     }).catch(() => {});
 
     // Wait for the autojoin to land again so the next spec doesn't race a
     // half-spawned session (same pattern as cp15-b6-parked-disconnect).
     for (let attempt = 0; attempt < 60; attempt++) {
-      if (await channelJoined(vjt.token, NETWORK_SLUG, SEED_CHANNEL)) return;
+      if (await channelJoined(subject.token, NETWORK_SLUG, SEED_CHANNEL)) return;
       await new Promise((r) => setTimeout(r, 500));
     }
   });
@@ -157,12 +156,12 @@ test.describe("issue #126 — detach lifecycle", () => {
   });
 
   test("user detach keeps the upstream session up (bug #1 + #2)", async ({ page }) => {
-    const vjt = await freshVjtSeed();
+    const seed = await freshSubjectSeed();
 
     // Baseline: the autojoin channel is live server-side.
-    expect(await channelJoined(vjt.token, NETWORK_SLUG, SEED_CHANNEL)).toBe(true);
+    expect(await channelJoined(seed.token, NETWORK_SLUG, SEED_CHANNEL)).toBe(true);
 
-    await loginAs(page, vjt);
+    await loginAs(page, seed);
 
     // Detach via the rail — #986 put a confirm modal in front of the verb,
     // so the affirmative is what actually fires it. The web session then
@@ -177,7 +176,7 @@ test.describe("issue #126 — detach lifecycle", () => {
     // the autojoin channel is still joined server-side (a SEPARATE fresh
     // bearer proves it without depending on the just-revoked token).
     // Pre-#126 detach tore the session down → this would read false.
-    const probe = await freshVjtSeed();
+    const probe = await freshSubjectSeed();
     let stillJoined = false;
     for (let attempt = 0; attempt < 10; attempt++) {
       stillJoined = await channelJoined(probe.token, NETWORK_SLUG, SEED_CHANNEL);

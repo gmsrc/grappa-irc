@@ -22,9 +22,9 @@
 // Sibling coverage: `compose.test.ts` ("compose draft persistence across a
 // reload (#772)") pins the store rules, including that history does NOT cross.
 
-import { expect, test } from "@playwright/test";
 import { composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // The seeder autojoins exactly one channel; `?? ""` satisfies
 // noUncheckedIndexedAccess without inventing a fallback that could pass.
@@ -32,9 +32,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0] ?? "";
 
 test.describe("#772 compose drafts survive a reload", () => {
   test("an unsent draft is still in the textarea after a real reload", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Marker so a stale buffer from another spec cannot green this.
     const draft = `half-written thought ${Date.now()}`;
@@ -45,7 +45,7 @@ test.describe("#772 compose drafts survive a reload", () => {
     // A real reload — same tab, same origin, exactly what the #674 refresh
     // button and a manual F5 both do.
     await page.reload();
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // The point of the issue: the operator gets their sentence back, with no
     // "restored" affordance to dismiss — it just looks like nothing happened.
@@ -53,9 +53,9 @@ test.describe("#772 compose drafts survive a reload", () => {
   });
 
   test("a SENT message does not come back on reload", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     const composer = composeTextarea(page);
     const body = `issue772 sent ${Date.now()}`;
@@ -75,7 +75,7 @@ test.describe("#772 compose drafts survive a reload", () => {
     await expect(scrollbackLine(page, "privmsg", body)).toBeVisible();
 
     await page.reload();
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Persisting a snapshot of the live store means the clear travels too. If
     // it did not, the operator would find a sent line staged to send again.
@@ -85,9 +85,9 @@ test.describe("#772 compose drafts survive a reload", () => {
   test("a draft stays in its own channel — the server window does not inherit it", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     const draft = `channel-scoped ${Date.now()}`;
     await composeTextarea(page).fill(draft);
@@ -100,7 +100,7 @@ test.describe("#772 compose drafts survive a reload", () => {
     await expect(composeTextarea(page)).toHaveValue("");
 
     // …and the channel that owns the draft still has it.
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(composeTextarea(page)).toHaveValue(draft, { timeout: 10_000 });
   });
 });

@@ -18,9 +18,10 @@
 // short-viewport cases stand in for the mobile "keyboard up → --viewport-height
 // shrinks" scenario without the mobile drawer's opener complexity.
 
-import { expect, type Page, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -70,9 +71,8 @@ async function menuGeometry(page: Page) {
 }
 
 async function seedChannel(page: Page): Promise<void> {
-  const vjt = getSeededVjt();
-  await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await loginAs(page, specUser());
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   // Own nick is always in NAMES after autojoin → at least one member row.
   await expect(page.locator(".members-pane .member-name").first()).toBeVisible({ timeout: 5_000 });
 }
