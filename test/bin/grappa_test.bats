@@ -133,6 +133,72 @@ EOF
     [ "$status" -eq 64 ]
 }
 
+# --- #1086: --help / -h as a FLAG, not just a verb -------------------------
+#
+# The dispatcher used to know help only as a verb (`bin/grappa help <verb>`).
+# A `--help` AFTER a verb was passed through as an ordinary argument: boot
+# verbs handed it to a mix task that parses `strict:`, which discarded it
+# silently and then blew up on the first required option with a raw KeyError
+# traceback. These assert the flag form reaches the SAME per-verb help path
+# the verb form already used, for every kind of verb, and that the verb's
+# real work never runs.
+
+@test "#1086 <boot-verb> --help routes to per-verb help, not to the task" {
+    run "$BIN_GRAPPA" bind-network --help
+    [ "$status" -eq 0 ]
+    grep -q 'mix.sh --env=dev help grappa.bind_network' "$ARGV_LOG"
+    # The task itself must never be invoked — that is the crash path.
+    refute grep -q 'mix.sh grappa.bind_network' "$ARGV_LOG"
+}
+
+@test "#1086 <boot-verb> -h routes to per-verb help" {
+    run "$BIN_GRAPPA" bind-network -h
+    [ "$status" -eq 0 ]
+    grep -q 'mix.sh --env=dev help grappa.bind_network' "$ARGV_LOG"
+    refute grep -q 'mix.sh grappa.bind_network' "$ARGV_LOG"
+}
+
+@test "#1086 --help is honoured after other arguments, not only first" {
+    run "$BIN_GRAPPA" bind-network --user vjt --network azzurra --help
+    [ "$status" -eq 0 ]
+    grep -q 'mix.sh --env=dev help grappa.bind_network' "$ARGV_LOG"
+    refute grep -q 'mix.sh grappa.bind_network' "$ARGV_LOG"
+}
+
+@test "#1086 <rpc-verb> --help prints inline help without touching docker" {
+    run "$BIN_GRAPPA" list-sessions --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"list-sessions"* ]]
+    [[ "$output" == *"SessionRegistry"* ]]
+    [ ! -s "$ARGV_LOG" ]
+}
+
+@test "#1086 <arg-taking verb> --help prints inline help instead of erroring" {
+    run "$BIN_GRAPPA" delete-visitor --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"uuid"* ]]
+    [ ! -s "$ARGV_LOG" ]
+}
+
+@test "#1086 <debug-verb> --help prints inline help without touching docker" {
+    run "$BIN_GRAPPA" shell --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"shell"* ]]
+    [ ! -s "$ARGV_LOG" ]
+}
+
+@test "#1086 bare --help prints the top banner and exits 0" {
+    run "$BIN_GRAPPA" --help
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Boot-time"* ]]
+    [[ "$output" == *"bind-network"* ]]
+}
+
+@test "#1086 --help on an unknown verb still exits 64" {
+    run "$BIN_GRAPPA" frobnicate --help
+    [ "$status" -eq 64 ]
+}
+
 # --- debug verbs ----------------------------------------------------------
 
 @test "shell invokes docker compose exec grappa bash" {

@@ -117,6 +117,31 @@ verb_field() {
 # Kebab → snake conversion. Pure mechanical — no per-verb hardcoding.
 kebab_to_snake() { tr '-' '_' <<<"$1"; }
 
+# #1086 — true when `--help` or `-h` appears anywhere in the argument
+# list. Neither layer used to claim the flag: this dispatcher knew help
+# only as a VERB (`bin/grappa help <verb>`), and the boot tasks parse
+# `strict:`, which drops an unrecognised switch silently and then dies on
+# the first required option with a raw KeyError traceback. Worse, the
+# rpc and debug verbs took the flag for a positional argument — a live
+# `delete-visitor --help` used to RPC `delete_visitor!("--help")` at the
+# running BEAM. Claiming it here is one rule for all verbs, including the
+# ones that never reach a mix task.
+#
+# Scanned anywhere rather than in first position only, because
+# `bin/grappa bind-network --user vjt --help` is how an operator asks
+# once they are already mid-command. The cost is that an option VALUE
+# spelled exactly `--help` reads as a help request; no switch on any
+# verb takes a value that could plausibly be spelled that way.
+wants_help() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            -h | --help) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # --- helpers --------------------------------------------------------------
 
 mix_task() {
@@ -473,6 +498,17 @@ dispatch_help() {
 dispatch() {
     if [ $# -eq 0 ]; then
         help_top
+        exit 0
+    fi
+    # #1086 — the flag form of help, routed to the SAME per-verb path the
+    # verb form uses. A bare `--help` with no verb is the top banner;
+    # anything else is the first argument's help. `dispatch_help` gates
+    # the verb, so an unknown one still exits 64.
+    if wants_help "$@"; then
+        case "$1" in
+            -h | --help) help_top ;;
+            *) dispatch_help "$1" ;;
+        esac
         exit 0
     fi
     local verb=$1
