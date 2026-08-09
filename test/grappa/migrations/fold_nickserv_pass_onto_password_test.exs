@@ -3,38 +3,34 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
   GH #124 — the expand-phase fold migration
   (`20260807120000_fold_nickserv_pass_onto_password`).
 
-  #509's `nickserv_pass_encrypted` held LIVE secrets and WON the old
-  precedence, so collapsing the read path onto `password_encrypted` without
-  moving those values would break exactly the operators who used the perform
-  field — silently, at the next reconnect, as a non-`+r` rather than an error.
+  ## What used to be here, and why it is gone (#1044)
 
-  Seeds the three real row shapes the fold meets in production and proves none
-  of them gets worse:
+  This file used to seed the three real row shapes the fold meets in
+  production and prove that none of them got worse — a behaviour suite that
+  replayed the fold's own SQL against the live test schema.
 
-    * perform-held secret on an `auth_method: :none` row — the #509 decoupled
-      shape. Folds, AND promotes to `:nickserv_identify`, else the fold would
-      disarm a working identify.
-    * no perform-held secret — untouched, both at `:none` and at
-      `:nickserv_identify` with a password of its own (the already-correct row).
-    * BOTH set — the perform secret OVERWRITES the password, because it is what
-      upstream was actually being identified with under the old precedence.
+  #1044 DROPPED `nickserv_pass_encrypted`
+  (`20260810120000_swap_nickserv_pass_slot_for_server_pass`). The test schema
+  is built by running every migration in order, so by the time a test runs,
+  the column the fold reads does not exist and the replay cannot be issued at
+  all. The behaviour tests were deleted rather than adapted: there is no
+  schema this suite can build on which that SQL is executable, and a rewrite
+  onto a stand-in table would be asserting against a table the migration never
+  touches.
 
-  Also pins the thing a byte-level BLOB copy has to earn: that the copied
-  ciphertext still DECRYPTS to the original plaintext through
-  `Credential.upstream_password/1`. That is the whole reason the migration may
-  skip the Vault.
+  The migration itself is untouched and still correct: on an upgrading
+  database it runs BEFORE the drop, in migration order, exactly as it always
+  did. What is lost is the witness, not the behaviour — say so out loud rather
+  than let the deletion read as "this stopped mattering".
 
-  The SQL is duplicated here (migrations stay self-contained per repo
-  convention — see `CollapseNickReadCursorsTest`), and a pin test asserts the
-  migration file embeds these exact statements, so the duplication cannot drift
-  into testing a copy the migration no longer runs.
+  ## What survives
+
+  The source pin below. It is a text assertion, so it keeps working after the
+  drop, and it still earns its place: the migration is frozen history now, and
+  the pin fails loudly if anyone edits the statements a shipped database has
+  already run.
   """
-  use Grappa.DataCase, async: true
-
-  import Grappa.AuthFixtures
-
-  alias Grappa.{EncryptedBinary, Repo}
-  alias Grappa.Networks.Credential
+  use ExUnit.Case, async: true
 
   @migration_path "priv/repo/migrations/20260807120000_fold_nickserv_pass_onto_password.exs"
 
@@ -52,172 +48,15 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
      AND auth_method = 'none'
   """
 
-  defp uniq, do: System.unique_integer([:positive])
-
-  defp seed(attrs) do
-    user = user_fixture(name: "vjt-#{uniq()}")
-    {network, _} = network_with_server(port: 6667, slug: "azzurra-#{uniq()}")
-    credential_fixture(user, network, attrs)
-  end
-
-  # The #509 write path is GONE (#124 removed the virtual + its changeset cast),
-  # so a pre-#124 row can only be staged by writing the ciphertext directly —
-  # which is also the honest reproduction of what is sitting in prod today.
-  defp seed_perform_secret(%Credential{} = cred, plaintext) do
-    {:ok, blob} = EncryptedBinary.dump(plaintext)
-
-    Repo.query!(
-      "UPDATE network_credentials SET nickserv_pass_encrypted = ? WHERE id = ?",
-      [blob, cred.id]
-    )
-
-    cred
-  end
-
-  # Read through raw SQL, like `seed_perform_secret/2` writes it: #124 removed
-  # the schema field, so the column is only reachable this way.
-  defp perform_secret_still_stored?(%Credential{id: id}) do
-    %{rows: [[blob]]} =
-      Repo.query!("SELECT nickserv_pass_encrypted FROM network_credentials WHERE id = ?", [id])
-
-    blob != nil
-  end
-
-  # #1028 — FOLD first, then promote. Both statements now match on
-  # `auth_method = 'none'`, so promoting first would consume the fold's own
-  # WHERE match and the copy would reach nothing. Mirrors `up/0`'s order, which
-  # is the whole point of duplicating the SQL here.
-  defp run_migration do
-    Repo.query!(@fold_sql)
-    Repo.query!(@promote_sql)
-  end
-
-  defp reload(%Credential{id: id}), do: Repo.get!(Credential, id)
-
-  describe "the fold (#124 expand phase)" do
-    test "a perform-held secret on an :none row folds onto the password AND promotes" do
-      cred =
-        %{auth_method: :none, password: nil}
-        |> seed()
-        |> seed_perform_secret("perform-secret")
-
-      run_migration()
-
-      folded = reload(cred)
-
-      # Decrypts: the BLOB copy really did survive as the same plaintext, which
-      # is what lets the migration skip the Vault entirely.
-      assert Credential.upstream_password(folded) == "perform-secret"
-      assert folded.auth_method == :nickserv_identify
-
-      # And the collapsed read path now resolves it — the end-to-end point of
-      # the fold, asserted through production code rather than the column.
-      assert Credential.recover_secret(folded) == "perform-secret"
-    end
-
-    # GH #1028 — this test used to assert "winner", i.e. that the fold reached
-    # an ALREADY-`:nickserv_identify` row. The guard is now `auth_method =
-    # 'none'`, so it does not, and the assertion is inverted to say what the
-    # migration actually does. It is pinned rather than deleted BECAUSE the
-    # outcome is a known gap, and a gap nobody can see is a gap nobody fixes.
-    test "an already-:nickserv_identify row is NOT folded — the #1028 gap, pinned on purpose" do
-      cred =
-        %{auth_method: :nickserv_identify, password: "loser"}
-        |> seed()
-        |> seed_perform_secret("winner")
-
-      run_migration()
-
-      folded = reload(cred)
-
-      # The perform secret stays where it was. Under the old precedence
-      # "winner" is what upstream is REALLY being identified with, but post-#124
-      # nothing reads `nickserv_pass_encrypted` any more, so the identify falls
-      # back to the password below and dies as a silent non-`+r`.
-      assert Credential.recover_secret(folded) == "loser"
-
-      # Not destroyed, only not-yet-moved: the column is EXPAND-only and still
-      # holds the secret, which is why this row stays repairable by whatever
-      # vjt decides — unlike a folded :server_pass row, which does not.
-      assert perform_secret_still_stored?(cred)
-    end
-
-    test "a row with no perform-held secret is untouched (the already-correct shape)" do
-      cred = seed(%{auth_method: :nickserv_identify, password: "mine"})
-
-      run_migration()
-
-      folded = reload(cred)
-      assert Credential.upstream_password(folded) == "mine"
-      assert folded.auth_method == :nickserv_identify
-    end
-
-    test "an :none row with no perform-held secret is NOT promoted" do
-      cred = seed(%{auth_method: :none, password: nil})
-
-      run_migration()
-
-      folded = reload(cred)
-      assert folded.auth_method == :none
-      assert Credential.recover_secret(folded) == nil
-    end
-
-    # GH #1028 — the three methods that SPEND `password_encrypted` on the wire.
-    # `:server_pass` and `:auto` ship it as the single PASS token
-    # (`AuthFSM.maybe_send_pass/1`, `when m in [:auto, :server_pass]`); `:auto`
-    # and `:sasl` also spend it as the SASL PLAIN payload. On none of the three
-    # is it the NickServ secret, so folding the perform secret onto it does not
-    # preserve an effective secret — it DESTROYS a live one, and `down/0`
-    # cannot put it back.
-    #
-    # Generated rather than written three times: the claim is about a CLOSED
-    # SET (`Credential.auth_methods/0` minus the two the fold is for), and a
-    # fourth method added later must be a deliberate decision, not an omission.
-    for method <- [:server_pass, :sasl, :auto] do
-      test "#{method}: the fold leaves the password alone — it is spent on the wire, not on NickServ" do
-        cred =
-          %{auth_method: unquote(method), password: "wire-side"}
-          |> seed()
-          |> seed_perform_secret("ns-side")
-
-        run_migration()
-
-        folded = reload(cred)
-        # Not promoted: rewriting the method would change what the password is
-        # SPENT ON. This half was always true.
-        assert folded.auth_method == unquote(method)
-        # Not folded either — the #1028 half. Before the guard this read
-        # "ns-side", and the row's upstream handshake died with
-        # `Closing Link: wrong password`.
-        assert Credential.upstream_password(folded) == "wire-side"
-      end
-    end
-
-    test "re-running the fold changes nothing (idempotent)" do
-      cred =
-        %{auth_method: :none, password: nil}
-        |> seed()
-        |> seed_perform_secret("perform-secret")
-
-      run_migration()
-      once = reload(cred)
-      run_migration()
-      twice = reload(cred)
-
-      assert Credential.upstream_password(twice) == Credential.upstream_password(once)
-      assert twice.auth_method == once.auth_method
-    end
-  end
-
   describe "migration-file pin" do
-    # The SQL above is a COPY (repo convention: migrations stay self-contained).
-    # Without this pin the copy could drift and the suite would go on proving a
-    # fold the migration no longer performs.
+    # A migration that has already run on a production database must never be
+    # edited: the edit would not re-run, so the file would stop describing what
+    # the schema actually went through. That risk OUTLIVES the column.
     #
     # Compared with whitespace runs collapsed, NOT byte-for-byte: the migration
     # indents its heredoc bodies to sit inside `execute(...)`, so a literal
     # comparison would pin the indentation rather than the statement. Every
-    # part that decides what the fold DOES — the table, the SET, the WHERE
+    # part that decides what the fold DID — the table, the SET, the WHERE
     # guards — still has to match exactly.
     test "the migration file embeds both statements" do
       source = squash(File.read!(Path.join(File.cwd!(), @migration_path)))
