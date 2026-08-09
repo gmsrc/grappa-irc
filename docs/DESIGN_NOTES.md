@@ -36109,3 +36109,61 @@ The mismatch is a static property of the call site, so the canary still fires
 the first time that site actually spawns; recovering it on the no-op path would
 mean exporting a validate-only verb from `Admission` purely to keep a detector
 warm, which is more surface than the detector is worth.
+---
+
+## 2026-08-09 — #425: the locale is a property of the machine until a service definition says otherwise
+
+**The defect is latent and the framing has to stay that way.** The BEAM decides
+`native_name_encoding` from the locale it inherits at boot; without a UTF-8 one
+it comes up latin1 and Elixir says so on stderr. That setting governs FILENAME
+handling, which is not academic here — uploads carry user-supplied names.
+Production answers `:file.native_name_encoding() #=> :utf8` today, and the
+reason is that the jail's ambient locale happens to be `C.UTF-8`, not that
+anything pins it. This unit removes an unpinned dependency; it does not repair a
+running defect, and a PR that claimed otherwise would be selling an incident
+that never happened.
+
+**`LANG=C.UTF-8` over `ELIXIR_ERL_OPTIONS="+fnu"`.** The issue offers both and
+taking both would be two mechanisms for one property — redundancy that diverges
+the first time someone edits one of them. `LANG=C.UTF-8` was already the
+repo's spelling in two places before this unit: #419's packaged systemd unit,
+and `Dockerfile.release` (twice, builder and runtime). A third spelling for the
+same property would have been the bug of some later afternoon. It is also the
+wider fix: `+fnu` sets the VM's own filename encoding and nothing else, while
+the environment variable reaches the ports the release spawns — `exiftool` and
+`ffmpeg` for `Grappa.Uploads.MetadataStrip` — and is honored by construction
+rather than by whatever the release boot script forwards.
+
+**What each substrate needed.** systemd starts a unit with no locale at all, so
+`Environment=LANG=C.UTF-8` is the whole fix. FreeBSD's rc.d wrapper runs the
+release through `su -m`, which KEEPS the invoking environment: the locale there
+is root's, whatever rc(8) had. The export therefore goes inside `grappa_runas`'
+`su -c` string next to `RELEASE_TMP` and the `PATH` prepend — the same place,
+for the same reason, as the 2026-06-10 PATH gap. **Declared limit:** an
+`LC_ALL`/`LC_CTYPE` inherited from root still outranks `LANG`. This pins the
+default; it does not fight an override, and pinning `LC_ALL` to win that fight
+would take the choice away from an operator who set it deliberately.
+
+**The guard is dynamic in the set and static in the census.** A pin nobody
+guards is a pin the next unit gets written without, so
+`test/infra/service_locale_pin_test.bats` discovers the tracked service
+definitions (`*.service`, `*/rc.d/*`) filtered to those that actually launch
+`bin/grappa` — a fourth substrate is held to the rule without anyone
+remembering this file, and the `bin/grappa` filter keeps non-BEAM units (the
+#665 certbot oneshot) out. The first case then asserts the three current paths
+verbatim, because a discovery that silently returned nothing would make every
+other case pass vacuously.
+
+**Attribution was worth a second shape.** The first version asserted the
+absolute violation set against a sandbox copied from production, so removing
+one shipped pin turned four cases red, including cases about other substrates.
+The sensitivity cases now assert the DELTA against the pristine sandbox and
+each mutation asserts its pre-state first. Measured on all three: dropping a
+pin now kills the tree-wide case plus only the cases whose subject is that
+file.
+
+**Not verified here, and deliberately not.** That the modified unit really
+boots the BEAM in utf8 is provable only on a host, and no worker touches m42 or
+production. What is proven is the content of the definitions, the guard's
+sensitivity, and the spelling's agreement with the two doors that already had
+it.
