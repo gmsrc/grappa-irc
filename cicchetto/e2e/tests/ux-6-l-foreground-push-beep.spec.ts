@@ -28,6 +28,7 @@ import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarWindow, waitForDmListenerReady } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
+import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const PEER_NICK_DM = "ux6l-dmer";
@@ -51,16 +52,7 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
   // Surface browser console + any uncaught errors — the DM-listener
   // race manifests as "DM persisted server-side, cic never received
   // broadcast"; chasing that without console output is masochism.
-  page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warn") {
-      // eslint-disable-next-line no-console
-      console.log(`[cic:${msg.type()}] ${msg.text()}`);
-    }
-  });
-  page.on("pageerror", (err) => {
-    // eslint-disable-next-line no-console
-    console.log(`[cic:pageerror] ${err.message}`);
-  });
+  forwardPageDiagnostics(page);
   await loginAs(page, vjt);
   // Stay focused on #bofh — peer DM lands in a NEW window we're NOT
   // looking at, so beep MUST fire (same focus-rule as the mention

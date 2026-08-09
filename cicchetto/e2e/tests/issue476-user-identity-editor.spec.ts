@@ -121,7 +121,7 @@ async function waitForOwnNickInMembers(
   attempts = 60,
 ): Promise<void> {
   for (let i = 0; i < attempts; i++) {
-    const members = await fetchMembers(token, slug, channel).catch(() => []);
+    const members = await fetchMembers(token, slug, channel).catch((): string[] => []);
     if (members.includes(ownNick)) return;
     await new Promise((r) => setTimeout(r, 500));
   }

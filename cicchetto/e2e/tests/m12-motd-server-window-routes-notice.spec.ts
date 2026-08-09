@@ -24,11 +24,7 @@
 //     (CP13 S9 — slash-only enforced inside compose.ts).
 
 import { test, expect } from "../fixtures/test";
-import {
-  composeTextarea,
-  loginAs,
-  scrollbackLine,
-} from "../fixtures/cicchettoPage";
+import { composeTextarea, loginAs } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -102,7 +98,11 @@ test("M12 — MOTD persists into $server channel + cicchetto Server window rende
   // (audit 2026-05-26): pin kind=notice so a regression that routes
   // MOTD as e.g. :privmsg or drops the row entirely still fails the
   // spec, even if other unrelated $server traffic is present.
-  const motdRow = scrollbackLine(page, "notice");
+  // Kind-only: any :notice row will do, so this is the bare locator rather
+  // than `scrollbackLine`, which also takes a body match (it was being called
+  // with the body argument missing — Playwright read the resulting
+  // `hasText: undefined` as "no filter", so the intent survived by accident).
+  const motdRow = page.locator('[data-testid="scrollback-line"][data-kind="notice"]');
   await expect(motdRow.first()).toBeVisible({ timeout: 5_000 });
 
   // CP13 S9: ComposeBox now renders on the Server window — slash-only

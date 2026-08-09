@@ -79,8 +79,20 @@ test("sustained inbound flood 429s then severs the web session; a second subject
   // Flood the metered REST write door with the vjt bearer, wave-batched so
   // the browser's per-origin connection cap doesn't stretch the burst into
   // refill territory. Capture every status + the FIRST 429's parsed body.
+  // The return type is spelled out because `throttleBody` is only ever
+  // assigned from inside `one()`: without it TS narrows the binding to its
+  // `null` initializer and types every `result.throttleBody?.…` read below as
+  // `never` — the assertions would still run, but against a type that says the
+  // 429 envelope cannot exist.
   const result = await page.evaluate(
-    async ({ url, total, wave }) => {
+    async ({
+      url,
+      total,
+      wave,
+    }): Promise<{
+      statuses: number[];
+      throttleBody: { error?: string; retry_after_ms?: number } | null;
+    }> => {
       const token = localStorage.getItem("grappa-token");
       const statuses: number[] = [];
       let throttleBody: { error?: string; retry_after_ms?: number } | null = null;

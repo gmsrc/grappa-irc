@@ -218,16 +218,3 @@ test("#498 — a mention of the LIVE (renamed) nick lifts the server badge on co
     await peer.disconnect("i498 done");
   }
 });
-
-declare global {
-  interface Window {
-    __cic_dropSocketForTests?: () => Promise<void>;
-    __cic_socketHealth?: {
-      recordOpen: () => void;
-      recordError: () => void;
-      recordClose: (e: { code: number; reason: string } | undefined) => void;
-      reset: () => void;
-      state: () => { state: "connecting" | "open" | "error" };
-    };
-  }
-}

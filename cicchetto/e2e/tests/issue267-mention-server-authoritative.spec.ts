@@ -203,13 +203,3 @@ test("#267 — mention on an unfocused channel fans out from the server to both 
     await ctxB.close();
   }
 });
-
-declare global {
-  interface Window {
-    __cic_dropSocketForTests?: () => Promise<void>;
-    __cic_resumeSocketForTests?: () => Promise<void>;
-    __cic_socketHealth?: {
-      state: () => { state: string };
-    };
-  }
-}

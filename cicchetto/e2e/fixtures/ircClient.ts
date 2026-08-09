@@ -14,7 +14,7 @@
 // `disconnect` tears it down. Pair `try/finally` in the spec to keep
 // peer leaks out of the runner between tests.
 
-import { Client } from "irc-framework";
+import { Client, type IrcEventMap, type IrcEventName } from "irc-framework";
 import { awaitPrivmsg } from "./privmsgWait";
 
 const HOST = process.env.E2E_IRC_HOST ?? "bahamut-test";
@@ -101,12 +101,7 @@ export class IrcPeer {
       });
     }
 
-    const registered = once<{ nick: string }>(
-      client,
-      "registered",
-      REGISTER_TIMEOUT_MS,
-      `register ${opts.nick}`,
-    );
+    const registered = once(client, "registered", REGISTER_TIMEOUT_MS, `register ${opts.nick}`);
 
     // Ghost/collision hardening (#604). If the requested nick is already held —
     // a residual ghost from a prior run, or a live collision under bahamut's
@@ -556,18 +551,23 @@ export class IrcPeer {
 // attached for the life of the peer: harmless-looking, but `waitForLine`'s
 // runs a regex over every wire line thereafter, and the next helper written
 // in this shape inherits it.
-function once<T = unknown>(
+// Both waits are keyed by the event NAME, not by a caller-supplied payload
+// type: `IrcEventName` is closed, so a listener on an event irc-framework never
+// emits no longer compiles (the `rpl_youreoper` trap this file documents under
+// `oper()`), and the payload type follows from the name instead of from
+// whatever the call site guessed.
+function once<E extends IrcEventName>(
   client: Client,
-  event: string,
+  event: E,
   timeoutMs: number,
   label: string,
-): Promise<T> {
+): Promise<IrcEventMap[E]> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       client.removeListener(event, handler);
       reject(new Error(`IrcPeer: timeout waiting for ${label} (${timeoutMs}ms)`));
     }, timeoutMs);
-    const handler = (payload: T) => {
+    const handler = (payload: IrcEventMap[E]) => {
       clearTimeout(timer);
       client.removeListener(event, handler);
       resolve(payload);
@@ -576,19 +576,19 @@ function once<T = unknown>(
   });
 }
 
-function onceMatching<T>(
+function onceMatching<E extends IrcEventName>(
   client: Client,
-  event: string,
-  predicate: (payload: T) => boolean,
+  event: E,
+  predicate: (payload: IrcEventMap[E]) => boolean,
   timeoutMs: number,
   label: string,
-): Promise<T> {
+): Promise<IrcEventMap[E]> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       client.removeListener(event, handler);
       reject(new Error(`IrcPeer: timeout waiting for ${label} (${timeoutMs}ms)`));
     }, timeoutMs);
-    const handler = (payload: T) => {
+    const handler = (payload: IrcEventMap[E]) => {
       if (!predicate(payload)) return;
       clearTimeout(timer);
       client.removeListener(event, handler);

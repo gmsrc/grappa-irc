@@ -174,7 +174,7 @@ async function waitForOwnNickInMembers(
   ownNick: string,
 ): Promise<void> {
   for (let i = 0; i < 40; i++) {
-    const members = await fetchMembers(token, slug, channel).catch(() => []);
+    const members = await fetchMembers(token, slug, channel).catch((): string[] => []);
     if (members.includes(ownNick)) return;
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -454,13 +454,3 @@ test("issue #211 phase 7 — one visitor on TWO networks survives a real cic WS 
     await reapVisitors(admin.token, visitor?.id);
   }
 });
-
-declare global {
-  interface Window {
-    __cic_dropSocketForTests?: () => Promise<void>;
-    __cic_resumeSocketForTests?: () => Promise<void>;
-    __cic_socketHealth?: {
-      state: () => { state: string };
-    };
-  }
-}

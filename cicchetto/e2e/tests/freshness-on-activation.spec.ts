@@ -165,10 +165,3 @@ test("#159 — tab RE-FOREGROUND (hidden→visible) after a socket-stays-open ga
     await peer.disconnect("#159 vis test done");
   }
 });
-
-declare global {
-  interface Window {
-    __cic_suppressChannelDeliveryForTests?: (slug: string, name: string) => void;
-    __cic_resumeChannelDeliveryForTests?: (slug: string, name: string) => void;
-  }
-}

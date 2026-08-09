@@ -216,26 +216,3 @@ test("sw-registration STACKS below the WS source without overlapping (#120)", as
   if (!wsBox || !swBox) throw new Error("banner slots have no layout box");
   expect(wsBox.y + wsBox.height).toBeLessThanOrEqual(swBox.y + 1);
 });
-
-declare global {
-  interface Window {
-    __cic_socketHealth?: {
-      recordOpen: () => void;
-      recordError: () => void;
-      recordClose: (e: { code: number; reason: string } | undefined) => void;
-      reset: () => void;
-      state: () => { state: "connecting" | "open" | "error" };
-    };
-    __cic_bundleHash?: {
-      setServerHash: (hash: string) => void;
-      reset: () => void;
-      bootHash: () => string | null;
-    };
-    __cic_swRegistration?: {
-      recordError: (e: { name: string; message: string }) => void;
-      recordRegistered: (reg?: unknown) => void;
-      reset: () => void;
-      state: () => { state: "unknown" | "registered" | "error"; error: { name: string; message: string } | null };
-    };
-  }
-}

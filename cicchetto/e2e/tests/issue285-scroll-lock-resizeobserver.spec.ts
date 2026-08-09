@@ -141,7 +141,7 @@ test("@webkit #285 reopen — .scrollback base is fail-open pan-y and the lock g
   // the dead `touch-action: none` the old fail-CLOSED base baked. Strip + read
   // + restore synchronously inside one evaluate so Solid's reactive classList
   // can't re-assert mid-read (no race).
-  const baseTouchAction = await scrollback.evaluate((el) => {
+  const baseTouchAction = await scrollback.evaluate((el: HTMLElement) => {
     const prev = el.className;
     el.className = "scrollback";
     const ta = getComputedStyle(el).touchAction;

@@ -238,12 +238,20 @@ test("UX-6-I — refresh button forces SW update + cache purge before reload", a
         installing: null,
       };
       const swContainer = navigator.serviceWorker as ServiceWorkerContainer & {
-        getRegistration: () => Promise<typeof fakeReg>;
         controller: { state: string } | null;
         addEventListener: (event: string, handler: EventListener) => void;
         removeEventListener: (event: string, handler: EventListener) => void;
       };
-      swContainer.getRegistration = async () => fakeReg;
+      // `getRegistration` resolves a real `ServiceWorkerRegistration`, which
+      // `fakeReg` deliberately is not (the stub carries only the three members
+      // `performRefresh` touches). Intersecting a narrower signature onto the
+      // container makes the property's type the intersection of BOTH return
+      // types, which nothing satisfies — so install it the same way
+      // `controller` below is installed, by definition rather than assignment.
+      Object.defineProperty(swContainer, "getRegistration", {
+        configurable: true,
+        value: async () => fakeReg,
+      });
       Object.defineProperty(swContainer, "controller", {
         configurable: true,
         value: { state: "activated" },
@@ -325,20 +333,3 @@ test("UX-6-I — refresh button forces SW update + cache purge before reload", a
   expect(probe?.cacheDeletes).toContain("workbox-precache-v2-https://test/");
   expect(probe?.cacheDeletes).toContain("workbox-runtime");
 });
-
-declare global {
-  interface Window {
-    // Mirror of the prod surface in `cicchetto/src/lib/bundleHash.ts` —
-    // page-side `window.__cic_bundleHash` is defined by the SPA at
-    // boot; the type re-declaration here gives this spec strong
-    // typing without an import (the spec doesn't run through tsc).
-    __cic_bundleHash?: {
-      setServerHash: (hash: string) => void;
-      setServerVersion: (version: string | null) => void;
-      reset: () => void;
-      bootHash: () => string | null;
-      bootVersion: () => string | null;
-      __refreshProbe?: () => void;
-    };
-  }
-}

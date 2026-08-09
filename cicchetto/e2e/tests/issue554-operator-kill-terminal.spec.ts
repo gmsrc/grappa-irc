@@ -98,6 +98,6 @@ test("#554 — operator KILL marks the network :failed with a killed reason and 
     await new Promise((r) => setTimeout(r, 8_000));
     expect((await networkState(vjt.token)).state).toBe("failed");
   } finally {
-    await peer.disconnect();
+    await peer.disconnect("#554 kill test done");
   }
 });

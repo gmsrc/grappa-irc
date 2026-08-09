@@ -40,6 +40,7 @@
 import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
+import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -63,12 +64,7 @@ test.afterEach(async () => {
 
 test("#200 — own-PART tears down the per-channel WS subscription (no leak)", async ({ page }) => {
   const vjt = getSeededVjt();
-  page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warn") {
-      // eslint-disable-next-line no-console
-      console.log(`[cic:${msg.type()}] ${msg.text()}`);
-    }
-  });
+  forwardPageDiagnostics(page);
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
@@ -94,12 +90,7 @@ test("#200 — after own-PART teardown, compose /join re-subscribes AND focuses 
   page,
 }) => {
   const vjt = getSeededVjt();
-  page.on("console", (msg) => {
-    if (msg.type() === "error" || msg.type() === "warn") {
-      // eslint-disable-next-line no-console
-      console.log(`[cic:${msg.type()}] ${msg.text()}`);
-    }
-  });
+  forwardPageDiagnostics(page);
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
   await expect.poll(() => joinedTopicKeys(page), { timeout: 10_000 }).toContain(TOPIC_KEY);

@@ -379,10 +379,3 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     }
   });
 });
-
-declare global {
-  interface Window {
-    __cic_suppressChannelDeliveryForTests?: (slug: string, name: string) => void;
-    __cic_resumeChannelDeliveryForTests?: (slug: string, name: string) => void;
-  }
-}

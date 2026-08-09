@@ -127,13 +127,3 @@ test("CP29 R-5 — peer PRIVMSG during WS gap recovered via refresh-on-WS-join-o
       await peer.disconnect("test cleanup");
     }
   });
-
-declare global {
-  interface Window {
-    __cic_dropSocketForTests?: () => Promise<void>;
-    __cic_resumeSocketForTests?: () => Promise<void>;
-    __cic_socketHealth?: {
-      state: () => { state: string };
-    };
-  }
-}

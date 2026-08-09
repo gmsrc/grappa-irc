@@ -91,13 +91,15 @@ async function bootVisitor(
 
 // Poll GET /networks until it lists at least `n` rows (the async
 // autoconnect fan-out settles after the sync anchor connect).
-async function waitForNetworks(token: string, n: number): Promise<Array<{ slug: string }>> {
+type NetworkRow = { slug: string; connection_state: string };
+
+async function waitForNetworks(token: string, n: number): Promise<NetworkRow[]> {
   for (let i = 0; i < 40; i++) {
     const res = await fetch(`${GRAPPA_BASE_URL}/networks`, {
       headers: { authorization: `Bearer ${token}` },
     });
     if (res.ok) {
-      const rows = (await res.json()) as Array<{ slug: string }>;
+      const rows = (await res.json()) as NetworkRow[];
       if (rows.length >= n) return rows;
     }
     await new Promise((r) => setTimeout(r, 500));

@@ -28,6 +28,7 @@ import { type Page } from "@playwright/test";
 import { loginAs, scrollbackLine, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
+import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -211,16 +212,7 @@ test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
     test.setTimeout(150_000);
     // Surface cic console errors / uncaught page errors so a wiring regression
     // (e.g. the badge signal throwing) is legible in the run log.
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warn") {
-        // eslint-disable-next-line no-console
-        console.log(`[cic:${msg.type()}] ${msg.text()}`);
-      }
-    });
-    page.on("pageerror", (err) => {
-      // eslint-disable-next-line no-console
-      console.log(`[cic:pageerror] ${err.message}`);
-    });
+    forwardPageDiagnostics(page);
 
     const vjt = getSeededVjt();
     const channel = `#i360m-${Date.now() % 100000}`;

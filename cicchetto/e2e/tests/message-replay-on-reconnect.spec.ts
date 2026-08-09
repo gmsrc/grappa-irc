@@ -112,13 +112,3 @@ test("message replay on reconnect — peer PRIVMSG during WS gap appears after r
       await peer.disconnect("test cleanup");
     }
   });
-
-declare global {
-  interface Window {
-    __cic_dropSocketForTests?: () => Promise<void>;
-    __cic_resumeSocketForTests?: () => Promise<void>;
-    __cic_socketHealth?: {
-      state: () => { state: string };
-    };
-  }
-}
