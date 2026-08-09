@@ -35793,3 +35793,85 @@ conjunct was killed by zero assertions: dropping it left the whole scrollback
 suite green while the mutant re-keys every row whose `dm_with` is some other
 peer, stamping our new nick over unrelated DM history. Pinned with one row — an
 inbound DM received while we were somebody else.
+## 2026-08-09 — #1078: the four ways a fixed subject was load-bearing
+
+Giving every spec its own subject (#1078 option A) turned ten e2e specs red.
+None was a flake and none was an environment fault: all four mechanisms are
+the shared subject being load-bearing in a way nobody had written down.
+
+**1 — Two specs had never been migrated, and a third was green by luck.**
+`issue487` and `issue772` still called `getSeededVjt()` / `NETWORK_NICK`, so
+they waited for `vjt-grappa has joined #bofh` in a pane belonging to a user
+nobody resets any more: the old `SubjectReset` respawned that session before
+every test, putting a fresh self-JOIN at the tail of the page cic loads, and
+without the respawn the last one is buried hundreds of rows back. Six of the
+ten reds, all in the setup, none of them about what the spec tests.
+
+The sweep for the rest found `issue126`, which was green: it had been migrated
+to `specUser()` but still built its login seed with `VJT_PASSWORD` /
+`VJT_IDENTIFIER`. `loginAs` reads only `token` + `subjectJson`, so the two
+wrong fields were dead — and would have come alive the moment anything read
+them. **A migration sweep has to run on every spelling of the thing being
+migrated, not on the files that happened to go red.**
+
+**2 — A colour assertion was pinning a serialisation, and the new nick moved
+off it.** `#443` and `ux-5-bc2` asserted `getComputedStyle(el).color` matched
+`/^rgba?\(/`. Nick palette buckets 16..31 are `color-mix(in oklab, …)` (#444),
+which Chrome serialises as `oklab(L a b)`, and the fixed nick `vjt-grappa`
+hashes to bucket 1 — so in the whole life of those specs the derived band was
+unreachable and the regex looked total. A per-spec nick lands there about half
+the time. Confirmed by reconstruction, not by inference: the reported
+`oklab(0.318454 -0.0363971 0.0654648)` is
+`color-mix(in oklab, #607000, #000000 38%)` — mirc-light's bucket 19 — to five
+decimal places.
+
+The regex was also weaker than it read. An undeclared `--nick-color-N` is
+invalid-at-computed-value-time, so the span inherits `--fg` — still `rgb(…)`,
+still a pass. The rewrite compares opaque computed strings instead: the hue
+must differ from the resolved `--fg` (the var actually resolved), and equal the
+resolved value of the var the span declares (nothing painted over it). Both
+mutants the old oracle let through; neither depends on a colour space.
+
+**Why that closes the structural cost rather than papering over it.** The
+subject's name is `sha1(testInfo.titlePath)`, so renaming a test changes its
+nick, hence its palette bucket. While any assertion fixed a serialisation, a
+cosmetic rename could turn a spec red without touching the product — a real
+cost of option (A). Once no assertion reads the serialisation, the re-roll has
+nothing to break, and the cost is gone at the source. **The fix is on the
+assertion side. Re-deriving the nick to keep it inside buckets 0..15 would
+have been curing the symptom from the wrong end** — and would have thrown away
+what the randomisation bought: those derived buckets had never once been
+exercised in a browser before #1078 made them reachable.
+
+The same rewrite retired a stale mirror next door. `ux-5-bc2`'s palette probe
+re-implemented djb2 in the page to pick its slots and did it `% 16` while
+production had moved to `NICK_PALETTE_SIZE = 32`, so it had never touched the
+derived band either — a test passing on a mapping the product no longer used.
+Nick → slot is pure and already pinned in `src/__tests__/nickColor.test.ts`;
+the browser only needs to answer whether the declared slots resolve and stay
+distinct, which it can now do by walking the palette instead of guessing at it.
+
+**3 — A cap counted the population by hand.** The cap-honesty journey set
+`max_concurrent_user_sessions: 3` for "vjt + m9b-test + m9b-victim". A per-spec
+subject is a fourth live session, so the reconnect it expects to succeed got
+`503 network_busy`. The literal had already rotted once (2 → 3 when m9b-victim
+was seeded). It is now derived from `live_counts.users`, which is projected
+from the same `count_live_sessions/2` the admission check consults, as
+`live + 1` — the tightest cap that admits one more, given the check admits iff
+`live < cap`. **A constant that encodes a population is a bug with a date on
+it.**
+
+**4 — A scroll-up spec depended on a read cursor it never set.** `cp14-b2`
+scrolls to the top and expects `loadMore` to land older rows; it got a pane
+that already held the entire corpus. The arithmetic suggested the pane had
+drained four 50-row pages before the measurement. **The CI trace says
+otherwise, and the trace is what counts**: one `?after=0&limit=200` — the
+cold-buffer recovery arm — followed by a tail page and exactly one post-wheel
+`?before=`. With no read position, cic hydrates from the OLDEST row, so
+scroll-up pages backwards from the oldest row in the channel and finds
+nothing. **A deeper seed cannot fix this**; the corpus depth was never the
+variable. The old fixture handed every spec a cursor at the tail via a
+`restoreReadCursorToTail` that #1078 deleted as ceremony — it was a
+precondition. The spec now plants its own, and guards it: if the pane already
+holds the whole corpus the test fails loudly instead of passing on a
+`loadMore` that was never needed.
