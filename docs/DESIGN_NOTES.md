@@ -34791,3 +34791,75 @@ the full integration suite. The per-surface behaviour is asserted for `/who` and
 `/whois` at the channel door and for `/who` at the session level; the other
 eight verbs are believed on the strength of a shared mechanism, not measured one
 by one.
+
+---
+
+## 2026-08-09 — #1086: two layers each declined to claim `--help`
+
+`bin/grappa bind-network --help` crashed with a raw Elixir traceback —
+`** (KeyError) key :user not found in: []`, five frames of mix internals, at a
+self-hoster. The flag was nobody's: the dispatcher knew help only as a VERB
+(`bin/grappa help <verb>`), so a `--help` after a verb was passed through as an
+ordinary argument, and the boot tasks parse `strict:`, which drops an
+unrecognised switch into the `invalid` element every caller was discarding. The
+first `Keyword.fetch!` for the option that never got set then raised. A plain
+typo (`--nework azzurra`) produced the identical dump for the identical reason.
+
+**The blast radius was wider than the report, and in a worse direction.** The
+issue's table counts seven mix tasks whose `run/1` reaches `Keyword.fetch!`.
+But eleven of the dispatcher's twenty-one verbs never reach a mix task at all,
+and those took the flag for a POSITIONAL argument. Measured against the bats
+docker stub, `bin/grappa delete-visitor --help` RPC'd
+`Grappa.Operator.delete_visitor!("--help")` at the live BEAM and exited 0 — a
+help request reaching a mutating verb on the running node. It was harmless only
+because no visitor has that UUID.
+
+**The cure is one point per layer, not one point.** `--help` belongs to the
+dispatcher: it is the only layer that can serve all twenty-one verbs, and for
+the eleven non-mix ones no Elixir layer exists to fix. Missing-required and
+unknown-switch belong to the tasks: the dispatcher does not know any verb's
+switch table and could only learn it by duplicating it, a parallel structure
+that would drift at the first new switch — and the tasks are reachable
+directly as `scripts/mix.sh grappa.bind_network ...`, which is the invocation
+their own moduledocs document, bypassing the dispatcher entirely. Inside the
+Elixir layer the cure stays single: `Mix.Tasks.Grappa.OptionParsing` was
+already the shared home and already used `Mix.raise` for malformed input, so
+`parse!/3` joined it rather than nine patched tasks.
+
+**Nine tasks, not the seven the issue counts.** `repair_passwords` and
+`set_network_caps` have no required options and so never met the KeyError, but
+they had the silent half: a misspelled `--max-visitor-session` was discarded
+and surfaced as "no changes specified", which names the wrong thing — the
+operator did specify a change, they misspelled it. They route through the same
+call with an empty required list. `gen_wire_types` stays out: it parses
+non-strict, is codegen rather than an operator verb, and is absent from the
+verb table.
+
+**An unrecognised switch is reported in preference to the required option it
+failed to set.** `--nework azzurra` names the typo. Saying `--network` is
+missing would be true and useless — it would send the operator hunting for a
+flag they believe they typed. Unknown-versus-unparseable is told apart by
+whether the reported spelling appears in the caller's own switch table,
+comparing STRINGS only; that module already carries a long note on why it
+refuses `String.to_existing_atom`, and this stays on the safe side of it.
+
+**The flag is scanned anywhere in the argument list**, not in first position
+only, because `bin/grappa bind-network --user vjt --help` is how an operator
+asks once already mid-command. The cost is that an option VALUE spelled exactly
+`--help` reads as a help request. No switch on any verb takes a value that
+could plausibly be spelled that way; this is a judgement, not a measurement.
+
+**Three tests pinned the bug as the contract.** `bind_network_test.exs` and
+`create_user_test.exs` each asserted `assert_raise KeyError` for a missing
+required option. That is why a defect this shallow survived a suite that
+covered it: the crash was the documented behaviour. They now assert the message
+names the option.
+
+**Not closed, escalated.** For the ten boot verbs the dispatcher's help path is
+`exec scripts/mix.sh --env=dev help grappa.<task>`, which reads `@shortdoc` /
+`@moduledoc` from inside the container — so it needs the container UP. With the
+instance down, which is exactly when a self-hoster reaches for `--help`, the
+acceptance criterion "prints that verb's help and exits 0, for every verb" does
+not hold. Closing it means inline help text for the boot verbs, doubling the
+surface that has to stay in lockstep with the `@shortdoc`s. That is a product
+call, deliberately not taken here.
