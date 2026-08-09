@@ -5,6 +5,17 @@ import solid from "vite-plugin-solid";
 // service-worker's Web Push notification icon (`src/lib/pwaIcons.ts`), so a
 // rename can't silently drift the SW into a 404 path.
 import { PWA_ICONS } from "./src/lib/pwaIcons";
+// #1103 — the share-target contract is shared with the service worker and the
+// app, for the same reason the icon set is: the action URL, the form field and
+// the accepted MIME list must agree in all three places or the OS offers a
+// share the app cannot answer. `lib/shareTarget.ts` imports only
+// `lib/uploadCategory.ts` (which imports nothing), so pulling it in here does
+// not drag the SolidJS graph into the build config.
+import {
+  SHARE_TARGET_ACCEPT,
+  SHARE_TARGET_ACTION,
+  SHARE_TARGET_FILES_FIELD,
+} from "./src/lib/shareTarget";
 
 // #292 — bake grappa's version into the built (and dev) index.html as
 // `<meta name="cicchetto-version">`. ONE injection point: cic reads this tag
@@ -146,6 +157,26 @@ export default defineConfig({
         // Single source of truth shared with the SW notification icon —
         // see `src/lib/pwaIcons.ts` (S18).
         icons: [...PWA_ICONS],
+        // #1103 — accept files shared from the OS share sheet.
+        //
+        // FILES ONLY, deliberately: `title` / `text` / `url` are omitted, so
+        // Android offers cicchetto for a file share and not for a shared
+        // link. Declaring them would register a door that swallows a shared
+        // URL and does nothing with it — cic has no compose-insert path for
+        // one, and an app that appears in the sheet and then eats the share
+        // is worse than an app that never appears.
+        //
+        // `POST` + `multipart/form-data` is what the spec requires for file
+        // params, and it is why `service-worker.ts` needed a `fetch` listener
+        // at all: the POST never reaches the network, the worker answers it.
+        share_target: {
+          action: SHARE_TARGET_ACTION,
+          method: "POST",
+          enctype: "multipart/form-data",
+          params: {
+            files: [{ name: SHARE_TARGET_FILES_FIELD, accept: [...SHARE_TARGET_ACCEPT] }],
+          },
+        },
       },
       injectManifest: {
         // Shell-only: precache the build's hashed JS/CSS + index.html
