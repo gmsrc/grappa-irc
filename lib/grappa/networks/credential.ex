@@ -146,9 +146,10 @@ defmodule Grappa.Networks.Credential do
           sasl_user: String.t() | nil,
           password_encrypted: binary() | nil,
           password: String.t() | nil,
+          server_pass_encrypted: binary() | nil,
+          server_pass: String.t() | nil,
           oper_pass_encrypted: binary() | nil,
           oper_pass: String.t() | nil,
-          nickserv_pass_encrypted: binary() | nil,
           perform_list_encrypted: binary() | nil,
           perform_list: String.t() | nil,
           auth_method: auth_method() | nil,
@@ -188,6 +189,26 @@ defmodule Grappa.Networks.Credential do
     field :password_encrypted, EncryptedBinary, redact: true
     field :password, :string, virtual: true, redact: true
 
+    # GH #1044 — the SECOND secret slot: the server `PASS`, held apart from the
+    # NickServ one above. A password-gated network wants both at once, and one
+    # slot with an `auth_method` selector could only ever spend it on one role.
+    #
+    # This is #509's retired column resurrected under the role it now carries
+    # (`20260810120000_swap_nickserv_pass_slot_for_server_pass`), NOT a new one.
+    # The direction is deliberate: `password_encrypted` KEEPS the NickServ
+    # meaning, because on every VISITOR row that is what it holds — a visitor's
+    # `auth_method` is derived from that secret's presence
+    # (`Grappa.Visitors.SessionPlan`), never chosen. Renaming the other column
+    # would have made the name lie on the whole visitor population.
+    #
+    # USER-ONLY: a visitor cannot spend this, since their derived `auth_method`
+    # never reaches `:server_pass`. The subject XOR makes the branch decidable
+    # in the changeset, so `validate_server_pass_is_user_only/1` REFUSES it on
+    # the visitor branch rather than dropping it — a discarded secret is a
+    # silent lie to whoever set it.
+    field :server_pass_encrypted, EncryptedBinary, redact: true
+    field :server_pass, :string, virtual: true, redact: true
+
     # GH #189 — on-connect perform list + its `$oper_pass` secret. Both
     # encrypted at rest (Cloak AES-GCM); `redact: true` so neither the
     # decrypted-on-load `*_encrypted` value nor the input-only virtual leaks in
@@ -200,17 +221,6 @@ defmodule Grappa.Networks.Credential do
     # `upstream_oper_pass/1`).
     field :oper_pass_encrypted, EncryptedBinary, redact: true
     field :oper_pass, :string, virtual: true, redact: true
-    # RETIRED by #124 (GH #509's `$nickserv_pass`). NOTHING reads or writes this
-    # column any more: `20260807120000_fold_nickserv_pass_onto_password` folded
-    # every live value onto `password_encrypted`, and the secret now has exactly
-    # one home. The field is declared ONLY so the retired column stays visible
-    # and `redact: true` while it exists.
-    #
-    # #124 is deliberately EXPAND-ONLY (vjt's scope ruling): dropping the column
-    # is CONTRACT and needs a cold window, and the cure was not to be held
-    # hostage to scheduling one. Its input-only virtual is already gone, so the
-    # follow-up that drops the column deletes this line and nothing else.
-    field :nickserv_pass_encrypted, EncryptedBinary, redact: true
     field :perform_list_encrypted, EncryptedBinary, redact: true
     field :perform_list, :string, virtual: true, redact: true
     # No default: operators MUST pick the auth method explicitly. S29
@@ -279,6 +289,7 @@ defmodule Grappa.Networks.Credential do
       :realname,
       :sasl_user,
       :password,
+      :server_pass,
       :auth_method,
       :auth_command_template,
       :autojoin_channels,
@@ -319,6 +330,11 @@ defmodule Grappa.Networks.Credential do
     |> validate_change(:realname, &Identity.safe_line_token/2)
     |> validate_change(:sasl_user, &Identity.safe_line_token/2)
     |> validate_change(:password, &Identity.safe_line_token/2)
+    # GH #1044 — the server PASS is a single-line wire token (`PASS <secret>`),
+    # so it gets the same CR/LF/NUL guard as `:password`: a newline here would
+    # split the outbound frame and inject a second command.
+    |> validate_change(:server_pass, &Identity.safe_line_token/2)
+    |> validate_server_pass_is_user_only()
     |> validate_change(:auth_command_template, &Identity.safe_line_token/2)
     |> validate_change(:autojoin_channels, &validate_autojoin_channels/2)
     # H15 (REV-D 2026-05-22): defensive schema-level cap on the
@@ -332,6 +348,7 @@ defmodule Grappa.Networks.Credential do
     # observes the same ceiling.
     |> validate_length(:last_joined_channels, max: @last_joined_channels_max)
     |> put_encrypted_password()
+    |> put_encrypted_server_pass()
     |> put_default_connection_state_changed_at()
     # Admin-panel bucket 3 — pre-fix `bind_credential/3` (via the
     # REST `POST /admin/credentials`) raised `Ecto.ConstraintError`
@@ -744,6 +761,41 @@ defmodule Grappa.Networks.Credential do
   end
 
   defp put_encrypted_password(cs), do: cs
+
+  # GH #1044 — the second slot is USER-ONLY, and the subject XOR is what makes
+  # that expressible here: exactly one of `user_id` / `visitor_id` is set, so
+  # "is this the user branch" is a field read, not an inference. A visitor
+  # cannot spend the slot anyway — their `auth_method` is DERIVED from the
+  # presence of the one NickServ secret (`Grappa.Visitors.SessionPlan`) and
+  # never reaches `:server_pass`.
+  #
+  # REFUSED on the visitor branch, not silently dropped. The value is a SECRET,
+  # and the worst failure here is not one 422 too many: it is an operator who
+  # believes a server PASS is stored when it was thrown away. No door can send
+  # it today (the admin REST whitelists do not carry `server_pass`), so the
+  # guard costs nothing now and meets whoever opens that door later with a loud
+  # error instead of a mute hole. Same posture as #124's 410 on the retired
+  # perform field, and CLAUDE.md's "no silent-swallow at boundaries".
+  @spec validate_server_pass_is_user_only(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp validate_server_pass_is_user_only(cs) do
+    case {get_change(cs, :server_pass), get_field(cs, :user_id)} do
+      {nil, _} -> cs
+      {_, nil} -> add_error(cs, :server_pass, "is only valid on a user credential")
+      {_, _} -> cs
+    end
+  end
+
+  # Mirror of `put_encrypted_password/1`. The `valid?: true` head is what makes
+  # the user-branch check unnecessary here: `validate_server_pass_is_user_only/1`
+  # has already invalidated the changeset on the visitor branch, so a valid
+  # changeset carrying this change is a user credential by construction.
+  @spec put_encrypted_server_pass(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp put_encrypted_server_pass(%{valid?: true, changes: %{server_pass: pw}} = cs)
+       when is_binary(pw) do
+    put_change(cs, :server_pass_encrypted, pw)
+  end
+
+  defp put_encrypted_server_pass(cs), do: cs
 
   @doc """
   Returns the post-Cloak-load plaintext upstream IRC password.

@@ -284,6 +284,10 @@ defmodule Grappa.Networks.Wire do
   that column and deliberately publishes NOTHING about it — not even
   its set-ness. The field is write-only end to end.
 
+  The same holds for #1044's `:server_pass_encrypted` / `:server_pass`
+  pair: a second secret slot is still a secret slot, and it inherits
+  the write-only posture rather than an exception to it.
+
   Includes T32 connection-state fields (`connection_state`,
   `connection_state_reason`, `connection_state_changed_at`) so the
   REST surface for `PATCH /networks/:id` can return the updated

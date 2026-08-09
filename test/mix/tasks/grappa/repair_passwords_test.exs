@@ -198,18 +198,28 @@ defmodule Mix.Tasks.Grappa.RepairPasswordsTest do
       assert reload(credential).password_encrypted == @three_token
     end
 
-    test "never touches the retired nickserv_pass_encrypted column", %{user: user, network: network} do
+    test "never touches the server_pass_encrypted column", %{user: user, network: network} do
+      # #1044 gave the credential a second secret slot. The task repairs a
+      # two-token NickServ password and must leave the OTHER role's secret
+      # alone — a repaired row that lost its server PASS cannot connect at all,
+      # which is a worse failure than the one being repaired.
       credential = bind(user, network, @two_token, :nickserv_identify)
 
-      legacy = Grappa.Vault.encrypt!("legacy-secret")
-      Repo.query!("UPDATE network_credentials SET nickserv_pass_encrypted = ? WHERE id = ?", [legacy, credential.id])
+      server_pass = Grappa.Vault.encrypt!("server-secret")
+
+      Repo.query!("UPDATE network_credentials SET server_pass_encrypted = ? WHERE id = ?", [
+        server_pass,
+        credential.id
+      ])
 
       capture_io(fn -> RepairPasswords.run(["--write"]) end)
 
       %{rows: [[after_run]]} =
-        Repo.query!("SELECT nickserv_pass_encrypted FROM network_credentials WHERE id = ?", [credential.id])
+        Repo.query!("SELECT server_pass_encrypted FROM network_credentials WHERE id = ?", [
+          credential.id
+        ])
 
-      assert after_run == legacy
+      assert after_run == server_pass
     end
 
     test "sweeps visitor credentials, not only user ones", %{network: network} do

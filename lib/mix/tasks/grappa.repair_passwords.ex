@@ -64,9 +64,9 @@ defmodule Mix.Tasks.Grappa.RepairPasswords do
   credential any more, so a run that DOES find one is the signal of a new
   bug rather than routine maintenance. The output says so.
 
-  The retired `nickserv_pass_encrypted` column is never read and never
-  written: it was never fed by the `SET PASSWD` capture path, so it is not
-  part of this corruption.
+  The `server_pass_encrypted` slot (#1044) is never read and never written:
+  it holds a different role's secret and was never fed by the `SET PASSWD`
+  capture path, so it is not part of this corruption.
   """
   use Boundary,
     top_level?: true,

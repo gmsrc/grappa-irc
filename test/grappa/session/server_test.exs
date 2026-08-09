@@ -1735,21 +1735,21 @@ defmodule Grappa.Session.ServerTest do
     # the wire, because the failure mode of getting it wrong is silent — a
     # session that simply never becomes `+r`.
     #
-    # The retired column still EXISTS (#124 is expand-only), so the sharpest
-    # tests are the ones that leave a value in it and prove it is inert.
+    # The sharpest tests are the ones that leave a value in the OTHER secret
+    # slot and prove it is inert on the NickServ path. #1044 dropped the
+    # retired column and opened `server_pass_encrypted` in its place, so the
+    # slot these now stage is the server-PASS one — and the property is the
+    # same one #124 established, now defended against the new column: a second
+    # stored secret must never become a second NickServ source.
+    #
+    # Seeded through the production write path, which #1044 gave it back.
+    defp seed_server_pass_slot(credential, pass) do
+      {:ok, updated} =
+        credential
+        |> Grappa.Networks.Credential.changeset(%{server_pass: pass})
+        |> Repo.update()
 
-    # The #509 write path is gone with its virtual field, so a leftover column
-    # value can only be staged as raw ciphertext — which is also exactly the
-    # shape a post-fold production row has.
-    defp seed_retired_nickserv_column(credential, pass) do
-      {:ok, blob} = Grappa.EncryptedBinary.dump(pass)
-
-      Repo.query!("UPDATE network_credentials SET nickserv_pass_encrypted = ? WHERE id = ?", [
-        blob,
-        credential.id
-      ])
-
-      credential
+      updated
     end
 
     test "a :server_pass credential does NOT identify — the second secret is gone" do
@@ -1763,10 +1763,10 @@ defmodule Grappa.Session.ServerTest do
           autojoin_channels: []
         })
 
-      # Pre-#124 this exact row identified from the dedicated field. Now the
-      # password is spent on PASS and there is no second secret to fall back
-      # on, so nothing may reach NickServ — least of all the server password.
-      cred = seed_retired_nickserv_column(credential, "ns-secret")
+      # Pre-#124 this exact row identified from the dedicated field. The
+      # password is spent on PASS and the second slot is NOT a NickServ source
+      # (#1044 gave it a different role), so nothing may reach NickServ.
+      cred = seed_server_pass_slot(credential, "ns-secret")
       pid = nickserv_plan(user, network, cred, 60_000)
 
       :ok = await_handshake(server)
@@ -1785,7 +1785,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "the credential password drives the identify, NOT a leftover nickserv column" do
+    test "the credential password drives the identify, NOT the other secret slot" do
       {server, port} = start_server()
 
       {user, network, credential} =
@@ -1797,10 +1797,11 @@ defmodule Grappa.Session.ServerTest do
         })
 
       # The precedence INVERTED at #124: pre-#124 this row identified with
-      # "stale-override". A post-fold row can still carry the column, and it
-      # must be inert — otherwise the operator repairs the password field and
-      # the old value keeps going on the wire, which IS the split brain.
-      cred = seed_retired_nickserv_column(credential, "stale-override")
+      # "stale-override". A row can carry a second stored secret again (#1044),
+      # and it must stay inert on this path — otherwise the operator repairs
+      # the password field and the other value keeps going on the wire, which
+      # IS the split brain.
+      cred = seed_server_pass_slot(credential, "stale-override")
       pid = nickserv_plan(user, network, cred, 60_000)
 
       :ok = await_handshake(server)
@@ -1897,7 +1898,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "autojoin fires immediately for :server_pass carrying only the retired column" do
+    test "autojoin fires immediately for :server_pass carrying only the server-PASS slot" do
       {server, port} = start_server()
 
       {user, network, credential} =
@@ -1915,7 +1916,7 @@ defmodule Grappa.Session.ServerTest do
       # fallback below is load-bearing: with the production ~0.5s default a
       # wrongful defer would still fire inside the 1s window and this test
       # would pass either way.
-      cred = seed_retired_nickserv_column(credential, "ns-secret")
+      cred = seed_server_pass_slot(credential, "ns-secret")
       pid = nickserv_plan(user, network, cred, 60_000)
 
       :ok = await_handshake(server)

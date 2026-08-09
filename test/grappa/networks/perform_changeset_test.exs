@@ -159,20 +159,24 @@ defmodule Grappa.Networks.PerformChangesetTest do
       assert %{oper_pass: [_ | _]} = errors_on(cs)
     end
 
-    test "#124 — a nickserv_pass attr is not cast, so it can never reach the column" do
-      # The controller answers a stale client with a 410, but the changeset is
-      # the LAST line: even a caller that bypasses the controller cannot write
-      # the retired column, because `cast/3` no longer lists the field. Without
-      # this, re-adding it to the cast list would silently reopen the second
-      # source and no test would notice.
+    # #124's twin of this test staged a `nickserv_pass` attr and proved it
+    # could not reach the retired column. #1044 DROPPED that column, so the
+    # attr no longer names a field anywhere and the write it guarded against
+    # has no destination left. What replaces it is the same guard aimed at the
+    # column #1044 reopened, which DOES have a live write path.
+    test "#1044 — the perform door cannot reach the server-PASS slot" do
+      # The slot is an AUTH field: it is written through the wide changeset, on
+      # the user branch only. The perform editor is a different door and must
+      # stay unable to write it — otherwise a secret gets a second editable
+      # home, which is the split brain #124 is named after.
       {_, _, cred} = setup_credential()
 
       {:ok, saved} =
         cred
-        |> Credential.perform_changeset(%{perform_list: "MODE $nick +x", nickserv_pass: "sneaky"})
+        |> Credential.perform_changeset(%{perform_list: "MODE $nick +x", server_pass: "sneaky"})
         |> Repo.update()
 
-      assert reload(saved).nickserv_pass_encrypted == nil
+      assert reload(saved).server_pass_encrypted == nil
     end
 
     test "rejects a perform list over the byte cap" do

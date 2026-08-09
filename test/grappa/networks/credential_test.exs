@@ -83,12 +83,13 @@ defmodule Grappa.Networks.CredentialTest do
       refute Credential.has_nickserv_secret?(cred)
     end
 
-    test "#124 — the retired nickserv_pass column no longer grants the gate" do
-      # Pre-#124 this was TRUE (the #509 second source, decoupled from
-      # auth_method). The expand migration folded any live value onto
-      # `password_encrypted`, so a row still carrying one here is a
-      # post-fold leftover and must NOT resurrect the second source.
-      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
+    test "#1044 — the server-PASS slot does not grant the gate" do
+      # Pre-#124 the second column WAS a NickServ source (#509, decoupled from
+      # auth_method) and this was TRUE. #1044 reopened that column for a
+      # DIFFERENT role, and #124's property has to hold against it: one role,
+      # one home, no fallback chain. A server password is not something
+      # /recover can identify with.
+      cred = %Credential{auth_method: :server_pass, server_pass_encrypted: "hunter2"}
       refute Credential.has_nickserv_secret?(cred)
     end
   end
@@ -120,22 +121,23 @@ defmodule Grappa.Networks.CredentialTest do
              }) == nil
     end
 
-    test "#124 — a leftover nickserv_pass column is NOT read" do
-      cred = %Credential{auth_method: :server_pass, nickserv_pass_encrypted: "hunter2"}
+    test "#1044 — the server-PASS slot is NOT read" do
+      cred = %Credential{auth_method: :server_pass, server_pass_encrypted: "hunter2"}
       assert Credential.recover_secret(cred) == nil
     end
 
-    test "#124 — the credential password wins over a leftover nickserv_pass column" do
-      # Pre-#124 the column WON this exact shape ("$nickserv_pass WINS over
-      # the :nickserv_identify password"). The precedence is gone: after the
-      # fold there is one secret, and it is `password_encrypted`.
+    test "#1044 — the NickServ secret is resolved with the server-PASS slot also set" do
+      # Pre-#124 the second column WON this exact shape ("$nickserv_pass WINS
+      # over the :nickserv_identify password"). There is no precedence to
+      # re-open: the two slots hold two different roles, and this one reads
+      # `password_encrypted` and nothing else.
       cred = %Credential{
         auth_method: :nickserv_identify,
-        nickserv_pass_encrypted: "stale",
-        password_encrypted: "folded"
+        server_pass_encrypted: "hunter2",
+        password_encrypted: "ns-secret"
       }
 
-      assert Credential.recover_secret(cred) == "folded"
+      assert Credential.recover_secret(cred) == "ns-secret"
     end
   end
 
