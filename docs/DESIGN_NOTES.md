@@ -35555,3 +35555,89 @@ non-empty range plus `is-selecting` present plus `text`/`default` resolved means
 WebKit installed everything and painted nothing — lead 1 — and the fix belongs
 in the ordering or the keyboard, not in the class or the CSS. It needs no new
 code.
+## 2026-08-09 — #1066: a variable named after the knob it does not turn
+
+**The defect.** `cicchetto/e2e/compose.yaml` sets `SVC_AKILL_CLONES: "0"` under
+a comment ending "0 = akill off (detection/globops still run)". Detection and
+globops do not still run. The azzurra-testnet template
+(`infra/services/conf.tmpl`) writes that value to the `CLONES` directive, and
+in `azzurra/services` `CLONES` and `CLONEKILL` are two different knobs:
+
+| directive | variable | validator |
+|---|---|---|
+| `CLONES` | `CONF_SET_CLONE` | `conf.c:786` — boolean; fatal unless 0 or 1 |
+| `CLONEKILL` | `CONF_AKILL_CLONES` | `conf.c:940` — 0, or 5..50 |
+
+`CONF_SET_CLONE` gates `check_clones()` outright (`users.c:1316`), so `0` there
+turns clone detection off entirely — no scan, no oper globops, and therefore no
+autokill. `CONF_AKILL_CLONES`, the variable the template is named after, is
+never written at all and keeps its built-in 5, moot while detection is off. All
+line numbers read at `azzurra/services` `2d464b2e`, the `master` the testnet
+Dockerfile builds from.
+
+**Measured, not argued.** The container built from that template fatals on the
+standalone testnet's own default:
+
+```
+[F00019 L00791 T005 S005] FATAL ERROR: Value 5 for CLONES is not valid
+```
+
+`L00791` is the `fatal_error(FACILITY_CONF, __LINE__, …)` in the `CLONES` arm —
+the running binary naming the same source line as the reading above. Sweeping
+the value: 0 and 1 proceed to the hub connect; 2, 5, 20 and 50 all fatal. The
+submodule's `entrypoint.sh` documents "Valid values: 0 (off) or 5..50", which
+is precisely the range that cannot work.
+
+**Three arms on the live stack**, same six connections from one pinned source
+IP, same opered observer on `+g`:
+
+| services.conf | 6 clones from one IP | globops |
+|---|---|---|
+| `CLONES:0` (today) | all six live | none |
+| `CLONEKILL:5` | `465 You have been Autokilled` | `WARNING: 5 clones autokilled from …` |
+| `CLONEKILL:0` | all six live | `Clones: 5 from …` |
+
+The first row's silence only means something because of the other two: the same
+burst does produce a signal when detection is on. The second row is also what
+makes #349's fear concrete rather than theoretical — the autokill is real on
+this testnet, and it is a services akill, not only bahamut's own throttling.
+The third row is the behaviour the comment claimed to have.
+
+**One arm had to be thrown away.** The `CLONEKILL:0` run was first attempted on
+a source IP docker had recycled from the `CLONEKILL:5` run, whose akill was
+still live for its full 600s: every connection was refused at the door with the
+same akill ID and timestamp as the previous arm. Nothing about clone detection
+could be read from it. Re-run from a pinned, unakilled IP.
+
+**What is cured here, and what is not.** The outcome #349 wanted still holds —
+grappa's bouncer IP is not autokilled — so this is a comment fix, not a
+behaviour change. The submodule half is a one-line change
+(`CLONES:${SVC_AKILL_CLONES}` → `CLONEKILL:${SVC_AKILL_CLONES}`) that is
+proposed, not pushed: it is another repository, and the pointer is not bumped
+here.
+
+**The guard follows the fix instead of freezing today.**
+`test/scripts/e2e_clone_directive_test.bats` reads the directive out of the
+template rather than naming it, then checks the compose value against that
+directive's validator. Setting 5 today goes red instead of taking the stack
+down as an opaque cascade; the day the submodule writes `CLONEKILL`, the
+accepted set becomes the numeric one with no edit here — verified by mutating
+the template and re-running. An unrecognised third directive fails loudly,
+because a variable quietly moved onto a knob whose validator nobody read is how
+this happened in the first place.
+
+**Impact on #349's coverage: none lost, because none existed.** No spec
+exercises clone detection, globops, or a services AKILL — the only AKILL-adjacent
+spec, `issue554-operator-kill-terminal.spec.ts`, drives an operator KILL from an
+opered peer. What is lost is a latent safety net, not an assertion. The
+forward-looking note is the opposite one: the registration-wizard specs have
+only ever run with clone detection fully off, so if the submodule is fixed the
+suite runs for the first time with services scanning every connecting user and
+globopsing once grappa's fifth session lands. Harmless by the third row above,
+but never yet observed.
+
+**Not claimed.** That the submodule's `testnet` smoke workflow would have caught
+this: it triggers on pushes to `master` while the repository's default branch is
+`main`, and no run of it appears in the repository's history. That is a
+plausible reason the fatal stayed invisible, not a measured one — nobody has
+re-pointed the trigger and watched it go red.
