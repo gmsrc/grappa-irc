@@ -29,7 +29,8 @@ defmodule GrappaWeb.Admin.VhostsController do
   """
   use GrappaWeb, :controller
 
-  alias Grappa.{Accounts, SubjectSearch, Vhosts, Visitors}
+  alias Grappa.{Accounts, ServerSettings, SubjectSearch, Vhosts, Visitors}
+  alias Grappa.Net.HostAddresses
   alias Grappa.Vhosts.AdminWire
   alias GrappaWeb.Admin.SubjectLabels
   alias GrappaWeb.Validation
@@ -41,7 +42,7 @@ defmodule GrappaWeb.Admin.VhostsController do
   @doc """
   Lists the vhost inventory (each with its grants) plus the host's
   candidate addresses (`:inet.getifaddrs/0`) the operator can curate
-  from. `200 OK`.
+  from, minus the #543 derivation block. `200 OK`.
   """
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, _) do
@@ -58,8 +59,28 @@ defmodule GrappaWeb.Admin.VhostsController do
     json(conn, %{
       vhosts: vhosts,
       grants: grants,
-      host_candidates: Grappa.Net.HostAddresses.list()
+      host_candidates: host_candidates()
     })
+  end
+
+  # #1157 — the operator curates from the host's addresses, but under the
+  # #543 static-mapping mode every derived source is a real `/128` alias
+  # on `lo0`, so `getifaddrs/0` hands back the whole derivation block and
+  # the picker fills with addresses nobody chose. Reject them here.
+  #
+  # Both reads happen at this boundary and are passed IN: the prefix
+  # lives in `ServerSettings`, and `Grappa.Vhosts` deliberately does not
+  # depend on it (`vhosts.ex` moduledoc) — the same pass-the-config-in
+  # shape as `Vhosts.effective_pool/1` and `allowed_vhosts/2`.
+  #
+  # On mode 1 (`pool_with_reservations`, the default) there is no prefix
+  # row, `static_mapping_prefix/0` is nil, and the list comes through
+  # untouched.
+  defp host_candidates do
+    HostAddresses.reject_in_prefix(
+      HostAddresses.list(),
+      ServerSettings.static_mapping_prefix()
+    )
   end
 
   @doc "Create a vhost. Body: `address` (required), `in_pool?`, `generally_available?`."

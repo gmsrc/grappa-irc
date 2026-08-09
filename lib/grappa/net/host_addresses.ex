@@ -70,6 +70,38 @@ defmodule Grappa.Net.HostAddresses do
   end
 
   @doc """
+  `addresses` minus everything sitting inside `prefix_cidr`. A `nil`
+  prefix returns the list untouched.
+
+  #1157 — under the #543 `static_mapping_with_reservations` addressing
+  mode each subject's derived source is bound as a real `/128` alias on
+  `lo0` (`infra/freebsd/bin/grappa-source-alias`), so `list/0` reports
+  every derived alias as a candidate and the operator's vhost picker
+  fills with addresses nobody curated. Those are the machine's, not the
+  operator's: the derivation owns that block.
+
+  Pure over the passed set, exactly like `local_bindable?/2` above — the
+  universe AND the prefix are passed IN. The prefix lives in
+  `Grappa.ServerSettings`, which neither this module nor `Grappa.Vhosts`
+  may depend on, so the admin-boundary caller reads both and composes.
+  Membership is `Grappa.Net.IpLiteral.in_cidr6?/2`, the same primitive
+  `Grappa.Vhosts.SourceMapping.in_prefix?/2` aliases (that alias is
+  unreachable from here — this module's `Boundary` deps are
+  `[Grappa.Net.IpLiteral]`, and the math is a `Net.IpLiteral` primitive
+  precisely so each side calls it without duplicating it).
+
+  A malformed prefix drops nothing: an unparseable setting must not
+  silently empty the operator's picker.
+  """
+  @spec reject_in_prefix([String.t()], String.t() | nil) :: [String.t()]
+  def reject_in_prefix(addresses, nil) when is_list(addresses), do: addresses
+
+  def reject_in_prefix(addresses, prefix_cidr)
+      when is_list(addresses) and is_binary(prefix_cidr) do
+    Enum.reject(addresses, &Grappa.Net.IpLiteral.in_cidr6?(&1, prefix_cidr))
+  end
+
+  @doc """
   True when `ip_tuple` is a source address an outbound connection can
   legitimately egress from — i.e. NOT loopback and NOT link-local.
   Public + private (RFC1918 / ULA) addresses are egressable (jail/LAN

@@ -12,7 +12,8 @@ defmodule GrappaWeb.Admin.VhostsControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, Networks.Credentials, Vhosts}
+  alias Grappa.{Accounts, Networks.Credentials, ServerSettings, Vhosts}
+  alias Grappa.Net.HostAddresses
 
   defp admin_session do
     {user, session} = user_and_session()
@@ -55,6 +56,59 @@ defmodule GrappaWeb.Admin.VhostsControllerTest do
       assert Enum.any?(body["vhosts"], &(&1["id"] == v.id and &1["in_pool"] == true))
       assert is_list(body["grants"])
       assert is_list(body["host_candidates"])
+    end
+
+    # #1157 — THE mode-1 pin the ruling asked for by name.
+    #
+    # `pool_with_reservations` is the default and is what every server
+    # that never configured a derivation block runs. Its candidate list
+    # must survive the new filter byte-identical. Asserting `is_list/1`
+    # (the contract before this change) would pass just as happily on a
+    # filter that emptied the picker, so assert the WHOLE list against
+    # the unfiltered universe.
+    test "mode 1 (no prefix configured) returns the candidate list IDENTICAL", %{conn: conn} do
+      session = admin_session()
+      assert ServerSettings.static_mapping_prefix() == nil
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/vhosts")
+
+      assert json_response(conn, 200)["host_candidates"] == HostAddresses.list()
+    end
+
+    # #1157 — the positive direction: a configured derivation block is
+    # withheld from the picker.
+    #
+    # Honest limit: the universe here is the real kernel interface table,
+    # so this can only exclude an address the host actually has. On a
+    # host with a v6 interface we pin the strong claim (that address is
+    # GONE, the v4 ones stay); on a v4-only host there is no derived
+    # alias to hide and we pin the wiring instead. The filtering maths
+    # itself is pinned deterministically, with synthetic input, in
+    # `Grappa.Net.HostAddressesTest`.
+    test "a configured static-mapping prefix is withheld from the candidates", %{conn: conn} do
+      session = admin_session()
+      candidates = HostAddresses.list()
+
+      case Enum.find(candidates, &String.contains?(&1, ":")) do
+        nil ->
+          prefix = "2001:db8:1157::/64"
+          :ok = ServerSettings.put_static_mapping_prefix(prefix)
+          conn = conn |> put_bearer(session.id) |> get("/admin/vhosts")
+
+          assert json_response(conn, 200)["host_candidates"] ==
+                   HostAddresses.reject_in_prefix(candidates, prefix)
+
+        v6 ->
+          :ok = ServerSettings.put_static_mapping_prefix(v6 <> "/128")
+          conn = conn |> put_bearer(session.id) |> get("/admin/vhosts")
+          returned = json_response(conn, 200)["host_candidates"]
+
+          refute v6 in returned
+
+          for v4 <- Enum.reject(candidates, &String.contains?(&1, ":")) do
+            assert v4 in returned
+          end
+      end
     end
 
     # #1140 — the listing used to assert only `is_list(body["grants"])`,

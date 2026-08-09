@@ -97,4 +97,61 @@ defmodule Grappa.Net.HostAddressesTest do
       refute HostAddresses.local_bindable?("203.0.113.5", [])
     end
   end
+
+  # #1157 — under the #543 `static_mapping_with_reservations` mode every
+  # derived source is bound as a real `/128` alias on `lo0`, so
+  # `getifaddrs/0` hands them back and the operator's vhost picker fills
+  # with addresses nobody curated. Same shape as `local_bindable?/2`: the
+  # universe AND the prefix are passed IN, so this is deterministic
+  # wherever it runs.
+  describe "reject_in_prefix/2" do
+    @prefix "2a03:4000:20:2d3:cafe::/80"
+
+    test "drops an address inside the prefix" do
+      universe = ["2a03:4000:20:2d3:cafe::5", "2a03:4000:20:2d3::1"]
+
+      refute "2a03:4000:20:2d3:cafe::5" in HostAddresses.reject_in_prefix(universe, @prefix)
+    end
+
+    test "keeps a v6 address outside the prefix" do
+      assert HostAddresses.reject_in_prefix(["2a03:4000:20:2d3::1"], @prefix) ==
+               ["2a03:4000:20:2d3::1"]
+    end
+
+    test "keeps every v4 address — a v6 prefix cannot contain one" do
+      assert HostAddresses.reject_in_prefix(["203.0.113.5", "10.0.0.5"], @prefix) ==
+               ["203.0.113.5", "10.0.0.5"]
+    end
+
+    test "preserves the order of the survivors" do
+      assert HostAddresses.reject_in_prefix(
+               ["203.0.113.5", "2a03:4000:20:2d3:cafe::5", "2a03:4000:20:2d3::1"],
+               @prefix
+             ) == ["203.0.113.5", "2a03:4000:20:2d3::1"]
+    end
+
+    # THE mode-1 pin. `pool_with_reservations` (the default, and every
+    # server that never set a prefix) stores no prefix at all, and its
+    # candidate list must come through byte-identical — reading
+    # `in_cidr6?/2` and concluding "nil is falsy anyway" is a reading of
+    # the code, and a reading gives the structure, never the magnitude.
+    test "a nil prefix (mode 1) returns the list IDENTICAL" do
+      addresses = ["203.0.113.5", "2a03:4000:20:2d3:cafe::5", "2a03:4000:20:2d3::1"]
+      assert HostAddresses.reject_in_prefix(addresses, nil) == addresses
+    end
+
+    test "a nil prefix does not even drop an address that a prefix would" do
+      assert HostAddresses.reject_in_prefix(["2a03:4000:20:2d3:cafe::5"], nil) ==
+               ["2a03:4000:20:2d3:cafe::5"]
+    end
+
+    test "a malformed prefix drops nothing (degrade open, not shut)" do
+      addresses = ["2a03:4000:20:2d3:cafe::5", "203.0.113.5"]
+      assert HostAddresses.reject_in_prefix(addresses, "not-a-cidr") == addresses
+    end
+
+    test "an empty universe stays empty" do
+      assert HostAddresses.reject_in_prefix([], @prefix) == []
+    end
+  end
 end
