@@ -1,17 +1,13 @@
 #!/usr/bin/env bash
 # Register a grappa A record via Technitium DNS API.
 #
-# Personal/operator helper — not invoked by the standard dev or deploy
-# flow. Pre-supposes a Technitium DNS server with API access and an
-# env file containing TECHNITIUM_TOKEN. Tune the env vars below for
-# your deployment; nothing is hardcoded to a particular IP/hostname.
+# Operator helper — not part of the dev or deploy flow. Needs a Technitium
+# server with API access and an env file holding TECHNITIUM_TOKEN.
 #
-# Idempotent in the strong sense: post-condition asserts the
-# authoritative DNS answer matches the desired IP after this runs.
-# If the record already resolves correctly, no API call is made. If
-# it exists but resolves to a different IP (drift), the existing
-# record is deleted and re-added — `add` alone would silently no-op
-# on conflict and leave the wrong IP in place.
+# Idempotent: no API call when the record already resolves to the desired
+# IP; on drift or absence, delete-then-add, then assert the authoritative
+# answer as a post-condition.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
 #
 # Required env vars (no defaults — script refuses to run without):
 #   GRAPPA_DOMAIN         FQDN to register, e.g. grappa.example.com
@@ -23,10 +19,6 @@
 #   TECHNITIUM_BASE_URL   default https://ns1.bad.ass/api
 #   DNS_NS                default ns1.bad.ass     (post-condition dig)
 #   TECHNITIUM_ENV_FILE   default /srv/dns/.env   (sourced for TECHNITIUM_TOKEN)
-#
-# Technitium quirks: API takes params as query-string (NOT JSON body);
-# self-signed cert (curl -sk); response JSON has `status` + optional
-# `errorMessage` at top level.
 
 set -euo pipefail
 
@@ -51,11 +43,10 @@ if [ -z "${TECHNITIUM_TOKEN:-}" ]; then
     exit 1
 fi
 
-# Print only `status` + `errorMessage` from a Technitium response —
-# never the full body. Defense in depth: if Technitium ever echoes
-# the API token in an error reply (current versions don't, but the
-# request token rides every call), the leak would surface in operator
-# stdout/CI logs. Tab-separated for cut downstream.
+# POST to a Technitium endpoint (query-string params, self-signed cert) and
+# print ONLY `status` + `errorMessage`, tab-separated — never the full body:
+# the API token rides every request.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
 api_call() {
     local endpoint="$1"
     shift
@@ -69,17 +60,15 @@ api_call() {
     printf '%s\t%s\n' "$status" "$errmsg"
 }
 
-# Authoritative pre-check. dig with +short prints just the answer;
-# +tries=1 + +timeout=5 fails fast on a dead nameserver. `|| true`
-# absorbs dig's own non-zero exit on no-answer (record absent).
+# Authoritative pre-check; +tries=1/+timeout=5 fails fast on a dead
+# nameserver. `|| true` absorbs dig's non-zero exit on no-answer.
 current="$(dig @"$DNS_NS" "$DOMAIN" A +short +timeout=5 +tries=1 2>/dev/null || true)"
 if [ "$current" = "$IP" ]; then
     echo "✓ DNS record already correct: $DOMAIN A $IP (no API call needed)"
     exit 0
 fi
 
-# Drift OR absence — both end with "delete then add" so the record
-# is authoritative regardless of prior state. Delete failure on a
+# Drift OR absence — both end with "delete then add". Delete failure on a
 # non-existent record is expected and not fatal.
 echo "  current: '$DOMAIN' → '${current:-<none>}', desired: '$IP' — re-registering"
 
@@ -117,9 +106,8 @@ if [ "$add_status" != "ok" ]; then
 fi
 echo "✓ DNS record set: $DOMAIN A $IP (TTL $TTL)"
 
-# Post-condition. Tiny settle delay: Technitium's in-zone cache lags
-# the add slightly. If the new answer doesn't propagate within ~3s
-# something is wrong with the zone serial or the upstream resolver.
+# Post-condition. The `sleep` settles Technitium's in-zone cache, which
+# lags the add slightly.
 sleep 1
 final="$(dig @"$DNS_NS" "$DOMAIN" A +short +timeout=5 +tries=1 2>/dev/null || true)"
 if [ "$final" != "$IP" ]; then

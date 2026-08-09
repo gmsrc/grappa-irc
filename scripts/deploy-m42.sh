@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 # Host-side one-command deploy to the m42 bastille jail.
 #
-# Wraps the `ssh m42` + `sudo bastille cmd grappa <jail script>`
-# incantation so the operator doesn't have to memorise it. The jail-side
-# scripts live in infra/freebsd/ and are documented "invoke from m42
-# host"; this is that host-side caller, runnable from anywhere with ssh
-# access to m42 (workstation, this repo checkout, CI).
+# Wraps `ssh m42` + `sudo bastille cmd grappa <jail script>`; the jail-side
+# scripts live in infra/freebsd/. Runnable from anywhere with ssh access to
+# m42 (workstation, repo checkout, CI).
 #
-# The jail scripts `git pull --ff-only` from origin/main, so PUSH your
-# commits to origin/main FIRST — this script does NOT push. As a guard it
-# fetches origin and refuses to run if local main is ahead of origin/main
-# (you'd otherwise deploy a stale tree and wonder why nothing changed).
+# The jail scripts `git pull --ff-only` from origin/main, so PUSH FIRST —
+# this script does NOT push, it only refuses to run when local main is
+# ahead of origin/main.
 #
 # Modes (mirror the Docker split — deploy.sh / deploy-cic.sh):
 #   scripts/deploy-m42.sh                 server deploy, auto hot/cold
@@ -20,19 +17,10 @@
 #   scripts/deploy-m42.sh --cic           cic-only bundle deploy, NO BEAM
 #                                         restart → jail_deploy_cic.sh
 #                                         (vite rebuild + refresh banner)
-#   scripts/deploy-m42.sh --full-restart  cold deploy that binds NEW jail
-#                                         vhosts in ONE bounce: the jail
-#                                         stages the release + rc.d wrappers
-#                                         and STOPS the BEAM (deploy.sh
-#                                         --force-cold --defer-restart), then
-#                                         the host does a single
-#                                         `bastille restart` to boot it. Use
-#                                         when a new vhost / jail-layer
-#                                         network change must take effect.
-#
-# No path here touches a proxy: there is no nginx inside the jail. The
-# BEAM binds `*:4000` and the m42 HOST vhost proxies straight to it, the
-# same posture as Docker.
+#   scripts/deploy-m42.sh --full-restart  cold deploy + a single host
+#                                         `bastille restart`, for when a new
+#                                         vhost / jail-layer network change
+#                                         must take effect
 #
 # Overridable via env:
 #   M42_HOST   ssh host alias            (default: m42)
@@ -48,8 +36,7 @@ M42_HOST="${M42_HOST:-m42}"
 JAIL="${JAIL:-grappa}"
 JAIL_REPO="${JAIL_REPO:-/home/grappa/grappa}"
 
-# --full-restart post-bounce healthcheck. Mirrors deploy.sh's
-# HEALTHCHECK_* feel (30×2s); the jail-internal curl runs over ssh so each
+# --full-restart post-bounce healthcheck (30×2s, like deploy.sh). Each
 # attempt also carries an ssh round-trip. Overridable for tests / slow jails.
 FULL_RESTART_HC_URL="${FULL_RESTART_HC_URL:-http://127.0.0.1:4000/healthz}"
 FULL_RESTART_HC_RETRIES="${FULL_RESTART_HC_RETRIES:-30}"
@@ -88,8 +75,7 @@ case "${1:-}" in
 esac
 
 # Push guard: the jail pulls origin/main, so local main must not be ahead.
-# Fetch quietly; tolerate offline (warn, don't block — operator may have
-# pushed from elsewhere).
+# Offline is tolerated (warn, don't block — the push may be from elsewhere).
 if git rev-parse --git-dir >/dev/null 2>&1; then
   git fetch -q origin main 2>/dev/null || echo "deploy-m42: warning — could not fetch origin (offline?); skipping push check" >&2
   local_main="$(git rev-parse main 2>/dev/null || true)"
@@ -105,12 +91,12 @@ echo "==> deploy-m42: ${label}"
 echo "    host=${M42_HOST} jail=${JAIL} script=${jail_script}"
 
 if [ "$full_restart" -eq 1 ]; then
-  # One-bounce vhost bind. The jail stages the release + rc.d wrappers and
-  # STOPS the BEAM (deploy.sh --force-cold --defer-restart exits 0 without
-  # starting it); then a single host `bastille restart` boots the staged
-  # release through the new wrapper and binds any new jail vhosts. The
-  # completed-deploy marker is written here, by the host, only AFTER the
-  # post-bounce healthcheck passes — deploy.sh deliberately did not write it.
+  # One-bounce vhost bind: the jail stages the release + rc.d wrappers and
+  # STOPS the BEAM (--defer-restart exits 0 without starting it), then a
+  # single host `bastille restart` boots it and binds any new jail vhosts.
+  # The completed-deploy marker is written by the HOST, below, only after
+  # the post-bounce healthcheck passes.
+  # Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
   echo "==> deploy-m42: staging release + rc.d wrappers (BEAM stops, NOT restarted)"
   # shellcheck disable=SC2029  # intentional client-side expansion of vars
   ssh "$M42_HOST" "sudo bastille cmd ${JAIL} ${jail_script} ${remote_args}"
@@ -136,8 +122,8 @@ if [ "$full_restart" -eq 1 ]; then
   fi
 
   # Write the marker INSIDE the jail (deploy.sh reads it as the
-  # completed-deploy signal). Read the jail's own HEAD rather than passing a
-  # sha from the host — a sibling push could have raced the host's view.
+  # completed-deploy signal), from the jail's OWN HEAD — never a sha passed
+  # down from the host, which a sibling push could have raced.
   echo "==> deploy-m42: healthcheck ok — recording runtime/last-deployed-sha (jail HEAD)"
   # shellcheck disable=SC2029  # intentional client-side expansion of vars
   ssh "$M42_HOST" "sudo bastille cmd ${JAIL} su -l grappa -c 'cd ${JAIL_REPO} && git rev-parse HEAD > runtime/last-deployed-sha'"

@@ -2,10 +2,9 @@
 # scripts/testnet.sh — bring up / tear down / probe the integration
 # testnet stack on its own (without running the Playwright suite).
 #
-# Wraps `cicchetto/e2e/compose.yaml` for iterative debugging — the
-# integration.sh wrapper always tears the stack down on exit, which
-# makes it useless when you want to inspect S2S linkup, conf rendering,
-# or peer behavior interactively.
+# Wraps `cicchetto/e2e/compose.yaml` for iterative debugging: unlike
+# integration.sh, it leaves the stack up so S2S linkup, conf rendering and
+# peer behaviour can be inspected interactively.
 #
 # Usage:
 #   scripts/testnet.sh up         # build + start hub + leaves + services + grappa-test + nginx (no runner, no auto-tear-down)
@@ -15,8 +14,7 @@
 #   scripts/testnet.sh probe      # raw IRC client connect to leaf4 + /links + /stats l (oper-up auto)
 #   scripts/testnet.sh shell <svc>  # exec sh inside one of the running containers
 #
-# Worktree-aware via _lib.sh — REPO_ROOT / SRC_ROOT resolution mirrors
-# integration.sh so volumes + bind-mounts land in the right place.
+# Worktree-aware via _lib.sh (REPO_ROOT / SRC_ROOT), same as integration.sh.
 #
 # Canonical "which test runner do I use?" + e2e cascade-vs-flake triage
 # runbook: docs/TESTING.md.
@@ -28,10 +26,9 @@ set -euo pipefail
 
 E2E_DIR="$SRC_ROOT/cicchetto/e2e"
 
-# #538 — the e2e cicchetto-build-test container mounts only ./cicchetto and
-# cannot read mix.exs; vite bakes GRAPPA_VERSION into <meta cicchetto-version>
-# (asserted by the bundle-refresh e2e). Derive the single-source version here
-# (SRC_ROOT has mix.exs) so every `docker compose` below passes it through.
+# Derive the single-source version here (SRC_ROOT has it) and export it, so
+# every `docker compose` below passes it through to the cic build.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)" (#538).
 GRAPPA_VERSION="$("$SRC_ROOT/infra/packaging/version.sh")"
 export GRAPPA_VERSION
 
@@ -39,15 +36,10 @@ if [ ! -f "$E2E_DIR/compose.yaml" ]; then
     die "missing $E2E_DIR/compose.yaml"
 fi
 if [ ! -d "$E2E_DIR/infra/bahamut" ]; then
-    # Git worktrees do NOT inherit the parent checkout's submodules, so a
-    # fresh worktree always lands here. Auto-init instead of dying on a
-    # manual step everyone forgets — idempotent and a no-op once present.
-    # `-c protocol.file.allow=always` is REQUIRED, not cosmetic (#592): in a
-    # worktree git clones the submodule from the superproject's LOCAL module
-    # store ($REPO/.git/modules/…) over the file:// transport, which the
-    # CVE-2022-39253 mitigation blocks by default — without the flag every
-    # fresh worktree dies with `fatal: transport 'file' not allowed`, so the
-    # auto-init that exists precisely to spare the manual step never spared it.
+    # Git worktrees do NOT inherit the parent checkout's submodules — auto-init
+    # (idempotent, a no-op once present). `-c protocol.file.allow=always` is
+    # REQUIRED, not cosmetic.
+    # Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)" (#592).
     echo "testnet: azzurra-testnet submodule empty (fresh worktree?) — initialising…" >&2
     git -C "$SRC_ROOT" -c protocol.file.allow=always submodule update --init cicchetto/e2e/infra >&2 \
         || die "submodule auto-init failed — run: git -C '$SRC_ROOT' -c protocol.file.allow=always submodule update --init cicchetto/e2e/infra"
@@ -63,9 +55,9 @@ shift || true
 
 case "$cmd" in
     up)
-        # Same UID/GID handling + bind-mount mkdir as integration.sh —
-        # without these the bahamut + grappa-test sqlite + cicchetto-dist
-        # writes hit AccessDenied under the dropped UID.
+        # Same UID/GID handling + bind-mount mkdir as integration.sh — without
+        # these the bahamut / grappa-test sqlite / cicchetto-dist writes hit
+        # AccessDenied under the dropped UID.
         e2e_export_uid
         mkdir -p \
             "$REPO_ROOT/runtime/bun-cache" \
@@ -73,49 +65,27 @@ case "$cmd" in
             "$SRC_ROOT/runtime/e2e/grappa-runtime"
 
         cd "$E2E_DIR"
-        # Idempotent: if a previous `testnet up` is still around (or an
-        # integration.sh run died mid-flight), the bahamut leaf and the
-        # grappa-test container still hold ports / DB locks / sqlite WAL
-        # state. Tear down before bringing up so the second run inherits
-        # a clean slate. `down -v` is destructive — wipes named volumes,
-        # but those are e2e-only (deps, build, hex caches + runner
-        # node_modules). The host bind-mount runtime/e2e/* is wiped in
-        # the down branch, mirroring `down`.
+        # Tear down first so the bring-up inherits a clean slate: a leftover
+        # testnet still holds ports / DB locks / sqlite WAL state. `down -v`
+        # wipes named volumes, but those are all e2e-only caches.
         docker compose down -v --remove-orphans 2>&1 | tail -5 || true
-        # e2e_force_rm (not plain rm) — a prior run can leave these
-        # root-owned, and a plain rm would abort under set -e, breaking
-        # the next bring-up. See _lib.sh.
+        # e2e_force_rm, not plain rm — a prior run can leave these root-owned
+        # (see _lib.sh).
         e2e_force_rm "$SRC_ROOT/runtime/e2e/grappa-runtime" "$SRC_ROOT/runtime/e2e/cicchetto-dist"
         mkdir -p \
             "$SRC_ROOT/runtime/e2e/cicchetto-dist" \
             "$SRC_ROOT/runtime/e2e/grappa-runtime"
 
-        # Phase 1: seeder oneshot. See integration.sh for the two-phase
-        # rationale — TL;DR: re-running an already-completed seeder via
-        # the dep graph trips on the duplicate user row, so we boot it
-        # alone first.
-        #
-        # `compose run --rm` (NOT `up --wait`) — `up --wait` treats a
-        # one-shot's normal exit as a healthcheck failure and returns
-        # non-zero, tripping `set -e`. `run --rm` is sync + returns the
-        # container's actual exit code, which is what we want for the
-        # mix-task seed pipeline.
+        # Phase 1: seeder oneshot, booted alone and via `compose run --rm`
+        # (NOT `up --wait`).
+        # Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
         docker compose build grappa-e2e-seeder
         docker compose run --rm grappa-e2e-seeder
-        # Phase 2: long-running services (NO runner — that's what makes
-        # this script different from integration.sh). `--build` here too
-        # so bahamut hub + leaves pick up conf.{hub,leaf4,leaf6}.tmpl
-        # edits — the seeder's `--build` only rebuilds the grappa image,
-        # the azzurra-testnet bahamut images are independent and would
-        # otherwise stay cached on whatever `infra/bahamut/*.tmpl` was
-        # COPY'd at last build. #221: `solanum-test2` is the standalone
-        # second-network ircd (solanum, replacing the old bahamut-test2 —
-        # it keeps the `bahamut-test2` network alias, but the compose
-        # SERVICE name is solanum-test2).
-        # #349 — `mailpit` is the mailcatcher the registration-wizard e2e
-        # polls for the emailed NickServ AUTH code (services relays via
-        # msmtp → mailpit:1025). Distroless image, no healthcheck → `--wait`
-        # treats it as up once running.
+        # Phase 2: long-running services, NO runner (that is what separates
+        # this script from integration.sh). `--build` so the bahamut hub +
+        # leaves pick up conf.{hub,leaf4,leaf6}.tmpl edits. `solanum-test2` is
+        # the second-network ircd; `mailpit` the mailcatcher the
+        # registration-wizard e2e polls for the NickServ AUTH code.
         docker compose up --build --wait hub leaf-v4 leaf-v6 services solanum-test2 grappa-test nginx-test mailpit
         echo
         echo "testnet up. ports: nginx=http://nginx-test, irc=bahamut-test:6667 (in-network only)"
@@ -135,12 +105,10 @@ case "$cmd" in
         docker compose logs -f "${1:-}"
         ;;
     probe)
-        # Raw IRC connect from inside the docker network. Uses nginx-test
-        # as a convenient netcat host — the alpine image ships nc and is
-        # already on the grappa-e2e bridge. Auto-opers via the baked-in
-        # `azzurra`/`azzt3st` credential so /links + /stats l show real
-        # link state. Output is raw IRC wire — useful for diagnosing
-        # split-mode (255 :I have N clients and 0 servers = unlinked).
+        # Raw IRC connect from inside the docker network, using nginx-test as
+        # the netcat host (alpine, already on the grappa-e2e bridge).
+        # Auto-opers so /links + /stats l show real link state; output is raw
+        # IRC wire.
         docker exec grappa-e2e-nginx sh -c '{
             echo "NICK probe-$$";
             echo "USER probe 0 * :probe";

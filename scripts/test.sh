@@ -7,9 +7,8 @@
 #   scripts/test.sh --only integration
 #   scripts/test.sh --cover                      # with coverage
 #
-# Routes through scripts/mix.sh's --env=test override; auto-detect would
-# pick up the live container's MIX_ENV (likely dev or prod), neither of
-# which is what tests want.
+# Routes through scripts/mix.sh's --env=test override: auto-detect would pick
+# up the live container's MIX_ENV (dev or prod), which tests must not run in.
 #
 # Canonical "which test runner do I use?" docs: docs/TESTING.md.
 

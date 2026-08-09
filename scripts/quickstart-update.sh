@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# DEPRECATED SHIM (#503) — forwards to `infra/docker/deploy.sh update`.
-#
-# Absorbed into the verb-dispatched consumer of the shared deploy lib. The
-# update verb is now smarter than this script ever was: instead of always
-# recreating, it classifies hot-vs-cold via Grappa.Deploy.Preflight (HOT →
-# POST /admin/reload, sessions preserved; COLD → recreate). Kept for one
-# release; forwards verbatim (--no-pull / --force-hot / --force-cold ride
+# DEPRECATED SHIM (#503), kept for one release — forwards verbatim to
+# `infra/docker/deploy.sh update` (--no-pull / --force-hot / --force-cold ride
 # through). Prefer:
 #
 #   infra/docker/deploy.sh update

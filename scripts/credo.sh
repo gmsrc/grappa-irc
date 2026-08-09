@@ -5,10 +5,10 @@
 #   scripts/credo.sh           # mix credo --strict
 #   scripts/credo.sh suggest   # mix credo suggest --strict (more verbose)
 #   scripts/credo.sh list      # mix credo list (one-line per finding)
-#   scripts/credo.sh diff master  # show issues only on changed files vs master
+#   scripts/credo.sh diff main    # show issues only on changed files vs main
 #
-# Pins MIX_ENV=dev via scripts/mix.sh because credo is `only: [:dev, :test]`
-# and unavailable under MIX_ENV=prod (the typical live-container env).
+# Pins MIX_ENV=dev via scripts/mix.sh: credo is `only: [:dev, :test]` and is
+# absent from a prod-profile container.
 
 # shellcheck source=scripts/_lib.sh
 . "$(dirname "$0")/_lib.sh"

@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
 # Build + exercise the self-contained RELEASE image (Dockerfile.release)
 # locally — the sanctioned door for the `docker run ghcr.io/vjt/grappa:<tag>`
-# path that #503 unit D ships and that nothing else in scripts/ could reach.
-#
-# Why this exists: docs/TESTING.md forbids raw `docker` from a shell or an
-# agent, and every other wrapper drives the compose DEV stack. The release
-# image is a different artifact with a different failure surface — #862
-# (no secrets on a bare run) and #867 (no migration on a bare run) were both
-# found by hand-typing docker commands, and unit D still carries a "run a
-# real docker run of the published image before trusting these one-liners"
-# caveat. This turns that into a repeatable command.
+# path; every other wrapper in scripts/ drives the compose DEV stack.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
 #
 # Usage:
 #   scripts/release-image.sh build            # buildx the local image
@@ -18,10 +11,6 @@
 #   scripts/release-image.sh oneshot <args…>  # `docker run --rm … <args>` on the volume
 #   scripts/release-image.sh logs             # container logs
 #   scripts/release-image.sh down [--volume]  # remove the container (and volume)
-#
-# `fresh-boot` / `warm-boot` reproduce the DOCUMENTED one-liner: the only
-# thing they pass is PHX_HOST, which cannot be invented. Everything else
-# must come from the image + the volume, or the one-liner is a lie.
 #
 # Knobs: GRAPPA_TEST_IMAGE (tag), GRAPPA_TEST_VOLUME, GRAPPA_TEST_CONTAINER,
 # GRAPPA_TEST_PORT, PHX_HOST, GRAPPA_TEST_BOOT_TIMEOUT (seconds).
@@ -46,9 +35,9 @@ remove_container() {
 }
 
 # boot — `docker run -d` the image exactly as the docs tell an operator to,
-# then poll /healthz from the HOST until it answers or the deadline passes.
-# Prints the container log on failure: a dead bare run is the whole point of
-# this script, so its output must never be swallowed.
+# passing ONLY PHX_HOST, then poll /healthz from the HOST until it answers
+# or the deadline passes. Dumps the container log on failure.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
 boot() {
     remove_container
     docker run -d \

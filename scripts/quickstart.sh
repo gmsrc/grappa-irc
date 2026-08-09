@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
-# DEPRECATED SHIM (#503) — forwards to `infra/docker/deploy.sh install`.
-#
-# The three quickstart scripts (quickstart.sh / -update.sh / -stop.sh) were
-# absorbed into one verb-dispatched consumer of the shared deploy lib
-# (infra/docker/deploy.sh). This shim is kept for one release so existing
-# muscle memory + docs keep working; it forwards verbatim — the whole
-# environment (PHX_HOST, HTTP_BIND, SEED_*, FRONTEND_SSL_*, …) rides through
-# the exec unchanged. Prefer:
+# DEPRECATED SHIM (#503), kept for one release — forwards verbatim to
+# `infra/docker/deploy.sh install`; the whole environment (PHX_HOST, HTTP_BIND,
+# SEED_*, FRONTEND_SSL_*, …) rides through the exec unchanged. Prefer:
 #
 #   infra/docker/deploy.sh install
 set -euo pipefail

@@ -7,15 +7,13 @@
 #   scripts/mix.sh --env=prod ecto.migrate     # explicit env override
 #   scripts/mix.sh --env=test test             # explicit env override
 #
-# Auto-detect probes `printenv MIX_ENV` inside the live container; if
-# no container is up (oneshot path), defaults to dev. Sibling scripts
-# that depend on dev-only deps (credo, dialyzer, format, sobelow) MUST
-# pass `--env=dev` explicitly because dev-only deps aren't compiled
-# into prod images — auto-detect would crash on those.
+# Auto-detect probes `printenv MIX_ENV` inside the live container, and falls
+# back to dev when no container is up. Sibling scripts that depend on dev-only
+# deps (credo, dialyzer, format, sobelow) MUST pass `--env=dev` explicitly —
+# those deps are absent from a prod image, so auto-detect would crash.
 #
-# The --env=<env> flag is recognised only as the FIRST positional arg;
-# anywhere else it's passed through verbatim to mix (which will likely
-# reject it). Predictable parse path > flexible parse path.
+# `--env=<env>` is recognised ONLY as the first positional arg; anywhere else
+# it is passed through to mix verbatim.
 
 # shellcheck source=scripts/_lib.sh
 . "$(dirname "$0")/_lib.sh"
@@ -31,23 +29,17 @@ fi
 if [ -z "$env" ]; then
     env="$(detect_mix_env)"
     if [ -z "$env" ]; then
-        # Honest log — `feedback_no_silent_drops_closed`. Operator on a
-        # prod box who EXPECTED prod must see they got dev. No silent
-        # default.
+        # No silent default: an operator who expected prod must see they got dev.
         printf 'scripts/mix.sh: container not running, defaulting MIX_ENV=dev\n' >&2
         env="dev"
     fi
 fi
 
-# DATABASE_PATH is read ONLY by config/runtime.exs's prod branch —
-# config/{dev,test}.exs hardcode the DB path and ignore the env var. So
-# only prod needs an override here: compose.yaml interpolates
-# DATABASE_PATH from the HOST's MIX_ENV, which diverges from the env this
-# script resolved, and `--env=prod` on a dev host would otherwise
-# migrate/read the DEV db (#364 docker S5). Inject the matching prod path
-# via the db_path_for_env SoT; leave dev/test to their compile-time
-# config (injecting there would be inert theater — and grappa_test.db
-# doesn't even match config/test.exs's MIX_TEST_PARTITION suffix).
+# DATABASE_PATH is read ONLY by config/runtime.exs's prod branch, so only prod
+# gets an override: compose.yaml interpolates DATABASE_PATH from the HOST's
+# MIX_ENV, so `--env=prod` on a dev host would otherwise migrate/read the DEV
+# db (#364). dev/test keep their compile-time config.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
 db_env=()
 if [ "$env" = "prod" ]; then
     db_env=(DATABASE_PATH="$(db_path_for_env prod)")

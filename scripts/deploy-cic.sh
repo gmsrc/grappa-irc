@@ -5,19 +5,15 @@
 #
 # Two-step:
 #   1. `compose --profile prod run --rm cicchetto-build` — bun + Vite
-#      build into the bind-mounted runtime/cicchetto-dist/. Produces a
-#      new `index-<hash>.js` whose hash differs from the previous build
-#      iff the source changed.
-#   2. `POST /admin/cic-bundle-changed` — re-reads the new index.html
-#      via `Grappa.Cic.Bundle.current_hash/0` and broadcasts
-#      `{kind: "bundle_hash", hash}` on every live user-topic. cic
-#      compares against `bootBundleHash` (the hash baked into the page
-#      the browser loaded) and surfaces a refresh banner on mismatch.
-#      Click → `window.location.reload()`.
+#      build into runtime/cicchetto-dist/, producing an `index-<hash>.js`
+#      whose hash changes iff the source did.
+#   2. `POST /admin/cic-bundle-changed` — re-reads the new index.html and
+#      broadcasts `{kind: "bundle_hash", hash}` on every live user-topic;
+#      cic compares it against `bootBundleHash` and shows a refresh banner
+#      on mismatch.
 #
 # Independent of `scripts/deploy.sh`: cic deploys never need a server
-# restart, server deploys never trigger a cic refresh. Each surface
-# ships on its own cadence.
+# restart, server deploys never trigger a cic refresh.
 #
 # Usage:
 #   scripts/deploy-cic.sh
@@ -32,51 +28,41 @@ set -euo pipefail
 # shellcheck source=infra/lib/cic_dist.sh
 . "$(dirname "$0")/../infra/lib/cic_dist.sh"
 
-# #364 docker S10: assert main-checkout + main-branch BEFORE the dist
-# rebuild swaps the on-disk bundle nginx serves. Pre-fix this script had
-# NO branch guard (it shipped whatever the main checkout's branch held)
-# and only hit in_container's worktree check AFTER the build — dist
-# deployed, then a non-zero exit at the broadcast POST.
+# Assert main-checkout + main-branch BEFORE the rebuild swaps the on-disk
+# bundle that is being served (#364).
 require_main_checkout "deploy-cic.sh"
 
 cd "$REPO_ROOT"
 
-# #1020 — build into a staging sibling, NOT into the dir the live BEAM is
-# serving. CIC_BUILD_OUT is scoped to the build command so the rest of this
-# script (and any later compose call) sees the normal mount.
+# Build into a STAGING sibling, never into the dir the live BEAM is serving.
+# CIC_BUILD_OUT is scoped to the build command so the rest of this script
+# (and any later compose call) sees the normal mount.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)" (#1020).
 CIC_SERVED="runtime/cicchetto-dist"
 CIC_BUILD_OUT="$(cic_dist_docker_stage "$CIC_SERVED")"
 
-# #538 — derive the single-source version for the cic build. The
-# cicchetto-build container mounts only ./cicchetto, so it can't read the repo
-# root; pass GRAPPA_VERSION (from the VERSION file, #652) through the compose env.
+# The cicchetto-build container mounts only ./cicchetto and cannot read the
+# repo root, so pass the version through the compose env (#538).
 GRAPPA_VERSION="$("$REPO_ROOT/infra/packaging/version.sh")"
 export GRAPPA_VERSION
 echo "Building cicchetto dist..."
 CIC_BUILD_OUT="$CIC_BUILD_OUT" docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm cicchetto-build
-# Swap the finished bundle in. The tracked .gitkeep is planted by the promote,
-# so the post-build `touch` that used to undo vite's wipe is gone.
+# Swap the finished bundle in; the promote plants the tracked .gitkeep.
 cic_dist_promote "$CIC_SERVED" "$CIC_BUILD_OUT"
 
 echo "Notifying grappa of new bundle hash..."
-# Container `curl` against loopback inside the grappa pod —
-# /admin/cic-bundle-changed is loopback-gated. Response body is the
-# new hash on success, empty on 204 (the BEAM could not READ the bundle
-# it was asked to broadcast). Routes through `_lib.sh in_container` so
-# the container-name lookup is shared with every other operator surface
-# (H27 from the 2026-05-22 codebase review) — bare `docker exec grappa`
-# assumed `container_name: grappa` literally and was brittle to compose
-# overrides.
+# /admin/cic-bundle-changed is loopback-gated, so curl it from inside the
+# container. Body is the new hash on success, empty on 204 (the BEAM could
+# not READ the bundle it was asked to broadcast). Goes through `_lib.sh
+# in_container` — never a bare `docker exec grappa`.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
 if ! hash="$(in_container curl -fsS -X POST http://localhost:4000/admin/cic-bundle-changed)"; then
     die "cic-bundle-changed POST failed — is grappa up? scripts/healthcheck.sh"
 fi
 
-# #526: an empty body is HTTP 204 — the server could not read the dist we
-# JUST built, so it broadcast NOTHING and no live client will see the
-# refresh banner. That is a FAILED deploy, not a success: the whole point
-# of this step is the broadcast. The old code printed a ✓ here, so the
-# 2026-07-28 prod incident (CIC_DIST_ROOT resolving to a path the BEAM's
-# CWD could not reach) degraded silently. Fail loud and name the fix.
+# An empty body is HTTP 204 — nothing was broadcast, so no client sees the
+# refresh banner. That is a FAILED deploy: fail loud, never print a ✓ here.
+# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)" (#526).
 if [ -z "$hash" ]; then
     die "cic-bundle-changed returned 204 (empty) — grappa built the dist but could NOT read it back to broadcast the hash, so NO refresh banner fired. Check that CIC_DIST_ROOT resolves to the dir the build wrote (runtime/cicchetto-dist). See issue #526."
 fi

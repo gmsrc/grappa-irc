@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# DEPRECATED SHIM (#503) — forwards to `infra/docker/deploy.sh stop`.
-#
-# Absorbed into the verb-dispatched consumer of the shared deploy lib. Kept
-# for one release; forwards verbatim (--volumes / -v ride through). Prefer:
+# DEPRECATED SHIM (#503), kept for one release — forwards verbatim to
+# `infra/docker/deploy.sh stop` (--volumes / -v ride through). Prefer:
 #
 #   infra/docker/deploy.sh stop
 set -euo pipefail

@@ -5,14 +5,8 @@
 #   scripts/bats.sh                       # all tests: test/bin/ test/infra/ test/scripts/
 #   scripts/bats.sh test/bin/grappa_test.bats
 #
-# Bats lives at vendor/bats-core (git submodule pinned to v1.9.0).
-# Auto-initialised below on a fresh clone / fresh worktree — no manual
-# `git submodule update --init` step needed.
-#
-# Bats runs ON THE HOST, against host-side scripts (bin/grappa). It is
-# NOT containerised — no docker compose involvement. The grappa
-# container is only invoked transitively when a test exercises a verb
-# that shells out to docker (those tests stub `docker` via PATH).
+# Bats runs ON THE HOST (vendor/bats-core submodule, pinned to v1.9.0),
+# against host-side scripts — no docker compose involvement.
 
 # shellcheck source=scripts/_lib.sh
 . "$(dirname "$0")/_lib.sh"
@@ -22,17 +16,10 @@ cd "$SRC_ROOT"
 bats_bin="$SRC_ROOT/vendor/bats-core/bin/bats"
 
 if [ ! -x "$bats_bin" ]; then
-    # Self-heal a fresh clone / fresh worktree: the bats-core submodule
-    # isn't checked out by default (the gitlink + .git/modules entry are
-    # shared, but each worktree gets its own vendor/bats-core working
-    # tree). Init it rather than making the operator run the incantation
-    # by hand — mirrors the testnet.sh submodule auto-init pattern so
-    # check.sh works first-try from any worktree.
-    # `-c protocol.file.allow=always` is REQUIRED, not cosmetic (#592): in a
-    # worktree git clones the submodule from the superproject's LOCAL module
-    # store over the file:// transport, which the CVE-2022-39253 mitigation
-    # blocks by default — without it a fresh worktree dies with
-    # `fatal: transport 'file' not allowed`.
+    # Self-heal a fresh clone / worktree: vendor/bats-core is a per-worktree
+    # working tree and is not checked out by default.
+    # `-c protocol.file.allow=always` is REQUIRED, not cosmetic (#592).
+    # Why: docs/TESTING.md § "What each script actually runs".
     printf 'scripts/bats.sh: vendor/bats-core missing — initialising submodule...\n' >&2
     git -C "$SRC_ROOT" -c protocol.file.allow=always submodule update --init vendor/bats-core >&2 \
         || die "vendor/bats-core init failed. Run: git -C \"$SRC_ROOT\" -c protocol.file.allow=always submodule update --init vendor/bats-core"
