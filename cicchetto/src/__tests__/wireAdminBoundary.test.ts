@@ -6,6 +6,7 @@ import {
   narrowSessionLogEntry,
 } from "../lib/wireNarrow";
 import { S_AdminEventsWireEvent, S_AdminOverviewWireT, S_SessionLogWireT } from "../lib/wireSchema";
+import { ADMISSION_FLOW } from "../lib/wireTypes";
 import type { WireNode } from "../lib/wireValidate";
 
 // #429 — a MEASUREMENT of what the admin-events boundary does to a malformed
@@ -131,6 +132,27 @@ describe("admin-events boundary — malformed-payload measurement (#429)", () =>
     expect(verdict({})).toBe("reject");
     expect(verdict({ kind: 1, at: "t" })).toBe("reject");
     expect(verdict({ kind: "a_kind_from_the_future", at: "t" })).toBe("reject");
+  });
+
+  // The regression this slice was chasing, stated as behaviour rather than as
+  // a snapshot cell: every arm of the server's own `Admission.flow/0` must
+  // get through. Against the pre-#429 hand narrower this fails on exactly one
+  // member, `visitor_reconnect`, which the five-arm transcription never
+  // learned about.
+  it("admits every member of the server's declared admission-flow set", () => {
+    for (const flow of ADMISSION_FLOW) {
+      expect(
+        narrowAdminEvent({
+          kind: "capacity_reject",
+          flow,
+          error: "ip_cap_exceeded",
+          network_id: 1,
+          network_slug: "azzurra",
+          source_ip: null,
+          at: "2026-08-09T00:00:00Z",
+        }),
+      ).not.toBeNull();
+    }
   });
 
   it("keeps the snapshot atomic — one malformed row drops the whole set", () => {
@@ -362,12 +384,12 @@ describe("admin-events boundary — malformed-payload measurement (#429)", () =>
           "unknownKey": "accept",
         },
         "web_session_severed": {
-          "baseline": "reject",
+          "baseline": "accept",
           "fields": "at, failures, kind, subject_id, subject_kind, window_ms",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
-          "unknownKey": "reject",
+          "unknownKey": "accept",
         },
       }
     `);

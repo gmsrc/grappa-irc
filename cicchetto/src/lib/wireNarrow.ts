@@ -1,6 +1,5 @@
 import type {
   AdminSnapshotPayload,
-  AdmissionFlow,
   MessageKind,
   ScrollbackMessage,
   WhoUser,
@@ -9,25 +8,21 @@ import type {
 } from "./api";
 import type { ModesEntry, TopicEntry } from "./channelTopic";
 import type { MemberEntry } from "./memberTypes";
-import type {
-  AdminEventsWireLoginThrottleDoor,
-  AdminEventsWireLoginThrottleScope,
-  AdminOverviewWireT,
-  SessionLogEvent,
-  SessionLogWireT,
-  WindowCountsSeverity,
-} from "./wireTypes";
+// #429 — the generated RUNTIME schemas. `S_*` consts are the same typespecs
+// `wireTypes.ts` mirrors at compile time, emitted as data so the boundary can
+// enforce them after tsc has erased the types.
+import { S_AdminEventsWireEvent, S_AdminOverviewWireT, S_SessionLogWireT } from "./wireSchema";
+import type { AdminOverviewWireT, SessionLogWireT, WindowCountsSeverity } from "./wireTypes";
 // #410 — the runtime allowlists derive from the codegen-emitted `as const`
 // enum arrays, so each closed set has ONE source (the server typespec via
 // wireTypes.ts), not a hand copy that can silently drift.
 import {
   ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_DOOR,
   ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_SCOPE,
-  ADMISSION_FLOW,
   SCROLLBACK_MESSAGE_KIND,
-  SESSION_LOG_EVENT,
   WINDOW_COUNTS_SEVERITY,
 } from "./wireTypes";
+import { validate } from "./wireValidate";
 
 // #267 — narrow the window_counts severity to the closed union, defaulting
 // to "none" for an unknown value (defensive: a stale server mid hot-reload
@@ -39,18 +34,6 @@ function narrowSeverity(raw: unknown): WindowCountsSeverity {
   return typeof raw === "string" && (WINDOW_COUNTS_SEVERITY as readonly string[]).includes(raw)
     ? (raw as WindowCountsSeverity)
     : "none";
-}
-
-// An ADDITIVE closed-set field: absent (an older server minted the event)
-// or unrecognised (a newer one added an arm) both narrow to `undefined`,
-// so the caller renders without it instead of dropping the event. Same
-// #410 discipline as `narrowSeverity` — the allowlist IS the
-// codegen-emitted const, never a hand copy.
-function narrowEnumMember<T extends string>(
-  raw: unknown,
-  allowed: readonly string[],
-): T | undefined {
-  return typeof raw === "string" && allowed.includes(raw) ? (raw as T) : undefined;
 }
 
 // Bucket G H4+U3 (codebase-review-2026-05-12): runtime narrowing for
@@ -472,65 +455,63 @@ export function narrowChannelEvent(raw: unknown): WireChannelEvent | null {
 // the live `liveCountsByNetworkId` projection. The narrowers gate the
 // boundary: shape mismatch → return null → caller drops + logs.
 //
-// `narrowAdminSnapshot` validates the `{events: WireAdminEvent[]}` outer
-// shape AND every element. Either the whole snapshot validates or it
-// drops — partial admission would corrupt the audit ring with malformed
-// rows.
+// #429 — the 27 arms below used to be transcribed BY HAND from the server's
+// `Grappa.AdminEvents.Wire` typespecs: ~420 lines re-stating a shape the
+// codegen already reads. They now run off `S_AdminEventsWireEvent`, emitted
+// from those same typespecs by `mix grappa.gen_wire_types` and gated by the
+// same `--check` drift check as `wireTypes.ts`.
 //
-// Adding a new admin event arm:
-//   1. Add to `WireAdminEvent` union in api.ts.
-//   2. Add an arm to `narrowAdminEvent` here.
-//   3. Add a dispatch case to `ingest()` in adminEvents.ts (tsc-enforced
-//      via `assertNever`).
-// The narrower's default-arm returning null is the runtime mirror of
-// `assertNever` — unknown server kinds drop instead of crashing.
-
-// #448 — the allowlist derives from the codegen-emitted `ADMISSION_FLOW`
-// const (the #410 posture), not a hand copy. The hand copy this replaces
-// had silently gone stale: it was missing `visitor_reconnect`, so every
-// capacity_reject raised by the visitor-reconnect door was dropped here
-// and never reached the Events tab.
-const VALID_ADMISSION_FLOWS: ReadonlySet<AdmissionFlow> = new Set(ADMISSION_FLOW);
-
-const VALID_SUBJECT_KINDS: ReadonlySet<"user" | "visitor"> = new Set(["user", "visitor"]);
-
-const VALID_CIRCUIT_CLOSE_REASONS: ReadonlySet<"success" | "cooldown_expired"> = new Set([
-  "success",
-  "cooldown_expired",
-]);
-
-// Shared helpers — every admin arm carries `at: string`; most carry
-// `network_id: number` + `network_slug: string | null`. Failing the
-// shared shape early keeps the per-arm switches compact.
-
-function isNonNullString(v: unknown): boolean {
-  return typeof v === "string";
-}
-
-function isNullableString(v: unknown): boolean {
-  return v === null || typeof v === "string";
-}
-
-// A nullable string field ADDED to an already-shipped wire shape.
+// Transcription is not free: the hand version had NO `web_session_severed`
+// arm, so every flood-sever audit row was dropped on the live push — and,
+// because `narrowAdminSnapshot` is atomic, a single such row in the ring
+// blanked the whole Events tab on reconnect. That arm exists on the server,
+// in `wireTypes.ts` and in `adminEvents.ts`'s dispatch; only the hand copy
+// lost it. Nobody could have noticed by reading the diff that omitted it.
+// See the measured before/after in `__tests__/wireAdminBoundary.test.ts`.
 //
-// The narrowers are otherwise strict — a missing field drops the row — and
-// that is right for fields present since the shape was born. It is wrong for
-// a field added later: cic deploys independently of the server
-// (`deploy-m42.sh --cic`), so a new cic against a not-yet-deployed server
-// would drop EVERY row of that shape. The wire contract says a new field may
-// appear at any time and that unknown-is-never-fatal in BOTH directions;
-// requiring a field the peer predates is the same breakage wearing the other
-// hat. Absent normalises to null at the call site.
-function isAddedNullableString(v: unknown): boolean {
-  return v === undefined || isNullableString(v);
-}
+// Adding a new admin event arm now: declare it in the server typespec, run
+// the codegen, add a dispatch case to `ingest()` in adminEvents.ts
+// (tsc-enforced via `assertNever`). Nothing to add HERE.
 
-function isNullableNumber(v: unknown): boolean {
-  return v === null || typeof v === "number";
-}
+// A closed-set field the server marked `optional(:k)` AND that carries
+// attribution DETAIL rather than the substance of the event.
+//
+// This is the part of a narrower a typespec cannot express, so it stays
+// hand-written and named. `optional(:door)` tells the schema the server may
+// OMIT the key; it cannot say what to do when a NEWER server sends a member
+// this build has never heard of. `login_throttled` is a security alert whose
+// door/scope are the attribution: dropping the alert to protect the detail
+// inverts the priority, and the admin ring is mirrored to disk and replayed
+// at boot, so rows minted by another vintage genuinely do arrive. Strip the
+// unrecognised value, keep the alert — the judgement `narrowEnumMember` made
+// inline before #429, now stated once.
+const ADDITIVE_DETAIL_FIELDS: ReadonlyMap<string, ReadonlyMap<string, readonly string[]>> = new Map(
+  [
+    [
+      "login_throttled",
+      new Map([
+        ["door", ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_DOOR as readonly string[]],
+        ["scope", ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_SCOPE as readonly string[]],
+      ]),
+    ],
+  ],
+);
 
-function isNullableBoolean(v: unknown): boolean {
-  return v === null || typeof v === "boolean";
+function dropUnrecognisedDetails(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return raw;
+  const r = raw as Record<string, unknown>;
+  const details = typeof r.kind === "string" ? ADDITIVE_DETAIL_FIELDS.get(r.kind) : undefined;
+  if (details === undefined) return raw;
+
+  let out: Record<string, unknown> | null = null;
+  for (const [field, allowed] of details) {
+    const value = r[field];
+    if (value === undefined) continue;
+    if (typeof value === "string" && allowed.includes(value)) continue;
+    out ??= { ...r };
+    delete out[field];
+  }
+  return out ?? raw;
 }
 
 /**
@@ -540,431 +521,15 @@ function isNullableBoolean(v: unknown): boolean {
  * any shape mismatch. Caller (adminEvents.ts) drops + logs on null.
  */
 export function narrowAdminEvent(raw: unknown): WireAdminEvent | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  if (typeof r.kind !== "string") return null;
-  if (!isNonNullString(r.at)) return null;
-  switch (r.kind) {
-    case "circuit_open":
-      if (
-        typeof r.network_id !== "number" ||
-        !isNullableString(r.network_slug) ||
-        typeof r.threshold !== "number" ||
-        typeof r.cooldown_ms !== "number"
-      )
-        return null;
-      return {
-        kind: "circuit_open",
-        network_id: r.network_id,
-        network_slug: r.network_slug as string | null,
-        threshold: r.threshold,
-        cooldown_ms: r.cooldown_ms,
-        at: r.at as string,
-      };
-    case "circuit_close":
-      if (
-        typeof r.network_id !== "number" ||
-        !isNullableString(r.network_slug) ||
-        typeof r.reason !== "string" ||
-        !VALID_CIRCUIT_CLOSE_REASONS.has(r.reason as "success" | "cooldown_expired")
-      )
-        return null;
-      return {
-        kind: "circuit_close",
-        network_id: r.network_id,
-        network_slug: r.network_slug as string | null,
-        reason: r.reason as "success" | "cooldown_expired",
-        at: r.at as string,
-      };
-    case "capacity_reject":
-      if (
-        typeof r.flow !== "string" ||
-        !VALID_ADMISSION_FLOWS.has(r.flow as AdmissionFlow) ||
-        typeof r.error !== "string" ||
-        typeof r.network_id !== "number" ||
-        !isNullableString(r.network_slug) ||
-        !isNullableString(r.source_ip)
-      )
-        return null;
-      return {
-        kind: "capacity_reject",
-        flow: r.flow as AdmissionFlow,
-        error: r.error,
-        network_id: r.network_id,
-        network_slug: r.network_slug as string | null,
-        source_ip: r.source_ip as string | null,
-        at: r.at as string,
-      };
-    case "visitor_deleted":
-      if (
-        typeof r.visitor_id !== "string" ||
-        !isNullableString(r.visitor_nick) ||
-        // #211 phase 7 — `network_slug` DROPPED from the server event; a
-        // guard on it would make `isNullableString(undefined)` false →
-        // narrow to null → blank the admin events tab. Not validated.
-        !isNullableString(r.actor_user_id) ||
-        !isNullableString(r.actor_user_name)
-      )
-        return null;
-      return {
-        kind: "visitor_deleted",
-        visitor_id: r.visitor_id,
-        visitor_nick: r.visitor_nick as string | null,
-        actor_user_id: r.actor_user_id as string | null,
-        actor_user_name: r.actor_user_name as string | null,
-        at: r.at as string,
-      };
-    case "visitor_reaped":
-      if (
-        typeof r.visitor_id !== "string" ||
-        !isNullableString(r.visitor_nick)
-        // #211 phase 7 — `network_slug` DROPPED (see visitor_deleted).
-      )
-        return null;
-      return {
-        kind: "visitor_reaped",
-        visitor_id: r.visitor_id,
-        visitor_nick: r.visitor_nick as string | null,
-        at: r.at as string,
-      };
-    case "visitor_share_token_minted":
-      // #982 — the actor is NON-nullable on this one, unlike
-      // visitor_deleted: the verb is only reachable behind
-      // `:admin_authn`, so an unattributed grant is a malformed event
-      // and must narrow to null rather than render as anonymous.
-      if (
-        typeof r.visitor_id !== "string" ||
-        !isNullableString(r.visitor_nick) ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: "visitor_share_token_minted",
-        visitor_id: r.visitor_id,
-        visitor_nick: r.visitor_nick as string | null,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "reaper_swept":
-      if (typeof r.count !== "number") return null;
-      return { kind: "reaper_swept", count: r.count, at: r.at as string };
-    case "upload_reaped":
-      if (
-        typeof r.upload_id !== "string" ||
-        typeof r.slug !== "string" ||
-        typeof r.subject_kind !== "string" ||
-        !VALID_SUBJECT_KINDS.has(r.subject_kind as "user" | "visitor") ||
-        typeof r.subject_id !== "string"
-      )
-        return null;
-      return {
-        kind: "upload_reaped",
-        upload_id: r.upload_id,
-        slug: r.slug,
-        subject_kind: r.subject_kind as "user" | "visitor",
-        subject_id: r.subject_id,
-        at: r.at as string,
-      };
-    case "uploads_swept":
-      if (typeof r.count !== "number") return null;
-      return { kind: "uploads_swept", count: r.count, at: r.at as string };
-    case "session_disconnected":
-    case "session_terminated": {
-      if (
-        typeof r.subject_kind !== "string" ||
-        !VALID_SUBJECT_KINDS.has(r.subject_kind as "user" | "visitor") ||
-        typeof r.subject_id !== "string" ||
-        typeof r.network_id !== "number" ||
-        !isNullableString(r.network_slug) ||
-        !isNullableString(r.actor_user_id) ||
-        !isNullableString(r.actor_user_name)
-      )
-        return null;
-      const base = {
-        subject_kind: r.subject_kind as "user" | "visitor",
-        subject_id: r.subject_id,
-        network_id: r.network_id,
-        network_slug: r.network_slug as string | null,
-        actor_user_id: r.actor_user_id as string | null,
-        actor_user_name: r.actor_user_name as string | null,
-        at: r.at as string,
-      };
-      return r.kind === "session_disconnected"
-        ? { kind: "session_disconnected", ...base }
-        : { kind: "session_terminated", ...base };
-    }
-    case "network_caps_updated":
-      if (
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        !isNullableNumber(r.max_concurrent_visitor_sessions) ||
-        !isNullableNumber(r.max_concurrent_user_sessions) ||
-        !isNullableNumber(r.max_per_ip) ||
-        !isNullableString(r.actor_user_id) ||
-        !isNullableString(r.actor_user_name)
-      )
-        return null;
-      return {
-        kind: "network_caps_updated",
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        max_concurrent_visitor_sessions: r.max_concurrent_visitor_sessions as number | null,
-        max_concurrent_user_sessions: r.max_concurrent_user_sessions as number | null,
-        max_per_ip: r.max_per_ip as number | null,
-        actor_user_id: r.actor_user_id as string | null,
-        actor_user_name: r.actor_user_name as string | null,
-        at: r.at as string,
-      };
-    case "circuit_reset":
-      if (
-        typeof r.network_id !== "number" ||
-        !isNullableString(r.network_slug) ||
-        !isNullableString(r.actor_user_id) ||
-        !isNullableString(r.actor_user_name)
-      )
-        return null;
-      return {
-        kind: "circuit_reset",
-        network_id: r.network_id,
-        network_slug: r.network_slug as string | null,
-        actor_user_id: r.actor_user_id as string | null,
-        actor_user_name: r.actor_user_name as string | null,
-        at: r.at as string,
-      };
-    case "user_created":
-    case "user_updated":
-      if (
-        typeof r.user_id !== "string" ||
-        typeof r.user_name !== "string" ||
-        typeof r.is_admin !== "boolean" ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: r.kind,
-        user_id: r.user_id,
-        user_name: r.user_name,
-        is_admin: r.is_admin,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "user_password_changed":
-    case "user_deleted":
-      if (
-        typeof r.user_id !== "string" ||
-        typeof r.user_name !== "string" ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: r.kind,
-        user_id: r.user_id,
-        user_name: r.user_name,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "network_created":
-    case "network_deleted":
-      if (
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: r.kind,
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "server_added":
-    case "server_updated":
-      if (
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        typeof r.server_id !== "number" ||
-        typeof r.host !== "string" ||
-        typeof r.port !== "number" ||
-        typeof r.tls !== "boolean" ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: r.kind,
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        server_id: r.server_id,
-        host: r.host,
-        port: r.port,
-        tls: r.tls,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "server_removed":
-      if (
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        typeof r.server_id !== "number" ||
-        typeof r.host !== "string" ||
-        typeof r.port !== "number" ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: "server_removed",
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        server_id: r.server_id,
-        host: r.host,
-        port: r.port,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "credential_bound":
-      if (
-        typeof r.user_id !== "string" ||
-        typeof r.user_name !== "string" ||
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        typeof r.nick !== "string" ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: "credential_bound",
-        user_id: r.user_id,
-        user_name: r.user_name,
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        nick: r.nick,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "credential_updated":
-      if (
-        typeof r.user_id !== "string" ||
-        typeof r.user_name !== "string" ||
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        typeof r.session_action !== "string" ||
-        (r.session_action !== "left_alone" && r.session_action !== "stopped") ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: "credential_updated",
-        user_id: r.user_id,
-        user_name: r.user_name,
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        session_action: r.session_action,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    case "credential_unbound":
-      if (
-        typeof r.user_id !== "string" ||
-        typeof r.user_name !== "string" ||
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        typeof r.actor_user_id !== "string" ||
-        typeof r.actor_user_name !== "string"
-      )
-        return null;
-      return {
-        kind: "credential_unbound",
-        user_id: r.user_id,
-        user_name: r.user_name,
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        actor_user_id: r.actor_user_id,
-        actor_user_name: r.actor_user_name,
-        at: r.at as string,
-      };
-    // S6 (review 2026-07-19) — a credential door's throttle trip.
-    // source_ip is nullable (server RemoteIP honesty for unresolvable
-    // peers). door/scope are ADDITIVE and narrow to `undefined` rather
-    // than nulling the event: the admin ring is mirrored to disk and
-    // reloaded at boot, so the Events tab genuinely replays rows minted
-    // before the fields existed. The trip is the load-bearing part; the
-    // attribution is the detail, and a missing detail must not delete
-    // the alert.
-    case "login_throttled":
-      if (
-        !isNullableString(r.source_ip) ||
-        typeof r.failures !== "number" ||
-        typeof r.window_ms !== "number"
-      )
-        return null;
-      return {
-        kind: "login_throttled",
-        source_ip: r.source_ip as string | null,
-        failures: r.failures,
-        window_ms: r.window_ms,
-        at: r.at as string,
-        door: narrowEnumMember<AdminEventsWireLoginThrottleDoor>(
-          r.door,
-          ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_DOOR,
-        ),
-        scope: narrowEnumMember<AdminEventsWireLoginThrottleScope>(
-          r.scope,
-          ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_SCOPE,
-        ),
-      };
-    case "cap_counts_changed":
-      // REV-H H5 (2026-05-22): network_slug is required non-null on
-      // this arm. The server-side broadcaster early-returns when the
-      // network row was deleted, so a nil-slug payload would already
-      // never reach cic — narrowing it as required surfaces that
-      // contract at the boundary instead of letting cic render
-      // `net#{id}` for a payload that can't occur.
-      if (
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        typeof r.visitors !== "number" ||
-        typeof r.users !== "number" ||
-        !isNullableNumber(r.max_concurrent_visitor_sessions) ||
-        !isNullableNumber(r.max_concurrent_user_sessions)
-      )
-        return null;
-      return {
-        kind: "cap_counts_changed",
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        visitors: r.visitors,
-        users: r.users,
-        max_concurrent_visitor_sessions: r.max_concurrent_visitor_sessions as number | null,
-        max_concurrent_user_sessions: r.max_concurrent_user_sessions as number | null,
-        at: r.at as string,
-      };
-    default:
-      return null;
-  }
+  return validate(S_AdminEventsWireEvent, dropUnrecognisedDetails(raw));
 }
 
 /**
  * Runtime narrower for the admin-channel `snapshot` push payload.
- * Validates the `{events: [...]}` outer shape AND every element.
- * Atomic: a single malformed element drops the whole snapshot (avoids
- * corrupting the audit ring with mid-shape rows). Caller drops + logs
- * on null.
+ * Validates the `{events: [...]}` outer shape AND every element. Atomic: a
+ * single malformed element drops the whole snapshot (avoids corrupting the
+ * audit ring with mid-shape rows) — a policy call, not a shape, which is why
+ * it is not `{ a: S_AdminEventsWireEvent }`. Caller drops + logs on null.
  */
 export function narrowAdminSnapshot(raw: unknown): AdminSnapshotPayload | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -987,20 +552,8 @@ export function narrowAdminSnapshot(raw: unknown): AdminSnapshotPayload | null {
 // `sessionLog.ts` extracts `.entry` and narrows it here. Same
 // boundary-validation contract as `narrowAdminEvent` — a malformed
 // live push (field missing / wrong-typed) drops instead of crashing
-// the store setter. `event` is validated against the closed
-// `SessionLogEvent` set so a version-skewed server that adds a new
-// kind drops (runtime mirror of the tsc-side literal union). #410 — the
-// set IS the codegen-emitted `SESSION_LOG_EVENT` const (mirror of
-// `Grappa.SessionLog.Wire` event closed set), not a hand copy.
-const VALID_SESSION_LOG_EVENTS: ReadonlySet<SessionLogEvent> = new Set(SESSION_LOG_EVENT);
+// the store setter.
 
-/**
- * Runtime narrower for a single `SessionLogWireT` row. Mirror of the
- * generated wire shape (`Grappa.SessionLog.Wire.t/0`). Returns the
- * typed row on success or `null` on any shape mismatch. Used by
- * `sessionLog.ts` on the live `session_log_event` push (the REST
- * snapshot trusts the server, same as the other `adminList*` helpers).
- */
 /**
  * Runtime narrower for the admin top bar's projection (`"overview"` push /
  * `GET /admin/overview`). Same REV-G H24 discipline as its siblings: the
@@ -1010,68 +563,35 @@ const VALID_SESSION_LOG_EVENTS: ReadonlySet<SessionLogEvent> = new Set(SESSION_L
  * `Grappa.AdminOverview.Wire` sends `nil` when `:cpu_sup` cannot be reached
  * because "cannot measure" is a different fact from "the box is idle";
  * demanding a number here would drop the whole payload exactly when the
- * sampler is down, blanking a bar whose other four stats are fine.
+ * sampler is down, blanking a bar whose other four stats are fine. #429 — the
+ * typespec already says `integer() | nil`, so the generated schema carries
+ * that nullability and no hand check has to remember it.
  */
 export function narrowAdminOverview(raw: unknown): AdminOverviewWireT | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  if (typeof r.visitors !== "object" || r.visitors === null) return null;
-  const v = r.visitors as Record<string, unknown>;
-  if (
-    typeof r.sessions !== "number" ||
-    typeof v.total !== "number" ||
-    typeof v.live !== "number" ||
-    typeof r.hostname !== "string" ||
-    !isNullableNumber(r.loadavg) ||
-    typeof r.version !== "string"
-  )
-    return null;
-  return {
-    sessions: r.sessions,
-    visitors: { total: v.total, live: v.live },
-    hostname: r.hostname,
-    loadavg: r.loadavg as number | null,
-    version: r.version,
-  };
+  return validate(S_AdminOverviewWireT, raw);
 }
 
+/**
+ * Runtime narrower for a single `SessionLogWireT` row. Mirror of the
+ * generated wire shape (`Grappa.SessionLog.Wire.t/0`). Returns the
+ * typed row on success or `null` on any shape mismatch. Used by
+ * `sessionLog.ts` on the live `session_log_event` push (the REST
+ * snapshot trusts the server, same as the other `adminList*` helpers).
+ *
+ * #618/#429 — `old_nick` is the second policy residue on this boundary (the
+ * first is `login_throttled`'s door/scope in `dropUnrecognisedDetails`). The
+ * server declares it REQUIRED and always sends it, so the typespec is right
+ * and the generated schema is right to demand it. But the field was ADDED
+ * after this shape shipped, and cic deploys independently of the server
+ * (`deploy-m42.sh --cic`): a cic ahead of its server would drop EVERY
+ * session-log row over one field the peer predates. That is the additive-only
+ * contract (#447) read from the client side, and no typespec can express it —
+ * "required of a current server, tolerated absent from an older one" is a
+ * statement about deploy skew, not about the shape. Default it and let the
+ * row through.
+ */
 export function narrowSessionLogEntry(raw: unknown): SessionLogWireT | null {
-  if (typeof raw !== "object" || raw === null) return null;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
-  if (
-    typeof r.id !== "number" ||
-    typeof r.session_id !== "string" ||
-    typeof r.event !== "string" ||
-    !VALID_SESSION_LOG_EVENTS.has(r.event as SessionLogEvent) ||
-    typeof r.subject_kind !== "string" ||
-    !VALID_SUBJECT_KINDS.has(r.subject_kind as "user" | "visitor") ||
-    typeof r.network_id !== "number" ||
-    !isNullableString(r.network_slug) ||
-    !isNullableString(r.nick) ||
-    // #618 — added after #215 shipped this shape, so absent is tolerated.
-    !isAddedNullableString(r.old_nick) ||
-    !isNullableString(r.reason) ||
-    !isNullableBoolean(r.clean) ||
-    !isNullableNumber(r.duration_ms) ||
-    !isNullableNumber(r.delay_ms) ||
-    !isNullableNumber(r.attempt) ||
-    typeof r.at !== "string"
-  )
-    return null;
-  return {
-    id: r.id,
-    session_id: r.session_id,
-    event: r.event as SessionLogEvent,
-    subject_kind: r.subject_kind as "user" | "visitor",
-    network_id: r.network_id,
-    network_slug: r.network_slug as string | null,
-    nick: r.nick as string | null,
-    old_nick: (r.old_nick ?? null) as string | null,
-    reason: r.reason as string | null,
-    clean: r.clean as boolean | null,
-    duration_ms: r.duration_ms as number | null,
-    delay_ms: r.delay_ms as number | null,
-    attempt: r.attempt as number | null,
-    at: r.at,
-  };
+  return validate(S_SessionLogWireT, r.old_nick === undefined ? { ...r, old_nick: null } : r);
 }
