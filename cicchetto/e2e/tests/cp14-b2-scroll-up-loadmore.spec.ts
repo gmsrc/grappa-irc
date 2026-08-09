@@ -14,14 +14,15 @@
 //     restore as `newScrollHeight - oldScrollHeight + oldScrollTop`
 //     after merge so the user's view doesn't yank.
 //
-// Reuses the seeded 200-row corpus on `(vjt, bahamut-test, #bofh)`
-// from the e2e seeder sidecar (cicchetto/e2e/compose.yaml lines
-// 123-124). Same tiny-viewport (800×300) trick as B1 so the latest
-// REST page reliably overflows and "is the scrollback longer than
-// the viewport" is measurable.
+// Runs on the 200-row corpus the #1078 fixture seeds into this spec's own
+// subject at provision time (`specSubject.ts:SEED_COUNT`, itself mirroring
+// the seeder sidecar's `--count 200`). Same tiny-viewport (800×300) trick
+// as B1 so the latest REST page reliably overflows and "is the scrollback
+// longer than the viewport" is measurable.
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
+import { fetchAllMessagesAsc, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -81,6 +82,28 @@ test.describe("CP14 B2 — scroll-up triggers loadMore (no end-of-history bounce
     page,
   }) => {
     const vjt = specUser();
+
+    // Plant the read cursor at the tail BEFORE login, so the channel
+    // hydrates through the cursor-PRESENT arm: `after(cursor)` returns
+    // nothing (all read) and the pane opens on the ~50-row read-context
+    // page — "cic loads latest 50", which is the state this spec is about.
+    //
+    // Without it the subject has no read position, cic takes the cold-buffer
+    // recovery arm (`?after=0&limit=200`, observed in the #1078 CI trace)
+    // and the pane opens holding the channel's OLDEST rows. Scroll-up then
+    // has nothing older to fetch, whatever the corpus depth: `loadMore`
+    // pages backwards from the oldest LOADED id, and that arm already
+    // loaded the oldest row in the channel. A deeper seed does not fix it —
+    // the read position does.
+    //
+    // Note this is not a prop: an operator who scrolls up has read the
+    // channel. The old shared subject got the same state for free, from a
+    // `restoreReadCursorToTail` in a fixture that #1078 deleted.
+    const seeded = await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, CHANNEL);
+    const tail = seeded[seeded.length - 1];
+    if (!tail) throw new Error("cp14-b2: seeded #bofh corpus is empty");
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tail.id);
+
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
@@ -91,6 +114,13 @@ test.describe("CP14 B2 — scroll-up triggers loadMore (no end-of-history bounce
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
 
     const initialCount = await scrollbackLines(page).count();
+
+    // Guard the precondition, or the assertion below tests nothing: if the
+    // pane already holds the whole corpus there is no older page for
+    // scroll-up to fetch, and a green run would only mean "loadMore was
+    // never needed". This is exactly how the spec failed under #1078 —
+    // loudly here, instead of as a mystery timeout 20 lines down.
+    expect(initialCount).toBeLessThan(seeded.length);
     const g0 = await scrollbackGeometry(page);
     expect(g0.scrollHeight).toBeGreaterThan(g0.clientHeight);
 
