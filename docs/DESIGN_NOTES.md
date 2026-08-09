@@ -34636,3 +34636,90 @@ divider never leaves the viewport. Hidden frames are excluded by construction
 (they are the frames the operator cannot see), and the end state is pinned
 visible AND parked on the divider so the green cannot come from a pane that
 stayed hidden or never rendered a divider.
+---
+
+### 2026-08-09 — #1075 — the admin bar counts sources, not rows
+
+Server half of the operator top bar (#1073 is the cic half): session count,
+visitor counts, hostname, loadavg, version, live while the console is open.
+
+**The obvious shape is the expensive one.** Two of the five stats look
+already-solved — `GET /admin/sessions` and `GET /admin/visitors` both return
+lists, so the bar could count rows. Measured, that is `O(N × 250ms)`:
+`LiveIntrospection.list_sessions/0` issues a `GenServer.call` per live pid
+(joined channels, then peer address, each with a 250ms degradation budget)
+and `Visitors.list_all_with_live_state/0` does the same per credential. On a
+push cadence that is real session-mailbox traffic to produce two integers.
+
+The 20% that does not fit the existing infrastructure is exactly that: the
+tabs want enriched ROWS, the bar wants SCALARS. So `Grappa.AdminOverview` is
+a new projection — but it reuses the *sources*, not the payloads.
+`LiveIntrospection.count_live/0` scans the SAME `Grappa.SessionRegistry` the
+Sessions tab enumerates, with the same `:session`-tag-pinned match spec, and
+messages no pid; `Visitors.count_all/0` counts the same population
+`list_all/0` returns. The bar and the tabs cannot disagree about what exists.
+
+**The DB/live pair goes where the domain has one, and nowhere else.** The
+first draft of this payload was `sessions: {live, intended}` alongside
+`visitors: {total, live}`, for symmetry with the house rule that an admin
+listing carries both truths. That was wrong and was withdrawn before
+implementation: the only available `intended` is
+`Credentials.list_credentials_for_all_users/0`, scoped `user_id IS NOT NULL`
+(visitor sessions are spawned from `Visitors.list_active/0` instead), while
+`live` counts pids across BOTH subject kinds. The pair would read
+`live > intended` permanently and mean nothing.
+
+So `visitors` carries `{total, live}` — the Visitors tab carries that
+duality, `live_state: null` being its U-0 honesty signal, and here the
+scalar form says "1 visitor exists, none connected" without opening the tab.
+`sessions` is a single live number, because the Sessions tab is
+registry-driven by construction ("one row = one live pid") and its own
+moduledoc routes the DB-intent signal to `/admin/visitors` and
+`/admin/credentials` rather than carrying it. **A fabricated pair is worse
+than an honest single number** — the rule is "don't compute one truth from
+the other", not "always print two columns".
+
+**Cadence: a tick in the channel process, not a supervised sampler.** The
+counts change because something happened and could ride
+`Topic.admin_events/0`; loadavg cannot — it is sampled, with no event to
+hang off. Rather than run an event path AND a sampler, `AdminChannel` pushes
+the whole payload on an interval, armed on join and re-armed per tick. It
+lives in the channel pid deliberately: the bar exists only while an operator
+has the console open, so the sampling should too, and it dies with the
+socket with no fan-out to manage. The interval comes from the boot →
+`:persistent_term` seam (`AdminOverview.boot/0`, mirroring
+`Admission.Config`), re-read per tick so a hot-deployed change lands on the
+next one. Hostname and version are constants for the life of a connection
+and ride the join push rather than the stream.
+
+**loadavg: `:os_mon`, and it is the host's.** `:cpu_sup.avg1/0`, not
+`/proc/loadavg` — production is a FreeBSD jail, which has no `/proc`;
+cpu_sup shells out to a per-OS port program, which is the reason to pay for
+the dependency. `config/config.exs` turns off os_mon's `memsup` and
+`disksup`: they raise watermark alarms on thresholds nothing here subscribes
+to. An unavailable sampler yields `nil`, never `0.0` — "cannot measure" and
+"idle" are different facts and only one should render as a calm bar. A jail
+shares the host kernel, so the number is the HOST's load; clients must label
+it or an operator will read it as "grappa is busy".
+
+**The nginx allowlist section of the issue was already false.** #1075 asked
+for a proxy change, citing the sibling comments that made #269 nest under
+`/admin/sessions/` and annotate `/db_latency`. #485 deleted that constraint:
+`infra/snippets/locations-api.conf` states the allowlist "is GONE" and
+forwards `location /` to the BEAM unfiltered, and two substrates have no
+nginx at all. `/admin/overview` therefore sits at the top level of the admin
+scope; `:admin_authn` is the whole gate.
+
+**The symptom outlived the cause, though, and is worth knowing.** An
+unregistered `/admin/*` path does not 404 — it falls through to the BEAM's
+own SPA history-fallback and answers `200 text/html`. That surfaced in this
+change's red, where the auth-gate assertions failed on "expected 403, got
+200" rather than on a missing route. Same operator-visible shape the old
+nginx `try_files` produced; different owner. Not addressed here — it is a
+router catch-all question, not an admin-bar one.
+
+**Not established.** That any of this works inside the FreeBSD jail. The
+issue's "Done when" asks for it explicitly and it has not been done: `cpu_sup`
+was exercised only in the Linux dev container, and its FreeBSD port program
+is a different binary. Whether `avg1/0` answers inside a jail is an
+expectation here, not a measurement.
