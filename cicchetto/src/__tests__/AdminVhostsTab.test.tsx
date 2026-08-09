@@ -41,10 +41,14 @@ const vhost = (over: Partial<AdminVhost> & { id: number }): AdminVhost => ({
   ...over,
 });
 
-const response = (vhosts: AdminVhost[], grants: AdminVhostGrant[] = []): AdminVhostsResponse => ({
+const response = (
+  vhosts: AdminVhost[],
+  grants: AdminVhostGrant[] = [],
+  host_candidates: string[] = [],
+): AdminVhostsResponse => ({
   vhosts,
   grants,
-  host_candidates: [],
+  host_candidates,
 });
 
 const GRANT_UUID = "0f2a7c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
@@ -211,5 +215,68 @@ describe("grants table subject cell (#1140)", () => {
     // invented placeholder.
     const cell = await screen.findByTestId("admin-vhost-grant-subject-13");
     expect(cell).toHaveTextContent(GRANT_UUID);
+  });
+});
+
+// #1157 — the add-select used to offer every host candidate, including
+// addresses that already have a vhost row. Those can only answer 409, so
+// the picker was advertising guaranteed failures. (The other half of the
+// noise — the #543 derivation block — is dropped server-side, because the
+// prefix that identifies it never reaches the browser.)
+describe("AdminVhostsTab — the address select hides already-configured addresses (#1157)", () => {
+  const optionValues = (): string[] =>
+    Array.from(
+      (screen.getByTestId("vhost-address-select") as HTMLSelectElement).querySelectorAll("option"),
+    ).map((o) => (o as HTMLOptionElement).value);
+
+  it("omits an address that already has a vhost row", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVhosts).mockResolvedValue(
+      response([vhost({ id: 1, address: "203.0.113.5" })], [], ["203.0.113.5", "203.0.113.9"]),
+    );
+
+    render(() => <AdminVhostsTab />);
+    await screen.findByTestId("vhost-address-select");
+
+    expect(optionValues()).not.toContain("203.0.113.5");
+  });
+
+  it("keeps an address that has no vhost row yet", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVhosts).mockResolvedValue(
+      response([vhost({ id: 1, address: "203.0.113.5" })], [], ["203.0.113.5", "203.0.113.9"]),
+    );
+
+    render(() => <AdminVhostsTab />);
+    await screen.findByTestId("vhost-address-select");
+
+    expect(optionValues()).toContain("203.0.113.9");
+  });
+
+  it("pre-selects the first still-available address, not a configured one", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVhosts).mockResolvedValue(
+      response([vhost({ id: 1, address: "203.0.113.5" })], [], ["203.0.113.5", "203.0.113.9"]),
+    );
+
+    render(() => <AdminVhostsTab />);
+    const select = (await screen.findByTestId("vhost-address-select")) as HTMLSelectElement;
+
+    expect(select.value).toBe("203.0.113.9");
+  });
+
+  it("says so when every bindable address is already configured", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVhosts).mockResolvedValue(
+      response([vhost({ id: 1, address: "203.0.113.5" })], [], ["203.0.113.5"]),
+    );
+
+    render(() => <AdminVhostsTab />);
+    const select = await screen.findByTestId("vhost-address-select");
+
+    // The empty picker has to say WHY it is empty. "choose an address"
+    // over an empty list reads as a loading bug.
+    expect(select).toHaveTextContent("every bindable address is already configured");
+    expect(optionValues()).toEqual([""]);
   });
 });

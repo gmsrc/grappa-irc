@@ -1,4 +1,4 @@
-import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import AdminCard from "./admin/AdminCard";
 import AdminExpandRow from "./admin/AdminExpandRow";
@@ -127,6 +127,23 @@ const AdminVhostsTab: Component = () => {
   const grantsFor = (vhostId: number): AdminVhostGrant[] =>
     grants().filter((g) => g.vhost_id === vhostId);
 
+  // #1157 — the addresses the operator can still create a vhost FOR.
+  //
+  // An address that already has a vhost row can only ever answer 409, so
+  // offering it is offering a guaranteed failure. This set was already
+  // being computed to pre-select a sensible default; it now filters the
+  // option list too, which is the same rule applied once instead of a
+  // default that disagrees with what the list offers.
+  //
+  // The other half of the picker's noise — the #543 derivation block —
+  // is dropped server-side, in `VhostsController.index/2`: cic cannot
+  // tell a derived alias from a real interface address, because the
+  // prefix that defines the block never reaches the browser.
+  const availableAddresses = createMemo(() => {
+    const configured = new Set((vhosts() ?? []).map((v) => v.address));
+    return hostCandidates().filter((a) => !configured.has(a));
+  });
+
   const refresh = async (): Promise<void> => {
     const t = token();
     if (t === null) return;
@@ -138,12 +155,10 @@ const AdminVhostsTab: Component = () => {
       setVhosts(next.vhosts);
       setGrants(next.grants);
       setHostCandidates(next.host_candidates);
-      // Seed the create form's address select to the first candidate the
-      // operator hasn't already created (server rejects a duplicate with
-      // 409, but pre-selecting a free one is the friendlier default).
-      const used = new Set(next.vhosts.map((v) => v.address));
-      const free = next.host_candidates.find((a) => !used.has(a));
-      setCreateAddress(free ?? next.host_candidates[0] ?? "");
+      // Seed the create form to the first address still available. Same
+      // set the option list is built from, so the default can never name
+      // something the picker refuses to show.
+      setCreateAddress(availableAddresses()[0] ?? "");
       setGrantForm(
         produce((draft) => {
           for (const v of next.vhosts) {
@@ -305,8 +320,14 @@ const AdminVhostsTab: Component = () => {
               data-testid="vhost-address-select"
               required
             >
-              <option value="">choose an address</option>
-              <For each={hostCandidates()}>{(addr) => <option value={addr}>{addr}</option>}</For>
+              <option value="">
+                {availableAddresses().length === 0
+                  ? "every bindable address is already configured"
+                  : "choose an address"}
+              </option>
+              <For each={availableAddresses()}>
+                {(addr) => <option value={addr}>{addr}</option>}
+              </For>
             </select>
             <label class="adm-check">
               <input
