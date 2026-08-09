@@ -441,6 +441,21 @@ export type AdminEventsWireEvent =
   | AdminEventsWireLoginThrottledEvent
   | AdminEventsWireWebSessionSeveredEvent;
 
+// === Grappa.AdminOverview.Wire ===
+
+export type AdminOverviewWireVisitors = {
+  total: number;
+  live: number;
+};
+
+export type AdminOverviewWireT = {
+  sessions: number;
+  visitors: AdminOverviewWireVisitors;
+  hostname: string;
+  loadavg: number | null;
+  version: string;
+};
+
 // === Grappa.Admission.NetworkCircuit.AdminWire ===
 
 export type AdmissionNetworkCircuitAdminWireT = {

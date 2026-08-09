@@ -102,21 +102,10 @@ defmodule Grappa.AdminOverview do
   use Boundary,
     top_level?: true,
     deps: [Grappa.LiveIntrospection, Grappa.Version, Grappa.Visitors],
-    exports: []
+    exports: [Wire]
 
+  alias Grappa.AdminOverview.Wire
   alias Grappa.{LiveIntrospection, Version, Visitors}
-
-  @typedoc """
-  The admin-bar payload. `loadavg` is `nil` when the sampler is
-  unavailable — the honesty signal, distinct from a measured `0.0`.
-  """
-  @type t :: %{
-          sessions: non_neg_integer(),
-          visitors: %{total: non_neg_integer(), live: non_neg_integer()},
-          hostname: String.t(),
-          loadavg: float() | nil,
-          version: String.t()
-        }
 
   @key {__MODULE__, :push_interval_ms}
   @default_push_interval_ms 5_000
@@ -152,7 +141,7 @@ defmodule Grappa.AdminOverview do
   The current admin-bar payload. One registry scan + one `COUNT` + two
   cheap machine reads; messages no session pid.
   """
-  @spec snapshot() :: t()
+  @spec snapshot() :: Wire.t()
   def snapshot do
     live = LiveIntrospection.count_live()
 
