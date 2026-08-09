@@ -1,5 +1,6 @@
 import { useNavigate } from "@solidjs/router";
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { refreshInCardHead, refreshSlot } from "./admin/refreshSlot";
 import { archiveSlugForSelection } from "./lib/archiveContext";
 import { channelKey } from "./lib/channelKey";
 import { conversationMuteKey, isConversationMuted } from "./lib/conversationMute";
@@ -52,13 +53,19 @@ import {
 // pinned launcher stays in view while a long list scrolls internally, on
 // desktop as it already did on mobile).
 //
-// #1040 — HOME is the exception, and it is an exception to the REASON, not to
+// #1040 — HOME is an exception, and it is an exception to the REASON, not to
 // the rule. #500's cost was a nick-list cost; `RailContext` renders nothing for
 // home, so that window's rail is an empty column with one launcher pinned to
 // its bottom, charging a tap to reach buttons that had nowhere to be pushed to.
 // On home the actions therefore lay out EXPANDED and in flow from the top of
-// the rail, and the launcher is not rendered at all. Every other kind keeps
-// #500 verbatim — the launcher stays the single door everywhere else.
+// the rail, and the launcher is not rendered at all.
+//
+// #1073 — ADMIN is the second, on the same reason and not by analogy:
+// `RailContext` has no admin arm either and `MembersPane` is joined-channel
+// gated, so that rail is as empty above the actions as home's. It also matters
+// more there — the console's close × was deleted, so this menu is the way out
+// of it. Every OTHER kind keeps #500 verbatim: the launcher stays the single
+// door everywhere else.
 //
 // The expanded state is not "the overlay, left open": the popover geometry
 // (absolute, `bottom: 100%`, a max-height measured from the space above the
@@ -91,14 +98,19 @@ import {
 // navigation away.
 //
 // Buttons, in order: home · rooms · mentions · themes · archive · settings ·
-// admin · denoise · detach · quit. Each carries its NAME as visible text next
-// to the glyph (#473: bare emoji had to be guessed / long-pressed).
+// admin · refresh · denoise · detach · quit. Each carries its NAME as visible
+// text next to the glyph (#473: bare emoji had to be guessed / long-pressed).
 //
 // Gating is CAPABILITY-only — no form-factor gates (#473):
 //   * home / themes / settings / archive / quit — always.
 //   * rooms — needs a network context (`archiveSlugForSelection()`).
 //   * mentions — needs a bundle to re-open for that network context.
 //   * admin — `isAdmin()`.
+//   * refresh — #1073, the active admin tab's re-fetch, registered on
+//     `admin/refreshSlot`. Present only while the console is open, only for a
+//     tab that has a fetch to repeat, and only where that seam says the rail
+//     is the button's home (the phone; on desktop it renders in the data
+//     card's own head instead).
 //   * denoise — channel-gated (a channel window is selected).
 //   * detach — `canDetach()`: a persistent identity has a bouncer to leave
 //     running, an ephemeral visitor does not.
@@ -505,6 +517,51 @@ const RailActions: Component<Props> = (props) => {
               </span>
               <span class="rail-action-label">admin</span>
             </button>
+          </Show>
+
+          {/* #1073 — the active admin tab's refresh. vjt: *"il refresh può
+              tranquillamente stare tra le actions nel rail, non serve così
+              prominente"*. It used to be one of two controls in the console's
+              own band, which is more prominence than a re-fetch earns.
+
+              The rail knows nothing about admin tabs: `refreshSlot` is the
+              module singleton a tab registers itself on while mounted, so the
+              row appears only for a tab that HAS something to re-fetch (Events
+              has no fetch and correctly contributes nothing) and disappears
+              with the console. It carries the tab's own testid, unchanged by
+              the move: `admin-visitors-refresh` and its siblings are what the
+              tabs' own suites assert the registration publishes, and renaming
+              a control while relocating it hides which of the two broke.
+
+              `refreshInCardHead()` is the desktop placement, next to the data
+              rather than in the window furniture; rendering here as well would
+              put a duplicate `admin-*-refresh` in the DOM. One button either
+              way, which is the seam's whole contract. */}
+          <Show when={!refreshInCardHead() && refreshSlot()}>
+            {(reg) => (
+              <button
+                type="button"
+                class="shell-chrome-btn rail-action rail-action-refresh"
+                aria-label={reg().label}
+                aria-busy={reg().busy()}
+                data-testid={reg().testId}
+                onClick={() => {
+                  reg().onRefresh();
+                  // The rail is a drawer OVER the pane on a phone — this is
+                  // mobile-only by the gate above — so leaving it up would hide
+                  // the table the operator just asked to re-fetch. Unlike
+                  // denoise, which flips a pref in place, the whole point of
+                  // this action is the result behind the drawer.
+                  props.setters.setMembersOpen(false);
+                  close();
+                }}
+              >
+                <span class="rail-action-icon" aria-hidden="true">
+                  {"\u{21BB}"}
+                </span>
+                <span class="rail-action-label">refresh</span>
+              </button>
+            )}
           </Show>
 
           {/* #222 — per-channel join/part/quit/nick-change suppression toggle

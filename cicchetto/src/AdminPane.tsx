@@ -10,8 +10,6 @@ import AdminUsersTab from "./AdminUsersTab";
 import AdminVhostsTab from "./AdminVhostsTab";
 import AdminVisitorsTab from "./AdminVisitorsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
-import { AdminRefreshButton } from "./admin/AdminToolbar";
-import { refreshInCardHead, refreshSlot } from "./admin/refreshSlot";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
 import PaneTopBar from "./PaneTopBar";
 
@@ -152,26 +150,6 @@ const AdminPane: Component<Props> = (props) => {
           it on the same side as the channel bar's. */}
       <PaneTopBar onOpenRail={props.onOpenRail} railLabel="open actions">
         <h1>admin console</h1>
-        {/* The active tab's refresh, hoisted out of its own toolbar — see
-            `admin/refreshSlot.ts` for why that toolbar went away. The
-            callback form of `<Show>` so the button exists only when a tab
-            registered one: Events has no fetch to repeat and correctly
-            contributes nothing. */}
-        {/* Phone only: on desktop the button lives in the data card's own
-            header (`refreshInCardHead`), next to what it refreshes rather
-            than up in the window furniture. Never both — one button, one
-            testid, which is what the e2e specs click. */}
-        <Show when={!refreshInCardHead() && refreshSlot()}>
-          {(reg) => (
-            <AdminRefreshButton
-              compact
-              onClick={reg().onRefresh}
-              busy={reg().busy()}
-              label={reg().label}
-              testId={reg().testId}
-            />
-          )}
-        </Show>
       </PaneTopBar>
       <AdminNav
         groups={GROUPS}

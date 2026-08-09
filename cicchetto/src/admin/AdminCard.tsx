@@ -39,7 +39,6 @@ const AdminCard: Component<Props> = (props) => (
         <Show when={props.hostsRefresh === true && refreshInCardHead() && refreshSlot()}>
           {(reg) => (
             <AdminRefreshButton
-              compact={false}
               onClick={reg().onRefresh}
               busy={reg().busy()}
               label={reg().label}

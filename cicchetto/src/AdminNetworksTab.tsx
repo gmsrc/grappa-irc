@@ -617,7 +617,6 @@ const AdminNetworksTab: Component = () => {
                 rather than moving to the pane header like the tabs whose
                 toolbar was title-plus-refresh and nothing else. */}
             <AdminRefreshButton
-              compact={false}
               onClick={() => {
                 void refresh();
               }}

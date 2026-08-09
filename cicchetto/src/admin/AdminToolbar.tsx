@@ -31,26 +31,23 @@ export type RefreshButtonProps = {
   busy: boolean;
   label: string;
   testId: string;
-  /**
-   * Glyph only, no "refresh" word — for the pane header, where the button
-   * sits beside the close × in a row with no room for a label. Required
-   * rather than optional: there are two call sites and which one you are
-   * is never ambiguous, so a default would only hide the choice. The
-   * `aria-label` carries the name either way.
-   */
-  compact: boolean;
 };
 
+// #1073 — the `compact` variant (glyph only, no word) existed for ONE call
+// site: the console's own band, where the button sat beside the close × with
+// no room for a label. Both of those left the band, and the two remaining
+// call sites are card heads with room for the word, so the branch is gone
+// rather than kept as a prop nobody passes.
 export const AdminRefreshButton: Component<RefreshButtonProps> = (props) => (
   <button
     type="button"
-    class={`adm-btn adm-refresh-btn ${props.compact ? "adm-refresh-btn--compact" : ""}`.trim()}
+    class="adm-btn adm-refresh-btn"
     aria-label={props.label}
     aria-busy={props.busy}
     onClick={props.onClick}
     data-testid={props.testId}
   >
-    {props.compact ? "↻" : "↻ refresh"}
+    {"\u{21BB} refresh"}
   </button>
 );
 

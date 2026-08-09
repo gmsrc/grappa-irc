@@ -4345,13 +4345,6 @@ html.resize-dragging * {
   margin: -1rem -1rem 1rem;
 }
 
-/* The refresh sits at the band's trailing edge, not adrift after the title.
-   Transitional: #1073 moves this button into the rail's actions on mobile,
-   which is when this rule and its consumer both go. */
-.admin-pane .topic-bar .adm-refresh-btn {
-  margin-left: auto;
-}
-
 .admin-pane .topic-bar h1 {
   font-family: var(--adm-font);
   font-size: 0.85rem;

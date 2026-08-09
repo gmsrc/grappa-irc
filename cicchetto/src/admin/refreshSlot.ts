@@ -11,9 +11,11 @@ import { isMobile } from "../lib/theme";
 // carries something the nav cannot (Networks: the Sweep-visitors verb
 // plus a line explaining what the caps column means).
 //
-// That leaves refresh with nowhere to live, and it belongs next to the
-// pane's close button: one row of chrome, at the top, always in the
-// same place regardless of tab.
+// That leaves refresh with nowhere to live. It first went into the pane's
+// own band, beside the close ×; #1073 moved it again, into the rail's
+// actions — vjt: *"il refresh puo' tranquillamente stare tra le actions
+// nel rail, non serve cosi' prominente"*. The band it was in is now the
+// shared channel bar and carries no controls of its own at all.
 //
 // The wiring is a module-level signal rather than a context or a prop
 // chain because there is exactly one AdminPane mounted at a time and
@@ -23,9 +25,11 @@ import { isMobile } from "../lib/theme";
 // only when the active tab actually has something to re-fetch (Events
 // has no fetch at all, and correctly contributes nothing).
 //
-// The registration carries the tab's own `testId`, so the button in the
-// header is still `admin-visitors-refresh` / `admin-sessions-refresh` /
-// … — the ids the e2e specs click. Moving the button must not rename it.
+// The registration carries the tab's own `testId`, so wherever the button
+// is rendered it is still `admin-visitors-refresh` /
+// `admin-sessions-refresh` / … — the ids the tabs' own suites assert. The
+// button has now moved twice; neither move renamed it, which is what keeps
+// a relocation distinguishable from a removal.
 
 export type RefreshRegistration = {
   onRefresh: () => void;
@@ -43,8 +47,9 @@ export const refreshSlot = registration;
 /**
  * Where the registered refresh button is rendered.
  *
- * On a phone it goes in the pane header, beside the close ×: there is
- * one row of chrome up there and no room for anything else.
+ * On a phone it is a row in the rail's actions (`RailActions`), reached
+ * through the console's ☰. #1073 — the pane's band carries no controls,
+ * and a re-fetch does not earn one of the two slots it used to hold.
  *
  * On desktop the pane header is a wide, near-empty band and the card the
  * data actually lives in has its own right-aligned actions slot, so the
@@ -54,7 +59,9 @@ export const refreshSlot = registration;
  * ONE button either way, carrying the tab's own testid. Rendering it in
  * both places and hiding one with CSS would put a duplicate
  * `admin-*-refresh` in the DOM, which is exactly what the e2e specs
- * click.
+ * click. The two renderers therefore read this predicate with opposite
+ * polarity and nothing else decides: `AdminCard` on true, `RailActions`
+ * on false.
  */
 export function refreshInCardHead(): boolean {
   return !isMobile();

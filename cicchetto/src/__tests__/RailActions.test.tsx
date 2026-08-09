@@ -122,6 +122,25 @@ vi.mock("../lib/selection", () => ({
   setSelectedChannel: (...args: unknown[]) => setSelectedChannel(...args),
 }));
 
+// #1073 — the active admin tab's refresh registers itself here and the rail
+// renders it. Both halves of the seam are mocked: WHICH tab registered (the
+// registration, `null` outside the console) and WHERE the button belongs (the
+// desktop card head vs the rail). The seam's own behaviour — register on
+// mount, identity-compared cleanup — is covered by the tabs' suites.
+const refreshHolder = vi.hoisted(() => ({
+  value: null as {
+    onRefresh: () => void;
+    busy: () => boolean;
+    label: string;
+    testId: string;
+  } | null,
+}));
+const inCardHeadHolder = vi.hoisted(() => ({ value: false }));
+vi.mock("../admin/refreshSlot", () => ({
+  refreshSlot: () => refreshHolder.value,
+  refreshInCardHead: () => inCardHeadHolder.value,
+}));
+
 const roomsSlugHolder: { value: string | null } = { value: "freenode" };
 vi.mock("../lib/archiveContext", () => ({
   archiveSlugForSelection: () => roomsSlugHolder.value,
@@ -149,6 +168,7 @@ import { dismissConfirm } from "../lib/confirmDialog";
 import RailActions from "../RailActions";
 
 const channelSel: Sel = { networkSlug: "freenode", channelName: "#italia", kind: "channel" };
+const adminSel: Sel = { networkSlug: "$admin", channelName: "$admin", kind: "admin" };
 
 const setters = {
   membersOpen: () => false,
@@ -163,6 +183,8 @@ beforeEach(() => {
   mentionsBundles.value = {};
   subjectHolder.current = null;
   mutedHolder.value = {};
+  refreshHolder.value = null;
+  inCardHeadHolder.value = false;
   dismissConfirm();
 });
 
@@ -925,12 +947,68 @@ describe("RailActions expanded home rail (#1040)", () => {
   // above already pins that they stay off; a second copy of those tests would
   // measure the gate twice and the kind not at all.
   it("gives the admin console the same expanded rail (#1073)", async () => {
-    selHolder.value = { networkSlug: "$admin", channelName: "$admin", kind: "admin" };
+    selHolder.value = adminSel;
     const { container } = render(() => <RailActions setters={setters} />);
     expect(container.querySelector(".rail-actions")).toHaveClass("expanded");
     expect(screen.queryByTestId(LAUNCHER)).toBeNull();
     expect(screen.getByTestId("mobile-panel-home")).toBeInTheDocument();
     await settle();
     expect(overlayCount()).toBe(0);
+  });
+});
+
+// #1073 — vjt: *"il refresh può tranquillamente stare tra le actions nel
+// rail, non serve così prominente"*. It leaves the console's band, where it
+// was one of only two controls, and becomes a rail row like any other.
+//
+// The registration is what makes this possible without RailActions knowing
+// anything about admin tabs: it carries the tab's OWN testid, so the button
+// the e2e specs click keeps its name across the move.
+describe("the admin refresh, moved into the rail (#1073)", () => {
+  const reg = (testId: string): NonNullable<typeof refreshHolder.value> => ({
+    onRefresh: vi.fn(),
+    busy: () => false,
+    label: "refresh visitors list",
+    testId,
+  });
+
+  it("renders the registered refresh under its own testid and fires it", () => {
+    selHolder.value = adminSel;
+    const registration = reg("admin-visitors-refresh");
+    refreshHolder.value = registration;
+    render(() => <RailActions setters={setters} />);
+    const btn = screen.getByTestId("admin-visitors-refresh");
+    expect(btn).toHaveAttribute("aria-label", "refresh visitors list");
+    fireEvent.click(btn);
+    expect(registration.onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  // On a phone the rail is a drawer laid OVER the pane, so leaving it up
+  // would hide the very table the operator just asked to re-fetch.
+  it("dismisses the rail so the refreshed pane is what you land on", () => {
+    selHolder.value = adminSel;
+    refreshHolder.value = reg("admin-sessions-refresh");
+    render(() => <RailActions setters={setters} />);
+    fireEvent.click(screen.getByTestId("admin-sessions-refresh"));
+    expect(setters.setMembersOpen).toHaveBeenCalledWith(false);
+  });
+
+  // Two ways for the row to be wrong, and they fail differently: a DESKTOP
+  // duplicate would put two `admin-*-refresh` nodes in the DOM (the specs
+  // click by that id), while a row rendered with no registration would be a
+  // button wired to nothing.
+  it("renders nothing on desktop, where the button belongs in the card head", () => {
+    selHolder.value = adminSel;
+    refreshHolder.value = reg("admin-visitors-refresh");
+    inCardHeadHolder.value = true;
+    render(() => <RailActions setters={setters} />);
+    expect(screen.queryByTestId("admin-visitors-refresh")).toBeNull();
+  });
+
+  it("renders nothing when no tab has registered a refresh", () => {
+    selHolder.value = adminSel;
+    render(() => <RailActions setters={setters} />);
+    expect(screen.queryByTestId("admin-visitors-refresh")).toBeNull();
+    expect(screen.queryByTestId("rail-action-refresh")).toBeNull();
   });
 });
