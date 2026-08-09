@@ -36099,3 +36099,12 @@ side effect on the fast path (right return value, wrong telemetry) kills only
 the `refute_received`; deleting the emission in `Admission` kills only the
 negative control's `assert_received`. Three mutants, three distinct assertions,
 no overlap.
+
+**One canary goes quiet on the no-op path, deliberately.**
+`check_capacity/1` raises `ArgumentError` when a caller's `flow` and
+`requesting_subject` tag disagree — a loud caller-bug detector. Skipping the
+gate means a mismatched call whose session happens to be live no longer raises.
+The mismatch is a static property of the call site, so the canary still fires
+the first time that site actually spawns; recovering it on the no-op path would
+mean exporting a validate-only verb from `Admission` purely to keep a detector
+warm, which is more surface than the detector is worth.
