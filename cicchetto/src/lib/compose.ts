@@ -15,6 +15,7 @@ import { openBanlistModal } from "./banlistModal";
 import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
+import { scrubCtcpDelimiters } from "./ctcpAction";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
 import { friendlyError } from "./friendlyError";
 import { addHighlight, delHighlight } from "./highlightList";
@@ -284,7 +285,13 @@ export const sendBodyLines = async (
   action: boolean,
   onProgress?: (sent: number, total: number, residue: string) => void,
 ): Promise<void> => {
-  const lines = splitMessageLines(body);
+  // #1126 — the exit guard. This is the ONE free-text outbound door, and
+  // `ctcpFrame` (applied below, AFTER the scrub) is the ONE sanctioned producer
+  // of \x01. Anything the operator typed, pasted, or had written into their
+  // compose box by another verb is text, never framing. Scrubbing here rather
+  // than at each writer means the next path that learns to fill the compose box
+  // inherits the guarantee instead of having to remember it.
+  const lines = splitMessageLines(scrubCtcpDelimiters(body));
   const total = lines.length;
   let sent = 0;
   // Consecutive paced retries of the CURRENT line; reset when `sent` advances.

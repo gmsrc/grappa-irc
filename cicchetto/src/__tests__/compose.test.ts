@@ -1052,6 +1052,47 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  // #1126 — the protocol half of the reply-quote defect. `sendBodyLines` is the
+  // ONE free-text outbound door (privmsg, /me, /msg); `ctcpFrame` is the ONE
+  // sanctioned producer of \x01, applied AFTER this scrub. So an operator-typed
+  // (or pasted, or quote-injected) \x01 can never reach the wire as framing we
+  // did not intend. Fixing `replyQuote` alone would leave this door open to the
+  // next path that learns to write into the compose box.
+  it("scrubs \\x01 out of a free-text privmsg before it reaches the wire — #1126", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "<vjt> \x01ACTION si dà alla fuga\x01<< no");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith(
+      "freenode",
+      "#a",
+      "<vjt> ACTION si dà alla fuga<< no",
+    );
+    const body = vi.mocked(sb.sendMessage).mock.calls[0]?.[2] ?? "";
+    expect(body).not.toContain("\x01");
+    expect(result).toEqual({ ok: true });
+  });
+
+  // The scrub sits UPSTREAM of the framer, so /me still gets its envelope: the
+  // two delimiters below are ours, built by `ctcpFrame`, not passed through.
+  it("scrubs a pasted \\x01 from /me yet still frames the action — #1126", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/me waves\x01PING x\x01");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01ACTION wavesPING x\x01");
+  });
+
   // #591/#640 — /ctcp <target> <verb> builds a single \x01VERB\x01 frame. #640:
   // a CTCP QUERY is a control-surface probe, so the echo is keyed to the SOURCE
   // window (the submit's channelName, "#a") and the wire recipient ("bob")
