@@ -35408,6 +35408,7 @@ hand-injected `padding-bottom` would be overriding the very declaration under
 test, so the simulation would be circular. The on-device look, and whether the
 bottom row of tabs still takes taps reliably inside the home-indicator strip,
 remain owed to a real notched iPhone.
+
 ## 2026-08-09 — #1121: the overlay close asks two questions, and they live in two epochs
 
 A reader sitting at the tail of a live channel opened the media viewer, waited
