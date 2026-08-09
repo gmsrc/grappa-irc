@@ -1143,6 +1143,49 @@ export async function synthSwipe(
   );
 }
 
+// The compose caret + scroll geometry, read off the live element.
+export type ComposeCaretGeometry = {
+  selStart: number | null;
+  selEnd: number | null;
+  valueLen: number;
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+};
+
+export async function composeCaretGeometry(page: Page): Promise<ComposeCaretGeometry> {
+  return await composeTextarea(page).evaluate((el: HTMLTextAreaElement) => ({
+    selStart: el.selectionStart,
+    selEnd: el.selectionEnd,
+    valueLen: el.value.length,
+    scrollTop: el.scrollTop,
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+  }));
+}
+
+// The oracle shared by every "caret at the end, and visible" door: #173's
+// history recall and #1105's reply quote both route through
+// `lib/composeCaret.placeCaretAtEndInView`, so they are owed the same proof
+// and must not carry two drifting copies of it — the production duplication
+// is exactly what let #1105 ship.
+//
+// `minOverflowPx` is REQUIRED and per-caller on purpose: it is the guard
+// against a vacuous pass. A draft that does not overflow the rows=1 textarea
+// sits at scrollTop 0 legitimately, so without it "the caret is in view" is
+// true for the wrong reason. Each caller states how much overflow its own
+// fixture is expected to produce, rather than inheriting a number that
+// silently stops being true.
+export function expectEndCaretVisible(g: ComposeCaretGeometry, minOverflowPx: number): void {
+  expect(g.scrollHeight).toBeGreaterThan(g.clientHeight + minOverflowPx);
+  expect(g.selStart).toBe(g.valueLen);
+  expect(g.selEnd).toBe(g.valueLen);
+  // The defect: scrollTop left at 0 hides the end-caret. Fixed: scrolled to
+  // the bottom, so the caret's line is within [scrollTop, +clientHeight].
+  expect(g.scrollTop).toBeGreaterThan(0);
+  expect(g.scrollTop).toBeGreaterThanOrEqual(g.scrollHeight - g.clientHeight - 2);
+}
+
 // #902 — the inbound-INVITE banner, the surface that replaced the greyed
 // `:invited` pseudo-row.
 //

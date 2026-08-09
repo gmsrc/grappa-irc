@@ -25,8 +25,10 @@
 // the caret-scroll turns both red (scrollTop stays 0).
 
 import {
+  composeCaretGeometry,
   composeSend,
   composeTextarea,
+  expectEndCaretVisible,
   loginAs,
   selectChannel,
   synthSwipe,
@@ -40,32 +42,12 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // over, so an end-caret left at scrollTop 0 is unambiguously off-screen.
 const LONG_BODY = Array.from({ length: 12 }, (_, i) => `recall line ${i}`).join("\n");
 
-// Read the caret + scroll geometry the fix must establish.
-async function caretGeometry(ta: ReturnType<typeof composeTextarea>) {
-  return await ta.evaluate((el: HTMLTextAreaElement) => ({
-    selStart: el.selectionStart,
-    selEnd: el.selectionEnd,
-    valueLen: el.value.length,
-    scrollTop: el.scrollTop,
-    scrollHeight: el.scrollHeight,
-    clientHeight: el.clientHeight,
-  }));
-}
-
-// The shared assertion: caret deterministically at the end of the recalled
-// line AND the textarea scrolled so that end-caret is within the viewport.
-// `overflowSlack` guards against a vacuous pass on a non-overflowing draft.
-function expectEndCaretVisible(g: Awaited<ReturnType<typeof caretGeometry>>): void {
-  // Sanity: the recalled draft really overflows (else "in view" is trivial).
-  expect(g.scrollHeight).toBeGreaterThan(g.clientHeight + 40);
-  // Caret placed at the END of the recalled line (irssi recall semantics).
-  expect(g.selStart).toBe(g.valueLen);
-  expect(g.selEnd).toBe(g.valueLen);
-  // The bug: scrollTop left at 0 hides the end-caret. Fixed: scrolled to the
-  // bottom so the end-caret's line is within [scrollTop, scrollTop+clientHeight].
-  expect(g.scrollTop).toBeGreaterThan(0);
-  expect(g.scrollTop).toBeGreaterThanOrEqual(g.scrollHeight - g.clientHeight - 2);
-}
+// #1105 lifted `caretGeometry` + `expectEndCaretVisible` into the shared
+// fixture: the reply quote is a second door onto the very same "end-caret must
+// be visible" rule, and two copies of the oracle would be the test-side twin
+// of the production duplication that let #1105 through. LONG_BODY is 12 lines,
+// so 40px of required overflow is a wide margin here.
+const MIN_OVERFLOW_PX = 40;
 
 test("issue173 — keydown ArrowUp recall scrolls the end-caret into view", async ({ page }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
@@ -86,7 +68,7 @@ test("issue173 — keydown ArrowUp recall scrolls the end-caret into view", asyn
   await ta.press("ArrowUp");
   await expect(ta).toHaveValue(LONG_BODY, { timeout: 2_000 });
 
-  expectEndCaretVisible(await caretGeometry(ta));
+  expectEndCaretVisible(await composeCaretGeometry(page), MIN_OVERFLOW_PX);
 });
 
 test("issue173 — gesture (fast up-flick) recall scrolls the end-caret into view", async ({
@@ -114,5 +96,5 @@ test("issue173 — gesture (fast up-flick) recall scrolls the end-caret into vie
   await synthSwipe(page, { startX: 100, startY: 300, endX: 100, endY: 220, slowMs: 0 });
   await expect(ta).toHaveValue(LONG_BODY, { timeout: 2_000 });
 
-  expectEndCaretVisible(await caretGeometry(ta));
+  expectEndCaretVisible(await composeCaretGeometry(page), MIN_OVERFLOW_PX);
 });
