@@ -95,6 +95,26 @@ defmodule Grappa.SpawnOrchestrator do
 
   Each `spawn/4` invocation:
 
+    0. Looks the subject's session up in the `SessionRegistry`
+       (`Grappa.Session.whereis/2`). If one is already live, the connect
+       would spawn nothing, so it resets `Backoff` and returns
+       `{:ok, :already_started, pid}` WITHOUT consulting admission.
+       **Why before the gate** (#1147): capacity is not free — an ETS
+       circuit read, a Registry count and a DB query — and a rejection
+       is *recorded* (`Telemetry.capacity_reject/4`). Running it first
+       let a network at its cap refuse a subject who was ALREADY on it,
+       and logged a rejection for a request that was never going to
+       admit anything. The idempotent-keep semantics the callers rely on
+       (Bootstrap restart, PATCH-while-already-up) only held for the
+       spawn call itself, not end-to-end through `spawn/4`.
+
+       The lookup does NOT need to be race-free to be correct, and does
+       not weaken the synchronization story above: the spawn call
+       remains the authority. If the session dies between lookup and
+       spawn the normal path runs; if one appears, `start_session/3`
+       still returns `{:error, {:already_started, pid}}` and step 4 maps
+       it to the same outcome. Two paths reach `:already_started` — the
+       fast one and the raced one — and they agree by construction.
     1. Calls `Grappa.Admission.check_capacity/1` with the caller's
        `capacity_input` (carries `flow:` discriminator —
        `:bootstrap_user`, `:bootstrap_visitor`, or
@@ -148,6 +168,11 @@ defmodule Grappa.SpawnOrchestrator do
       free when `spawn/4` runs ⇒ it returns `{:ok, :spawned, _}`, NEVER
       `:already_started`. That is the definitional contrast with the
       keep verb.
+
+  That contrast survives `spawn/4`'s already-live fast path (step 0),
+  which reads the very Registry slot `stop_session/3` has just polled
+  clear — so the bounce reaches admission every time, as it must: it
+  really is about to spawn.
 
   Teardown is `stop_session/3` (idempotent — no live session ⇒ `:ok`),
   so `reconnect/5` composes cleanly whether or not a session is live.
@@ -204,11 +229,13 @@ defmodule Grappa.SpawnOrchestrator do
 
     * `{:ok, :spawned, pid}` — admission cleared, fresh
       `Session.Server` started under `SessionSupervisor`.
-    * `{:ok, :already_started, pid}` — admission cleared, but a
-      `Session.Server` for the same `(subject, network_id)` was
-      already registered (Bootstrap restart idempotency,
-      NetworksController PATCH-while-already-up). The pid is the
-      live process; caller should treat as no-op.
+    * `{:ok, :already_started, pid}` — a `Session.Server` for the same
+      `(subject, network_id)` was already registered (Bootstrap restart
+      idempotency, NetworksController PATCH-while-already-up), so
+      nothing was spawned. The pid is the live process; caller should
+      treat as no-op. Admission is NOT consulted on this outcome when
+      the fast path saw the session (step 0) — a connect that spawns
+      nothing consumes no capacity and records no rejection.
     * `{:ok, :ignored}` — admission cleared, but `Session.Server.init/1`
       returned `:ignore` because the operator-owned DB row for the
       subject is gone (`Visitors.delete/1`, `Credentials.unbind_credential/2`).
@@ -233,6 +260,11 @@ defmodule Grappa.SpawnOrchestrator do
   passed verbatim to `Admission.check_capacity/1` — caller fills in
   the `flow:` discriminant and `client_id` per its own surface.
 
+  A session already live for this exact `(subject, network_id)`
+  short-circuits to `{:ok, :already_started, pid}` before admission is
+  consulted (#1147): the connect is a no-op, so it neither spends
+  capacity nor records a rejection.
+
   See the moduledoc for the contract of each step + the
   unified `spawn_outcome/0` shape.
   """
@@ -240,6 +272,17 @@ defmodule Grappa.SpawnOrchestrator do
           spawn_outcome()
   def spawn(subject, network_id, plan, capacity_input)
       when is_integer(network_id) and is_map(plan) and is_map(capacity_input) do
+    case Session.whereis(subject, network_id) do
+      pid when is_pid(pid) ->
+        :ok = Backoff.reset(subject, network_id)
+        {:ok, :already_started, pid}
+
+      nil ->
+        admit_then_spawn(subject, network_id, plan, capacity_input)
+    end
+  end
+
+  defp admit_then_spawn(subject, network_id, plan, capacity_input) do
     case Admission.check_capacity(capacity_input) do
       :ok ->
         :ok = Backoff.reset(subject, network_id)

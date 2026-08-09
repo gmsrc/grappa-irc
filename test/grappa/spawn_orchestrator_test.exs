@@ -155,6 +155,28 @@ defmodule Grappa.SpawnOrchestratorTest do
   # the cast to be processed before reading ETS via `failure_count/2`.
   defp sync_backoff, do: :sys.get_state(Backoff)
 
+  # `:telemetry.execute/3` runs handlers in the CALLING process, and the
+  # orchestrator is called inline here — so the message is in this
+  # mailbox by the time `spawn/4` returns. That makes the zero-timeout
+  # `assert_received` / `refute_received` pair exact: no polling window
+  # to widen, and an absence assertion that cannot pass by being early.
+  defp attach_capacity_reject do
+    id = "spawn-orch-capacity-reject-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        id,
+        [:grappa, :admission, :capacity, :reject],
+        fn name, measurements, metadata, pid ->
+          send(pid, {:telemetry, name, measurements, metadata})
+        end,
+        test_pid
+      )
+
+    on_exit(fn -> :telemetry.detach(id) end)
+  end
+
   describe "spawn/4 happy path" do
     test "admission ok + fresh session — returns {:ok, :spawned, pid}" do
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
@@ -259,6 +281,80 @@ defmodule Grappa.SpawnOrchestratorTest do
                SpawnOrchestrator.spawn({:user, vjt_b.id}, network.id, plan_b, cap_in)
 
       assert Session.whereis({:user, vjt_b.id}, network.id) == nil
+    end
+  end
+
+  # #1147 — the capacity gate used to run BEFORE the already-live check,
+  # so a connect that would spawn nothing could still be refused for
+  # capacity (and recorded as a rejection that never corresponded to an
+  # admission attempt). The pair below pins both halves: the no-op keeps
+  # the session AND stays out of the reject counter, while a connect that
+  # really would spawn still hits the gate and is still recorded.
+  describe "spawn/4 idempotent connect against a network at its cap (#1147)" do
+    test "already-live subject keeps its session and records no capacity reject" do
+      vjt = user_fixture(name: "idemcap-#{System.unique_integer([:positive])}")
+      {_, port} = start_server()
+      slug = "idemcap-#{System.unique_integer([:positive])}"
+      {network, plan} = setup_credential(vjt, slug, port, %{max_concurrent_user_sessions: 1})
+      :ok = clear_registry_for(network.id)
+      on_exit(fn -> clear_registry_for(network.id) end)
+
+      subject = {:user, vjt.id}
+      cap_in = capacity_input(network.id, :bootstrap_user)
+
+      assert {:ok, :spawned, pid} = SpawnOrchestrator.spawn(subject, network.id, plan, cap_in)
+
+      # The network is now AT its cap of one — and this subject's OWN
+      # session is the one filling it. Attach only now, so the handler
+      # can only witness the second call.
+      attach_capacity_reject()
+
+      assert {:ok, :already_started, ^pid} =
+               SpawnOrchestrator.spawn(subject, network.id, plan, cap_in)
+
+      refute_received {:telemetry, [:grappa, :admission, :capacity, :reject], _, _}
+      assert Session.whereis(subject, network.id) == pid
+    end
+
+    test "subject with no live session still gets the capacity error, and it IS recorded" do
+      vjt_a = user_fixture(name: "capgate-a-#{System.unique_integer([:positive])}")
+      vjt_b = user_fixture(name: "capgate-b-#{System.unique_integer([:positive])}")
+      {_, port} = start_server()
+      slug = "capgate-#{System.unique_integer([:positive])}"
+
+      {network, plan_a} = setup_credential(vjt_a, slug, port, %{max_concurrent_user_sessions: 1})
+
+      {:ok, cred_b} =
+        Credentials.bind_credential(vjt_b, network, %{
+          nick: "vjtb",
+          auth_method: :none,
+          autojoin_channels: []
+        })
+
+      {:ok, plan_b} = SessionPlan.resolve(cred_b)
+
+      :ok = clear_registry_for(network.id)
+      on_exit(fn -> clear_registry_for(network.id) end)
+
+      network_id = network.id
+      cap_in = capacity_input(network_id, :bootstrap_user)
+
+      assert {:ok, :spawned, _} =
+               SpawnOrchestrator.spawn({:user, vjt_a.id}, network_id, plan_a, cap_in)
+
+      attach_capacity_reject()
+
+      assert {:error, :user_cap_exceeded} =
+               SpawnOrchestrator.spawn({:user, vjt_b.id}, network_id, plan_b, cap_in)
+
+      assert_received {:telemetry, [:grappa, :admission, :capacity, :reject], %{},
+                       %{
+                         flow: :bootstrap_user,
+                         error: :user_cap_exceeded,
+                         network_id: ^network_id
+                       }}
+
+      assert Session.whereis({:user, vjt_b.id}, network_id) == nil
     end
   end
 
