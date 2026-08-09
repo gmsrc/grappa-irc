@@ -27,6 +27,15 @@ import type { WireNode } from "../lib/wireValidate";
 // `survives…` lists the fields whose mutation was ACCEPTED. Everything else
 // was rejected, so an empty list ("-") means the boundary caught every
 // mutation of every field on that arm.
+//
+// `types` is the recorded SHAPE, and it is here because without it this
+// corpus is an oracle made of the thing under test: the sampler reads the
+// generated schema and the narrower now validates against that same schema,
+// so the two move together and a wrong typespec stays green forever. (Proven,
+// not assumed — flipping `circuit_open.network_id` to `String.t()` upstream
+// left all six tests passing until this line existed.) Recording the shape
+// gives the snapshot an anchor OUTSIDE the loop: a field changing type
+// upstream now shows as a diff here, whether or not the narrower notices.
 
 const ARMS = S_AdminEventsWireEvent.u as readonly WireNode[];
 
@@ -66,6 +75,12 @@ function wrongType(value: unknown): unknown {
 
 type Narrower = (raw: unknown) => unknown;
 
+function jsonType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
 function verdictOf(narrow: Narrower, payload: unknown): "accept" | "reject" {
   return narrow(payload) === null ? "reject" : "accept";
 }
@@ -102,7 +117,7 @@ function measure(narrow: Narrower, node: WireNode): Record<string, string> {
   const valid = sample(node) as Record<string, unknown>;
   const fields = Object.keys(valid).sort();
   return {
-    fields: fields.join(", "),
+    types: fields.map((f) => `${f}:${jsonType(valid[f])}`).join(", "),
     baseline: verdictOf(narrow, valid),
     unknownKey: verdictOf(narrow, { ...valid, a_field_from_the_future: 1 }),
     survivesMissing: survivors(narrow, fields, (f) => without(valid, f)),
@@ -169,226 +184,226 @@ describe("admin-events boundary — malformed-payload measurement (#429)", () =>
       {
         "cap_counts_changed": {
           "baseline": "accept",
-          "fields": "at, kind, max_concurrent_user_sessions, max_concurrent_visitor_sessions, network_id, network_slug, users, visitors",
           "survivesMissing": "-",
           "survivesNull": "max_concurrent_user_sessions, max_concurrent_visitor_sessions",
           "survivesWrongType": "-",
+          "types": "at:string, kind:string, max_concurrent_user_sessions:number, max_concurrent_visitor_sessions:number, network_id:number, network_slug:string, users:number, visitors:number",
           "unknownKey": "accept",
         },
         "capacity_reject": {
           "baseline": "accept",
-          "fields": "at, error, flow, kind, network_id, network_slug, source_ip",
           "survivesMissing": "-",
           "survivesNull": "network_slug, source_ip",
           "survivesWrongType": "-",
+          "types": "at:string, error:string, flow:string, kind:string, network_id:number, network_slug:string, source_ip:string",
           "unknownKey": "accept",
         },
         "circuit_close": {
           "baseline": "accept",
-          "fields": "at, kind, network_id, network_slug, reason",
           "survivesMissing": "-",
           "survivesNull": "network_slug",
           "survivesWrongType": "-",
+          "types": "at:string, kind:string, network_id:number, network_slug:string, reason:string",
           "unknownKey": "accept",
         },
         "circuit_open": {
           "baseline": "accept",
-          "fields": "at, cooldown_ms, kind, network_id, network_slug, threshold",
           "survivesMissing": "-",
           "survivesNull": "network_slug",
           "survivesWrongType": "-",
+          "types": "at:string, cooldown_ms:number, kind:string, network_id:number, network_slug:string, threshold:number",
           "unknownKey": "accept",
         },
         "circuit_reset": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug",
           "survivesMissing": "-",
           "survivesNull": "actor_user_id, actor_user_name, network_slug",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string",
           "unknownKey": "accept",
         },
         "credential_bound": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug, nick, user_id, user_name",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string, nick:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
         "credential_unbound": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug, user_id, user_name",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
         "credential_updated": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug, session_action, user_id, user_name",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string, session_action:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
         "login_throttled": {
           "baseline": "accept",
-          "fields": "at, door, failures, kind, scope, source_ip, window_ms",
           "survivesMissing": "door, scope",
           "survivesNull": "door, scope, source_ip",
           "survivesWrongType": "door, scope",
+          "types": "at:string, door:string, failures:number, kind:string, scope:string, source_ip:string, window_ms:number",
           "unknownKey": "accept",
         },
         "network_caps_updated": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, max_concurrent_user_sessions, max_concurrent_visitor_sessions, max_per_ip, network_id, network_slug",
           "survivesMissing": "-",
           "survivesNull": "actor_user_id, actor_user_name, max_concurrent_user_sessions, max_concurrent_visitor_sessions, max_per_ip",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, max_concurrent_user_sessions:number, max_concurrent_visitor_sessions:number, max_per_ip:number, network_id:number, network_slug:string",
           "unknownKey": "accept",
         },
         "network_created": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string",
           "unknownKey": "accept",
         },
         "network_deleted": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string",
           "unknownKey": "accept",
         },
         "reaper_swept": {
           "baseline": "accept",
-          "fields": "at, count, kind",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "at:string, count:number, kind:string",
           "unknownKey": "accept",
         },
         "server_added": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, host, kind, network_id, network_slug, port, server_id, tls",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, host:string, kind:string, network_id:number, network_slug:string, port:number, server_id:number, tls:boolean",
           "unknownKey": "accept",
         },
         "server_removed": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, host, kind, network_id, network_slug, port, server_id",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, host:string, kind:string, network_id:number, network_slug:string, port:number, server_id:number",
           "unknownKey": "accept",
         },
         "server_updated": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, host, kind, network_id, network_slug, port, server_id, tls",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, host:string, kind:string, network_id:number, network_slug:string, port:number, server_id:number, tls:boolean",
           "unknownKey": "accept",
         },
         "session_disconnected": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug, subject_id, subject_kind",
           "survivesMissing": "-",
           "survivesNull": "actor_user_id, actor_user_name, network_slug",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string, subject_id:string, subject_kind:string",
           "unknownKey": "accept",
         },
         "session_terminated": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, network_id, network_slug, subject_id, subject_kind",
           "survivesMissing": "-",
           "survivesNull": "actor_user_id, actor_user_name, network_slug",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, network_id:number, network_slug:string, subject_id:string, subject_kind:string",
           "unknownKey": "accept",
         },
         "upload_reaped": {
           "baseline": "accept",
-          "fields": "at, kind, slug, subject_id, subject_kind, upload_id",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "at:string, kind:string, slug:string, subject_id:string, subject_kind:string, upload_id:string",
           "unknownKey": "accept",
         },
         "uploads_swept": {
           "baseline": "accept",
-          "fields": "at, count, kind",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "at:string, count:number, kind:string",
           "unknownKey": "accept",
         },
         "user_created": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, is_admin, kind, user_id, user_name",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, is_admin:boolean, kind:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
         "user_deleted": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, user_id, user_name",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
         "user_password_changed": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, user_id, user_name",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
         "user_updated": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, is_admin, kind, user_id, user_name",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, is_admin:boolean, kind:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
         "visitor_deleted": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, visitor_id, visitor_nick",
           "survivesMissing": "-",
           "survivesNull": "actor_user_id, actor_user_name, visitor_nick",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, visitor_id:string, visitor_nick:string",
           "unknownKey": "accept",
         },
         "visitor_reaped": {
           "baseline": "accept",
-          "fields": "at, kind, visitor_id, visitor_nick",
           "survivesMissing": "-",
           "survivesNull": "visitor_nick",
           "survivesWrongType": "-",
+          "types": "at:string, kind:string, visitor_id:string, visitor_nick:string",
           "unknownKey": "accept",
         },
         "visitor_share_token_minted": {
           "baseline": "accept",
-          "fields": "actor_user_id, actor_user_name, at, kind, visitor_id, visitor_nick",
           "survivesMissing": "-",
           "survivesNull": "visitor_nick",
           "survivesWrongType": "-",
+          "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, visitor_id:string, visitor_nick:string",
           "unknownKey": "accept",
         },
         "web_session_severed": {
           "baseline": "accept",
-          "fields": "at, failures, kind, subject_id, subject_kind, window_ms",
           "survivesMissing": "-",
           "survivesNull": "-",
           "survivesWrongType": "-",
+          "types": "at:string, failures:number, kind:string, subject_id:string, subject_kind:string, window_ms:number",
           "unknownKey": "accept",
         },
       }
@@ -406,18 +421,18 @@ describe("admin-events boundary — malformed-payload measurement (#429)", () =>
       {
         "admin_overview": {
           "baseline": "accept",
-          "fields": "hostname, loadavg, sessions, version, visitors",
           "survivesMissing": "-",
           "survivesNull": "loadavg",
           "survivesWrongType": "-",
+          "types": "hostname:string, loadavg:number, sessions:number, version:string, visitors:object",
           "unknownKey": "accept",
         },
         "session_log_entry": {
           "baseline": "accept",
-          "fields": "at, attempt, clean, delay_ms, duration_ms, event, id, network_id, network_slug, nick, old_nick, reason, session_id, subject_kind",
           "survivesMissing": "old_nick",
           "survivesNull": "attempt, clean, delay_ms, duration_ms, network_slug, nick, old_nick, reason",
           "survivesWrongType": "-",
+          "types": "at:string, attempt:number, clean:boolean, delay_ms:number, duration_ms:number, event:string, id:number, network_id:number, network_slug:string, nick:string, old_nick:string, reason:string, session_id:string, subject_kind:string",
           "unknownKey": "accept",
         },
       }
