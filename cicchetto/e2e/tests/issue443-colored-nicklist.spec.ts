@@ -19,8 +19,11 @@
 
 import {
   closeSettings,
+  computedColor,
+  inlineNickColorVar,
   loginAs,
   openSettingsSection,
+  resolveCssColor,
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
@@ -56,6 +59,11 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
   // No inline `color` in the style attribute.
   await expect(ownNickText(page)).not.toHaveAttribute("style", /color/);
 
+  // The monochrome baseline, captured BEFORE the toggle: whatever `--fg`
+  // resolves to in the live cascade. The coloured state below has to be
+  // different from THIS, and an unresolvable palette var lands exactly here.
+  const monochrome = await computedColor(ownNickText(page));
+
   // Open Settings → display sub-page (#460); the toggle lives in the display
   // options section and is unchecked by default (current behavior).
   await openSettingsSection(page, "display");
@@ -66,9 +74,21 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
   await page.getByTestId("colored-nicklist-toggle").check();
   await expect(ownNickText(page)).toHaveAttribute("style", /color/);
   // ...and the var() resolves to a real hue in the live cascade (jsdom can't
-  // do this — the browser proof).
-  const computed = await ownNickText(page).evaluate((el) => getComputedStyle(el).color);
-  expect(computed).toMatch(/^rgba?\(/);
+  // do this — the browser proof). Two assertions, one mutant each:
+  //
+  //   (1) the hue actually moved OFF the inherited `--fg`. An undeclared or
+  //       unresolvable `--nick-color-N` is invalid-at-computed-value-time and
+  //       the span silently inherits `--fg` — still a colour, so the retired
+  //       `/^rgba?\(/` oracle accepted that as a pass. This one does not.
+  //   (2) the hue is the one the span DECLARES, not one a stray rule with
+  //       higher specificity (or a theme `!important`) painted over it.
+  //
+  // Both compare opaque computed strings — see `resolveCssColor` for why a
+  // parsed rgb tuple is the wrong oracle here.
+  const coloured = await computedColor(ownNickText(page));
+  expect(coloured).not.toBe(monochrome);
+  const declaredSlot = await resolveCssColor(page, await inlineNickColorVar(ownNickText(page)));
+  expect(coloured).toBe(declaredSlot);
 
   // Close the drawer; the applied color sticks. closeSettings uses the header
   // × — #460's "done" footer button lives on the main index only, and we are
@@ -80,6 +100,11 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
   await page.reload();
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(ownNickText(page)).toHaveAttribute("style", /color/);
+  // ...and the SAME hue: nick → slot is a pure hash, so a fresh document
+  // must land on the colour the previous one did. A mapping that drifted
+  // per page-load (a seeded/randomised hash) would restore the preference
+  // and still repaint the roster on every reload.
+  expect(await computedColor(ownNickText(page))).toBe(coloured);
 
   // And the drawer reflects the persisted choice.
   await openSettingsSection(page, "display");

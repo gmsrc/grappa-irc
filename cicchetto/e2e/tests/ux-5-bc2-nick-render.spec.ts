@@ -13,9 +13,12 @@
 // Post-bucket end state:
 //   * Every nick render site routes through `<NickText>`. Outer span
 //     is `.nick`; inline `style="color: var(--nick-color-N)"` where
-//     N = djb2(nick.toLowerCase()) % 16. Theme blocks
-//     (`:root[data-theme="..."]`) define `--nick-color-0..15` per
-//     theme so palette swaps with the rest of the chrome.
+//     N = djb2(asciiFold(nick)) % NICK_PALETTE_SIZE. Theme blocks
+//     (`:root[data-theme="..."]`) define `--nick-color-0..15` per theme
+//     so the palette swaps with the rest of the chrome; #444 DERIVES a
+//     second band on top of those in plain `:root`, as
+//     `color-mix(in oklab, …)` — which the browser serialises as
+//     `oklab(…)`, never `rgb(…)`.
 //   * Op/halfop/voiced senders get a bold `.nick-prefix.nick-prefix-{op,
 //     halfop,voiced}` span BEFORE the nick text, taking the existing
 //     mode-token color (`--mode-op` etc.). Plain members render with
@@ -30,7 +33,14 @@
 // Parity matrix: UI shape contract, subject-shape-agnostic. Registered
 // seed (vjt + #bofh autojoin) suffices.
 
-import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  computedColor,
+  inlineNickColorVar,
+  loginAs,
+  resolveCssColor,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -38,17 +48,6 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.setTimeout(60_000);
-
-// Parses an rgb(R, G, B) computed-style string into a tuple. jsdom
-// returns "" for unresolved var(); a real browser resolves the
-// `var(--nick-color-N)` to the theme's defined hue and returns
-// `rgb(...)`. We assert on the parsed tuple to dodge whitespace /
-// rgba alpha variants.
-function parseRgb(input: string): [number, number, number] | null {
-  const m = input.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (!m) return null;
-  return [Number(m[1]), Number(m[2]), Number(m[3])];
-}
 
 test("ux-5-bc2 desktop — scrollback sender: own nick renders with NickText (.nick-text + colored)", async ({
   page,
@@ -81,70 +80,79 @@ test("ux-5-bc2 desktop — scrollback sender: own nick renders with NickText (.n
   // computed color.
   const nickTextSpan = ownPrivmsg.locator(".scrollback-sender .nick-text").first();
   await expect(nickTextSpan).toHaveText(specNick());
-  const computedColor = await nickTextSpan.evaluate((el) => getComputedStyle(el).color);
-  const rgb = parseRgb(computedColor);
-  expect(rgb).not.toBeNull();
-  // Non-trivial color — at least one channel above 0 (the palette has
-  // no pure black slot; any `--nick-color-N` resolves to a colored hue).
-  if (rgb) {
-    expect(rgb[0] + rgb[1] + rgb[2]).toBeGreaterThan(0);
-  }
+
+  // Two assertions, one mutant each. Both compare opaque computed strings —
+  // see `resolveCssColor` for why a parsed rgb tuple is the wrong oracle.
+  //
+  //   (1) the palette var RESOLVED. An undeclared or unresolvable
+  //       `--nick-color-N` is invalid-at-computed-value-time and the span
+  //       inherits `--fg`, i.e. renders uncoloured. The retired oracle
+  //       approximated this as "sum of channels > 0", which only bites in a
+  //       light theme (mirc-light's `--fg` is #000000); against `--fg`
+  //       itself it bites in every theme.
+  const sender = await computedColor(nickTextSpan);
+  expect(sender).not.toBe(await resolveCssColor(page, "var(--fg)"));
+  //   (2) the hue is the slot the span DECLARES, not one painted over it by
+  //       a stray rule with higher specificity.
+  expect(sender).toBe(await resolveCssColor(page, await inlineNickColorVar(nickTextSpan)));
 });
 
-test("ux-5-bc2 desktop — distinct nicks resolve to distinct CSS color values via the djb2 hash", async ({
+test("ux-5-bc2 desktop — every declared palette slot resolves, and to a distinct hue", async ({
   page,
 }) => {
   const vjt = specUser();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  // Probe at the document level: render two NickText nodes with known
-  // distinct nicks ("alice" and "bob") and read their computed colors.
-  // Injecting into the page rather than driving IRC traffic keeps the
-  // assertion deterministic; the real DOM cascade still runs.
-  const colors = await page.evaluate(() => {
-    const make = (nick: string) => {
-      // Construct the same DOM shape NickText produces; the live CSS
-      // cascade resolves the `var(--nick-color-N)` value the same way.
-      const outer = document.createElement("span");
-      outer.className = "nick";
-      const text = document.createElement("span");
-      text.className = "nick-text";
-      // Mirror the djb2 hash + palette modulo from
-      // cicchetto/src/lib/nickColor.ts so this probe doesn't fork
-      // the contract — if the hash changes there the e2e fails here.
-      const folded = nick.toLowerCase();
-      let hash = 5381;
-      for (let i = 0; i < folded.length; i++) {
-        hash = (Math.imul(hash, 33) + folded.charCodeAt(i)) | 0;
-      }
-      const idx = (hash >>> 0) % 16;
-      text.style.color = `var(--nick-color-${idx})`;
-      text.textContent = nick;
-      outer.appendChild(text);
-      document.body.appendChild(outer);
-      const resolved = getComputedStyle(text).color;
-      document.body.removeChild(outer);
-      return resolved;
+  // What only a browser can answer: does `var(--nick-color-N)` actually
+  // RESOLVE, and do the slots stay distinct from one another?
+  //
+  // This used to re-implement djb2 in the probe to pick the slots — and the
+  // copy said `% 16` while production had moved to 32 (`NICK_PALETTE_SIZE`,
+  // #444). The mirror was stale, so the probe never once touched buckets
+  // 16..31, the CSS-DERIVED band (`color-mix(in oklab, …)`) that is exactly
+  // the part a stylesheet can break. Nick → slot is a pure function with no
+  // DOM in it and is pinned in `src/__tests__/nickColor.test.ts`
+  // (determinism, case-folding, in-bounds, distribution, and "every bucket
+  // has a declaration"); duplicating it here bought nothing and forked the
+  // contract. So the probe now walks the palette the stylesheet declares
+  // instead of guessing which slots a nick lands in — no constant copied.
+  const { slots, fg } = await page.evaluate(() => {
+    const probe = document.createElement("span");
+    document.body.appendChild(probe);
+    const resolve = (value: string) => {
+      probe.style.color = value;
+      return getComputedStyle(probe).color;
     };
-    return { alice: make("alice"), bob: make("bob"), aliceUpper: make("ALICE") };
+    const foreground = resolve("var(--fg)");
+    // Walk upward while the slot resolves to something other than the
+    // inherited `--fg` — an undeclared var is invalid-at-computed-value-time
+    // and lands there. The ceiling only bounds the walk; it is not a claim
+    // about the palette size.
+    const resolved: string[] = [];
+    for (let i = 0; i < 64; i++) {
+      const colour = resolve(`var(--nick-color-${i})`);
+      if (colour === foreground) break;
+      resolved.push(colour);
+    }
+    probe.remove();
+    return { slots: resolved, fg: foreground };
   });
 
-  const alice = parseRgb(colors.alice);
-  const bob = parseRgb(colors.bob);
-  const aliceUpper = parseRgb(colors.aliceUpper);
-  expect(alice).not.toBeNull();
-  expect(bob).not.toBeNull();
-  expect(aliceUpper).not.toBeNull();
+  // The legacy hand-authored band is 16 slots; #444 derives a second band on
+  // top of it. Anything at or below 16 means the derived band stopped
+  // resolving — the regression #444 has to stay ahead of.
+  expect(slots.length).toBeGreaterThan(16);
 
-  // alice + bob hash to different palette slots — assert their colors
-  // differ. (djb2 distribution: indices for `alice`/`bob` differ in
-  // practice; if a future palette rotation made them collide, this
-  // assertion would force us to reconsider the palette ordering.)
-  expect(alice).not.toEqual(bob);
+  // Distinct hues, or two different nicks read as the same person. Compared
+  // as opaque computed strings: the derived band serialises as `oklab(…)`
+  // and the base band as `rgb(…)`, and both are equally valid colours.
+  expect(new Set(slots).size).toBe(slots.length);
 
-  // Case-insensitivity: ALICE === alice → same color slot.
-  expect(aliceUpper).toEqual(alice);
+  // And none of them is the uncoloured default (the walk's break condition
+  // proves this for the prefix it accepted; asserting it makes the intent
+  // survive a future rewrite of the loop).
+  expect(slots).not.toContain(fg);
 });
 
 test("ux-5-bc2 desktop — own nick (operator self, plain in channel) has no @/%/+ prefix glyph on PRIVMSG sender", async ({
@@ -236,9 +244,12 @@ test("ux-5-bc2 desktop — theme switch repaints nick colors (irssi-dark → mir
     .evaluate((el) => getComputedStyle(el).color);
 
   expect(colorBefore).not.toBe(colorAfter);
-  // Sanity: both colors are resolved (non-empty).
-  expect(parseRgb(colorBefore)).not.toBeNull();
-  expect(parseRgb(colorAfter)).not.toBeNull();
+  // Sanity: both colors are resolved (non-empty). Checked as strings — a
+  // computed colour may serialise as `rgb(…)` OR `oklab(…)` depending on the
+  // slot (see `resolveCssColor`), so "did it parse as rgb" is not the
+  // question and never was.
+  expect(colorBefore).not.toBe("");
+  expect(colorAfter).not.toBe("");
 });
 
 test("ux-5-bc2 desktop — scrollback PRIVMSG sender wraps the nick inside angle brackets <{nick}>", async ({

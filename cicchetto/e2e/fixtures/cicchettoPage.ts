@@ -1204,3 +1204,53 @@ export function inviteBannerJoin(page: Page, networkSlug: string, channelName: s
 export function inviteBannerDismiss(page: Page, networkSlug: string, channelName: string) {
   return inviteBanner(page, networkSlug, channelName).locator(".error-banner-dismiss");
 }
+
+// ---------------------------------------------------------------------------
+// Computed colours (#1078)
+//
+// Compare computed colours as OPAQUE STRINGS. Never parse them with an
+// `/^rgba?\(/` regex and never assume a channel tuple: nick-palette buckets
+// 16..31 are declared as `color-mix(in oklab, …)` (themes/default.css, #444),
+// which Chrome serialises as `oklab(L a b)` — a legitimate, fully-resolved
+// colour that no `rgb(` oracle can read. Before #1078 every spec ran as one
+// fixed nick that happened to hash into 0..15, so the derived band was
+// unreachable and the regex looked total; the per-spec subject made it
+// reachable and the regex started reporting "no colour" for a correctly
+// coloured nick. Two computed values are equal iff their serialisations are
+// equal, which is all a colour assertion here needs.
+// ---------------------------------------------------------------------------
+
+// The browser's computed `color` for an element, verbatim.
+export function computedColor(locator: Locator): Promise<string> {
+  return locator.evaluate((el) => getComputedStyle(el).color);
+}
+
+// Resolve a CSS <color> (`var(--nick-color-19)`, `var(--fg)`, …) through the
+// LIVE cascade and return the browser's computed serialisation of it.
+//
+// A detached probe span is appended to <body> so it inherits the same
+// `:root` custom properties the real node does, read, then removed. This is
+// the only way to answer "what does this var actually resolve to" — jsdom is
+// cascade-blind, so it cannot be asked in a unit test.
+export function resolveCssColor(page: Page, value: string): Promise<string> {
+  return page.evaluate((cssValue) => {
+    const probe = document.createElement("span");
+    probe.style.color = cssValue;
+    document.body.appendChild(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+    return resolved;
+  }, value);
+}
+
+// The `var(--nick-color-N)` a NickText span declares inline. Throws rather
+// than returning null: every caller asserts against it, and a silent null
+// would turn the comparison into a tautology.
+export async function inlineNickColorVar(locator: Locator): Promise<string> {
+  const style = await locator.getAttribute("style");
+  const match = style?.match(/var\(--nick-color-\d+\)/);
+  if (!match) {
+    throw new Error(`expected an inline nick-colour var on the span, got style=${String(style)}`);
+  }
+  return match[0];
+}
