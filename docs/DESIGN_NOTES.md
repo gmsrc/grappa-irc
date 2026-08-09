@@ -38483,6 +38483,93 @@ deferring the parse, not the network.
 
 ---
 
+## 2026-08-10 — #1044: a second secret slot, and why the RENAME went the other way
+
+A credential had exactly one secret slot and `auth_method` decided which single
+role it was spent on. That models a network where the roles are alternatives.
+On a password-gated server — a `PASS` to get in, plus services to identify to —
+they are not, and the user had to choose between connecting and identifying.
+Reported by Mezmerize from a live self-hosted setup; Hypnotize (Azzurra oper)
+confirmed the dual-secret configuration is the ordinary one there, not an
+oper-side edge case.
+
+**The slot already existed.** #509's `nickserv_pass_encrypted` was retired by
+#124, not dropped (#124 is expand-only by scope ruling), so the fix reopens a
+column rather than adding one. Its input-only virtual HAD been removed, so the
+write path had to be re-declared.
+
+**The direction is the decision.** `password_encrypted` KEEPS the NickServ
+meaning and the resurrected column becomes the server `PASS`. The reason is the
+visitor population: `Grappa.Visitors.SessionPlan` says outright that the
+`server_pass` branch never fires for visitors, and a visitor's `auth_method` is
+DERIVED, not chosen — `:none` without a secret, `:nickserv_identify` with one.
+So on every visitor row `password_encrypted` *is* the NickServ secret, and
+renaming that column instead would have made the name lie on the whole visitor
+population.
+
+**User-only, and it costs nothing.** The subject XOR (`belongs_to :user` /
+`belongs_to :visitor`, exactly one set) makes the branch a field read rather
+than an inference. A visitor cannot spend the slot anyway: their derived
+`auth_method` never reaches `:server_pass`.
+
+**The visitor branch REFUSES the value; it does not drop it.** The ruling's
+word was "ignored", which describes the SHAPE of the constraint (user-only) and
+not the arbitration between a discard and an error — that was an implementation
+call, and it went to the error. Three reasons, in order: the value is a
+SECRET, and the worst failure is not one 422 too many but an operator who
+believes a server `PASS` is stored when it was thrown away; no door can send it
+today (the admin REST whitelists do not carry `server_pass`), so the guard
+costs nothing and cannot break anything, while whoever opens that door later
+meets a loud error instead of a mute hole; and it is one function. Same posture
+as #124's 410 on the retired perform field, and CLAUDE.md's "no silent-swallow
+at boundaries". `put_encrypted_server_pass/1` then needs no branch of its own —
+a valid changeset carrying the change is a user credential by construction.
+
+**#124's property is preserved and now pinned against the new column.** For
+each role there is exactly ONE place the value is read from, with no fallback
+chain: `recover_secret/1` reads `password_encrypted` and nothing else, and the
+perform door cannot write the new slot. The pre-existing end-to-end pins that
+used to stage the retired column and prove it inert on the NickServ path were
+re-aimed at `server_pass_encrypted` — they assert the same property against the
+column that now has a live write path.
+
+**DROP + ADD, not RENAME.** A rename would have carried the old bytes across,
+and every value still in that column is a *NickServ* secret. Relabelling one as
+a server `PASS` would send the wrong secret as the `PASS` wire token. So the
+old content is destroyed deliberately and the new slot starts empty. On the
+production node there was nothing to destroy — #1028's last un-folded row was
+cleared by hand on 2026-08-10 and zero rows in the whole database carried the
+column. **Self-hosted databases were NOT measured** and may still hold values;
+nothing has read the column since #124, so that content is dead by ruling
+rather than by measurement, and the release note has to say the drop is
+deliberate rather than pretend the column was already empty everywhere.
+
+**What the deployment costs.** The rename and the drop are both CONTRACT and
+ship in the same cold window; `Preflight` classifies the migration cold by
+construction (`remove` is not a hot alter op). `down/0` restores the SHAPE, not
+the data — recovery is restore-from-backup, so the "Pre-deploy gate" in
+`docs/OPERATIONS.md` applies.
+
+**What this does NOT do, and it is deliberate.** The slot is storage plus a
+write path. Nothing READS it yet: the AuthFSM still spends `password_encrypted`
+as the single `PASS` token, so a dual-secret handshake is not shipped here and
+#1044's user-visible symptom is not yet cured. No REST door exposes the field
+either — the admin whitelists do not carry `server_pass`, so today the only
+writer is a direct `Credential.changeset/2` caller. That is the ruling's scope;
+the reader is the next step, not an omission.
+
+**The witness that was lost.** `fold_nickserv_pass_onto_password_test.exs`
+replayed the #124 fold's SQL against the live test schema. The test schema is
+built by running every migration, so after the drop that SQL is not executable
+on any schema the suite can build, and the behaviour tests were deleted. The
+migration is untouched and still runs correctly in order on an upgrading
+database; the source pin survives, because a migration a production database
+has already run must never be edited. Behaviour coverage, not behaviour, is
+what went away — recorded here so the deletion does not read as "it stopped
+mattering".
+
+---
+
 ## 2026-08-11 — #348: one knob for the auto-away delay, its off switch, and everyone
 
 The grace period between "every device of this subject went hidden" and the
