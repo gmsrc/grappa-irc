@@ -31,6 +31,7 @@ defmodule GrappaWeb.Admin.VhostsController do
 
   alias Grappa.{Accounts, SubjectSearch, Vhosts, Visitors}
   alias Grappa.Vhosts.AdminWire
+  alias GrappaWeb.Admin.SubjectLabels
   alias GrappaWeb.Validation
 
   # #257 — the autocomplete requests a bounded page; the operator narrows
@@ -45,7 +46,14 @@ defmodule GrappaWeb.Admin.VhostsController do
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def index(conn, _) do
     vhosts = Enum.map(Vhosts.list_vhosts(), &AdminWire.vhost_to_admin_json/1)
-    grants = Enum.map(Vhosts.list_grants(), &AdminWire.grant_to_admin_json/1)
+
+    grant_rows = Vhosts.list_grants()
+    # #1140 — resolve every grant's subject to its display name in two
+    # batched queries (one per subject kind), then render. The operator
+    # picks a subject BY NAME in the add-grant autocomplete; the table has
+    # to speak the same language back.
+    labels = grant_rows |> Enum.map(&Vhosts.grant_subject/1) |> SubjectLabels.resolve()
+    grants = Enum.map(grant_rows, &AdminWire.grant_to_admin_json(&1, labels))
 
     json(conn, %{
       vhosts: vhosts,
@@ -110,7 +118,7 @@ defmodule GrappaWeb.Admin.VhostsController do
          {:ok, grant} <- Vhosts.grant_vhost(vhost, subject) do
       conn
       |> put_status(:created)
-      |> json(AdminWire.grant_to_admin_json(grant))
+      |> json(AdminWire.grant_to_admin_json(grant, SubjectLabels.resolve([subject])))
     end
   end
 

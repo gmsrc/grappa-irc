@@ -70,8 +70,7 @@ defmodule GrappaWeb.Admin.SessionsController do
   alias Grappa.{Accounts, LiveIntrospection, Operator, Session}
   alias Grappa.LiveIntrospection.AdminWire
   alias Grappa.Net.PtrCache
-  alias Grappa.Networks.Credentials
-  alias GrappaWeb.Admin.AuthPlug
+  alias GrappaWeb.Admin.{AuthPlug, SubjectLabels}
 
   @doc """
   Enumerate every live `Session.Server` registered in the registry.
@@ -79,11 +78,12 @@ defmodule GrappaWeb.Admin.SessionsController do
   for `:connected`-but-no-pid lives on `/admin/visitors` and
   `/admin/credentials`, not here.
 
-  Pre-joins `subject_label` per row via two batched DB lookups
-  (`Accounts.get_users_by_ids/1` + `Visitors.get_by_ids/1`) — one
-  query per subject_kind regardless of session count. The composition
-  lives here, not in `LiveIntrospection`, because that boundary
-  excludes `Accounts` / `Visitors` deps (pure live-state module).
+  Pre-joins `subject_label` per row via `GrappaWeb.Admin.SubjectLabels`
+  — two batched DB lookups, one query per subject_kind regardless of
+  session count. The composition lives at the web layer, not in
+  `LiveIntrospection`, because that boundary excludes `Accounts` /
+  `Credentials` deps (pure live-state module); #1140 promoted it out of
+  this controller so `/admin/vhosts` grants resolve the same way.
   `subject_label: nil` IS the gemello honesty signal: BEAM has a
   pid but the DB row is gone (orphan pid — operator can spot from
   the table without paging through the registry directly).
@@ -92,11 +92,7 @@ defmodule GrappaWeb.Admin.SessionsController do
   def index(conn, _) do
     entries = LiveIntrospection.list_sessions()
     {user_ids, visitor_ids} = partition_subject_ids(entries)
-    users = Accounts.get_users_by_ids(user_ids)
-    # #211 phase 7 — the visitor nick lives per-network on the credential
-    # now, so resolve the session label from the representative (identity-
-    # anchor) credential nick per visitor, batched (one query, no N+1).
-    visitor_nicks = Credentials.representative_nicks_by_visitor_ids(visitor_ids)
+    labels = SubjectLabels.resolve(Enum.map(entries, & &1.subject))
     # MAX(accounts_sessions.last_seen_at) per subject. Two batched
     # queries (one per subject_kind, same shape as the labels lookup)
     # so the controller's DB cost stays O(1) regardless of session
@@ -120,7 +116,7 @@ defmodule GrappaWeb.Admin.SessionsController do
       Enum.map(entries, fn entry ->
         AdminWire.session_to_admin_json(
           entry,
-          resolve_label(entry, users, visitor_nicks),
+          Map.get(labels, entry.subject),
           resolve_last_seen(entry, user_last_seen, visitor_last_seen),
           resolve_peer_name(entry, peer_names)
         )
@@ -143,17 +139,6 @@ defmodule GrappaWeb.Admin.SessionsController do
         {:visitor, id} -> {users, [id | visitors]}
       end
     end)
-  end
-
-  defp resolve_label(%{subject: {:user, id}}, users, _) do
-    case Map.get(users, id) do
-      %Accounts.User{name: name} -> name
-      nil -> nil
-    end
-  end
-
-  defp resolve_label(%{subject: {:visitor, id}}, _, visitor_nicks) do
-    Map.get(visitor_nicks, id)
   end
 
   defp resolve_last_seen(%{subject: {:user, id}}, user_last_seen, _),

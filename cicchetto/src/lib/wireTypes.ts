@@ -1347,6 +1347,7 @@ export type VhostsAdminWireGrantJson = {
   vhost_id: number;
   subject_type: "user" | "visitor";
   subject_id: string;
+  subject_label: string | null;
 };
 
 // === Grappa.Visitors.AdminWire ===

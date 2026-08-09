@@ -6,6 +6,7 @@ defmodule Grappa.Vhosts.AdminWire do
   schema field is a deliberate edit here (CLAUDE.md "no leaky
   abstractions").
   """
+  alias Grappa.{Subject, Vhosts}
   alias Grappa.Vhosts.{Grant, Vhost}
 
   @type vhost_json :: %{
@@ -21,7 +22,8 @@ defmodule Grappa.Vhosts.AdminWire do
           id: integer(),
           vhost_id: integer(),
           subject_type: :user | :visitor,
-          subject_id: String.t()
+          subject_id: String.t(),
+          subject_label: String.t() | nil
         }
 
   @doc "Renders a vhost row to the admin JSON shape."
@@ -46,24 +48,24 @@ defmodule Grappa.Vhosts.AdminWire do
   serializes it to the identical wire bytes, and the closed atom union
   is what lets the generated TS mirror be a literal union instead of a
   bare `string` (#448).
+
+  `labels` is the batched `%{subject => name}` map from
+  `GrappaWeb.Admin.SubjectLabels.resolve/1`; the grant's own subject pair
+  is the lookup key, so a user and a visitor sharing a uuid string can
+  never cross. `subject_label: nil` when the subject resolves to no name —
+  the honesty signal (#1140). `subject_id` STAYS on the wire: it is the
+  stable key, the label is display only.
   """
-  @spec grant_to_admin_json(Grant.t()) :: grant_json()
-  def grant_to_admin_json(%Grant{user_id: uid} = g) when is_binary(uid) do
-    base_grant_json(g, :user, uid)
-  end
+  @spec grant_to_admin_json(Grant.t(), %{Subject.t() => String.t()}) :: grant_json()
+  def grant_to_admin_json(%Grant{} = g, labels) when is_map(labels) do
+    {subject_type, subject_id} = subject = Vhosts.grant_subject(g)
 
-  def grant_to_admin_json(%Grant{visitor_id: vid} = g) when is_binary(vid) do
-    base_grant_json(g, :visitor, vid)
-  end
-
-  @spec base_grant_json(Grant.t(), :user | :visitor, String.t()) :: grant_json()
-  defp base_grant_json(%Grant{} = g, subject_type, subject_id)
-       when subject_type in [:user, :visitor] do
     %{
       id: g.id,
       vhost_id: g.vhost_id,
       subject_type: subject_type,
-      subject_id: subject_id
+      subject_id: subject_id,
+      subject_label: Map.get(labels, subject)
     }
   end
 end

@@ -117,6 +117,22 @@ defmodule Grappa.VhostsTest do
     end
   end
 
+  describe "grant_subject/1 — the one XOR reader (#1140)" do
+    test "reads a user grant back as its subject tuple" do
+      user = user_fixture()
+      {:ok, v} = Vhosts.create_vhost(%{address: addr()})
+      {:ok, grant} = Vhosts.grant_vhost(v, {:user, user.id})
+      assert Vhosts.grant_subject(grant) == {:user, user.id}
+    end
+
+    test "reads a visitor grant back as its subject tuple" do
+      visitor = visitor_fixture()
+      {:ok, v} = Vhosts.create_vhost(%{address: addr()})
+      {:ok, grant} = Vhosts.grant_vhost(v, {:visitor, visitor.id})
+      assert Vhosts.grant_subject(grant) == {:visitor, visitor.id}
+    end
+  end
+
   describe "allowed_vhosts/2 — mode 1 union of generally-available + in_pool + granted" do
     test "includes generally-available vhosts" do
       user = user_fixture()

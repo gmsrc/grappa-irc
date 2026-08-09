@@ -1317,7 +1317,13 @@ export const S_ThemesWireT = {
 
 // Grappa.Vhosts.AdminWire.grant_json/0
 export const S_VhostsAdminWireGrantJson = {
-  o: { id: "i", vhost_id: "i", subject_type: { e: ["user", "visitor"] }, subject_id: "s" },
+  o: {
+    id: "i",
+    vhost_id: "i",
+    subject_type: { e: ["user", "visitor"] },
+    subject_id: "s",
+    subject_label: { u: ["s", "z"] },
+  },
 } as const;
 
 // Grappa.Vhosts.AdminWire.vhost_json/0

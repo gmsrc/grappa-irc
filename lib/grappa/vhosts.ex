@@ -188,6 +188,16 @@ defmodule Grappa.Vhosts do
     end
   end
 
+  @doc """
+  Reads a grant's subject back out of its XOR FK — the ONE place that
+  knows which of `user_id` / `visitor_id` is the populated column. Callers
+  outside the context (the admin listing resolving display labels, #1140)
+  get the `Subject.t()` tuple instead of reaching into the schema.
+  """
+  @spec grant_subject(Grant.t()) :: Subject.t()
+  def grant_subject(%Grant{user_id: uid}) when is_binary(uid), do: {:user, uid}
+  def grant_subject(%Grant{visitor_id: vid}) when is_binary(vid), do: {:visitor, vid}
+
   @doc "Every grant for `subject`."
   @spec list_grants_for_subject(Subject.t()) :: [Grant.t()]
   def list_grants_for_subject({_, _} = subject) do

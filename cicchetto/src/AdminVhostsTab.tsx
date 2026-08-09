@@ -517,7 +517,7 @@ const GrantsDisclosure: Component<{
           <thead>
             <tr>
               <th>subject type</th>
-              <th class="adm-table-grow">subject id</th>
+              <th class="adm-table-grow">subject</th>
               <th>actions</th>
             </tr>
           </thead>
@@ -526,7 +526,16 @@ const GrantsDisclosure: Component<{
               {(g) => (
                 <tr data-testid={`admin-vhost-grant-row-${g.id}`}>
                   <td>{g.subject_type}</td>
-                  <td>{g.subject_id}</td>
+                  {/* #1140 — the operator picks the subject BY NAME in the
+                      autocomplete above; the table answers in the same
+                      language. `subject_label: null` is the server's
+                      honesty signal (row gone / no nick yet) — fall back
+                      to the uuid rather than invent a placeholder. The
+                      uuid stays reachable as the title: it is the stable
+                      key, the label is display. */}
+                  <td title={g.subject_id} data-testid={`admin-vhost-grant-subject-${g.id}`}>
+                    {g.subject_label ?? g.subject_id}
+                  </td>
                   <td>
                     <InlineConfirmButton
                       idleLabel="Revoke"

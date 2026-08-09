@@ -56,6 +56,63 @@ defmodule GrappaWeb.Admin.VhostsControllerTest do
       assert is_list(body["grants"])
       assert is_list(body["host_candidates"])
     end
+
+    # #1140 — the listing used to assert only `is_list(body["grants"])`,
+    # which a wire that prints nothing but UUIDs satisfies. Assert the
+    # rendered identity.
+    test "a user grant carries the account name, not just the uuid", %{conn: conn} do
+      session = admin_session()
+      {:ok, v} = Vhosts.create_vhost(%{address: addr()})
+      target = user_fixture(name: "granted1140")
+      {:ok, grant} = Vhosts.grant_vhost(v, {:user, target.id})
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/vhosts")
+      row = Enum.find(json_response(conn, 200)["grants"], &(&1["id"] == grant.id))
+
+      assert row["subject_id"] == target.id
+      assert row["subject_label"] == "granted1140"
+    end
+
+    test "a visitor grant carries the representative credential nick", %{conn: conn} do
+      session = admin_session()
+      {:ok, v} = Vhosts.create_vhost(%{address: addr()})
+      {visitor, network} = visitor_with_network(7140)
+
+      {:ok, _} =
+        Credentials.upsert_visitor_credential(visitor.id, network.id, %{
+          nick: "vgranted1140",
+          auth_method: :none
+        })
+
+      {:ok, grant} = Vhosts.grant_vhost(v, {:visitor, visitor.id})
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/vhosts")
+      row = Enum.find(json_response(conn, 200)["grants"], &(&1["id"] == grant.id))
+
+      assert row["subject_type"] == "visitor"
+      assert row["subject_id"] == visitor.id
+      assert row["subject_label"] == "vgranted1140"
+    end
+
+    # #1140 — a visitor holding no credential has no nick to show. `nil` is
+    # the honesty signal (same rule as `/admin/sessions`' subject_label);
+    # cic falls back to the uuid rather than printing a fabricated name.
+    test "a subject with no resolvable name renders subject_label: null", %{conn: conn} do
+      session = admin_session()
+      {:ok, v} = Vhosts.create_vhost(%{address: addr()})
+      visitor = visitor_fixture(network_slug: "absent-network-1140")
+      {:ok, grant} = Vhosts.grant_vhost(v, {:visitor, visitor.id})
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/vhosts")
+      row = Enum.find(json_response(conn, 200)["grants"], &(&1["id"] == grant.id))
+
+      assert row["subject_id"] == visitor.id
+      # `has_key?` FIRST: a wire that never carries the field also reads
+      # `nil` here, so the bare nil assertion passed against the pre-#1140
+      # shape. The claim is "present and null", not "absent".
+      assert Map.has_key?(row, "subject_label")
+      assert row["subject_label"] == nil
+    end
   end
 
   describe "POST /admin/vhosts" do
@@ -131,6 +188,10 @@ defmodule GrappaWeb.Admin.VhostsControllerTest do
       assert body["subject_id"] == target.id
       # #251 — a grant is availability-only; no pinned field on the wire.
       refute Map.has_key?(body, "pinned")
+
+      # #1140 — every door renders the same grant shape: the 201 body
+      # carries the identity too, not only the index listing.
+      assert body["subject_label"] == target.name
     end
 
     test "404s an unknown subject", %{conn: conn} do

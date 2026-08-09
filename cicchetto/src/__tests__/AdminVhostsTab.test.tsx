@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AdminVhost, AdminVhostsResponse } from "../lib/api";
+import type { AdminVhost, AdminVhostGrant, AdminVhostsResponse } from "../lib/api";
 
 vi.mock("../lib/auth", () => ({
   token: () => "test-bearer",
@@ -41,10 +41,21 @@ const vhost = (over: Partial<AdminVhost> & { id: number }): AdminVhost => ({
   ...over,
 });
 
-const response = (vhosts: AdminVhost[]): AdminVhostsResponse => ({
+const response = (vhosts: AdminVhost[], grants: AdminVhostGrant[] = []): AdminVhostsResponse => ({
   vhosts,
-  grants: [],
+  grants,
   host_candidates: [],
+});
+
+const GRANT_UUID = "0f2a7c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b";
+
+const grant = (over: Partial<AdminVhostGrant>): AdminVhostGrant => ({
+  id: 1,
+  vhost_id: 1,
+  subject_type: "user",
+  subject_id: GRANT_UUID,
+  subject_label: null,
+  ...over,
 });
 
 beforeEach(() => {
@@ -147,5 +158,58 @@ describe("AdminVhostsTab — in_pool auto-sets + disables generally_available (#
     fireEvent.click(inPool);
     expect(ga).toBeChecked();
     expect(ga).toBeEnabled();
+  });
+});
+
+// #1140 — the grants table printed the bare subject UUID while the
+// add-grant autocomplete searched BY NAME, so after the post-grant refresh
+// the operator could not tell which of their users held the grant. The
+// server now resolves the name (`subject_label`); the uuid stays the
+// stable key and is demoted to the cell's `title`.
+describe("grants table subject cell (#1140)", () => {
+  it("renders the resolved subject label instead of the uuid", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVhosts).mockResolvedValue(
+      response(
+        [vhost({ id: 1 })],
+        [grant({ id: 11, vhost_id: 1, subject_type: "user", subject_label: "vjt" })],
+      ),
+    );
+
+    render(() => <AdminVhostsTab />);
+
+    const cell = await screen.findByTestId("admin-vhost-grant-subject-11");
+    expect(cell).toHaveTextContent("vjt");
+    expect(cell).not.toHaveTextContent(GRANT_UUID);
+  });
+
+  it("keeps the uuid reachable as the cell title — it stays the stable key", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVhosts).mockResolvedValue(
+      response(
+        [vhost({ id: 1 })],
+        [grant({ id: 12, vhost_id: 1, subject_type: "visitor", subject_label: "guest" })],
+      ),
+    );
+
+    render(() => <AdminVhostsTab />);
+
+    const cell = await screen.findByTestId("admin-vhost-grant-subject-12");
+    expect(cell).toHaveAttribute("title", GRANT_UUID);
+  });
+
+  it("falls back to the uuid when the server could not resolve a name", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVhosts).mockResolvedValue(
+      response([vhost({ id: 1 })], [grant({ id: 13, vhost_id: 1, subject_label: null })]),
+    );
+
+    render(() => <AdminVhostsTab />);
+
+    // `subject_label: null` is the server's honesty signal (the subject row
+    // is gone / holds no nick). Show the key we DO have rather than an
+    // invented placeholder.
+    const cell = await screen.findByTestId("admin-vhost-grant-subject-13");
+    expect(cell).toHaveTextContent(GRANT_UUID);
   });
 });

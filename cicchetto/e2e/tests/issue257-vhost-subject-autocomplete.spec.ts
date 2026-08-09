@@ -113,13 +113,18 @@ test("#257 — picking a visitor from the grant autocomplete stores its stable i
     // Submit the grant.
     await page.getByTestId(`admin-vhost-grant-submit-${vhostId}`).click();
 
-    // The persisted grant row shows the visitor's STABLE id (UUID), never
-    // the typed nick — the whole point of #257.
+    // The persisted grant carries the visitor's STABLE id (UUID), never
+    // the typed nick — the whole point of #257. Since #1140 that id is the
+    // subject cell's `title` rather than its text (the text names the
+    // subject); the storage claim is unchanged, only where it surfaces.
+    // Asserting on the rendered uuid was this spec's oracle, and #1140
+    // moved it — so the oracle moved with it, it was not dropped.
     const grantsTable = page.getByTestId(`admin-vhost-grants-table-${vhostId}`);
     await expect(grantsTable).toBeVisible({ timeout: 10_000 });
     await expect(grantsTable).toContainText("visitor");
-    await expect(grantsTable).toContainText(visitor.id);
-    await expect(grantsTable).not.toContainText(visitor.nick);
+
+    const subjectCell = grantsTable.locator("[data-testid^='admin-vhost-grant-subject-']").first();
+    await expect(subjectCell).toHaveAttribute("title", visitor.id);
   } finally {
     if (vhostId !== null) await deleteVhostBestEffort(admin.token, vhostId);
     await reapVisitors(admin.token, visitorId);
