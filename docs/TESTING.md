@@ -143,6 +143,19 @@ does `cicchetto/node_modules`, and the CI job runs `bun install --cwd e2e`
 before `bun run check`. To run just the e2e half:
 `scripts/bun.sh x tsc --noEmit -p e2e/tsconfig.json`.
 
+**A fresh worktree has no `node_modules`, and the failures that produces
+look like your code.** `vitest`, `tsc`, `vite` and `biome` all live in
+`cicchetto/node_modules`, which is per-worktree — unlike the bun download
+cache at `runtime/bun-cache`, which every worktree shares. Without an
+install the first `run test` / `run build` / `run check` dies with
+`vitest: command not found` (exit 127 — no toolchain, not a test
+failure), and the e2e half of the #484 gate fails with `Cannot find type
+definition file for 'node'`, which is an ABSENT TOOLCHAIN reported as a
+type error: do not go hunting for the bad import. `scripts/bun.sh`
+self-heals both trees, pre-installing on demand for every non-install
+verb. Either signature means you invoked something other than the
+wrapper, or the install failed earlier in the same run — scroll up.
+
 **`scripts/bun.sh run check` counts a biome FORMAT violation as an
 ERROR, and hides which file it came from.** `check` starts with `biome
 check`: a line biome would reflow (a long `foo({ a, b, c })`
@@ -173,10 +186,26 @@ The authoritative source is the comment block at the top of each
 * **`scripts/test.sh`** → `scripts/mix.sh --env=test test --warnings-as-errors "$@"`. Forces `MIX_ENV=test` (auto-detect would use the live container's env, usually dev/prod, breaking sandbox).
 * **`scripts/check.sh`** → `scripts/mix.sh --env=dev ci.check` + `mix grappa.gen_wire_types --check` (wireTypes drift gate) + `scripts/bats.sh`. The `ci.check` alias (in `mix.exs`) chains: compile (warnings as errors), format check, credo, deps.audit, hex.audit, sobelow, `cmd env MIX_ENV=test mix doctor`, `cmd env MIX_ENV=test mix test --warnings-as-errors`, dialyzer, docs. Doctor shells out to `:test` since #621: in `:dev` it counts a module's functions from the source AST but reads doc/spec presence from the beam, so every `Mix.env() == :test`-gated helper is scored as undocumented, and `elixirc_paths` omits `test/support` there. `:test` is a strict superset on both axes, and matches the workflow's single `mix doctor` step. The `ci` workflow runs the same gates — including the wireTypes drift check since #767 — but it re-lists them by hand in YAML rather than invoking this script, so the two lists mirror each other only for as long as someone keeps them in step. A gate added here is not in CI until it is added there too; #767 was one instance of that (the drift gate was local-only, and a stale `wireTypes.ts` survived a merge with CI green).
 * **`scripts/bun.sh`** → oneshot `oven/bun:1` against `cicchetto/`. `run test` = vitest. `run check` = biome + tsc over `src` AND `e2e`. `install`, `add`, etc. forward to bun.
-* **`scripts/bats.sh`** → host-side bats v1.9.0 (submodule at `vendor/bats-core`) against `test/bin/`, `test/infra/` and `test/scripts/`. NOT containerised — bats tests host-side bash (`bin/grappa`, the deploy scripts, the cloud installer).
+* **`scripts/bats.sh`** → host-side bats v1.9.0 (submodule at `vendor/bats-core`) against `test/bin/`, `test/infra/` and `test/scripts/`. NOT containerised — bats tests host-side bash (`bin/grappa`, the deploy scripts, the cloud installer). There is no compose involvement in the runner: the container is reached only transitively, when a test exercises a verb that shells out to docker, and those tests stub `docker` on `PATH` rather than touching a real one. So this gate needs no stack up.
 * **`scripts/release-image.sh`** → the RELEASE image (`Dockerfile.release`), not the compose dev stack. `build` buildx-loads it locally; `fresh-boot` wipes the scratch volume and bare-runs it with nothing but `PHX_HOST` (the documented one-liner — the point is that everything else must come from the image and the volume); `warm-boot` does the same on the EXISTING volume; `oneshot <args…>` runs a throwaway container against that volume; `logs` / `down [--volume]` clean up. This is the reproduction for #862 and #867, both of which were found by hand-typing docker commands because no wrapper reached this artifact.
 * **`scripts/integration.sh`** → `scripts/testnet.sh up` → `docker compose run --rm playwright-runner npx playwright test "$@"` → trap-on-exit `scripts/testnet.sh down`. `KEEP_STACK=1` opts out of tear-down.
 * **`scripts/testnet.sh`** → manages the stack standalone. `up` boots hub + leaves + services + grappa-test + nginx-test + seeder. `down` tears down + wipes `runtime/e2e/`. `probe` connects an oper-up client to leaf4 for `/links` + `/stats l`.
+
+**`check.sh` pins the whole run to `MIX_ENV=dev`** because `ci.check`
+invokes credo, sobelow and ex_doc, all `only: [:dev, :test]` deps. Exactly
+two sub-steps escape the pin with `cmd env MIX_ENV=test`: the test run
+(inside an alias a bare `mix test` inherits `:dev`, so the Repo never gets
+the Sandbox pool and the run is corrupt) and, since #621, doctor.
+
+**There is exactly ONE doctor run and it lives in the alias — do not add
+a second to `scripts/check.sh`.** #75 (a four-red-commits post-mortem)
+once added a second one, because the alias's doctor was pinned to `:dev`
+and so never scanned `test/support` the way the GitHub job does. That
+left two runs, one of them scoring every `Mix.env() == :test` seam as
+undocumented. Making the alias's run the `:test` one collapses them into
+a single honest run identical to the workflow's single `mix doctor` step
+— local equals CI by construction rather than by hand. Re-adding the
+second run re-opens both defects.
 
 ## The e2e stack
 
