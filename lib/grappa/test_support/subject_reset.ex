@@ -84,6 +84,8 @@ if Mix.env() in [:dev, :test] do
         Grappa.WSPresence
       ]
 
+    import Grappa.TestSupport.SubjectSession, only: [measure: 1]
+
     alias Grappa.{
       Accounts,
       Admission.NetworkCircuit,
@@ -101,8 +103,6 @@ if Mix.env() in [:dev, :test] do
       UserSettings,
       WSPresence
     }
-
-    import Grappa.TestSupport.SubjectSession, only: [measure: 1]
 
     require Logger
 

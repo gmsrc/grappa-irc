@@ -60,9 +60,9 @@ if Mix.env() in [:dev, :test] do
         Grappa.TestSupport.SubjectSession
       ]
 
-    alias Grappa.{Accounts, Networks, Repo, TestSupport.SubjectSession}
-
     import Grappa.TestSupport.SubjectSession, only: [measure: 1]
+
+    alias Grappa.{Accounts, Networks, Repo, TestSupport.SubjectSession}
 
     require Logger
 
@@ -198,7 +198,7 @@ if Mix.env() in [:dev, :test] do
       end
     end
 
-    defp seed_all(_user, _cred, []), do: :ok
+    defp seed_all(_, _, []), do: :ok
 
     defp seed_all(user, cred, [%{name: name, seed_count: count, seed_sender: sender} | rest]) do
       :ok = SubjectSession.seed_channel(user.id, cred.network_id, name, count, sender)

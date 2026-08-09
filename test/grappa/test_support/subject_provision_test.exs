@@ -68,7 +68,7 @@ defmodule Grappa.TestSupport.SubjectProvisionTest do
       # the settle step errors without ever reaching an upstream.
       network = network_fixture()
 
-      assert {:error, {:reconnect_failed, slug, _reason}} =
+      assert {:error, {:reconnect_failed, slug, _}} =
                SubjectProvision.provision!(params(name, network.slug, %{}))
 
       assert slug == network.slug
