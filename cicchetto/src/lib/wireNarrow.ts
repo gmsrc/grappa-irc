@@ -12,6 +12,7 @@ import type { MemberEntry } from "./memberTypes";
 import type {
   AdminEventsWireLoginThrottleDoor,
   AdminEventsWireLoginThrottleScope,
+  AdminOverviewWireT,
   SessionLogEvent,
   SessionLogWireT,
   WindowCountsSeverity,
@@ -1000,6 +1001,40 @@ const VALID_SESSION_LOG_EVENTS: ReadonlySet<SessionLogEvent> = new Set(SESSION_L
  * `sessionLog.ts` on the live `session_log_event` push (the REST
  * snapshot trusts the server, same as the other `adminList*` helpers).
  */
+/**
+ * Runtime narrower for the admin top bar's projection (`"overview"` push /
+ * `GET /admin/overview`). Same REV-G H24 discipline as its siblings: the
+ * caller (adminOverview.ts) drops + logs on null rather than trusting a cast.
+ *
+ * `loadavg` is checked as NULLABLE, and that is the load-bearing line.
+ * `Grappa.AdminOverview.Wire` sends `nil` when `:cpu_sup` cannot be reached
+ * because "cannot measure" is a different fact from "the box is idle";
+ * demanding a number here would drop the whole payload exactly when the
+ * sampler is down, blanking a bar whose other four stats are fine.
+ */
+export function narrowAdminOverview(raw: unknown): AdminOverviewWireT | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.visitors !== "object" || r.visitors === null) return null;
+  const v = r.visitors as Record<string, unknown>;
+  if (
+    typeof r.sessions !== "number" ||
+    typeof v.total !== "number" ||
+    typeof v.live !== "number" ||
+    typeof r.hostname !== "string" ||
+    !isNullableNumber(r.loadavg) ||
+    typeof r.version !== "string"
+  )
+    return null;
+  return {
+    sessions: r.sessions,
+    visitors: { total: v.total, live: v.live },
+    hostname: r.hostname,
+    loadavg: r.loadavg as number | null,
+    version: r.version,
+  };
+}
+
 export function narrowSessionLogEntry(raw: unknown): SessionLogWireT | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;

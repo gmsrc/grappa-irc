@@ -1,5 +1,6 @@
 import type { Channel } from "phoenix";
 import { createSignal } from "solid-js";
+import { installAdminOverview, resetAdminOverview } from "./adminOverview";
 import { assertNever, type WireAdminEvent } from "./api";
 import { installSessionLog, resetSessionLog } from "./sessionLog";
 import { joinAdminEvents } from "./socket";
@@ -156,6 +157,11 @@ export function installAdminEvents(channel: Channel): void {
   // the sibling session-log handler here (its store + ingest live in
   // sessionLog.ts). One channel, two consumers — no second WS join.
   installSessionLog(channel);
+
+  // #1073 — and so does the admin top bar's `"overview"` projection (store +
+  // ingest in adminOverview.ts). Same reason, same shape: a third consumer of
+  // one channel beats a second join for a payload already pushed here.
+  installAdminOverview(channel);
 }
 
 export function uninstallAdminEvents(): void {
@@ -169,6 +175,9 @@ export function uninstallAdminEvents(): void {
   // just left; clear its view state too so the next mount re-fills from
   // the REST snapshot + fresh live pushes.
   resetSessionLog();
+  // #1073 — same for the top bar's projection: the next open re-fills from
+  // the join push.
+  resetAdminOverview();
 }
 
 // Production wrapper: join + install in one call so AdminPane.onMount

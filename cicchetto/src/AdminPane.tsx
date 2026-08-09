@@ -3,6 +3,7 @@ import AdminCredentialsTab from "./AdminCredentialsTab";
 import AdminDebugTab from "./AdminDebugTab";
 import AdminEventsTab from "./AdminEventsTab";
 import AdminNetworksTab from "./AdminNetworksTab";
+import AdminOverviewStats from "./AdminOverviewStats";
 import AdminSessionLogTab from "./AdminSessionLogTab";
 import AdminSessionsTab from "./AdminSessionsTab";
 import AdminSettingsTab from "./AdminSettingsTab";
@@ -11,6 +12,7 @@ import AdminVhostsTab from "./AdminVhostsTab";
 import AdminVisitorsTab from "./AdminVisitorsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
+import { adminOverview } from "./lib/adminOverview";
 import PaneTopBar from "./PaneTopBar";
 
 // M-7 — Admin console pane. Replaces the channel content in
@@ -150,6 +152,13 @@ const AdminPane: Component<Props> = (props) => {
           it on the same side as the channel bar's. */}
       <PaneTopBar onOpenRail={props.onOpenRail} railLabel="open actions">
         <h1>admin console</h1>
+        {/* #1073 — the live key stats, fed by the `"overview"` push the admin
+            channel already carries (`lib/adminOverview.ts`). Read here rather
+            than inside the component so the component stays presentation-only
+            and testable without a socket. Nothing renders until the first push
+            lands: the bar is the title alone for that instant, which beats
+            five placeholder zeroes. */}
+        <AdminOverviewStats overview={adminOverview()} />
       </PaneTopBar>
       <AdminNav
         groups={GROUPS}

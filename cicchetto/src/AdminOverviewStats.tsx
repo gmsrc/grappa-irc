@@ -1,4 +1,5 @@
 import { type Component, Show } from "solid-js";
+import type { AdminOverviewWireT } from "./lib/wireTypes";
 
 /**
  * #1073 — the admin bar's left group: the five live stats vjt asked for,
@@ -36,18 +37,19 @@ import { type Component, Show } from "solid-js";
  *    `0.00`. The unknown case renders an em dash, carries the reason in its
  *    `title`, and contains no digit at all.
  */
-export type Overview = {
-  sessions: number;
-  visitors: { total: number; live: number };
-  hostname: string;
-  /** `null` = the sampler was unreachable. NOT the same as `0`. */
-  loadavg: number | null;
-  version: string;
-};
-
 export type Props = {
-  /** `null` until the first push lands — the bar renders nothing until then. */
-  overview: Overview | null;
+  /**
+   * The wire shape, GENERATED from `Grappa.AdminOverview.Wire` by `mix
+   * grappa.gen_wire_types` — never a hand-written twin of it. This component
+   * held a local copy of the same five fields while #1075 was still in
+   * flight; `scripts/check.sh` runs the generator with `--check`, so the copy
+   * would have gone on compiling happily while the server's shape moved under
+   * it. Reading the generated type is what makes a server-side field rename
+   * fail here instead of at an operator's screen.
+   *
+   * `null` until the first push lands — the bar renders nothing until then.
+   */
+  overview: AdminOverviewWireT | null;
 };
 
 const LOADAVG_UNKNOWN = "—";
@@ -93,8 +95,11 @@ const AdminOverviewStats: Component<Props> = (props) => {
             </span>
             {overview().visitors.live}/{overview().visitors.total}
           </span>
+          {/* The only cell whose width is not bounded by its own shape — a
+              hostname can be anything — so it is the one that yields when the
+              row runs out of bar. See `.admin-overview-stat-host`. */}
           <span
-            class="admin-overview-stat"
+            class="admin-overview-stat admin-overview-stat-host"
             data-testid="admin-overview-hostname"
             title="the host this grappa runs on"
           >

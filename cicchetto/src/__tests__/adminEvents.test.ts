@@ -18,6 +18,7 @@ import {
   startAdminEventsSubscription,
   uninstallAdminEvents,
 } from "../lib/adminEvents";
+import { adminOverview } from "../lib/adminOverview";
 
 // Fake Channel that captures the .on handlers so the test can fire
 // snapshot / event payloads at will. Matches the slim slice of
@@ -28,16 +29,19 @@ function makeFakeChannel(): {
   fireEvent: (event: WireAdminEvent) => void;
   fireRawSnapshot: (payload: unknown) => void;
   fireRawEvent: (payload: unknown) => void;
+  fireOverview: (payload: unknown) => void;
   leftCount: () => number;
 } {
   let snapshotCb: ((p: unknown) => void) | null = null;
   let eventCb: ((p: unknown) => void) | null = null;
+  let overviewCb: ((p: unknown) => void) | null = null;
   let leftCount = 0;
 
   const channel = {
     on: (name: string, cb: unknown) => {
       if (name === "snapshot") snapshotCb = cb as (p: unknown) => void;
       if (name === "event") eventCb = cb as (p: unknown) => void;
+      if (name === "overview") overviewCb = cb as (p: unknown) => void;
       return 0;
     },
     leave: () => {
@@ -52,6 +56,7 @@ function makeFakeChannel(): {
     fireEvent: (event) => eventCb?.(event),
     fireRawSnapshot: (payload) => snapshotCb?.(payload),
     fireRawEvent: (payload) => eventCb?.(payload),
+    fireOverview: (payload) => overviewCb?.(payload),
     leftCount: () => leftCount,
   };
 }
@@ -60,6 +65,7 @@ beforeEach(() => {
   uninstallAdminEvents();
   expect(adminEvents()).toEqual([]);
   expect(liveCountsByNetworkId()).toEqual({});
+  expect(adminOverview()).toBeNull();
   joinAdminEventsMock.mockReset();
 });
 
@@ -489,6 +495,43 @@ describe("adminEvents — bucket 4 mutation kinds", () => {
       expect(list[0]?.kind).toBe(ev.kind);
     });
   }
+});
+
+// #1073 / #1075 — the admin top bar's `"overview"` push rides THIS channel.
+//
+// adminEvents.ts owns the join/leave, so it also installs the sibling
+// consumers: sessionLog (#215) and now adminOverview. The alternative — a
+// second `joinAdminEvents()` from the bar — would open a second WS channel
+// for a payload the server already pushes here, and would need its own
+// lifecycle to tear down. One channel, three consumers.
+describe("adminEvents — the overview consumer rides the same channel (#1073)", () => {
+  const OVERVIEW = {
+    sessions: 3,
+    visitors: { total: 5, live: 2 },
+    hostname: "m42",
+    loadavg: 0.42,
+    version: "0.15.0",
+  };
+
+  it("installAdminEvents registers the overview handler too (no second join)", () => {
+    const fake = makeFakeChannel();
+    installAdminEvents(fake.channel);
+
+    fake.fireOverview(OVERVIEW);
+
+    expect(adminOverview()).toEqual(OVERVIEW);
+  });
+
+  it("uninstallAdminEvents resets the overview store with the rest", () => {
+    const fake = makeFakeChannel();
+    installAdminEvents(fake.channel);
+    fake.fireOverview(OVERVIEW);
+    expect(adminOverview()).not.toBeNull();
+
+    uninstallAdminEvents();
+
+    expect(adminOverview()).toBeNull();
+  });
 });
 
 // REV-G H24 (2026-05-22) — runtime narrower boundary regression.

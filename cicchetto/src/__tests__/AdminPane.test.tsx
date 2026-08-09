@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
-import { describe, expect, it, vi } from "vitest";
+import type { Channel } from "phoenix";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // M-cluster M-8 / M-9b / M-10 / M-11 + UX-6-B2 — AdminPane mounts
 // Visitors + Sessions + Networks + Events + Settings tabs inside
@@ -42,6 +43,10 @@ vi.mock("../lib/adminEvents", () => ({
 }));
 
 import AdminPane from "../AdminPane";
+// NOT mocked: the overview store is a plain signal with no socket of its own
+// (adminEvents.ts owns the channel), so the pane's wiring to it is exercised
+// for real by installing a fake channel and firing the server's push.
+import { installAdminOverview, resetAdminOverview } from "../lib/adminOverview";
 
 // M-cluster M-7 / M-8 / M-9b / M-10 / M-11 — admin console pane.
 // Per `feedback_e2e_user_class_parity_matrix`: AdminPane itself is
@@ -192,6 +197,88 @@ describe("AdminPane", () => {
     it("keeps the admin door's accessible name", () => {
       render(() => <AdminPane onOpenRail={vi.fn()} />);
       expect(screen.getByLabelText(/open actions/i)).toBeInTheDocument();
+    });
+  });
+
+  // #1073 — the issue's "Done when": the bar's LEFT side carries the live key
+  // stats. They are mounted in `PaneTopBar`'s content slot, the same slot the
+  // channel bar fills with its namebox and topic strip.
+  describe("#1073 — the live stats in the bar's left group", () => {
+    const OVERVIEW = {
+      sessions: 3,
+      visitors: { total: 5, live: 2 },
+      hostname: "m42",
+      loadavg: 0.42,
+      version: "0.15.0",
+    };
+
+    function fakeChannel(): { channel: Channel; fire: (p: unknown) => void } {
+      let cb: ((p: unknown) => void) | null = null;
+      const channel = {
+        on: (name: string, handler: unknown) => {
+          if (name === "overview") cb = handler as (p: unknown) => void;
+          return 0;
+        },
+        leave: () => ({ receive: () => ({ receive: () => undefined }) }),
+      } as unknown as Channel;
+      return { channel, fire: (p) => cb?.(p) };
+    }
+
+    beforeEach(() => resetAdminOverview());
+    afterEach(() => resetAdminOverview());
+
+    it("renders the stats once the first push has landed", () => {
+      const fake = fakeChannel();
+      installAdminOverview(fake.channel);
+      fake.fire(OVERVIEW);
+
+      const { container } = render(() => <AdminPane onOpenRail={vi.fn()} />);
+
+      const stats = container.querySelector(".admin-overview-stats");
+      expect(stats).not.toBeNull();
+      expect(stats?.textContent ?? "").toContain("m42");
+    });
+
+    it("puts them INSIDE the bar's content slot, not loose in the pane", () => {
+      // `.topic-bar-header` is the slot; anything outside it is a second row of
+      // chrome, which is the thing #1073 removes rather than adds.
+      const fake = fakeChannel();
+      installAdminOverview(fake.channel);
+      fake.fire(OVERVIEW);
+
+      const { container } = render(() => <AdminPane onOpenRail={vi.fn()} />);
+
+      expect(container.querySelector(".topic-bar-header .admin-overview-stats")).not.toBeNull();
+    });
+
+    it("still puts the ☰ last, with the stats in front of it", () => {
+      const fake = fakeChannel();
+      installAdminOverview(fake.channel);
+      fake.fire(OVERVIEW);
+
+      const { container } = render(() => <AdminPane onOpenRail={vi.fn()} />);
+
+      expect(container.querySelector(".topic-bar")?.lastElementChild).toHaveClass(
+        "topic-bar-hamburger",
+      );
+    });
+
+    it("renders the bar with no stats at all before the first push", () => {
+      const { container } = render(() => <AdminPane onOpenRail={vi.fn()} />);
+      expect(container.querySelector(".topic-bar")).not.toBeNull();
+      expect(container.querySelector(".admin-overview-stats")).toBeNull();
+    });
+
+    it("updates in place when the next tick arrives", () => {
+      const fake = fakeChannel();
+      installAdminOverview(fake.channel);
+      fake.fire(OVERVIEW);
+
+      const { container } = render(() => <AdminPane onOpenRail={vi.fn()} />);
+      fake.fire({ ...OVERVIEW, sessions: 9, hostname: "m43" });
+
+      expect(container.querySelectorAll(".admin-overview-stats").length).toBe(1);
+      expect(container.querySelector(".admin-overview-stats")?.textContent ?? "").toContain("m43");
     });
   });
 

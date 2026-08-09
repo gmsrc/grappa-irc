@@ -4355,6 +4355,60 @@ html.resize-dragging * {
   color: var(--adm-text-dim);
 }
 
+/* #1073 — the admin host's slot holds two things ON ONE LINE (the title and
+   the stats), where the channel host stacks two text columns. `flex-start` is
+   right for the channel bar — it is what registers topic line-1 beside the
+   channel name (#344) — and wrong here, where it would hang the small stats
+   text off the top of the taller title. Overridden for this host only; the
+   shared rule keeps its meaning. */
+.admin-pane .topic-bar-header {
+  align-items: baseline;
+}
+
+/* #1073 — the five live stats beside the title, fed by the admin channel's
+   `"overview"` push.
+
+   ONE ROW, ALWAYS. vjt: *"si, non invadente"*; Hypnotize: *"deve essere
+   piccola, che già la tastiera occupa una madonna"*. With the keyboard up on a
+   phone, vertical space is the binding constraint — a second line here costs
+   more than any stat on it is worth. So the row never wraps and clips instead,
+   and the ONE cell whose width is unbounded by its own shape (the hostname)
+   carries the ellipsis chain and yields first, leaving the four numeric cells
+   legible at 393px. */
+.admin-overview-stats {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--adm-font);
+  font-size: 0.7rem;
+  color: var(--adm-text-dim);
+  /* The numbers are re-sampled every tick; proportional digits would shift
+     every cell to their right on each one. */
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-overview-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2rem;
+  white-space: nowrap;
+}
+
+.admin-overview-stat-host {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
+.admin-overview-stat-icon {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
 /* Admin redesign Layer 2/3 — `AdminNav` (cicchetto/src/admin/AdminNav.tsx).
    Mobile-first: a horizontal scrolling chip strip (`.adm-nav` row +
    `.adm-nav-group` row), grouped by a non-interactive label. The
