@@ -466,7 +466,7 @@ export const S_AdminOverviewWireT = {
 // Grappa.Admission.NetworkCircuit.AdminWire.t/0
 export const S_AdmissionNetworkCircuitAdminWireT = {
   o: {
-    state: "s",
+    state: { e: ["closed", "open"] },
     failure_count: "i",
     window_start_ms: "i",
     cooled_at_ms: "i",
@@ -1296,7 +1296,7 @@ export const S_SessionLogWireListResult = { o: { session_log: { a: S_SessionLogW
 
 // Grappa.SubjectSearch.AdminWire.result_json/0
 export const S_SubjectSearchAdminWireResultJson = {
-  o: { type: "s", id: "s", network: { u: ["s", "z"] }, nick: "s" },
+  o: { type: { e: ["user", "visitor"] }, id: "s", network: { u: ["s", "z"] }, nick: "s" },
 } as const;
 
 // Grappa.Themes.Wire.t/0
@@ -1317,7 +1317,7 @@ export const S_ThemesWireT = {
 
 // Grappa.Vhosts.AdminWire.grant_json/0
 export const S_VhostsAdminWireGrantJson = {
-  o: { id: "i", vhost_id: "i", subject_type: "s", subject_id: "s" },
+  o: { id: "i", vhost_id: "i", subject_type: { e: ["user", "visitor"] }, subject_id: "s" },
 } as const;
 
 // Grappa.Vhosts.AdminWire.vhost_json/0
