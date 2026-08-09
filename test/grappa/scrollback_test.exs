@@ -3048,6 +3048,30 @@ defmodule Grappa.ScrollbackTest do
       assert id == row.id
     end
 
+    # The OTHER consumer that made `sender` move, pinned against the real
+    # predicate rather than argued. `Push.Triggers.own_row?/2` (#532 C) reads
+    # `sender` as a LIVE identity test and is the first arm of
+    # `should_notify?/4`, which `Push.BadgeCount` folds back over the unread
+    # tail. Migrate `channel` without `sender` and the row leaves own-row
+    # suppression while ENTERING the DM branch — notes we wrote to ourselves
+    # would count as unread DMs.
+    test "a migrated self row still suppresses as our OWN row (#532 C)",
+         %{user: user, network: net} do
+      {:ok, row} =
+        Scrollback.persist_event(sample(user, net, 100, %{channel: "oldme", sender: "oldme", dm_with: "oldme"}))
+
+      assert {:ok, 1} = Scrollback.rename_self_window({:user, user.id}, net.id, "oldme", "newme")
+
+      migrated = Repo.get!(Message, row.id)
+
+      refute Grappa.Push.Triggers.should_notify?(
+               migrated,
+               "newme",
+               Grappa.UserSettings.default_notification_prefs(),
+               []
+             )
+    end
+
     # Guard 1 of 3, the `sender` conjunct. I was `alice`, I DM'd `carol`,
     # carol vanished, I took the nick `carol`, and now I rename
     # `carol -> dave`. `channel == dm_with == carol` on that row exactly as
