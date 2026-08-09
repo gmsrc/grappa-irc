@@ -35876,3 +35876,41 @@ variable. The old fixture handed every spec a cursor at the tail via a
 precondition. The spec now plants its own, and guards it: if the pane already
 holds the whole corpus the test fails loudly instead of passing on a
 `loadMore` that was never needed.
+
+## 2026-08-09 — #1078: a fifth way, found by rebasing, and the half of it that stays open
+
+A rebase is when a migration finds the work that landed behind its back. Two
+specs merged to main after this branch forked — `issue1121` and `issue407` —
+were written against the shared boot subject, so the codemod never saw them and
+they carried mechanism 1 above. Migrating names fixed `issue407`. `issue1121`
+then failed somewhere else entirely, and the diagnosis is worth keeping for the
+shape, not for the spec.
+
+**The mechanism, proved.** The spec pins a reader at the tail, opens an overlay,
+sends three lines underneath, and asserts the frozen pane did not move. It moved
+11px. Instrumenting the pane showed `clientHeight` unchanged and the row count
+going 202 → 206: **four** insertions in a window the spec fills with three. The
+fourth was named rather than inferred — the peer's own
+`* arr1121-peer [~arr1121-p@…] has joined #bofh`, absent at the pin and present
+during. `await peer.join(CHANNEL)` resolves on the IRC-side ack, which says
+nothing about the row reaching the DOM; the three PRIVMSGs each had a
+`toBeAttached` barrier and the JOIN had none. **That asymmetry was the defect**,
+and the cure is the sanctioned one for a race: make the SETUP deterministic by
+waiting on the observable, never weaken the assertion or raise a timeout.
+
+**Why a green CI did not settle it.** The same sha was green on CI and red 3/3
+locally, at the same roster position, with the identical received value. A spec
+that passes because a race falls the right way on one runner is a latent red,
+not a green — and the branch had already touched this spec, so leaving the race
+inside it would have been worse than the migration that exposed it.
+
+**The half that does NOT close, recorded as open.** The JOIN row is 18px tall
+and `scrollTop` moved 11. So "the unbarriered row displaced the scroll by its
+own height" is FALSE, and no rounding makes it true. The frozen pane also ended
+70px above the new maximum — neither held (+0) nor following (+81). What is
+established is that an unbarriered insertion occurs inside the frozen window;
+what is NOT established is why the pane responds to it with 11px. Curing the
+barrier removes the trigger, not the behaviour. The measurement is filed as its
+own issue against `ScrollbackPane`'s freeze rather than folded into this fix:
+an unexplained number that someone silently rounds off is how the next bug gets
+its hiding place.

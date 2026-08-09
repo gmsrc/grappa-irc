@@ -32,7 +32,7 @@
 // reproduces desktop scroll physics (feedback_playwright_webkit_not_ios_scroll).
 
 import { TINY_PNG_HEX } from "../fixtures/bytes";
-import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -78,6 +78,18 @@ test.describe("#1121 — closing an overlay over a tail reader must not strand t
     const peer = await IrcPeer.connect({ nick: PEER_NICK });
     try {
       await peer.join(CHANNEL);
+
+      // Barrier on the JOIN ROW, not on the join. `peer.join()` resolves on the
+      // IRC-side ack, which says nothing about the row having reached the DOM —
+      // so without this the peer's `has joined` line lands INSIDE the frozen
+      // window below, and the pane is measured across an insertion this test
+      // never asked for. Every other line here already has its own
+      // `toBeAttached`; the JOIN was the one that did not, and that asymmetry
+      // was the whole defect. `toBeAttached`, like its siblings: the row's
+      // presence is what perturbs the geometry, whether or not it is on screen.
+      await expect(
+        scrollbackLine(page, "join", new RegExp(`${PEER_NICK} \\[~?[^\\]]+\\] has joined`)),
+      ).toBeAttached({ timeout: 15_000 });
 
       // Pin the reader AT the tail and let onScroll MEASURE it. Both halves
       // matter: the position is the precondition, and the measurement is what
