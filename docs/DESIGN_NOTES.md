@@ -36184,3 +36184,38 @@ on FreeBSD rests on the issue's own observation that the jail's login
 environment already carries it. What is proven here is the content of the
 definitions, the guard's sensitivity, the mechanism on one substrate, and the
 spelling's agreement with the two doors that already had it.
+
+---
+
+## 2026-08-09 — #1066: the e2e testnet's clone threshold changed directive, and the value's meaning changed with it
+
+`cicchetto/e2e/infra` moved from `0c235dc3` to `687c73bd` — one pointer line.
+The value in `cicchetto/e2e/compose.yaml` did **not** move: it is still
+`SVC_AKILL_CLONES: "0"`. Its **meaning** did. Upstream now writes the setting
+into `CLONEKILL` instead of `CLONES`, and in azzurra's services those are two
+different directives. `CLONES` (`CONF_SET_CLONE`) is a boolean master switch,
+so `CLONES:0` turned clone detection off entirely — no scan, no globops, no
+autokill. `CLONEKILL` (`CONF_AKILL_CLONES`) is the numeric threshold, so
+`CLONEKILL:0` leaves detection **on** and disables only the autokill.
+
+The consequence is the part a future reader will actually trip over: the e2e
+testnet now emits `Clones: N from …` globops where nothing was emitted before.
+Anyone who meets those lines and greps for a cause should land here. It is
+also why the bump was gated on the full e2e suite instead of a scoped
+`--grep`: a behaviour change, not a version bump.
+
+**The #1142 bats guard adapted with no edit**, which is what was predicted when
+it was written. `test/scripts/e2e_clone_directive_test.bats` reads the
+directive out of the template rather than naming it, so the accepted set became
+the numeric one on its own. Green alone proved nothing there, since `0` is
+valid for both directives — so the arm was pinned with a one-shot mutant:
+`"1"`, legal for `CLONES` (boolean 0|1) and illegal for `CLONEKILL` (0, or
+5..50). It kills exactly the third assertion and leaves the other two green.
+
+**Not proven, and deliberately recorded as such.** That the new globops reach
+grappa at all is unverified: it depends on the `+g` umode of an opered session,
+which no test asserts. In the full e2e gate run for this bump, `grep -a -i
+clones` over the 237 MB grappa container log returned **0**, with a sanity
+count of 126,802 `privmsg` lines from the same grep on the same file — so in
+that run they never appeared anywhere. That is one run's observation, not a
+general claim that the bump is inert.
