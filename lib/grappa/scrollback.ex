@@ -1368,7 +1368,11 @@ defmodule Grappa.Scrollback do
       own`), whose row shape is indistinguishable from an outbound DM to
       a peer bearing our old nick without also folding `sender`. That is
       a window-key migration (the peer-rename set: window row + cursor),
-      a different defect from this stale tag, and it is tracked apart.
+      a different defect from this stale tag — #948 tracked it and
+      `rename_self_window/4` below now does it, folding `sender` to MATCH
+      exactly as predicted here. The two predicates are DISJOINT by the
+      `dm_with` conjunct: this one takes `fold(dm_with) != fold(old)`, that
+      one `== fold(old)`, so no row is migrated twice.
   """
   @spec rename_own_nick(subject(), integer(), String.t(), String.t()) ::
           {:ok, non_neg_integer()}
@@ -1390,6 +1394,98 @@ defmodule Grappa.Scrollback do
             Identifier.nick_fold(m.dm_with) != ^folded_old
         )
         |> Repo.update_all(set: [channel: folded_new])
+
+      {:ok, count}
+    end
+  end
+
+  @doc """
+  #948 — migrates the subject's OWN SELF window (`/msg <ownnick>`, the
+  scratchpad where both ends of the exchange are us) from `old_nick` to
+  `new_nick` after a SELF nick change.
+
+  Sibling of `rename_own_nick/4` and NOT a duplicate of it: that one moves
+  a stale TAG on rows belonging to a PEER's window, this one moves a
+  WINDOW KEY. `channel_or_dm_where/3`'s own-nick arm reads the self window
+  as `channel == <live own nick> AND fold(dm_with) == <live own nick>`, so
+  leaving these rows behind does not merely cost a badge — the whole
+  conversation disappears from the window and resurfaces as a phantom
+  QUERY with a peer bearing our old nick.
+
+  ## The predicate: three conjuncts, three distinct corruptions
+
+  A self row is `fold(channel) == fold(dm_with) == fold(sender) ==
+  fold(old)` — we sent it, we received it, we are the window. Each
+  conjunct excludes a REAL row shape that shares the other two, and each
+  is pinned by its own test:
+
+    * `fold(sender) == old` — an OUTBOUND DM to a peer who bears our old
+      nick carries `channel == dm_with == peer`; only `sender` (us, under
+      whatever nick we had then) separates them. Without it we file the
+      real peer's history under our new nick. This is exactly the fold
+      `rename_own_nick/4`'s carve-out named as the missing ingredient.
+    * `fold(channel) == old` — an INBOUND DM *from* a peer who bore our
+      old nick before we took it carries `dm_with == sender == old`, with
+      `channel` recording whoever WE were at receipt.
+    * `fold(dm_with) == old` — a non-CTCP NOTICE from a peer we already
+      have a query open with persists at `channel = sender, dm_with =
+      NULL` (`EventRouter.route_non_channel_notice_non_chanserv/3`). From
+      a peer bearing our old nick that is `channel == sender == old`, and
+      it drops out on SQL three-valued logic (`lower(NULL) = 'x'` is NULL,
+      which `WHERE` rejects) rather than on an explicit `not is_nil`.
+
+  Folding `sender` here is a MATCH, not a key derivation: `sender` is
+  never written by this migration, because it is testimony about who
+  spoke. `channel` is the KEY column → set FOLDED (`Repo.update_all`
+  bypasses `Message.canonicalize_channel/1`, the #537 trap);
+  `dm_with` is DISPLAY → set to the RAW `new_nick`.
+
+  ## What stays ambiguous
+
+  Two row shapes cannot be recovered, and both are the SAME ambiguity read
+  from two sides — the shape a self row takes once its `sender` no longer
+  folds to the window key:
+
+    * a self row already migrated ONCE (now `channel == dm_with == b,
+      sender == a`) is byte-identical to an outbound DM to a peer named
+      `b`, so a SECOND rename `b -> c` leaves it behind. No predicate over
+      `(channel, dm_with, sender)` can separate them; only a durable
+      self-marker written at persist time could, which is a schema change
+      and a different unit of work.
+    * a pre-CP14-B3 self row (`dm_with IS NULL`) is byte-identical to the
+      peer NOTICE the third conjunct exists to protect.
+
+  In both cases the migration declines rather than corrupting a peer's
+  history — incompleteness, never a wrong move.
+
+  Returns `{:ok, count}` of migrated rows; `{:ok, 0}` on a case-only
+  change (`fold(old) == fold(new)`) or an empty match.
+
+  Sole production caller: `Grappa.Session.Server.apply_effects/2` on the
+  `{:own_nick_renamed, old, new}` effect, which gates the window-row +
+  read-cursor moves on a non-zero count here.
+  """
+  @spec rename_self_window(subject(), integer(), String.t(), String.t()) ::
+          {:ok, non_neg_integer()}
+  def rename_self_window(subject, network_id, old_nick, new_nick)
+      when is_integer(network_id) and is_binary(old_nick) and is_binary(new_nick) do
+    folded_old = Identifier.canonical_target(old_nick)
+    folded_new = Identifier.canonical_target(new_nick)
+
+    if folded_old == folded_new do
+      {:ok, 0}
+    else
+      {count, _} =
+        Message
+        |> subject_where(subject)
+        |> where([m], m.network_id == ^network_id)
+        |> where(
+          [m],
+          Identifier.nick_fold(m.channel) == ^folded_old and
+            Identifier.nick_fold(m.dm_with) == ^folded_old and
+            Identifier.nick_fold(m.sender) == ^folded_old
+        )
+        |> Repo.update_all(set: [channel: folded_new, dm_with: new_nick])
 
       {:ok, count}
     end
