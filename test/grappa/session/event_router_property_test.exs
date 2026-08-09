@@ -260,10 +260,19 @@ defmodule Grappa.Session.EventRouterPropertyTest do
         {:presence_command_unknown, cmd} ->
           assert cmd in [:monitor, :watch]
 
-        # #373 — a peer NICK migrates its query window; both nicks binary.
+        # #373 — a peer NICK migrates its query window; #948's self twin
+        # re-keys the DM tag. Both are IDENTITIES, so `is_binary/1` alone
+        # would be the certificate of nothing this file has already been
+        # burned by twice (see the #279 and #878 arms above): a blank name
+        # satisfies it while naming nobody. Assert the class the effects
+        # actually promise — a non-blank nick on both sides.
         {:peer_nick_renamed, old_nick, new_nick} ->
-          assert is_binary(old_nick)
-          assert is_binary(new_nick)
+          assert String.trim(old_nick) != ""
+          assert String.trim(new_nick) != ""
+
+        {:own_nick_renamed, old_nick, new_nick} ->
+          assert String.trim(old_nick) != ""
+          assert String.trim(new_nick) != ""
 
         other ->
           flunk("malformed effect: #{inspect(other)}")
@@ -365,6 +374,47 @@ defmodule Grappa.Session.EventRouterPropertyTest do
 
       for {:supported_umodes_changed, modes} <- effects do
         assert umode_letters?(modes), "malformed supported set from token #{inspect(token)}"
+      end
+    end
+  end
+
+  # What the shape property above does NOT reach on its own is the NICK
+  # boundary: it fires only when the seed draws a prefix nick equal to the
+  # state's — a collision between two independent 16-char draws — which is
+  # WHY a rename to a blank nick could sit on main as an intermittent red
+  # (it took 47 runs to surface once, and 48 seeds produced none at all).
+  # This one puts a NICK on both rename branches for EVERY generated
+  # example, so the class is pinned by the test set rather than by the seed.
+  property "no NICK param renames anyone to a blank nick" do
+    check all(
+            param <- string(:ascii, min_length: 0, max_length: 32),
+            renamer <- member_of(["self", "alice"])
+          ) do
+      state = %{min_state() | members: %{"#chan" => %{"self" => [], "alice" => []}}}
+
+      m = %Message{
+        command: :nick,
+        params: [param],
+        prefix: {:nick, renamer, "u", "h"},
+        tags: %{}
+      }
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+
+      assert String.trim(new_state.nick) != "",
+             "state.nick blanked by param #{inspect(param)}"
+
+      assert Enum.all?(Map.keys(new_state.members["#chan"]), &(String.trim(&1) != "")),
+             "members key blanked by param #{inspect(param)}"
+
+      for {:own_nick_renamed, old, new} <- effects do
+        assert String.trim(old) != "" and String.trim(new) != "",
+               "blank own rename from param #{inspect(param)}"
+      end
+
+      for {:peer_nick_renamed, old, new} <- effects do
+        assert String.trim(old) != "" and String.trim(new) != "",
+               "blank peer rename from param #{inspect(param)}"
       end
     end
   end
