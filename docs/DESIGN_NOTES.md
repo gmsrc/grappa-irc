@@ -36039,6 +36039,7 @@ red, shape property green. `String.trim/1` narrowed to `== ""`: exactly the two
 whitespace-only unit tests red, both properties green — so the whitespace
 sub-class is pinned by the named-input tests alone, which is the reason they
 exist rather than leaving the class to the fuzzer.
+
 ## 2026-08-09 — #1147: a gate that guards spawning should not judge a connect that spawns nothing
 
 `SpawnOrchestrator.spawn/4` is the one verb every spawn-initiating surface goes
