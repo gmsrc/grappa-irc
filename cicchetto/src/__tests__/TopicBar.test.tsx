@@ -686,4 +686,31 @@ describe("TopicBar", () => {
       expect(container.querySelector(".topic-bar-header .topic-bar-hamburger")).toBeNull();
     });
   });
+
+  // #1073 — characterization, written BEFORE the bar's shell was extracted so
+  // the extraction has something to be measured against.
+  //
+  // The admin console adopts this same bar, and the reason its ☰ lands on the
+  // RIGHT there is not a new CSS rule: it is that the glyph is `.topic-bar`'s
+  // LAST flex child here. `.admin-pane-header` used to put its opener FIRST,
+  // which is why the two surfaces disagreed about the side. Nothing pinned the
+  // order, so an innocent reshuffle of this JSX could move the channel ☰ and
+  // silently take the admin bar with it.
+  describe("#1073 — the shell the admin bar reuses", () => {
+    it("renders exactly two element children: the header block, then the ☰", () => {
+      const { container } = render(() => <TopicBar {...baseProps()} />);
+      const bar = container.querySelector(".topic-bar");
+      expect(bar).not.toBeNull();
+      const kids = Array.from(bar?.children ?? []);
+      expect(kids).toHaveLength(2);
+      expect(kids[0]).toHaveClass("topic-bar-header");
+      expect(kids[1]).toHaveClass("topic-bar-hamburger");
+    });
+
+    it("puts the ☰ LAST, which is what places it on the right", () => {
+      const { container } = render(() => <TopicBar {...baseProps()} />);
+      const bar = container.querySelector(".topic-bar");
+      expect(bar?.lastElementChild).toHaveClass("topic-bar-hamburger");
+    });
+  });
 });
