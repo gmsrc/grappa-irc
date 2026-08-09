@@ -35914,3 +35914,73 @@ barrier removes the trigger, not the behaviour. The measurement is filed as its
 own issue against `ScrollbackPane`'s freeze rather than folded into this fix:
 an unexplained number that someone silently rounds off is how the next bug gets
 its hiding place.
+---
+
+## 2026-08-09 — #1140: the grants table printed the key, and the label was already someone's job
+
+The vhost grants table rendered its subject as a bare UUID while the
+add-grant form searches BY NAME (#257). An operator picked "azzurra -
+guest", the post-grant refresh answered with
+`0f2a7c1e-3b4d-4e5f-8a9b-0c1d2e3f4a5b`, and with two grants on one vhost
+the table stopped being readable at all. The label has to be resolved
+server-side: the grants list arrives inside the vhosts payload and has no
+search round-trip to piggyback on.
+
+**The first design was wrong, and grep is what said so.** The autocomplete
+source returns one row PER CREDENTIAL, so a multi-network visitor yields N
+`{network, nick}` rows and a grant — which stores only `visitor_id` —
+cannot recover which row was clicked. That argues for putting the whole
+list on the wire. But the class was already solved twice:
+`Accounts.get_users_by_ids/1` and
+`Credentials.representative_nicks_by_visitor_ids/1` exist precisely so
+"admin endpoints resolve N ids to display labels without N+1", and
+`SessionsController.index/2` already composes them into
+`subject_label: String.t() | nil`. Shipping a list here would have given
+the admin panel two conventions for one concept — the exact
+"Claude copies whichever pattern is closer" drift CLAUDE.md warns about.
+So the list was dropped for the established `subject_label`.
+
+**What that costs, stated rather than hidden.** A visitor is multi-network
+and the label is the REPRESENTATIVE (lowest-`network_id`) nick, so a
+visitor with different nicks on two networks is shown under one of them.
+That is acceptable only because nothing keys on the label: `subject_id`
+stays on the wire as the stable key, and cic demotes it to the cell
+`title`. The label is display, permanently.
+
+**Where the composition lives is forced, not chosen.** `Grappa.Networks`
+deps `Grappa.Vhosts`, so resolving labels inside `Vhosts` would close the
+Boundary cycle `Vhosts → SubjectSearch → Networks → Vhosts`. The web edge
+is where both subject contexts are already reachable — which is also why
+the sessions controller had grown its own private `resolve_label/3`. That
+private helper is now `GrappaWeb.Admin.SubjectLabels`, shared by both
+listings: a second copy would have been the third pattern.
+
+**No defensive orphan arm.** Both `vhost_grants` FKs are ON DELETE
+CASCADE and `foreign_keys: :on` holds in dev, test and runtime, so a grant
+whose subject row vanished is unreachable and needs no code. The `nil`
+that IS reachable is a visitor holding no credential yet — the shape
+`Credentials.list_visitor_credentials/1` documents as "a fresh row the
+reconcile hasn't touched". cic renders the uuid then, never a fabricated
+placeholder.
+
+**A pre-existing spec had made the bug its oracle.** The #257 e2e proved
+"the STABLE id was stored, not the typed nick" by asserting the grants
+table *renders* the UUID and does NOT render the nick — the display this
+change reverses. The assertion was moved, not deleted: it now asserts the
+subject cell's `title` EQUALS `visitor.id`, which is strictly stronger
+than the old substring check, and the "not the nick" claim survives
+because the spec already asserts `visitor.id !== visitor.nick` up front.
+The listing test on the server side was vacuous in the same family
+(`assert is_list(body["grants"])` — satisfied by a wire of pure UUIDs),
+and `Grappa.Vhosts.AdminWire` had no unit test at all; both now exist.
+
+**One test passed against the pre-state and shouldn't have.** The
+`subject_label: null` assertion was green before the field existed,
+because an absent JSON key reads as `nil`. It asserts
+`Map.has_key?(row, "subject_label")` first now: the claim is "present and
+null", not "absent".
+
+`subject_label` is a new field, so this is additive — no
+`protocol_version` bump, and a client that ignores it is unaffected.
+
+_Deploy: **HOT** — server logic + `--cic`. No migration._
