@@ -976,12 +976,12 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   ## ----- Schema node IR ----------------------------------------------------
 
-  defp schema_ir(nil, _mod), do: {:raw, ~s("z")}
-  defp schema_ir({:atom, _, [nil]}, _mod), do: {:raw, ~s("z")}
-  defp schema_ir({:atom, _, [true]}, _mod), do: {:obj, [{"l", {:raw, "true"}}]}
-  defp schema_ir({:atom, _, [false]}, _mod), do: {:obj, [{"l", {:raw, "false"}}]}
+  defp schema_ir(nil, _), do: {:raw, ~s("z")}
+  defp schema_ir({:atom, _, [nil]}, _), do: {:raw, ~s("z")}
+  defp schema_ir({:atom, _, [true]}, _), do: {:obj, [{"l", {:raw, "true"}}]}
+  defp schema_ir({:atom, _, [false]}, _), do: {:obj, [{"l", {:raw, "false"}}]}
 
-  defp schema_ir({:atom, _, [a]}, _mod) when is_atom(a) do
+  defp schema_ir({:atom, _, [a]}, _) when is_atom(a) do
     {:obj, [{"l", {:raw, ~s("#{Atom.to_string(a)}")}}]}
   end
 
@@ -995,13 +995,13 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     end
   end
 
-  defp schema_ir({:remote_type, _, [String, :t]}, _mod), do: {:raw, ~s("s")}
-  defp schema_ir({:remote_type, _, [DateTime, :t]}, _mod), do: {:raw, ~s("s")}
-  defp schema_ir({:remote_type, _, [Date, :t]}, _mod), do: {:raw, ~s("s")}
-  defp schema_ir({:remote_type, _, [NaiveDateTime, :t]}, _mod), do: {:raw, ~s("s")}
-  defp schema_ir({:remote_type, _, [Ecto.UUID, :t]}, _mod), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [String, :t]}, _), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [DateTime, :t]}, _), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [Date, :t]}, _), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [NaiveDateTime, :t]}, _), do: {:raw, ~s("s")}
+  defp schema_ir({:remote_type, _, [Ecto.UUID, :t]}, _), do: {:raw, ~s("s")}
 
-  defp schema_ir({:remote_type, _, [mod, type]}, _mod) when is_atom(mod) and is_atom(type) do
+  defp schema_ir({:remote_type, _, [mod, type]}, _) when is_atom(mod) and is_atom(type) do
     if elixir_module?(mod) do
       schema_ref(mod, type)
     else
@@ -1011,19 +1011,19 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   defp schema_ir({:user_type, _, [name]}, mod) when is_atom(name), do: schema_ref(mod, name)
 
-  defp schema_ir({:integer, _, []}, _mod), do: {:raw, ~s("i")}
-  defp schema_ir({:non_neg_integer, _, []}, _mod), do: {:raw, ~s("i")}
-  defp schema_ir({:pos_integer, _, []}, _mod), do: {:raw, ~s("i")}
-  defp schema_ir({:float, _, []}, _mod), do: {:raw, ~s("i")}
-  defp schema_ir({:boolean, _, []}, _mod), do: {:raw, ~s("b")}
-  defp schema_ir({:binary, _, []}, _mod), do: {:raw, ~s("s")}
-  defp schema_ir({:atom, _, []}, _mod), do: {:raw, ~s("s")}
-  defp schema_ir({:term, _, []}, _mod), do: {:raw, ~s("x")}
-  defp schema_ir({:any, _, []}, _mod), do: {:raw, ~s("x")}
+  defp schema_ir({:integer, _, []}, _), do: {:raw, ~s("i")}
+  defp schema_ir({:non_neg_integer, _, []}, _), do: {:raw, ~s("i")}
+  defp schema_ir({:pos_integer, _, []}, _), do: {:raw, ~s("i")}
+  defp schema_ir({:float, _, []}, _), do: {:raw, ~s("i")}
+  defp schema_ir({:boolean, _, []}, _), do: {:raw, ~s("b")}
+  defp schema_ir({:binary, _, []}, _), do: {:raw, ~s("s")}
+  defp schema_ir({:atom, _, []}, _), do: {:raw, ~s("s")}
+  defp schema_ir({:term, _, []}, _), do: {:raw, ~s("x")}
+  defp schema_ir({:any, _, []}, _), do: {:raw, ~s("x")}
 
   # Bare `map()` — the type side warns and falls back to
   # `Record<string, unknown>`; the runtime side accepts any JSON object.
-  defp schema_ir({:map, _, []}, _mod), do: {:obj, [{"r", {:raw, ~s("x")}}]}
+  defp schema_ir({:map, _, []}, _), do: {:obj, [{"r", {:raw, ~s("x")}}]}
 
   defp schema_ir({:tuple, _, members}, mod) do
     {:obj, [{"p", {:arr, Enum.map(members, &schema_ir(&1, mod))}}]}
@@ -1031,7 +1031,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   defp schema_ir([inner], mod), do: {:obj, [{"a", schema_ir(inner, mod)}]}
 
-  defp schema_ir({:open_map, _, [_key, value]}, mod), do: {:obj, [{"r", schema_ir(value, mod)}]}
+  defp schema_ir({:open_map, _, [_, value]}, mod), do: {:obj, [{"r", schema_ir(value, mod)}]}
 
   defp schema_ir({:%{}, _, fields}, mod) do
     props =
@@ -1070,7 +1070,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   ## ----- Schema emission ---------------------------------------------------
 
   defp topo_sort_schema(entries) do
-    {order, _perm} =
+    {order, _} =
       entries
       |> Map.keys()
       |> Enum.sort_by(&schema_sort_key/1)
@@ -1092,7 +1092,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
         raise "gen_wire_types: cyclic wire schema reference at #{schema_sort_key(key)}"
 
       true ->
-        {_ir, deps} = Map.fetch!(entries, key)
+        {_, deps} = Map.fetch!(entries, key)
         path = MapSet.put(path, key)
 
         {acc, perm} =
@@ -1107,7 +1107,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   end
 
   defp render_schema_const({mod, name} = key, entries) do
-    {ir, _deps} = Map.fetch!(entries, key)
+    {ir, _} = Map.fetch!(entries, key)
     const = schema_const_name(render_alias_name(mod, name))
     prefix = "export const #{const} = "
 
@@ -1193,7 +1193,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
 
   defp inline_ts({:arr, items}), do: "[" <> Enum.map_join(items, ", ", &inline_ts/1) <> "]"
 
-  defp block_ts({:raw, s}, _indent), do: s
+  defp block_ts({:raw, s}, _), do: s
 
   defp block_ts({:obj, kvs}, indent) do
     inner = indent + 2
