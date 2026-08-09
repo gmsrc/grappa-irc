@@ -35281,6 +35281,7 @@ boundary case fails on its FIRST assertion, with `Login.login` returning
 actually a refusal, losing the diagnosis. That is a separate defect on the login
 path, not circuit isolation, and it is left for its own issue rather than
 widened into this one.
+
 ## 2026-08-09 — #407: an extraction is a promise, and a promise needs a witness
 
 Twenty-four modal controls each carried a copy of one of three declaration
