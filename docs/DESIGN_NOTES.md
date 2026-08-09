@@ -35690,6 +35690,7 @@ because the conjunction with a nick-shaped token and a later `<< ` makes the
 collision rare, and because the damage is confined to the quote being drafted:
 the sender's message, the compose box's existing draft, and the wire are all
 untouched.
+
 ## 2026-08-09 — #948: the one window our own nick keys, and the sender that names it
 
 `/msg <ownnick>` — the self window, the scratchpad some people keep. Both ends
