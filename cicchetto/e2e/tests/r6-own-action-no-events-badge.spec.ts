@@ -46,7 +46,6 @@
 // Cleanup: re-JOIN of #bofh restores the seed state. No afterEach
 // restoration needed.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   selectChannel,
@@ -55,6 +54,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel, restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

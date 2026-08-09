@@ -30,7 +30,9 @@ test.describe("#284 password always-visible + optional", () => {
     await expect(page.getByLabel(/nick or email/i)).toBeVisible({ timeout: 10_000 });
   });
 
-  test("password is visible on the main form by default (not behind Advanced)", async ({ page }) => {
+  test("password is visible on the main form by default (not behind Advanced)", async ({
+    page,
+  }) => {
     // No Advanced expand — the password is right there on the first screen.
     await expect(page.getByLabel(/password/i)).toBeVisible();
 

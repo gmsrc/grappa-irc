@@ -23,10 +23,10 @@
 //     scrollback contains a notice line, compose box IS PRESENT
 //     (CP13 S9 — slash-only enforced inside compose.ts).
 
-import { test, expect } from "../fixtures/test";
 import { composeTextarea, loginAs } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SERVER_CHANNEL = "$server";
 
@@ -69,7 +69,9 @@ async function assertMotdPersisted(token: string): Promise<void> {
   );
 }
 
-test("M12 — MOTD persists into $server channel + cicchetto Server window renders with compose box", async ({ page }) => {
+test("M12 — MOTD persists into $server channel + cicchetto Server window renders with compose box", async ({
+  page,
+}) => {
   const vjt = getSeededVjt();
 
   // Server-side first door: at least one :notice row exists for the

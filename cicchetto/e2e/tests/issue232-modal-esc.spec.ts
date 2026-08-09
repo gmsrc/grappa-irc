@@ -46,24 +46,23 @@ test.setTimeout(60_000);
 // autofocus) pre-fix, so a focus-outside Esc never reached their old onKeyDown.
 // Each opens via a read-only compose command (no server-state mutation → safe
 // on the shared testnet session).
-const ESC_MODALS: { name: string; testid: string; open: (page: Page) => Promise<void> }[] =
-  [
-    {
-      name: "ModeModal (/mode)",
-      testid: "mode-modal",
-      open: (page) => composeSend(page, `/mode ${CHANNEL}`),
-    },
-    {
-      name: "NamesModal (/names)",
-      testid: "names-modal",
-      open: (page) => composeSend(page, `/names ${CHANNEL}`),
-    },
-    {
-      name: "ServerReplyModal (/info)",
-      testid: "server-reply-modal",
-      open: (page) => composeSend(page, "/info"),
-    },
-  ];
+const ESC_MODALS: { name: string; testid: string; open: (page: Page) => Promise<void> }[] = [
+  {
+    name: "ModeModal (/mode)",
+    testid: "mode-modal",
+    open: (page) => composeSend(page, `/mode ${CHANNEL}`),
+  },
+  {
+    name: "NamesModal (/names)",
+    testid: "names-modal",
+    open: (page) => composeSend(page, `/names ${CHANNEL}`),
+  },
+  {
+    name: "ServerReplyModal (/info)",
+    testid: "server-reply-modal",
+    open: (page) => composeSend(page, "/info"),
+  },
+];
 
 for (const m of ESC_MODALS) {
   test(`#232 ${m.name} closes on Esc pressed from body focus (was focus-trapped)`, async ({

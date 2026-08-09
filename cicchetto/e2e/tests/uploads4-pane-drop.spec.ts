@@ -21,10 +21,10 @@
 // wires the SAME DropUploadZone component (tsc-checked); the browser
 // behaviour is asserted once, on the browser where it is a real gesture.
 
-import { expect, test } from "../fixtures/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -37,15 +37,18 @@ async function fireFileDrag(
   scrollback: ReturnType<typeof scrollbackLine>,
   type: "dragenter" | "dragover" | "drop",
 ): Promise<void> {
-  await scrollback.evaluate((el, { hex, evType }) => {
-    const bytes = Uint8Array.from((hex.match(/../g) ?? []).map((h) => Number.parseInt(h, 16)));
-    const file = new File([bytes], "dropped-on-scrollback.png", { type: "image/png" });
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    el.dispatchEvent(
-      new DragEvent(evType, { bubbles: true, cancelable: true, dataTransfer: dt }),
-    );
-  }, { hex: TINY_PNG_HEX, evType: type });
+  await scrollback.evaluate(
+    (el, { hex, evType }) => {
+      const bytes = Uint8Array.from((hex.match(/../g) ?? []).map((h) => Number.parseInt(h, 16)));
+      const file = new File([bytes], "dropped-on-scrollback.png", { type: "image/png" });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      el.dispatchEvent(
+        new DragEvent(evType, { bubbles: true, cancelable: true, dataTransfer: dt }),
+      );
+    },
+    { hex: TINY_PNG_HEX, evType: type },
+  );
 }
 
 test("uploads-4 #351 — a file dropped over the SCROLLBACK uploads (whole pane is the drop target)", async ({

@@ -16,9 +16,9 @@
 // in issue221-solanum-whois.spec.ts, run against the real solanum ircd
 // where nick-masks match.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -40,4 +40,3 @@ test("#221 — /who <mask> surfaces the WhoModal (feedback, not pre-#221 silence
   const modal = page.getByTestId("who-modal");
   await expect(modal).toBeVisible({ timeout: 8_000 });
 });
-

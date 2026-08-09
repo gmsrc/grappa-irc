@@ -5,7 +5,7 @@
 // e2e-only `irc-framework` dependency.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type PrivmsgEvent, awaitPrivmsg, type PrivmsgSource } from "./privmsgWait";
+import { awaitPrivmsg, type PrivmsgEvent, type PrivmsgSource } from "./privmsgWait";
 
 type FakeSource = PrivmsgSource & {
   emit: (nick: string, message: string) => void;

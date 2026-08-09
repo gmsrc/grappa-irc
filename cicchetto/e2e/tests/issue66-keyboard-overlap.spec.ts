@@ -30,12 +30,7 @@
 // (playwright.config.ts grep) so `html.is-ios` engages and the real iOS
 // height path (`body { height: calc(var(--vh) * 100) }`) is exercised.
 
-import {
-  composeTextarea,
-  loginAs,
-  scrollbackLine,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
+import { composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";

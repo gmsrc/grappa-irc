@@ -33,7 +33,7 @@
 // surface only, not the (pre-covered) destructive composite. Every
 // interaction below is client-side state — zero server mutation.
 
-import { openRailMenu, loginAs } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

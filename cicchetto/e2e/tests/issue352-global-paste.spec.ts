@@ -15,15 +15,10 @@
 // dispatched on document.body drives the production listener deterministically,
 // the same path a real Ctrl+V takes minus the OS-clipboard permission dance.
 
-import { expect, test } from "../fixtures/test";
-import {
-  composeTextarea,
-  confirmModal,
-  loginAs,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import type { Page } from "@playwright/test";
+import { composeTextarea, confirmModal, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

@@ -18,10 +18,10 @@
 // selected). RED against the `await focus(); postMessage()` ordering,
 // GREEN once delivery no longer depends on focus() resolving.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
 import { buildPushDeepLink } from "../fixtures/pushTap";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("#146 recurrence — real SW notificationclick delivers the navigate even when focus() rejects", async ({
   page,

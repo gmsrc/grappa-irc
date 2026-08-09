@@ -22,7 +22,6 @@
 // (4) confirming actually parks the network (REST is source-of-truth);
 // (5) the row swaps to the parked state with a Reconnect chip.
 
-import { expect, test } from "../fixtures/test";
 import {
   confirmModal,
   confirmModalBody,
@@ -33,6 +32,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { patchNetworkConnectionState, type SeededUser } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];

@@ -11,7 +11,6 @@
 // Together they pin the selection.ts isSelected gate for query
 // windows — the same rule M1/M2 prove for channels.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -24,6 +23,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "m5-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

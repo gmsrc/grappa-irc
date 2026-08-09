@@ -33,10 +33,10 @@
 // the embedded path posts to grappa itself, which is deterministic
 // in the e2e harness (sqlite + local disk + Reaper).
 
-import { expect, test } from "../fixtures/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 import { EMBEDDED_MODAL_HEADING, pickFile, uploadViaPicker } from "../fixtures/uploadJourney";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];

@@ -20,7 +20,6 @@
 // DM. Neither window is focused when the activity lands (focus parks on
 // the neutral $server window), so both accrue unread.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   selectChannel,
@@ -31,6 +30,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const CHANNEL_LINE = "235 ordinary channel traffic";

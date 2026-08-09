@@ -218,7 +218,8 @@ async function reportReadings(
   readings: { height: number; g: MenuGeometry }[],
 ): Promise<void> {
   if (readings.length === 0) return;
-  for (const { height, g } of readings) console.log(`#988 ${label} h=${height} ${JSON.stringify(g)}`);
+  for (const { height, g } of readings)
+    console.log(`#988 ${label} h=${height} ${JSON.stringify(g)}`);
   await testInfo.attach(`issue988-geometry-${label}`, {
     body: JSON.stringify(readings, null, 2),
     contentType: "application/json",

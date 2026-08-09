@@ -17,12 +17,7 @@
 //     (compose filled, row snapped back, menu open, nothing select-all'd) and
 //     must not be read as covering the rest.
 import type { Page } from "@playwright/test";
-import {
-  composeSend,
-  composeTextarea,
-  loginAs,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
+import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -88,7 +83,12 @@ async function swipeRow(page: Page, body: string, points: Pt[]): Promise<Gesture
         if (row.classList.contains("scrollback-line-swiping")) swipingClassDuring = true;
       }
       fire("touchend", last);
-      return { prevented, transformDuring, transformAfter: row.style.transform, swipingClassDuring };
+      return {
+        prevented,
+        transformDuring,
+        transformAfter: row.style.transform,
+        swipingClassDuring,
+      };
     },
     { body, points },
   );
@@ -324,7 +324,9 @@ test("issue1067 — the menu's Copy item writes the whole rendered row to the pa
   await menuItem(page, "Copy").click();
 
   await expect
-    .poll(async () => await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied))
+    .poll(
+      async () => await page.evaluate(() => (window as unknown as { __copied: string[] }).__copied),
+    )
     .toHaveLength(1);
   const copied = await page.evaluate(
     () => (window as unknown as { __copied: string[] }).__copied[0] ?? "",

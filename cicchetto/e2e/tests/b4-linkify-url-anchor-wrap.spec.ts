@@ -19,10 +19,10 @@
 // pins the DOM shape under a real browser; click semantics are
 // covered by the unit tests in ScrollbackPane.test.tsx.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "b4-linker";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

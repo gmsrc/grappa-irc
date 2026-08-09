@@ -53,8 +53,8 @@
 // channel accrues unread; the peer disconnects in `finally`.
 
 import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
-import { IrcPeer } from "../fixtures/ircClient";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
+import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -145,12 +145,14 @@ test("#264 @webkit — mobile next-active button is a keyboard-safe circle (≥4
       Math.abs(unfocused.width - unfocused.height),
       `circle must be symmetric: width ${unfocused.width}px vs height ${unfocused.height}px`,
     ).toBeLessThanOrEqual(SQUARE_TOLERANCE_PX);
-    expect(unfocused.width, `width ${unfocused.width}px must be ≥ ${MIN_TAP_PX}px (HIG)`).toBeGreaterThanOrEqual(
-      MIN_TAP_PX,
-    );
-    expect(unfocused.height, `height ${unfocused.height}px must be ≥ ${MIN_TAP_PX}px (HIG)`).toBeGreaterThanOrEqual(
-      MIN_TAP_PX,
-    );
+    expect(
+      unfocused.width,
+      `width ${unfocused.width}px must be ≥ ${MIN_TAP_PX}px (HIG)`,
+    ).toBeGreaterThanOrEqual(MIN_TAP_PX);
+    expect(
+      unfocused.height,
+      `height ${unfocused.height}px must be ≥ ${MIN_TAP_PX}px (HIG)`,
+    ).toBeGreaterThanOrEqual(MIN_TAP_PX);
     expect(
       isRound(unfocused.borderRadius, unfocused.width),
       `border-radius ${unfocused.borderRadius} must render the ${unfocused.width}px box as a circle`,

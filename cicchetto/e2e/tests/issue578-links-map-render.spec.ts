@@ -32,7 +32,10 @@ type Box = { left: number; top: number; right: number; bottom: number };
 const boxesOverlap = (a: Box, b: Box): boolean => {
   const EPS = 0.5;
   return (
-    a.left < b.right - EPS && b.left < a.right - EPS && a.top < b.bottom - EPS && b.top < a.bottom - EPS
+    a.left < b.right - EPS &&
+    b.left < a.right - EPS &&
+    a.top < b.bottom - EPS &&
+    b.top < a.bottom - EPS
   );
 };
 

@@ -28,9 +28,9 @@
 // +g GLOBOPS, +S SSL) renders in the modal. The modal shows the full known
 // table, so those toggles are present even though vjt holds none of them.
 
-import { expect, test } from "../fixtures/test";
-import { expectShellReady, composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { composeSend, expectShellReady, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("#229 — own umodes are visible from connect (cold-snapshot after reload), and tapping opens the umode modal", async ({
   page,

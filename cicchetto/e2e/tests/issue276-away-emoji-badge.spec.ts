@@ -27,10 +27,10 @@
 // for the next spec. Away is transient (not persisted), but a leaked
 // badge would confuse a later assertion on the same sidebar row.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { fetchAllMessagesAsc } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "$server";
@@ -87,8 +87,6 @@ test("#276 — self /away shows the 💤 badge (not the word away) + writes no $
   // :notice rows from connect, so filter for the away-ack numerics
   // specifically — any such row is the bug this issue removes.
   const serverRows = await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, SERVER_WINDOW);
-  const awayAckRows = serverRows.filter(
-    (r) => r.meta?.numeric === 305 || r.meta?.numeric === 306,
-  );
+  const awayAckRows = serverRows.filter((r) => r.meta?.numeric === 305 || r.meta?.numeric === 306);
   expect(awayAckRows).toEqual([]);
 });

@@ -24,7 +24,7 @@
 // scroll-geometry-spec precedent (#168, #243, #280-coexist) which pins
 // geometry on one engine rather than the user-class parity matrix.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLine, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
@@ -241,7 +241,7 @@ test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
       for (let i = 0; i < TRAILING; i++) buffer.push(filler(LEADING + MIDDLE + i));
       for (let i = 0; i < buffer.length; i++) {
         if (i >= FLOOD_SAFE_BURST) await sleep(PACE_MS);
-        peer.privmsg(channel, buffer[i]!);
+        peer.privmsg(channel, buffer[i]);
       }
 
       // Confirm the burst persisted server-side. The peer sends on ONE ordered

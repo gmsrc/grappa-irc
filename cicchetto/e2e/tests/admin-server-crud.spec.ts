@@ -8,10 +8,10 @@
 // Uses a freshly-created ephemeral network per test (so we don't
 // pollute the seeded networks' server lists).
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 async function adminLogin(
   page: import("@playwright/test").Page,
@@ -71,19 +71,18 @@ test("admin adds a server to a network via the disclosure", async ({ page }) => 
     await page.getByTestId(`admin-network-expand-${slug}`).click();
     await expect(page.getByTestId(`admin-network-add-server-form-${slug}`)).toBeVisible();
 
-    await page
-      .getByTestId(`admin-network-add-server-host-${slug}`)
-      .fill("irc.example.test");
+    await page.getByTestId(`admin-network-add-server-host-${slug}`).fill("irc.example.test");
     await page.getByTestId(`admin-network-add-server-port-${slug}`).fill("6697");
     await page.getByTestId(`admin-network-add-server-submit-${slug}`).click();
 
     // New row lands in the servers table.
-    await expect(
-      page.getByTestId(`admin-network-servers-table-${slug}`),
-    ).toBeVisible({ timeout: 5_000 });
-    await expect(
-      page.locator(`[data-testid^='admin-network-server-row-${slug}-']`),
-    ).toHaveCount(1, { timeout: 5_000 });
+    await expect(page.getByTestId(`admin-network-servers-table-${slug}`)).toBeVisible({
+      timeout: 5_000,
+    });
+    await expect(page.locator(`[data-testid^='admin-network-server-row-${slug}-']`)).toHaveCount(
+      1,
+      { timeout: 5_000 },
+    );
   } finally {
     if (networkId !== null) await deleteNetworkBestEffort(admin.token, networkId);
   }
@@ -154,9 +153,7 @@ test("admin sees a per-network source rejected via the add-server form (non-loca
     await expect(page.getByTestId("admin-networks-error")).toContainText("source_not_local", {
       timeout: 5_000,
     });
-    await expect(
-      page.locator(`[data-testid^='admin-network-server-row-${slug}-']`),
-    ).toHaveCount(0);
+    await expect(page.locator(`[data-testid^='admin-network-server-row-${slug}-']`)).toHaveCount(0);
   } finally {
     if (networkId !== null) await deleteNetworkBestEffort(admin.token, networkId);
   }

@@ -11,8 +11,8 @@
 // Copy is deliberately NOT asserted: the checkbox keys off its data-testid,
 // so vjt's final (pending) wording swap can never break this spec.
 
-import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

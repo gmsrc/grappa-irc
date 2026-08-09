@@ -26,20 +26,11 @@
 // (from fixtures/test) also resets autojoin to AUTOJOIN_CHANNELS
 // after every test.
 
-import { test, expect } from "../fixtures/test";
-import {
-  loginAs,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded
 // here because the e2e tsconfig does not resolve src/ imports. A
@@ -58,129 +49,122 @@ test.afterEach(async () => {
   await partChannel(vjt.token, NETWORK_SLUG, PEER_CHANNEL).catch(() => {});
 });
 
-test(
-  "channel-directory — browse, no /messages fetch (#81 guard), search filter, one-click join",
-  async ({ page }) => {
-    const vjt = getSeededVjt();
+test("channel-directory — browse, no /messages fetch (#81 guard), search filter, one-click join", async ({
+  page,
+}) => {
+  const vjt = getSeededVjt();
 
-    // Connect an IRC peer and join PEER_CHANNEL so it exists in bahamut
-    // before grappa issues LIST. The peer stays connected for the whole
-    // test so the channel is non-empty in bahamut's 322 replies.
-    const peer = await IrcPeer.connect({
-      nick: `e2edir-${crypto.randomUUID().slice(0, 4)}`,
+  // Connect an IRC peer and join PEER_CHANNEL so it exists in bahamut
+  // before grappa issues LIST. The peer stays connected for the whole
+  // test so the channel is non-empty in bahamut's 322 replies.
+  const peer = await IrcPeer.connect({
+    nick: `e2edir-${crypto.randomUUID().slice(0, 4)}`,
+  });
+  try {
+    await peer.join(PEER_CHANNEL);
+
+    await loginAs(page, vjt);
+
+    // Focus #bofh and wait for its scrollback to land so the initial
+    // GET /messages for the autojoin channel has already fired BEFORE
+    // we arm the request collector.
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], {
+      ownNick: NETWORK_NICK,
     });
-    try {
-      await peer.join(PEER_CHANNEL);
 
-      await loginAs(page, vjt);
+    // Arm the /messages request collector from this point forward, SCOPED
+    // to the $list window under test (#534/#653). The regression the #81
+    // guard catches — a kindHasScrollback("list") slip — would fetch
+    // scrollback for the SELECTED window, i.e. cic's listMessages hits
+    // GET .../channels/%24list/messages (encodeURIComponent("$list")).
+    // Record ONLY that path: an unrelated forward gap-fill on the live
+    // autojoin #bofh (.../channels/%23bofh/messages?after=...) is legitimate
+    // background activity — a peer is connected and seed traffic is real —
+    // NOT the regression, and under full-gate load it can fire inside this
+    // window and trip a global-zero collector (the load-only flake).
+    // Keying on the $list channel segment keeps the assertion STRICT (a
+    // genuine $list scrollback fetch still reds it below) while making it
+    // deterministic — this is NOT a toHaveLength(<=1) relaxation nor a
+    // blanket substring filter that would blind the guard.
+    const listMessagesPath = `/channels/${encodeURIComponent(LIST_WINDOW_NAME)}/messages`;
+    const messagesRequests: string[] = [];
+    page.on("request", (req) => {
+      const url = req.url();
+      if (url.includes(listMessagesPath)) {
+        messagesRequests.push(url);
+      }
+    });
 
-      // Focus #bofh and wait for its scrollback to land so the initial
-      // GET /messages for the autojoin channel has already fired BEFORE
-      // we arm the request collector.
-      await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], {
-        ownNick: NETWORK_NICK,
-      });
+    // Open the 📇 channels directory window for this network.
+    // sidebarWindow resolves `li[data-window-name="$list"]` on
+    // desktop; .sidebar-window-btn is the clickable button inside it.
+    await sidebarWindow(page, NETWORK_SLUG, LIST_WINDOW_NAME)
+      .locator(".sidebar-window-btn")
+      .click();
 
-      // Arm the /messages request collector from this point forward, SCOPED
-      // to the $list window under test (#534/#653). The regression the #81
-      // guard catches — a kindHasScrollback("list") slip — would fetch
-      // scrollback for the SELECTED window, i.e. cic's listMessages hits
-      // GET .../channels/%24list/messages (encodeURIComponent("$list")).
-      // Record ONLY that path: an unrelated forward gap-fill on the live
-      // autojoin #bofh (.../channels/%23bofh/messages?after=...) is legitimate
-      // background activity — a peer is connected and seed traffic is real —
-      // NOT the regression, and under full-gate load it can fire inside this
-      // window and trip a global-zero collector (the load-only flake).
-      // Keying on the $list channel segment keeps the assertion STRICT (a
-      // genuine $list scrollback fetch still reds it below) while making it
-      // deterministic — this is NOT a toHaveLength(<=1) relaxation nor a
-      // blanket substring filter that would blind the guard.
-      const listMessagesPath = `/channels/${encodeURIComponent(LIST_WINDOW_NAME)}/messages`;
-      const messagesRequests: string[] = [];
-      page.on("request", (req) => {
-        const url = req.url();
-        if (url.includes(listMessagesPath)) {
-          messagesRequests.push(url);
-        }
-      });
+    // DirectoryPane is now mounted. The search box and Refresh button
+    // render outside the <Show when={page()}> guard and are immediate.
+    await expect(page.locator(".directory-search")).toBeVisible({
+      timeout: 5_000,
+    });
+    const refreshBtn = page.locator(".directory-refresh");
+    await expect(refreshBtn).toBeVisible({ timeout: 5_000 });
 
-      // Open the 📇 channels directory window for this network.
-      // sidebarWindow resolves `li[data-window-name="$list"]` on
-      // desktop; .sidebar-window-btn is the clickable button inside it.
-      await sidebarWindow(page, NETWORK_SLUG, LIST_WINDOW_NAME)
-        .locator(".sidebar-window-btn")
-        .click();
+    // (3) Assert NO /messages request was fired for the $list window
+    // selection. Checked here — before any join that would legitimately
+    // trigger GET /messages for the newly-joined channel window.
+    expect(
+      messagesRequests,
+      "GET /messages must NOT fire when selecting kind=list — grappa-irc#81 guard",
+    ).toHaveLength(0);
 
-      // DirectoryPane is now mounted. The search box and Refresh button
-      // render outside the <Show when={page()}> guard and are immediate.
-      await expect(page.locator(".directory-search")).toBeVisible({
-        timeout: 5_000,
-      });
-      const refreshBtn = page.locator(".directory-refresh");
-      await expect(refreshBtn).toBeVisible({ timeout: 5_000 });
+    // Force a fresh server-side LIST so PEER_CHANNEL (just created
+    // above) is captured even if a stale snapshot already exists.
+    await refreshBtn.click();
 
-      // (3) Assert NO /messages request was fired for the $list window
-      // selection. Checked here — before any join that would legitimately
-      // trigger GET /messages for the newly-joined channel window.
-      expect(
-        messagesRequests,
-        "GET /messages must NOT fire when selecting kind=list — grappa-irc#81 guard",
-      ).toHaveLength(0);
+    // (2a) PEER_CHANNEL appears in the directory. Generous timeout:
+    // the LIST → Session.Server 322 capture → 323 → progress ping
+    // → cic re-GET round-trip is fully async; allow 15 s.
+    const peerRow = page.locator(".directory-row-join").filter({ hasText: PEER_CHANNEL });
+    await expect(peerRow).toBeVisible({ timeout: 15_000 });
 
-      // Force a fresh server-side LIST so PEER_CHANNEL (just created
-      // above) is captured even if a stale snapshot already exists.
-      await refreshBtn.click();
+    // (2b) The seeded autojoin channel also appears.
+    const bofhRow = page.locator(".directory-row-join").filter({ hasText: AUTOJOIN_CHANNELS[0] });
+    await expect(bofhRow).toBeVisible({ timeout: 5_000 });
 
-      // (2a) PEER_CHANNEL appears in the directory. Generous timeout:
-      // the LIST → Session.Server 322 capture → 323 → progress ping
-      // → cic re-GET round-trip is fully async; allow 15 s.
-      const peerRow = page
-        .locator(".directory-row-join")
-        .filter({ hasText: PEER_CHANNEL });
-      await expect(peerRow).toBeVisible({ timeout: 15_000 });
+    // (4) Search filter: typing the unique fragment ("e2edir") routes a
+    // server-side query re-GET. Only PEER_CHANNEL should match;
+    // AUTOJOIN_CHANNELS[0] (#bofh) should be absent.
+    await page.locator(".directory-search").fill("e2edir");
+    await expect(peerRow).toBeVisible({ timeout: 5_000 });
+    await expect(bofhRow).toBeHidden({ timeout: 5_000 });
 
-      // (2b) The seeded autojoin channel also appears.
-      const bofhRow = page
-        .locator(".directory-row-join")
-        .filter({ hasText: AUTOJOIN_CHANNELS[0] });
-      await expect(bofhRow).toBeVisible({ timeout: 5_000 });
+    // Clear the filter so all rows are back before the join step.
+    await page.locator(".directory-search").fill("");
+    await expect(bofhRow).toBeVisible({ timeout: 5_000 });
 
-      // (4) Search filter: typing the unique fragment ("e2edir") routes a
-      // server-side query re-GET. Only PEER_CHANNEL should match;
-      // AUTOJOIN_CHANNELS[0] (#bofh) should be absent.
-      await page.locator(".directory-search").fill("e2edir");
-      await expect(peerRow).toBeVisible({ timeout: 5_000 });
-      await expect(bofhRow).toBeHidden({ timeout: 5_000 });
+    // (5) One-click join: assert PEER_CHANNEL is not yet in the sidebar,
+    // click its join control, then assert the sidebar gains an entry
+    // (mirrors m8: sidebarWindow toHaveCount(1)).
+    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_CHANNEL)).toHaveCount(0);
+    await peerRow.click();
+    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_CHANNEL)).toHaveCount(1, {
+      timeout: 10_000,
+    });
 
-      // Clear the filter so all rows are back before the join step.
-      await page.locator(".directory-search").fill("");
-      await expect(bofhRow).toBeVisible({ timeout: 5_000 });
-
-      // (5) One-click join: assert PEER_CHANNEL is not yet in the sidebar,
-      // click its join control, then assert the sidebar gains an entry
-      // (mirrors m8: sidebarWindow toHaveCount(1)).
-      await expect(
-        sidebarWindow(page, NETWORK_SLUG, PEER_CHANNEL),
-      ).toHaveCount(0);
-      await peerRow.click();
-      await expect(
-        sidebarWindow(page, NETWORK_SLUG, PEER_CHANNEL),
-      ).toHaveCount(1, { timeout: 10_000 });
-
-      // #244 — a user-initiated directory tap now JOINs *and* foregrounds
-      // the new channel's window (amends #125's original no-auto-open). So
-      // the tap flips selKind() list → channel, unmounting DirectoryPane;
-      // the `.directory-row-badge` (a DirectoryPane-only element) is no
-      // longer observable in a mounted pane. Assert the foreground signal
-      // instead: the newly-joined channel is the SELECTED sidebar window.
-      // The badge itself is unit-covered in DirectoryPane.test.tsx; the
-      // foreground behaviour is the #244 P0 fix, covered end-to-end in
-      // issue244-directory-tap-foreground.spec.ts.
-      await expect(
-        sidebarWindow(page, NETWORK_SLUG, PEER_CHANNEL),
-      ).toHaveClass(/selected/, { timeout: 10_000 });
-    } finally {
-      await peer.disconnect("e2e channel-directory done");
-    }
-  },
-);
+    // #244 — a user-initiated directory tap now JOINs *and* foregrounds
+    // the new channel's window (amends #125's original no-auto-open). So
+    // the tap flips selKind() list → channel, unmounting DirectoryPane;
+    // the `.directory-row-badge` (a DirectoryPane-only element) is no
+    // longer observable in a mounted pane. Assert the foreground signal
+    // instead: the newly-joined channel is the SELECTED sidebar window.
+    // The badge itself is unit-covered in DirectoryPane.test.tsx; the
+    // foreground behaviour is the #244 P0 fix, covered end-to-end in
+    // issue244-directory-tap-foreground.spec.ts.
+    await expect(sidebarWindow(page, NETWORK_SLUG, PEER_CHANNEL)).toHaveClass(/selected/, {
+      timeout: 10_000,
+    });
+  } finally {
+    await peer.disconnect("e2e channel-directory done");
+  }
+});

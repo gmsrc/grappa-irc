@@ -41,7 +41,6 @@
 // what the production bug surfaces as: it's the cursor persistence
 // that was broken.
 
-import { test, expect } from "../fixtures/test";
 import {
   loginAs,
   scrollbackLine,
@@ -52,6 +51,7 @@ import {
 import { assertMessagePersisted, getReadCursor } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "ux6k-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

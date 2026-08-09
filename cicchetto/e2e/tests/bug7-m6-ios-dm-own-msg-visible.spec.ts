@@ -16,8 +16,7 @@
 //
 // `@webkit` opts into the webkit-iphone-15 project.
 
-import { type Page } from "@playwright/test";
-import { test, expect } from "../fixtures/test";
+import type { Page } from "@playwright/test";
 import {
   composeTextarea,
   loginAs,
@@ -28,6 +27,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "bug7m6-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -45,7 +45,9 @@ async function distanceToBottom(page: Page): Promise<number> {
   });
 }
 
-test("@webkit BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input", async ({ page }) => {
+test("@webkit BUG7-M6 — cicchetto /msg DM own-msg visible on iOS-shaped input", async ({
+  page,
+}) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });

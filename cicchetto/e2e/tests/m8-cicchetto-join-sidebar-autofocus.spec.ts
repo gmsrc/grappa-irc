@@ -24,15 +24,10 @@
 // unique random suffix, and `afterEach` PARTs whatever was joined so
 // the credential's autojoin set stays clean.
 
-import { test, expect } from "../fixtures/test";
-import {
-  composeSend,
-  loginAs,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 // Random per-run suffix so /join's autojoin-persistence side-effect
@@ -76,4 +71,3 @@ test("M8 — cicchetto /join adds sidebar entry + auto-focuses the new channel",
     timeout: 5_000,
   });
 });
-

@@ -19,9 +19,9 @@
 // visitor login is sufficient. Per `feedback_ux_e2e_mandatory`, every
 // cic UX-behavior change ships a Playwright e2e.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("@webkit UX-6-E — narrow mode renders one network entry; no standalone 'Server' tab", async ({
   page,
@@ -50,15 +50,11 @@ test("@webkit UX-6-E — narrow mode renders one network entry; no standalone 'S
   await expect(standaloneServer).toHaveCount(0);
 });
 
-test("@webkit UX-6-E — clicking the network-header focuses the server window", async ({
-  page,
-}) => {
+test("@webkit UX-6-E — clicking the network-header focuses the server window", async ({ page }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
-  const header = page.locator(
-    `.bottom-bar-network-header[data-network-slug="${NETWORK_SLUG}"]`,
-  );
+  const header = page.locator(`.bottom-bar-network-header[data-network-slug="${NETWORK_SLUG}"]`);
   await expect(header).toBeVisible({ timeout: 10_000 });
 
   // Pre-tap: header isn't selected (login lands on home).

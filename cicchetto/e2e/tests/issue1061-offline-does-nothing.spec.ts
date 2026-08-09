@@ -51,9 +51,9 @@
 // demonstrably works. Neither test was weakened to go green: test 2 was made
 // able to go RED at all.
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Eight rungs of phoenix's default backoff ladder. Long enough that a client
 // which resumed retrying would have done so many times over; short enough not

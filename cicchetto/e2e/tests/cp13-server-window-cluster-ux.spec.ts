@@ -11,7 +11,6 @@
 //   - S9: $server has a ComposeBox; plain-text submit is rejected
 //     with a friendly error; slash-commands pass the gate.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeTextarea,
   loginAs,
@@ -20,6 +19,7 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SERVER_WINDOW_LABEL = "Server";
 const TEST_CHANNEL = "#bofh";

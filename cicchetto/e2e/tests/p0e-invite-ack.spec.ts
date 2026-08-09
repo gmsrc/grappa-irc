@@ -31,10 +31,10 @@
 // per-spec-distinct so concurrent test runs don't collide on +o
 // ownership.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "p0e-invitee";
 const CHANNEL = "#p0e-invite-test";

@@ -10,10 +10,10 @@
 // Uses a freshly-created ephemeral network per test so we don't pollute
 // the seeded networks' featured lists.
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 async function adminLogin(
   page: import("@playwright/test").Page,
@@ -80,9 +80,10 @@ test("admin adds a featured channel to a network via the disclosure", async ({ p
     await expect(page.getByTestId(`admin-network-featured-table-${slug}`)).toBeVisible({
       timeout: 5_000,
     });
-    await expect(
-      page.locator(`[data-testid^='admin-network-featured-row-${slug}-']`),
-    ).toHaveCount(1, { timeout: 5_000 });
+    await expect(page.locator(`[data-testid^='admin-network-featured-row-${slug}-']`)).toHaveCount(
+      1,
+      { timeout: 5_000 },
+    );
   } finally {
     if (networkId !== null) await deleteNetworkBestEffort(admin.token, networkId);
   }
@@ -96,14 +97,11 @@ test("admin deletes a featured channel via inline-confirm", async ({ page }) => 
   try {
     networkId = await createNetwork(admin.token, slug);
 
-    const fRes = await fetch(
-      `${GRAPPA_BASE_URL}/admin/networks/${networkId}/featured_channels`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${admin.token}` },
-        body: JSON.stringify({ name: "#delme", description: "bye" }),
-      },
-    );
+    const fRes = await fetch(`${GRAPPA_BASE_URL}/admin/networks/${networkId}/featured_channels`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${admin.token}` },
+      body: JSON.stringify({ name: "#delme", description: "bye" }),
+    });
     expect(fRes.ok).toBe(true);
     const fBody = (await fRes.json()) as { id: number };
     const featuredId = fBody.id;

@@ -26,7 +26,6 @@
 // case-folding, so one user-class spec suffices). No `@webkit` tag →
 // desktop/chromium project only, so the `.shell-sidebar` selector applies.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -36,6 +35,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK_LOWER = "foldreplypeer";
 const PEER_NICK_PROPER = "FoldReplyPeer";

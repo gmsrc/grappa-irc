@@ -40,16 +40,16 @@
 // both networks in one socket resume.
 
 import type { Browser, Page } from "@playwright/test";
-import { test, expect } from "../fixtures/test";
 import { expectShellReady, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
-import { IrcPeer } from "../fixtures/ircClient";
 import {
-  reapVisitors,
   assertMessagePersisted,
   GRAPPA_BASE_URL,
   mintVisitor,
+  reapVisitors,
 } from "../fixtures/grappaApi";
+import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const ANCHOR = "azzurra";
 const SECOND = "azzurra2";
@@ -137,22 +137,8 @@ async function setNetworkNick(token: string, slug: string, nick: string): Promis
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
     body: JSON.stringify({ nick }),
   });
-  if (!res.ok) throw new Error(`setNetworkNick: ${slug}=${nick} → ${res.status} ${await res.text()}`);
-}
-
-async function patchConnectionState(
-  token: string,
-  slug: string,
-  state: "connected" | "parked",
-): Promise<void> {
-  const res = await fetch(`${GRAPPA_BASE_URL}/networks/${slug}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({ connection_state: state }),
-  });
-  if (!res.ok) {
-    throw new Error(`patchConnectionState: ${slug}=${state} → ${res.status} ${await res.text()}`);
-  }
+  if (!res.ok)
+    throw new Error(`setNetworkNick: ${slug}=${nick} → ${res.status} ${await res.text()}`);
 }
 
 async function fetchMembers(token: string, slug: string, channel: string): Promise<string[]> {
@@ -188,11 +174,7 @@ async function waitForOwnNickInMembers(
 // passed) while the upstream is still mid-register, so a bare joinChannel
 // races the register. Retry on 404 until the JOIN sticks (same
 // poll-until-ready discipline the park/reconnect specs use for autojoin).
-async function joinChannelWhenReady(
-  token: string,
-  slug: string,
-  channel: string,
-): Promise<void> {
+async function joinChannelWhenReady(token: string, slug: string, channel: string): Promise<void> {
   let last = "";
   for (let i = 0; i < 60; i++) {
     const res = await fetch(`${GRAPPA_BASE_URL}/networks/${slug}/channels`, {
@@ -209,9 +191,7 @@ async function joinChannelWhenReady(
     }
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(
-    `joinChannelWhenReady: ${slug}/${channel} never became joinable (last: ${last})`,
-  );
+  throw new Error(`joinChannelWhenReady: ${slug}/${channel} never became joinable (last: ${last})`);
 }
 
 test("issue #211 phase 7 — one visitor on TWO networks survives a real cic WS drop and reappears LIVE on BOTH", async ({
@@ -354,9 +334,7 @@ test("issue #211 phase 7 — one visitor on TWO networks survives a real cic WS 
       }
       await window.__cic_dropSocketForTests();
     });
-    await page.waitForFunction(
-      () => window.__cic_socketHealth?.state().state !== "open",
-    );
+    await page.waitForFunction(() => window.__cic_socketHealth?.state().state !== "open");
 
     // Peers send a PRIVMSG on EACH network while cic is confirmed
     // disconnected. Both are persisted server-side (Session.Server persist

@@ -30,14 +30,9 @@
 // presence assertion below covers the same joined-state contract
 // (both gate on the same `windowIsJoined(key())` predicate).
 
-import { test, expect } from "../fixtures/test";
-import {
-  composeSend,
-  loginAs,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 // UX-5 bucket BT (2026-05-19) — UX-4 bucket C merged the Server window

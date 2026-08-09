@@ -30,7 +30,6 @@
 // row. It also proves the other half of the marker contract: the marker is
 // per-BROWSER, not per-user, so the same account elsewhere sees no marker.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
@@ -44,6 +43,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "n964-dmer";
 const SUB_ID = "964-device-row";

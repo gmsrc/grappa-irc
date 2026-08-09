@@ -87,7 +87,6 @@
 // Desktop viewport on purpose, matching #997: the sidebar badge is the clearer
 // read of "the badge fell" than the mobile tab treatment.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
 import {
   fetchAllMessagesAsc,
@@ -103,6 +102,7 @@ import {
   NETWORK_SLUG,
   VJT_USER,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

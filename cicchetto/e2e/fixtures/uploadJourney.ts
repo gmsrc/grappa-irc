@@ -24,7 +24,7 @@
 // fallback probe) before the POST, so its budget is 6× the image
 // path's. A shared default would silently misbudget one of them.
 
-import { type Locator, type Page, expect } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { scrollbackLine } from "./cicchettoPage";
 
 export interface PickerFile {

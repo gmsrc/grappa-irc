@@ -13,10 +13,10 @@
 // Cleanup: tests create unique usernames (timestamp suffix) and
 // best-effort delete via REST in finally to avoid leaking rows.
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 async function adminLogin(
   page: import("@playwright/test").Page,
@@ -70,7 +70,7 @@ test("admin lists users, creates a new user, sees the row land", async ({ page }
 
     // Extract id from the row data-testid for cleanup.
     const testId = await row.getAttribute("data-testid");
-    if (testId !== null && testId.startsWith("admin-user-row-")) {
+    if (testId?.startsWith("admin-user-row-")) {
       createdId = testId.slice("admin-user-row-".length);
     }
   } finally {

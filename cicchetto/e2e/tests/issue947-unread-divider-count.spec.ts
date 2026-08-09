@@ -38,7 +38,6 @@
 // cascade rule — a spec that leaves a mid-list cursor behind makes every
 // downstream spec open its pane at a divider instead of at the tail).
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import {
   fetchAllMessagesAsc,
@@ -53,6 +52,7 @@ import {
   NETWORK_SLUG,
   VJT_USER,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -154,7 +154,9 @@ test.describe("#947 — the unread divider counts the conversation, not the page
       .locator('[data-testid="unread-marker"], [data-testid="scrollback-line"]')
       .evaluateAll((nodes) =>
         nodes.map((n) =>
-          n.getAttribute("data-testid") === "unread-marker" ? "MARKER" : n.getAttribute("data-msg-id"),
+          n.getAttribute("data-testid") === "unread-marker"
+            ? "MARKER"
+            : n.getAttribute("data-msg-id"),
         ),
       );
     const markerAt = flow.indexOf("MARKER");

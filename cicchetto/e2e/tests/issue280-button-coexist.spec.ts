@@ -37,19 +37,23 @@
 // (auto-hidden via `<Show when={hasActiveWindows()}>`) would trivially
 // satisfy a no-overlap / size check.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   composeTextarea,
   loginAs,
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { assertMessagePersisted, partChannel, restoreReadCursorToTail } from "../fixtures/grappaApi";
+import {
+  assertMessagePersisted,
+  partChannel,
+  restoreReadCursorToTail,
+} from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]!;
+const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 
 const SCROLL_TO_BOTTOM = '[data-testid="scroll-to-bottom"]';

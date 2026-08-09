@@ -48,8 +48,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // many rows inside a narrow card — the same shape as a real gecos, just longer.
 // A short bundle would false-pass against the BROKEN build (nothing overflows,
 // nothing is pushed anywhere), which is the trap #500's spec calls out.
-const LONG_GECOS =
-  "a deliberately long realname so the rail whois card overflows a short viewport";
+const LONG_GECOS = "a deliberately long realname so the rail whois card overflows a short viewport";
 
 // Short enough that the stacked WHOIS card cannot fit — the fold has to bite.
 const SHORT_VIEWPORT = { width: 1280, height: 220 };

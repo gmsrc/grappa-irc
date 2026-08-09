@@ -73,8 +73,7 @@ export async function awaitPrivmsg(source: PrivmsgSource, spec: PrivmsgWaitSpec)
     rejectWait = reject;
   });
 
-  const matches = (event: PrivmsgEvent) =>
-    event.nick === fromNick && event.message.includes(body);
+  const matches = (event: PrivmsgEvent) => event.nick === fromNick && event.message.includes(body);
 
   const handler = (event: PrivmsgEvent) => {
     const at = Date.now();

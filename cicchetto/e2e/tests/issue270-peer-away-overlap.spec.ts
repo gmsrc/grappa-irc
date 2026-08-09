@@ -22,7 +22,6 @@
 // P-0b away-peer + DM setup on the real testnet path (no stub) and the
 // issue278 overlapArea geometry style.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -33,6 +32,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "t270-away-peer";
 const AWAY_MESSAGE = "Gone fishing — back at 5pm";

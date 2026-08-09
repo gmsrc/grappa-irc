@@ -24,10 +24,10 @@
 // tested in `test/grappa/session/event_router_test.exs` +
 // `cicchetto/src/__tests__/WhoisCard.test.tsx`.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "c2-target";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -67,9 +67,9 @@ test("C2 — /whois <nick> renders WhoisCard in the scrollback overlay layer", a
     // shrink back toward the old ~14px glyph regresses here.
     const closeBtn = card.locator(".whois-card-close");
     const box = await closeBtn.boundingBox();
-    expect(box).not.toBeNull();
-    expect(box!.width).toBeGreaterThanOrEqual(40);
-    expect(box!.height).toBeGreaterThanOrEqual(40);
+    if (!box) throw new Error("whois card close button has no layout box");
+    expect(box.width).toBeGreaterThanOrEqual(40);
+    expect(box.height).toBeGreaterThanOrEqual(40);
 
     // Close button dismisses the card.
     await closeBtn.click();

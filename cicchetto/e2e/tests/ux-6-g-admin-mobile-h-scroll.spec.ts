@@ -47,7 +47,6 @@
 // + autojoined #bofh so it can reach the mobile launcher footer.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
@@ -57,6 +56,7 @@ import {
   NETWORK_SLUG,
   VJT_USER,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const GRAPPA_BASE_URL = "http://grappa-test:4000";

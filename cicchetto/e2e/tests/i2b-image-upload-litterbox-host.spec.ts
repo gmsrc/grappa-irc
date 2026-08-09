@@ -20,8 +20,7 @@
 //      specs see a clean default (per `feedback_no_silent_drops_closed`
 //      pattern from ux-6-b-admin-settings.spec.ts).
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import {
@@ -31,6 +30,7 @@ import {
   NETWORK_NICK,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 import { LITTERBOX_MODAL_HEADING, pickFile } from "../fixtures/uploadJourney";
 
 const FIXTURE_URL = "https://litter.catbox.moe/i2-fixture.png";

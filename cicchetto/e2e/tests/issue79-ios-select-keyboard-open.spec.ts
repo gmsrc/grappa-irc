@@ -26,7 +26,6 @@
 // reds the tap half. The FEEL (selection actually appearing, and the tap
 // dismissing the keyboard on-device) is a real-device test (vjt post-ship).
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -35,6 +34,7 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern): the e2e sqlite scrollback persists

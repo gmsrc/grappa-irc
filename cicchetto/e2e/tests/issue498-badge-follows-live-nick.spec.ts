@@ -87,10 +87,7 @@ async function runCommand(page: Parameters<typeof loginAs>[0], command: string):
 // and `own_nick_changed` is broadcast AFTER the server has published the
 // new live nick into the registry — so seeing it here guarantees the
 // server-side count already resolves the new nick.
-async function expectOwnMember(
-  page: Parameters<typeof loginAs>[0],
-  nick: string,
-): Promise<void> {
+async function expectOwnMember(page: Parameters<typeof loginAs>[0], nick: string): Promise<void> {
   const membersPane = page.locator(".shell-members .members-pane");
   await expect(membersPane).toBeVisible({ timeout: 10_000 });
   await expect(membersPane.locator(".member-name", { hasText: nick })).toBeVisible({

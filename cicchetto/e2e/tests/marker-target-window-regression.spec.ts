@@ -23,7 +23,6 @@
 // jsdom can't see either (no layout, no `::before`-style ref-drift).
 // This spec is the only line of defense.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -34,6 +33,7 @@ import {
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "marker-target-buddy";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -79,9 +79,9 @@ test("focused-window send+reply does NOT spawn unread marker", async ({ page }) 
     // Send an own-PRIVMSG in the focused DM.
     await composeSend(page, own);
     // Wait for own-msg to land in the scrollback.
-    await expect(
-      page.locator('[data-testid="scrollback-line"]', { hasText: own }),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-testid="scrollback-line"]', { hasText: own })).toBeVisible({
+      timeout: 5_000,
+    });
     // Gate the inbound peer reply on the DM-listener (own-nick topic)
     // subscription — peer→own DMs persist channel=ownNick and fan out
     // there; an early privmsg would fastlane past the unsubscribed
@@ -90,9 +90,9 @@ test("focused-window send+reply does NOT spawn unread marker", async ({ page }) 
     // Peer replies on the same DM topic.
     peer.privmsg(NETWORK_NICK, reply);
     // Wait for the reply to land.
-    await expect(
-      page.locator('[data-testid="scrollback-line"]', { hasText: reply }),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-testid="scrollback-line"]', { hasText: reply })).toBeVisible({
+      timeout: 5_000,
+    });
     // The invariant: NO unread-marker. The user was reading live the
     // whole time — both messages arrived during their focus session.
     await expect(page.locator('[data-testid="unread-marker"]')).toHaveCount(0);
@@ -117,14 +117,14 @@ test("switching to tall window after focused send scrolls target to bottom", asy
     // gate the peer reply on the DM-listener (own-nick topic) — see T1.
     await waitForQueryWindowReady(page, NETWORK_SLUG, PEER_NICK);
     await composeSend(page, own);
-    await expect(
-      page.locator('[data-testid="scrollback-line"]', { hasText: own }),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-testid="scrollback-line"]', { hasText: own })).toBeVisible({
+      timeout: 5_000,
+    });
     await waitForDmListenerReady(page, NETWORK_SLUG);
     peer.privmsg(NETWORK_NICK, reply);
-    await expect(
-      page.locator('[data-testid="scrollback-line"]', { hasText: reply }),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-testid="scrollback-line"]', { hasText: reply })).toBeVisible({
+      timeout: 5_000,
+    });
 
     // Pad the channel with extra rows so scrollHeight > clientHeight
     // and "at bottom vs at top" is observable. The autojoin channel

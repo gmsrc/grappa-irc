@@ -30,10 +30,10 @@
 // for gap (a) is the numeric ROUTING (WHO round-trip), covered by
 // issue221-solanum-whois.spec.ts.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "whois221-target";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

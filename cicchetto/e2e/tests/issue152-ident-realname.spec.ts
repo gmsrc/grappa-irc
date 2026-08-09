@@ -22,9 +22,9 @@
 //      reconnect primitive re-registers upstream with the changed ident
 //      AND rejoins the channel (the visitor can speak in it again).
 
-import { expect, test } from "../fixtures/test";
-import { expectShellReady,
+import {
   composeSend,
+  expectShellReady,
   openSettingsSection,
   selectChannel,
   waitForUserTopicReady,
@@ -32,6 +32,7 @@ import { expectShellReady,
 import { reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("issue #152 — login-Advanced ident + settings live-apply reach upstream", async ({
   browser,

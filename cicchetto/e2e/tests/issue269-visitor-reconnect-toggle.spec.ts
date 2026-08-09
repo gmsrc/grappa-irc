@@ -22,10 +22,10 @@
 // toggle reads Disconnect + the badge reads "● N chan". Not DOM cosmetics
 // alone: the session genuinely goes down then up on the SPECIFIC network.
 
-import { expect, test } from "../fixtures/test";
 import { openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 async function adminOpenVisitorsTab(
   page: import("@playwright/test").Page,

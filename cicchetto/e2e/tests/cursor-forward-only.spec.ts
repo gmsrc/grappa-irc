@@ -34,16 +34,11 @@
 // scroll-on-window-switch, ux-5-bk, ux-6-k, p0e-invite-ack) see
 // a fully-read channel.
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const REST_PAGE_SIZE = 50;
@@ -72,10 +67,7 @@ async function fetchCursor(token: string, channel: string): Promise<number | nul
   return body.read_cursors?.[NETWORK_SLUG]?.[channel] ?? null;
 }
 
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number }>> {
+async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
   const url = `${GRAPPA_TEST_BASE}/networks/${encodeURIComponent(NETWORK_SLUG)}/channels/${encodeURIComponent(channel)}/messages`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) {
@@ -242,9 +234,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     // `visible` and `store` (mid-pane) — any row ID in that range
     // satisfies `visible < baseline ≤ store`.
     const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
-    const candidates = page0.filter(
-      (r) => r.id > (visible as number) && r.id <= (store as number),
-    );
+    const candidates = page0.filter((r) => r.id > (visible as number) && r.id <= (store as number));
     if (candidates.length === 0) {
       throw new Error(
         `no baseline candidate between visible=${visible} and store=${store}; ` +

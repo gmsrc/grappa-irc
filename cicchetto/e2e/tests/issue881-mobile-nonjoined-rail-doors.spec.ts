@@ -37,7 +37,6 @@
 // isMobile() branch), so this runs on the webkit-iphone-15 project alone — the
 // @webkit tag; the chromium project grepInverts it.
 
-import { expect, test } from "../fixtures/test";
 import {
   closeArchive,
   composeSend,
@@ -49,6 +48,7 @@ import {
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Per-run-unique: bahamut holds channel state for a window after disconnect, so
 // a literal collides on rapid reruns (--repeat-each).

@@ -33,11 +33,11 @@
 // mid-spec failure can't strand the watch entry in vjt's durable list
 // for later specs.
 
-import { openSettingsDrawer, composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { expect, test } from "../fixtures/test";
+import { composeSend, loginAs, openSettingsDrawer, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "i247-watched";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];

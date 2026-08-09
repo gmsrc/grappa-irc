@@ -17,7 +17,6 @@
 // of cic state, and we want the DM unfocused so dedup doesn't
 // short-circuit (dedup is the dedup spec).
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
@@ -30,6 +29,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "b5-dmer";
 const SUB_ID = "dm";

@@ -60,7 +60,7 @@
 // cicchetto/src/lib/theme.ts MOBILE_QUERY = `(max-width: 768px)`.
 // Playwright's iPhone 15 device has viewport 393×852 → mobile branch.
 
-import { type Locator, type Page, expect } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import type { SeededUser } from "./grappaApi";
 
 const SHELL_READY_TIMEOUT_MS = 10_000;
@@ -218,9 +218,7 @@ export function sidebarWindow(page: Page, networkSlug: string, windowName: strin
     // (the slug attribute already disambiguates it from channel/query
     // tabs).
     if (isServerWindow) {
-      return section.locator(
-        `.bottom-bar-network-header[data-network-slug="${networkSlug}"]`,
-      );
+      return section.locator(`.bottom-bar-network-header[data-network-slug="${networkSlug}"]`);
     }
     // Channel + query tabs: exact match via data-window-name on the
     // `.bottom-bar-tab` button. Exclude the network-header tab
@@ -284,8 +282,7 @@ export function sidebarCloseButton(page: Page, networkSlug: string, windowName: 
     });
     // The tab + close are now flat siblings; locate the tab by text,
     // then walk to the next sibling close × via xpath following-sibling.
-    return section
-      .locator(`.bottom-bar-tab:has-text("${windowName}") + .bottom-bar-close`);
+    return section.locator(`.bottom-bar-tab:has-text("${windowName}") + .bottom-bar-close`);
   }
   return sidebarWindow(page, networkSlug, windowName).locator(".sidebar-close");
 }
@@ -635,9 +632,8 @@ export async function awaitServiceWorkerActive(page: Page): Promise<void> {
 export async function awaitServerBundleHashPush(page: Page): Promise<void> {
   await page.waitForFunction(
     () => {
-      const bh = (
-        window as unknown as { __cic_bundleHash?: { serverHash?: () => string | null } }
-      ).__cic_bundleHash;
+      const bh = (window as unknown as { __cic_bundleHash?: { serverHash?: () => string | null } })
+        .__cic_bundleHash;
       return bh?.serverHash?.() != null;
     },
     null,
@@ -661,10 +657,9 @@ export function scrollbackLines(page: Page) {
 // non-contiguous tokens must match, e.g. a presence line that now
 // carries an irssi-style `[user@host]` between the nick and the verb.
 export function scrollbackLine(page: Page, kind: string, bodyMatch: string | RegExp) {
-  return page.locator(
-    `[data-testid="scrollback-line"][data-kind="${kind}"]`,
-    { hasText: bodyMatch },
-  );
+  return page.locator(`[data-testid="scrollback-line"][data-kind="${kind}"]`, {
+    hasText: bodyMatch,
+  });
 }
 
 // #237 — the on-JOIN inline topic line. NOT a `scrollback-line` (it is a
@@ -947,10 +942,7 @@ export type SettingsSection =
 // (viewport-aware — it opens the rail drawer first on mobile), then the cog is
 // tapped. Re-navigating an already-open drawer is a no-op on the open step and
 // assumes it is on the main index.
-export async function openSettingsSection(
-  page: Page,
-  section: SettingsSection,
-): Promise<Locator> {
+export async function openSettingsSection(page: Page, section: SettingsSection): Promise<Locator> {
   if ((await page.locator(".settings-drawer.open").count()) === 0) {
     await openRailMenu(page);
     await page.getByTestId("action-cluster-cog").click();
@@ -1050,9 +1042,7 @@ export async function closeSettings(page: Page): Promise<void> {
 // click directly via DevTools — same end-state effect, no synthesis
 // race. Verified across UX-6-A scroll spec + UX-4-Z journey spec.
 export async function closeMembersDrawer(page: Page): Promise<void> {
-  await page
-    .locator(".shell-drawer-backdrop.open")
-    .click({ position: { x: 20, y: 200 } });
+  await page.locator(".shell-drawer-backdrop.open").click({ position: { x: 20, y: 200 } });
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
 }
 
@@ -1115,32 +1105,29 @@ export async function synthSwipe(
   page: Page,
   args: { startX: number; startY: number; endX: number; endY: number; slowMs: number },
 ): Promise<void> {
-  await page.evaluate(
-    async ({ startX, startY, endX, endY, slowMs }) => {
-      const ta = document.querySelector(".compose-box textarea");
-      if (!(ta instanceof HTMLTextAreaElement)) throw new Error("compose textarea not found");
-      const touch = (x: number, y: number) =>
-        new Touch({ identifier: 1, target: ta, clientX: x, clientY: y });
-      const fire = (type: "touchstart" | "touchmove" | "touchend", x: number, y: number) => {
-        const t = touch(x, y);
-        const ended = type === "touchend";
-        ta.dispatchEvent(
-          new TouchEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            touches: ended ? [] : [t],
-            targetTouches: ended ? [] : [t],
-            changedTouches: [t],
-          }),
-        );
-      };
-      fire("touchstart", startX, startY);
-      if (slowMs > 0) await new Promise((r) => setTimeout(r, slowMs));
-      fire("touchmove", endX, endY);
-      fire("touchend", endX, endY);
-    },
-    args,
-  );
+  await page.evaluate(async ({ startX, startY, endX, endY, slowMs }) => {
+    const ta = document.querySelector(".compose-box textarea");
+    if (!(ta instanceof HTMLTextAreaElement)) throw new Error("compose textarea not found");
+    const touch = (x: number, y: number) =>
+      new Touch({ identifier: 1, target: ta, clientX: x, clientY: y });
+    const fire = (type: "touchstart" | "touchmove" | "touchend", x: number, y: number) => {
+      const t = touch(x, y);
+      const ended = type === "touchend";
+      ta.dispatchEvent(
+        new TouchEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          touches: ended ? [] : [t],
+          targetTouches: ended ? [] : [t],
+          changedTouches: [t],
+        }),
+      );
+    };
+    fire("touchstart", startX, startY);
+    if (slowMs > 0) await new Promise((r) => setTimeout(r, slowMs));
+    fire("touchmove", endX, endY);
+    fire("touchend", endX, endY);
+  }, args);
 }
 
 // The compose caret + scroll geometry, read off the live element.

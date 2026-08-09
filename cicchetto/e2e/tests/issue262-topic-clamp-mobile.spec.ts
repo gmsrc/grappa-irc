@@ -25,12 +25,7 @@
 // it can set the topic before vjt joins); vjt PARTs it in `finally` and the
 // peer disconnects (dropping its membership → channel destroyed).
 
-import {
-  composeSend,
-  loginAs,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";

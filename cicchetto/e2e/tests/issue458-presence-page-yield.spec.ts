@@ -75,9 +75,7 @@ test("#458 — presence pref persists, cold-load respects it, and revealing refe
     await expect(toggle).toBeVisible({ timeout: 5_000 });
     const hidePut = page.waitForResponse(
       (r) =>
-        r.url().includes("/me/settings/display-prefs") &&
-        r.request().method() === "PUT" &&
-        r.ok(),
+        r.url().includes("/me/settings/display-prefs") && r.request().method() === "PUT" && r.ok(),
     );
     await toggle.click();
     await hidePut;

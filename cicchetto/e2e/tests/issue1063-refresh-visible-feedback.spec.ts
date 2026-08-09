@@ -33,14 +33,14 @@
 // booted. Nothing here sleeps, and nothing here may be "fixed" by sleeping.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
+import { snapshotBundle, swapToBootableBundleB } from "../fixtures/bundleSwap";
 import {
   awaitServerBundleHashPush,
   awaitServiceWorkerActive,
   loginAs,
 } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
-import { snapshotBundle, swapToBootableBundleB } from "../fixtures/bundleSwap";
+import { expect, test } from "../fixtures/test";
 
 // #119 — the refresh banner is a slot in the stacked error region.
 const BANNER_SELECTOR = '.error-banner[data-source="bundle-refresh"]';

@@ -35,7 +35,7 @@
 // engages and the real iOS height path (`body { height: calc(var(--vh) *
 // 100) }`) is exercised.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { resetSubject } from "../fixtures/grappaApi";
 import {

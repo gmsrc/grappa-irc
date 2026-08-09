@@ -11,9 +11,13 @@
 // run. The banner's job is to render the bootBundleHash != serverHash
 // invariant, which this spec validates end-to-end.
 
-import { expect, test } from "../fixtures/test";
-import { loginAs, awaitServiceWorkerActive, awaitServerBundleHashPush } from "../fixtures/cicchettoPage";
+import {
+  awaitServerBundleHashPush,
+  awaitServiceWorkerActive,
+  loginAs,
+} from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // #119 — the bundle-refresh banner folded into the unified stacked error
 // region as one typed source; it renders as a `.error-banner` slot with
@@ -270,13 +274,17 @@ test("UX-6-I — refresh button forces SW update + cache purge before reload", a
 
     // Stub caches API to record deletion calls.
     if ("caches" in window) {
-      (window.caches as CacheStorage & {
-        keys: () => Promise<string[]>;
-        delete: (key: string) => Promise<boolean>;
-      }).keys = async () => ["workbox-precache-v2-https://test/", "workbox-runtime"];
-      (window.caches as CacheStorage & {
-        delete: (key: string) => Promise<boolean>;
-      }).delete = async (key: string) => {
+      (
+        window.caches as CacheStorage & {
+          keys: () => Promise<string[]>;
+          delete: (key: string) => Promise<boolean>;
+        }
+      ).keys = async () => ["workbox-precache-v2-https://test/", "workbox-runtime"];
+      (
+        window.caches as CacheStorage & {
+          delete: (key: string) => Promise<boolean>;
+        }
+      ).delete = async (key: string) => {
         probe.cacheDeletes.push(key);
         return true;
       };
@@ -315,14 +323,16 @@ test("UX-6-I — refresh button forces SW update + cache purge before reload", a
   );
 
   const probe = await page.evaluate(() => {
-    return (window as Window & {
-      __ux6i_probe?: {
-        updateCalls: number;
-        waitingSkipCalls: number;
-        cacheDeletes: string[];
-        reloaded: boolean;
-      };
-    }).__ux6i_probe;
+    return (
+      window as Window & {
+        __ux6i_probe?: {
+          updateCalls: number;
+          waitingSkipCalls: number;
+          cacheDeletes: string[];
+          reloaded: boolean;
+        };
+      }
+    ).__ux6i_probe;
   });
 
   expect(probe?.reloaded).toBe(true);

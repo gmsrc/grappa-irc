@@ -25,7 +25,6 @@
 // not exercised here (the integration stack has no real push vendor, so
 // the SW never receives a real PushEvent).
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
@@ -39,6 +38,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "fg-suppressor";
 const SUB_ID = "foreground-suppression";

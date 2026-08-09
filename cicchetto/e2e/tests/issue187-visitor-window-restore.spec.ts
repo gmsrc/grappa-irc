@@ -22,15 +22,16 @@
 // GREEN post-fix: the restore arm re-selects #r187 → the row is `.selected`.
 
 import type { Browser } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
-import { expectShellReady,
+import {
   composeSend,
+  expectShellReady,
   selectChannel,
   sidebarWindow,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Boot cic straight into Shell as a freshly-minted visitor (no captcha/anon
 // dance) — identical seeding to issue148/issue153/issue154.

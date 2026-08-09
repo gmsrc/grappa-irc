@@ -23,13 +23,13 @@
 // this rides the scroll-spec precedent (issue168, contamination, cp14-b1),
 // which assert scroll geometry only.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]!;
+const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 
 async function distFromBottom(page: Page): Promise<number | null> {

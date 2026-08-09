@@ -19,7 +19,6 @@
 // dogfood pass (flagged to orch), but this spec deterministically proves
 // the handler WIRING: an empty-compose up-flick now reaches recallPrev.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -28,6 +27,7 @@ import {
   synthSwipe,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

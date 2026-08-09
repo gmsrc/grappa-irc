@@ -17,10 +17,10 @@
 // Playwright e2e — vitest jsdom can't follow the multipart → IRC-echo
 // chain twice in sequence.
 
-import { expect, test } from "../fixtures/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -52,9 +52,7 @@ test("uploads-3 #118 — multi-file picker uploads ALL files sequentially → tw
   // minting its own bytes-access slug.
   const texts = await rows.allTextContents();
   const slugs = new Set(
-    texts.flatMap((t) =>
-      Array.from(t.matchAll(/\/uploads\/([a-z2-7]{26})/g)).map((m) => m[1]),
-    ),
+    texts.flatMap((t) => Array.from(t.matchAll(/\/uploads\/([a-z2-7]{26})/g)).map((m) => m[1])),
   );
   expect(slugs.size).toBeGreaterThanOrEqual(2);
 });

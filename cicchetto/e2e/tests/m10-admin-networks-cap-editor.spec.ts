@@ -55,9 +55,7 @@ test("M-10 admin Networks tab lists seeded network rows", async ({ page }) => {
   // `feedback_seed_expansion_audit`: a hardcoded seed count is fragile
   // to seed growth; the two named rows are the real intent).
   const rows = page.locator("[data-testid^='admin-network-row-']");
-  await expect
-    .poll(async () => await rows.count(), { timeout: 15_000 })
-    .toBeGreaterThanOrEqual(2);
+  await expect.poll(async () => await rows.count(), { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
   await expect(page.getByTestId("admin-network-row-bahamut-test")).toBeVisible();
   await expect(page.getByTestId("admin-network-row-azzurra")).toBeVisible();
 });

@@ -18,10 +18,10 @@
 // engine computes. The vitest unit tests pin the parser; this pins the
 // rendered visual on the quit line.
 
-import { test, expect } from "../fixtures/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 

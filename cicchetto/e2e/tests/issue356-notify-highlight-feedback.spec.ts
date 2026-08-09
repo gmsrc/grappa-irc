@@ -20,10 +20,16 @@
 // parameterize (the parity-matrix rule applies only to subject-shaped
 // surfaces). The deep presence protocol arm lives in issue247-notify-watch.
 
-import { openSettingsDrawer, composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { expect, test } from "../fixtures/test";
+import {
+  composeSend,
+  composeTextarea,
+  loginAs,
+  openSettingsDrawer,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i356-watched";
@@ -96,7 +102,10 @@ test("#356 — bare /notify and bare /hilight open the watch-lists section; home
   await expect(subpage).toHaveCount(0);
 
   // Home no longer shows the standalone watched list (moved to settings).
-  await page.locator(".sidebar-channel-name").filter({ hasText: /^Home$/ }).click();
+  await page
+    .locator(".sidebar-channel-name")
+    .filter({ hasText: /^Home$/ })
+    .click();
   await expect(page.locator(".watched-panel")).toHaveCount(0);
   await expect(page.getByTestId(`watched-panel-${NETWORK_SLUG}`)).toHaveCount(0);
 });

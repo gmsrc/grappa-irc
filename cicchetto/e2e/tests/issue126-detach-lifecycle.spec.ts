@@ -30,14 +30,13 @@
 // specs. The afterEach reconnects vjt's network defensively (a pre-#126
 // RED run of this spec would tear the seeded session down).
 
-import { test, expect } from "../fixtures/test";
-import { openRailMenu, loginAs } from "../fixtures/cicchettoPage";
+import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import {
-  reapVisitors,
   GRAPPA_BASE_URL,
   login,
   mintVisitor,
   patchNetworkConnectionState,
+  reapVisitors,
 } from "../fixtures/grappaApi";
 import {
   AUTOJOIN_CHANNELS,
@@ -46,6 +45,7 @@ import {
   VJT_IDENTIFIER,
   VJT_PASSWORD,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 

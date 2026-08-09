@@ -27,10 +27,10 @@
 // Reuses the m8-admin-visitors-delete scaffold (mint a throwaway visitor
 // via REST, log in as the seeded admin, open AdminPane → Visitors tab).
 
-import { expect, test } from "../fixtures/test";
 import { openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("admin Visitors tab: per-network cell is separated + delete button stays in its row", async ({
   page,

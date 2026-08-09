@@ -29,8 +29,7 @@
 // Harness mirrors issue580 (DB-seeded 200-row #bofh; tiny 800×300 viewport so
 // the buffer overflows and scroll geometry is measurable).
 
-import { test, expect } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
@@ -40,6 +39,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -120,7 +120,12 @@ async function installScrollProbe(page: Page, windowMs: number): Promise<void> {
           return desc.get?.call(this);
         },
         set(v: number) {
-          w.__i625writes.push({ t: Math.round(now()), kind: "scrollTop=", detail: String(Math.round(v)), before: Math.round(getTop()) });
+          w.__i625writes.push({
+            t: Math.round(now()),
+            kind: "scrollTop=",
+            detail: String(Math.round(v)),
+            before: Math.round(getTop()),
+          });
           desc.set?.call(this, v);
         },
       });
@@ -129,13 +134,23 @@ async function installScrollProbe(page: Page, windowMs: number): Promise<void> {
     const rawSIV = Element.prototype.scrollIntoView;
     Element.prototype.scrollIntoView = function (arg?: boolean | ScrollIntoViewOptions) {
       if (this === el || el.contains(this as Node)) {
-        w.__i625writes.push({ t: Math.round(now()), kind: "scrollIntoView", detail: JSON.stringify(arg ?? null), before: Math.round(getTop()) });
+        w.__i625writes.push({
+          t: Math.round(now()),
+          kind: "scrollIntoView",
+          detail: JSON.stringify(arg ?? null),
+          before: Math.round(getTop()),
+        });
       }
       return rawSIV.call(this, arg as ScrollIntoViewOptions);
     };
 
     const sample = () => {
-      w.__i625samples.push({ t: Math.round(now()), top: Math.round(getTop()), height: el.scrollHeight, client: el.clientHeight });
+      w.__i625samples.push({
+        t: Math.round(now()),
+        top: Math.round(getTop()),
+        height: el.scrollHeight,
+        client: el.clientHeight,
+      });
     };
     sample();
     el.addEventListener("scroll", sample, { passive: true });
@@ -150,7 +165,10 @@ async function installScrollProbe(page: Page, windowMs: number): Promise<void> {
 // On failure this dump is the whole story: `writes` names every container scroll
 // write + its timestamp (the delayed double-scroll shows as a second entry ~0.5s
 // in), `topChanges` is the compressed scrollTop timeline.
-async function dumpEvidence(page: Page, tag: string): Promise<{ samples: Sample[]; writes: WriteEvent[] }> {
+async function dumpEvidence(
+  page: Page,
+  tag: string,
+): Promise<{ samples: Sample[]; writes: WriteEvent[] }> {
   const samples = await page.evaluate(
     () => (window as unknown as { __i625samples: Sample[] }).__i625samples,
   );
@@ -214,9 +232,15 @@ test.describe("issue #625 — a single send must not jump the pane up before set
     // #625 CORE — no DELAYED second scroll write. A single send performs ONE
     // tail-follow; the regression's redundant follow-on poll fires its fail-safe
     // scroll ~0.5s later. RED on main; GREEN once that write is suppressed.
-    expect(writes.length, `expected the send's tail-follow write; writes=${JSON.stringify(writes)}`).toBeGreaterThanOrEqual(1);
+    expect(
+      writes.length,
+      `expected the send's tail-follow write; writes=${JSON.stringify(writes)}`,
+    ).toBeGreaterThanOrEqual(1);
     const late = delayedWrites(writes);
-    expect(late, `delayed scroll write(s) after the send's tail-follow: ${JSON.stringify(writes)}`).toEqual([]);
+    expect(
+      late,
+      `delayed scroll write(s) after the send's tail-follow: ${JSON.stringify(writes)}`,
+    ).toEqual([]);
 
     // Visible-symptom guard: following a send, the pane never travels UP.
     const maxDist = Math.max(...samples.map(distOf));
@@ -265,9 +289,15 @@ test.describe("issue #625 — a single send must not jump the pane up before set
     // #625 CORE — same invariant as the at-tail case: a single send must not fire
     // a DELAYED second scroll write. (Here the follow-on rows change is the marker
     // collapse, which cannot settle and hits the fail-safe.)
-    expect(writes.length, `expected the send's tail-follow write; writes=${JSON.stringify(writes)}`).toBeGreaterThanOrEqual(1);
+    expect(
+      writes.length,
+      `expected the send's tail-follow write; writes=${JSON.stringify(writes)}`,
+    ).toBeGreaterThanOrEqual(1);
     const late = delayedWrites(writes);
-    expect(late, `delayed scroll write(s) after the send's tail-follow: ${JSON.stringify(writes)}`).toEqual([]);
+    expect(
+      late,
+      `delayed scroll write(s) after the send's tail-follow: ${JSON.stringify(writes)}`,
+    ).toEqual([]);
 
     // #608: a send follows the tail unconditionally → the pane reaches the bottom.
     // Once there, it STAYS (a delayed writer would drag it back UP).

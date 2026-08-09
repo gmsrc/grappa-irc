@@ -122,9 +122,7 @@ test("#219-general (regression guard) — message-follow is untouched: at the ta
     await page.waitForTimeout(300);
 
     // The pane followed to the bottom (the new line is at the tail).
-    const followed = await sc.evaluate(
-      (el) => el.scrollHeight - el.scrollTop - el.clientHeight,
-    );
+    const followed = await sc.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
     expect(followed).toBeLessThanOrEqual(50);
   } finally {
     await peer.disconnect("#219-general follow done");

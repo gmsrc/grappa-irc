@@ -21,9 +21,9 @@
 // until the first `"overview"` push lands, so `toBeVisible()` waits on the
 // arrival of real server data rather than on a timer.
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // admin-vjt has no network bind, so `loginAs`'s network-section shell-ready
 // selector would time out. Same shape as m7-admin-gate / m11-admin-events.

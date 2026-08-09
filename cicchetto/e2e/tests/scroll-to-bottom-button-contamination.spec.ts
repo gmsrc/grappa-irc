@@ -33,13 +33,13 @@
 // a proof the fix addresses the prod report — that needs a real iOS
 // device. Kept @webkit-only since the bug is iOS-shaped.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { composeSend, loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
-import { expect, test } from "../fixtures/test";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]!;
+const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 const EMPTY_QUERY_PEER = "no-dm-peer-btn";
 
@@ -67,13 +67,17 @@ test.beforeEach(async () => {
 });
 
 test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands at bottom", () => {
-  test("@webkit tap scroll-to-bottom, bounce to empty query and back, lands at bottom", async ({ page }) => {
+  test("@webkit tap scroll-to-bottom, bounce to empty query and back, lands at bottom", async ({
+    page,
+  }) => {
     const vjt = getSeededVjt();
     await loginAs(page, vjt);
 
     // Focus #bofh, confirm the first REST page is in.
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
-    await expect.poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(50);
+    await expect
+      .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
+      .toBeGreaterThanOrEqual(50);
 
     // Open an empty query (the "other" window) so it exists to switch to,
     // then return to #bofh. Done up front so the loadMore + tap below all
@@ -82,9 +86,9 @@ test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands
     await composeSend(page, `/query ${EMPTY_QUERY_PEER}`);
     await expect(page.locator(".scrollback-empty")).toBeVisible({ timeout: 5_000 });
     await selectChannel(page, NETWORK_SLUG, CHANNEL);
-    await expect.poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 }).toBeLessThanOrEqual(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 })
+      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // Exhaust loadMore: scroll to top until the row count stops growing —
     // "load 5-6 pages of history". Leaves the pane near the top, so the
@@ -111,7 +115,9 @@ test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands
     // the channel tab are tapped directly (mobile tablist).
     await selectChannel(page, NETWORK_SLUG, EMPTY_QUERY_PEER);
     await selectChannel(page, NETWORK_SLUG, CHANNEL);
-    await expect.poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(50);
+    await expect
+      .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
+      .toBeGreaterThanOrEqual(50);
 
     // Contract: #bofh lands at the bottom after the roundtrip — NOT blank.
     await expect

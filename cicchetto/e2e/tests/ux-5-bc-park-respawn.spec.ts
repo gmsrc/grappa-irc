@@ -41,9 +41,9 @@
 // where /connect succeeds at the HTTP boundary but the spawn dance
 // half-completes (Session.Server up, autojoin loop silently failing).
 
-import { expect, test } from "../fixtures/test";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { patchNetworkConnectionState } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -91,9 +91,7 @@ async function patchConnectionWithClientId(
   });
 }
 
-async function fetchChannels(
-  token: string,
-): Promise<Array<{ name: string; joined: boolean }>> {
+async function fetchChannels(token: string): Promise<Array<{ name: string; joined: boolean }>> {
   const res = await fetch(`${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/channels`, {
     headers: { authorization: `Bearer ${token}` },
   });
@@ -101,10 +99,7 @@ async function fetchChannels(
   return (await res.json()) as Array<{ name: string; joined: boolean }>;
 }
 
-async function fetchChannelMembers(
-  token: string,
-  channel: string,
-): Promise<string[]> {
+async function fetchChannelMembers(token: string, channel: string): Promise<string[]> {
   const res = await fetch(
     `${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/channels/${encodeURIComponent(channel)}/members`,
     {
@@ -148,11 +143,7 @@ test("UX-5 BC — park then /connect from the same source IP succeeds (self-excl
   // → /connect 200s. The tight-cap load-bearing case is unit-covered
   // (networks_controller_test UX-5 BC); this proves the gated /connect
   // path admits the returning subject end-to-end.
-  const bearer = await loginWithClientId(
-    vjt.identifier,
-    vjt.password,
-    BUCKET_BC_CLIENT_ID,
-  );
+  const bearer = await loginWithClientId(vjt.identifier, vjt.password, BUCKET_BC_CLIENT_ID);
 
   // Step 1 — park (T32 X-button equivalent). The DB row flips to
   // :parked, Session.Server terminates. accounts_session stays alive

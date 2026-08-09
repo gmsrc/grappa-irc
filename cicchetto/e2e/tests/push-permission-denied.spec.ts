@@ -20,10 +20,10 @@
 // copy + a separate spec if/when it earns regression coverage. The
 // current B5 plan calls out the denied path specifically.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openSettingsSection, sidebarWindow } from "../fixtures/cicchettoPage";
 import { resetPushSubscriptions, stubPushManagerDenied } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("push permission denied — toggle stays OFF, banner explains", async ({ page, context }) => {
   const vjt = getSeededVjt();

@@ -27,10 +27,10 @@
 // text-selection-restored.spec.ts's @webkit half. Real-device dogfood remains
 // the final iOS verification (vjt post-ship).
 
-import { expect, test } from "../fixtures/test";
 import { openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test.setTimeout(60_000);
 

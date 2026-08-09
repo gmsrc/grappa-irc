@@ -23,15 +23,10 @@
 // CHANNEL CLEANUP: random per-run suffix; afterEach has the peer PART
 // the channel + cic operator never joined so no autojoin row exists.
 
-import { test, expect } from "../fixtures/test";
-import {
-  composeSend,
-  loginAs,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#cp15-b6-i-${crypto.randomUUID().slice(0, 8)}`;

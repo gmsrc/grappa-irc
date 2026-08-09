@@ -18,9 +18,9 @@
 // and test/grappa/session/event_router_test.exs. The parser + compose plumbing
 // is unit-tested in cicchetto/src/__tests__/{slashCommands,compose}.test.ts.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

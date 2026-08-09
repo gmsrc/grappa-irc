@@ -23,8 +23,8 @@
 // visitor-multinet path, so it is stable regardless of the visitor
 // accretion-connect timing.
 
-import { expect, test } from "../fixtures/test";
 import { IrcPeer } from "../fixtures/ircClient";
+import { expect, test } from "../fixtures/test";
 
 // The solanum node carries the `bahamut-test2` docker-network alias (#221
 // kept it so the azzurra2 seed resolves unchanged) — the SECOND network's
@@ -62,9 +62,7 @@ test("#221 — solanum answers a mask WHO with 352 channel='*' + 315 echoing the
 
     // Poll the captured lines for the 315 terminator (always emitted, even
     // on zero matches — m_who.c:294), then assert the shape.
-    await expect
-      .poll(() => lines.some((l) => / 315 /.test(l)), { timeout: 10_000 })
-      .toBe(true);
+    await expect.poll(() => lines.some((l) => / 315 /.test(l)), { timeout: 10_000 }).toBe(true);
 
     const reply352 = lines.find((l) => / 352 /.test(l));
     const reply315 = lines.find((l) => / 315 /.test(l));

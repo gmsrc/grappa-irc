@@ -18,15 +18,10 @@
 // mirroring issue100-reconnecting-badge, so the next spec on the shared
 // testnet inherits a live session.
 
-import { test, expect } from "../fixtures/test";
-import { IrcPeer } from "../fixtures/ircClient";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
 import { GRAPPA_BASE_URL, patchNetworkConnectionState } from "../fixtures/grappaApi";
+import { IrcPeer } from "../fixtures/ircClient";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const OPER_NAME = "testoper";
 const OPER_PASS = "testoperpass";
@@ -37,9 +32,7 @@ const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 // margin. Same budget as the sibling park/reconnect specs.
 test.setTimeout(90_000);
 
-async function networkState(
-  token: string,
-): Promise<{ state: string; reason: string | null }> {
+async function networkState(token: string): Promise<{ state: string; reason: string | null }> {
   const res = await fetch(`${GRAPPA_BASE_URL}/networks`, {
     headers: { authorization: `Bearer ${token}` },
   });

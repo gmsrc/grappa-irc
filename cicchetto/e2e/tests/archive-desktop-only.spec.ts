@@ -24,7 +24,6 @@
 // uses `devices["Desktop Chrome"]` (1280×720 viewport, well above the
 // (max-width: 768px) mobile breakpoint).
 
-import { expect, test } from "../fixtures/test";
 import {
   expandArchiveGroup,
   loginAs,
@@ -35,6 +34,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -86,9 +86,7 @@ test("desktop — rail archive button is present across every window kind and op
   await expect(modal.locator("#archive-modal-title")).toHaveText("Archive");
 });
 
-test("desktop — archive modal rows inherit the canonical monospace style", async ({
-  page,
-}) => {
+test("desktop — archive modal rows inherit the canonical monospace style", async ({ page }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 

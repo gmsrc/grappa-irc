@@ -32,16 +32,17 @@
 // which the testnet already carries.
 
 import type { Browser } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
-import { expectShellReady,
+import {
   composeSend,
   composeTextarea,
+  expectShellReady,
   scrollbackLine,
   selectChannel,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Boot cic straight into Shell as a freshly-minted visitor (no captcha/anon
 // dance) — identical seeding to issue148/issue153.
@@ -143,9 +144,9 @@ test("issue #154(2) — an own-nick /umode renders a 'sets user mode' row in $se
     // VISIBLE outcome: a `data-kind="mode"` row rendered as "sets user mode"
     // (own-nick form — no "on <channel>" suffix). RED pre-fix (nothing lands),
     // GREEN post-fix.
-    await expect(
-      scrollbackLine(page, "mode", /sets user mode/i).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(scrollbackLine(page, "mode", /sets user mode/i).first()).toBeVisible({
+      timeout: 15_000,
+    });
   } finally {
     await ctx.close();
     await reapVisitors(admin.token, visitor.id);

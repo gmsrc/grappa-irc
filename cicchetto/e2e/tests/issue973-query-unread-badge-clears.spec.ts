@@ -30,7 +30,6 @@
 // authoritative 001 (#604), so every locator below is derived from the nick
 // the server actually registered, never from the constant we asked for.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   selectChannel,
@@ -40,6 +39,7 @@ import {
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "Server";

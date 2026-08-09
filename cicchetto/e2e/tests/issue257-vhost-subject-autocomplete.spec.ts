@@ -15,10 +15,10 @@
 // autocomplete lands a grant whose subject_id is the visitor UUID, not the
 // typed nick — is the value proof.
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 async function adminLogin(
   page: import("@playwright/test").Page,
@@ -100,9 +100,7 @@ test("#257 — picking a visitor from the grant autocomplete stores its stable i
     // displaying "network - nickname".
     await input.fill(visitor.nick);
 
-    const option = page.getByTestId(
-      `subject-autocomplete-option-${vhostId}-visitor-${visitor.id}`,
-    );
+    const option = page.getByTestId(`subject-autocomplete-option-${vhostId}-visitor-${visitor.id}`);
     await expect(option).toBeVisible({ timeout: 10_000 });
     await expect(option).toContainText(`${visitor.network_slug} - ${visitor.nick}`);
 

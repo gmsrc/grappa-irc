@@ -26,7 +26,12 @@
 // user, so the rebuilt socket authenticates as the identical identity.
 
 import type { Page } from "@playwright/test";
-import { composeSend, loginAs, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  loginAs,
+  selectChannel,
+  waitForUserTopicReady,
+} from "../fixtures/cicchettoPage";
 import { login } from "../fixtures/grappaApi";
 import {
   AUTOJOIN_CHANNELS,
@@ -68,8 +73,9 @@ test("#364 — user-topic events + push verbs survive a token rotation with unch
   // subject+network in the registry), then rotate to it in-context.
   const rotated = await login(VJT_IDENTIFIER, VJT_PASSWORD);
   await page.evaluate((tok) => {
-    (window as unknown as { __cic_setTokenForTests?: (t: string | null) => void })
-      .__cic_setTokenForTests?.(tok);
+    (
+      window as unknown as { __cic_setTokenForTests?: (t: string | null) => void }
+    ).__cic_setTokenForTests?.(tok);
   }, rotated.token);
 
   // Rotation-aware gate: userTopic clears the ready stamp on the

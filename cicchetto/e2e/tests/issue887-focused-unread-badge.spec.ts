@@ -23,7 +23,6 @@
 // the right shape.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
 import {
   fetchAllMessagesAsc,
@@ -32,6 +31,7 @@ import {
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "badge887-buddy";
@@ -170,9 +170,9 @@ test.describe("#887 focused-window unread badge", () => {
       peer.privmsg(CHANNEL, body);
 
       // The row lands and the pane tail-follows it into view.
-      await expect(
-        page.locator('[data-testid="scrollback-line"]', { hasText: body }),
-      ).toBeVisible({ timeout: 10_000 });
+      await expect(page.locator('[data-testid="scrollback-line"]', { hasText: body })).toBeVisible({
+        timeout: 10_000,
+      });
 
       // …and settles back to no badge, with the operator having touched
       // nothing. Without the read-at-the-tail arm this sticks at 1 forever:

@@ -17,10 +17,10 @@
 // Seeding: featured channels added via the admin REST path, removed in
 // `finally`. Network id resolved by slug from GET /admin/networks.
 
-import { test, expect } from "../fixtures/test";
 import { expectShellReady } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Unique per run: avoids featured-list bleed across retries / parallel
 // runs on the shared seeded network. crypto.randomUUID() is available in
@@ -38,11 +38,7 @@ async function resolveNetworkId(adminToken: string, slug: string): Promise<numbe
   return row.id;
 }
 
-async function addFeatured(
-  adminToken: string,
-  networkId: number,
-  name: string,
-): Promise<number> {
+async function addFeatured(adminToken: string, networkId: number, name: string): Promise<number> {
   const res = await fetch(`${GRAPPA_BASE_URL}/admin/networks/${networkId}/featured_channels`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${adminToken}` },
@@ -58,10 +54,10 @@ async function deleteFeaturedBestEffort(
   featuredId: number,
 ): Promise<void> {
   try {
-    await fetch(
-      `${GRAPPA_BASE_URL}/admin/networks/${networkId}/featured_channels/${featuredId}`,
-      { method: "DELETE", headers: { authorization: `Bearer ${adminToken}` } },
-    );
+    await fetch(`${GRAPPA_BASE_URL}/admin/networks/${networkId}/featured_channels/${featuredId}`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${adminToken}` },
+    });
   } catch {
     // best-effort teardown
   }

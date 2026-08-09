@@ -16,7 +16,6 @@
 // and routes to kind=:action. The body persisted in scrollback is the
 // inner text (no \x01 envelope on the rendered side).
 
-import { test, expect } from "../fixtures/test";
 import {
   composeTextarea,
   loginAs,
@@ -27,6 +26,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "m10-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

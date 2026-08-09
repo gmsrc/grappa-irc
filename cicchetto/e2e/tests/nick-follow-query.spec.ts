@@ -23,7 +23,6 @@
 // subject-agnostic, so one user-class spec suffices). No `@webkit` tag →
 // desktop/chromium project only, so the `.shell-sidebar` selector applies.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -34,6 +33,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Real grappa session (not a seed-per-spec DB) — unique suffixes so retries
 // / sibling specs don't strict-mode-collide on persisted scrollback or on a
@@ -133,9 +133,7 @@ test("query window follows a peer NICK change — relabels, keeps history, route
     // The send is the wait's trigger (#806): the peer is listening before
     // it fires, and the delivery budget starts once it has fired — the
     // round trip inside `composeSend` is not charged to delivery.
-    await peer.waitForPrivmsg(NETWORK_NICK, FOLLOWUP_BODY, () =>
-      composeSend(page, FOLLOWUP_BODY),
-    ); // fails with cause SILENCE if grappa still routed to the stale nick
+    await peer.waitForPrivmsg(NETWORK_NICK, FOLLOWUP_BODY, () => composeSend(page, FOLLOWUP_BODY)); // fails with cause SILENCE if grappa still routed to the stale nick
     await expect(
       page.locator('[data-testid="scrollback-line"]', { hasText: FOLLOWUP_BODY }),
     ).toBeVisible({ timeout: 5_000 });

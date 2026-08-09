@@ -29,10 +29,14 @@
 // renders regardless of whether the e2e testnet seeds a vhost inventory.
 
 import type { Browser, Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
-import { openSettingsDrawer, expectShellReady, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import {
+  expectShellReady,
+  openSettingsDrawer,
+  waitForUserTopicReady,
+} from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const ANCHOR = "azzurra";
 

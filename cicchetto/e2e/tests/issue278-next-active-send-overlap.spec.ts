@@ -41,9 +41,14 @@
 // mounts a compose box), so the channel accrues unread while we have a
 // compose box to focus; the peer disconnects in `finally`.
 
-import { composeTextarea, loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
-import { IrcPeer } from "../fixtures/ircClient";
+import {
+  composeTextarea,
+  loginAs,
+  selectChannel,
+  sidebarMessageBadge,
+} from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
+import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -153,7 +158,10 @@ test("#278 @webkit — with the keyboard open the next-active circle does not ov
       const vp = page.viewportSize();
       expect(vp, "viewport size must be known").not.toBeNull();
       if (vp) {
-        expect(na.y, `next-active top ${na.y.toFixed(0)} must be ≥ 0 (on-screen)`).toBeGreaterThanOrEqual(0);
+        expect(
+          na.y,
+          `next-active top ${na.y.toFixed(0)} must be ≥ 0 (on-screen)`,
+        ).toBeGreaterThanOrEqual(0);
         expect(
           na.y + na.height,
           `next-active bottom ${(na.y + na.height).toFixed(0)} must be ≤ viewport height ${vp.height}`,

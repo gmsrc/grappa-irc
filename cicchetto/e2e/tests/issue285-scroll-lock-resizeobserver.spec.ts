@@ -35,7 +35,7 @@
 // engages and the real iOS height path drives `.scrollback`'s clientHeight —
 // mirrors issue245-scroll-remeasure-on-resize.spec.ts (its direct sibling).
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { resetSubject } from "../fixtures/grappaApi";
 import {

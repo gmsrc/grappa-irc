@@ -26,10 +26,10 @@
 // behaviour iOS exhibits.
 
 import type { BrowserContext } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import { resetPushCatcher, resetPushSubscriptions } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const ENDPOINT_A = "https://push.example/e2e/resub-A";
 const ENDPOINT_B = "https://push.example/e2e/resub-B";
@@ -160,7 +160,5 @@ test("silent drop → controllerchange re-subscribes with supersedes; device lis
   expect(body.supersedes).toBe(ENDPOINT_A);
 
   // Server superseded the ghost: exactly ONE device remains (B), not two.
-  await expect
-    .poll(async () => listDeviceCount(vjt.token), { timeout: 5_000 })
-    .toBe(1);
+  await expect.poll(async () => listDeviceCount(vjt.token), { timeout: 5_000 }).toBe(1);
 });

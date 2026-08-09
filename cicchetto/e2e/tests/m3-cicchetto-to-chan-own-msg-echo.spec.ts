@@ -19,7 +19,6 @@
 // webkit-paint shaped specs (BUG7's territory) come in a second pass
 // once chromium is green across the matrix.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -29,6 +28,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = "M3: cicchetto-driven outbound";

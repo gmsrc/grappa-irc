@@ -32,9 +32,9 @@
 // the column reads well under a thumb, and whether a short device scrolls it
 // comfortably, are vjt's device-verify calls.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — vjt's seeded autojoin channel
 

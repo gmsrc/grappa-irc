@@ -34,7 +34,6 @@
 // this proves DOM + layout wiring at that viewport, not iOS gesture
 // behaviour.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   inviteBanner,
@@ -46,6 +45,7 @@ import {
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Per-run-unique names — bahamut holds a ghosted nick + lingering channel
 // state for a window after disconnect, so literals collide on rapid
@@ -128,5 +128,4 @@ test("@webkit #902 — an inbound INVITE reaches a phone via the banner, not the
   // Joined ⇒ the window left `:invited` ⇒ the registry stops deriving the
   // entry. Nothing dismissed it.
   await expect(banner).toHaveCount(0, { timeout: 10_000 });
-
 });

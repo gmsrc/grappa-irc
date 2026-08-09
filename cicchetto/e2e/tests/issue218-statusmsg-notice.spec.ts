@@ -24,11 +24,17 @@
 // Pre-fix, step 5's server-side assertion would TIME OUT: the row
 // persisted to a query window keyed on the peer's nick, never `#chan`.
 
-import { expect, test } from "../fixtures/test";
-import { composeSend, loginAs, scrollbackLine, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  loginAs,
+  scrollbackLine,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Fresh per-run channel so the founder-op + autojoin side-effects don't
 // pollute other specs (mirrors issue16 / cp15-b6). Lowercased — grappa

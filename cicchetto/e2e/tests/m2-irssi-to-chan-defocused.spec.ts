@@ -15,20 +15,11 @@
 // re-trigger the JOIN-self auto-focus path and confuse the focus
 // invariant we want to assert against.
 
-import { test, expect } from "../fixtures/test";
-import {
-  loginAs,
-  selectChannel,
-  sidebarMessageBadge,
-} from "../fixtures/cicchettoPage";
+import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "m2-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

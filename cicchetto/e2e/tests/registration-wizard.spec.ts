@@ -96,10 +96,7 @@ function networksJson() {
 // through to the real nginx-test via route.continue(); every API path is
 // answered locally so no request reaches a real grappa/IRC backend. The
 // NickServ `messages` POST is captured into `sent` for the body-spy.
-async function stubRest(
-  page: import("@playwright/test").Page,
-  sent: SentMessage[],
-): Promise<void> {
+async function stubRest(page: import("@playwright/test").Page, sent: SentMessage[]): Promise<void> {
   await page.route("**/*", async (route) => {
     const req = route.request();
     const { pathname } = new URL(req.url());
@@ -120,7 +117,10 @@ async function stubRest(
       return;
     }
     if (pathname === "/networks" && req.method() === "GET") {
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify(networksJson()) });
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(networksJson()),
+      });
       return;
     }
     // Per-network channel list — none needed for the home pane assertions.
@@ -218,10 +218,7 @@ async function boot(page: import("@playwright/test").Page): Promise<void> {
   await page.addInitScript(
     ([name]) => {
       localStorage.setItem("grappa-token", "faked-token");
-      localStorage.setItem(
-        "grappa-subject",
-        JSON.stringify({ kind: "user", id: "u1", name }),
-      );
+      localStorage.setItem("grappa-subject", JSON.stringify({ kind: "user", id: "u1", name }));
       localStorage.setItem("cic.installChoice", "browser");
     },
     [USER_NAME] as const,
@@ -301,8 +298,9 @@ test.describe("#349 registration wizard (faked, fast lane)", () => {
     // to a joined channel (Phoenix.PubSub doesn't replay to late joiners).
     await page.waitForFunction(
       (u) =>
-        (window as unknown as { __cic_userTopicReady?: Set<string> }).__cic_userTopicReady?.has(u) ??
-        false,
+        (window as unknown as { __cic_userTopicReady?: Set<string> }).__cic_userTopicReady?.has(
+          u,
+        ) ?? false,
       USER_NAME,
     );
 

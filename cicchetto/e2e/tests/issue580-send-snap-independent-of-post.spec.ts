@@ -50,8 +50,7 @@
 // measurable; mid-page cursor so cold-mount lands on the marker, above the
 // fold).
 
-import { test, expect } from "../fixtures/test";
-import { type Locator, type Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import {
   composeTextarea,
   loginAs,
@@ -61,6 +60,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -81,10 +81,7 @@ async function distanceToBottom(page: Page): Promise<number> {
 
 // Latest REST page in wire shape (DESC by server_time) — used to pick a known
 // message id for the mid-page cursor seed (mirror of issue168).
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number }>> {
+async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
   const url = `http://grappa-test:4000/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;
@@ -200,9 +197,9 @@ test.describe("issue #580 — own send snaps to the bottom independent of the PO
     // The pane snapped to the BOTTOM at submit time — NOT hostage to the POST.
     // RED pre-fix: the snap sat after the throwing await, so the view stayed
     // parked on the marker and distance-to-tail stayed above threshold.
-    await expect.poll(async () => await distanceToBottom(page)).toBeLessThanOrEqual(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => await distanceToBottom(page))
+      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
     await expect(sentLine).toBeInViewport();
   });
 
@@ -217,9 +214,9 @@ test.describe("issue #580 — own send snaps to the bottom independent of the PO
     const sentLine = await sendAndAwaitEcho(page, `#778 snap-under-banner ${Date.now()}`);
 
     // The pane has tail-followed the echo; the failure is still parked.
-    await expect.poll(async () => await distanceToBottom(page)).toBeLessThanOrEqual(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => await distanceToBottom(page))
+      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
     await expect(sentLine).toBeInViewport();
 
     // NOW let the POST fail. The `.compose-box-error` line mounts below the pane
@@ -235,9 +232,9 @@ test.describe("issue #580 — own send snaps to the bottom independent of the PO
     // 50px threshold but taller than a row). GREEN: the container ResizeObserver
     // re-pins a follower to the tail on any box change.
     await expect(sentLine).toBeInViewport();
-    await expect.poll(async () => await distanceToBottom(page)).toBeLessThanOrEqual(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => await distanceToBottom(page))
+      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
   });
 });
 

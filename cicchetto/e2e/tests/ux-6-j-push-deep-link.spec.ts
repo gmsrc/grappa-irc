@@ -18,9 +18,9 @@
 // commit), cold-path because main.tsx never called the URL reader.
 // post-J the same URLs route into the selection signal.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test.describe("UX-6-J — push notification deep-link routing", () => {
   test("warm-path: SW postMessage navigate routes selection (channel)", async ({ page }) => {
@@ -80,7 +80,11 @@ test.describe("UX-6-J — push notification deep-link routing", () => {
     await loginAs(page, vjt);
 
     // Capture initial selected-row text so we can confirm no flip.
-    const initial = await page.locator("li.selected").first().innerText().catch(() => "");
+    const initial = await page
+      .locator("li.selected")
+      .first()
+      .innerText()
+      .catch(() => "");
 
     // Dispatch a navigate message with a parse-failure URL.
     await page.evaluate(() => {
@@ -97,20 +101,30 @@ test.describe("UX-6-J — push notification deep-link routing", () => {
     // `initial` and the toBe(initial) on the final read still catches
     // it; the poll just gives the dispatcher a microtask flush window.
     await expect
-      .poll(async () => page.locator("li.selected").first().innerText().catch(() => ""), {
-        timeout: 1_000,
-        intervals: [50, 100, 200, 400],
-      })
+      .poll(
+        async () =>
+          page
+            .locator("li.selected")
+            .first()
+            .innerText()
+            .catch(() => ""),
+        {
+          timeout: 1_000,
+          intervals: [50, 100, 200, 400],
+        },
+      )
       .toBe(initial);
-    const after = await page.locator("li.selected").first().innerText().catch(() => "");
+    const after = await page
+      .locator("li.selected")
+      .first()
+      .innerText()
+      .catch(() => "");
     expect(after).toBe(initial);
     // Use NETWORK_NICK so the unused-import lint stays quiet.
     expect(NETWORK_NICK).toBeTruthy();
   });
 
-  test("cold-path: opening at /?network=X&channel=Y routes selection on boot", async ({
-    page,
-  }) => {
+  test("cold-path: opening at /?network=X&channel=Y routes selection on boot", async ({ page }) => {
     const vjt = getSeededVjt();
     const channel = AUTOJOIN_CHANNELS[0];
 

@@ -31,10 +31,10 @@
 // `query_windows` row) selected a window that was never opened: dead
 // selection, no sidebar row.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
 import { buildPushDeepLink, dispatchNavigateMessage } from "../fixtures/pushTap";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Peer nicks with NO query window open in cic — the deep-link targets a
 // DM whose window must be created by the tap itself (the
@@ -45,7 +45,11 @@ const DM_PEER_WARM = "notif146-warm";
 
 // Seeds auth the same way loginAs does, then boots straight at the
 // deep-link — mirrors the SW's `openWindow(url)` on a closed PWA.
-async function coldBootAt(page: Parameters<typeof loginAs>[0], vjt: ReturnType<typeof getSeededVjt>, url: string): Promise<void> {
+async function coldBootAt(
+  page: Parameters<typeof loginAs>[0],
+  vjt: ReturnType<typeof getSeededVjt>,
+  url: string,
+): Promise<void> {
   await page.addInitScript(
     ([token, subjectJson]) => {
       localStorage.setItem("grappa-token", token);

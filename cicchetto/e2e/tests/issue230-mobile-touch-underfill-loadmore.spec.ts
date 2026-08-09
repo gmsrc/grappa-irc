@@ -50,8 +50,7 @@
 // prior spec left behind. A TALL viewport (2000px) makes those ~50 rows
 // underfill the container; the server still holds ~150 older rows for loadMore.
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import {
   fetchAllMessagesAsc,
@@ -59,6 +58,7 @@ import {
   setReadCursorToId,
 } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -71,7 +71,11 @@ async function scrollbackGeometry(
   return await page.evaluate(() => {
     const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
     if (!el) throw new Error("scrollback container not found");
-    return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    return {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    };
   });
 }
 
@@ -85,7 +89,8 @@ async function synthTouchDrag(page: Page, startY: number, endY: number): Promise
     ({ startY, endY }) => {
       const el = document.querySelector('[data-testid="scrollback"]');
       if (!el) throw new Error("scrollback container not found");
-      const touch = (y: number) => new Touch({ identifier: 1, target: el, clientX: 100, clientY: y });
+      const touch = (y: number) =>
+        new Touch({ identifier: 1, target: el, clientX: 100, clientY: y });
       const fire = (type: "touchstart" | "touchmove", y: number): void => {
         const t = touch(y);
         el.dispatchEvent(

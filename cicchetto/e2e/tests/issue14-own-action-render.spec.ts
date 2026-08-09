@@ -19,7 +19,6 @@
 // assert BOTH the REST-persisted kind AND the rendered action row, plus
 // the negative invariant that no privmsg row carries the same tag.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -29,6 +28,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = "#bofh";
 

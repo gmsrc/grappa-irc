@@ -27,10 +27,10 @@
 //
 // Sibling test covers /api/server-settings → JSON not SPA shell.
 
-import { expect, test } from "../fixtures/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 async function waitForServiceWorkerControl(page: import("@playwright/test").Page): Promise<void> {
   // cic's SW uses skipWaiting + clients.claim so the first navigation

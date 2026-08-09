@@ -30,7 +30,6 @@
 // joined state, matching the seed → no afterEach restoration needed.
 // The PART side-effect on autojoin survives across runs otherwise.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   expandArchiveGroup,
@@ -41,6 +40,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

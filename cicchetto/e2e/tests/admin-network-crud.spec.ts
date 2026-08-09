@@ -9,10 +9,10 @@
 // other specs — never delete those. Tests create unique slugs (timestamp
 // suffix) and best-effort delete in finally.
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 function userIdFromSubject(subjectJson: string): string {
   const subj = JSON.parse(subjectJson) as { kind: string; id: string };

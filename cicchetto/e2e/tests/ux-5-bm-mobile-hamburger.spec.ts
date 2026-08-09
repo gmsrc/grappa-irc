@@ -34,9 +34,9 @@
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: UI shape
 // contract, subject-shape-agnostic. Registered seed suffices.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -56,9 +56,7 @@ test("ux-5-bm desktop — members aside carries the RailActions drawer", async (
   // #500 — the cog + archive live behind the rail launcher menu now; open it
   // (desktop: taps the launcher) then assert the cog is reachable.
   await openRailMenu(page);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
-  ).toBeVisible();
+  await expect(page.locator(".rail-actions-menu [data-testid='action-cluster-cog']")).toBeVisible();
 
   // #473 — the members aside DOES carry the `.rail-actions` drawer now (the
   // retired mobile-only `.mobile-panel-actions` footer became one rail present
@@ -66,9 +64,9 @@ test("ux-5-bm desktop — members aside carries the RailActions drawer", async (
   // always-on cog + archive rows live in the launcher menu it opens.
   const rail = page.locator(".shell-members .rail-actions");
   await expect(rail).toHaveCount(1);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']"),
-  ).toHaveCount(1);
+  await expect(page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']")).toHaveCount(
+    1,
+  );
 });
 
 test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer hosts settings+archive launchers; mutex enforced", async ({
@@ -112,12 +110,12 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   // #500 folded the buttons behind the launcher menu — open it (the members
   // drawer is already open, so this only taps the launcher), then assert.
   await openRailMenu(page);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
-  ).toHaveCount(1);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']"),
-  ).toHaveCount(1);
+  await expect(page.locator(".rail-actions-menu [data-testid='action-cluster-cog']")).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']")).toHaveCount(
+    1,
+  );
 
   // Tap the rail's settings cog → launcher menu + drawer close, SettingsDrawer opens.
   await page.locator(".rail-actions-menu [data-testid='action-cluster-cog']").tap();
@@ -179,6 +177,8 @@ test("@webkit ux-5-bm mobile-non-channel — home keeps its own ☰ door to the 
   // the cog is NOT in the chrome bar — it lives in the rail's RailActions drawer
   // now (#473). The retired `shell-chrome-cog` testid is gone from the DOM, so
   // assert against the LIVE `action-cluster-cog` to keep the check meaningful.
-  await expect(page.locator(".shell-chrome [data-testid='shell-chrome-rail-opener']")).toBeVisible();
+  await expect(
+    page.locator(".shell-chrome [data-testid='shell-chrome-rail-opener']"),
+  ).toBeVisible();
   await expect(page.locator(".shell-chrome [data-testid='action-cluster-cog']")).toHaveCount(0);
 });

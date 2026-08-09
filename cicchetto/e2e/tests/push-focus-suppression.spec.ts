@@ -22,7 +22,6 @@
 //   * visible + BLURRED  → triggering DM → push-catcher DOES receive it.  ← #192
 //   * visible + REFOCUSED → triggering DM → push-catcher receives NOTHING.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
@@ -37,6 +36,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "focus-suppressor";
 const SUB_ID = "focus-suppression";

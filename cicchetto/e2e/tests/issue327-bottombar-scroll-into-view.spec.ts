@@ -32,9 +32,19 @@
 // `finally` (before the wrapped-test vjt reset), so the shared bahamut-test
 // stack is left exactly as found.
 
-import { loginAs, selectChannel, sidebarMessageBadge, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  selectChannel,
+  sidebarMessageBadge,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
+import {
+  assertMessagePersisted,
+  joinChannel,
+  partChannel,
+  restoreReadCursorToTail,
+} from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { assertMessagePersisted, joinChannel, partChannel, restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

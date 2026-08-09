@@ -15,10 +15,10 @@
 // two properties vjt called out: non-greedy (two independent pairs on one
 // line) and the path/identifier false-positive guard.
 
-import { test, expect } from "../fixtures/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 const tag = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 6)}`;

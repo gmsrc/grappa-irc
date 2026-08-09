@@ -332,8 +332,7 @@ export class IrcPeer {
     const ack = onceMatching(
       this.client,
       "raw",
-      (event: { line?: string }) =>
-        typeof event.line === "string" && / 306 /.test(event.line),
+      (event: { line?: string }) => typeof event.line === "string" && / 306 /.test(event.line),
       AWAY_TIMEOUT_MS,
       `away ack (306 RPL_NOWAWAY) for ${this.nick}`,
     );
@@ -391,7 +390,7 @@ export class IrcPeer {
       (event: { target: string; raw_modes: string }) =>
         event.target === channel && event.raw_modes === rawModes,
       MODE_TIMEOUT_MS,
-      `mode ${channel} ${rawModes}${extraArg ? " " + extraArg : ""}`,
+      `mode ${channel} ${rawModes}${extraArg ? ` ${extraArg}` : ""}`,
     );
     this.client.mode(channel, rawModes, extraArg);
     await modeEcho;

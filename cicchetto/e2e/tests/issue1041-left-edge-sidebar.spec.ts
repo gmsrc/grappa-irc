@@ -88,9 +88,7 @@ async function openChannel(page: Page): Promise<void> {
 // at translateX(-100%) is off-screen and the operator sees nothing. Polled
 // because the enter animation takes 200ms.
 async function expectSlidIn(page: Page): Promise<void> {
-  await expect
-    .poll(async () => (await page.locator(SIDEBAR).boundingBox())?.x ?? null)
-    .toBe(0);
+  await expect.poll(async () => (await page.locator(SIDEBAR).boundingBox())?.x ?? null).toBe(0);
 }
 
 test("issue1041 — left-edge right-swipe mounts the sidebar and slides it on screen", async ({

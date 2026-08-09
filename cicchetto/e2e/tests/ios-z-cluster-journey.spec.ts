@@ -34,7 +34,6 @@
 // localStorage at end so subsequent specs in the same browser context
 // don't inherit XL font-size.
 
-import { expect, test } from "../fixtures/test";
 import {
   confirmModal,
   confirmModalYes,
@@ -45,12 +44,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh
 
@@ -65,9 +60,7 @@ test.afterEach(async () => {
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
-test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", async ({
-  page,
-}) => {
+test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", async ({ page }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 
@@ -137,9 +130,7 @@ test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", asy
     const section = page.locator(".bottom-bar-network", {
       has: page.locator(`.bottom-bar-network-header[data-network-slug="${NETWORK_SLUG}"]`),
     });
-    await expect(
-      section.locator('.bottom-bar-close[aria-label="Close Server"]'),
-    ).toHaveCount(0);
+    await expect(section.locator('.bottom-bar-close[aria-label="Close Server"]')).toHaveCount(0);
 
     // iOS-4 — font-size XL persists across reload. #71 INC-2 — the settings
     // cog lives in the rail's ActionCluster now; #460 moved font size into the
@@ -153,9 +144,7 @@ test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", asy
     await page.locator('[data-testid="font-size-XL"]').tap();
     await expect(page.locator('[data-testid="font-size-XL"]')).toBeChecked();
     const xlSize = await page.evaluate(() =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue("--font-size")
-        .trim(),
+      getComputedStyle(document.documentElement).getPropertyValue("--font-size").trim(),
     );
     expect(xlSize).toBe("18px");
 
@@ -166,9 +155,7 @@ test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", asy
     await openSettingsSection(page, "display");
     await expect(page.locator('[data-testid="font-size-XL"]')).toBeChecked();
     const reloadedSize = await page.evaluate(() =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue("--font-size")
-        .trim(),
+      getComputedStyle(document.documentElement).getPropertyValue("--font-size").trim(),
     );
     expect(reloadedSize).toBe("18px");
   } finally {

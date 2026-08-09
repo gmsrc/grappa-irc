@@ -18,9 +18,9 @@
 // One registered class pass is sufficient. Chromium-only — mobile
 // uses BottomBar and the home row is not present there.
 
-import { test, expect } from "../fixtures/test";
 import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test.setTimeout(60_000);
 
@@ -52,9 +52,9 @@ test("ux-5-b — home sidebar row renders the 🏠 emoji icon", async ({ page })
   // past Playwright's toBeVisible heuristic in some cases).
   await expect(homeEmoji).toBeVisible();
   const box = await homeEmoji.boundingBox();
-  expect(box).not.toBeNull();
-  expect(box!.width).toBeGreaterThan(0);
-  expect(box!.height).toBeGreaterThan(0);
+  if (!box) throw new Error("home emoji has no layout box");
+  expect(box.width).toBeGreaterThan(0);
+  expect(box.height).toBeGreaterThan(0);
 
   // Belt-and-suspenders: the emoji span lives INSIDE the home button
   // (sibling of the "Home" label span), not as a stray standalone

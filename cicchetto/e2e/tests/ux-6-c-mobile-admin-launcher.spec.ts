@@ -28,7 +28,6 @@
 // #bofh; promoting it temporarily gives the full surface (admin gate + joined
 // channel + rail drawer) without ripple-affecting other specs.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   AUTOJOIN_CHANNELS,
@@ -38,6 +37,7 @@ import {
   NETWORK_SLUG,
   VJT_USER,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
@@ -59,11 +59,7 @@ async function findVjtUserId(adminToken: string): Promise<string> {
   return vjt.id;
 }
 
-async function setAdminFlag(
-  adminToken: string,
-  userId: string,
-  isAdmin: boolean,
-): Promise<void> {
+async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean): Promise<void> {
   const res = await fetch(`${GRAPPA_BASE_URL}/admin/users/${encodeURIComponent(userId)}`, {
     method: "PATCH",
     headers: {
@@ -194,9 +190,9 @@ test.describe("UX-6-C / #473 — admin launcher in the rail actions drawer", () 
     // (on desktop the rail is always on screen, so this taps the launcher
     // directly) before reaching the admin button.
     await openRailMenu(page);
-    await expect(
-      page.locator(".rail-actions-menu [data-testid='mobile-panel-admin']"),
-    ).toHaveCount(1);
+    await expect(page.locator(".rail-actions-menu [data-testid='mobile-panel-admin']")).toHaveCount(
+      1,
+    );
     // The retired mobile-only `.mobile-panel-actions` footer is gone entirely —
     // guard that the migration left no stray footer anywhere.
     await expect(page.locator(".mobile-panel-actions")).toHaveCount(0);

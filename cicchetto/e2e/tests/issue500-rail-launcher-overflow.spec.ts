@@ -22,10 +22,10 @@
 // The mobile launcher + menu path is exercised by the sibling specs, which now
 // reach every rail action through `openRailMenu`.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — vjt's seeded autojoin channel
 // vjt + PEER_COUNT peers. Four extra members overflow the short viewport below

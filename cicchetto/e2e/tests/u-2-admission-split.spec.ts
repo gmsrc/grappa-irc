@@ -36,7 +36,7 @@
 // afterEach restores caps to permissive defaults so subsequent specs
 // see the seeder baseline.
 
-import { expect, test } from "../fixtures/test";
+import { login, patchNetworkConnectionState } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
@@ -44,7 +44,7 @@ import {
   getSeededVjt,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
-import { login, patchNetworkConnectionState } from "../fixtures/grappaApi";
+import { expect, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -157,12 +157,12 @@ for (const arm of [
     // only at fresh-spawn time. Idempotent: prior specs may have
     // left vjt parked already → server returns 400 `not_parked` for
     // a re-park; treat that as success (the goal state is reached).
-    await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, { connection_state: "parked" }).catch(
-      (e: unknown) => {
-        if (e instanceof Error && /not_connected|not_parked/.test(e.message)) return;
-        throw e;
-      },
-    );
+    await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
+      connection_state: "parked",
+    }).catch((e: unknown) => {
+      if (e instanceof Error && /not_connected|not_parked/.test(e.message)) return;
+      throw e;
+    });
 
     // Admin saturates ONE cap dimension. cap=0 = degenerate lock-down;
     // any count >= 0 trips the rejection.

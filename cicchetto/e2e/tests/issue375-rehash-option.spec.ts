@@ -28,10 +28,15 @@
 // GREEN post-fix: `/rehash MOTD` sends `line: "REHASH MOTD"`; bare `/rehash`
 // still sends exactly `"REHASH"` (the null-filter drops the absent option).
 
-import { expect, test } from "../fixtures/test";
-import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  expectShellReady,
+  scrollbackLine,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // 481 ERR_NOPRIVILEGES trailing text bahamut-azzurra sends (src/s_err.c):
 //   `:%s 481 %s :Permission Denied, You do not have the correct irc
@@ -103,9 +108,9 @@ test("issue #375 — /rehash <option> forwards the option on the raw wire, bare 
     // …and it genuinely reached upstream: the non-oper gets 481 back, the
     // server's reply to the frame we shipped, rendered as a :notice in
     // $server. (Non-oper 481 is scoped-agnostic — safe, no config reload.)
-    await expect(
-      scrollbackLine(page, "notice", ERR_NOPRIVILEGES_TEXT).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(scrollbackLine(page, "notice", ERR_NOPRIVILEGES_TEXT).first()).toBeVisible({
+      timeout: 15_000,
+    });
 
     // (2) REGRESSION GUARD — bare /rehash still ships EXACTLY `REHASH` (full
     // config reload). The null-filter must not leak a trailing space or a

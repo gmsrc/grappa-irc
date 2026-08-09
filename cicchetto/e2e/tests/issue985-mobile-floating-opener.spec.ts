@@ -121,9 +121,7 @@ test("@webkit #985 — a mobile query window spends no band on the ☰, and the 
     // button — which is what `.shell-chrome-btn` declares — would leave it
     // unreadable. Assert a FULLY opaque backing, not merely a non-empty one.
     const bg = await opener.evaluate((el) => getComputedStyle(el).backgroundColor);
-    expect(bg, "#985 — the floated opener must carry its own backing").not.toBe(
-      "rgba(0, 0, 0, 0)",
-    );
+    expect(bg, "#985 — the floated opener must carry its own backing").not.toBe("rgba(0, 0, 0, 0)");
     // Alpha lives ONLY in the four-component form. CSSOM serialises an opaque
     // colour as `rgb(r, g, b)` whatever the theme (`#fff` in light, `#0a0a0a`
     // in dark), so it is the component COUNT that carries opacity and the
@@ -139,10 +137,9 @@ test("@webkit #985 — a mobile query window spends no band on the ☰, and the 
       throw new Error(`#985 — unparseable computed backgroundColor: ${bg}`);
     }
     const alpha = channels.length === 4 ? Number(channels[3]) : 1;
-    expect(
-      alpha,
-      `#985 — the floated opener's backing must be fully opaque; computed ${bg}`,
-    ).toBe(1);
+    expect(alpha, `#985 — the floated opener's backing must be fully opaque; computed ${bg}`).toBe(
+      1,
+    );
 
     // REACHABILITY (issue constraint 2, and the reason the rule carries a
     // z-index at all). The opener overflows a zero-height box, so the

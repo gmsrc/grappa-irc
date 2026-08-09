@@ -24,12 +24,17 @@
 // server suppresses the OS push at source — the beep is the
 // foreground alert).
 
-import { expect, test } from "../fixtures/test";
-import { loginAs, selectChannel, sidebarWindow, waitForDmListenerReady } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  selectChannel,
+  sidebarWindow,
+  waitForDmListenerReady,
+} from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK_DM = "ux6l-dmer";
 const PEER_NICK_MENTION = "ux6l-mentioner";
@@ -94,9 +99,7 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
     // call site fires playBeep BEFORE routeMessage (which is what
     // appends to scrollback + opens the sidebar window). If sidebar
     // is present, beep MUST have fired.
-    await expect
-      .poll(async () => await readLastBeepAt(page), { timeout: 5_000 })
-      .not.toBeNull();
+    await expect.poll(async () => await readLastBeepAt(page), { timeout: 5_000 }).not.toBeNull();
   } finally {
     await peer.disconnect("ux6l DM done");
   }
@@ -135,9 +138,7 @@ test("channel mention fires in-app beep on a non-focused mention target", async 
       body: mentionBody,
     });
 
-    await expect
-      .poll(async () => await readLastBeepAt(page), { timeout: 5_000 })
-      .not.toBeNull();
+    await expect.poll(async () => await readLastBeepAt(page), { timeout: 5_000 }).not.toBeNull();
   } finally {
     await peer.disconnect("ux6l mention done");
     await partChannel(vjt.token, NETWORK_SLUG, MENTION_CHANNEL).catch(() => {});

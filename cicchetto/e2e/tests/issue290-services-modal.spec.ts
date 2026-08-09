@@ -27,8 +27,8 @@
 // compose.test.ts. This spec is the browser integration proof.
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { expect, test } from "../fixtures/test";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

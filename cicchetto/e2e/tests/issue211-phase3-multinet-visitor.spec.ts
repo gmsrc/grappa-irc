@@ -26,16 +26,21 @@
 // `.shell-members .members-pane`, no mobile drawer).
 
 import type { Browser, Page } from "@playwright/test";
-import { test, expect } from "../fixtures/test";
-import { expectShellReady, composeSend, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
-import { IrcPeer } from "../fixtures/ircClient";
 import {
-  reapVisitors,
+  composeSend,
+  expectShellReady,
+  selectChannel,
+  waitForUserTopicReady,
+} from "../fixtures/cicchettoPage";
+import {
   GRAPPA_BASE_URL,
-  mintVisitor,
   type MintedVisitor,
+  mintVisitor,
+  reapVisitors,
 } from "../fixtures/grappaApi";
+import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const VISITOR_NETWORK = "azzurra";
 
@@ -123,9 +128,9 @@ test("issue #211 phase 3 — fresh visitor lands JOINED with own nick + a live P
     // the line into scrollback.
     peer = await IrcPeer.connect({ nick: `peer-p3-${stamp % 100000}` });
     await peer.join(channel);
-    await expect(
-      membersPane.locator(".member-name", { hasText: peer.nick }),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(membersPane.locator(".member-name", { hasText: peer.nick })).toBeVisible({
+      timeout: 15_000,
+    });
 
     const wireMsg = `phase3-live-${stamp}`;
     peer.privmsg(channel, wireMsg);

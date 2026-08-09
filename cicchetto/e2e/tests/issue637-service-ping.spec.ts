@@ -15,13 +15,21 @@
 // If NickServ ever stops echoing, this goes red loudly (element-not-found)
 // rather than silently passing — the #78 "green while broken" trap.
 
-import { expect, test } from "../fixtures/test";
-import { composeSend, composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  composeTextarea,
+  loginAs,
+  scrollbackLine,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
-test("#637 — /ping NickServ (a real service, token-less echo) renders the round-trip line", async ({ page }) => {
+test("#637 — /ping NickServ (a real service, token-less echo) renders the round-trip line", async ({
+  page,
+}) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
@@ -33,7 +41,7 @@ test("#637 — /ping NickServ (a real service, token-less echo) renders the roun
   // window (#bofh).
   await composeSend(page, "/ping NickServ");
 
-  await expect(
-    scrollbackLine(page, "notice", /CTCP PING reply from NickServ: \d+ ms/),
-  ).toBeVisible({ timeout: 20_000 });
+  await expect(scrollbackLine(page, "notice", /CTCP PING reply from NickServ: \d+ ms/)).toBeVisible(
+    { timeout: 20_000 },
+  );
 });

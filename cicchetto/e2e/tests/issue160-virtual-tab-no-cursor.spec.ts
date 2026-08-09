@@ -20,10 +20,10 @@
 // read-cursor POST returned 4xx (the fail2ban trigger). RED before the
 // setReadCursor guard (a $home 404 is captured); GREEN after.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

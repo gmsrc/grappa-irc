@@ -34,7 +34,7 @@
 // dispatch (nick → resolve against Accounts → account, not guest) runs
 // through the real cic form, unstubbed.
 
-import { type Page, expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { FRESH_PASSWORD, FRESH_USER } from "../fixtures/seedData";
 
 async function loginViaForm(page: Page, identifier: string, password: string): Promise<void> {
@@ -93,9 +93,7 @@ test.describe("#405 fresh non-admin account first-login journey", () => {
     });
   });
 
-  test("bare account name logs in as a USER and shows the self-serve home", async ({
-    page,
-  }) => {
+  test("bare account name logs in as a USER and shows the self-serve home", async ({ page }) => {
     await loginViaForm(page, FRESH_USER, FRESH_PASSWORD);
     await expectUserHomeSelfServe(page);
   });

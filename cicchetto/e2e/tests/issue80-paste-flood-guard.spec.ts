@@ -22,7 +22,7 @@
 // jsdom cannot show. A real ClipboardEvent + DataTransfer (both constructible
 // in chromium) drives the production onPaste handler deterministically.
 
-import { expect, test } from "../fixtures/test";
+import type { Page } from "@playwright/test";
 import {
   composeTextarea,
   confirmModal,
@@ -30,12 +30,12 @@ import {
   confirmModalBody,
   confirmModalCancel,
   confirmModalYes,
-  scrollbackLine,
   loginAs,
+  scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import type { Page } from "@playwright/test";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -95,9 +95,7 @@ test("#80 — multi-line paste: dialog opens, Cancel drops it, Paste inserts it"
   await expect(ta).toBeFocused();
 });
 
-test("#816 — a one-message paste is frictionless; two messages already guard", async ({
-  page,
-}) => {
+test("#816 — a one-message paste is frictionless; two messages already guard", async ({ page }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
   const vjt = getSeededVjt();
   await loginAs(page, vjt);

@@ -19,15 +19,10 @@
 //     to document that the auto-focus side-effect was the only piece
 //     of the entangled `createEffect` that needed to survive.
 
-import { test, expect } from "../fixtures/test";
-import {
-  composeSend,
-  loginAs,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#ux-5-bj-${crypto.randomUUID().slice(0, 8)}`;

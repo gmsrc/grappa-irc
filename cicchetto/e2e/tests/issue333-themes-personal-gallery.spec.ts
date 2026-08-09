@@ -18,8 +18,8 @@
 // before/after the fix targets. Desktop chromium: the sections + scroll are
 // layout-agnostic and the editor is a JS flow.
 
-import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -133,7 +133,8 @@ test.describe("#333 — themes personal/gallery + copy UX + delete confirm", () 
       await openThemes(page);
 
       // Copy a gallery theme → owned copy with the base's name.
-      const firstCardName = await page.locator("[data-testid^='theme-select-'] .theme-card-name")
+      const firstCardName = await page
+        .locator("[data-testid^='theme-select-'] .theme-card-name")
         .first()
         .innerText();
       const selects = page.locator("[data-testid^='theme-select-']");

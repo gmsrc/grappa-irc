@@ -42,11 +42,11 @@
 // the SOLE input the detach gate reads (issue126 seeds `registered: false`
 // symmetrically for its ephemeral case).
 
-import { openRailMenu, loginAs } from "../fixtures/cicchettoPage";
+import type { Browser, Page } from "@playwright/test";
+import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
-import { type Browser, type Page } from "@playwright/test";
 
 // #986 — the lifecycle verbs left the settings drawer for the rail actions
 // menu. The persistence QUESTION this spec is about (`isPersistentIdentity`,

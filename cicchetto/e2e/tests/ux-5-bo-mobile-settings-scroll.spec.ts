@@ -43,7 +43,6 @@
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: subject-
 // shape-agnostic CSS contract — registered vjt suffices.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   openRailMenu,
@@ -51,6 +50,7 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -142,9 +142,7 @@ test("@webkit ux-5-bo — archive modal asserts touch-action: pan-y + overscroll
   // DOM only after the launcher is tapped). Reveal it, then tap the archive row
   // from `.rail-actions-menu` where it now renders.
   await openRailMenu(page);
-  await page
-    .locator(".rail-actions-menu [data-testid='mobile-panel-archive']")
-    .tap();
+  await page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']").tap();
   const modal = page.locator(".archive-modal");
   await expect(modal).toBeVisible({ timeout: 5_000 });
 

@@ -87,10 +87,12 @@ test.describe("login Advanced section stays reachable on a short viewport", () =
       .poll(
         async () => {
           await page.mouse.wheel(0, 600);
-          return await connect.isVisible().then(() => connect.evaluate((el) => {
-            const r = el.getBoundingClientRect();
-            return r.top >= 0 && r.bottom <= window.innerHeight;
-          }));
+          return await connect.isVisible().then(() =>
+            connect.evaluate((el) => {
+              const r = el.getBoundingClientRect();
+              return r.top >= 0 && r.bottom <= window.innerHeight;
+            }),
+          );
         },
         { timeout: 10_000 },
       )
@@ -144,4 +146,3 @@ test.describe("login on a tall viewport — fix must not break the common case",
     await expect(page.getByRole("button", { name: /^connect$/i })).toBeInViewport();
   });
 });
-

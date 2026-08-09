@@ -37,10 +37,14 @@
 // validated each release per the H2-reviewer wait-loop in
 // `performRefresh()`.
 
-import { expect, test } from "../fixtures/test";
-import { loginAs, awaitServiceWorkerActive, awaitServerBundleHashPush } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
 import { snapshotBundle, swapToBundleB } from "../fixtures/bundleSwap";
+import {
+  awaitServerBundleHashPush,
+  awaitServiceWorkerActive,
+  loginAs,
+} from "../fixtures/cicchettoPage";
+import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // #119 — bundle-refresh banner folded into the unified stacked error region;
 // renders as a `.error-banner` slot with data-source="bundle-refresh".
@@ -106,9 +110,7 @@ test("UX-6-I.2 — single-press refresh converges to new bundle (real swap)", as
     // fails, SW precache served the OLD index.html again (the original
     // 3-press bug).
     const reloadedHash = await page.evaluate(() => {
-      const script = document.querySelector<HTMLScriptElement>(
-        'script[src*="/assets/index-"]',
-      );
+      const script = document.querySelector<HTMLScriptElement>('script[src*="/assets/index-"]');
       const m = script?.getAttribute("src")?.match(/\/assets\/index-([^."]+)\.js/);
       return m?.[1] ?? null;
     });

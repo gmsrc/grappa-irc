@@ -31,9 +31,9 @@
 // This test issues /lusers explicitly, which marks the request solicited
 // and exercises the slash → push → broadcast → render path end-to-end.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("#231 — /lusers surfaces LusersCard in the CURRENT (channel) window, not $server", async ({
   page,

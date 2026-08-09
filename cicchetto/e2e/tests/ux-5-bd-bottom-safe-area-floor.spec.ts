@@ -39,7 +39,6 @@
 // `max(1.5rem, env(...))` declaration shape so future refactors that
 // drop the env() arm still fail loud.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   openRailMenu,
@@ -47,6 +46,7 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -79,9 +79,7 @@ async function readDeclaredCssValue(
         try {
           const found = visit(sheet.cssRules);
           if (found) return found;
-        } catch {
-          continue;
-        }
+        } catch {}
       }
       return null;
     },
@@ -155,9 +153,7 @@ test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor
   // DOM only after the launcher is tapped). Reveal it, then tap the archive row
   // from `.rail-actions-menu` where it now renders.
   await openRailMenu(page);
-  await page
-    .locator(".rail-actions-menu [data-testid='mobile-panel-archive']")
-    .tap();
+  await page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']").tap();
   const modal = page.locator(".archive-modal");
   await expect(modal).toBeVisible({ timeout: 5_000 });
 

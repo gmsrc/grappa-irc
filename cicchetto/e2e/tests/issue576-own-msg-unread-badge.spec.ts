@@ -25,7 +25,6 @@
 // regress the report describes) and focus away. Pre-fix the badge shows
 // the own lines; post-fix it shows nothing until a PEER line arrives.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -43,6 +42,7 @@ import {
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i576-peer";

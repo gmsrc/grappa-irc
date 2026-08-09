@@ -24,7 +24,6 @@
 // in test/grappa/session/event_router_test.exs; the userhost_cache upsert
 // (S2.4, feeds /ban masks) still fires from the 352 route, unchanged.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -34,6 +33,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "issue169-who-target";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -72,9 +72,9 @@ test("#169 — /who renders the WhoModal with parsed rows; scrollback stays clea
 
     // Scrollback stays CLEAN — the pre-#169 N+1 :notice dump is gone.
     await expect(scrollbackLine(page, "notice", "End of /WHO list")).toHaveCount(0);
-    await expect(scrollbackLine(page, "notice", `[${CHANNEL}]`).filter({ hasText: PEER_NICK })).toHaveCount(
-      0,
-    );
+    await expect(
+      scrollbackLine(page, "notice", `[${CHANNEL}]`).filter({ hasText: PEER_NICK }),
+    ).toHaveCount(0);
 
     // Clicking the peer nick opens a query window for it AND dismisses the modal.
     await modal.locator(".who-modal-nick", { hasText: PEER_NICK }).click();

@@ -41,7 +41,6 @@
 // contract — the rail is present on both form factors but the mobile door is a
 // collapsed drawer, a distinct touch path a real iOS user produces.
 
-import { expect, test } from "../fixtures/test";
 import {
   closeMembersDrawer,
   expandArchiveGroup,
@@ -54,6 +53,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — the seeded autojoin channel
 

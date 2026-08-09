@@ -46,7 +46,6 @@
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: UI shape
 // contract, subject-shape-agnostic. Registered seed suffices.
 
-import { expect, test } from "../fixtures/test";
 import {
   closeMembersDrawer,
   loginAs,
@@ -55,6 +54,7 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -70,9 +70,7 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
   // (cog moved to the permanent right rail); #500 folded the cog behind the rail
   // launcher menu, so open it (desktop: taps the launcher) then assert the cog.
   await openRailMenu(page);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
-  ).toBeVisible({
+  await expect(page.locator(".rail-actions-menu [data-testid='action-cluster-cog']")).toBeVisible({
     timeout: 10_000,
   });
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
@@ -105,9 +103,7 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
   // #500 — re-open the launcher menu on the channel window; the cog is reachable
   // in the rail (not the topic-bar).
   await openRailMenu(page);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
-  ).toBeVisible();
+  await expect(page.locator(".rail-actions-menu [data-testid='action-cluster-cog']")).toBeVisible();
 
   // Sidebar network-name nit: header span computed weight is bold +
   // header button uses flex-start justification. getComputedStyle
@@ -163,12 +159,12 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 
   // + archive rows are present in the rail launcher menu. openRailMenu opens the
   // members drawer then the launcher (mobile), revealing the buttons.
   await openRailMenu(page);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='action-cluster-cog']"),
-  ).toHaveCount(1);
-  await expect(
-    page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']"),
-  ).toHaveCount(1);
+  await expect(page.locator(".rail-actions-menu [data-testid='action-cluster-cog']")).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".rail-actions-menu [data-testid='mobile-panel-archive']")).toHaveCount(
+    1,
+  );
   // #500 — opening the launcher opened the members drawer + menu; close both so
   // the hamburger tap-target checks + the re-open below run against the clean
   // topic-bar state (the open drawer/backdrop would otherwise occlude the tap).

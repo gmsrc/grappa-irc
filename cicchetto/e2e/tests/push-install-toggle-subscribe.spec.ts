@@ -21,7 +21,6 @@
 //   * The toggle is checked.
 //   * No banner (banner is the unhappy-path surface).
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import {
   pushCatcherEndpoint,
@@ -30,6 +29,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SUB_ID = "install-happy";
 
@@ -54,8 +54,7 @@ test("master toggle enables push: subscribe → POST /push/subscriptions → dev
   // response status. POST may fire before the devices-list refresh,
   // so we set up the waiter before the click.
   const subscribePostPromise = page.waitForResponse(
-    (resp) =>
-      resp.url().endsWith("/push/subscriptions") && resp.request().method() === "POST",
+    (resp) => resp.url().endsWith("/push/subscriptions") && resp.request().method() === "POST",
     { timeout: 5_000 },
   );
 

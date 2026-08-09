@@ -50,7 +50,11 @@ async function forceRegisteredMe(page: Page): Promise<void> {
     const resp = await route.fetch();
     const body = (await resp.json()) as Record<string, unknown>;
     body.registered = true;
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
   });
 }
 
@@ -116,7 +120,9 @@ const SUBJECTS: SubjectCase[] = [
 
 test.describe("#496 — home restyle: per-subject session copy + no Map button", () => {
   for (const subject of SUBJECTS) {
-    test(`${subject.label}: session copy renders and the Map button is hidden`, async ({ page }) => {
+    test(`${subject.label}: session copy renders and the Map button is hidden`, async ({
+      page,
+    }) => {
       const teardown = await subject.arrive(page);
       try {
         // (1) The per-subject session-lifetime copy renders with its fact.

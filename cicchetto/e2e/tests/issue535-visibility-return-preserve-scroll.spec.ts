@@ -39,17 +39,12 @@
 // it to the tail (BUGHUNT-3 cascade rule — a leaked mid-page cursor forks the
 // next spec's divider assertions).
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
-import {
-  loginAs,
-  scrollbackLine,
-  scrollbackLines,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
+import type { Page } from "@playwright/test";
+import { loginAs, scrollbackLine, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -65,7 +60,11 @@ async function scrollbackGeometry(
   return await page.evaluate(() => {
     const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
     if (!el) throw new Error("scrollback container not found");
-    return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    return {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    };
   });
 }
 
@@ -109,10 +108,7 @@ async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
 // Fetch the newest REST page (DESC; [0] === newest === tail). Used to learn the
 // tail id (seed cursor to head = fully read → no divider) and a mid-page id
 // (seed a divider). Same shape as scroll-on-window-switch.spec.ts.
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number }>> {
+async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
   const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;
@@ -255,9 +251,9 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     // top and distance collapsed to <= threshold.
     await expect(marker).toHaveCount(1);
     await expect(marker).toBeInViewport();
-    await expect.poll(async () => await distanceFromBottom(page)).toBeGreaterThan(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => await distanceFromBottom(page))
+      .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
     const markerOffset = await page.evaluate(() => {
       const el = document.querySelector('[data-testid="scrollback"]') as HTMLElement | null;
       const m = document.querySelector('[data-testid="unread-marker"]') as HTMLElement | null;

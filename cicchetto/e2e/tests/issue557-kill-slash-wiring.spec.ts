@@ -24,7 +24,6 @@
 // `line: "KILL spammer :flooding the channel"`; bare `/kill spammer` sends
 // exactly `"KILL spammer"` (no trailing colon, no stray null/space).
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   expectShellReady,
@@ -33,6 +32,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // A non-oper KILL reply. bahamut's m_kill rejects a non-oper (481
 // ERR_NOPRIVILEGES) — routed to `$server` by the numeric_router :scan

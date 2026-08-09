@@ -25,10 +25,10 @@
 // subject-agnostic, one user-class spec suffices). No `@webkit` tag →
 // desktop/chromium project only, so the `.shell-sidebar` selector applies.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, waitForDmListenerReady } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Per-run-unique peer nick — bahamut holds a ghosted nick for a linger
 // window after disconnect, so a fixed literal 433s on rapid reruns

@@ -35,7 +35,6 @@
 // CHANNEL CLEANUP: random per-run suffix; afterEach has the peer PART
 // the channel.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   expandArchiveGroup,
@@ -45,6 +44,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const KEYED_CHANNEL = `#ux-5-bk-${crypto.randomUUID().slice(0, 8)}`;

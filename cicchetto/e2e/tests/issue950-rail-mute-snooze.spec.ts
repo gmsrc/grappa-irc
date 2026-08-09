@@ -28,7 +28,12 @@
 // row while leaving the push arms green — the discrimination this spec exists
 // for.
 
-import { loginAs, openRailMenu, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  openRailMenu,
+  openSettingsSection,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { clearMutedConversations, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import {

@@ -30,7 +30,6 @@
 // `p.muted` empty pane is dead code in the path this spec triggers.
 // Assert on the home pane render instead.
 
-import { test, expect } from "../fixtures/test";
 import {
   confirmModal,
   confirmModalYes,
@@ -40,6 +39,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, joinChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -96,4 +96,3 @@ test("M9 — sidebar X-button PARTs the channel and dismisses the window", async
   // selection routing is covered by the dedicated selection.ts
   // bucket-E tests + ux-4-z-cluster-journey.spec.ts.
 });
-

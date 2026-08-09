@@ -45,7 +45,6 @@
 // needed; `restoreReadCursorToTail` in afterAll undoes the early cursor
 // (BUGHUNT-3 cascade rule).
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import {
   fetchAllMessagesAsc,
@@ -60,6 +59,7 @@ import {
   NETWORK_SLUG,
   VJT_USER,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

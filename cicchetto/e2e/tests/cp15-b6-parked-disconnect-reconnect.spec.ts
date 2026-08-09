@@ -52,9 +52,9 @@
 // SpawnOrchestrator → autojoin loop, which re-JOINs SEED_CHANNEL and
 // gets the row back to its baseline live state.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PARK_REASON = "testing parked state cp19";
@@ -197,9 +197,7 @@ test("CP19 T32 — /disconnect parks network + redirects to Home; Reconnect ungr
   // in UX-4 bucket C; the `title` attr now lives on
   // `.sidebar-network-header .sidebar-channel-name` (Sidebar.tsx
   // L319-326).
-  const networkHeader = networkSection.locator(
-    ".sidebar-network-header .sidebar-channel-name",
-  );
+  const networkHeader = networkSection.locator(".sidebar-network-header .sidebar-channel-name");
   await expect(networkHeader).toHaveAttribute("title", PARK_REASON, { timeout: 5_000 });
 
   // Operator unparks via the Home card's Reconnect chip. Server-side:

@@ -107,9 +107,7 @@ test.describe("issue259 install-hint — per-platform branch rendering", () => {
     expect(await arrow.innerText()).toContain("⋯");
   });
 
-  test("@webkit issue259 — standalone-mode PWA suppresses the install splash", async ({
-    page,
-  }) => {
+  test("@webkit issue259 — standalone-mode PWA suppresses the install splash", async ({ page }) => {
     // A launched-from-home-screen PWA has no Safari chrome to point at, so
     // the splash must not mount at all. isStandalonePwa() reads
     // navigator.standalone (iOS pre-17) — stub it true before boot.

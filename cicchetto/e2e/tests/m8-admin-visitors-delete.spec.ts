@@ -20,10 +20,10 @@
 // cold-start. This spec re-enables M-8 to verify the post-UD7 budget
 // actually holds in the e2e harness.
 
-import { expect, test } from "../fixtures/test";
 import { openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("M-8 admin Visitors tab lists + deletes a minted visitor (inline confirm two-step)", async ({
   page,

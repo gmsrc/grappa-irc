@@ -26,10 +26,10 @@
 // the real store-fed card. Desktop viewport → the rail column is visible
 // with no drawer toggle (permanent surface), so no members-open dance.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { expectRailFieldsStacked } from "../fixtures/railFieldGeometry";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SERVER_WINDOW_LABEL = "Server";
 

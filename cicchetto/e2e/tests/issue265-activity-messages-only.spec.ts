@@ -22,7 +22,6 @@
 // or a missing-locator timeout. Under the total gate #bofh's `eventsUnread`
 // bumps the count to 2; under the message-scoped gate it contributes 0.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   selectChannel,
@@ -33,6 +32,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const DM_LINE = "265 direct message counts";

@@ -19,7 +19,6 @@
 //      window the /ping was typed in (irssi behaviour; RTT decoupled from the
 //      reply's routing).
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -30,6 +29,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -59,9 +59,9 @@ test("#591 — own /ctcp query self-echoes as '→ CTCP VERB args to target', no
   });
 
   // DOM: rendered as the CTCP query line (data-kind=privmsg), envelope gone.
-  await expect(
-    scrollbackLine(page, "privmsg", `→ CTCP VERSION ${tag} to ${CHANNEL}`),
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(scrollbackLine(page, "privmsg", `→ CTCP VERSION ${tag} to ${CHANNEL}`)).toBeVisible({
+    timeout: 10_000,
+  });
 });
 
 test("#591 — /ping shows the round-trip time in the source window", async ({ page }) => {

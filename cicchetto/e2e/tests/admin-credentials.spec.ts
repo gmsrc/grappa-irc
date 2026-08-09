@@ -9,10 +9,10 @@
 // asserts, and cleans up best-effort. We don't touch the seeded
 // vjt/bahamut-test credential (it's load-bearing for other specs).
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 async function adminLogin(
   page: import("@playwright/test").Page,
@@ -124,9 +124,9 @@ test("admin binds a new credential via the bind form — row appears", async ({ 
     await page.getByTestId("admin-credentials-bind-nick").fill("boundnick");
     await page.getByTestId("admin-credentials-bind-submit").click();
 
-    await expect(
-      page.getByTestId(`admin-credential-row-${userId}:${networkId}`),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId(`admin-credential-row-${userId}:${networkId}`)).toBeVisible({
+      timeout: 10_000,
+    });
   } finally {
     if (userId !== null && networkId !== null) {
       await unbindBestEffort(admin.token, userId, networkId);
@@ -155,15 +155,13 @@ test("admin edits a credential (realname change) — left_alone toast", async ({
     await page.getByTestId(`admin-credential-edit-${credKey}`).click();
     await expect(page.getByTestId(`admin-credential-edit-form-${credKey}`)).toBeVisible();
 
-    await page
-      .getByTestId(`admin-credential-edit-realname-${credKey}`)
-      .fill("Updated Real Name");
+    await page.getByTestId(`admin-credential-edit-realname-${credKey}`).fill("Updated Real Name");
     await page.getByTestId(`admin-credential-edit-submit-${credKey}`).click();
 
     // Toast surfaces left_alone (cosmetic change, no session impact).
-    await expect(
-      page.getByTestId("admin-credentials-session-action-toast"),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByTestId("admin-credentials-session-action-toast")).toBeVisible({
+      timeout: 5_000,
+    });
     await expect(page.getByTestId("admin-credentials-session-action-toast")).toContainText(
       /left alone/i,
     );

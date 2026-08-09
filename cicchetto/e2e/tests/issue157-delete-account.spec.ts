@@ -26,10 +26,15 @@
 // (`Grappa.AccountDeletionTest`) + cic vitest (SettingsDrawer gating +
 // DeleteAccountModal). Honest scope, mirroring issue126-detach-lifecycle.
 
-import { test, expect } from "../fixtures/test";
-import { openSettingsDrawer, expectShellReady, openRailMenu, closeSettings } from "../fixtures/cicchettoPage";
+import {
+  closeSettings,
+  expectShellReady,
+  openRailMenu,
+  openSettingsDrawer,
+} from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, login, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PASSWORD = "test-password-not-secret";
 

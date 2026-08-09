@@ -23,14 +23,9 @@
 // seeded headroom (100) so no later spec inherits a cap=1 on the shared
 // runner IP.
 
-import { expect, test } from "../fixtures/test";
+import { GRAPPA_BASE_URL, login, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { ADMIN_IDENTIFIER, ADMIN_PASSWORD } from "../fixtures/seedData";
-import {
-  GRAPPA_BASE_URL,
-  reapVisitors,
-  login,
-  mintVisitor,
-} from "../fixtures/grappaApi";
+import { expect, test } from "../fixtures/test";
 
 // The anon visitor network. Its seeded `max_per_ip` is the headroom
 // value later specs rely on (see compose.yaml azzurra seeder).

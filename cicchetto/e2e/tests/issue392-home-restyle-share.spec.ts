@@ -18,8 +18,8 @@
 // Desktop chromium (untagged): the drawer + modal are layout-agnostic and
 // the QR is inline SVG, not a device camera.
 
-import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { openSettingsDrawer } from "../fixtures/cicchettoPage";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

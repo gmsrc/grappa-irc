@@ -41,10 +41,10 @@
 // client observes, so it ships with a Playwright e2e via
 // scripts/integration.sh.
 
-import { test, expect } from "../fixtures/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "i671-away-watcher";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

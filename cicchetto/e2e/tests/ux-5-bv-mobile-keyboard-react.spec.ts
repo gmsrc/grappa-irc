@@ -52,9 +52,9 @@
 // Per `feedback_e2e_user_class_parity_matrix`: CSS-layer shape +
 // JS-mounted side-effect bucket. Single visitor login suffices.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -87,9 +87,7 @@ async function readDeclaredHeight(
         try {
           const found = visit(sheet.cssRules);
           if (found) return found;
-        } catch {
-          continue;
-        }
+        } catch {}
       }
       return null;
     },
@@ -145,9 +143,7 @@ test("@webkit ux-5-bv — .image-upload-modal caps max-height to var(--viewport-
   expect(heightDecl).toContain("100dvh");
 });
 
-test("@webkit ux-5-bv — .home-pane caps max-height to var(--viewport-height)", async ({
-  page,
-}) => {
+test("@webkit ux-5-bv — .home-pane caps max-height to var(--viewport-height)", async ({ page }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
 

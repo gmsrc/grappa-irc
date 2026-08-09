@@ -17,7 +17,6 @@
 // issue195-leave-confirm-modal (the shared ConfirmModal drive + the
 // count-0 "no modal" negative assertion).
 
-import { test, expect } from "../fixtures/test";
 import {
   confirmModal,
   confirmModalBody,
@@ -30,6 +29,7 @@ import {
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // vjt is autojoined here (seedData.AUTOJOIN_CHANNELS) — the window the peer
 // posts the `#channel`-bearing PRIVMSG into.

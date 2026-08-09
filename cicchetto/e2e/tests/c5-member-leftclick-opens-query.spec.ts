@@ -14,10 +14,10 @@
 //   - members list still renders #bofh (we left the channel in the
 //     sidebar — close semantics for query windows is unrelated).
 
-import { test, expect } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "c5-buddy";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

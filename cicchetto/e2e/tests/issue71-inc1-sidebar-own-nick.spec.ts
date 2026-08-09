@@ -17,15 +17,10 @@
 // project (Desktop Chrome, 1280×720, above the (max-width: 768px) mobile
 // breakpoint), same gate as archive-desktop-only.spec.ts.
 
-import { expect, test } from "../fixtures/test";
-import {
-  expandArchiveGroup,
-  loginAs,
-  openArchive,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { expandArchiveGroup, loginAs, openArchive, sidebarWindow } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

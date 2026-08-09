@@ -21,7 +21,6 @@
 // network and the afterEach reconnects it (same pattern as
 // cp15-b6-parked-disconnect-reconnect), polling until autojoin restores #bofh.
 
-import { expect, test } from "../fixtures/test";
 import {
   confirmModal,
   confirmModalBody,
@@ -34,6 +33,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel, patchNetworkConnectionState } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const LEAVE_CHANNEL = "#x195-leave";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];

@@ -34,9 +34,9 @@
 // the default `auto` and the assertion fails. The `@webkit` twin is a
 // regression guard that iOS keeps the nick selectable after the change.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern): the e2e sqlite scrollback persists

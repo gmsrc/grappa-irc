@@ -45,7 +45,7 @@
 // touch CONTRACT, not a device-physics repro; the deterministic cursor-persist
 // assertion is the authoritative mechanism proof on both.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { getReadCursor, restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
@@ -71,10 +71,7 @@ async function distFromBottom(page: Page): Promise<number> {
 // Latest REST page (DESC by server_time; rows[0] is the newest) — used to pick a
 // known message id for the mid-page cursor seed + the tail id we expect the tap
 // to advance to. Mirror of the #168 local helper.
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number }>> {
+async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
   const url = `http://grappa-test:4000/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;

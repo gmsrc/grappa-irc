@@ -22,10 +22,11 @@
 // (the server stores them per-subject via the same XOR-FK shape). No
 // subject-shaped branch to parameterize.
 
-import { openSettingsDrawer,
+import {
   composeSend,
   composeTextarea,
   loginAs,
+  openSettingsDrawer,
   scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";

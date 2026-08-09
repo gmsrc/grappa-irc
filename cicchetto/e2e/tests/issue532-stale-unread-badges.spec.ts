@@ -32,7 +32,6 @@
 // ReadCursor, CollapseNickReadCursors) — they have no distinct browser
 // surface, so they are deliberately out of scope here.
 
-import { expect, test } from "../fixtures/test";
 import {
   closeArchive,
   expandArchiveGroup,
@@ -53,6 +52,7 @@ import {
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i532-peer";
@@ -111,9 +111,7 @@ test("#532 A — a self-PART leaves NO stale event badge on the archived channel
   // message another spec might land on the shared #bofh — that would add a
   // message badge, never an event badge, and A is strictly about events.
   await expect(
-    page
-      .getByTestId(`archive-unread-${NETWORK_SLUG}-${CHANNEL}`)
-      .locator(".sidebar-events-unread"),
+    page.getByTestId(`archive-unread-${NETWORK_SLUG}-${CHANNEL}`).locator(".sidebar-events-unread"),
   ).toHaveCount(0);
 
   await closeArchive(page);

@@ -32,9 +32,9 @@
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: this is a
 // UI-shape/layout contract, subject-shape-agnostic. Registered seed suffices.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -44,7 +44,7 @@ test.use({ viewport: { width: 844, height: 390 } });
 
 test.setTimeout(60_000);
 
-test("#319 landscape 5\" — slim proportioned rails, center gets the majority, single-line topic", async ({
+test('#319 landscape 5" — slim proportioned rails, center gets the majority, single-line topic', async ({
   page,
 }) => {
   const vjt = getSeededVjt();
@@ -105,9 +105,7 @@ test("#319 landscape 5\" — slim proportioned rails, center gets the majority, 
   // name of width). scrollWidth ≤ clientWidth means the text is not clipped.
   const channelName = page.locator(".topic-bar-channel").first();
   await expect(channelName).toBeVisible();
-  const nameFits = await channelName.evaluate(
-    (el) => el.scrollWidth <= el.clientWidth + 1,
-  );
+  const nameFits = await channelName.evaluate((el) => el.scrollWidth <= el.clientWidth + 1);
   expect(nameFits, "#319 — channel name must not be ellipsis-truncated in landscape-compact").toBe(
     true,
   );

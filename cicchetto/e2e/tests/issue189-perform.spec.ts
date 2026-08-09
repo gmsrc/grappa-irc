@@ -12,7 +12,7 @@
 // surface behaving identically for every subject class (the server stores it on
 // the credential via the same shape). No subject-shaped branch to parameterize.
 
-import { openSettingsDrawer, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { loginAs, openSettingsDrawer, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";

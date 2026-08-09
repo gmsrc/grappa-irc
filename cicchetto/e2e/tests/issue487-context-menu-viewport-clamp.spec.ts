@@ -18,7 +18,7 @@
 // short-viewport cases stand in for the mobile "keyboard up → --viewport-height
 // shrinks" scenario without the mobile drawer's opener complexity.
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 

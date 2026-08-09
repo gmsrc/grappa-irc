@@ -21,15 +21,10 @@
 //
 // Untagged → runs in the chromium (desktop) project.
 
-import { expect, test } from "../fixtures/test";
-import {
-  composeSend,
-  loginAs,
-  scrollbackLine,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "m188-peer";
 const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // "#bofh" — already joined at login

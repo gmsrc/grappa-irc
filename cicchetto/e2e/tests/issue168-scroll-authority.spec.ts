@@ -37,8 +37,7 @@
 // `#bofh` via the e2e seeder sidecar; tiny 800×300 viewport so the 50-row
 // REST page overflows and scroll geometry is measurable).
 
-import { test, expect } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
@@ -48,6 +47,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -64,7 +64,11 @@ async function scrollbackGeometry(
   return await page.evaluate(() => {
     const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
     if (!el) throw new Error("scrollback container not found");
-    return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+    return {
+      scrollTop: el.scrollTop,
+      scrollHeight: el.scrollHeight,
+      clientHeight: el.clientHeight,
+    };
   });
 }
 
@@ -151,9 +155,9 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     // (a) Pane is pinned at the BOTTOM after the send. RED pre-fix: the
     // marker anchor parked the view mid-pane and the send did not follow,
     // so distance-to-tail stayed well above threshold.
-    await expect.poll(async () => await distanceToBottom(page)).toBeLessThanOrEqual(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => await distanceToBottom(page))
+      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // (b) The just-sent line is visible — the view did NOT jump to / stay
     // stuck at the unread divider (which sits above the fold). RED pre-fix:
@@ -189,9 +193,9 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     // Cold-mount into an unread channel now lands on the MARKER, not the tail
     // (#168 completion, 2026-07-03b — vjt point-2 reversed the #46
     // cold-mount-tail wontfix). So activation already sits ABOVE the fold.
-    await expect.poll(async () => await distanceToBottom(page)).toBeGreaterThan(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => await distanceToBottom(page))
+      .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // Operator PAGES UP with a real wheel gesture. This ALSO clears the
     // marker-activation latch (arms the operator-input gate), so the subsequent
@@ -213,9 +217,9 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
 
     const sentLine = scrollbackLines(page).filter({ hasText: marker });
     await expect(sentLine).toHaveCount(1, { timeout: 10_000 });
-    await expect.poll(async () => await distanceToBottom(page)).toBeLessThanOrEqual(
-      SCROLL_BOTTOM_THRESHOLD_PX,
-    );
+    await expect
+      .poll(async () => await distanceToBottom(page))
+      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
     await expect(sentLine).toBeInViewport();
   });
 });

@@ -38,8 +38,8 @@
 
 import { expect, test } from "@playwright/test";
 import { expectShellReady, openAdminConsole, openRailMenu } from "../fixtures/cicchettoPage";
-import { getSeededAdmin } from "../fixtures/seedData";
 import { mintVisitor } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const AZZURRA_SLUG = "azzurra";
@@ -59,10 +59,6 @@ async function adminFriendlyLogin(
   );
   await page.goto("/");
   await expectShellReady(page);
-}
-
-async function openAdminPane(page: import("@playwright/test").Page): Promise<void> {
-  await openAdminConsole(page);
 }
 
 // PATCH /admin/networks/:slug — partial body shape per M-10. Only
@@ -148,9 +144,7 @@ test("M-Z admin operator journey: drawer → 4 tabs → cap-saturation event lan
     // (`network_busy`) → server emits `:capacity_reject` admin event
     // via Admission.Telemetry → AdminEvents.record → broadcast on
     // grappa:admin:events → cic Events tab renders new row.
-    const mintErr = await mintVisitor(`mz-cap-reject-${Date.now()}`).catch(
-      (e: Error) => e.message,
-    );
+    const mintErr = await mintVisitor(`mz-cap-reject-${Date.now()}`).catch((e: Error) => e.message);
     expect(typeof mintErr).toBe("string");
     expect(mintErr).toMatch(/503/);
 

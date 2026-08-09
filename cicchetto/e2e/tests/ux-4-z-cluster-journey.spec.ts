@@ -85,8 +85,15 @@
 // Cleanup: re-join the autojoin channel + reset font-size in
 // `afterEach` so subsequent specs see the seeder baseline.
 
-import { expect, test } from "../fixtures/test";
-import { closeMembersDrawer, loginAs, openSettingsMobile, selectChannel, sidebarWindow, openAdminConsole, closeSettings } from "../fixtures/cicchettoPage";
+import {
+  closeMembersDrawer,
+  closeSettings,
+  loginAs,
+  openAdminConsole,
+  openSettingsMobile,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import {
   AUTOJOIN_CHANNELS,
@@ -95,6 +102,7 @@ import {
   NETWORK_NICK,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh
 
@@ -174,9 +182,7 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
       hasText: NETWORK_SLUG,
     });
     await expect(homeRow).toBeVisible();
-    await expect(homeRow.locator(".home-pane-network-nick")).toContainText(
-      NETWORK_NICK,
-    );
+    await expect(homeRow.locator(".home-pane-network-nick")).toContainText(NETWORK_NICK);
 
     // ─── Bucket L — settings reachable from every window kind ─────────
     // #71 INC-2 — on mobile the settings cog lives in the rail's

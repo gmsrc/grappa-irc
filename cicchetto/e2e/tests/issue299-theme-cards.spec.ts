@@ -88,7 +88,9 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
 
     // Tap the first card → its (and ONLY its) action row appears.
     await selects.first().tap();
-    await expect(page.locator("[data-testid^='theme-actions-']")).toHaveCount(1, { timeout: 5_000 });
+    await expect(page.locator("[data-testid^='theme-actions-']")).toHaveCount(1, {
+      timeout: 5_000,
+    });
 
     // The revealed copy button is a proper ≥44px tap target.
     const copyBtn = page.locator("[data-testid^='theme-copy-']").first();
@@ -100,7 +102,9 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
 
     // Tapping a DIFFERENT card moves the disclosure — still exactly one row.
     await selects.nth(1).tap();
-    await expect(page.locator("[data-testid^='theme-actions-']")).toHaveCount(1, { timeout: 5_000 });
+    await expect(page.locator("[data-testid^='theme-actions-']")).toHaveCount(1, {
+      timeout: 5_000,
+    });
   });
 
   test("a minted visitor copies a built-in and gets manage actions on the owned copy", async ({
@@ -198,9 +202,7 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
       // Re-open the gallery (forces a fresh fetch): the nick snapshot STILL
       // shows — NOT "system" (the new owner), NOT the "guest" fallback.
       await reopenGalleryDesktop(page);
-      const authorAfter = page.locator(
-        `[data-testid="theme-card-${themeId}"] .theme-card-author`,
-      );
+      const authorAfter = page.locator(`[data-testid="theme-card-${themeId}"] .theme-card-author`);
       await expect(authorAfter).toBeVisible({ timeout: 5_000 });
       await expect(authorAfter).toContainText(visitor.nick);
     } finally {
@@ -225,6 +227,13 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
         cleanupErrors.push(err);
       }
       if (cleanupErrors.length > 0) {
+        // Deliberate: a failed cleanup leaves a visitor (and a published
+        // gallery theme) behind on the shared stack, which poisons every spec
+        // that runs after this one — so it MUST fail the test even though a
+        // throw from `finally` can mask an in-flight body error. The masking is
+        // the accepted cost of never letting a leak pass silently; the comment
+        // above states the same intent.
+        // biome-ignore lint/correctness/noUnsafeFinally: a cleanup leak must fail loud, see above
         throw new AggregateError(cleanupErrors, "issue299 cleanup failed");
       }
     }

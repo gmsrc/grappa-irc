@@ -34,10 +34,10 @@
 // SUFFICIENT — the fix still HOLDS for the real-iOS-device verification batch
 // (#245/#250/#253/#254/#255).
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

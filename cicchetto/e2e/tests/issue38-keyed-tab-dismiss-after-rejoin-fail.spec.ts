@@ -42,7 +42,6 @@
 // failed — clears last_joined, and restarts the session, which drops
 // the failed NEW_CHANNEL window). afterEach only tears down the peer.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   confirmModal,
@@ -60,6 +59,7 @@ import {
   NETWORK_NICK,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const KEY = "k38-secret-key";
@@ -128,8 +128,9 @@ test("issue #38 — × dismisses a 475-failed +k autojoin channel row", async ({
 
   // The seeded channel re-JOINed (live, not greyed) — confirms autojoin
   // ran on the fresh session.
-  await expect(sidebarWindow(page, NETWORK_SLUG, SEED_CHANNEL).locator(".sidebar-window-greyed"))
-    .toHaveCount(0, { timeout: 20_000 });
+  await expect(
+    sidebarWindow(page, NETWORK_SLUG, SEED_CHANNEL).locator(".sidebar-window-greyed"),
+  ).toHaveCount(0, { timeout: 20_000 });
 
   // NEW_CHANNEL lands as a greyed, not-joined row. Both sidebar sources
   // are proven here: `toHaveCount(1)` confirms source A (the GET

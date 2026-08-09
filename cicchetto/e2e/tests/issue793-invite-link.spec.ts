@@ -22,20 +22,15 @@
 // unnecessary.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import {
   confirmModal,
   confirmModalBody,
   confirmModalYes,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import {
-  joinChannel,
-  listChannelNames,
-  partChannel,
-  type SeededUser,
-} from "../fixtures/grappaApi";
+import { joinChannel, listChannelNames, partChannel, type SeededUser } from "../fixtures/grappaApi";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Lowercase throughout: raw == ASCII-folded, so the sidebar window key (the
 // folded key IS the display) equals the spelling asserted on. The raw-vs-

@@ -20,7 +20,6 @@
 // window — `/msg` does that automatically inside compose.ts. We just
 // wait for the query window's sidebar entry to appear after submit.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -33,6 +32,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "m6-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

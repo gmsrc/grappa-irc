@@ -29,7 +29,7 @@
 // re-arms auto-follow. The leaving pane's user-scrolled-up state is
 // per-window and MUST NOT leak through the shared DOM node.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
@@ -38,8 +38,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
-import { expect, test } from "../fixtures/test";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const REST_PAGE_SIZE = 50;

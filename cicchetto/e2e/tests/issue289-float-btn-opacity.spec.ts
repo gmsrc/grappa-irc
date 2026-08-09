@@ -27,19 +27,23 @@
 // (an `opacity`-less element, or one gated out via `<Show>`) would
 // trivially satisfy an opacity check.
 
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   composeTextarea,
   loginAs,
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { assertMessagePersisted, partChannel, restoreReadCursorToTail } from "../fixtures/grappaApi";
+import {
+  assertMessagePersisted,
+  partChannel,
+  restoreReadCursorToTail,
+} from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]!;
+const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 
 const SCROLL_TO_BOTTOM = '[data-testid="scroll-to-bottom"]';
@@ -125,9 +129,7 @@ async function scrollChannelUp(page: Page): Promise<void> {
 // CHANNEL scrolled up. Returns the peer + bg channel so the caller's
 // `finally` can tear them down. Shared by the #289 opacity test and the
 // #302 hover-latch test — one setup, two contracts.
-async function surfaceBothFloatButtons(
-  page: Page,
-): Promise<{ peer: IrcPeer; bgChannel: string }> {
+async function surfaceBothFloatButtons(page: Page): Promise<{ peer: IrcPeer; bgChannel: string }> {
   const vjt = getSeededVjt();
   const peerNick = `t289-${Date.now() % 100000}`;
   const bgChannel = "#t289op";
@@ -249,9 +251,7 @@ test.describe("#302 — mobile float buttons don't latch :hover 'selected' after
     try {
       // Precondition: this project emulates a hover-less (touch) pointer —
       // the whole bug is that such a pointer must never latch `:hover`.
-      const hoverNone = await page.evaluate(
-        () => window.matchMedia("(hover: none)").matches,
-      );
+      const hoverNone = await page.evaluate(() => window.matchMedia("(hover: none)").matches);
       expect(
         hoverNone,
         "webkit-iphone-15 must emulate a hover-less pointer for this contract to witness the fix",

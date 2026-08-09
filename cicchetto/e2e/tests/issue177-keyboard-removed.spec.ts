@@ -17,7 +17,6 @@
 // inline (mobile suppresses it on channel windows, UX-5 BM), so the drawer
 // open is reliable here.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -27,6 +26,7 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

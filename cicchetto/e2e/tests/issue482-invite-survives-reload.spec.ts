@@ -30,7 +30,6 @@
 // Needs the live upstream + a session surviving a browser reload, which
 // jsdom/vitest cannot do (per feedback_cicchetto_browser_smoke).
 
-import { expect, test } from "../fixtures/test";
 import {
   expandArchiveGroup,
   expectShellReady,
@@ -43,6 +42,7 @@ import {
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Per-run-unique — bahamut lingers channel/nick state after disconnect, so
 // static literals collide on rapid reruns (feedback: per-run-unique names).

@@ -38,9 +38,9 @@
 // where morph saw the starve.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SERVER_WINDOW_LABEL = "Server";
 

@@ -17,10 +17,15 @@
 // chromium-only: the TouchEvent constructor + synthetic swipe physics are
 // reliable on chromium, not webkit (same limitation the #123 spec notes).
 
-import { expect, test } from "../fixtures/test";
-import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { synthSwipe } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  composeTextarea,
+  loginAs,
+  selectChannel,
+  synthSwipe,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

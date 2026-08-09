@@ -29,9 +29,9 @@
 // expanded RailActions menu, which is absolutely positioned, capped by
 // a JS-measured max-height and overlays the members list.
 
-import { expect, test } from "../fixtures/test";
-import { openRailMenu, expectShellReady } from "../fixtures/cicchettoPage";
+import { expectShellReady, openRailMenu } from "../fixtures/cicchettoPage";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // admin-vjt has no network bind — loginAs's `.sidebar-network-section h3`
 // shell-ready selector would time out. Wait on the always-visible

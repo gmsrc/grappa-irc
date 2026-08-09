@@ -23,10 +23,10 @@
 // test/grappa/session/{event_router,server,wire}_test.exs; the grouping
 // + dismiss render logic in cicchetto/src/__tests__/NamesModal.test.tsx.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "names140-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

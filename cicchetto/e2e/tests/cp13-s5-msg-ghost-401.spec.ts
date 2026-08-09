@@ -22,7 +22,6 @@
 // NOR the sidebar unread badge for the query window — both
 // regressions share one predicate (lib/operatorActionEcho.ts).
 
-import { test, expect } from "../fixtures/test";
 import {
   composeTextarea,
   loginAs,
@@ -30,12 +29,11 @@ import {
   sidebarMessageBadge,
 } from "../fixtures/cicchettoPage";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 
-test("CP13 S5 — /msg to nonexistent nick: 401 lands in the query window live", async ({
-  page,
-}) => {
+test("CP13 S5 — /msg to nonexistent nick: 401 lands in the query window live", async ({ page }) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, TEST_CHANNEL);
@@ -66,9 +64,9 @@ test("CP13 S5 — /msg to nonexistent nick: 401 lands in the query window live",
   // timeout because the round-trip is grappa→bahamut→401→grappa→
   // persist→broadcast→cicchetto, and the WS subscription on the
   // newly-opened query topic has to settle first.
-  await expect(
-    page.locator(".scrollback-pane .scrollback-notice-error"),
-  ).toHaveCount(1, { timeout: 15_000 });
+  await expect(page.locator(".scrollback-pane .scrollback-notice-error")).toHaveCount(1, {
+    timeout: 15_000,
+  });
 
   // The 401 NOTICE is server feedback to the operator's own /msg —
   // it must NOT inflate the in-pane unread-marker NOR the sidebar

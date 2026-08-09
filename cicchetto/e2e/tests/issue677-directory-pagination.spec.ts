@@ -20,9 +20,9 @@
 // (21 specs); the real backend still serves login + everything else.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
 import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded — the e2e
 // tsconfig does not resolve src/ imports; a rename must be mirrored here.
@@ -53,9 +53,7 @@ function fullPage(prefix: string, nextCursor: string | null, total: number) {
 const isDirectoryGet = (url: URL) => url.pathname.endsWith("/directory");
 
 async function openList(page: Page): Promise<void> {
-  await sidebarWindow(page, NETWORK_SLUG, LIST_WINDOW_NAME)
-    .locator(".sidebar-window-btn")
-    .click();
+  await sidebarWindow(page, NETWORK_SLUG, LIST_WINDOW_NAME).locator(".sidebar-window-btn").click();
 }
 
 test("#677 defect 1 — the directory pages past 100 rows on scroll", async ({ page }) => {

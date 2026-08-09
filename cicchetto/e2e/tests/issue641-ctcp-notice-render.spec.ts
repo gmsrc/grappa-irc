@@ -17,11 +17,11 @@
 // WRONG reason. A stray VERSION reply has NO correlation machinery — it hits
 // the exact fall-through the bug reports.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW_LABEL = "Server";

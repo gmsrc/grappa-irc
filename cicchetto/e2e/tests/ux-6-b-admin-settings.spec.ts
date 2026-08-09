@@ -27,7 +27,7 @@
 // seedData) to PUT it back in afterEach.
 
 import { expect, test } from "@playwright/test";
-import { openAdminConsole, expectShellReady } from "../fixtures/cicchettoPage";
+import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 async function adminFriendlyLogin(
@@ -70,9 +70,7 @@ test.describe("UX-6-B admin Settings tab", () => {
     expect(res.ok()).toBe(true);
   });
 
-  test("renders default settings + can flip active host litterbox → embedded", async ({
-    page,
-  }) => {
+  test("renders default settings + can flip active host litterbox → embedded", async ({ page }) => {
     await adminFriendlyLogin(page, getSeededAdmin());
     await openAdminPaneAndSettingsTab(page);
 
@@ -101,9 +99,7 @@ test.describe("UX-6-B admin Settings tab", () => {
     await expect(perFile).toHaveClass(/admin-settings-field-error/, { timeout: 5_000 });
   });
 
-  test("PUT /admin/settings fans out server_settings_changed on user-topics", async ({
-    page,
-  }) => {
+  test("PUT /admin/settings fans out server_settings_changed on user-topics", async ({ page }) => {
     await adminFriendlyLogin(page, getSeededAdmin());
     await openAdminPaneAndSettingsTab(page);
 

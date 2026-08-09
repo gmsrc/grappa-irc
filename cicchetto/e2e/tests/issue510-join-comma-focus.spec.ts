@@ -23,12 +23,7 @@
 // vjt creates two fresh per-run channels via ONE `/join #x,#y` (→ sole op
 // of each) and PARTs both in `finally`, keeping the shared testnet tidy.
 
-import {
-  composeSend,
-  composeTextarea,
-  loginAs,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
+import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

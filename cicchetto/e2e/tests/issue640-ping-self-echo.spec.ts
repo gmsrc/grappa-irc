@@ -16,7 +16,6 @@
 // see any of this: it is the compose → REST → self-echo + reply → WS → render
 // path against a real bahamut (feedback_ux_e2e_mandatory).
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -27,6 +26,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -113,9 +113,9 @@ test("#640 — /ctcp <peer> VERSION self-echoes in the SOURCE window, opens no q
   await composeSend(page, `/ctcp ${victim} VERSION ${tag}`);
 
   // Echo in the SOURCE window, target from meta (not the routing key).
-  await expect(
-    scrollbackLine(page, "privmsg", `→ CTCP VERSION ${tag} to ${victim}`),
-  ).toBeVisible({ timeout: 10_000 });
+  await expect(scrollbackLine(page, "privmsg", `→ CTCP VERSION ${tag} to ${victim}`)).toBeVisible({
+    timeout: 10_000,
+  });
 
   await expect(sidebarWindow(page, NETWORK_SLUG, victim)).toHaveCount(0);
 });

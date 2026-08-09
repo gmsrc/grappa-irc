@@ -34,7 +34,6 @@
 // spec — afterEach only disconnects the upstream peer, which cleans the
 // upstream nick. No explicit window close needed.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   expandArchiveGroup,
@@ -46,6 +45,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = `cp15b6q-${crypto.randomUUID().slice(0, 6)}`;
@@ -99,9 +99,11 @@ test("CP15 B6 — /msg peer + close → archive entry; clicking the archive row 
   // removes the flake without masking a genuine hang. See DESIGN_NOTES
   // 2026-06-09 "cp15-b6 / m6 e2e timing flake".
   await composeSend(page, `/msg ${PEER_NICK} hello-archive`);
-  const queryRow = page.locator(".sidebar-network-section", {
-    has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
-  }).locator("li", { hasText: PEER_NICK });
+  const queryRow = page
+    .locator(".sidebar-network-section", {
+      has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),
+    })
+    .locator("li", { hasText: PEER_NICK });
   await expect(queryRow).toHaveCount(1, { timeout: 15_000 });
 
   // Confirm the row landed server-side via REST before closing — the

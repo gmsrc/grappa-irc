@@ -55,15 +55,11 @@
 // this, the entire content fits on-screen and "is the tail at the bottom"
 // becomes unmeasurable.
 
-import { test, expect } from "../fixtures/test";
-import { type Page } from "@playwright/test";
-import {
-  loginAs,
-  scrollbackLines,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
+import type { Page } from "@playwright/test";
+import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

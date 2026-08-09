@@ -18,10 +18,10 @@
 // contract. RED against pre-fix code (row never appears without reload) → GREEN
 // once activation/visibility drive `refreshScrollback`.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -61,10 +61,7 @@ async function suppressChannelDelivery(
 // `document.hasFocus()`, so both must be overridden; dispatch the
 // production listeners' events so the Solid signal updates synchronously.
 // Same idiom as ux-5-bu-unread-focus.spec.ts's `setTabHidden`.
-async function setTabHidden(
-  page: Parameters<typeof loginAs>[0],
-  hidden: boolean,
-): Promise<void> {
+async function setTabHidden(page: Parameters<typeof loginAs>[0], hidden: boolean): Promise<void> {
   await page.evaluate((isHidden) => {
     Object.defineProperty(document, "visibilityState", {
       configurable: true,

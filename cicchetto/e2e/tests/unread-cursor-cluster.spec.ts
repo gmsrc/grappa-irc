@@ -30,8 +30,7 @@
 // badges CONTRACT, not a new IRC verb across user classes — single
 // seeded-registered-user shape is correct.
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
@@ -40,12 +39,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "unread-cursor-buddy";
@@ -58,10 +53,7 @@ const PEER_NICK = "unread-cursor-buddy";
 const POST_SEND_SETTLE_MS = 800;
 
 function ownNickRows(page: Page, body: string) {
-  return page.locator(
-    `[data-testid="scrollback-line"][data-kind="privmsg"]`,
-    { hasText: body },
-  );
+  return page.locator(`[data-testid="scrollback-line"][data-kind="privmsg"]`, { hasText: body });
 }
 
 test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
@@ -87,9 +79,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   //   - session B's `messagesUnread` memo (bucket B2) recomputes
   //     `count_after(cursor)` on #bofh → drops the row → badge stays
   //     at 0 (or whatever pre-existing count was)
-  test("session A's send in #bofh does NOT bump session B's #bofh badge", async ({
-    browser,
-  }) => {
+  test("session A's send in #bofh does NOT bump session B's #bofh badge", async ({ browser }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
     const vjt = getSeededVjt();
 
@@ -195,9 +185,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   //     publishes `lastOwnSend` → the pane's send-relatch effect
   //     re-latches `markerCursorId` to the advanced cursor → marker
   //     collapses on the next render.
-  test("focused send collapses the in-pane unread marker immediately", async ({
-    page,
-  }) => {
+  test("focused send collapses the in-pane unread marker immediately", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
     const vjt = getSeededVjt();
 
@@ -275,9 +263,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   // (The sibling symptom — sidebar badge flicker on focus-leave — is a
   // sub-frame paint event Playwright cannot reliably observe; the same
   // unit test guards its root cause.)
-  test("own message sent then a fast away-and-back is NOT shown unread", async ({
-    page,
-  }) => {
+  test("own message sent then a fast away-and-back is NOT shown unread", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
     const vjt = getSeededVjt();
 

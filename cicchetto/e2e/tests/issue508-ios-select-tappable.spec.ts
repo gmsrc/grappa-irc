@@ -22,9 +22,9 @@
 // removing the base `html.is-ios` none would red the control half — so
 // neither a stale rule nor a dropped fix can pass silently.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("@webkit iOS — <select> is exempt from the inherited user-select:none so the native picker opens on a direct tap of the control, not only via its label", async ({
   page,

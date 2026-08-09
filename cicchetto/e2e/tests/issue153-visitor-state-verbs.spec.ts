@@ -27,9 +27,9 @@
 // depending on the leaf's split-mode first-joiner-op behavior — ircops
 // issue MODE freely on any channel they're in (see ircClient.oper docs).
 
-import { expect, test } from "../fixtures/test";
-import { expectShellReady,
+import {
   composeSend,
+  expectShellReady,
   scrollbackLine,
   selectChannel,
   waitForUserTopicReady,
@@ -37,6 +37,7 @@ import { expectShellReady,
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Stable core phrase of bahamut's 381 RPL_YOUREOPER trailing text
 // (`:%s 381 %s :You are now an IRC Operator`) — matched as a regex so
@@ -92,9 +93,9 @@ test("issue #153 — visitor /quote and /mode reach upstream and take effect", a
     // in $server as a :notice — proves the oper took (and, incidentally,
     // that #148's visitor-oper carve-out still holds).
     await composeSend(page, "/oper testoper testoperpass");
-    await expect(
-      scrollbackLine(page, "notice", RPL_YOUREOPER_TEXT).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(scrollbackLine(page, "notice", RPL_YOUREOPER_TEXT).first()).toBeVisible({
+      timeout: 15_000,
+    });
 
     // Gate the compose /join on the user-topic JOIN ack (window_pending
     // fastlanes only to subscribed sockets — see waitForUserTopicReady).

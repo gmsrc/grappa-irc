@@ -211,16 +211,11 @@ export async function swapToBootableBundleB(): Promise<BundleSwapResult> {
  * `contentsFor(newHash)`. Shared by both swaps — they differ only in what
  * bundle B contains.
  */
-async function swapEntryAsset(
-  contentsFor: (newHash: string) => string,
-): Promise<BundleSwapResult> {
+async function swapEntryAsset(contentsFor: (newHash: string) => string): Promise<BundleSwapResult> {
   const oldHash = await readCurrentBundleHash();
   const newHash = `${SYNTH_HASH_PREFIX}${Date.now().toString(36)}`;
 
-  await fs.writeFile(
-    path.join(DIST_DIR, ASSETS_DIR, `index-${newHash}.js`),
-    contentsFor(newHash),
-  );
+  await fs.writeFile(path.join(DIST_DIR, ASSETS_DIR, `index-${newHash}.js`), contentsFor(newHash));
 
   const htmlPath = path.join(DIST_DIR, INDEX_HTML);
   const html = await fs.readFile(htmlPath, "utf8");

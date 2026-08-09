@@ -26,19 +26,16 @@
 // GREEN post-fix: 219 renders as a :notice in $server; no "u" window exists,
 // server-side or client-side.
 
-import { expect, test } from "../fixtures/test";
-import { expectShellReady,
+import {
   composeSend,
+  expectShellReady,
   scrollbackLine,
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import {
-  reapVisitors,
-  GRAPPA_BASE_URL,
-  mintVisitor,
-} from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // The stats letter we query. `u` (uptime) is deliberately reused from #155:
 // bahamut's `m_stats case 'u'` is un-gated (public, no oper) and does NOT
@@ -99,9 +96,9 @@ test("issue #184 — /stats reply renders in $server, never a query window named
     // POSITIVE (RED pre-fix): the letter-carrying 219 renders as a :notice
     // in the $server pane (still focused). Pre-fix it was routed to query
     // "u" and this pane never saw it.
-    await expect(
-      scrollbackLine(page, "notice", RPL_ENDOFSTATS_TEXT).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(scrollbackLine(page, "notice", RPL_ENDOFSTATS_TEXT).first()).toBeVisible({
+      timeout: 15_000,
+    });
 
     // NEGATIVE, client-side (RED pre-fix): NO sidebar window/tab named after
     // the stats letter. `sidebarWindow` matches on the production

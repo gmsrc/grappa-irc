@@ -30,10 +30,7 @@ import {
   waitForQueryWindowReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  expectFieldsTwoColumn,
-  expectRailFieldsStacked,
-} from "../fixtures/railFieldGeometry";
+import { expectFieldsTwoColumn, expectRailFieldsStacked } from "../fixtures/railFieldGeometry";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

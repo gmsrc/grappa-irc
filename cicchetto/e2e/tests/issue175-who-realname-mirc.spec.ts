@@ -19,10 +19,10 @@
 //   - The raw \x02 control byte does NOT appear in the row's textContent
 //     (proof the bytes were consumed, not dumped raw — the #175 bug).
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -53,9 +53,9 @@ test("#175 — a peer's bold-formatted WHO realname renders a .scrollback-mirc-b
     // proof the realname routed through MircBody, not a raw `{u.realname}`.
     const peerRow = modal.locator(".who-modal-row", { hasText: peerNick });
     await expect(peerRow).toBeVisible();
-    await expect(
-      peerRow.locator(".scrollback-mirc-bold", { hasText: boldTag }),
-    ).toHaveCount(1, { timeout: 5_000 });
+    await expect(peerRow.locator(".scrollback-mirc-bold", { hasText: boldTag })).toHaveCount(1, {
+      timeout: 5_000,
+    });
 
     // The raw \x02 control byte must NOT leak into the DOM (the #175 bug).
     const rowText = (await peerRow.textContent()) ?? "";

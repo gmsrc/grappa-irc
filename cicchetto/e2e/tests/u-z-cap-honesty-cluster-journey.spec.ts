@@ -92,7 +92,7 @@
 // restores vjt to :connected so subsequent specs see the seeder
 // baseline. Mirrors u-2 + u-3 cleanup pattern.
 
-import { expect, test } from "../fixtures/test";
+import { login, patchNetworkConnectionState } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
@@ -100,15 +100,12 @@ import {
   getSeededVjt,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
-import { login, patchNetworkConnectionState } from "../fixtures/grappaApi";
+import { expect, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
-type CapKnob =
-  | "max_concurrent_user_sessions"
-  | "max_concurrent_visitor_sessions"
-  | "max_per_ip";
+type CapKnob = "max_concurrent_user_sessions" | "max_concurrent_visitor_sessions" | "max_per_ip";
 
 async function adminPatchCaps(
   adminToken: string,

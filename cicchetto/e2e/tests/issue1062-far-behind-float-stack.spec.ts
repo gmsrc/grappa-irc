@@ -39,7 +39,6 @@
 // Desktop viewport, as the spec it replaces: the removal is a DOM claim, not a
 // geometry one, and the sidebar badge is the clearer read of "the badge fell".
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
 import {
   fetchAllMessagesAsc,
@@ -54,6 +53,7 @@ import {
   NETWORK_SLUG,
   VJT_USER,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

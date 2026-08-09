@@ -46,11 +46,11 @@
 // switch documents). A TALL viewport (2000px) makes those ~50 rows underfill
 // the container; the server still holds 150 older rows for loadMore to fetch.
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -73,10 +73,7 @@ async function scrollbackGeometry(
 
 // Latest REST page (DESC by server_time) — used to pick the HEAD id for the
 // read-cursor seed. Same shape cp14-b1 / issue168 / scroll-on-window-switch use.
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number }>> {
+async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
   const url = `http://grappa-test:4000/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;

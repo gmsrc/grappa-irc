@@ -29,9 +29,7 @@ type PWPage = import("@playwright/test").Page;
 
 // The inline `--accent` custom property customTheme.ts writes on <html>.
 function readAccent(page: PWPage): Promise<string> {
-  return page.evaluate(() =>
-    document.documentElement.style.getPropertyValue("--accent").trim(),
-  );
+  return page.evaluate(() => document.documentElement.style.getPropertyValue("--accent").trim());
 }
 
 // Set an <input type="color"> value deterministically across engines (fill
@@ -52,9 +50,7 @@ async function openThemesGalleryDesktop(page: PWPage): Promise<void> {
 }
 
 test.describe("#75 — theme editor (producer path)", () => {
-  test("new theme: live preview + save persists across reload via the server", async ({
-    page,
-  }) => {
+  test("new theme: live preview + save persists across reload via the server", async ({ page }) => {
     await loginAs(page, getSeededVjt());
     await openThemesGalleryDesktop(page);
 
@@ -150,10 +146,7 @@ test.describe("#75 — theme editor (producer path)", () => {
     await page.getByTestId("theme-editor-font").selectOption("jetbrains-mono");
     await expect
       .poll(
-        () =>
-          page.evaluate(() =>
-            document.documentElement.style.getPropertyValue("--font-mono"),
-          ),
+        () => page.evaluate(() => document.documentElement.style.getPropertyValue("--font-mono")),
         { timeout: 5_000 },
       )
       .toContain("jetbrains-mono");

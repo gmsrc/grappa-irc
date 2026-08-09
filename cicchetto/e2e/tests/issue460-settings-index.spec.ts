@@ -21,9 +21,9 @@
 // covered by the vitest unit). There is no subject-shaped branch to
 // parameterize here.
 
-import { openSettingsDrawer, composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { expect, test } from "../fixtures/test";
+import { composeSend, loginAs, openSettingsDrawer, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 

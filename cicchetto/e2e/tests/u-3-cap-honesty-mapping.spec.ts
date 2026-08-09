@@ -41,8 +41,8 @@
 //
 // afterEach restores caps to permissive defaults.
 
-import { expect, test } from "../fixtures/test";
 import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { login, patchNetworkConnectionState } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
@@ -52,15 +52,12 @@ import {
   M9B_USER,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
-import { login, patchNetworkConnectionState } from "../fixtures/grappaApi";
+import { expect, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
-type CapKnob =
-  | "max_concurrent_user_sessions"
-  | "max_concurrent_visitor_sessions"
-  | "max_per_ip";
+type CapKnob = "max_concurrent_user_sessions" | "max_concurrent_visitor_sessions" | "max_per_ip";
 
 async function adminPatchCaps(
   adminToken: string,
@@ -300,8 +297,6 @@ test("U-3 (UD4) — admin Sessions tab renders per-network cap-count summary", a
   const usersCell = await page.getByTestId(`admin-sessions-summary-users-${slug}`).textContent();
   expect(usersCell).toMatch(/^\d+\/(\d+|∞)$/);
 
-  const perIpCell = await page
-    .getByTestId(`admin-sessions-summary-per-ip-${slug}`)
-    .textContent();
+  const perIpCell = await page.getByTestId(`admin-sessions-summary-per-ip-${slug}`).textContent();
   expect(perIpCell).toMatch(/^(\d+|∞)$/);
 });

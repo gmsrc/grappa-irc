@@ -78,8 +78,7 @@
 // overflows the scrollback area; without overflow, "lands at bottom"
 // is vacuously true and "divider above the fold" is unmeasurable.
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
@@ -88,12 +87,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -519,4 +514,3 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     await expect(marker).toHaveCount(0, { timeout: 5_000 });
   });
 });
-

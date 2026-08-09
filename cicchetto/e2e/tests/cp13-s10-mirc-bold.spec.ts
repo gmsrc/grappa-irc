@@ -12,10 +12,10 @@
 //   - cic mIRC parser splits into 3 runs (plain / bold / plain)
 //   - bold run renders as `.scrollback-mirc-bold` <span>
 
-import { test, expect } from "../fixtures/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 

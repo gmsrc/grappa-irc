@@ -12,7 +12,6 @@
 // Per `feedback_ux_e2e_mandatory`: every cic UX-touching change ships
 // with a Playwright e2e via scripts/integration.sh.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   loginAs,
@@ -22,6 +21,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "p0b-away-peer";
 const AWAY_MESSAGE = "Gone fishing — back at 5pm";

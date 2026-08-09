@@ -15,10 +15,10 @@
 // it. If the deep-link routing survives the network-served path but
 // NOT the SW-served path, this is RED while the shipped gate is GREEN.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
 import { buildPushDeepLink } from "../fixtures/pushTap";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const DM_PEER = "notif146-swctl";
 

@@ -35,16 +35,11 @@
 // Runs on chromium desktop (members pane renders directly).
 
 import type { Browser, Page } from "@playwright/test";
-import { test, expect } from "../fixtures/test";
 import { expectShellReady, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import { GRAPPA_BASE_URL, joinChannel, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  reapVisitors,
-  GRAPPA_BASE_URL,
-  joinChannel,
-  mintVisitor,
-} from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Two full connect chains + a peer round-trip on each network — well
 // past the default; give it plenty of testnet-latency headroom.

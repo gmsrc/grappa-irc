@@ -18,15 +18,10 @@
 // test contamination isn't a concern; the unique name is for grep-
 // readability in trace failures.
 
-import { test, expect } from "../fixtures/test";
-import {
-  loginAs,
-  scrollbackLine,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { loginAs, scrollbackLine, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "m7-peer";
 const BOUND_CHANNEL = AUTOJOIN_CHANNELS[0];

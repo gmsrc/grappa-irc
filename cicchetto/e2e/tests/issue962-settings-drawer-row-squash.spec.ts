@@ -24,9 +24,9 @@
 // agnostic CSS layout contract — registered vjt suffices.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { loginAs, openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Seed the XXL font-size preference on the production localStorage key so
 // `applyFontSizeFromStorage()` writes `--font-size` before the first paint,

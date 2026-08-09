@@ -27,15 +27,15 @@
 // chromium run of `#260` is intentionally empty.
 
 import type { Page } from "@playwright/test";
-import { expect, test } from "../fixtures/test";
 import { loginAs, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import {
-  reapVisitors,
   GRAPPA_BASE_URL,
   type MintedVisitor,
   mintVisitor,
+  reapVisitors,
 } from "../fixtures/grappaApi";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Two separate ircds → distinct nick namespaces → ONE visitor can hold
 // both live with no 433 autokill (the #211 phase-7 topology). Two live
@@ -68,12 +68,12 @@ async function snapshotStrip(page: Page, scrollTo: number | "max"): Promise<Stri
     if (!bar) throw new Error("snapshotStrip: no .bottom-bar in the DOM");
     bar.scrollLeft = mode === "max" ? bar.scrollWidth : mode;
     const barRect = bar.getBoundingClientRect();
-    const headers = Array.from(
-      bar.querySelectorAll<HTMLElement>(".bottom-bar-network-header"),
-    ).map((h) => {
-      const r = h.getBoundingClientRect();
-      return { slug: h.getAttribute("data-network-slug") ?? "", left: r.left, right: r.right };
-    });
+    const headers = Array.from(bar.querySelectorAll<HTMLElement>(".bottom-bar-network-header")).map(
+      (h) => {
+        const r = h.getBoundingClientRect();
+        return { slug: h.getAttribute("data-network-slug") ?? "", left: r.left, right: r.right };
+      },
+    );
     const groups = Array.from(bar.querySelectorAll<HTMLElement>(".bottom-bar-network")).map((g) => {
       const r = g.getBoundingClientRect();
       const slug =

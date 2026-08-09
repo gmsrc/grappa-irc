@@ -19,9 +19,9 @@
 // OPENS (feedback), not a specific matched row (bahamut cloaks hosts and the
 // membership varies).
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // The bahamut hub the default `bahamut-test` network dials (compose.yaml:

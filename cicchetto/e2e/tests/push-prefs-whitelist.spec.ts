@@ -24,7 +24,6 @@
 // `should_notify?/4` predicate-level (test/grappa/push/triggers_test.exs);
 // this spec covers the UI → REST → server eval roundtrip.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
@@ -39,6 +38,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "b5-prefser";
 const ALLOW_CHANNEL = "#b5-allow";

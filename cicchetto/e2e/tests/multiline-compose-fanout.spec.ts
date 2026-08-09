@@ -10,9 +10,9 @@
 // the per-line sends — the whole point of the fix; jsdom unit tests only
 // assert the split, not that grappa + leaf accept the frames.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

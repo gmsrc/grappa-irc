@@ -17,9 +17,9 @@
 // @webkit / iPhone 15 — the drawer + openers are mobile-only (desktop has the
 // always-visible permanent rail; see issue71-inc2-permanent-rail-desktop).
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const OPENER_GLYPH = "\u{2630}"; // ☰ — identical glyph in both openers (paletto 2)

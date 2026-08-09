@@ -10,10 +10,10 @@
 // resolves differently. The vitest unit tests pin the parser/classes;
 // this pins the rendered visual.
 
-import { test, expect } from "../fixtures/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 
@@ -38,10 +38,7 @@ test("full mIRC: peer PRIVMSG renders strikethrough + monospace + hex-color span
   try {
     await peer.join(TEST_CHANNEL);
     // \x1e strikethrough toggle, \x11 monospace toggle, \x04RRGGBB hex.
-    peer.privmsg(
-      TEST_CHANNEL,
-      `\x1e${strikeTag}\x1e \x11${monoTag}\x11 \x04ff8800${hexTag}\x04`,
-    );
+    peer.privmsg(TEST_CHANNEL, `\x1e${strikeTag}\x1e \x11${monoTag}\x11 \x04ff8800${hexTag}\x04`);
 
     const lines = scrollbackLines(page);
 
@@ -51,9 +48,7 @@ test("full mIRC: peer PRIVMSG renders strikethrough + monospace + hex-color span
     ).toHaveCount(1, { timeout: 10_000 });
 
     // Monospace run → .scrollback-mirc-monospace span.
-    await expect(
-      lines.locator(".scrollback-mirc-monospace", { hasText: monoTag }),
-    ).toHaveCount(1);
+    await expect(lines.locator(".scrollback-mirc-monospace", { hasText: monoTag })).toHaveCount(1);
 
     // Hex color run → the run span's text is exactly hexTag and its
     // computed color is #ff8800 = rgb(255, 136, 0).

@@ -25,15 +25,10 @@
 // is over the REST members endpoint (layout-independent), so this is a
 // pure form-logic + live-upstream-effect proof.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openSettingsSection } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, patchNetworkConnectionState } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // A connect gate + a live identity apply (server-side reconnect + autojoin)
 // + a restore-and-reconnect in the finally — well past the default. Give it

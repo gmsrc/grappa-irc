@@ -24,16 +24,19 @@
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: subject-
 // shape-agnostic (UI shape contract). Registered vjt suffices.
 
-import { test, expect } from "../fixtures/test";
 import { devices } from "@playwright/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.setTimeout(60_000);
 
-async function asideWidth(page: import("@playwright/test").Page, selector: string): Promise<number> {
+async function asideWidth(
+  page: import("@playwright/test").Page,
+  selector: string,
+): Promise<number> {
   const box = await page.locator(selector).boundingBox();
   if (!box) throw new Error(`${selector} has no bounding box`);
   return Math.round(box.width);

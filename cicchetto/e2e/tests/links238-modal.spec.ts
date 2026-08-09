@@ -55,10 +55,10 @@ test("#238 — /links renders the topology map from the real 364/365 burst", asy
   expect(nodeCount).toBeGreaterThanOrEqual(2);
 
   // Ground-truth log of the discovered topology (server names off the wire).
-  const servers = await nodes.evaluateAll((els) =>
-    els.map((el) => el.getAttribute("data-server")),
-  );
-  // biome-ignore lint/suspicious/noConsole: e2e ground-truth breadcrumb for the 364 param-order verification
+  const servers = await nodes.evaluateAll((els) => els.map((el) => el.getAttribute("data-server")));
+  // Ground-truth breadcrumb for the #364 param-order verification. (`noConsole`
+  // is not in biome's recommended set, so the suppression this line used to
+  // carry was itself flagged as unused once e2e/ entered the lint scope.)
   console.log(`[#238] LINKS topology (${nodeCount} servers):`, servers);
 
   // Every node carries a non-empty server name (a real hostname, not garbage).

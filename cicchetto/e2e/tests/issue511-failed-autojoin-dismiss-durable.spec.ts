@@ -50,7 +50,6 @@
 // an assertion failed mid-spec, and restarts the session). afterEach only tears
 // down the peer.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   confirmModal,
@@ -69,6 +68,7 @@ import {
   NETWORK_NICK,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const KEY = "k511-secret-key";

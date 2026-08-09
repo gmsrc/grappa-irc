@@ -31,7 +31,6 @@
 // Android behavior needs a physical device / emulator (device-verified
 // post-ship). Do NOT read this file's green status as "Android covered."
 
-import { test, expect } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -40,6 +39,7 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern): the e2e sqlite scrollback persists

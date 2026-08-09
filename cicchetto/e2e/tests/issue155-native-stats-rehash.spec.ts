@@ -36,10 +36,15 @@
 // GREEN post-fix: the native slash builds the raw frame, pushRaw ships it,
 // and the reply numerics render as :notice rows in $server.
 
-import { expect, test } from "../fixtures/test";
-import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  expectShellReady,
+  scrollbackLine,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Verbatim trailing text bahamut-azzurra sends (src/s_err.c):
 //   242 RPL_STATSUPTIME   `:%s 242 %s :Server Up %d days, %d:%02d:%02d`
@@ -97,18 +102,18 @@ test("issue #155 — native /stats and /rehash ship upstream and render reply nu
     // sent → no 242. GREEN: pushRaw ships "STATS u", 242 RPL_STATSUPTIME
     // renders as a :notice in $server.
     await composeSend(page, "/stats u");
-    await expect(
-      scrollbackLine(page, "notice", RPL_STATSUPTIME_TEXT).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(scrollbackLine(page, "notice", RPL_STATSUPTIME_TEXT).first()).toBeVisible({
+      timeout: 15_000,
+    });
 
     // (2) NATIVE /rehash. RED pre-fix: unknown command → nothing sent → no
     // reply. GREEN: pushRaw ships "REHASH"; the non-oper visitor gets 481
     // ERR_NOPRIVILEGES back — the server's reply to our frame — rendered as
     // a :notice in $server.
     await composeSend(page, "/rehash");
-    await expect(
-      scrollbackLine(page, "notice", ERR_NOPRIVILEGES_TEXT).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(scrollbackLine(page, "notice", ERR_NOPRIVILEGES_TEXT).first()).toBeVisible({
+      timeout: 15_000,
+    });
 
     // The native verbs never surface the parser's unknown-command error.
     await expect(page.getByText(/unknown command/i)).toHaveCount(0);

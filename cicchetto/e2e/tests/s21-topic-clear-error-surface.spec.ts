@@ -20,9 +20,9 @@
 // jsdom/vitest cannot exercise — the e2e harness is the only place to prove
 // the end-to-end verb-ack round-trip.
 
-import { expect, test } from "../fixtures/test";
 import { composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Body (55 z's) > 49 → fails @channel_regex `^[#&+!][^\s,\x07]{1,49}$`.

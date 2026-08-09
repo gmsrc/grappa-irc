@@ -25,10 +25,15 @@
 // /oper is that O:line NAME field, NOT the visitor's nick — so any visitor
 // nick can oper with `testoper`/`testoperpass`.
 
-import { expect, test } from "../fixtures/test";
-import { expectShellReady, composeSend, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  expectShellReady,
+  scrollbackLine,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // Verbatim trailing text bahamut sends for numeric 381 RPL_YOUREOPER —
 // `:%s 381 %s :You are now an IRC Operator` (azzurra/bahamut src/s_err.c).
@@ -90,9 +95,9 @@ test("issue #148 — visitor /oper ships OPER upstream and renders the 381 notic
 
     // VISIBLE SUCCESS: the 381 RPL_YOUREOPER notice renders in $server.
     // Pre-#148 this never arrives (visitor_not_allowed short-circuit) → RED.
-    await expect(
-      scrollbackLine(page, "notice", RPL_YOUREOPER_TEXT).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    await expect(scrollbackLine(page, "notice", RPL_YOUREOPER_TEXT).first()).toBeVisible({
+      timeout: 15_000,
+    });
 
     // And the visitor_not_allowed rejection is NOT surfaced anywhere (the
     // compose alert renders the raw token for this unmapped channel-error).

@@ -14,7 +14,12 @@
 // iso-rerun at --repeat-each N. Server-side persistence of a `builtin` payload
 // is already pinned by the Elixir token_model + controller tests.
 
-import { loginAs, openSettingsDrawer, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  openSettingsDrawer,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

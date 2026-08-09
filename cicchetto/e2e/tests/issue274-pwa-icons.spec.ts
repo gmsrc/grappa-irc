@@ -45,8 +45,7 @@ test.describe("#274 real PWA icon set", () => {
     // Non-vacuous: prove we fetched the real cic manifest, not a fallback.
     expect(manifest.id, "manifest.id").toBe("/cic");
 
-    const icons: Array<{ src: string; sizes: string; purpose: string }> =
-      manifest.icons;
+    const icons: Array<{ src: string; sizes: string; purpose: string }> = manifest.icons;
     expect(Array.isArray(icons) && icons.length > 0, "manifest.icons").toBe(true);
 
     // #274 contract: a full-bleed `any` set AND a safe-zone `maskable` set,
@@ -61,10 +60,10 @@ test.describe("#274 real PWA icon set", () => {
 
     for (const purpose of ["any", "maskable"] as const) {
       const set = icons.filter((i) => i.purpose === purpose);
-      expect(
-        set.map((i) => i.sizes).sort(),
-        `${purpose} set sizes`,
-      ).toEqual(["192x192", "512x512"]);
+      expect(set.map((i) => i.sizes).sort(), `${purpose} set sizes`).toEqual([
+        "192x192",
+        "512x512",
+      ]);
     }
 
     // Every declared icon must actually be served, be a PNG, and match its
@@ -72,10 +71,7 @@ test.describe("#274 real PWA icon set", () => {
     for (const icon of icons) {
       const asset = await request.get(icon.src);
       expect(asset.status(), `GET ${icon.src}`).toBe(200);
-      expect(
-        asset.headers()["content-type"],
-        `${icon.src} content-type`,
-      ).toContain("image/png");
+      expect(asset.headers()["content-type"], `${icon.src} content-type`).toContain("image/png");
       const { width, height } = pngDimensions(await asset.body());
       const n = sizeOf(icon.sizes);
       expect({ src: icon.src, width, height }).toEqual({
@@ -105,9 +101,7 @@ test.describe("#274 real PWA icon set", () => {
     expect(buf.readUInt16LE(4), "ICO image count").toBeGreaterThan(0);
   });
 
-  test("the SVG favicon (/icon.svg — the single source vector) is served", async ({
-    request,
-  }) => {
+  test("the SVG favicon (/icon.svg — the single source vector) is served", async ({ request }) => {
     const res = await request.get("/icon.svg");
     expect(res.status(), "GET /icon.svg").toBe(200);
     expect(res.headers()["content-type"], "content-type").toContain("image/svg+xml");

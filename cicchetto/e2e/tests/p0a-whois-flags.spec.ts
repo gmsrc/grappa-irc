@@ -27,11 +27,11 @@
 // from which the other 10 P-0a numerics follow by same-shape
 // inductive reasoning.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { awaitMail, extractFromMail, resetMailpit } from "../fixtures/mailpit";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "p0a-target";
 const PEER_PASSWORD = "p0a-test-password-not-secret";

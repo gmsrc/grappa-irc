@@ -18,10 +18,10 @@
 // Per `feedback_e2e_user_class_parity_matrix`: this flow is
 // visitor-only by design (mint endpoint 403s for users). One-class spec.
 
-import { expect, test } from "../fixtures/test";
-import { openSettingsDrawer, expectShellReady } from "../fixtures/cicchettoPage";
+import { expectShellReady, openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("visitor session-sharing — mint on device A, consume on device B, both connected", async ({
   browser,

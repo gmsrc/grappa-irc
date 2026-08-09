@@ -15,10 +15,11 @@
 // (the expander is client-side; the settings sub-page + user_settings REST
 // behave identically for every subject class).
 
-import { openSettingsDrawer,
+import {
   composeSend,
   composeTextarea,
   loginAs,
+  openSettingsDrawer,
   scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";

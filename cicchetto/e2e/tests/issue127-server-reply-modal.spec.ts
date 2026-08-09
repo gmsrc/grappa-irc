@@ -24,9 +24,9 @@
 // The server-side accumulator + terminator drain + the connect-time-MOTD
 // gating are unit-tested in test/grappa/session/event_router_test.exs.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

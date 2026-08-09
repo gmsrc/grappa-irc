@@ -139,9 +139,12 @@ test("#386 — /kb <nick> bans (*!*@host) then kicks — the peer witnesses both
     await sawKick;
 
     // Visible cic outcome: the kicked peer leaves the operator's members pane.
-    await expect(page.locator(".members-pane .member-name", { hasText: peer.nick })).toHaveCount(0, {
-      timeout: 15_000,
-    });
+    await expect(page.locator(".members-pane .member-name", { hasText: peer.nick })).toHaveCount(
+      0,
+      {
+        timeout: 15_000,
+      },
+    );
   } finally {
     await peer.disconnect("bye").catch(() => {});
     await composeSend(page, `/part ${channel}`).catch(() => {});

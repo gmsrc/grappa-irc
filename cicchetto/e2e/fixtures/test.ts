@@ -71,20 +71,22 @@ interface CspViolation {
   lineNumber: number;
 }
 
+// `void` is Playwright's own spelling for an auto-fixture that produces no
+// value (`test.extend<{ myFixture: void }>`), so the three below are the
+// documented shape and not the confusing-void the rule is written against.
+// biome-ignore-start lint/suspicious/noConfusingVoidType: Playwright's auto-fixture declaration shape
 export const test = base.extend<{
   _vjtReset: void;
   _cspGuard: void;
   _unrouteGuard: void;
 }>({
+  // biome-ignore-end lint/suspicious/noConfusingVoidType: Playwright's auto-fixture declaration shape
   _cspGuard: [
     async ({ context }, use) => {
       const violations: CspViolation[] = [];
-      await context.exposeBinding(
-        "__grappaCspViolation",
-        (_source, violation: CspViolation) => {
-          violations.push(violation);
-        },
-      );
+      await context.exposeBinding("__grappaCspViolation", (_source, violation: CspViolation) => {
+        violations.push(violation);
+      });
       await context.addInitScript(() => {
         document.addEventListener("securitypolicyviolation", (e) => {
           const report = (
@@ -125,6 +127,11 @@ export const test = base.extend<{
   // purpose — the last two times this was a throwaway local diff, the
   // evidence was lost before the question got answered.
   _vjtReset: [
+    // The empty destructuring pattern is load-bearing: Playwright reads the
+    // first parameter's pattern to decide which fixtures to instantiate, and
+    // rejects a non-destructured one outright. `{}` is how a fixture declares
+    // it needs none — it is an API contract, not a stray empty pattern.
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture-dependency declaration
     async ({}, use, testInfo) => {
       await use();
       const admin = getSeededAdmin();

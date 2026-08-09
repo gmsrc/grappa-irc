@@ -33,10 +33,10 @@
 //
 // The two tests below are the part that IS both real and new.
 
-import { expect, test } from "../fixtures/test";
+import { snapshotBundle, swapServiceWorker } from "../fixtures/bundleSwap";
 import { awaitServiceWorkerActive, loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
-import { snapshotBundle, swapServiceWorker } from "../fixtures/bundleSwap";
+import { expect, test } from "../fixtures/test";
 
 test("#1063 — the SPA shell is served with a revalidation policy on the real wire", async ({
   page,

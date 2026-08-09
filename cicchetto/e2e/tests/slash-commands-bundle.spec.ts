@@ -30,15 +30,10 @@
 //     Asserting end-to-end would require a live ChanServ NOTICE
 //     reply which the test ircd doesn't bridge.
 
-import { test, expect } from "../fixtures/test";
-import {
-  composeSend,
-  loginAs,
-  selectChannel,
-  sidebarWindow,
-} from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -201,9 +196,7 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
     await expect(queryWindow).toHaveCount(0, { timeout: 5_000 });
   });
 
-  test("/quote PING reaches the upstream wire without crashing the session", async ({
-    page,
-  }) => {
+  test("/quote PING reaches the upstream wire without crashing the session", async ({ page }) => {
     const vjt = getSeededVjt();
     const cookie = runId();
 

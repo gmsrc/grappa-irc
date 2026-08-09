@@ -34,7 +34,6 @@
 // Per feedback_ux_e2e_mandatory: every cic UX-touching change ships a real
 // Playwright e2e via scripts/integration.sh.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   openRailMenu,
@@ -45,6 +44,7 @@ import {
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "Server";

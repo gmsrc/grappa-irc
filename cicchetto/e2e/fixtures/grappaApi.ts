@@ -40,9 +40,7 @@ export async function login(identifier: string, password: string): Promise<Login
     body: JSON.stringify({ identifier, password }),
   });
   if (!response.ok) {
-    throw new Error(
-      `grappaApi.login: ${identifier} → ${response.status} ${await response.text()}`,
-    );
+    throw new Error(`grappaApi.login: ${identifier} → ${response.status} ${await response.text()}`);
   }
   return (await response.json()) as LoginResult;
 }
@@ -80,9 +78,7 @@ export async function mintVisitor(nick: string, incognito = false): Promise<Mint
     body: JSON.stringify(loginBody),
   });
   if (!response.ok) {
-    throw new Error(
-      `grappaApi.mintVisitor: ${nick} → ${response.status} ${await response.text()}`,
-    );
+    throw new Error(`grappaApi.mintVisitor: ${nick} → ${response.status} ${await response.text()}`);
   }
   const body = (await response.json()) as {
     token: string;
@@ -161,9 +157,7 @@ export async function loginVisitor(
     subject: { kind: "visitor"; id: string; registered?: boolean; incognito?: boolean };
   };
   if (body.subject.kind !== "visitor") {
-    throw new Error(
-      `grappaApi.loginVisitor: expected visitor subject, got ${body.subject.kind}`,
-    );
+    throw new Error(`grappaApi.loginVisitor: expected visitor subject, got ${body.subject.kind}`);
   }
   return {
     id: body.subject.id,
@@ -361,9 +355,7 @@ export async function terminateSession(adminToken: string, sessionId: string): P
     headers: { authorization: `Bearer ${adminToken}` },
   });
   if (!res.ok) {
-    throw new Error(
-      `grappaApi.terminateSession: ${sessionId} → ${res.status} ${await res.text()}`,
-    );
+    throw new Error(`grappaApi.terminateSession: ${sessionId} → ${res.status} ${await res.text()}`);
   }
 }
 
@@ -376,10 +368,7 @@ export async function terminateSession(adminToken: string, sessionId: string): P
 //
 // Idempotent: 404 (visitor already deleted by the test under
 // assertion) is treated as success.
-export async function adminDeleteVisitor(
-  adminToken: string,
-  visitorId: string,
-): Promise<void> {
+export async function adminDeleteVisitor(adminToken: string, visitorId: string): Promise<void> {
   const url = `${GRAPPA_BASE_URL}/admin/visitors/${encodeURIComponent(visitorId)}`;
   const res = await fetch(url, {
     method: "DELETE",
@@ -514,10 +503,7 @@ function sleep(ms: number): Promise<void> {
 // record as offering it. Without this probe a spec asserting absence
 // stays green when the row stops being archive-eligible at all — passing
 // for the wrong reason.
-export async function listArchiveTargets(
-  token: string,
-  networkSlug: string,
-): Promise<string[]> {
+export async function listArchiveTargets(token: string, networkSlug: string): Promise<string[]> {
   const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(networkSlug)}/archive`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
@@ -851,8 +837,6 @@ export async function setCredentialAutojoin(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "<no body>");
-    throw new Error(
-      `setCredentialAutojoin(${userId}/${networkId}) → ${res.status} ${text}`,
-    );
+    throw new Error(`setCredentialAutojoin(${userId}/${networkId}) → ${res.status} ${text}`);
   }
 }

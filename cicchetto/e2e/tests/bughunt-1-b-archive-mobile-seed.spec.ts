@@ -22,7 +22,6 @@
 // touch + isMobile() = true). Desktop chromium project skips the tagged
 // test via `grepInvert: /@webkit/`.
 
-import { expect, test } from "../fixtures/test";
 import {
   expandArchiveGroup,
   loginAs,
@@ -32,6 +31,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

@@ -25,7 +25,6 @@
 // chrome. The mobile openers (paletto 3) are covered by
 // issue71-inc2-mobile-rail-openers.spec.ts.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   expandArchiveGroup,
@@ -36,9 +35,10 @@ import {
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { IrcPeer } from "../fixtures/ircClient";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
+import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // #bofh — seeded autojoin
 const CHANNEL_B = "#i71inc2"; // fresh channel joined for the away round-trip
@@ -130,7 +130,9 @@ test.describe("#71 INC-2 — permanent right rail (desktop)", () => {
       await expect
         .poll(
           async () =>
-            await mentionsRow.evaluate((el) => getComputedStyle(el).borderLeftWidth).catch(() => ""),
+            await mentionsRow
+              .evaluate((el) => getComputedStyle(el).borderLeftWidth)
+              .catch(() => ""),
           { timeout: 5_000, message: "mentions row should carry the 2px grouping rail" },
         )
         .toBe("2px");
@@ -152,7 +154,9 @@ test.describe("#71 INC-2 — permanent right rail (desktop)", () => {
       await expect
         .poll(
           async () =>
-            await mentionsRow.evaluate((el) => getComputedStyle(el).borderLeftWidth).catch(() => ""),
+            await mentionsRow
+              .evaluate((el) => getComputedStyle(el).borderLeftWidth)
+              .catch(() => ""),
           { timeout: 5_000, message: "mentions row rail must survive the archive move" },
         )
         .toBe("2px");

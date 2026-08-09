@@ -35,13 +35,8 @@
 // to-end). Reuses U-3 (UD3) FallbackController mapping (`network_busy`
 // for user-cap, `too_many_sessions` for client-cap).
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, waitForUserTopicReady } from "../fixtures/cicchettoPage";
-import {
-  login,
-  patchNetworkConnectionState,
-  type SeededUser,
-} from "../fixtures/grappaApi";
+import { login, patchNetworkConnectionState, type SeededUser } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
@@ -50,14 +45,12 @@ import {
   NETWORK_NICK,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
-type CapKnob =
-  | "max_concurrent_user_sessions"
-  | "max_concurrent_visitor_sessions"
-  | "max_per_ip";
+type CapKnob = "max_concurrent_user_sessions" | "max_concurrent_visitor_sessions" | "max_per_ip";
 
 async function adminPatchCaps(
   adminToken: string,
@@ -157,7 +150,9 @@ test("UX-5 BR — Home pane [Reconnect] chip reconnects a parked network", async
   );
 
   // Click the explicit [Reconnect] chip — the canonical action target.
-  const reconnectChip = parkedRow.getByRole("button", { name: new RegExp(`reconnect ${NETWORK_SLUG}`, "i") });
+  const reconnectChip = parkedRow.getByRole("button", {
+    name: new RegExp(`reconnect ${NETWORK_SLUG}`, "i"),
+  });
   await expect(reconnectChip).toBeVisible();
 
   // Gate on the user-topic JOIN ACK before clicking (audit 2026-05-26:
@@ -269,7 +264,9 @@ test("UX-5 BR — chip surfaces friendly error inline when cap is exceeded", asy
   const parkedRow = homePane.locator(".home-pane-network-row-parked", {
     has: page.locator(".home-pane-network-slug", { hasText: NETWORK_SLUG }),
   });
-  const reconnectChip = parkedRow.getByRole("button", { name: new RegExp(`reconnect ${NETWORK_SLUG}`, "i") });
+  const reconnectChip = parkedRow.getByRole("button", {
+    name: new RegExp(`reconnect ${NETWORK_SLUG}`, "i"),
+  });
   await reconnectChip.click();
 
   // Inline error span renders the friendly mapping. Match a substring

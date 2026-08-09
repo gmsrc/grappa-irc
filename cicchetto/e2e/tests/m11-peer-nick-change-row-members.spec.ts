@@ -13,7 +13,6 @@
 // IRC wire: NICK newname (no parameters beyond the new nick). Bahamut
 // echoes the rename to every channel both nicks share with the originator.
 
-import { test, expect } from "../fixtures/test";
 import {
   composeTextarea,
   loginAs,
@@ -24,6 +23,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_OLD_NICK = "m11-peer";
 // Per-run unique new nick so retries / parallel runs don't collide on
@@ -42,9 +42,9 @@ test("M11 — peer NICK change renders nick_change row + updates members list", 
     await peer.join(CHANNEL);
 
     // Old nick visible in members before the rename.
-    await expect(
-      page.locator(".members-pane li", { hasText: PEER_OLD_NICK }),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".members-pane li", { hasText: PEER_OLD_NICK })).toBeVisible({
+      timeout: 5_000,
+    });
 
     await peer.changeNick(PEER_NEW_NICK);
 
@@ -62,17 +62,17 @@ test("M11 — peer NICK change renders nick_change row + updates members list", 
     // DOM scrollback row: `* old is now known as new`. Substring match
     // on the new nick is unique per run (crypto-suffix), so no
     // strict-mode collision across retries.
-    await expect(
-      scrollbackLine(page, "nick_change", PEER_NEW_NICK),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(scrollbackLine(page, "nick_change", PEER_NEW_NICK)).toBeVisible({
+      timeout: 5_000,
+    });
 
     // Members list updated atomically: old gone, new present.
-    await expect(
-      page.locator(".members-pane li", { hasText: PEER_OLD_NICK }),
-    ).toHaveCount(0, { timeout: 5_000 });
-    await expect(
-      page.locator(".members-pane li", { hasText: PEER_NEW_NICK }),
-    ).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator(".members-pane li", { hasText: PEER_OLD_NICK })).toHaveCount(0, {
+      timeout: 5_000,
+    });
+    await expect(page.locator(".members-pane li", { hasText: PEER_NEW_NICK })).toBeVisible({
+      timeout: 5_000,
+    });
 
     // Presence kinds (nick_change is one) do NOT bump messagesUnread —
     // the focused-channel msg badge stays absent. eventsUnread split

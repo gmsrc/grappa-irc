@@ -30,9 +30,9 @@
 // Per `feedback_e2e_user_class_parity_matrix`: CSS shape + JS-side-
 // effect bucket. Single visitor login is sufficient.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("@webkit UX-3 OCT — viewport meta carries interactive-widget=resizes-content", async ({
   page,
@@ -142,9 +142,7 @@ test("@webkit UX-3 OCT — .shell-mobile reads var(--viewport-height) with 100dv
       try {
         const found = visit(sheet.cssRules);
         if (found) return found;
-      } catch {
-        continue;
-      }
+      } catch {}
     }
     return null;
   });

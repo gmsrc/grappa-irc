@@ -34,16 +34,11 @@
 // `@webkit` tag opts this spec into the `webkit-iphone-15` project
 // (playwright.config.ts grep). Default chromium project skips it.
 
-import { type Page } from "@playwright/test";
-import { test, expect } from "../fixtures/test";
-import {
-  composeTextarea,
-  loginAs,
-  scrollbackLine,
-  selectChannel,
-} from "../fixtures/cicchettoPage";
+import type { Page } from "@playwright/test";
+import { composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Per-run unique tag so retries / parallel runs don't strict-mode-collide
@@ -62,7 +57,9 @@ async function distanceToBottom(page: Page): Promise<number> {
   });
 }
 
-test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compose-send", async ({ page }) => {
+test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compose-send", async ({
+  page,
+}) => {
   const vjt = getSeededVjt();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });

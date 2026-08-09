@@ -111,9 +111,7 @@ test("sustained inbound flood 429s then severs the web session; a second subject
       };
 
       for (let sent = 0; sent < total; sent += wave) {
-        const batch = await Promise.all(
-          Array.from({ length: Math.min(wave, total - sent) }, one),
-        );
+        const batch = await Promise.all(Array.from({ length: Math.min(wave, total - sent) }, one));
         statuses.push(...batch);
       }
       return { statuses, throttleBody };

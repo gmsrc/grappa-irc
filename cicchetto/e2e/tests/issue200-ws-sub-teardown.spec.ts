@@ -37,11 +37,11 @@
 //      subscription. The interactive `/join` focus is synchronous +
 //      race-free (compose.ts), independent of the per-channel broadcast.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Mirrors `channelKey(slug, name)` — `${slug} ${canonicalChannel(name)}`.

@@ -29,7 +29,7 @@
 // future change to BOOT_FETCH_TIMEOUT_MS shortens that, this spec goes
 // red rather than silently asserting against the failure screen.
 
-import { type Locator, type Page, expect, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
 const ME_USER = {
   kind: "user",

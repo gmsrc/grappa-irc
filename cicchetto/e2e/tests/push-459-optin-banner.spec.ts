@@ -67,7 +67,9 @@ test("#459 — the push opt-in banner offers push on login", async ({ page }) =>
   await expect(banner.locator(".error-banner-dismiss")).toBeVisible();
 });
 
-test("#459 — [of course!] runs the accept path and does not persist a decline", async ({ page }) => {
+test("#459 — [of course!] runs the accept path and does not persist a decline", async ({
+  page,
+}) => {
   const vjt = getSeededVjt();
   await stubOptinNotification(page);
   await loginAs(page, vjt);
@@ -81,7 +83,9 @@ test("#459 — [of course!] runs the accept path and does not persist a decline"
   // count is the unambiguous witness that [of course!] took the accept path.
   await expect
     .poll(() =>
-      page.evaluate(() => (window as unknown as { __optinReqPermCalls: number }).__optinReqPermCalls),
+      page.evaluate(
+        () => (window as unknown as { __optinReqPermCalls: number }).__optinReqPermCalls,
+      ),
     )
     .toBeGreaterThan(0);
 

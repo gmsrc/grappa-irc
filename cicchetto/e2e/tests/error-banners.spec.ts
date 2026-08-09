@@ -10,9 +10,13 @@
 // two non-overlapping slots inside the one container — a spec that only showed
 // ONE error would hollow-green the overlap fix.
 
-import { expect, test } from "../fixtures/test";
-import { loginAs, awaitServiceWorkerActive, awaitServerBundleHashPush } from "../fixtures/cicchettoPage";
+import {
+  awaitServerBundleHashPush,
+  awaitServiceWorkerActive,
+  loginAs,
+} from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const REGION = ".error-banners";
 const WS = '.error-banner[data-source="ws"]';

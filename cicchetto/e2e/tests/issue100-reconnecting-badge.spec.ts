@@ -26,9 +26,9 @@
 // cp15-b6-parked-disconnect-reconnect so the next spec inherits a live
 // session.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PARK_REASON = "testing reconnect badge #100";
@@ -103,8 +103,7 @@ test("#100 — reconnecting badge shows while a parked network reconnects, then 
   await page.evaluate(() => {
     const w = window as unknown as { __cic_reconnectBadgeSeen?: boolean };
     w.__cic_reconnectBadgeSeen = false;
-    const seen = () =>
-      document.querySelector('[data-testid="reconnecting-badge"]') !== null;
+    const seen = () => document.querySelector('[data-testid="reconnecting-badge"]') !== null;
     if (seen()) {
       w.__cic_reconnectBadgeSeen = true;
       return;
@@ -126,7 +125,9 @@ test("#100 — reconnecting badge shows while a parked network reconnects, then 
   // The latch flips true the moment the badge enters the DOM — proves the
   // transient "reconnecting…" badge surfaced on the reconnect.
   await page.waitForFunction(
-    () => (window as unknown as { __cic_reconnectBadgeSeen?: boolean }).__cic_reconnectBadgeSeen === true,
+    () =>
+      (window as unknown as { __cic_reconnectBadgeSeen?: boolean }).__cic_reconnectBadgeSeen ===
+      true,
     undefined,
     { timeout: 20_000 },
   );

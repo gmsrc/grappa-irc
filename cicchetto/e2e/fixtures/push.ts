@@ -34,7 +34,7 @@
 // assertions, scrollback queries, channel selection still come from
 // cicchettoPage.ts — push specs use both.
 
-import { type BrowserContext, type Page, expect } from "@playwright/test";
+import { type BrowserContext, expect, type Page } from "@playwright/test";
 import { openSettingsSection } from "./cicchettoPage";
 
 const PUSH_CATCHER_URL = process.env.E2E_PUSH_CATCHER_URL ?? "http://push-catcher:3000";

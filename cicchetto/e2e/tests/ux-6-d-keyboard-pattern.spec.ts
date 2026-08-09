@@ -26,9 +26,16 @@
 // (e) Smart-pin: window.scrollTo(0,0) clamps any drift
 // (f) Admin → Debug tab renders the diag panel + DiagFloat toggle
 
-import { expect, test } from "../fixtures/test";
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededAdmin, getSeededVjt, NETWORK_NICK, NETWORK_SLUG, VJT_USER } from "../fixtures/seedData";
+import {
+  AUTOJOIN_CHANNELS,
+  getSeededAdmin,
+  getSeededVjt,
+  NETWORK_NICK,
+  NETWORK_SLUG,
+  VJT_USER,
+} from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -50,11 +57,7 @@ async function findVjtUserId(adminToken: string): Promise<string> {
   return vjt.id;
 }
 
-async function setAdminFlag(
-  adminToken: string,
-  userId: string,
-  isAdmin: boolean,
-): Promise<void> {
+async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean): Promise<void> {
   const res = await fetch(`${GRAPPA_BASE_URL}/admin/users/${encodeURIComponent(userId)}`, {
     method: "PATCH",
     headers: {
@@ -90,9 +93,7 @@ async function promoteVjtToAdmin(): Promise<{ revert: () => Promise<void> }> {
 test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () => {
   test("(a) html.is-ios class lands on iPhone UA after boot", async ({ page }) => {
     await loginAs(page, getSeededVjt());
-    const isIos = await page.evaluate(() =>
-      document.documentElement.classList.contains("is-ios"),
-    );
+    const isIos = await page.evaluate(() => document.documentElement.classList.contains("is-ios"));
     expect(isIos).toBe(true);
   });
 
@@ -117,9 +118,7 @@ test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () =>
     expect(value).toBeGreaterThan(100);
   });
 
-  test("(d) D1 :has(:focus) rule collapses padding-bottom when input focused", async ({
-    page,
-  }) => {
+  test("(d) D1 :has(:focus) rule collapses padding-bottom when input focused", async ({ page }) => {
     await loginAs(page, getSeededVjt());
     // GREEN-CI batch 2 — UX-4 bucket B made `:home` the cold-load
     // default selection; HomePane has no `.compose-box`. Select the

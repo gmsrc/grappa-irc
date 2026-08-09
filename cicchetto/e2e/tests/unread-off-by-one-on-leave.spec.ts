@@ -24,7 +24,6 @@
 // shared seeded `vjt @ bahamut-test/#bofh`, so `afterAll` restores the
 // cursor to tail for downstream specs.
 
-import { expect, test } from "../fixtures/test";
 import {
   loginAs,
   scrollbackLine,
@@ -33,12 +32,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "unread-offbyone-buddy";
@@ -56,9 +51,7 @@ test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   });
 
-  test("#163 last message stays read after leaving pinned-to-bottom", async ({
-    page,
-  }) => {
+  test("#163 last message stays read after leaving pinned-to-bottom", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
     const vjt = getSeededVjt();
 
@@ -102,10 +95,9 @@ test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
       // of `tailBody`, so `count_after(cursor)` === 1 and the badge
       // materializes showing "1". With the at-bottom short-circuit the
       // cursor is the true tail → count 0 → badge absent.
-      await expect(sidebarMessageBadge(page, NETWORK_SLUG, CHANNEL)).toHaveCount(
-        0,
-        { timeout: 5_000 },
-      );
+      await expect(sidebarMessageBadge(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, {
+        timeout: 5_000,
+      });
 
       // Re-select #bofh. Load-bearing assertion #2: NO `── 1 unread
       // message ──` divider is re-injected. The marker derives from the

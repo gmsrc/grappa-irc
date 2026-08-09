@@ -59,7 +59,11 @@
 // genuine phantom, and (b) the real B login spawns NO upstream Session.Server,
 // so it can't dangle a session / cascade (feedback_e2e_real_login_poisons_shared_stack).
 
-import { waitForChannelReady, waitForScrollbackRefreshed, openRailMenu } from "../fixtures/cicchettoPage";
+import {
+  openRailMenu,
+  waitForChannelReady,
+  waitForScrollbackRefreshed,
+} from "../fixtures/cicchettoPage";
 import { login } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
@@ -128,7 +132,8 @@ test.describe("issue #281 — account switch replay", () => {
         setItem.call(this, key, value);
       };
       Storage.prototype.removeItem = function (key: string): void {
-        if (key === "grappa-token") w.__cic281Identity?.push({ token: null, at: performance.now() });
+        if (key === "grappa-token")
+          w.__cic281Identity?.push({ token: null, at: performance.now() });
         removeItem.call(this, key);
       };
     });
@@ -221,8 +226,7 @@ test.describe("issue #281 — account switch replay", () => {
           const isAMessages =
             path.includes(`/networks/${slug}/channels/`) && path.includes("/messages");
           const isAFeatured =
-            path === `/networks/${slug}/featured` ||
-            path.startsWith(`/networks/${slug}/featured?`);
+            path === `/networks/${slug}/featured` || path.startsWith(`/networks/${slug}/featured?`);
           return isAMessages || isAFeatured;
         }),
         identity: w.__cic281Identity,

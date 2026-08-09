@@ -24,8 +24,8 @@
 // Per feedback_cicchetto_browser_smoke + feedback_ux_e2e_mandatory this
 // exercises the real CSS/DOM render path jsdom can't.
 
+import { expectShellReady, openAdminConsole, openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { openSettingsDrawer, expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

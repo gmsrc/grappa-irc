@@ -24,10 +24,10 @@
 // regex applies. The bare-313 fallback (badge only, no row) can't be forced
 // on a live ircd, so it is covered by the WhoisCard.test.tsx unit.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "oper367-target";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

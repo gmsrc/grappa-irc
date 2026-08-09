@@ -20,7 +20,6 @@
 // Assertion order matters: badge MUST be checked BEFORE the click-
 // to-inspect, otherwise the focus-switch clears the badge mid-test.
 
-import { test, expect } from "../fixtures/test";
 import {
   loginAs,
   scrollbackLine,
@@ -32,6 +31,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "m4-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];

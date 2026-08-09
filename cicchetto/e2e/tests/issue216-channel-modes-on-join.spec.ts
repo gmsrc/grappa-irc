@@ -25,10 +25,10 @@
 // Anti-#bofh-pollution: a per-run UNIQUE channel, and vjt PARTs it in
 // `finally` (the peer disconnects, dropping its membership too).
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 test("#216 — channel modes set before join are visible on join, and tapping opens the /mode modal", async ({
   page,
@@ -74,9 +74,7 @@ test("#216 — channel modes set before join are visible on join, and tapping op
     // accessible name ("secret (+s)", the button's aria-label) — a bare
     // getByText("secret") now matches BOTH the label span and the
     // HelpServ-verbatim description ("Channel is secret …", #667).
-    await expect(
-      modal.getByRole("button", { name: "secret (+s)" }),
-    ).toBeVisible();
+    await expect(modal.getByRole("button", { name: "secret (+s)" })).toBeVisible();
 
     // The "topic lock" (+t) toggle is ACTIVE (pressed) — the peer set it.
     const topicLock = modal.getByLabel(/topic lock/i);

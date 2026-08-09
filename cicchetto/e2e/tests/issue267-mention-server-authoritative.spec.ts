@@ -27,20 +27,11 @@
 //      server to BOTH tabs' badges (one shared truth, not two
 //      independently-computed counts).
 
-import { expect, test } from "../fixtures/test";
-import {
-  loginAs,
-  selectChannel,
-  sidebarMentionBadge,
-} from "../fixtures/cicchettoPage";
+import { loginAs, selectChannel, sidebarMentionBadge } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
+import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "Server";

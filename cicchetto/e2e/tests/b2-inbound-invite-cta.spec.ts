@@ -29,7 +29,6 @@
 // banner region's stacking or the click-to-join WS round-trip — exactly the
 // class of bug jsdom misses.
 
-import { expect, test } from "../fixtures/test";
 import {
   inviteBanner,
   inviteBannerJoin,
@@ -40,6 +39,7 @@ import {
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "b2-inviter";
 const TARGET_CHANNEL = "#b2-target";

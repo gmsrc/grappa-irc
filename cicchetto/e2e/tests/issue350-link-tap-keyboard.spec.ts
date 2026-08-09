@@ -25,9 +25,9 @@
 // keeps focus. RED pre-fix (short tap on a selectable surface is let
 // through → not prevented). Real-device keyboard smoke stays vjt's iPhone.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern, see text-selection-restored spec): the
@@ -57,7 +57,11 @@ test("@webkit iOS — a short tap on a scrollback link keeps the keyboard (mouse
   const result = await link.evaluate((linkEl) => {
     const ta = document.querySelector(".compose-box textarea");
     if (!(ta instanceof HTMLTextAreaElement)) {
-      return { error: "no compose textarea" as string | null, prevented: false, activeIsCompose: false };
+      return {
+        error: "no compose textarea" as string | null,
+        prevented: false,
+        activeIsCompose: false,
+      };
     }
     // Precondition: compose focused — the bug only bites while an input
     // has focus (that's when keepKeyboard arms its focus-shift prevent).

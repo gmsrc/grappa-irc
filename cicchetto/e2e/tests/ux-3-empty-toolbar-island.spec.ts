@@ -42,11 +42,16 @@
 // shape bucket, single visitor login sufficient. Parity matrix
 // runs in UX-Z.
 
-import { expect, test } from "../fixtures/test";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { getSeededVjt } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
-type SelectorPadding = { selector: string; padding: string; paddingTop: string; paddingBottom: string };
+type SelectorPadding = {
+  selector: string;
+  padding: string;
+  paddingTop: string;
+  paddingBottom: string;
+};
 
 async function findRulePadding(
   page: import("@playwright/test").Page,

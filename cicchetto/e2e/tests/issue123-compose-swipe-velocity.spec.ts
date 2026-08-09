@@ -44,7 +44,6 @@
 // guard the wiring + CSS, not the physics. No hollow green: each fails on a
 // real regression.
 
-import { expect, test } from "../fixtures/test";
 import {
   composeSend,
   composeTextarea,
@@ -53,6 +52,7 @@ import {
   synthSwipe,
 } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 

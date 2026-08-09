@@ -35,9 +35,9 @@
 // reported surface). Both go through scripts/integration.sh --grep "#255".
 
 import type { Page } from "@playwright/test";
-import { test, expect } from "../fixtures/test";
 import { loginAs, selectChannel, sidebarCloseButton } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 // #bofh is autojoined → its tab renders a close-× on BOTH layouts.
 const CHANNEL = AUTOJOIN_CHANNELS[0];

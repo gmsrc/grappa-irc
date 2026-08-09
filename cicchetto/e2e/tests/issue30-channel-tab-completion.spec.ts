@@ -43,7 +43,6 @@
 // round-trip. jsdom/vitest can seed the store but cannot prove the store is
 // the thing the completion reads in a real browser on a real socket.
 
-import { IrcPeer } from "../fixtures/ircClient";
 import {
   composeSend,
   composeTextarea,
@@ -51,6 +50,7 @@ import {
   loginAs,
   selectChannel,
 } from "../fixtures/cicchettoPage";
+import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 

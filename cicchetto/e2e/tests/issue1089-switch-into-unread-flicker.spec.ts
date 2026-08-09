@@ -52,8 +52,7 @@
 // the #625 in-page sampler (a rAF loop, because case 2 is one frame wide and any
 // post-hoc snapshot false-greens).
 
-import { expect, test } from "../fixtures/test";
-import { type Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
 import {
   loginAs,
   scrollbackLines,
@@ -64,6 +63,7 @@ import {
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -194,7 +194,9 @@ async function installFlickerProbe(page: Page, windowMs: number): Promise<void> 
 // On failure this dump is the whole story: one entry per CHANGE of the
 // (visibility, divider offset) pair, so a one-frame excursion shows as a
 // visible=…, marker=<off-screen px> entry between two on-divider entries.
-function compress(frames: readonly Frame[]): Array<{ t: number; vis: string; marker: number | null; top: number }> {
+function compress(
+  frames: readonly Frame[],
+): Array<{ t: number; vis: string; marker: number | null; top: number }> {
   const out: Array<{ t: number; vis: string; marker: number | null; top: number }> = [];
   let prev = "";
   for (const f of frames) {
@@ -295,7 +297,8 @@ test.describe("issue #1089 — switching into an unread window must not flicker"
     // Witness: the perturbation actually landed INSIDE the sampled window. A
     // flat timeline (the append arriving after the sampler expired) would green
     // this test without ever exercising the re-assert.
-    const grew = Math.max(...frames.map((f) => f.height)) > Math.min(...frames.map((f) => f.height));
+    const grew =
+      Math.max(...frames.map((f) => f.height)) > Math.min(...frames.map((f) => f.height));
     expect(grew, "the live append did not land while the sampler was running").toBe(true);
   });
 });
@@ -363,7 +366,9 @@ async function assertNoVisibleJump(page: Page, tag: string): Promise<Frame[]> {
     () =>
       (window as unknown as { __i1089writes: Array<Record<string, unknown>> }).__i1089writes ?? [],
   );
-  console.log(`[#1089 ${tag}] frames=${frames.length} timeline=${JSON.stringify(compress(frames))}`);
+  console.log(
+    `[#1089 ${tag}] frames=${frames.length} timeline=${JSON.stringify(compress(frames))}`,
+  );
   console.log(`[#1089 ${tag}] writes=${JSON.stringify(writes)}`);
 
   expect(frames.length).toBeGreaterThan(10);
@@ -375,9 +380,7 @@ async function assertNoVisibleJump(page: Page, tag: string): Promise<Frame[]> {
   expect(settled.marker as number).toBeLessThan(settled.client);
   // Parked on the divider, not tailed (the pane must have something below to
   // scroll to, or a "no jump" green would be vacuous).
-  expect(settled.height - settled.top - settled.client).toBeGreaterThan(
-    SCROLL_BOTTOM_THRESHOLD_PX,
-  );
+  expect(settled.height - settled.top - settled.client).toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 
   // #1089 CORE — no VISIBLE frame shows the divider outside the viewport. On
   // main both post-reveal displacements land here: the tail snap parks it

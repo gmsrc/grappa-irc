@@ -77,23 +77,18 @@
 // against the same container and the spec is re-runnable N times on ONE
 // stack.
 
-import { expect, test } from "@playwright/test";
 import type { Browser } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import {
   composeSend,
   expectShellReady,
   selectChannel,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
-import {
-  GRAPPA_BASE_URL,
-  loginVisitor,
-  mintVisitor,
-  reapVisitors,
-} from "../fixtures/grappaApi";
-import { getSeededAdmin } from "../fixtures/seedData";
-import { awaitMail, extractFromMail, resetMailpit } from "../fixtures/mailpit";
+import { GRAPPA_BASE_URL, loginVisitor, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
+import { awaitMail, extractFromMail, resetMailpit } from "../fixtures/mailpit";
+import { getSeededAdmin } from "../fixtures/seedData";
 
 // Boot cic as a visitor (local per-spec helper — the established pattern; each
 // visitor spec inlines its own). Seeds the two auth localStorage keys the SPA
@@ -102,7 +97,10 @@ import { IrcPeer } from "../fixtures/ircClient";
 async function bootVisitor(
   browser: Browser,
   visitor: { id: string; nick: string; token: string },
-): Promise<{ ctx: Awaited<ReturnType<Browser["newContext"]>>; page: import("@playwright/test").Page }> {
+): Promise<{
+  ctx: Awaited<ReturnType<Browser["newContext"]>>;
+  page: import("@playwright/test").Page;
+}> {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   await page.addInitScript(
@@ -111,7 +109,10 @@ async function bootVisitor(
       localStorage.setItem("grappa-subject", subjectJson);
       localStorage.setItem("cic.installChoice", "browser");
     },
-    [visitor.token, JSON.stringify({ kind: "visitor", id: visitor.id, nick: visitor.nick })] as const,
+    [
+      visitor.token,
+      JSON.stringify({ kind: "visitor", id: visitor.id, nick: visitor.nick }),
+    ] as const,
   );
   await page.goto("/");
   await expectShellReady(page);
@@ -183,9 +184,9 @@ test.describe("#581 recover-identity (real services)", () => {
 
       await page.locator(".sidebar-home-btn").click();
       // The launcher never renders for an anon (non-recoverable) credential.
-      await expect(
-        page.getByTestId(`home-recover-identity-${visitor.network_slug}`),
-      ).toHaveCount(0);
+      await expect(page.getByTestId(`home-recover-identity-${visitor.network_slug}`)).toHaveCount(
+        0,
+      );
     } finally {
       if (ctx) await ctx.close();
       await reapVisitors(admin.token, visitor?.id);

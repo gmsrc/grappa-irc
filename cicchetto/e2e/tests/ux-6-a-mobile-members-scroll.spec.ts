@@ -38,9 +38,9 @@
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`:
 // subject-shape-agnostic CSS contract — registered vjt suffices.
 
-import { expect, test } from "../fixtures/test";
 import { closeMembersDrawer, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -137,9 +137,8 @@ test("@webkit ux-6-a — html.overlay-open suspends root touch-action so gesture
       html: getComputedStyle(document.documentElement).touchAction,
       body: getComputedStyle(document.body).touchAction,
       root: getComputedStyle(document.getElementById("root") ?? document.body).touchAction,
-      rootChild: getComputedStyle(
-        document.querySelector("#root > div") ?? document.body,
-      ).touchAction,
+      rootChild: getComputedStyle(document.querySelector("#root > div") ?? document.body)
+        .touchAction,
     };
   });
   expect(chain.html).toBe("none");
@@ -260,8 +259,6 @@ test("@webkit ux-6-a v2 — .member-name:hover underline is gated on (hover: hov
     .locator(".shell-mobile .shell-members .members-pane li .member-name")
     .first();
   await memberName.hover();
-  const decoration = await memberName.evaluate(
-    (el) => getComputedStyle(el).textDecorationLine,
-  );
+  const decoration = await memberName.evaluate((el) => getComputedStyle(el).textDecorationLine);
   expect(decoration).toBe("none");
 });

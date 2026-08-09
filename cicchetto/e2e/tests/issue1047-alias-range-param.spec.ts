@@ -24,11 +24,11 @@
 // SINGLE subject arm (vjt), justified as in #385: alias expansion is
 // client-side and subject-agnostic; there is no subject-shaped branch here.
 
-import { test, expect } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#i1047-${crypto.randomUUID().slice(0, 8)}`;
@@ -113,8 +113,6 @@ test("#1047 — `alias k kick $1 $2-` kicks with the WHOLE reason, upstream-witn
 
   // ORACLE 2 — the cic surface renders the same whole reason.
   await expect(
-    page
-      .locator('[data-testid="scrollback-line"][data-kind="kick"]')
-      .filter({ hasText: REASON }),
+    page.locator('[data-testid="scrollback-line"][data-kind="kick"]').filter({ hasText: REASON }),
   ).toBeVisible({ timeout: 10_000 });
 });

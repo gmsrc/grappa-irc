@@ -23,10 +23,10 @@
 // server-side fan-out, so once the asker has rendered it, a bystander that
 // was going to receive it has already been sent it.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -34,7 +34,10 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // collide with the still-connected peer of the previous iteration.
 const uniqueNick = () => `i1088-${Math.random().toString(36).slice(2, 8)}`;
 
-test("#1088 — /who opens the modal only on the client that issued it", async ({ page, browser }) => {
+test("#1088 — /who opens the modal only on the client that issued it", async ({
+  page,
+  browser,
+}) => {
   const vjt = getSeededVjt();
   const peerNick = uniqueNick();
 

@@ -31,10 +31,10 @@
 // non-clipped width) is per-tier, NOT per-channel — any channel where
 // vjt is +o suffices.
 
-import { expect, test } from "../fixtures/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, test } from "../fixtures/test";
 
 const PEER_NICK = "members-prefix-buddy";
 const CHANNEL = "#members-prefix-test";
