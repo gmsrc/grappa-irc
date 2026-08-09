@@ -34962,3 +34962,94 @@ installed from **Firefox will not appear in the system share sheet** even with
 this shipped. The original requester installed from Firefox, so their case
 stays uncovered on that browser; the feature works for Chromium-based installs.
 There is no fix available to us — it is not a bug in this implementation.
+## 2026-08-09 — #1086: the boot verbs answer for themselves, and the flag table is gated
+
+The first slice of #1086 left the ten boot verbs delegating their help to
+`exec scripts/mix.sh --env=dev help grappa.<task>` and escalated the rest. This
+closes it: all twenty-three verbs now answer `--help` from an inline
+`verb_help_<snake>` heredoc, and `dispatch_help` lost its per-kind branch.
+
+**The escalation's premise was wrong, and the honest reasons are different
+ones.** The previous entry says the delegated help "needs the container UP".
+It does not. `scripts/mix.sh` ends in `_lib.sh`'s `in_container_or_oneshot`,
+which `exec`s into the live container only when one is running and you are not
+in a worktree, and otherwise falls through to `in_oneshot` —
+`docker compose run --rm --no-deps grappa`. With the instance down the help
+still prints. The reasons that survive measurement are smaller and real:
+
+  * **It answered a different question.** `mix help grappa.create_user` prints
+    the `@moduledoc`, which documents the MIX TASK: it spells the command
+    `scripts/mix.sh grappa.create_user`, not `bin/grappa create-user`, and
+    carries developer prose — Boundary-declaration paragraphs, the #251/#266
+    vhost-precedence history, the post-mortem of the nine-day cold-start
+    mystery in `grappa.add_server`. An operator asking which flags a verb takes
+    gets none of that as an answer.
+  * **It cost a container to print a paragraph.** The oneshot path boots an
+    image; where docker is absent it does not run at all. Measured on this
+    worktree with `docker` refusing to exec and `SCRIPTS_DIR` pointing at an
+    empty directory, every one of the ten exited **127**; after the change,
+    every one exits **0**.
+
+**The packaged-host argument does NOT hold, and was not used.** It is tempting
+to say a `.deb`/AUR install has no compose and therefore no oneshot. True, but
+irrelevant: neither package ships this dispatcher. `/usr/bin/grappa` there is
+`infra/packaging/grappa-wrapper.sh`, a thin wrapper over the mix-release boot
+script whose verbs are `migrate`, `gen-secrets`, `remote`, `version`, `eval` —
+a different program that happens to share a name. It has no `create-user`.
+
+**Hand-written, not generated — and the `wireTypes.ts` precedent does not
+transfer.** The obvious alternative was generating the blocks from the
+`@shortdoc`/`@moduledoc` at build time with a drift gate, as
+`mix grappa.gen_wire_types --check` does for `cicchetto/src/lib/wireTypes.ts`.
+That generator derives from `@type` SPECS — a machine-readable declaration with
+exactly one correct rendering in the target language. `@moduledoc` is prose
+written for a different reader, and prose has no single correct rendering into
+a second audience's document. Generating it verbatim ships developer material
+to operators; generating a curated subset means marking which prose is
+operator-facing, i.e. writing the operator's text a second time inside the
+`.ex` and then adding a build step to move it — the same duplication with more
+machinery.
+
+**What IS the same contract twice is the flag table, so that is what is
+gated.** `test/mix/tasks/grappa/operator_help_drift_test.exs` reads the VERBS
+table out of `bin/grappa`, pulls each boot verb's heredoc, collects every
+`--flag` on a flag-declaration line, parses the task's `@switches` off its AST,
+and asserts the two sets are equal in BOTH directions. A boolean switch may be
+spelled `--x`, `--no-x` or both. The verb list is derived from the dispatcher,
+so a new boot verb is gated without touching the test; a companion assertion
+fails if the extractor ever matches nothing, which would otherwise make the
+whole gate pass vacuously.
+
+**Required-ness is deliberately NOT gated.** `@required` is not the whole truth:
+`grappa.set_network_caps` declares `@required []` while `--network` is
+unconditionally required, raised later by `fetch_slug!/1` so that "you passed no
+cap at all" is reported before "you passed no network". Gating against
+`@required` would force the help to call `--network` optional, which is false.
+
+**Two pre-existing defects fell out of writing the completeness test.**
+`db-latency` and `db-latency-reset` (#357) were in the VERBS table but in
+neither `VERB_DISPLAY_ORDER` nor the help functions: they were invisible in the
+banner, and `bin/grappa help db-latency` exited **127** with
+`verb_help_db_latency: command not found` — on `origin/main`, since #357.
+Both now have help and a banner row, and two bats assertions walk the table so
+the class cannot recur.
+
+**A gate that reads a repo file needs that file MOUNTED, or it grades the
+wrong tree.** The gate came up red on its first run against a worktree whose
+help was already correct: `scripts/_lib.sh`'s `WORKTREE_VOLUMES` bind-mounts
+`lib`, `test`, `config`, `priv/repo`, `infra`, `cicchetto/src` and a handful of
+named root files over the base `./:/app` bind — `bin/` was not among them, so
+`File.read!("bin/grappa")` inside the container read MAIN's dispatcher. This is
+a recurring class, not a surprise: #652 added the `VERSION` override for the
+same reason, #369 theme 8 added `CLAUDE.md`, #369 X1 added `compose.yaml` +
+`.env.example`. `bin` now joins them, RO. **The general rule: a drift-pin test
+that reads a repo path outside `lib/test/config/priv/repo/infra/cicchetto/src`
+must add that path to `WORKTREE_VOLUMES` in the same commit, or it can never be
+verified GREEN from a worktree before merge.**
+
+**And a third copy of the flag table, already drifted.** `docs/OPERATIONS.md`
+spelled the boot verbs out with flags, advertising an `--host`/`--port` pair
+`add-server` never had (it takes `--server host:port`) and omitting
+`bind-network`'s required `--server`. An operator following the runbook hit
+exactly the #1086 crash. Rather than gate a third surface, the copy is deleted:
+the runbook now lists the verb names and points at `--help`.

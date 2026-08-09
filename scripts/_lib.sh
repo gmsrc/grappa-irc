@@ -135,6 +135,14 @@ if [ "$SRC_ROOT" != "$REPO_ROOT" ]; then
         # verify a fix GREEN before merge. RO — tests only read them.
         -v "$SRC_ROOT/compose.yaml:/app/compose.yaml:ro"
         -v "$SRC_ROOT/.env.example:/app/.env.example:ro"
+        # Same drift-pin reasoning again for the operator dispatcher
+        # (#1086): operator_help_drift_test.exs reads bin/grappa to assert
+        # each boot verb's inline help names exactly its mix task's
+        # @switches. bin/ is not under the dir mounts above, so without
+        # this override a worktree run reads MAIN's dispatcher — which is
+        # how the gate first came up red against a worktree whose help
+        # was correct. RO — tests only read it.
+        -v "$SRC_ROOT/bin:/app/bin:ro"
     )
 fi
 

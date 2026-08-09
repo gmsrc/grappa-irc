@@ -23,6 +23,19 @@ dispatcher cd's to the main repo for docker compose and forwards
 worktree volumes via oneshot bindings (same machinery as
 `scripts/*.sh`).
 
+**Where the flag table lives: `bin/grappa <verb> --help`** (or
+`bin/grappa help <verb>`, or `-h` — anywhere in the args). Every verb
+answers inline, needing neither a running container nor docker at all,
+so it works exactly when you reach for it: mid-incident, on a cold host,
+before the first build. That is the ONE authoritative flag list per
+verb — for the boot verbs it is gated against the mix task's
+`@switches`, both directions, by
+`test/mix/tasks/grappa/operator_help_drift_test.exs`. This runbook
+deliberately no longer repeats it (#1086): the copy it used to carry had
+already drifted, advertising an `--host`/`--port` pair `add-server`
+never had and omitting `bind-network`'s required `--server`, so anyone
+following the runbook hit the very crash #1086 was filed for.
+
 > **2026-05-31 admin-panel CRUD cluster:** every mix-task verb below
 > now has a REST equivalent under `/admin/*` (admin-gated). Prefer
 > the **AdminPane in cic** (browser UI) for ad-hoc operator actions
@@ -38,17 +51,18 @@ bin/grappa help                  # list verbs grouped by category
 bin/grappa help <verb>           # per-verb help
 bin/grappa <verb> --help         # same, as a flag (or -h) — anywhere in the args
 
-# Boot-time verbs (mix tasks; auto-detect MIX_ENV from container):
-bin/grappa create-user --name <user> --password <pw>
-bin/grappa bind-network --user <user> --network <slug> --nick <nick> --auth <method> [--source <ip>] [--services-flavor <azzurra|atheme|oftc|unknown>]
-bin/grappa add-server --network <slug> --host <host> --port <port> [--tls] [--source <ip>]
-bin/grappa remove-server --network <slug> --host <host> --port <port>
-bin/grappa set-network-caps --network <slug> [--max-visitor-sessions N] [--max-user-sessions N] [--max-per-ip N]
-bin/grappa unbind-network --user <user> --network <slug>
-bin/grappa update-network-credential ...
-bin/grappa seed-scrollback ...
-bin/grappa gen-encryption-key
-bin/grappa gen-vapid
+# Boot-time verbs (mix tasks; auto-detect MIX_ENV from container).
+# Flags: `bin/grappa <verb> --help` — see the note above.
+bin/grappa create-user               # create a Grappa user account
+bin/grappa bind-network              # bind a (user, network) credential
+bin/grappa add-server                # add a server entry to a network
+bin/grappa remove-server             # remove a server entry from a network
+bin/grappa set-network-caps          # set / clear per-network admission caps
+bin/grappa unbind-network            # remove a (user, network) credential
+bin/grappa update-network-credential # edit autojoin / nick / SASL fields
+bin/grappa seed-scrollback           # seed dev + e2e scrollback
+bin/grappa gen-encryption-key        # generate a Cloak.Vault key
+bin/grappa gen-vapid                 # generate a VAPID keypair (push)
 
 # Live-state verbs (--rpc-eval against the live BEAM via T-2 dist shell):
 bin/grappa delete-visitor <uuid>     # sync terminate + Repo.delete; frees cap slot
@@ -58,6 +72,8 @@ bin/grappa reap-visitors             # force-run Visitors.Reaper.sweep (otherwis
 bin/grappa list-sessions             # tab-separated: subject, network_id, pid, mailbox, memory
 bin/grappa list-credentials          # tab-separated: user, network, nick, state (ALL states)
 bin/grappa list-visitors             # tab-separated: id, nick, network, expires_at, identified
+bin/grappa db-latency                # #357 SQLite write/query-latency aggregate
+bin/grappa db-latency-reset          # zero the counters, opening a fresh window
 
 # Live-state attach:
 bin/grappa remote-shell              # iex --remsh against live BEAM
