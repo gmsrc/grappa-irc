@@ -15,6 +15,7 @@ import { isContentKind, ownNickForNetwork, type ScrollbackMessage } from "./lib/
 import { acceptInvite, confirmJoinChannel } from "./lib/channelJoin";
 import { channelKey, decodeChannelKey } from "./lib/channelKey";
 import { type TopicJoinLine, topicByChannel, topicJoinLine } from "./lib/channelTopic";
+import { stripCtcpAction } from "./lib/ctcpAction";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { highlightPatterns } from "./lib/highlightList";
 import { type InviteAckEntry, inviteAckBySlug } from "./lib/inviteAck";
@@ -448,22 +449,6 @@ const userhostSuffix = (msg: ScrollbackMessage): string => {
   const user = msg.meta.sender_user;
   const host = msg.meta.sender_host;
   return typeof user === "string" && typeof host === "string" ? ` [${user}@${host}]` : "";
-};
-
-// Strip the CTCP ACTION envelope (`\x01ACTION ...\x01`) from a body for
-// rendering. The server stores the wire-form body verbatim per the
-// CLAUDE.md "preserved as-is" rule (round-trip fidelity for ACTION
-// and other CTCP verbs); the display layer unwraps the envelope when
-// the kind discriminator already classifies the row as `:action`.
-// Defensive: if the envelope isn't there (e.g. a future server-side
-// pre-strip lands), fall through to the raw body.
-const CTCP_ACTION_PREFIX = "\x01ACTION ";
-const CTCP_DELIMITER = "\x01";
-const stripCtcpAction = (body: string | null): string => {
-  if (!body) return "";
-  if (!body.startsWith(CTCP_ACTION_PREFIX)) return body;
-  const inner = body.slice(CTCP_ACTION_PREFIX.length);
-  return inner.endsWith(CTCP_DELIMITER) ? inner.slice(0, -1) : inner;
 };
 
 type NickHandlers = {
