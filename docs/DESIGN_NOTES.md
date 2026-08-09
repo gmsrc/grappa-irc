@@ -35349,6 +35349,7 @@ paints. Existing e2e already hit-tests two of the three shapes in a real browser
 mis-sized scrim would miss. The `-full` geometry has no such witness; the confirm
 and delete-account scrims both dismiss on backdrop click and neither is clicked
 by any spec.
+
 ## 2026-08-09 — #1127: the wasted band was nothing painting, and zero is not the same as absent
 
 **The defect.** On a notched iPhone PWA a black band sat under the mobile
