@@ -27,28 +27,28 @@ import {
   sidebarMessageBadge,
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = "M3: cicchetto-driven outbound";
 
 test("M3 — cicchetto compose to focused channel renders own-msg, no unread", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, MESSAGE_BODY);
 
   // Server-side: own message persisted as :privmsg with sender =
-  // NETWORK_NICK. assertMessagePersisted polls REST until the row
+  // specNick(). assertMessagePersisted polls REST until the row
   // appears, isolating "did grappa receive + persist" from the WS
   // echo path tested next.
   await assertMessagePersisted({
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     body: MESSAGE_BODY,
   });
 

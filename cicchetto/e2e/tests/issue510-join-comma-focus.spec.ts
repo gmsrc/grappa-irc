@@ -24,11 +24,11 @@
 // of each) and PARTs both in `finally`, keeping the shared testnet tidy.
 
 import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#510 — /join #a,#b focuses #a, never a phantom '#a,#b' window", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const stamp = Date.now();
   const chanA = `#t510a-${stamp}`;
   const chanB = `#t510b-${stamp}`;
@@ -36,7 +36,7 @@ test("#510 — /join #a,#b focuses #a, never a phantom '#a,#b' window", async ({
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready before the
   // /join (mirrors issue382 / issue240 boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   try {
     // ONE comma-list command → server sends ONE multi-target JOIN line.
@@ -59,8 +59,8 @@ test("#510 — /join #a,#b focuses #a, never a phantom '#a,#b' window", async ({
     // resolves to :joined — selectChannel with ownNick requires the
     // per-channel self-JOIN line + WS-ready seam, which only a resolved
     // :joined window satisfies (a greyed :pending/:failed never does).
-    await selectChannel(page, NETWORK_SLUG, chanB, { ownNick: NETWORK_NICK });
-    await selectChannel(page, NETWORK_SLUG, chanA, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, chanB, { ownNick: specNick() });
+    await selectChannel(page, NETWORK_SLUG, chanA, { ownNick: specNick() });
   } finally {
     // Explicit-channel /part parts each regardless of focus (both are fresh
     // per-run channels, so cleanup keeps the shared testnet tidy).

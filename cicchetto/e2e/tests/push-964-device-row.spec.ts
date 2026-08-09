@@ -42,8 +42,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "n964-dmer";
 const SUB_ID = "964-device-row";
@@ -53,14 +53,14 @@ test("device row shows the activity instant + marks the device you are on", asyn
   context,
   browser,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   await stubPushManager(context, { endpoint: pushCatcherEndpoint(SUB_ID) });
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
@@ -79,7 +79,7 @@ test("device row shows the activity instant + marks the device you are on", asyn
   try {
     // Background the device: a VISIBLE one suppresses the push at source.
     await setPageVisibility(page, false);
-    peer.privmsg(NETWORK_NICK, "hi from n964-dmer");
+    peer.privmsg(specNick(), "hi from n964-dmer");
     expect((await awaitPushDelivery(SUB_ID)).length).toBeGreaterThanOrEqual(1);
     // Barrier: Sender bumps the row AFTER the vendor 200, so the catcher
     // seeing a delivery does not yet mean the DB write has landed.

@@ -29,8 +29,7 @@
 
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 async function waitForServiceWorkerControl(page: import("@playwright/test").Page): Promise<void> {
   // cic's SW uses skipWaiting + clients.claim so the first navigation
@@ -91,7 +90,7 @@ async function uploadPng(
 test("REV-G H22 — SW does not intercept /uploads/<slug> navigation (serves image bytes)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await waitForServiceWorkerControl(page);
 
@@ -123,7 +122,7 @@ test("REV-G H22 — SW does not intercept /uploads/<slug> navigation (serves ima
 });
 
 test("REV-G H22 — SW does not intercept /api/server-settings (serves JSON)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await waitForServiceWorkerControl(page);
 

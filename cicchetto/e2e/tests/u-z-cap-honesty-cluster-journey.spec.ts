@@ -97,10 +97,9 @@ import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
   AUTOJOIN_CHANNELS,
-  getSeededVjt,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -235,12 +234,12 @@ test.afterEach(async () => {
     );
   });
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreNetwork(vjt.token);
 });
 
 test("U-Z cap-honesty journey: park → user-cap-reject → row-unchanged → bump → reconnect → visitor-independence", async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const admin = await login(ADMIN_IDENTIFIER, ADMIN_PASSWORD);
 
   // STEP 1 — Park vjt's Bootstrap-spawned session so subsequent

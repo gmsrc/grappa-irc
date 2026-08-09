@@ -11,7 +11,7 @@
 // The channels_changed broadcast drops the entry from the sidebar.
 //
 // Expected:
-//   - PART row persists server-side (sender = NETWORK_NICK, kind =
+//   - PART row persists server-side (sender = specNick(), kind =
 //     :part, channel = #bofh)
 //   - sidebar entry for #bofh disappears
 //   - selectedChannel redirects via UX-4-E picker — with no other
@@ -38,8 +38,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, joinChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -48,17 +48,17 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // joined (e.g. webkit BUG7 specs). Restore the seed-time joined state
 // after the test asserts so the suite remains order-independent.
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test("M9 — sidebar X-button PARTs the channel and dismisses the window", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Focus #bofh first so the WS subscription sync completes before
   // the PART. Without this, the BUG5a self-PART handler might not
   // be installed when the PART echo arrives.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Click the X button on #bofh's sidebar entry.
   // Sidebar.tsx renders `aria-label="Close #bofh"` — use that as the
@@ -79,7 +79,7 @@ test("M9 — sidebar X-button PARTs the channel and dismisses the window", async
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     kind: "part",
   });
 

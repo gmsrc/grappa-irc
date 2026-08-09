@@ -22,14 +22,8 @@ import {
   mintVisitor,
   publishTheme,
 } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MIN_TAP_TARGET_PX = 44;
@@ -72,8 +66,8 @@ async function reopenGalleryDesktop(page: PWPage): Promise<void> {
 
 test.describe("#299 — theme cards (tap-select + progressive disclosure)", () => {
   test("@webkit tapping a card reveals exactly one ≥44px action row", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await loginAs(page, specUser());
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await openThemesSubPageMobile(page);
@@ -187,8 +181,8 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
       expect(published.author).toBe(visitor.nick);
 
       // View the gallery as the seeded vjt; the card credits the visitor nick.
-      await loginAs(page, getSeededVjt());
-      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+      await loginAs(page, specUser());
+      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
       await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
       await openThemesSubPageDesktop(page);
 

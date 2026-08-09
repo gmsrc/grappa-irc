@@ -49,8 +49,8 @@ import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { getReadCursor, restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -88,7 +88,7 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
 // bahamut ghost-nick linger window (per-run-unique peer nicks, TESTING.md).
 async function tapButtonPersistsCursorAndHolds(page: Page, peerNick: string): Promise<void> {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Seed a cursor 25 rows from the tail → an unread divider is injected on first
   // focus and the activation parks ABOVE the fold (button shows). Same shape as
@@ -102,7 +102,7 @@ async function tapButtonPersistsCursorAndHolds(page: Page, peerNick: string): Pr
   await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect
     .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
     .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
@@ -166,7 +166,7 @@ test.describe("#310 — scroll-to-bottom button persists the read cursor (deskto
 
   test.afterEach(async () => {
     if (!CHANNEL) return;
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   });
 
@@ -180,7 +180,7 @@ test.describe("#310 — scroll-to-bottom button persists the read cursor (deskto
 test.describe("#310 — scroll-to-bottom button persists the read cursor (mobile)", () => {
   test.afterEach(async () => {
     if (!CHANNEL) return;
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   });
 

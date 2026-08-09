@@ -20,14 +20,14 @@
 
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
 import { buildPushDeepLink } from "../fixtures/pushTap";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("#146 recurrence — real SW notificationclick delivers the navigate even when focus() rejects", async ({
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // The page is now a window client and the SW is registered. Wait for
   // it to claim the page so `clients.matchAll` inside focusOrOpen sees

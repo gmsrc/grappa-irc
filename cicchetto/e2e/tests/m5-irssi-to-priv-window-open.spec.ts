@@ -22,19 +22,19 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m5-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = "M5: inbound DM to focused window";
 
 test("M5 — inbound DM to focused query window renders inline, no unread", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Channel-first focus to drive the WS-ready sync (own-nick subscribe
   // for dm-listener fires off the same boot effect chain).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   // Connect FIRST so the /query below names the nick the server GRANTED
@@ -48,10 +48,10 @@ test("M5 — inbound DM to focused query window renders inline, no unread", asyn
     await composeSend(page, `/query ${peer.nick}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
-    peer.privmsg(NETWORK_NICK, MESSAGE_BODY);
+    peer.privmsg(specNick(), MESSAGE_BODY);
 
     // Probe via REST against channel = PEER_NICK (peer-DM aggregation
-    // OR-shape matches inbound rows). Probing channel = NETWORK_NICK
+    // OR-shape matches inbound rows). Probing channel = specNick()
     // would hit the own-nick narrowing path (self-msgs only) and miss
     // peer-originated DMs — see m4 for the full rationale.
     await assertMessagePersisted({

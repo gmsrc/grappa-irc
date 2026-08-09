@@ -23,14 +23,8 @@
 import type { Page } from "@playwright/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 import { LITTERBOX_MODAL_HEADING, pickFile } from "../fixtures/uploadJourney";
 
 const FIXTURE_URL = "https://litter.catbox.moe/i2-fixture.png";
@@ -101,9 +95,9 @@ test.describe("I-2 litterbox path (admin-pinned host)", () => {
     // join+settings race by waiting for the WS frame carrying
     // `litterbox` to land before driving the picker.
     const settingsHydrated = waitForServerSettingsFrame(page, "litterbox");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await settingsHydrated;
 
     const modal = await pickFile(
@@ -138,9 +132,9 @@ test.describe("I-2 litterbox path (admin-pinned host)", () => {
     });
 
     const settingsHydrated = waitForServerSettingsFrame(page, "litterbox");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await settingsHydrated;
 
     const modal = await pickFile(

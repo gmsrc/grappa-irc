@@ -18,8 +18,8 @@
 
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test.setTimeout(60_000);
 
@@ -51,7 +51,7 @@ async function openThemesGalleryDesktop(page: PWPage): Promise<void> {
 
 test.describe("#75 — theme editor (producer path)", () => {
   test("new theme: live preview + save persists across reload via the server", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     await openThemesGalleryDesktop(page);
 
     // Open the editor seeded from a built-in (the "new theme" entry point).
@@ -78,7 +78,7 @@ test.describe("#75 — theme editor (producer path)", () => {
   });
 
   test("cancel restores the pre-open theme (no draft leak)", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     await openThemesGalleryDesktop(page);
 
     // Snapshot the applied accent BEFORE opening — whatever it is (base
@@ -100,11 +100,11 @@ test.describe("#75 — theme editor (producer path)", () => {
   });
 
   test("@webkit editor opens + live-previews + cancels on mobile", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     // The mobile members-sidebar hamburger (which hosts the settings cog,
     // the path to themes since #299) is channel-scoped — select a channel
     // first (mirror the gallery consumer spec).
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     // Mobile: reach the themes sub-page via the rail launcher menu (#500) → cog
@@ -135,7 +135,7 @@ test.describe("#75 — theme editor (producer path)", () => {
     const requests: string[] = [];
     page.on("request", (r) => requests.push(r.url()));
 
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     await openThemesGalleryDesktop(page);
 
     await page.getByTestId("theme-new").click();
@@ -169,10 +169,10 @@ test.describe("#75 — theme editor (producer path)", () => {
   test("background upload: wallpaper layer applies live + persists across reload", async ({
     page,
   }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     // Select a channel so the shell renders a .scrollback-pane (the surface
     // the wallpaper layer paints behind) underneath the settings drawer.
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
     await openThemesGalleryDesktop(page);
 

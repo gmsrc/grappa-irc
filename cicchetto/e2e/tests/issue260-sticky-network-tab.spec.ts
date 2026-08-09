@@ -34,8 +34,8 @@ import {
   mintVisitor,
   reapVisitors,
 } from "../fixtures/grappaApi";
-import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // Two separate ircds → distinct nick namespaces → ONE visitor can hold
 // both live with no 433 autokill (the #211 phase-7 topology). Two live
@@ -177,7 +177,7 @@ test("@webkit #260 — the network header carries the sticky-left CSS contract",
   // Deterministic, isolated anchor: the computed style the browser
   // consults to pin the header. Seeded vjt has ONE network → one header;
   // read-only (no JOINs), so no shared-stack poisoning.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const header = page.locator(".bottom-bar-network-header").first();

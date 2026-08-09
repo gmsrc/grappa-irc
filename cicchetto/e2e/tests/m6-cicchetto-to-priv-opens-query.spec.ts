@@ -31,20 +31,20 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m6-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = "M6: cicchetto-driven DM outbound";
 
 test("M6 — cicchetto /msg opens query window, focuses, renders own-msg", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Start in a real channel so the compose box is visible (Server
   // window has no compose). selectChannel + ownNick syncs WS-ready
   // for #bofh — same pattern as M1/M2/M7.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   // Peer joins the network so the DM target nick is visible to the
@@ -70,14 +70,14 @@ test("M6 — cicchetto /msg opens query window, focuses, renders own-msg", async
     await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 15_000 });
 
     // Server-side: DM row persisted at channel = PEER_NICK with
-    // sender = NETWORK_NICK. The wire shape mirrors a regular
+    // sender = specNick(). The wire shape mirrors a regular
     // PRIVMSG row; the channel field is the nick because that's the
     // PRIVMSG target.
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: peer.nick,
-      sender: NETWORK_NICK,
+      sender: specNick(),
       body: MESSAGE_BODY,
     });
 

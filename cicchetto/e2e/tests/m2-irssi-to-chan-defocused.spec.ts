@@ -18,8 +18,8 @@
 import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m2-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -27,7 +27,7 @@ const SERVER_WINDOW = "Server";
 const MESSAGE_BODY = "M2: defocused-channel inbound";
 
 test("M2 — peer PRIVMSG to defocused channel bumps msg-unread badge by 1", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Visit #bofh FIRST with the WS-ready sync so we know the channel
   // topic subscription has landed (joinChannel fired + server-side
@@ -35,7 +35,7 @@ test("M2 — peer PRIVMSG to defocused channel bumps msg-unread badge by 1", asy
   // up-front sync, the peer's PRIVMSG races the WS subscribe and the
   // unread bump is silently skipped (no WS push = no routeMessage =
   // no bumpMessageUnread).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   // Server window is always present and has no compose, so selecting
   // it can't accidentally produce client-side chatter that would race
   // the unread-bump assertion. WS-ready guard is off here — Server

@@ -55,8 +55,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique — bahamut lingers channel/nick state after disconnect, so
 // static literals collide on rapid reruns (feedback: per-run-unique names).
@@ -68,12 +68,12 @@ test("#976 — declining an invite drops it on every device and it does NOT come
   page,
   browser,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Confirm login on a real channel first (self-JOIN echo present) so the
   // upstream session is live before the INVITEs.
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // DEVICE B — the same operator, a second browser context, so a second WS on
   // the same user topic. Opened BEFORE the invites: its own banners appearing
@@ -91,8 +91,8 @@ test("#976 — declining an invite drops it on every device and it does NOT come
     // two raw INVITEs to the operator's session.
     await peer.join(DECLINED_CHANNEL);
     await peer.join(KEPT_CHANNEL);
-    peer.rawInvite(NETWORK_NICK, DECLINED_CHANNEL);
-    peer.rawInvite(NETWORK_NICK, KEPT_CHANNEL);
+    peer.rawInvite(specNick(), DECLINED_CHANNEL);
+    peer.rawInvite(specNick(), KEPT_CHANNEL);
 
     // LIVE on A: TWO banners, stacked. This is the only place in the suite
     // where a single banner SOURCE has more than one live entry — the case

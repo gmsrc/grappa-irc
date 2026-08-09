@@ -26,8 +26,8 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "oper367-target";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -39,9 +39,9 @@ const OPER_PASS = "testoperpass";
 const OPER_ROLE_TEXT_RE = /operator|administrator/i;
 
 test("issue #367 — /whois of an opered peer renders the 313 role text row", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {

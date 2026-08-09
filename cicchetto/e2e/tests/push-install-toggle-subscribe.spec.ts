@@ -28,8 +28,8 @@ import {
   resetPushSubscriptions,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SUB_ID = "install-happy";
 
@@ -37,7 +37,7 @@ test("master toggle enables push: subscribe → POST /push/subscriptions → dev
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   // The seeded `vjt` user is shared across every push spec; without
   // a per-spec wipe of push_subscriptions, leftover rows from prior
@@ -48,7 +48,7 @@ test("master toggle enables push: subscribe → POST /push/subscriptions → dev
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // Watch for the subscribe POST so we can assert request shape +
   // response status. POST may fire before the devices-list refresh,

@@ -52,14 +52,8 @@ import {
   restoreReadCursorToTail,
   setReadCursorToId,
 } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_SLUG,
-  VJT_USER,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -78,17 +72,11 @@ const MAX_HTTP_LIMIT = 200;
 test.describe("#161/#693 — a gap larger than one page opens at the tail, not the cursor", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("unread > 200: the newest row is rendered on arrival, with an uncapped jump-back count and no divider", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const admin = getSeededAdmin();
 
     // Re-seed #bofh with > 200 rows. resetSubject truncates then re-seeds
@@ -96,7 +84,7 @@ test.describe("#161/#693 — a gap larger than one page opens at the tail, not t
     // lands as the max id row after the seed).
     await resetSubject(
       admin.token,
-      VJT_USER,
+      specUser().name,
       { [NETWORK_SLUG]: AUTOJOIN_CHANNELS },
       { [NETWORK_SLUG]: [{ name: CHANNEL, seedCount: LARGE_SEED_COUNT, seedSender: SEED_SENDER }] },
     );

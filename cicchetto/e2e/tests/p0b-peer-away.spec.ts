@@ -20,17 +20,17 @@ import {
   waitForDmListenerReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "p0b-away-peer";
 const AWAY_MESSAGE = "Gone fishing — back at 5pm";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test("P-0b — /msg to away peer surfaces peer_away banner in DM window", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });

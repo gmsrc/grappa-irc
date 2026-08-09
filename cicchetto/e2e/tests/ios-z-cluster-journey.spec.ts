@@ -44,8 +44,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh
 
@@ -56,19 +56,19 @@ const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh
 // 30s. Re-join via REST in afterEach so the autojoin steady state
 // returns before the next spec.
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
 test("@webkit iOS-Z cluster — viewport + safe-area + close× + font-size", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // UX-4 bucket B made `:home` the cold-load default selection, so the
   // shell now lands on HomePane (no TopicBar) post-login. The iOS-2
   // arm needs `.topic-bar` in the DOM — explicitly select the autojoin
   // channel so the topic-bar gates resolve.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Wait for TopicBar to render — `.topic-bar` is gated on
   // `selectedChannel().kind === "channel"` in Shell.tsx, so it only

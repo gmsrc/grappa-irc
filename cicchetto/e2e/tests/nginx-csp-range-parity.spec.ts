@@ -26,8 +26,8 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 import { uploadViaPicker } from "../fixtures/uploadJourney";
 
 // Directives whose loss has bitten (media-src/worker-src, 6f3327c) or
@@ -66,9 +66,9 @@ test("nginx parity — ranged GET /uploads/<slug> through the proxy → 206 + co
   page,
 }) => {
   const body = readFileSync(fileURLToPath(new URL("../fixtures/upload.txt", import.meta.url)));
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const { slug } = await uploadViaPicker(
     page,

@@ -35,8 +35,8 @@
 // regression guard that iOS keeps the nick selectable after the change.
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern): the e2e sqlite scrollback persists
@@ -45,19 +45,19 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = `android-nick-select target ${Date.now()}`;
 
 // Read the computed selection policy off the freshly-rendered sender
-// button of a message we just sent (NETWORK_NICK is vjt's own nick), so
+// button of a message we just sent (specNick() is vjt's own nick), so
 // the `.nick-clickable` under test is guaranteed present and attributed.
 async function nickSelectionStyles(page: import("@playwright/test").Page) {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, MESSAGE_BODY);
   const row = scrollbackLine(page, "privmsg", MESSAGE_BODY);
   await expect(row).toBeVisible({ timeout: 5_000 });
 
   const nick = row.locator(".scrollback-sender.nick-clickable");
-  await expect(nick).toContainText(NETWORK_NICK);
+  await expect(nick).toContainText(specNick());
 
   return nick.evaluate((el) => {
     const cs = getComputedStyle(el);

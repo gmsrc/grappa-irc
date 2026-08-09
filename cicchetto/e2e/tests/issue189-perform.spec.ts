@@ -14,8 +14,8 @@
 
 import { loginAs, openSettingsDrawer, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = "#bofh";
 
@@ -35,11 +35,11 @@ const clearPerform = (token: string): Promise<unknown> =>
 test("#189 — perform editor: nav row, save list + oper pass, round-trips against server", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   try {
     await clearPerform(vjt.token);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Open via the settings nav row (proves the row exists + wiring).
     await openSettingsDrawer(page);

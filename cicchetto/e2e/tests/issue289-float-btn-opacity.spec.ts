@@ -40,8 +40,8 @@ import {
   restoreReadCursorToTail,
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
@@ -130,21 +130,21 @@ async function scrollChannelUp(page: Page): Promise<void> {
 // `finally` can tear them down. Shared by the #289 opacity test and the
 // #302 hover-latch test — one setup, two contracts.
 async function surfaceBothFloatButtons(page: Page): Promise<{ peer: IrcPeer; bgChannel: string }> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = `t289-${Date.now() % 100000}`;
   const bgChannel = "#t289op";
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: peerNick });
   await peer.join(bgChannel);
   await composeTextarea(page).fill(`/join ${bgChannel}`);
   await composeTextarea(page).press("Enter");
-  await selectChannel(page, NETWORK_SLUG, bgChannel, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, bgChannel, { ownNick: specNick() });
 
   // Back to CHANNEL and scroll UP → scroll-to-bottom shows and the pane
   // stays far from the tail (background arrivals will NOT auto-follow).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await scrollChannelUp(page);
 
   // Background traffic → bgChannel unread → next-active mounts (count "1"),
@@ -173,7 +173,7 @@ async function surfaceBothFloatButtons(page: Page): Promise<{ peer: IrcPeer; bgC
 // later spec that assumes a clean cursor / exact next-active count is not
 // poisoned (cascade-poisoner discipline — mirror #280 / #243).
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
@@ -181,7 +181,7 @@ test.describe("#289 — mobile floating buttons are translucent (text shows thro
   test("@webkit — next-active + scroll-to-bottom are translucent yet clearly tappable", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const { peer, bgChannel } = await surfaceBothFloatButtons(page);
     try {
       // ── The fix: both mobile floating buttons are translucent. ──────
@@ -246,7 +246,7 @@ test.describe("#302 — mobile float buttons don't latch :hover 'selected' after
   test("@webkit — hover-less pointer keeps next-active + scroll-to-bottom at base (no latch)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const { peer, bgChannel } = await surfaceBothFloatButtons(page);
     try {
       // Precondition: this project emulates a hover-less (touch) pointer —

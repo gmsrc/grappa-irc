@@ -40,14 +40,14 @@
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test.describe("#263 topic editing inside the modal", () => {
   test("op edits the topic from the modal: read-only → ✏️ → cancel-stays-open → esc-cancel → multi-line save flattens + closes", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const channel = `#e2e263-${crypto.randomUUID().slice(0, 8)}`;
     // Multi-line input (three lines) — proves the flatten: the peer must see
     // the single flattened line, never the raw multi-line string.
@@ -58,14 +58,14 @@ test.describe("#263 topic editing inside the modal", () => {
     const flattened = `${line1} ${line2} ${line3}`;
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     const peer = await IrcPeer.connect({ nick: `e2e263-${crypto.randomUUID().slice(0, 4)}` });
     try {
       // vjt founds + joins the fresh channel (→ chanop, beats +t), then selects.
       await composeSend(page, `/join ${channel}`);
       await expect(sidebarWindow(page, NETWORK_SLUG, channel)).toBeVisible({ timeout: 10_000 });
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
       await peer.join(channel);
 
       const strip = page.locator('[data-testid="topic-strip"]');
@@ -157,17 +157,17 @@ test.describe("#263 topic editing inside the modal", () => {
     // {:error, :body_too_large} → 413 → `postTopic` throws → S21 surfaces
     // inline + preserves the draft + keeps the modal open. Mirrors the
     // synchronous-reject strategy of s21-topic-clear-error-surface.spec.ts.
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const channel = `#e2e263s21-${crypto.randomUUID().slice(0, 8)}`;
     const overLong = "z".repeat(9000); // > BodyLimit cap (8192) → 413 reject
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     try {
       await composeSend(page, `/join ${channel}`);
       await expect(sidebarWindow(page, NETWORK_SLUG, channel)).toBeVisible({ timeout: 10_000 });
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
       const strip = page.locator('[data-testid="topic-strip"]');
       const modal = page.locator(".topic-modal");

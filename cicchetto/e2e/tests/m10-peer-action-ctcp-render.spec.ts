@@ -25,8 +25,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m10-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -41,9 +41,9 @@ const ACTION_BODY = `M10: waves at the channel @ ${crypto.randomUUID().slice(0, 
 const PERSISTED_BODY = `\x01ACTION ${ACTION_BODY}\x01`;
 
 test("M10 — peer ACTION renders as '* peer body' in focused channel", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(composeTextarea(page)).toBeVisible();
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });

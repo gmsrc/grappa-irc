@@ -19,8 +19,8 @@
 // is unit-tested in cicchetto/src/__tests__/{slashCommands,compose}.test.ts.
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -31,9 +31,9 @@ const BOGUS_SERVER = "no.such.server.grappa.test";
 test("#374 — /motd <unknown-server> surfaces the 402 in the MOTD modal (target reached the wire)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Pre-#374 this arg was dropped and the CURRENT server's MOTD came back with
   // no error. Post-#374 the target is threaded → upstream 402 ERR_NOSUCHSERVER.

@@ -30,17 +30,17 @@
 import { loginAs, selectChannel, sidebarMentionBadge } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "Server";
 
 // A mention is a content row whose body matches the operator's own nick
-// (`NETWORK_NICK`). The server's `Mentions.mentioned?/3` word-boundary,
+// (`specNick()`). The server's `Mentions.mentioned?/3` word-boundary,
 // case-insensitive predicate is the SSOT; we prefix the nick so the body
 // unambiguously mentions vjt regardless of the run-unique suffix.
-const mentionBody = (runId: string) => `${NETWORK_NICK}: server-authoritative mention ${runId}`;
+const mentionBody = (runId: string) => `${specNick()}: server-authoritative mention ${runId}`;
 
 // Sync gate: after focusing a joined channel, the members pane must list
 // the operator's own nick. A rendered member list is the deterministic
@@ -50,7 +50,7 @@ const mentionBody = (runId: string) => `${NETWORK_NICK}: server-authoritative me
 async function assertJoinedWithOwnMember(page: Parameters<typeof loginAs>[0]): Promise<void> {
   const membersPane = page.locator(".shell-members .members-pane");
   await expect(membersPane).toBeVisible({ timeout: 10_000 });
-  await expect(membersPane.locator(".member-name", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(membersPane.locator(".member-name", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
 }
@@ -58,7 +58,7 @@ async function assertJoinedWithOwnMember(page: Parameters<typeof loginAs>[0]): P
 test("#267 — mention landing during a WS gap surfaces from the server count on reconnect (never a client bump)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const runId = crypto.randomUUID().slice(0, 8);
   const body = mentionBody(runId);
 
@@ -72,7 +72,7 @@ test("#267 — mention landing during a WS gap surfaces from the server count on
 
   // Focus #bofh so its per-channel topic is subscribed (joinChannel fired
   // + JOIN echoed). Gate on the seeded member list before moving on.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await assertJoinedWithOwnMember(page);
 
   // Defocus to the Server window. The mention badge's focus-zero overlay
@@ -136,7 +136,7 @@ test("#267 — mention landing during a WS gap surfaces from the server count on
 test("#267 — mention on an unfocused channel fans out from the server to both tabs' badges", async ({
   browser,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const runId = crypto.randomUUID().slice(0, 8);
   const body = mentionBody(runId);
 
@@ -155,9 +155,9 @@ test("#267 — mention on an unfocused channel fans out from the server to both 
     await loginAs(pageA, vjt);
     await loginAs(pageB, vjt);
 
-    await selectChannel(pageA, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(pageA, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await assertJoinedWithOwnMember(pageA);
-    await selectChannel(pageB, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(pageB, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await assertJoinedWithOwnMember(pageB);
 
     await selectChannel(pageA, NETWORK_SLUG, SERVER_WINDOW, { awaitWsReady: false });

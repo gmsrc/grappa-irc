@@ -29,8 +29,8 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK_LOWER = "casepeer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -38,9 +38,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 test("nick case-sensitivity: /q with different casing focuses existing window, no duplicate", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Bring the peer online so /q has a real target on the network.
   // (cic /q opens a window unconditionally — the IRC peer's presence
@@ -107,7 +107,7 @@ test("nick case-sensitivity: /q with different casing focuses existing window, n
     // by server-side dm_with normalization) would NOT show.
     // peer.privmsg returns void (irc-framework fire-and-forget); the
     // expect.toContainText 5s wait is the synchronisation point.
-    peer.privmsg(NETWORK_NICK, "ping from case peer");
+    peer.privmsg(specNick(), "ping from case peer");
 
     const scrollback = page.locator('[data-testid="scrollback"]');
     await expect(scrollback).toContainText("ping from case peer", { timeout: 5_000 });

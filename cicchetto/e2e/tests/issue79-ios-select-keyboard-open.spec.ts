@@ -33,8 +33,8 @@ import {
   scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern): the e2e sqlite scrollback persists
@@ -51,9 +51,9 @@ test.setTimeout(60_000);
 test("@webkit iOS — keep-keyboard duration-gates its mousedown preventDefault on scrollback: short tap not prevented (keyboard closes), long-press prevented (selection kept), chrome always prevented", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, MESSAGE_BODY);
   const row = scrollbackLine(page, "privmsg", MESSAGE_BODY);

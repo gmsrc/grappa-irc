@@ -36,23 +36,23 @@
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#cp15-b5-${crypto.randomUUID().slice(0, 8)}`;
 
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await partChannel(vjt.token, NETWORK_SLUG, NEW_CHANNEL).catch(() => {});
 });
 
 test("CP15 B5 — /join transitions to joined; MembersPane renders snapshot from members_seeded", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, NEW_CHANNEL)).toHaveCount(0);
 
   await composeSend(page, `/join ${NEW_CHANNEL}`);
@@ -66,7 +66,7 @@ test("CP15 B5 — /join transitions to joined; MembersPane renders snapshot from
   await expect(
     page
       .locator('[data-testid="scrollback-line"][data-kind="join"]')
-      .filter({ hasText: NETWORK_NICK })
+      .filter({ hasText: specNick() })
       .filter({ hasText: NEW_CHANNEL })
       .first(),
   ).toBeVisible({ timeout: 10_000 });
@@ -86,7 +86,7 @@ test("CP15 B5 — /join transitions to joined; MembersPane renders snapshot from
   // The own nick lands in the member list as @-prefixed (operator
   // joined a fresh channel → server-side gives @ ops). Assert the
   // li with own nick is there to prove the snapshot landed end-to-end.
-  await expect(membersPane.locator("li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(membersPane.locator("li", { hasText: specNick() })).toBeVisible({
     timeout: 5_000,
   });
 

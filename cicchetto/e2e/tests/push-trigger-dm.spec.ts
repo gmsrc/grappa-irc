@@ -12,7 +12,7 @@
 // + `ttl` headers.
 //
 // DM has its own routing concern: the spec uses `enablePushFromSettings`
-// + a peer DM `privmsg(NETWORK_NICK, ...)`. The cic UI does NOT need
+// + a peer DM `privmsg(specNick(), ...)`. The cic UI does NOT need
 // to focus a query window — push fires on the server side regardless
 // of cic state, and we want the DM unfocused so dedup doesn't
 // short-circuit (dedup is the dedup spec).
@@ -28,8 +28,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b5-dmer";
 const SUB_ID = "dm";
@@ -38,7 +38,7 @@ test("DM while push-enabled fires Sender → push-catcher receives a POST", asyn
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   // Stub MUST install before page.goto (loginAs) — initScripts run
@@ -48,7 +48,7 @@ test("DM while push-enabled fires Sender → push-catcher receives a POST", asyn
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
@@ -62,7 +62,7 @@ test("DM while push-enabled fires Sender → push-catcher receives a POST", asyn
     // PRIVMSG straight to the operator's nick — no JOIN needed.
     // Server-side this hits Session.Server's :persist arm with
     // `channel = own_nick`; Triggers' dm? predicate matches.
-    peer.privmsg(NETWORK_NICK, "hi from b5-dmer");
+    peer.privmsg(specNick(), "hi from b5-dmer");
 
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);

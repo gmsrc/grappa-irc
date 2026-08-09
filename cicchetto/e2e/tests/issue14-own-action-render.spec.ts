@@ -27,15 +27,15 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = "#bofh";
 
 test("issue #14 — operator's own /me renders as '* nick body', not raw privmsg", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { awaitWsReady: false });
   await expect(composeTextarea(page)).toBeVisible();
@@ -44,7 +44,7 @@ test("issue #14 — operator's own /me renders as '* nick body', not raw privmsg
   // members-pane own-nick row requires the after-join members_seeded
   // push, which only lands once the Phoenix channel join completed —
   // so the self-echo broadcast for our send won't fire into the void.
-  await expect(page.locator(".members-pane li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(page.locator(".members-pane li", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
 
@@ -59,7 +59,7 @@ test("issue #14 — operator's own /me renders as '* nick body', not raw privmsg
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     body: `\x01ACTION ${tag}\x01`,
     kind: "action",
   });

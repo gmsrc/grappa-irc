@@ -19,12 +19,12 @@
 // post-J the same URLs route into the selection signal.
 
 import { loginAs } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test.describe("UX-6-J — push notification deep-link routing", () => {
   test("warm-path: SW postMessage navigate routes selection (channel)", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // Confirm baseline: the operator lands on home (or whatever the
@@ -76,7 +76,7 @@ test.describe("UX-6-J — push notification deep-link routing", () => {
   });
 
   test("warm-path: SW postMessage with malformed url is a safe no-op", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // Capture initial selected-row text so we can confirm no flip.
@@ -120,12 +120,12 @@ test.describe("UX-6-J — push notification deep-link routing", () => {
       .innerText()
       .catch(() => "");
     expect(after).toBe(initial);
-    // Use NETWORK_NICK so the unused-import lint stays quiet.
-    expect(NETWORK_NICK).toBeTruthy();
+    // Use specNick() so the unused-import lint stays quiet.
+    expect(specNick()).toBeTruthy();
   });
 
   test("cold-path: opening at /?network=X&channel=Y routes selection on boot", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const channel = AUTOJOIN_CHANNELS[0];
 
     // Pre-seed auth via the same init-script shape loginAs uses, but

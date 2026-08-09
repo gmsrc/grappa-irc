@@ -86,9 +86,9 @@ import {
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -126,7 +126,7 @@ async function scrollbackGeometry(
 // (R-4 migration), so the pre-CP29 seedCursor-via-localStorage shape
 // no longer worked. Same shape cp14-b1 uses.
 async function seedCursor(page: Page, channel: string, messageId: number): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Delegates to the shared `setReadCursorToId` (test-only force endpoint,
   // `ReadCursor.force_set/4`) so a mid-page seed lands regardless of prior
   // cursor state — the production endpoint is advance-only since #233 and
@@ -159,25 +159,10 @@ async function fetchScrollbackPage(
 test.describe("scroll-on-window-switch — re-selecting a window snaps correctly", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  // BUGHUNT-3 cascade rule (feedback_cascade_poisoner_pattern): scenarios
-  // 2-4 seed a MID-PAGE #bofh cursor. Since #233 the seed goes through the
-  // force endpoint, so it actually lands (pre-#233 a backward seed was
-  // silently dropped and this spec accidentally left #bofh at the tail).
-  // Without this restore the last scenario's mid-page cursor would leak to
-  // whatever spec runs next → phantom unread divider → scroll/marker
-  // assertions flip downstream. Restore to the tail so the channel reads
-  // fully-read for the next spec (the tail is a FORWARD move, still served
-  // by the production advance-only cursor).
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("channel → empty query → channel-back: scroll lands at bottom-or-marker on return", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Step 1 — focus the seeded channel and confirm scroll lands at the
@@ -206,7 +191,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     await seedCursor(page, CHANNEL, headId);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
@@ -266,7 +251,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
   test("fresh focus / cold-mount into channel-with-unreads: jumps to the marker, then a send snaps to bottom (#168)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Pre-seed a cursor 25 rows from the tail of #bofh so the divider injects
@@ -286,7 +271,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     await seedCursor(page, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
@@ -353,7 +338,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
   test("app-startup: cold-mount into a selected unread channel after a full reload jumps to the marker (#168)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // The genuine app-startup path: a full PWA reload re-boots the SPA, so the
@@ -371,7 +356,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // Reboot the app BEFORE any window focus, then focus #bofh — a cold mount
     // on a freshly-booted SPA.
     await page.reload();
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
@@ -405,7 +390,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
   test("SWITCH into channel-with-unreads: jumps to the marker, then a send snaps to bottom", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Seed a cursor 25 rows from the tail so an unread divider injects

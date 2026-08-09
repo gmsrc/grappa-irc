@@ -22,8 +22,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_OLD_NICK = "m11-peer";
 // Per-run unique new nick so retries / parallel runs don't collide on
@@ -32,9 +32,9 @@ const PEER_NEW_NICK = `m11-renamed-${crypto.randomUUID().slice(0, 6)}`;
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test("M11 — peer NICK change renders nick_change row + updates members list", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(composeTextarea(page)).toBeVisible();
 
   const peer = await IrcPeer.connect({ nick: PEER_OLD_NICK });

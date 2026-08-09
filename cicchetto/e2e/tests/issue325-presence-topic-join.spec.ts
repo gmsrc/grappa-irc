@@ -31,13 +31,13 @@ import {
   topicJoinRow,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#325 — presence-hide suppresses join/part churn but keeps the #237 topic line", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t325-${Date.now()}`;
   const topicOnJoin = `#325 topic set before join ${Date.now()} — must survive presence-hide`;
   const churnNick = `t325churn-${Date.now() % 100000}`;
@@ -46,7 +46,7 @@ test("#325 — presence-hide suppresses join/part churn but keeps the #237 topic
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready before /join
   // (mirrors issue237 boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // A creator peer makes the channel (→ op) and sets the topic BEFORE vjt joins,
   // so vjt learns the topic only via the join-time 332 (the #237 path).
@@ -58,7 +58,7 @@ test("#325 — presence-hide suppresses join/part churn but keeps the #237 topic
 
     await composeSend(page, `/join ${channel}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, channel)).toBeVisible({ timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // The #237 topic line prints inline on join, full text.
     const topicRow = topicJoinRow(page).filter({ hasText: topicOnJoin });

@@ -33,8 +33,8 @@ import {
   waitForQueryWindowReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Unique suffix so retries / sibling specs never collide on a nick already in
 // use upstream (same rule as issue606-query-rail-whois).
@@ -57,9 +57,9 @@ const SHORT_VIEWPORT = { width: 1280, height: 220 };
 test.setTimeout(90_000);
 
 test("#984 — a tall query WHOIS card keeps the rail launcher reachable", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER, gecos: LONG_GECOS });
   try {
@@ -119,9 +119,9 @@ test("#984 — a tall query WHOIS card keeps the rail launcher reachable", async
 test("@webkit #984 — the query rail scroller carries pan-y, and so does its subtree", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: `M${PEER}`, gecos: LONG_GECOS });
   try {

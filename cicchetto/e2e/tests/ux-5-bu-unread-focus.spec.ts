@@ -29,8 +29,8 @@
 import type { Page } from "@playwright/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "bu-clearbuddy";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -68,9 +68,9 @@ async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
 test("focus-regain clears mention badge on selected+blurred window (BU bug-1)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
@@ -85,7 +85,7 @@ test("focus-regain clears mention badge on selected+blurred window (BU bug-1)", 
     // Peer says vjt's nick — mention path. PRIVMSG body matches
     // `mentionsUser(body, displayNick(u))` so BOTH bumpMessageUnread
     // AND bumpMention fire.
-    const mentionBody = `${NETWORK_NICK}: BU mention ${RUN_ID}`;
+    const mentionBody = `${specNick()}: BU mention ${RUN_ID}`;
     peer.privmsg(CHANNEL, mentionBody);
 
     // Wait for both badges. We assert presence (>0), not exact count —
@@ -126,9 +126,9 @@ test("focus-regain clears mention badge on selected+blurred window (BU bug-1)", 
 test("re-clicking active sidebar row does NOT POST ReadCursor (BU bug-2 idempotency)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Settle: send an own-msg so the scrollback has a tail row and the
   // cursor-set helper has data to write IF the effect re-fires.

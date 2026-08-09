@@ -28,17 +28,17 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test("#591 — own /ctcp query self-echoes as '→ CTCP VERB args to target', not raw \\x01", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(composeTextarea(page)).toBeVisible();
 
   // Per-run unique arg so the shared #bofh scrollback doesn't accumulate
@@ -53,7 +53,7 @@ test("#591 — own /ctcp query self-echoes as '→ CTCP VERB args to target', no
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     body: `\x01VERSION ${tag}\x01`,
     kind: "privmsg",
   });
@@ -65,9 +65,9 @@ test("#591 — own /ctcp query self-echoes as '→ CTCP VERB args to target', no
 });
 
 test("#591 — /ping shows the round-trip time in the source window", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(composeTextarea(page)).toBeVisible();
 
   // Per-run unique peer nick. A fixed nick is a 433/ghost time bomb under CI

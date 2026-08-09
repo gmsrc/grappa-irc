@@ -36,8 +36,8 @@ import {
   waitForQueryWindowReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique: a literal nick collides with itself upstream on rapid reruns
 // (--repeat-each), the same rule every peer-driven spec here follows.
@@ -49,9 +49,9 @@ test.setTimeout(90_000);
 test("@webkit #985 — a mobile query window spends no band on the ☰, and the float stays legible and reachable", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER });
   try {

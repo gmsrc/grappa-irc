@@ -19,13 +19,12 @@
 // uses BottomBar and the home row is not present there.
 
 import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 test.setTimeout(60_000);
 
 test("ux-5-b — home sidebar row renders the 🏠 emoji icon", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Shell mounted; cold-load lands on home (UX-4 bucket B selection

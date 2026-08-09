@@ -34,8 +34,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b3-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -45,13 +45,13 @@ const VJT_TO_PEER = "B3: outbound from vjt to peer";
 test("CP14 B3 — DM query window shows both inbound and outbound history after reload", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Channel-first focus so the WS-ready boot chain (own-nick subscribe
   // for dm-listener, networks fetch, etc.) is fully evaluated before
   // the DM exchange. Same trick as M5.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // FLAKE-D (2026-05-23) — `selectChannel` awaits the channel topic
   // join, NOT the own-nick DM-listener subscribe. Without this guard
@@ -66,12 +66,12 @@ test("CP14 B3 — DM query window shows both inbound and outbound history after 
   try {
     // Inbound: peer → vjt-grappa. Server persists with channel =
     // own_nick AND dm_with = peer (CP14 B3 derivation in EventRouter).
-    peer.privmsg(NETWORK_NICK, PEER_TO_VJT);
+    peer.privmsg(specNick(), PEER_TO_VJT);
 
     // Probe via REST against channel = PEER_NICK so the peer-DM
     // aggregation OR-shape (channel == peer OR dm_with == peer) picks
     // up the inbound row stored at channel = own_nick + dm_with =
-    // peer. Probing channel = NETWORK_NICK would hit the own-nick
+    // peer. Probing channel = specNick() would hit the own-nick
     // narrowing path (self-msgs only) and miss peer-originated DMs.
     await assertMessagePersisted({
       token: vjt.token,
@@ -97,7 +97,7 @@ test("CP14 B3 — DM query window shows both inbound and outbound history after 
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: peer.nick,
-      sender: NETWORK_NICK,
+      sender: specNick(),
       body: VJT_TO_PEER,
     });
   } finally {

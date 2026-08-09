@@ -42,8 +42,8 @@
 // half-completes (Session.Server up, autojoin loop silently failing).
 
 import { patchNetworkConnectionState } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -121,7 +121,7 @@ test.afterEach(async () => {
   // Restore vjt to :connected so the next spec sees a healthy
   // baseline. The bucket-BC client_id is throwaway (its accounts_session
   // stays in the DB but only adds 1 row; cleanup not load-bearing).
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
     connection_state: "connected",
   }).catch(() => {});
@@ -134,7 +134,7 @@ test.afterEach(async () => {
 });
 
 test("UX-5 BC — park then /connect from the same source IP succeeds (self-exclusion)", async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Mint a fresh accounts_session(vjt) via cic-style POST /auth/login.
   // Pre-BC this row was counted against vjt himself for the subsequent
@@ -189,9 +189,9 @@ test("UX-5 BC — park then /connect from the same source IP succeeds (self-excl
   let members: string[] = [];
   for (let attempt = 0; attempt < 30; attempt++) {
     members = await fetchChannelMembers(bearer, SEED_CHANNEL).catch(() => []);
-    if (members.length > 0 && members.includes(NETWORK_NICK)) break;
+    if (members.length > 0 && members.includes(specNick())) break;
     await new Promise((r) => setTimeout(r, 500));
   }
   expect(members.length).toBeGreaterThan(0);
-  expect(members).toContain(NETWORK_NICK);
+  expect(members).toContain(specNick());
 });

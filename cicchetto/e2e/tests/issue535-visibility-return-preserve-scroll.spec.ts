@@ -41,10 +41,10 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLine, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -118,7 +118,7 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
 }
 
 async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
 }
 
@@ -142,16 +142,10 @@ async function suppressChannelDelivery(page: Page, slug: string, name: string): 
 test.describe("#535 — visibility-return preserves the mid-backlog reader's position", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("scrolled-up reader, NO unread divider: return preserves scrollTop, never tail-snaps", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Fully-read channel: seed the cursor to the newest row so NO divider
@@ -166,7 +160,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     await seedCursor(CHANNEL, tailId);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
@@ -210,7 +204,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
   test("scrolled-up reader, unread divider present: return lands ON the divider, never tail-snaps", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Seed a cursor 25 rows from the tail so an unread divider injects mid-page
@@ -222,7 +216,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     await seedCursor(CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
@@ -267,7 +261,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
   test("follow-live reader (at the tail): return still snaps to the newest row (#46 preserved)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Fully read → focus lands at the tail, atBottom stays true (no scroll up).
@@ -278,7 +272,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     await seedCursor(CHANNEL, tailId);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
@@ -314,7 +308,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
   test("scrolled-up reader, messages missed while hidden: return neither tail-snaps nor strands at the top", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Fully read → no divider; the reader will scroll up into read backlog.
@@ -325,7 +319,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     await seedCursor(CHANNEL, tailId);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);

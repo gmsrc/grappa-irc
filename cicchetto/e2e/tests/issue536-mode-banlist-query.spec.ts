@@ -26,15 +26,15 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test("#536 — /mode #chan +b opens the banlist and renders the ban (query form)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t536mb-${Date.now()}`;
   // A literal mask — no peer resolve needed; the peer here is only a wire
   // witness that the +b landed before we query.
@@ -42,7 +42,7 @@ test("#536 — /mode #chan +b opens the banlist and renders the ban (query form)
   const peer = await IrcPeer.connect({ nick: `mb536-${Date.now() % 1_000_000}` });
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   try {
     // vjt creates the channel → becomes op (@) → +b is allowed.
@@ -50,7 +50,7 @@ test("#536 — /mode #chan +b opens the banlist and renders the ban (query form)
     await expect(
       page.locator(".sidebar-network-section li").filter({ hasText: channel }),
     ).toHaveCount(1, { timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // Peer joins so it receives the channel MODE broadcast.
     await peer.join(channel);
@@ -84,7 +84,7 @@ test("#536 — /mode #chan +b opens the banlist and renders the ban (query form)
     const mask = modal.locator(".banlist-modal-mask");
     await expect(mask).toContainText(banMask, { timeout: 20_000 });
     await expect(modal).toContainText("set by");
-    await expect(modal).toContainText(NETWORK_NICK);
+    await expect(modal).toContainText(specNick());
 
     // Close the modal so the compose textarea is actionable for cleanup.
     await modal.getByRole("button", { name: "close ban list" }).click();

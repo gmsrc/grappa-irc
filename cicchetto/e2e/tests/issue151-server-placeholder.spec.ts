@@ -21,13 +21,13 @@
 // a Playwright e2e via scripts/integration.sh.
 
 import { composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("#151 — server-window compose placeholder shows the network slug, not the $server sentinel", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus the always-present server window. `windowName === networkSlug`

@@ -20,8 +20,8 @@
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW_LABEL = "Server";
@@ -29,9 +29,9 @@ const SERVER_WINDOW_LABEL = "Server";
 test("#641 — an uncorrelated CTCP notice renders '← CTCP VERB reply from <peer>', never raw \\x01", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Per-run unique peer nick + tag: $server accumulates across runs, and a
   // fixed nick is a 433/ghost time bomb under CI rerun (mirrors #591/#637).
@@ -42,7 +42,7 @@ test("#641 — an uncorrelated CTCP notice renders '← CTCP VERB reply from <pe
     // Unsolicited CTCP VERSION reply straight to our upstream nick — no /ctcp
     // was ever sent, so nothing correlates it. No shared channel needed; a
     // NOTICE to a nick is delivered directly.
-    peer.notice(NETWORK_NICK, `\x01VERSION ${tag}\x01`);
+    peer.notice(specNick(), `\x01VERSION ${tag}\x01`);
 
     // Server-side: a CTCP-framed reply is protocol, not a DM, so grappa routes
     // it to $server with the body kept VERBATIM (the \x01 envelope survives) —

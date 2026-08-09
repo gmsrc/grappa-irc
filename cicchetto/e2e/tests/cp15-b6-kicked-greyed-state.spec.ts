@@ -23,8 +23,8 @@
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#cp15-b6-k-${crypto.randomUUID().slice(0, 8)}`;
@@ -40,7 +40,7 @@ test.afterEach(async () => {
   // Defensive PART — if the kick assertion failed mid-run vjt may
   // still be on the channel and the autojoin row would persist into
   // the next spec.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await partChannel(vjt.token, NETWORK_SLUG, NEW_CHANNEL).catch(() => {});
 });
 
@@ -52,9 +52,9 @@ test("CP15 B6 — peer KICKs vjt; window flips to kicked, stays in active sideba
   peer = await IrcPeer.connect({ nick: `cp15b6k-${crypto.randomUUID().slice(0, 6)}` });
   await peer.join(NEW_CHANNEL);
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // Cic /join — vjt joins the channel as second user, no @ ops. The
   // sidebar row appears + state goes pending → joined when the JOIN
@@ -77,7 +77,7 @@ test("CP15 B6 — peer KICKs vjt; window flips to kicked, stays in active sideba
   await expect(
     page
       .locator('[data-testid="scrollback-line"][data-kind="join"]')
-      .filter({ hasText: NETWORK_NICK })
+      .filter({ hasText: specNick() })
       .filter({ hasText: NEW_CHANNEL })
       .first(),
   ).toBeVisible({ timeout: 10_000 });
@@ -88,14 +88,14 @@ test("CP15 B6 — peer KICKs vjt; window flips to kicked, stays in active sideba
   // a fast peer.kick race would catch vjt before bahamut completes the
   // JOIN handshake (the kick would 401 nosuchnick on the server side).
   const membersPane = page.locator(".members-pane");
-  await expect(membersPane.locator("li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(membersPane.locator("li", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
 
   // Peer KICKs vjt. Server-side: event_router self-target KICK arm
   // emits `:kicked` effect → apply_effects broadcasts
   // `kind: "kicked"` + window_states flip.
-  await peer.kick(NEW_CHANNEL, NETWORK_NICK, KICK_REASON);
+  await peer.kick(NEW_CHANNEL, specNick(), KICK_REASON);
 
   // Sidebar row stays put (KICK doesn't archive — intent doc) but
   // gets the greyed class.

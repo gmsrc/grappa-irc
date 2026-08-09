@@ -43,8 +43,8 @@
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "i671-away-watcher";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -74,7 +74,7 @@ test("#671 — a stale-then-dead last socket still drives the bouncer AWAY (peer
   // Login + the 60s stale window + the debounce + WHOIS round-trips.
   test.setTimeout(120_000);
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Simulate "the device stopped reporting": forward the FIRST visibility
   // report (so the pid legitimately becomes :visible), then drop every
@@ -91,9 +91,9 @@ test("#671 — a stale-then-dead last socket still drives the bouncer AWAY (peer
   });
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  // The bouncer's upstream session (NETWORK_NICK on bahamut-test) is now
+  // The bouncer's upstream session (specNick() on bahamut-test) is now
   // live; a peer connects to witness its away state.
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
@@ -125,15 +125,15 @@ test("#671 — a stale-then-dead last socket still drives the bouncer AWAY (peer
     // RPL_AWAY once the bouncer is flagged away. Poll WHOIS until the
     // AWAY lands (debounce + round-trip), bounded by the listener timeout.
     const awaySeen = peer.waitForLine(
-      new RegExp(` 301 .* ${NETWORK_NICK} `),
-      `RPL_AWAY for ${NETWORK_NICK}`,
+      new RegExp(` 301 .* ${specNick()} `),
+      `RPL_AWAY for ${specNick()}`,
       25_000,
     );
-    peer.whois(NETWORK_NICK);
-    const poll = setInterval(() => peer.whois(NETWORK_NICK), 2_000);
+    peer.whois(specNick());
+    const poll = setInterval(() => peer.whois(specNick()), 2_000);
     try {
       const line = await awaySeen;
-      expect(line).toContain(NETWORK_NICK);
+      expect(line).toContain(specNick());
     } finally {
       clearInterval(poll);
     }

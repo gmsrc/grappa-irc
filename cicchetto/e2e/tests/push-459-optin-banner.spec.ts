@@ -29,8 +29,7 @@
 // present — except in (d), which removes PushManager to simulate the opposite.
 
 import { loginAs, openSettingsSection } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 // The persisted × decline key (mirrors pushOptin.ts PUSH_OPTIN_DECLINED_KEY).
 const PUSH_OPTIN_DECLINED_KEY = "cic.pushOptinDeclined";
@@ -55,7 +54,7 @@ async function stubOptinNotification(page: import("@playwright/test").Page): Pro
 }
 
 test("#459 — the push opt-in banner offers push on login", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await stubOptinNotification(page);
   await loginAs(page, vjt);
 
@@ -70,7 +69,7 @@ test("#459 — the push opt-in banner offers push on login", async ({ page }) =>
 test("#459 — [of course!] runs the accept path and does not persist a decline", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await stubOptinNotification(page);
   await loginAs(page, vjt);
 
@@ -100,7 +99,7 @@ test("#459 — [of course!] runs the accept path and does not persist a decline"
 });
 
 test("#459 — × declines: banner leaves and stays gone across reload", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await stubOptinNotification(page);
   await loginAs(page, vjt);
 
@@ -123,7 +122,7 @@ test("#459 — × declines: banner leaves and stays gone across reload", async (
 test("#459 — settings push sub-page disables the toggle + shows the hint when push is unavailable", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Simulate a browser without Web Push: remove the PushManager constructor so
   // pushAvailable() is false (Notification + serviceWorker alone don't suffice).
   await page.addInitScript(() => {

@@ -27,8 +27,8 @@
 
 import { loginAs, openSettingsSection } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, patchNetworkConnectionState } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // A connect gate + a live identity apply (server-side reconnect + autojoin)
 // + a restore-and-reconnect in the finally — well past the default. Give it
@@ -126,7 +126,7 @@ async function waitForOwnNickInMembers(
 test("issue #476 — a USER edits its per-network identity in settings and it applies live", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = AUTOJOIN_CHANNELS[0];
   if (!channel) throw new Error("issue476: AUTOJOIN_CHANNELS is empty — seed contract broken");
   const stamp = Date.now();
@@ -143,7 +143,7 @@ test("issue #476 — a USER edits its per-network identity in settings and it ap
       connection_state: "connected",
     });
     await waitForNetworkState(vjt.token, NETWORK_SLUG, "connected");
-    await waitForOwnNickInMembers(vjt.token, NETWORK_SLUG, channel, NETWORK_NICK);
+    await waitForOwnNickInMembers(vjt.token, NETWORK_SLUG, channel, specNick());
 
     // ── BROWSER: log in as the seeded USER vjt, open the editor ──
     await loginAs(page, vjt);
@@ -156,7 +156,7 @@ test("issue #476 — a USER edits its per-network identity in settings and it ap
     });
 
     // The nick field seeds from the SELECTED network row's live nick.
-    await expect(page.locator("#settings-nick")).toHaveValue(NETWORK_NICK, {
+    await expect(page.locator("#settings-nick")).toHaveValue(specNick(), {
       timeout: 10_000,
     });
 
@@ -186,9 +186,9 @@ test("issue #476 — a USER edits its per-network identity in settings and it ap
     // resetSubject (wrapped-test teardown) does NOT touch the nick, so this
     // is the only restore. Swallow errors: a cleanup hiccup must not mask
     // the test's own assertion outcome.
-    await setNetworkNick(vjt.token, NETWORK_SLUG, NETWORK_NICK)
-      .then(() => waitForNetworkNick(vjt.token, NETWORK_SLUG, NETWORK_NICK))
-      .then(() => waitForOwnNickInMembers(vjt.token, NETWORK_SLUG, channel, NETWORK_NICK))
+    await setNetworkNick(vjt.token, NETWORK_SLUG, specNick())
+      .then(() => waitForNetworkNick(vjt.token, NETWORK_SLUG, specNick()))
+      .then(() => waitForOwnNickInMembers(vjt.token, NETWORK_SLUG, channel, specNick()))
       .catch(() => {});
   }
 });

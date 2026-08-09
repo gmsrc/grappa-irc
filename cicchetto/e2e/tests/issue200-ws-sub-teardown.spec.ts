@@ -40,8 +40,8 @@
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Mirrors `channelKey(slug, name)` — `${slug} ${canonicalChannel(name)}`.
@@ -58,15 +58,15 @@ const joinedTopicKeys = (page: import("@playwright/test").Page): Promise<string[
 test.afterEach(async () => {
   // Restore the seed state — if the assertion path left #bofh parted,
   // downstream specs that assume the autojoin seed (M1, BUG7, …) would fail.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
 test("#200 — own-PART tears down the per-channel WS subscription (no leak)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   forwardPageDiagnostics(page);
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
 
   // While joined, the per-channel topic is live in the subscription set.
@@ -89,10 +89,10 @@ test("#200 — own-PART tears down the per-channel WS subscription (no leak)", a
 test("#200 — after own-PART teardown, compose /join re-subscribes AND focuses (no focus regression)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   forwardPageDiagnostics(page);
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect.poll(() => joinedTopicKeys(page), { timeout: 10_000 }).toContain(TOPIC_KEY);
 
   // PART #bofh → subscription torn down, channel leaves the sidebar.
@@ -122,7 +122,7 @@ test("#200 — after own-PART teardown, compose /join re-subscribes AND focuses 
   await expect(
     page
       .locator('[data-testid="scrollback-line"][data-kind="join"]')
-      .filter({ hasText: NETWORK_NICK })
+      .filter({ hasText: specNick() })
       .filter({ hasText: CHANNEL })
       .last(),
   ).toBeVisible({ timeout: 10_000 });

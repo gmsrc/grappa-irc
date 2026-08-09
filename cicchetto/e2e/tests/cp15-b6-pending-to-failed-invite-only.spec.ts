@@ -25,8 +25,8 @@
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#cp15-b6-i-${crypto.randomUUID().slice(0, 8)}`;
@@ -53,9 +53,9 @@ test("CP15 B6 — /join transitions pending → failed for invite-only channel; 
   await peer.join(NEW_CHANNEL);
   await peer.mode(NEW_CHANNEL, "+i");
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // The cic /join arm fires setPending immediately + setSelectedChannel
   // — cic focuses the would-be channel before the upstream 473 lands.

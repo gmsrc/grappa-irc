@@ -28,8 +28,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // vjt is autojoined here (seedData.AUTOJOIN_CHANNELS) — the window the peer
 // posts the `#channel`-bearing PRIVMSG into.
@@ -49,17 +49,19 @@ const freshChannel = (label: string) => `#i648${label}-${crypto.randomUUID().sli
 // Cheapest "live WS + members_seeded processed" signal (cp13-s10): the members
 // pane rendering our own nick proves the per-channel subscription is live, so a
 // following peer PRIVMSG broadcast isn't fastlaned into the void.
-const MEMBERS_PANE_SELF = { hasText: NETWORK_NICK };
+// A function, not a const: the own-nick is per-test (#1078), so it
+// cannot be read at module load.
+const membersPaneSelf = () => ({ hasText: specNick() });
 
 test("a #channel in scrollback is clickable → confirm → joins and switches (#648)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const target = freshChannel("join");
 
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, HOST_CHANNEL, { awaitWsReady: false });
-  await expect(page.locator(".members-pane li", MEMBERS_PANE_SELF)).toBeVisible({
+  await expect(page.locator(".members-pane li", membersPaneSelf())).toBeVisible({
     timeout: 10_000,
   });
 
@@ -98,7 +100,7 @@ test("a #channel in scrollback is clickable → confirm → joins and switches (
 test("clicking a #channel we're already in switches to it with NO modal (#648)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const already = freshChannel("have");
 
   // Pre-join BEFORE login so window_states carries it as "joined" once the WS
@@ -108,9 +110,9 @@ test("clicking a #channel we're already in switches to it with NO modal (#648)",
   await loginAs(page, vjt);
   // Prove the pre-joined window is live, then focus a DIFFERENT window so the
   // switch is observable.
-  await selectChannel(page, NETWORK_SLUG, already, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, already, { ownNick: specNick() });
   await selectChannel(page, NETWORK_SLUG, HOST_CHANNEL, { awaitWsReady: false });
-  await expect(page.locator(".members-pane li", MEMBERS_PANE_SELF)).toBeVisible({
+  await expect(page.locator(".members-pane li", membersPaneSelf())).toBeVisible({
     timeout: 10_000,
   });
 

@@ -26,8 +26,8 @@
 
 import { composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = `issue241-send-spinner-${Date.now()}`;
@@ -41,9 +41,9 @@ test.setTimeout(60_000);
 test("#241 — send button swaps arrow→spinner while a send is in flight, reverts to the arrow on the 201 ack", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const sendBtn = page.getByRole("button", { name: /send message/i });
   const glyph = sendBtn.locator("[data-testid='compose-send-glyph']");
@@ -90,7 +90,7 @@ test("#241 — send button swaps arrow→spinner while a send is in flight, reve
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     body: MESSAGE_BODY,
   });
 });

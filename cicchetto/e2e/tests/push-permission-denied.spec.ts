@@ -22,11 +22,11 @@
 
 import { loginAs, openSettingsSection, sidebarWindow } from "../fixtures/cicchettoPage";
 import { resetPushSubscriptions, stubPushManagerDenied } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("push permission denied — toggle stays OFF, banner explains", async ({ page, context }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Wipe stale subscriptions from prior specs — see push-install
   // moduledoc on the shared-vjt teardown rationale.
   await resetPushSubscriptions(vjt.token);

@@ -16,8 +16,8 @@
 // bahamut), which jsdom/vitest cannot do — per feedback_cicchetto_browser_smoke.
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // A mask that matches no server on the testnet mesh → bahamut answers with a
@@ -27,9 +27,9 @@ const NO_MATCH_MASK = "all";
 test("#513a — /links <mask matching nothing> shows 'no server matches', not 'hides topology'", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // grappa sends `LINKS all` upstream; bahamut replies with a bare 365 (the
   // mask matched nothing); 365 flushes an EMPTY bundle CARRYING mask="all".

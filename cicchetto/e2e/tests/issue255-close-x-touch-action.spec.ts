@@ -36,8 +36,8 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, selectChannel, sidebarCloseButton } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // #bofh is autojoined → its tab renders a close-× on BOTH layouts.
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -55,9 +55,9 @@ async function closeXTouchAction(page: Page, slug: string, channel: string): Pro
 test("#255 — desktop .sidebar-close aligns touch-action to the sidebar's pan-y axis", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // PRE-FIX: "none" (orphaned #172 declaration). POST-FIX: "pan-y"
   // (matches the vertical sidebar scroll so a drag starting on the ×
@@ -69,9 +69,9 @@ test("#255 — desktop .sidebar-close aligns touch-action to the sidebar's pan-y
 test("#255 @webkit — mobile .bottom-bar-close aligns touch-action to the bottom-bar's pan-x axis", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // PRE-FIX: "none" (orphaned #172 declaration) → the browser disabled
   // panning for a gesture landing on the × → the bar could not scroll

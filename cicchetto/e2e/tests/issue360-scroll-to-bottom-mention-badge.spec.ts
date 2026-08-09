@@ -29,8 +29,8 @@ import { loginAs, scrollbackLine, scrollbackLines, selectChannel } from "../fixt
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 const SCROLL_TO_BOTTOM = '[data-testid="scroll-to-bottom"]';
@@ -53,10 +53,12 @@ test.use({ viewport: { width: 900, height: 560 } });
 // Deliberately free of the own nick so a filler is never itself a mention.
 const filler = (i: number): string => `i360 filler ${i} — ${"padding ".repeat(32)}`.slice(0, 280);
 
-const MENTION_1 = `${NETWORK_NICK}: first ping i360 mention one`;
-const MENTION_2 = `${NETWORK_NICK}: second ping i360 mention two`;
+// Functions, not consts: the own-nick is per-test (#1078), so it
+// cannot be read at module load.
+const mention1 = () => `${specNick()}: first ping i360 mention one`;
+const mention2 = () => `${specNick()}: second ping i360 mention two`;
 
-// Buffer, oldest → newest. LEADING pushes MENTION_1 below the fold at
+// Buffer, oldest → newest. LEADING pushes mention1() below the fold at
 // scroll-top; MIDDLE separates the two mentions by more than half the pane so
 // centering the first leaves the second below the fold; TRAILING keeps the pane
 // off the tail after the second jump (button stays up) and leaves travel for
@@ -214,13 +216,13 @@ test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
     // (e.g. the badge signal throwing) is legible in the run log.
     forwardPageDiagnostics(page);
 
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const channel = `#i360m-${Date.now() % 100000}`;
     const peerNick = `i360peer-${Date.now() % 100000}`;
 
     await loginAs(page, vjt);
     // Stable base — the seeded autojoin window is live + focused first.
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     const peer = await IrcPeer.connect({ nick: peerNick });
     try {
@@ -230,14 +232,14 @@ test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
       // (no unread-marker divider to fight the scroll geometry).
       await page.locator(".compose-box textarea").fill(`/join ${channel}`);
       await page.locator(".compose-box textarea").press("Enter");
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
       // Seed the buffer, oldest → newest — burst-then-pace (see FLOOD_SAFE_BURST).
       const buffer: string[] = [];
       for (let i = 0; i < LEADING; i++) buffer.push(filler(i));
-      buffer.push(MENTION_1);
+      buffer.push(mention1());
       for (let i = 0; i < MIDDLE; i++) buffer.push(filler(LEADING + i));
-      buffer.push(MENTION_2);
+      buffer.push(mention2());
       for (let i = 0; i < TRAILING; i++) buffer.push(filler(LEADING + MIDDLE + i));
       for (let i = 0; i < buffer.length; i++) {
         if (i >= FLOOD_SAFE_BURST) await sleep(PACE_MS);
@@ -273,21 +275,21 @@ test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
       await expect(page.locator(SCROLL_TO_BOTTOM)).toBeVisible({ timeout: 5_000 });
       await expect(page.locator(BADGE)).toHaveText("2", { timeout: 10_000 });
 
-      // Tap 1 → jump to the NEAREST mention below (MENTION_1); it lands in view
+      // Tap 1 → jump to the NEAREST mention below (mention1()); it lands in view
       // and the badge drops to the one remaining below.
       await page.locator(SCROLL_TO_BOTTOM).click({ timeout: 10_000 });
       await expect
-        .poll(async () => await lineVisibleInPane(page, MENTION_1), { timeout: 8_000 })
+        .poll(async () => await lineVisibleInPane(page, mention1()), { timeout: 8_000 })
         .toBe(true);
       await expect(page.locator(BADGE)).toHaveText("1", { timeout: 10_000 });
       // Still not at bottom → the button stays up for the next jump.
       await expectSettledNotAtBottom(page);
       await expect(page.locator(SCROLL_TO_BOTTOM)).toBeVisible();
 
-      // Tap 2 → jump to MENTION_2; no mentions remain below → badge gone.
+      // Tap 2 → jump to mention2(); no mentions remain below → badge gone.
       await page.locator(SCROLL_TO_BOTTOM).click({ timeout: 10_000 });
       await expect
-        .poll(async () => await lineVisibleInPane(page, MENTION_2), { timeout: 8_000 })
+        .poll(async () => await lineVisibleInPane(page, mention2()), { timeout: 8_000 })
         .toBe(true);
       await expect(page.locator(BADGE)).toHaveCount(0, { timeout: 10_000 });
       // Trailing content is still below → the button remains (now a plain

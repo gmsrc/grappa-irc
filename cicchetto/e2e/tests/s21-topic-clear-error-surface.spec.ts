@@ -21,8 +21,8 @@
 // the end-to-end verb-ack round-trip.
 
 import { composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Body (55 z's) > 49 → fails @channel_regex `^[#&+!][^\s,\x07]{1,49}$`.
@@ -31,9 +31,9 @@ const INVALID_CHANNEL = `#${"z".repeat(55)}`;
 test("S21 — /topic -delete surfaces an inline error on a server rejection (no false success)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Fill + Enter directly (NOT composeSend — that helper waits for the
   // textarea to EMPTY, which only happens on a SUCCESSFUL submit; a rejected

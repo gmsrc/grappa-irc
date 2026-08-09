@@ -53,8 +53,8 @@
 // JS-mounted side-effect bucket. Single visitor login suffices.
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -98,7 +98,7 @@ async function readDeclaredHeight(
 test("@webkit ux-5-bv — .shell-members reads var(--viewport-height) with 100dvh fallback", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const heightDecl = await readDeclaredHeight(page, ".shell-members", "height");
@@ -110,7 +110,7 @@ test("@webkit ux-5-bv — .shell-members reads var(--viewport-height) with 100dv
 test("@webkit ux-5-bv — .settings-drawer reads var(--viewport-height) with 100dvh fallback", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const heightDecl = await readDeclaredHeight(page, ".settings-drawer", "height");
@@ -122,7 +122,7 @@ test("@webkit ux-5-bv — .settings-drawer reads var(--viewport-height) with 100
 test("@webkit ux-5-bv — .archive-modal caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const heightDecl = await readDeclaredHeight(page, ".archive-modal", "max-height");
@@ -134,7 +134,7 @@ test("@webkit ux-5-bv — .archive-modal caps max-height to var(--viewport-heigh
 test("@webkit ux-5-bv — .image-upload-modal caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const heightDecl = await readDeclaredHeight(page, ".image-upload-modal", "max-height");
@@ -144,7 +144,7 @@ test("@webkit ux-5-bv — .image-upload-modal caps max-height to var(--viewport-
 });
 
 test("@webkit ux-5-bv — .home-pane caps max-height to var(--viewport-height)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const heightDecl = await readDeclaredHeight(page, ".home-pane", "max-height");
@@ -156,7 +156,7 @@ test("@webkit ux-5-bv — .home-pane caps max-height to var(--viewport-height)",
 test("@webkit ux-5-bv — .admin-pane caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const heightDecl = await readDeclaredHeight(page, ".admin-pane", "max-height");
@@ -168,7 +168,7 @@ test("@webkit ux-5-bv — .admin-pane caps max-height to var(--viewport-height)"
 test("@webkit ux-5-bv — .admin-tab-panel caps max-height to var(--viewport-height)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const heightDecl = await readDeclaredHeight(page, ".admin-tab-panel", "max-height");
@@ -180,13 +180,13 @@ test("@webkit ux-5-bv — .admin-tab-panel caps max-height to var(--viewport-hei
 test("@webkit ux-5-bv — mobile members drawer auto-closes when operator taps a member nick", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Need a joined channel so MembersPane mounts with non-zero members.
   // Per `feedback_e2e_visitor_members_list` (vjt 2026-05-16) — assert
   // both populated AND own-nick presence as part of the precondition.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Open the mobile members drawer (hamburger in TopicBar).
   await page.getByLabel(/open members sidebar/i).tap();
@@ -194,27 +194,27 @@ test("@webkit ux-5-bv — mobile members drawer auto-closes when operator taps a
   await expect(drawer).toBeVisible({ timeout: 5_000 });
 
   // Members list precondition: populated + own-nick present
-  // (`feedback_e2e_visitor_members_list` mandate). NETWORK_NICK is the
+  // (`feedback_e2e_visitor_members_list` mandate). specNick() is the
   // operator's per-network nick on the auto-join channel.
   const memberButtons = drawer.locator(".members-pane li .member-name");
   await expect(memberButtons.first()).toBeVisible({ timeout: 10_000 });
   const memberCount = await memberButtons.count();
   expect(memberCount).toBeGreaterThan(0);
   const ownNickPresent = await drawer
-    .locator(`.members-pane li .member-name:has-text("${NETWORK_NICK}")`)
+    .locator(`.members-pane li .member-name:has-text("${specNick()}")`)
     .count();
   expect(ownNickPresent).toBeGreaterThan(0);
 
   // Find a member other than self (tapping self would be a no-op).
   // Structured locator — `hasNotText` rejects any row whose text
-  // contains NETWORK_NICK as substring (so a "vjt-bot" peer would
+  // contains specNick() as substring (so a "vjt-bot" peer would
   // also be skipped when own-nick is "vjt"). With the seeded
   // auto-join channel there's always at least one non-self peer, so
   // `.first()` resolves; if seeding ever drifts the test fails loud
   // at the tap rather than running a silent off-by-one loop.
   const target = drawer
     .locator(".members-pane li .member-name")
-    .filter({ hasNotText: NETWORK_NICK })
+    .filter({ hasNotText: specNick() })
     .first();
   await expect(target).toBeVisible({ timeout: 5_000 });
   await target.tap();

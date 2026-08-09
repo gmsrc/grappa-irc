@@ -24,8 +24,8 @@
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded here
 // because the e2e tsconfig does not resolve src/ imports. A rename of the
@@ -36,7 +36,7 @@ test.describe("#244 directory tap foregrounds the joined window", () => {
   test("DESKTOP — tapping an unjoined /list row joins it AND foregrounds its window", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     // Per-run unique channel: a peer creates it (first joiner → +o) and
     // STAYS joined so bahamut includes it in LIST replies (only non-empty
     // channels appear in 322s). vjt never joins it → the /list row is
@@ -52,7 +52,7 @@ test.describe("#244 directory tap foregrounds the joined window", () => {
       // Focus a real channel first so the "before" selection is a
       // DIFFERENT window than the one we're about to tap. The foreground
       // assertion is only meaningful as a TRANSITION away from here.
-      await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
       await expect(sidebarWindow(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0])).toHaveClass(
         /selected/,
         { timeout: 10_000 },
@@ -100,7 +100,7 @@ test.describe("#244 directory tap foregrounds the joined window", () => {
   test("DESKTOP no-steal — a server-originated (automatic) join does NOT foreground; selection stays put", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     // A peer creates + holds a channel so the REST join below succeeds and
     // is a real, non-empty channel. vjt does NOT tap it — the join is
     // issued out-of-band via REST, mimicking an automatic re-join /
@@ -115,7 +115,7 @@ test.describe("#244 directory tap foregrounds the joined window", () => {
       await loginAs(page, vjt);
 
       // Focus a channel — this is the window that MUST retain focus.
-      await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
       await expect(sidebarWindow(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0])).toHaveClass(
         /selected/,
         { timeout: 10_000 },
@@ -150,7 +150,7 @@ test.describe("#244 directory tap foregrounds the joined window", () => {
   test("MOBILE @webkit — tapping an unjoined /list row foregrounds its window (BottomBar branch)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const channel = `#e2e244m-${crypto.randomUUID().slice(0, 8)}`;
     const peer = await IrcPeer.connect({
       nick: `e2e244m-${crypto.randomUUID().slice(0, 4)}`,
@@ -165,7 +165,7 @@ test.describe("#244 directory tap foregrounds the joined window", () => {
       // selecting the list window unmounts the ComposeBox (Shell renders
       // it only for kindHasScrollback kinds), so wait for the unmount
       // rather than the textarea-empty signal (which races the unmount).
-      await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
       await expect(sidebarWindow(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0])).toHaveClass(
         /selected/,
         { timeout: 10_000 },

@@ -31,8 +31,8 @@ import {
   waitForDmListenerReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const DM_LINE = "265 direct message counts";
@@ -55,7 +55,7 @@ async function seedEventOnlyAndMessageWindows(
   // Clear #bofh's baseline unread by focusing it (cursor baselines to
   // tail), then park focus on $server — a window that is NOT in the
   // channel/query cycle — so #bofh and the DM both stay unfocused.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
   // The own-nick DM topic must be subscribed before the peer DMs, or the
   // inbound broadcast fastlanes to zero subscribers (harness gotcha).
@@ -73,7 +73,7 @@ async function seedEventOnlyAndMessageWindows(
 
   // Message window — a DM opens the peer's query window (unfocused →
   // unread content).
-  peer.privmsg(NETWORK_NICK, DM_LINE);
+  peer.privmsg(specNick(), DM_LINE);
   await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
   await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
 
@@ -83,7 +83,7 @@ async function seedEventOnlyAndMessageWindows(
 test("desktop: #265 next-active count includes the message (DM) window, excludes the event-only channel", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = "act265-d";
   await loginAs(page, vjt);
 
@@ -115,7 +115,7 @@ test("desktop: #265 next-active count includes the message (DM) window, excludes
 test("@webkit mobile: #265 bottom-bar next-active count excludes the event-only channel", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = "act265-m";
   await loginAs(page, vjt);
 

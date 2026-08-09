@@ -32,8 +32,8 @@
 import type { Locator, Page } from "@playwright/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 import { mediaScrollbackRow, uploadViaPicker } from "../fixtures/uploadJourney";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -64,9 +64,9 @@ async function uploadPngAndGetLink(page: Page): Promise<{
 }
 
 test("📸 upload link click opens the in-app viewer instead of navigating", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const { url, row, link } = await uploadPngAndGetLink(page);
 
@@ -109,9 +109,9 @@ test("🎵 upload link click opens the docked mini-player, NOT the modal (GH #11
   // (media-src 'self') without a securitypolicyviolation — the
   // _cspGuard fixture fails the spec otherwise. Audio is pass-through
   // server-side (no metadata strip), so a tiny labelled buffer uploads.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const { slug, url } = await uploadViaPicker(
     page,
@@ -162,9 +162,9 @@ test("viewer load states: failure text on unfetchable media, spinner until bytes
   // successfully fetched image would be served from memory cache on a
   // later click, and cache hits bypass page.route interception — the
   // abort would never fire and the phase would flake.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const { slug, link } = await uploadPngAndGetLink(page);
   const viewer = page.getByRole("dialog", { name: "Media viewer" });
@@ -203,9 +203,9 @@ test("viewer load states: failure text on unfetchable media, spinner until bytes
 });
 
 test("plain web link is NOT intercepted — keeps the default anchor", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, "docs at https://example.com/page for reference");
   const row = scrollbackLine(page, "privmsg", "example.com");

@@ -33,8 +33,8 @@ import {
   loginAs,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 test.setTimeout(90_000);
@@ -103,8 +103,8 @@ test("issue1105 — replying to a wrapping message scrolls the compose caret int
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
   const body = uniqueBody();
 
-  await loginAs(page, getSeededVjt());
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await loginAs(page, specUser());
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await composeSend(page, body);
   await expect(page.locator('[data-testid="scrollback-line"]', { hasText: body })).toBeVisible({
     timeout: 5_000,
@@ -118,7 +118,7 @@ test("issue1105 — replying to a wrapping message scrolls the compose caret int
 
   await swipeRowRight(page, body);
 
-  const quote = `<${NETWORK_NICK}> ${body}<< `;
+  const quote = `<${specNick()}> ${body}<< `;
   await expect(ta).toHaveValue(quote, { timeout: 5_000 });
 
   // THE regression: caret at the end of the quote AND that line inside the

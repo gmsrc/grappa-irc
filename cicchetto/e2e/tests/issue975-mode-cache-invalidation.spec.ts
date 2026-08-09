@@ -31,13 +31,13 @@
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#975 — /mode on a parted channel reports unknown, not the modes cached while joined", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t975-${Date.now()}`;
 
   await loginAs(page, vjt);
@@ -45,7 +45,7 @@ test("#975 — /mode on a parted channel reports unknown, not the modes cached w
   // /join, and gives the composer a home to return to after the PART (the
   // `/mode <channel>` in step 4 is typed from here, not from the window
   // that no longer exists).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: `t975peer-${Date.now() % 100000}` });
   try {
@@ -56,7 +56,7 @@ test("#975 — /mode on a parted channel reports unknown, not the modes cached w
     await expect(
       page.locator(".sidebar-network-section li").filter({ hasText: channel }),
     ).toHaveCount(1, { timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // Step 2 — the cache is genuinely populated by the join-time 324.
     const modeIndicator = page.locator(".topic-bar-modes");
@@ -86,7 +86,7 @@ test("#975 — /mode on a parted channel reports unknown, not the modes cached w
     // Step 4 — the operator asks again. Selection has moved off the parted
     // window; re-anchor on the autojoin channel so the composer is live and
     // the network slug the verb resolves against is unambiguous.
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
     await composeSend(page, `/mode ${channel}`);
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await expect(modal.getByTestId("mode-modal-unknown")).toBeVisible();

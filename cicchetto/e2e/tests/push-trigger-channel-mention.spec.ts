@@ -45,8 +45,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b5-mentioner";
 const TARGET_CHANNEL = "#b5-mention";
@@ -56,7 +56,7 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   // Stub MUST install before page.goto (loginAs) — initScripts run
@@ -72,7 +72,7 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
   // window so the SW dedup doesn't suppress it. Focused-channel
   // dedup is the dedup spec's concern; this spec asserts the
   // server-side trigger only.
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
@@ -91,10 +91,10 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
 
     // Wait for the operator's auto-join line to land before the peer
     // sends — same race as M1 / b2 specs.
-    await selectChannel(page, NETWORK_SLUG, TARGET_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, TARGET_CHANNEL, { ownNick: specNick() });
 
     // Re-focus #bofh so the mention lands UNFOCUSED.
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     // #182 — background the device so the server delivers. The server
     // now suppresses at source when ANY device is visible, so the
@@ -104,7 +104,7 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
 
     // Peer mentions the operator. Mentions.mentioned?/3 matches
     // the bare nick at a word boundary.
-    peer.privmsg(TARGET_CHANNEL, `${NETWORK_NICK}: are you there?`);
+    peer.privmsg(TARGET_CHANNEL, `${specNick()}: are you there?`);
 
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);

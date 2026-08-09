@@ -1,42 +1,31 @@
 import { test as base, expect as baseExpect } from "@playwright/test";
-import { resetSubject } from "./grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG, VJT_USER } from "./seedData";
+import { provisionSpecSubject, setCurrentSpecSubject, teardownSpecSubject } from "./specSubject";
 
-// E2E-ROBUSTNESS bucket D — wrapped Playwright `test` fixture that
-// auto-resets vjt's grappa-side state after every test. Replaces the
-// per-spec `test.afterEach(() => resetSubject(...))` boilerplate so
-// future spec authors get cascade-prevention for free.
+// Wrapped Playwright `test` fixture. Specs that need a grappa user MUST
+// import `test` from THIS module instead of `@playwright/test`; the
+// bare import gets no subject (admin-*, m9b-*, and the login-journey
+// specs drive seeded users of their own on purpose).
 //
-// Specs that touch the seeded `vjt` user MUST import `test` from THIS
-// module instead of `@playwright/test`. Specs that target other seed
-// users (admin-vjt, m9b-test, m9b-victim) keep the bare
-// `@playwright/test` import — the reset is vjt-scoped, not global.
+// #1078 replaced what this fixture does. It used to run an afterEach
+// that restored ONE shared user (`vjt`) to a baseline — drain nine
+// enumerated surfaces, truncate and re-seed one enumerated channel.
+// That can only clean what somebody remembered to enumerate, and the
+// measurement on #1078 found what had fallen off the list: `$server`,
+// the pseudo-channel the reset's own reconnect writes its notices into,
+// grew +14 rows per reset and ~5000 across the suite.
 //
-// Wire: `_vjtReset` is an `auto: true` test-scoped fixture whose
-// teardown phase fires after EVERY `test()` body in any file that
-// imports `test` from this module. No per-spec wiring required.
+// Now `_specSubject` PROVISIONS a whole subject before the body and
+// destroys it after: its own user, its own credential, its own nick,
+// its own seeded scrollback, its own session. Nothing carries to the
+// next test because nothing is shared with it, and no list has to be
+// kept current for that to stay true.
 //
-// `baselineAutojoin` is the seed-time autojoin contract per network
-// slug — the fixture passes it through so the reset restores
-// `cred.autojoin_channels` to the seeded list every iteration. cic's
-// PART verb (DELETE /networks/.../channels) strips operator-config
-// autojoin permanently; UX-1, m9-part-x-click, cp15-b6 exercise
-// this. Without restoration, every reset after those specs sees an
-// empty autojoin list and `#bofh` never re-JOINs.
+// Declared FIRST so it tears down LAST: deleting the user revokes its
+// bearer and closes its socket, and that should happen after the CSP
+// assertion and after the route drain, not in the middle of them.
 //
-// `baselineSeed` is the per-channel scrollback seed contract —
-// truncate to zero rows then re-seed `seedCount` synthetic privmsg
-// rows. Mirrors the seeder's compose-time
-// `mix grappa.seed_scrollback --count 200 --sender seed-bot` so
-// every spec starts with EXACTLY the same scrollback baseline.
-// Without this, accumulated rows from prior specs flip
-// scroll-density-sensitive assertions in later specs (visible-tail,
-// marker placement, cursor-advance gates).
-//
-// See `lib/grappa/test_support/subject_reset.ex` for the orchestrator
-// + the `POST /admin/test/reset-subject` endpoint
-// (compile-gated to dev/test Mix envs).
-const SEED_COUNT = 200;
+// See `lib/grappa/test_support/subject_provision.ex` for the server
+// half (compile-gated to dev/test Mix envs).
 
 // `_cspGuard` (e2e CSP parity, 2026-06-11) — the BEAM emits the REAL
 // prod Content-Security-Policy (GrappaWeb.Plugs.SecurityHeaders), and
@@ -60,8 +49,8 @@ const SEED_COUNT = 200;
 //     is a document-context violation; only blocks INSIDE an
 //     already-running worker are invisible.
 //   - wrapped-import specs only: bare `@playwright/test` specs
-//     (admin-*, m9b-*) skip the guard, same as they skip the vjt
-//     reset. The media/upload surfaces that motivated this all
+//     (admin-*, m9b-*) skip the guard, same as they get no per-spec
+//     subject. The media/upload surfaces that motivated this all
 //     import the wrapped `test`.
 interface CspViolation {
   blockedURI: string;
@@ -76,11 +65,32 @@ interface CspViolation {
 // documented shape and not the confusing-void the rule is written against.
 // biome-ignore-start lint/suspicious/noConfusingVoidType: Playwright's auto-fixture declaration shape
 export const test = base.extend<{
-  _vjtReset: void;
+  _specSubject: void;
   _cspGuard: void;
   _unrouteGuard: void;
 }>({
   // biome-ignore-end lint/suspicious/noConfusingVoidType: Playwright's auto-fixture declaration shape
+  _specSubject: [
+    // The empty destructuring pattern is load-bearing: Playwright reads the
+    // first parameter's pattern to decide which fixtures to instantiate, and
+    // rejects a non-destructured one outright. `{}` is how a fixture declares
+    // it needs none — it is an API contract, not a stray empty pattern.
+    // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture-dependency declaration
+    async ({}, use, testInfo) => {
+      const subject = await provisionSpecSubject(testInfo);
+      setCurrentSpecSubject(subject);
+      try {
+        await use();
+      } finally {
+        // Clear the accessor BEFORE the network call: if the teardown
+        // throws, the next test must fail on "no subject" rather than
+        // quietly inherit this one.
+        setCurrentSpecSubject(null);
+        await teardownSpecSubject(subject);
+      }
+    },
+    { auto: true },
+  ],
   _cspGuard: [
     async ({ context }, use) => {
       const violations: CspViolation[] = [];
@@ -119,42 +129,6 @@ export const test = base.extend<{
     },
     { auto: true },
   ],
-  // The per-test reset is the single most expensive thing the suite does
-  // (#934: ~10 min of a 32 min run, and 43% of that concentrated in a tail
-  // that no client-side total could attribute). One stderr line per test
-  // makes every run its own dataset: elapsed, how many attempts the 433
-  // retry burned, and the server's own phase breakdown. Unconditional on
-  // purpose — the last two times this was a throwaway local diff, the
-  // evidence was lost before the question got answered.
-  _vjtReset: [
-    // The empty destructuring pattern is load-bearing: Playwright reads the
-    // first parameter's pattern to decide which fixtures to instantiate, and
-    // rejects a non-destructured one outright. `{}` is how a fixture declares
-    // it needs none — it is an API contract, not a stray empty pattern.
-    // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture-dependency declaration
-    async ({}, use, testInfo) => {
-      await use();
-      const admin = getSeededAdmin();
-      const startedAt = performance.now();
-      const { attempts, phases } = await resetSubject(
-        admin.token,
-        VJT_USER,
-        { [NETWORK_SLUG]: AUTOJOIN_CHANNELS },
-        {
-          [NETWORK_SLUG]: AUTOJOIN_CHANNELS.map((name) => ({
-            name,
-            seedCount: SEED_COUNT,
-            seedSender: "seed-bot",
-          })),
-        },
-      );
-      const elapsed = Math.round(performance.now() - startedAt);
-      process.stderr.write(
-        `__RESETCOST__\t${elapsed}\t${attempts}\t${phases}\t${testInfo.titlePath.join(" | ")}\n`,
-      );
-    },
-    { auto: true },
-  ],
   // `_unrouteGuard` (#619) — one seam for the whole suite's page.route
   // lifetime. 13 of 14 specs that call `page.route(` never unroute, so a
   // route callback can still be mid-flight when the test body returns;
@@ -185,3 +159,10 @@ export const test = base.extend<{
 });
 
 export { expect } from "@playwright/test";
+
+// Re-exported from HERE, not from `./specSubject`, on purpose: the
+// accessors are only meaningful where `_specSubject` runs, and that is
+// exactly the set of specs that import `test` from this module. Reaching
+// them through the same import that brings in `test` makes the coupling
+// impossible to get wrong.
+export { specNick, specUser } from "./specSubject";

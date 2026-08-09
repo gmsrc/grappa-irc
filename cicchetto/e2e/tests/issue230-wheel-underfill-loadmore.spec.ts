@@ -48,9 +48,9 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -90,7 +90,7 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
 // lands regardless of prior cursor state — the production endpoint is
 // advance-only since #233 and would clamp a backward seed.
 async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
 }
 
@@ -100,17 +100,8 @@ test.describe("issue #230 — wheel-up loads older history when content underfil
   // 800×2000 leaves ~1850px of scroll area for ~1000px of content.
   test.use({ viewport: { width: 800, height: 2000 } });
 
-  // The head cursor persists on the shared seeded vjt across spec
-  // boundaries (last-write-wins). Restore to the tail so downstream #bofh
-  // specs inherit a fully-read channel (mirror of issue168 / cp14-b1).
-  test.afterAll(async () => {
-    const vjt = getSeededVjt();
-    if (!CHANNEL) return;
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("wheel-UP on an underfilled pane fetches older rows", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Seed the cursor to HEAD → no unread divider → cic's cold load is the
@@ -122,7 +113,7 @@ test.describe("issue #230 — wheel-up loads older history when content underfil
     await seedCursor(CHANNEL, headId);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Initial REST page landed (~50 rows).
     await expect

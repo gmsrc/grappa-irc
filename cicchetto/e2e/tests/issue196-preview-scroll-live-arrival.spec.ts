@@ -30,8 +30,8 @@ import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 import { mediaScrollbackRow, uploadViaPicker } from "../fixtures/uploadJourney";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -51,7 +51,7 @@ test.describe("#196 — preview overlay holds scroll across a live message arriv
   // after every repeat, far too late; the sibling spec interleaves between our
   // repeats). Cascade hygiene: feedback_cascade_poisoner_pattern.
   test.afterEach(async () => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   });
 
@@ -60,9 +60,9 @@ test.describe("#196 — preview overlay holds scroll across a live message arriv
   }) => {
     test.slow();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Upload an image → a clickable media link lands at the tail.
     const { slug } = await uploadViaPicker(

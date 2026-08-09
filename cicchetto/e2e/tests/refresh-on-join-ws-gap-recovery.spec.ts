@@ -40,8 +40,8 @@
 
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "refresh-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -51,7 +51,7 @@ const MSG_DURING_GAP = "msg-r5-during-ws-gap";
 test("CP29 R-5 — peer PRIVMSG during WS gap recovered via refresh-on-WS-join-ok", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus the channel so its scrollback pane renders + its per-channel
@@ -59,7 +59,7 @@ test("CP29 R-5 — peer PRIVMSG during WS gap recovered via refresh-on-WS-join-o
   // (consumed by refreshScrollback's getResumeCursor) requires at
   // least one rendered row to know where to resume from — the live
   // baseline message below populates it.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {

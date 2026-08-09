@@ -39,8 +39,8 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const SERVER_WINDOW_LABEL = "Server";
 
@@ -89,7 +89,7 @@ async function assertServerRailCapped(page: Page): Promise<void> {
     },
   );
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus the server window (no WS-ready dance — server windows have no

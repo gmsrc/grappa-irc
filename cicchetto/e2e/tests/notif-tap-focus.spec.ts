@@ -32,9 +32,10 @@
 // selection, no sidebar row.
 
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
+import type { SeededUser } from "../fixtures/grappaApi";
 import { buildPushDeepLink, dispatchNavigateMessage } from "../fixtures/pushTap";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // Peer nicks with NO query window open in cic — the deep-link targets a
 // DM whose window must be created by the tap itself (the
@@ -47,7 +48,7 @@ const DM_PEER_WARM = "notif146-warm";
 // deep-link — mirrors the SW's `openWindow(url)` on a closed PWA.
 async function coldBootAt(
   page: Parameters<typeof loginAs>[0],
-  vjt: ReturnType<typeof getSeededVjt>,
+  vjt: SeededUser,
   url: string,
 ): Promise<void> {
   await page.addInitScript(
@@ -65,7 +66,7 @@ test.describe("#146 — notification tap opens & focuses the matching window", (
   test("channel highlight tap focuses the channel window (cold path / openWindow)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const channel = AUTOJOIN_CHANNELS[0];
     await coldBootAt(page, vjt, buildPushDeepLink(NETWORK_SLUG, channel));
 
@@ -75,7 +76,7 @@ test.describe("#146 — notification tap opens & focuses the matching window", (
   });
 
   test("DM tap opens AND focuses the query window (cold path / openWindow)", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await coldBootAt(page, vjt, buildPushDeepLink(NETWORK_SLUG, DM_PEER_COLD));
 
     // User-visible outcome: the DM window is now PRESENT in the sidebar
@@ -89,7 +90,7 @@ test.describe("#146 — notification tap opens & focuses the matching window", (
   test("channel highlight tap focuses the channel window (warm path / SW→page navigate)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     const channel = AUTOJOIN_CHANNELS[0];
@@ -107,7 +108,7 @@ test.describe("#146 — notification tap opens & focuses the matching window", (
   test("DM tap opens AND focuses the query window (warm path / SW→page navigate)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // The query window must NOT pre-exist. We deliberately do not send a

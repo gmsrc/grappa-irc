@@ -17,8 +17,8 @@
 // `/links` command, so the whole spec drives that path (never a button).
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -42,9 +42,9 @@ const boxesOverlap = (a: Box, b: Box): boolean => {
 test("#578 — /links map: no overlapping labels, nothing clipped, legend + you-marker", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Enter the map ONLY via the /links command (the Map button is hidden).
   await composeSend(page, "/links");

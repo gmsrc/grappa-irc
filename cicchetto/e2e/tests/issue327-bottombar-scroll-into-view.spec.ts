@@ -45,8 +45,8 @@ import {
   restoreReadCursorToTail,
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const NEXT_ACTIVE_BTN = '[data-testid="next-active-btn"]';
 const NEXT_ACTIVE_COUNT = '[data-testid="next-active-btn"] .next-active-count';
@@ -70,7 +70,7 @@ let peerSeq = 0;
 test("#327 @webkit — tapping next-active scrolls a far-off-screen unread tab fully into the bottom bar", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Overflow the tab strip BEFORE the page loads so the fresh channel-list
   // fetch includes every tab. Sequential awaits give each upstream JOIN

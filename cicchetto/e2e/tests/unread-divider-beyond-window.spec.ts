@@ -26,13 +26,9 @@
 // lands mid-pane → cascade.
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import {
-  fetchAllMessagesAsc,
-  restoreReadCursorToTail,
-  setReadCursorToId,
-} from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { fetchAllMessagesAsc, setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -44,17 +40,11 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const OWN_PRESENCE_KINDS = new Set(["join", "part", "quit", "nick_change", "mode", "kick"]);
 
 test.describe("#156 unread divider with unread beyond the fetch window", () => {
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("anchors the divider between last-read and first-unread with context above", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Learn the seeded #bofh id range (the seeder plants 200 lines). Page
     // back oldest-first so the cursor can be planted well below the tail
@@ -86,7 +76,7 @@ test.describe("#156 unread divider with unread beyond the fetch window", () => {
     const expectedUnread = rows.filter(
       (r) =>
         r.id > lastReadRow.id &&
-        !(OWN_PRESENCE_KINDS.has(r.kind) && r.sender.toLowerCase() === NETWORK_NICK.toLowerCase()),
+        !(OWN_PRESENCE_KINDS.has(r.kind) && r.sender.toLowerCase() === specNick().toLowerCase()),
     ).length;
     // Guard the chosen window: exact count requires staying under the cap.
     expect(expectedUnread).toBeGreaterThan(60);
@@ -96,7 +86,7 @@ test.describe("#156 unread divider with unread beyond the fetch window", () => {
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, lastReadRow.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     const scrollbackLine = (id: number) =>
       page.locator(`[data-testid="scrollback-line"][data-msg-id="${id}"]`);

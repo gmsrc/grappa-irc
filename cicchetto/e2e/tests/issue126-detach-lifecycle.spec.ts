@@ -40,12 +40,11 @@ import {
 } from "../fixtures/grappaApi";
 import {
   AUTOJOIN_CHANNELS,
-  getSeededVjt,
   NETWORK_SLUG,
   VJT_IDENTIFIER,
   VJT_PASSWORD,
 } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -59,7 +58,7 @@ async function freshVjtSeed(): Promise<{
   token: string;
   subjectJson: string;
 }> {
-  const { token, subject } = await login(VJT_IDENTIFIER, VJT_PASSWORD);
+  const { token, subject } = await login(specUser().identifier, specUser().password);
   return {
     name: subject.name,
     password: VJT_PASSWORD,
@@ -85,7 +84,7 @@ test.describe("issue #126 — detach lifecycle", () => {
     // so the next spec inherits a live autojoin. Post-#126 detach keeps
     // the session, so this is a no-op (already connected → :not_connected,
     // swallowed).
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
       connection_state: "connected",
     }).catch(() => {});

@@ -30,8 +30,8 @@ import {
   setReadCursorToId,
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "badge887-buddy";
@@ -78,20 +78,11 @@ async function badgeCount(page: Page): Promise<number> {
 }
 
 test.describe("#887 focused-window unread badge", () => {
-  // BUGHUNT-3 cascade rule: this spec deliberately leaves the cursor
-  // mid-channel for most of its run. Restore to tail so downstream specs
-  // inherit a fully-read #bofh.
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("survives focus, holds while scrolled up, and falls as the operator reads", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     const rows = await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(rows.length).toBeGreaterThanOrEqual(UNREAD_DEPTH + 10);
@@ -102,7 +93,7 @@ test.describe("#887 focused-window unread badge", () => {
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, lastRead.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     const badge = sidebarMessageBadge(page, NETWORK_SLUG, CHANNEL);
 
@@ -144,7 +135,7 @@ test.describe("#887 focused-window unread badge", () => {
 
   test("a message arriving while the operator watches the tail clears itself", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Caught up and parked at the tail — the state the old suppression used
     // to paper over and the one no pre-existing writer can serve: leave /
@@ -152,7 +143,7 @@ test.describe("#887 focused-window unread badge", () => {
     // needs an input event that never comes.
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarMessageBadge(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, {
       timeout: 10_000,
     });

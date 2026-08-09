@@ -31,8 +31,8 @@
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 async function box(locator: import("@playwright/test").Locator) {
   const b = await locator.boundingBox();
@@ -43,14 +43,14 @@ async function box(locator: import("@playwright/test").Locator) {
 test("#275 — channel modes stack below the name in a width-capped box that opens the /mode modal", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t275-${Date.now()}`;
   const marker = `t275-topic-${Date.now()}`;
 
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready before the
   // /join (mirrors issue216 / #262 boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // A peer creates the channel (→ op), sets +t AND a topic BEFORE vjt joins,
   // so vjt learns both via the join-time queries and the TopicBar renders a
@@ -63,7 +63,7 @@ test("#275 — channel modes stack below the name in a width-capped box that ope
 
     await composeSend(page, `/join ${channel}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, channel)).toBeVisible({ timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // The modes render — the join-time 324 query populated +t.
     const modes = page.locator(".topic-bar-modes");

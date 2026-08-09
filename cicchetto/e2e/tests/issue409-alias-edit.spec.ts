@@ -13,8 +13,8 @@
 import type { Page } from "@playwright/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = "#bofh";
 
@@ -36,11 +36,11 @@ const openAliasesSubpage = async (page: Page): Promise<void> => {
 test("#409 item 3 — edit an existing alias in place; the rename persists across a re-boot", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   try {
     await clearAliases(vjt.token);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await openAliasesSubpage(page);
 
@@ -69,7 +69,7 @@ test("#409 item 3 — edit an existing alias in place; the rename persists acros
     // PROVE persistence — re-boot the SPA (fresh page load → fresh server GET
     // on sub-page open) and re-open the sub-page.
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await openAliasesSubpage(page);
     await expect(page.getByTestId("aliases-item-w")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId("aliases-item-w")).toContainText("whois $1");

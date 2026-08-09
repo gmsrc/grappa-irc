@@ -30,17 +30,17 @@
 
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#222 — per-channel toggle hides join/part rows, persists across reload, PRIVMSG stays", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const channel = AUTOJOIN_CHANNELS[0];
-  await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
   // A dedicated peer produces REAL join + part presence events on #bofh.
   // Distinct single nick — no flood risk. try/finally tears it down.

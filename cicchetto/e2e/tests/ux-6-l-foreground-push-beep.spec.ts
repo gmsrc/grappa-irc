@@ -33,8 +33,8 @@ import {
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK_DM = "ux6l-dmer";
 const PEER_NICK_MENTION = "ux6l-mentioner";
@@ -53,7 +53,7 @@ async function readLastBeepAt(page: import("@playwright/test").Page): Promise<nu
 test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused window", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Surface browser console + any uncaught errors — the DM-listener
   // race manifests as "DM persisted server-side, cic never received
   // broadcast"; chasing that without console output is masochism.
@@ -62,7 +62,7 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
   // Stay focused on #bofh — peer DM lands in a NEW window we're NOT
   // looking at, so beep MUST fire (same focus-rule as the mention
   // gate).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // Sanity: no beep has fired pre-DM.
   const baseline = await readLastBeepAt(page);
@@ -75,7 +75,7 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK_DM });
   try {
-    peer.privmsg(NETWORK_NICK, DM_BODY);
+    peer.privmsg(specNick(), DM_BODY);
 
     // Step 1: confirm the DM landed SERVER-SIDE. Isolates "peer
     // connection / bahamut load flake" (server has no row) from "cic
@@ -106,9 +106,9 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
 });
 
 test("channel mention fires in-app beep on a non-focused mention target", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const baseline = await readLastBeepAt(page);
   expect(baseline).toBeNull();
@@ -121,12 +121,12 @@ test("channel mention fires in-app beep on a non-focused mention target", async 
     // pattern).
     await page.locator(".compose-box textarea").fill(`/join ${MENTION_CHANNEL}`);
     await page.locator(".compose-box textarea").press("Enter");
-    await selectChannel(page, NETWORK_SLUG, MENTION_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, MENTION_CHANNEL, { ownNick: specNick() });
 
     // Re-focus #bofh so mention lands on a NON-focused window.
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
-    const mentionBody = `${NETWORK_NICK}: you there?`;
+    const mentionBody = `${specNick()}: you there?`;
     peer.privmsg(MENTION_CHANNEL, mentionBody);
 
     // Confirm server-side first to isolate flakes.
@@ -148,9 +148,9 @@ test("channel mention fires in-app beep on a non-focused mention target", async 
 test("PRIVMSG without nick mention does NOT fire beep on a non-focused channel", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const baseline = await readLastBeepAt(page);
   expect(baseline).toBeNull();

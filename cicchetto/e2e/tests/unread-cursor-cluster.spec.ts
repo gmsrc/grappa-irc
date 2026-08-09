@@ -39,8 +39,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "unread-cursor-buddy";
@@ -57,12 +57,6 @@ function ownNickRows(page: Page, body: string) {
 }
 
 test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   // ── Sentinel 1: two-session own-msg-no-bump ─────────────────────────
   //
   // Two browser contexts, same seeded vjt. Session A focused on #bofh,
@@ -81,7 +75,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   //     at 0 (or whatever pre-existing count was)
   test("session A's send in #bofh does NOT bump session B's #bofh badge", async ({ browser }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Restore cursor to tail BEFORE either session loads so both
     // sessions hydrate with a clean (empty) unread state. Prior specs
@@ -101,7 +95,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
       await loginAs(pageB, vjt);
 
       // Session A focused on #bofh; session B focused on $server.
-      await selectChannel(pageA, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+      await selectChannel(pageA, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
       await selectChannel(pageB, NETWORK_SLUG, NETWORK_SLUG, {
         awaitWsReady: false,
       });
@@ -187,7 +181,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   //     collapses on the next render.
   test("focused send collapses the in-pane unread marker immediately", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Clean baseline so the marker pre-condition is reproducible:
     // restore cursor to tail BEFORE login so the channel renders as
@@ -211,7 +205,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
       // peer row + marker to render before the focused send so the
       // pre-condition is visible (otherwise a marker-already-gone state
       // would silently pass the post-send assertion).
-      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
       await expect(
         page.locator('[data-testid="scrollback-line"][data-kind="privmsg"]', {
           hasText: peerBody,
@@ -265,7 +259,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   // unit test guards its root cause.)
   test("own message sent then a fast away-and-back is NOT shown unread", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Clean baseline: channel fully-read at first focus so NO marker is
     // present before the send — any marker after the send/switch is the
@@ -273,7 +267,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(page.locator('[data-testid="unread-marker"]')).toHaveCount(0, {
       timeout: 5_000,
     });
@@ -288,7 +282,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
     // land. With the optimistic advance the cursor is already at the
     // own-row id, so the re-latch sees a fully-read channel.
     await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // The own message must NOT be marked unread: no divider injected.
     await expect(page.locator('[data-testid="unread-marker"]')).toHaveCount(0, {

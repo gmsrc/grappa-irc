@@ -12,20 +12,20 @@
 
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 
 test("full mIRC: peer PRIVMSG renders strikethrough + monospace + hex-color spans", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, TEST_CHANNEL, { awaitWsReady: false });
 
   // Live per-channel WS gate (see cp13-s10 rationale).
-  await expect(page.locator(".members-pane li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(page.locator(".members-pane li", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
 

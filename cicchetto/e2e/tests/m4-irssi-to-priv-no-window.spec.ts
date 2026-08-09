@@ -1,6 +1,6 @@
 // M4 — peer PRIVMSG to vjt's nick when cicchetto has NO query window open
 // for that peer. Expected:
-//   - DM persists server-side at channel = NETWORK_NICK (the inbound
+//   - DM persists server-side at channel = specNick() (the inbound
 //     DM target — grappa stores using the recipient nick as channel)
 //   - cicchetto auto-opens a query window keyed on the SENDER nick
 //     (subscribe.ts DM-listener loop calls openQueryWindowState then
@@ -30,21 +30,21 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m4-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = "M4: inbound DM to nick";
 
 test("M4 — inbound DM auto-opens query window with unread, clears on focus", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Stay focused on #bofh — the DM lands in a NEW window we're NOT
   // looking at, so unread MUST bump. selectChannel here also doubles
   // as the WS-ready sync (own-nick subscribe.ts join for the dm-
   // listener topic happens off the same effect chain).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   // Connect BEFORE the pre-condition so every locator below is keyed on the
@@ -59,16 +59,16 @@ test("M4 — inbound DM auto-opens query window with unread, clears on focus", a
     // before peer sent" flake).
     await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(0);
 
-    peer.privmsg(NETWORK_NICK, MESSAGE_BODY);
+    peer.privmsg(specNick(), MESSAGE_BODY);
 
-    // Server-side: row persisted at channel = NETWORK_NICK (the
+    // Server-side: row persisted at channel = specNick() (the
     // RECIPIENT nick is the channel for inbound DMs) with sender =
     // PEER_NICK + dm_with = PEER_NICK (CP14-B3 derivation). We probe
     // via REST against channel = PEER_NICK because the OR-shape DM
     // aggregation (channel == peer OR dm_with == peer) matches the
     // inbound row, which is the same lookup cic uses when the user
     // opens the auto-spawned PEER_NICK query window. Probing channel
-    // = NETWORK_NICK would hit the own-nick narrowing path
+    // = specNick() would hit the own-nick narrowing path
     // (channel == own AND dm_with == own — self-msgs only) and miss
     // peer-originated DMs.
     await assertMessagePersisted({

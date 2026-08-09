@@ -18,8 +18,8 @@
 // always-visible permanent rail; see issue71-inc2-permanent-rail-desktop).
 
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const OPENER_GLYPH = "\u{2630}"; // ☰ — identical glyph in both openers (paletto 2)
@@ -30,7 +30,7 @@ test.describe("#71 INC-2 — mobile rail openers (Opt A)", () => {
   test("@webkit non-channel (home): ☰ rail opener → drawer → cog opens settings", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // Cold-load lands on home (non-channel). ShellChrome renders the ☰ RAIL
@@ -60,9 +60,9 @@ test.describe("#71 INC-2 — mobile rail openers (Opt A)", () => {
   test("@webkit channel: TopicBar ☰ opens the SAME drawer + cog (ONE drawer, ONE glyph)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Channel windows render the TopicBar hamburger, NOT the ShellChrome rail
     // opener (no standalone chrome row on mobile-channel). Same ☰ glyph.

@@ -25,8 +25,8 @@
 import type { Page } from "@playwright/test";
 import { loginAs } from "../fixtures/cicchettoPage";
 import { type MintedVisitor, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
-import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // Seed a visitor bearer + subject into localStorage before the SPA boots
 // (mirror of the #392 helper).
@@ -78,7 +78,7 @@ const SUBJECTS: SubjectCase[] = [
     sessionTestid: "home-session-user",
     factRe: /7 days/i,
     async arrive(page) {
-      await loginAs(page, getSeededVjt());
+      await loginAs(page, specUser());
       await gotoHome(page);
       return async () => {};
     },

@@ -29,8 +29,8 @@
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 // Alphanumeric so the word-boundary match is unambiguous, own-nick-free so
@@ -43,11 +43,11 @@ test.setTimeout(90_000);
 test("#370 — a custom /hilight word paints the same visual highlight own-nick mentions get, live and after reload", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   let peer: IrcPeer | null = null;
   try {
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
     // Configure the custom highlight word. The green confirmation notice is
     // the deterministic signal the add round-tripped to the server (so the
@@ -71,7 +71,7 @@ test("#370 — a custom /hilight word paints the same visual highlight own-nick 
     // on the user-topic (re)join. A NEW matching line must still highlight
     // without opening settings.
     await page.reload();
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
     peer.privmsg(SEED_CHANNEL, `second ${KEYWORD} shipped clean`);
 
     const rehydratedLine = scrollbackLine(page, "privmsg", `second ${KEYWORD}`);

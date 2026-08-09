@@ -35,8 +35,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "focus-suppressor";
 const SUB_ID = "focus-suppression";
@@ -45,7 +45,7 @@ test("server delivers push once the window is blurred though still on-screen, su
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   // Stub MUST install before page.goto (loginAs) — initScripts run for
@@ -54,7 +54,7 @@ test("server delivers push once the window is blurred though still on-screen, su
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
   // Pin visibilityState "visible" for the whole test so the ONLY variable
@@ -68,7 +68,7 @@ test("server delivers push once the window is blurred though still on-screen, su
     // matches #182's visible case). setPageFocus blocks until WSPresence
     // acked present=true, so the DM can't race the focus update.
     await setPageFocus(page, true);
-    peer.privmsg(NETWORK_NICK, "you are looking at the app — no toast please");
+    peer.privmsg(specNick(), "you are looking at the app — no toast please");
     await assertNoPushDelivery(SUB_ID);
 
     // Phase 2 — visible but BLURRED (still on-screen, keyboard focus lost).
@@ -76,7 +76,7 @@ test("server delivers push once the window is blurred though still on-screen, su
     // stayed suppressed because visibilityState alone reported "visible".
     await resetPushCatcher();
     await setPageFocus(page, false);
-    peer.privmsg(NETWORK_NICK, "you clicked another app — deliver this one");
+    peer.privmsg(specNick(), "you clicked another app — deliver this one");
 
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
@@ -85,7 +85,7 @@ test("server delivers push once the window is blurred though still on-screen, su
     // Phase 3 — REFOCUS (still visible) → suppression restored.
     await resetPushCatcher();
     await setPageFocus(page, true);
-    peer.privmsg(NETWORK_NICK, "back in focus — suppress again");
+    peer.privmsg(specNick(), "back in focus — suppress again");
     await assertNoPushDelivery(SUB_ID);
   } finally {
     await peer.disconnect("#192 focus-suppression done");

@@ -48,11 +48,10 @@ import {
   ADMIN_PASSWORD,
   AUTOJOIN_CHANNELS,
   getSeededAdmin,
-  getSeededVjt,
   M9B_USER,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -156,7 +155,7 @@ test.afterEach(async () => {
     max_per_ip: null,
   }).catch(() => {});
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreNetwork(vjt.token);
 });
 
@@ -184,7 +183,7 @@ test.afterEach(async () => {
 // the UX-5 BC unit + controller tests, and at the e2e by
 // `ux-5-bc-park-respawn.spec.ts`.
 test("U-3 — per-IP cap saturation → 503 too_many_sessions", async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Park vjt's Bootstrap-spawned session so the /connect re-spawn
   // path is the one under test (admission is gated only at fresh

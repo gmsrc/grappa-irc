@@ -13,7 +13,7 @@
 // Sibling precedent: issue217-timestamp-format.spec.ts (Settings toggle →
 // live re-render → persist).
 //
-// Desktop project (untagged → chromium). Own nick (NETWORK_NICK) is always in
+// Desktop project (untagged → chromium). Own nick (specNick()) is always in
 // the roster, so there is a stable `.members-pane .member-name .nick-text` to
 // assert on regardless of the autojoin op-race.
 
@@ -23,8 +23,8 @@ import {
   openSettingsSection,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -35,7 +35,7 @@ test.setTimeout(60_000);
 function ownNickText(page: import("@playwright/test").Page) {
   return page
     .locator(".members-pane .member-name")
-    .filter({ hasText: NETWORK_NICK })
+    .filter({ hasText: specNick() })
     .first()
     .locator(".nick-text")
     .first();
@@ -45,9 +45,9 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await expect(ownNickText(page)).toBeVisible({ timeout: 10_000 });
 
@@ -78,7 +78,7 @@ test("#443 — colored nicklist off by default, toggles live from Settings, pers
 
   // Persistence: a full reload restores the stored preference (colored ON).
   await page.reload();
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(ownNickText(page)).toHaveAttribute("style", /color/);
 
   // And the drawer reflects the persisted choice.

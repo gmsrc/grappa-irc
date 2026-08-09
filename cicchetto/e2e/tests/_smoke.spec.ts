@@ -15,15 +15,15 @@
 
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "vjt-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = "smoke-test hello from peer";
 
 test("peer PRIVMSG to #bofh persists in grappa scrollback", async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {

@@ -70,10 +70,8 @@ import {
   ADMIN_PASSWORD,
   AUTOJOIN_CHANNELS,
   NETWORK_SLUG,
-  VJT_IDENTIFIER,
-  VJT_PASSWORD,
 } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 const A_CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -83,7 +81,7 @@ test.describe("issue #281 — account switch replay", () => {
   }) => {
     // Account A: FRESH vjt bearer (own token) so the detach revoke targets
     // this token only — never the shared seeded vjt token downstream specs ride.
-    const a = await login(VJT_IDENTIFIER, VJT_PASSWORD);
+    const a = await login(specUser().identifier, specUser().password);
 
     // Fetch-wrap: record every request URL synchronously at the call frame.
     // Installed FIRST so it wraps the fetch before the app's auth/networks

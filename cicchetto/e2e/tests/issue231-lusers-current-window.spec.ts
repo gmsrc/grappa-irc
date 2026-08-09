@@ -32,20 +32,20 @@
 // and exercises the slash → push → broadcast → render path end-to-end.
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#231 — /lusers surfaces LusersCard in the CURRENT (channel) window, not $server", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus a CHANNEL window (seed-autojoined #bofh) — deliberately NOT
   // the $server window. This is the anti-regression pivot: the old
   // `kind === "server"` gate would leave the card unmounted here.
   const channel = AUTOJOIN_CHANNELS[0];
-  await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
   // Issue /lusers FROM the channel window. Server pushes LUSERS
   // upstream; Bahamut replies with the 7-numeric sequence; 266

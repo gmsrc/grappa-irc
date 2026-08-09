@@ -48,15 +48,8 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-  VJT_USER,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
@@ -81,7 +74,7 @@ async function findVjtUserId(adminToken: string): Promise<string> {
     throw new Error(`GET /admin/users → ${res.status} ${await res.text()}`);
   }
   const body = (await res.json()) as { users: { id: string; name: string }[] };
-  const vjt = body.users.find((u) => u.name === VJT_USER);
+  const vjt = body.users.find((u) => u.name === specUser().name);
   if (!vjt) {
     throw new Error(`vjt user not found in admin users list: ${JSON.stringify(body)}`);
   }
@@ -107,7 +100,10 @@ async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean
 test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
   let vjtUserId: string;
 
-  test.beforeAll(async () => {
+  // beforeEACH, not beforeAll: the subject is per-test (#1078), so its
+  // user id has to be resolved per test — a once-per-file lookup would
+  // hold the id of a user that no longer exists.
+  test.beforeEach(async () => {
     const admin = getSeededAdmin();
     vjtUserId = await findVjtUserId(admin.token);
   });
@@ -121,9 +117,9 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     const admin = getSeededAdmin();
     await setAdminFlag(admin.token, vjtUserId, true);
 
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await page.getByLabel(/open members sidebar/i).tap();

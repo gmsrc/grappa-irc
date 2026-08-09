@@ -20,8 +20,8 @@
 
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -81,9 +81,9 @@ async function setTabHidden(page: Parameters<typeof loginAs>[0], hidden: boolean
 test("#159 — tab RE-SELECT after a socket-stays-open gap re-fetches the missed row", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: "fresh-sel-peer" });
   try {
@@ -114,7 +114,7 @@ test("#159 — tab RE-SELECT after a socket-stays-open gap re-fetches the missed
     // (load-once gate). The resume cursor is the Phase-1 high-water mark, so
     // `?after=<that id>` fetches the gap row and appends it (id-deduped).
     await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Phase 5 — the missed row is now visible, no reload. This is the bug fix.
     await expect(scrollbackLine(page, "privmsg", during)).toBeVisible({ timeout: 10_000 });
@@ -129,9 +129,9 @@ test("#159 — tab RE-SELECT after a socket-stays-open gap re-fetches the missed
 test("#159 — tab RE-FOREGROUND (hidden→visible) after a socket-stays-open gap re-fetches the missed row", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: "fresh-vis-peer" });
   try {

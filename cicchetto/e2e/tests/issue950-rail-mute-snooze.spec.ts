@@ -46,8 +46,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "i950-snoozer";
 const SNOOZED_CHANNEL = "#950-snoozed";
@@ -58,14 +58,14 @@ test("a one-hour snooze picked from the rail silences the channel and says how l
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   await stubPushManager(context, { endpoint: pushCatcherEndpoint(SUB_ID) });
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
@@ -77,12 +77,12 @@ test("a one-hour snooze picked from the rail silences the channel and says how l
     for (const channel of [SNOOZED_CHANNEL, LOUD_CHANNEL]) {
       await page.locator(".compose-box textarea").fill(`/join ${channel}`);
       await page.locator(".compose-box textarea").press("Enter");
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
     }
 
     // The rail picker is CONTEXT-SENSITIVE: it mutes whatever conversation is
     // selected, so selecting the target IS half the gesture.
-    await selectChannel(page, NETWORK_SLUG, SNOOZED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SNOOZED_CHANNEL, { ownNick: specNick() });
     await openRailMenu(page);
     const picker = page.getByTestId("rail-mute-picker");
     await expect(picker).toBeVisible();
@@ -122,17 +122,17 @@ test("a one-hour snooze picked from the rail silences the channel and says how l
 
     // Focus a third window so neither target is "being read", and background the
     // device so #182's foreground suppression is not what decides either arm.
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
     await setPageVisibility(page, false);
 
     // Negative arm — a MENTION inside the snoozed hour. The server compares the
     // integer this client wrote against its own clock and holds the push.
-    peer.privmsg(SNOOZED_CHANNEL, `${NETWORK_NICK}: not for the next hour`);
+    peer.privmsg(SNOOZED_CHANNEL, `${specNick()}: not for the next hour`);
     await assertNoPushDelivery(SUB_ID, 1_500);
 
     // Positive arm — the same shape in the unmuted sibling, so the negative arm
     // cannot be passing because push broke outright.
-    peer.privmsg(LOUD_CHANNEL, `${NETWORK_NICK}: but you will hear this`);
+    peer.privmsg(LOUD_CHANNEL, `${specNick()}: but you will hear this`);
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
   } finally {

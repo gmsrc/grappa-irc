@@ -15,8 +15,8 @@
 // out of a composer the async submit has already emptied.
 
 import { composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -27,9 +27,9 @@ const GONE_REFUSAL = "IRC does not support multi-line messages";
 
 test("#974 — Shift+Enter sends the message and shows no refusal", async ({ page }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const ta = composeTextarea(page);
   await expect(ta).toBeVisible();

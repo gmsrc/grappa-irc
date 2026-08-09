@@ -15,8 +15,7 @@ import {
   awaitServiceWorkerActive,
   loginAs,
 } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 const REGION = ".error-banners";
 const WS = '.error-banner[data-source="ws"]';
@@ -55,7 +54,7 @@ async function tripWsUnhealthy(
 // ungated. `awaitServiceWorkerActive` makes the settle deterministic (it
 // reloads once, past the autoUpdate reload). See ../fixtures/cicchettoPage.
 test.beforeEach(async ({ page }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await awaitServiceWorkerActive(page);
 });
 

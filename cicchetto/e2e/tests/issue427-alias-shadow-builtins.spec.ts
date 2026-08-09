@@ -24,8 +24,8 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = "#bofh";
 
@@ -43,7 +43,7 @@ const clearAliases = (token: string): Promise<unknown> =>
 test("#427 — an alias shadows a builtin end-to-end (/whois → /me takes effect)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   try {
     await clearAliases(vjt.token);
     await loginAs(page, vjt);
@@ -52,7 +52,7 @@ test("#427 — an alias shadows a builtin end-to-end (/whois → /me takes effec
 
     // Live per-channel WS gate (mirror #385/#14): the self-echo for our /me
     // send only fires once the channel join completed (own-nick member row).
-    await expect(page.locator(".members-pane li", { hasText: NETWORK_NICK })).toBeVisible({
+    await expect(page.locator(".members-pane li", { hasText: specNick() })).toBeVisible({
       timeout: 10_000,
     });
 
@@ -85,11 +85,11 @@ test("#427 — an alias shadows a builtin end-to-end (/whois → /me takes effec
 test("#427 — a shadowing alias stays removable from Settings → Alias (binding condition)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   try {
     await clearAliases(vjt.token);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Define a builtin-shadowing alias via the CLI, then confirm the Settings
     // escape hatch still lists and removes it — the issue's non-negotiable

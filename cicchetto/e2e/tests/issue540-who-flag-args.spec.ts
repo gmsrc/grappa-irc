@@ -20,8 +20,8 @@
 // membership varies).
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // The bahamut hub the default `bahamut-test` network dials (compose.yaml:
@@ -32,9 +32,9 @@ const HUB_SERVER = "hub.azzurra.chat";
 test("#540 A — /who +s <server> forwards flag args and opens the WhoModal (not pre-#540 522)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Pre-#540 the parser dropped the server arg → `WHO +s` → 522
   // ERR_WHOSYNTAX → no modal. Now the full arg string forwards verbatim and
@@ -48,9 +48,9 @@ test("#540 A — /who +s <server> forwards flag args and opens the WhoModal (not
 test("#540 B — raw /quote WHO +s <server> surfaces the WhoModal (no longer a silent hole)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // The raw escape hatch a user reaches for when part A blocks them. It
   // primes no accumulator server-side; pre-#540 the 352/315 burst was

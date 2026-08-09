@@ -32,8 +32,8 @@
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -53,9 +53,9 @@ function parseRgb(input: string): [number, number, number] | null {
 test("ux-5-bc2 desktop — scrollback sender: own nick renders with NickText (.nick-text + colored)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
   // Send a probe PRIVMSG so a sender-rendered row lands in scrollback.
@@ -80,7 +80,7 @@ test("ux-5-bc2 desktop — scrollback sender: own nick renders with NickText (.n
   // the inner span exists AND has a resolved (non-empty, non-default)
   // computed color.
   const nickTextSpan = ownPrivmsg.locator(".scrollback-sender .nick-text").first();
-  await expect(nickTextSpan).toHaveText(NETWORK_NICK);
+  await expect(nickTextSpan).toHaveText(specNick());
   const computedColor = await nickTextSpan.evaluate((el) => getComputedStyle(el).color);
   const rgb = parseRgb(computedColor);
   expect(rgb).not.toBeNull();
@@ -94,9 +94,9 @@ test("ux-5-bc2 desktop — scrollback sender: own nick renders with NickText (.n
 test("ux-5-bc2 desktop — distinct nicks resolve to distinct CSS color values via the djb2 hash", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Probe at the document level: render two NickText nodes with known
   // distinct nicks ("alice" and "bob") and read their computed colors.
@@ -150,9 +150,9 @@ test("ux-5-bc2 desktop — distinct nicks resolve to distinct CSS color values v
 test("ux-5-bc2 desktop — own nick (operator self, plain in channel) has no @/%/+ prefix glyph on PRIVMSG sender", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // GREEN-CI batch 2 — use a fresh channel where a peer joins FIRST so
   // vjt is plain (no @ prefix) deterministically. The previous "use
@@ -172,7 +172,7 @@ test("ux-5-bc2 desktop — own nick (operator self, plain in channel) has no @/%
     await expect(
       page.locator(".sidebar-network-section li").filter({ hasText: FRESH }),
     ).toHaveCount(1, { timeout: 10_000 });
-    await selectChannel(page, NETWORK_SLUG, FRESH, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, FRESH, { ownNick: specNick() });
 
     const probe = `ux-5-bc2 probe message ${crypto.randomUUID().slice(0, 6)}`;
     await page.locator(".compose-box textarea").fill(probe);
@@ -191,7 +191,7 @@ test("ux-5-bc2 desktop — own nick (operator self, plain in channel) has no @/%
     await expect(sender).toBeVisible();
     // NickText is mounted (verify by `.nick-text` presence + correct text).
     const senderText = sender.locator(".nick-text");
-    await expect(senderText).toHaveText(NETWORK_NICK);
+    await expect(senderText).toHaveText(specNick());
     // No prefix glyph on the plain own-nick.
     await expect(sender.locator(".nick-prefix")).toHaveCount(0);
   } finally {
@@ -202,16 +202,16 @@ test("ux-5-bc2 desktop — own nick (operator self, plain in channel) has no @/%
 test("ux-5-bc2 desktop — theme switch repaints nick colors (irssi-dark → mirc-light)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Capture own-nick color under whichever theme is active by default,
   // then flip the theme via setTheme() (theme.ts exports it). Assert
   // the color changes (palette hues differ per theme by design).
   const ownNickLocator = page
     .locator(".members-pane .member-name")
-    .filter({ hasText: NETWORK_NICK })
+    .filter({ hasText: specNick() })
     .first();
   await expect(ownNickLocator).toBeVisible({ timeout: 10_000 });
   const colorBefore = await ownNickLocator
@@ -244,9 +244,9 @@ test("ux-5-bc2 desktop — theme switch repaints nick colors (irssi-dark → mir
 test("ux-5-bc2 desktop — scrollback PRIVMSG sender wraps the nick inside angle brackets <{nick}>", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // GREEN-CI batch 2 — peer-first JOIN on a dedicated channel so vjt
   // is plain (no `@` prefix), same rationale as the previous test:
@@ -264,7 +264,7 @@ test("ux-5-bc2 desktop — scrollback PRIVMSG sender wraps the nick inside angle
     await expect(
       page.locator(".sidebar-network-section li").filter({ hasText: FRESH }),
     ).toHaveCount(1, { timeout: 10_000 });
-    await selectChannel(page, NETWORK_SLUG, FRESH, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, FRESH, { ownNick: specNick() });
 
     const probe = `ux-5-bc2 bracket-shape probe ${crypto.randomUUID().slice(0, 6)}`;
     await page.locator(".compose-box textarea").fill(probe);
@@ -281,7 +281,7 @@ test("ux-5-bc2 desktop — scrollback PRIVMSG sender wraps the nick inside angle
     // contract), so it appears in the sender button's textContent
     // unchanged.
     const senderText = await ownPrivmsg.locator(".scrollback-sender").first().textContent();
-    expect(senderText).toBe(`<${NETWORK_NICK}>`);
+    expect(senderText).toBe(`<${specNick()}>`);
   } finally {
     await peer.disconnect("bc2 bracket done");
   }

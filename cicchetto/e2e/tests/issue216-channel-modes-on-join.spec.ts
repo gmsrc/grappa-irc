@@ -27,19 +27,19 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#216 — channel modes set before join are visible on join, and tapping opens the /mode modal", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t216-${Date.now()}`;
 
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready before
   // issuing the /join (mirrors b0-invite / c2-whois boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // A peer creates the channel (→ op) and sets +t BEFORE vjt joins, so
   // vjt can only learn about +t via the join-time MODE query, never a
@@ -54,7 +54,7 @@ test("#216 — channel modes set before join are visible on join, and tapping op
       page.locator(".sidebar-network-section li").filter({ hasText: channel }),
     ).toHaveCount(1, { timeout: 15_000 });
 
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // PART 1 (P0): the mode indicator shows +t WITHOUT vjt ever seeing a
     // live MODE event — the join-time 324 query populated it.

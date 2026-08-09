@@ -37,8 +37,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // #bofh — seeded autojoin
 const CHANNEL_B = "#i71inc2"; // fresh channel joined for the away round-trip
@@ -50,20 +50,20 @@ const AWAY_REASON = "inc2 lunch";
 // and false-pass. A fresh runId makes each wait a true "the FRESH mention
 // landed" precondition.
 const mentionBody = (where: string, runId: string): string =>
-  `${NETWORK_NICK} inc2 ping in ${where} ${runId}`;
+  `${specNick()} inc2 ping in ${where} ${runId}`;
 
 test.setTimeout(90_000);
 
 test.afterEach(async () => {
   // The guardrail test PARTs #bofh into the archive; restore the seed-joined
   // state so later specs keep working (mirrors issue71-inc1-sidebar-own-nick).
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL_A);
 });
 
 test.describe("#71 INC-2 — permanent right rail (desktop)", () => {
   test("cog reachable in the permanent rail on a NON-channel window (home)", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // Cold-load lands on home (non-channel, no members surface). R1: the rail
@@ -83,15 +83,15 @@ test.describe("#71 INC-2 — permanent right rail (desktop)", () => {
   test("guardrail 1 — mentions row carries the 2px rail; archived row stays 0px; both coexist", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const runId = crypto.randomUUID().slice(0, 8);
     const peerNick = `i71inc2-peer-${runId}`;
     await loginAs(page, vjt);
 
     // Join both channels (subscribed + confirmed via the self-JOIN line).
-    await selectChannel(page, NETWORK_SLUG, CHANNEL_A, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL_A, { ownNick: specNick() });
     await composeSend(page, `/join ${CHANNEL_B}`);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL_B, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL_B, { ownNick: specNick() });
 
     // Go away so the peer's PRIVMSGs aggregate into a mentions bundle.
     await composeSend(page, `/away ${AWAY_REASON}`);

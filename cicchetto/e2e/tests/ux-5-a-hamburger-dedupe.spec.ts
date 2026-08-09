@@ -27,8 +27,8 @@
 // branches on identity.
 
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -37,7 +37,7 @@ test.setTimeout(60_000);
 test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden on desktop", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Cold-load lands on home (UX-4 bucket B). #71 INC-2 removed the desktop
@@ -58,7 +58,7 @@ test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden o
   // the chrome ZERO contract and the TopicBar CSS-hidden contract so a
   // future regression that resurrects the chrome hamburger OR breaks
   // the @media gate gets caught.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
   await expect(page.locator(".shell-chrome-hamburger")).toHaveCount(0);
   await expect(page.locator(".topic-bar-hamburger")).toHaveCount(1);
@@ -74,7 +74,7 @@ test("ux-5-a desktop — ZERO chrome hamburgers; TopicBar hamburger CSS-hidden o
 test("@webkit ux-5-a mobile — exactly ONE visible hamburger (TopicBar members) on channel; ZERO on home", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Cold-load lands on home — no channel context, TopicBar unmounted,
@@ -93,7 +93,7 @@ test("@webkit ux-5-a mobile — exactly ONE visible hamburger (TopicBar members)
 
   // Switch to channel via BottomBar (mobile). selectChannel handles
   // the mobile tap path internally.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // After channel selection: ZERO chrome hamburgers (dropped
   // end-to-end), ONE visible TopicBar hamburger (top-right, members
@@ -114,5 +114,5 @@ test("@webkit ux-5-a mobile — exactly ONE visible hamburger (TopicBar members)
   await expect(drawer).toBeVisible({ timeout: 5_000 });
   const memberNames = drawer.locator(".members-pane .member-name");
   await expect.poll(async () => await memberNames.count()).toBeGreaterThan(0);
-  await expect(drawer).toContainText(NETWORK_NICK);
+  await expect(drawer).toContainText(specNick());
 });

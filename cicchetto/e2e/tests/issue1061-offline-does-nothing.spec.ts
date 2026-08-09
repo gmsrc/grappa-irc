@@ -52,8 +52,7 @@
 // able to go RED at all.
 
 import { expectShellReady, loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 // Eight rungs of phoenix's default backoff ladder. Long enough that a client
 // which resumed retrying would have done so many times over; short enough not
@@ -124,7 +123,7 @@ async function connectAttempts(page: PageLike): Promise<number> {
 test("cold start offline opens no socket at all, across foreground/background transitions (#1061)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Offline BEFORE any page script runs: connectivity.ts seeds its signal from
   // `navigator.onLine` at module-evaluation time, so this is a boot that
@@ -192,7 +191,7 @@ test("a warm session taken really offline stays silent until the network returns
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const sockets = countAppSockets(page);
 
   await loginAs(page, vjt);

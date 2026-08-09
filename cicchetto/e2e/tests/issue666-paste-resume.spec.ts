@@ -23,8 +23,8 @@
 // coarse capacity (200), so nothing severs vjt's bearer.
 
 import { composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -38,9 +38,9 @@ test("#666 — a throttled multi-line paste auto-paces: no drop, no dup, compose
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Unique per run so prior runs' persisted rows don't satisfy the assertions.
   const tag = crypto.randomUUID().slice(0, 8);

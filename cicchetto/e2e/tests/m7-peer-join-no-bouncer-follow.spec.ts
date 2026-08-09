@@ -20,22 +20,22 @@
 
 import { loginAs, scrollbackLine, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m7-peer";
 const BOUND_CHANNEL = AUTOJOIN_CHANNELS[0];
 const OUTSIDE_CHANNEL = "#m7-outside";
 
 test("M7 — peer JOIN on unbound channel does NOT add sidebar entry", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Focus #bofh so the sync-point JOIN line lands in the currently-
   // visible scrollback (avoids false-negatives where the line is
   // appended to a non-rendered window's store). The WS-ready guard
   // also pins that the #bofh topic subscription has completed before
   // the peer fires.
-  await selectChannel(page, NETWORK_SLUG, BOUND_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, BOUND_CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {

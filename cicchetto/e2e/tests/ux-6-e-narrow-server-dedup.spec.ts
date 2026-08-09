@@ -20,13 +20,13 @@
 // cic UX-behavior change ships a Playwright e2e.
 
 import { loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("@webkit UX-6-E — narrow mode renders one network entry; no standalone 'Server' tab", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // The per-network section now contains a `.bottom-bar-network-header`
@@ -51,7 +51,7 @@ test("@webkit UX-6-E — narrow mode renders one network entry; no standalone 'S
 });
 
 test("@webkit UX-6-E — clicking the network-header focuses the server window", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const header = page.locator(`.bottom-bar-network-header[data-network-slug="${NETWORK_SLUG}"]`);
@@ -69,7 +69,7 @@ test("@webkit UX-6-E — clicking the network-header focuses the server window",
 test("@webkit UX-6-E — network-header has a disconnect × sibling, mirroring sidebar", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const section = page.locator(".bottom-bar-network", {

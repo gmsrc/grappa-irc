@@ -51,8 +51,8 @@ import {
   selectChannel,
   synthSwipe,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -137,9 +137,9 @@ test("issue123 — fast swipe-up recalls history, slow drag does not (touchend v
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Seed one history entry: a sent line is what recallPrev pulls back.
   const tag = crypto.randomUUID().slice(0, 8);
@@ -181,9 +181,9 @@ test("issue123 — nested-scroll handoff: native scroll owns the drag until the 
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Seed history so a hijacked recall WOULD be observable (draft → sent line).
   const tag = crypto.randomUUID().slice(0, 8);
@@ -267,9 +267,9 @@ test("@webkit issue123 — compose textarea is touch-action: pan-y + overscroll-
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // The CSS half of the fix: without pan-y a long draft can't scroll on
   // touch no matter what the JS does; overscroll-behavior:contain stops a

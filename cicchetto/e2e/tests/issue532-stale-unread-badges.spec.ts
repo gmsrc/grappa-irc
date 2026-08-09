@@ -51,8 +51,8 @@ import {
   restoreReadCursorToTail,
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i532-peer";
@@ -65,7 +65,7 @@ const DM_FIRST = "#532 B: first DM — read, so the cursor sits here";
 const DM_SECOND = "#532 B: second DM — the unread that the archive badge must show";
 
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Restore the seed-time joined state (test A parts #bofh) and clear the
   // DM unread test B leaves behind, so neither poisons a later spec under
   // retries. Both are idempotent / no-ops for the test that didn't touch
@@ -77,7 +77,7 @@ test.afterEach(async () => {
 test("#532 A — a self-PART leaves NO stale event badge on the archived channel row", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Put the cursor at the current tail so the ONLY row after it is the own
@@ -86,7 +86,7 @@ test("#532 A — a self-PART leaves NO stale event badge on the archived channel
   // also excludes own presence unconditionally, but pinning the cursor
   // isolates the assertion to exactly the self-PART under test.
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // PART #bofh. The self-PART persists an own `:part` audit row (id >
   // cursor) and drops the channel from the active sidebar into Archive.
@@ -125,11 +125,11 @@ test("#532 A — a self-PART leaves NO stale event badge on the archived channel
 test("#532 B — a closed DM window holding an unread message shows the message badge in Archive", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Channel-first focus drives the WS-ready sync the own-nick DM-listener
   // subscribe boots off (mirrors ux-6-k / M4).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
@@ -138,7 +138,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
     // First inbound DM → cic auto-opens the query window (server-owned,
     // #422). Focus it so the DM renders, then focus away so selection.ts's
     // leave-arm advances the cursor to this first DM — leaving it READ.
-    peer.privmsg(NETWORK_NICK, DM_FIRST);
+    peer.privmsg(specNick(), DM_FIRST);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
@@ -168,7 +168,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
 
     // Second inbound DM while focused elsewhere → exactly ONE unread
     // content row on the peer window.
-    peer.privmsg(NETWORK_NICK, DM_SECOND);
+    peer.privmsg(specNick(), DM_SECOND);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,

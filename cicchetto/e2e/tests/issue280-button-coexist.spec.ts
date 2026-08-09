@@ -50,8 +50,8 @@ import {
   restoreReadCursorToTail,
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
@@ -126,7 +126,7 @@ async function scrollChannelUp(page: Page): Promise<void> {
 // clean cursor / exact next-active count is not poisoned (the cascade-
 // poisoner discipline — mirror #243).
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
@@ -134,7 +134,7 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
   test("@webkit — both buttons coexist without overlap, same size, and next-active stays constant relative to the message container across keyboard open", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const peerNick = `t280geo-${Date.now() % 100000}`;
     const bgChannel = "#t280geo";
     await loginAs(page, vjt);
@@ -147,7 +147,7 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
     // BACKGROUND while we sit on CHANNEL scrolled up: scroll-to-bottom
     // (from CHANNEL) + next-active (from the background channel) then
     // coexist in CHANNEL's float stack.
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     const peer = await IrcPeer.connect({ nick: peerNick });
     try {
@@ -157,11 +157,11 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
       // push-trigger channel-mention seam (peer joins first, then op).
       await composeTextarea(page).fill(`/join ${bgChannel}`);
       await composeTextarea(page).press("Enter");
-      await selectChannel(page, NETWORK_SLUG, bgChannel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, bgChannel, { ownNick: specNick() });
 
       // Back to CHANNEL and scroll UP → scroll-to-bottom shows and the pane
       // stays far from the tail (background arrivals will NOT auto-follow).
-      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
       await scrollChannelUp(page);
 
       // Background traffic → bgChannel unread → next-active mounts (count
@@ -266,14 +266,14 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
   test("@webkit — badge is BLUE (normal class) when the next target is a plain channel message", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const peerNick = `t280blue-${Date.now() % 100000}`;
     await loginAs(page, vjt);
 
     // Park focus on $server (a scrollback window OUTSIDE the unread cycle)
     // so an ordinary line to CHANNEL accrues unread there in the
     // background → next-active targets CHANNEL, tier 1 (plain channel).
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
 
     const peer = await IrcPeer.connect({ nick: peerNick });
@@ -303,11 +303,11 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
   test("@webkit — badge is RED (priority class) when the next target carries a mention", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const peerNick = `t280red-${Date.now() % 100000}`;
     await loginAs(page, vjt);
 
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
 
     const peer = await IrcPeer.connect({ nick: peerNick });
@@ -317,7 +317,7 @@ test.describe("#280 — next-active + scroll-to-bottom coexist cleanly", () => {
       // while focus is on $server → mentionCounts[CHANNEL] > 0 → tier 0
       // → next-active targets a mention → RED. (Same seam #182 / the
       // push-trigger channel-mention spec use.)
-      const line = `${NETWORK_NICK}: 280 ping`;
+      const line = `${specNick()}: 280 ping`;
       peer.privmsg(CHANNEL, line);
       await assertMessagePersisted({
         token: vjt.token,

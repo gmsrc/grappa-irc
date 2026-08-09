@@ -32,8 +32,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel, patchNetworkConnectionState } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const LEAVE_CHANNEL = "#x195-leave";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -44,7 +44,7 @@ const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 test.setTimeout(90_000);
 
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Idempotent cleanup, best-effort (both tolerate already-in-state):
   //   1. Drop the dedicated leave-channel in case a test failed pre-Yes.
   //   2. Reconnect the shared network in case the network test parked it,
@@ -70,12 +70,12 @@ test.afterEach(async () => {
 
 test("#195 — channel ×: Cancel keeps the window, Yes leaves it", async ({ page }) => {
   test.slow();
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Join the dedicated channel BEFORE login so loginAs's channelsBySlug fetch
   // already carries it.
   await joinChannel(vjt.token, NETWORK_SLUG, LEAVE_CHANNEL);
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, LEAVE_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, LEAVE_CHANNEL, { ownNick: specNick() });
 
   const tab = sidebarWindow(page, NETWORK_SLUG, LEAVE_CHANNEL);
   await expect(tab).toBeVisible({ timeout: 10_000 });
@@ -105,10 +105,10 @@ test("#195 — channel ×: Cancel keeps the window, Yes leaves it", async ({ pag
 
 test("#195 — network ×: Cancel keeps it connected, Yes disconnects (parks)", async ({ page }) => {
   test.slow();
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Land somewhere stable so the network section is mounted.
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   const networkSection = page.locator(".sidebar-network-section", {
     has: page.locator(".sidebar-network-header", { hasText: NETWORK_SLUG }),

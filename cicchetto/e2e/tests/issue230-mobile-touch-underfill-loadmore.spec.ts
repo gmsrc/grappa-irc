@@ -52,13 +52,9 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import {
-  fetchAllMessagesAsc,
-  restoreReadCursorToTail,
-  setReadCursorToId,
-} from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { fetchAllMessagesAsc, setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -126,22 +122,13 @@ test.describe("issue #230 (mobile) — touch-drag-down loads older history when 
   // hasTouch / mobile UA — fine, the touch-action assertion is device-agnostic.
   test.use({ viewport: { width: 800, height: 2000 } });
 
-  // The head cursor persists on the shared seeded vjt across spec boundaries
-  // (last-write-wins). Restore to the tail so downstream #bofh specs inherit a
-  // fully-read channel (mirror of issue230-wheel / issue168 / cp14-b1).
-  test.afterAll(async () => {
-    const vjt = getSeededVjt();
-    if (!CHANNEL) return;
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("touch-drag-DOWN on an underfilled pane fetches older rows", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     await seedCursorToHead(vjt.token, CHANNEL);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
@@ -174,12 +161,12 @@ test.describe("issue #230 (mobile) — touch-drag-down loads older history when 
   });
 
   test("touch-drag-UP on an underfilled pane does NOT fetch older rows", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     await seedCursorToHead(vjt.token, CHANNEL);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
@@ -198,12 +185,12 @@ test.describe("issue #230 (mobile) — touch-drag-down loads older history when 
   test("@webkit issue230 mobile — underfilled .scrollback is touch-action: none + overscroll-behavior: contain", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     await seedCursorToHead(vjt.token, CHANNEL);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })

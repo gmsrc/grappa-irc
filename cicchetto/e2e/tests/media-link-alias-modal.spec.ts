@@ -29,8 +29,8 @@
 import type { Page } from "@playwright/test";
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 import { mediaScrollbackRow, uploadViaPicker } from "../fixtures/uploadJourney";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -39,9 +39,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const ALIAS_B_HOST = "alias-b.test";
 
 async function aliasModalJourney(page: Page): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Real upload → a valid slug whose bytes nginx serves back at the page
   // origin. `url` is the page-origin URL the re-rooted alias link must

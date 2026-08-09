@@ -41,8 +41,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique — bahamut lingers channel/nick state after disconnect, so
 // static literals collide on rapid reruns (feedback: per-run-unique names).
@@ -52,12 +52,12 @@ const TARGET_CHANNEL = `#inv482-${crypto.randomUUID().slice(0, 8)}`;
 test("#482 — the inbound INVITE surface survives a reload (cold-snapshot backfill), inviter and all", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Confirm login on a real channel first (self-JOIN echo present) so the
   // upstream session is live before the INVITE.
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
@@ -65,7 +65,7 @@ test("#482 — the inbound INVITE surface survives a reload (cold-snapshot backf
     // 442 ERR_NOTONCHANNEL), so the peer joins first, then relays the raw
     // INVITE to the operator's session.
     await peer.join(TARGET_CHANNEL);
-    peer.rawInvite(NETWORK_NICK, TARGET_CHANNEL);
+    peer.rawInvite(specNick(), TARGET_CHANNEL);
 
     // LIVE: the invite banner appears (event-time window_invited on the user
     // topic; the socket is subscribed, so this arm is the baseline, not the

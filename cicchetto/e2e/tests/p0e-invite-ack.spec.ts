@@ -33,8 +33,8 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "p0e-invitee";
 const CHANNEL = "#p0e-invite-test";
@@ -42,15 +42,15 @@ const CHANNEL = "#p0e-invite-test";
 test("P-0e + P-0f — /invite to a peer surfaces invite-ack row in the $server window", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Join a fresh channel so vjt is the first user → Bahamut grants
   // +o → vjt can issue /invite. selectChannel won't work for a
   // channel that doesn't have a sidebar slot yet, so /join via
-  // composeSend from any focused window. NETWORK_NICK is needed for
+  // composeSend from any focused window. specNick() is needed for
   // selectChannel's join-line wait on the prior step.
-  await selectChannel(page, NETWORK_SLUG, "#bofh", { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, "#bofh", { ownNick: specNick() });
   await composeSend(page, `/join ${CHANNEL}`);
   // Wait for the new channel's sidebar entry to appear (proves the
   // JOIN landed + windowState transitioned to :joined; the sidebar

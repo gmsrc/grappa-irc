@@ -33,34 +33,27 @@ import {
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
 import { login } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-  VJT_IDENTIFIER,
-  VJT_PASSWORD,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 // Self-WHOIS: the querying session is connected upstream, so its own nick
 // always resolves (311 + 318) — no peer setup, fully deterministic.
 async function whoisSelf(page: Page) {
-  await composeSend(page, `/whois ${NETWORK_NICK}`);
+  await composeSend(page, `/whois ${specNick()}`);
   const card = page.locator(".scrollback-overlay").getByTestId("whois-card");
   await expect(card).toBeVisible({ timeout: 8_000 });
-  await expect(card.locator(".whois-card-target")).toHaveText(NETWORK_NICK);
+  await expect(card.locator(".whois-card-target")).toHaveText(specNick());
   return card;
 }
 
 test("#364 — user-topic events + push verbs survive a token rotation with unchanged identity", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Baseline: whois works before the rotation — attributes any later
   // failure to the rotation itself, not to a broken whois path.
@@ -71,7 +64,7 @@ test("#364 — user-topic events + push verbs survive a token rotation with unch
   // Mint a fresh, server-valid bearer for the SAME user (a second
   // Accounts.create_session — no duplicate Session.Server, keyed by
   // subject+network in the registry), then rotate to it in-context.
-  const rotated = await login(VJT_IDENTIFIER, VJT_PASSWORD);
+  const rotated = await login(specUser().identifier, specUser().password);
   await page.evaluate((tok) => {
     (
       window as unknown as { __cic_setTokenForTests?: (t: string | null) => void }
@@ -85,7 +78,7 @@ test("#364 — user-topic events + push verbs survive a token rotation with unch
 
   // The identity-transition cleanup clears the selected window on any
   // token change; re-select before the post-rotation whois.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // The assertion: whois still round-trips after the rotation. Pre-fix
   // the rebuilt socket had no user-topic subscription — pushWhois no-op'd

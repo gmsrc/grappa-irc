@@ -45,8 +45,8 @@ import {
   openSettingsMobile,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -90,7 +90,7 @@ async function readDeclaredCssValue(
 test("@webkit ux-5-bd — .settings-drawer padding uses 1.5rem env() bottom floor", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const pad = await readDeclaredCssValue(page, ".settings-drawer", "padding");
@@ -104,7 +104,7 @@ test("@webkit ux-5-bd — .settings-drawer padding uses 1.5rem env() bottom floo
 test("@webkit ux-5-bd — .settings-drawer computed padding-bottom >= 1.5rem floor (non-notched)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Computed style proves the env() floor takes effect, not just the
@@ -129,7 +129,7 @@ test("@webkit ux-5-bd — .settings-drawer computed padding-bottom >= 1.5rem flo
 test("@webkit ux-5-bd — .archive-modal padding uses 1.5rem env() bottom floor", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const pad = await readDeclaredCssValue(page, ".archive-modal", "padding");
@@ -140,13 +140,13 @@ test("@webkit ux-5-bd — .archive-modal padding uses 1.5rem env() bottom floor"
 test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor (non-notched)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // #473 — the ArchiveModal launcher lives in the `.rail-actions` drawer inside
   // the members aside (superseding BM's `.mobile-panel-actions` footer chip).
   // On mobile-channel: select a channel, open the drawer, tap the archive row.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
   // #500 — the archive button lives behind the RailActions launcher menu (in the
@@ -167,7 +167,7 @@ test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor
 test("@webkit ux-5-bd — .image-upload-modal padding uses 1.5rem env() bottom floor", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const pad = await readDeclaredCssValue(page, ".image-upload-modal", "padding");
@@ -180,7 +180,7 @@ test("@webkit ux-5-bd — .image-upload-modal padding uses 1.5rem env() bottom f
 test("@webkit ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor (BM launcher footer trap)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // .shell-members uses split longhand (`padding-top` + `padding-bottom`)
@@ -199,11 +199,11 @@ test("@webkit ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor 
 test("@webkit ux-5-bd — .shell-members computed padding-bottom >= 1.5rem floor (non-notched)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Open the mobile members drawer so the aside is layout-active.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   const drawer = page.locator(".shell-members.open");
   await expect(drawer).toBeVisible({ timeout: 5_000 });

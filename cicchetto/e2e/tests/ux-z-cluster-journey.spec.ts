@@ -50,21 +50,21 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
   // Restore seeded baseline so the next spec sees #bofh joined.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test("@webkit UX-Z cluster — Dynamic Island clearance + RailActions archive + delete (registered class)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // ── UX-3 BIS — .shell.shell-mobile carries safe-area inset ──
@@ -161,7 +161,7 @@ test("@webkit UX-Z cluster — Dynamic Island clearance + RailActions archive + 
   // hidden from the cic cache). Mirror of UX-1's spec.
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible({ timeout: 10_000 });
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   const messageRows = page.locator(".scrollback-line[data-kind='privmsg']");
   await expect(messageRows).toHaveCount(0, { timeout: 3_000 });
 });

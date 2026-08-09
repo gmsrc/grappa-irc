@@ -41,10 +41,9 @@ import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
   AUTOJOIN_CHANNELS,
-  getSeededVjt,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -120,7 +119,7 @@ test.afterEach(async () => {
     max_concurrent_visitor_sessions: null,
   }).catch(() => {});
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreNetwork(vjt.token);
 });
 
@@ -149,7 +148,7 @@ for (const arm of [
   },
 ]) {
   test(`U-2 admission split — ${arm.name}`, async () => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Park first so /connect triggers a fresh spawn (admission gate
     // runs). connected→connected with cap=0 would NOT exercise the

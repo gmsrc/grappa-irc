@@ -34,8 +34,8 @@ import {
   waitForQueryWindowReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK_LOWER = "foldreplypeer";
 const PEER_NICK_PROPER = "FoldReplyPeer";
@@ -50,9 +50,9 @@ const REPLY_BODY = `#372 reply ${RUN_ID}`;
 test("incoming reply from a differently-cased nick lands in the opened query window (no split)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Peer registers with the PROPER-case nick — its PRIVMSG source prefix
   // on the wire carries that casing (the ascii casemapping makes it the
@@ -86,7 +86,7 @@ test("incoming reply from a differently-cased nick lands in the opened query win
     // there. Pre-fix the reply was re-keyed to a phantom `FoldReplyPeer`
     // bucket and never rendered in the opened window.
     await waitForDmListenerReady(page, NETWORK_SLUG);
-    peer.privmsg(NETWORK_NICK, REPLY_BODY);
+    peer.privmsg(specNick(), REPLY_BODY);
 
     // The reply lands in the SAME (focused) window's scrollback...
     await expect(

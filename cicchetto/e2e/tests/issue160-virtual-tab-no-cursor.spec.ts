@@ -21,9 +21,8 @@
 // setReadCursor guard (a $home 404 is captured); GREEN after.
 
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -35,17 +34,11 @@ const VIRTUAL_SEGMENTS = ["%24home", "%24admin", "%24list"];
 test.describe("#160 virtual-tab read-cursor suppression", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("#160 selecting Home after a real channel emits no virtual read-cursor POST and no 4xx", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Record every read-cursor POST the client emits, with url + status.
     const cursorPosts: Array<{ url: string; status: number }> = [];
@@ -60,7 +53,7 @@ test.describe("#160 virtual-tab read-cursor suppression", () => {
 
     // Be on a real channel first: pane mounted with a visible tail row —
     // the precondition for the onCleanup leak.
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThan(0);

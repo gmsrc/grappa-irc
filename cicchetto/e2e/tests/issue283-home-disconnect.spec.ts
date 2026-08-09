@@ -31,8 +31,8 @@ import {
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
 import { patchNetworkConnectionState, type SeededUser } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -72,14 +72,14 @@ async function restoreNetwork(vjt: SeededUser): Promise<void> {
 test.setTimeout(90_000);
 
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreNetwork(vjt);
 });
 
 test("#283 — Home ConnectedRow Disconnect: confirm modal parks the network, Cancel does not", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Ensure the seeded network is connected so the Home row renders a
   // ConnectedRow (with the new Disconnect button), not a parked card.

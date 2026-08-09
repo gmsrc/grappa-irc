@@ -36,8 +36,8 @@
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -124,11 +124,11 @@ async function assertSubscribeBeforeSend(
 test("#254 — /msg to a fresh query window subscribes BEFORE the send POST (own echo has a live listener)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = `i254q-${crypto.randomUUID().slice(0, 8)}`;
   await installSendPostReadinessProbe(page, `${NETWORK_SLUG}/${peerNick}`);
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: peerNick });
   try {
@@ -141,11 +141,11 @@ test("#254 — /msg to a fresh query window subscribes BEFORE the send POST (own
 test("@webkit #254 — /msg to a fresh query window subscribes BEFORE the send POST on iOS", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = `i254qw-${crypto.randomUUID().slice(0, 8)}`;
   await installSendPostReadinessProbe(page, `${NETWORK_SLUG}/${peerNick}`);
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: peerNick });
   try {
@@ -235,17 +235,17 @@ async function assertOwnChannelMsgRendersAfterWake(
 test("#254 — own channel message renders live after an iOS-style suspend/resume (no reload)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await assertOwnChannelMsgRendersAfterWake(page, `i254c-${crypto.randomUUID().slice(0, 8)}`);
 });
 
 test("@webkit #254 — own channel message renders live after iOS suspend/resume", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await assertOwnChannelMsgRendersAfterWake(page, `i254cw-${crypto.randomUUID().slice(0, 8)}`);
 });

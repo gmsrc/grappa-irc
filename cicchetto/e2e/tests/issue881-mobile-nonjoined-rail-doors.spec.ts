@@ -47,8 +47,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique: bahamut holds channel state for a window after disconnect, so
 // a literal collides on rapid reruns (--repeat-each).
@@ -63,16 +63,16 @@ test.afterEach(async () => {
     await peer.disconnect("i881 cleanup").catch(() => {});
     peer = null;
   }
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await partChannel(vjt.token, NETWORK_SLUG, GATED_CHANNEL).catch(() => {});
 });
 
 test("@webkit #881 — a non-joined channel window keeps every rail door, and still no members list", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   peer = await IrcPeer.connect({ nick: `i881peer-${crypto.randomUUID().slice(0, 6)}` });
 

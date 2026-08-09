@@ -31,8 +31,8 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b0-invitee";
 const CHANNEL = "#b0-invite-test";
@@ -40,14 +40,14 @@ const CHANNEL = "#b0-invite-test";
 test("B0 — /invite from $server window (no channel context) reaches upstream + invite-ack lands", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus #bofh first to confirm login + ws-ready, then /join the
   // fresh per-spec channel so vjt is the first user and Bahamut
   // grants +o (so /invite has the privileges to send). Same template
   // as p0e-invite-ack.spec.ts:53-60.
-  await selectChannel(page, NETWORK_SLUG, "#bofh", { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, "#bofh", { ownNick: specNick() });
   await composeSend(page, `/join ${CHANNEL}`);
   await expect(
     page.locator(".sidebar-network-section li").filter({ hasText: CHANNEL }),

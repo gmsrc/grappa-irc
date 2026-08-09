@@ -31,8 +31,8 @@
 import type { Page } from "@playwright/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const KEY = "k16-secret-key";
@@ -62,12 +62,12 @@ test("issue #16 — members pane seeds on a keyed JOIN and survives a cold WS re
   await peer.join(NEW_CHANNEL);
   await peer.mode(NEW_CHANNEL, "+k", KEY);
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Need a focused window (ComposeBox) to issue /join — focus the
   // seeded autojoin channel first.
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // cic /join carries the key (compose.ts postJoin(..., cmd.key)).
   await composeSend(page, `/join ${NEW_CHANNEL} ${KEY}`);
@@ -75,7 +75,7 @@ test("issue #16 — members pane seeds on a keyed JOIN and survives a cold WS re
   // Focus the keyed channel; awaitWsReady gates on the self-JOIN line,
   // which proves the scrollback REST fetch landed AND the per-channel
   // WS topic subscription completed.
-  await selectChannel(page, NETWORK_SLUG, NEW_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, NEW_CHANNEL, { ownNick: specNick() });
 
   // LIVE-path baseline: the 353/366 burst arrived on the freshly-
   // subscribed per-channel topic and members_seeded seeded the store.
@@ -91,7 +91,7 @@ test("issue #16 — members pane seeds on a keyed JOIN and survives a cold WS re
   // "loading…".
   await page.reload();
   await expect(page.locator(".sidebar-network-header").first()).toBeVisible({ timeout: 10_000 });
-  await selectChannel(page, NETWORK_SLUG, NEW_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, NEW_CHANNEL, { ownNick: specNick() });
 
   await assertMembersSeeded(page, peer.nick);
 });
@@ -106,6 +106,6 @@ async function assertMembersSeeded(page: Page, peerNick: string): Promise<void> 
   await expect(membersPane.locator(".member-name", { hasText: peerNick })).toBeVisible({
     timeout: 10_000,
   });
-  await expect(membersPane.locator(".member-name", { hasText: NETWORK_NICK })).toBeVisible();
+  await expect(membersPane.locator(".member-name", { hasText: specNick() })).toBeVisible();
   await expect(membersPane.locator("p.muted", { hasText: "loading" })).toHaveCount(0);
 }

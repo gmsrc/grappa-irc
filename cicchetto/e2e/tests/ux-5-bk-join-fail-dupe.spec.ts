@@ -43,8 +43,8 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const KEYED_CHANNEL = `#ux-5-bk-${crypto.randomUUID().slice(0, 8)}`;
@@ -70,9 +70,9 @@ test("UX-5 BK — /join +k without key shows ONE pseudo-row (closeable); × dism
   await peer.join(KEYED_CHANNEL);
   await peer.mode(KEYED_CHANNEL, "+k", CHANNEL_KEY);
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // /join the keyed channel WITHOUT supplying the key → bahamut
   // returns 475 ERR_BADCHANNELKEY → grappa's EventRouter emits
@@ -159,7 +159,7 @@ test("UX-5 BK — /join +k without key shows ONE pseudo-row (closeable); × dism
   await expect(
     page
       .locator('[data-testid="scrollback-line"][data-kind="join"]')
-      .filter({ hasText: NETWORK_NICK })
+      .filter({ hasText: specNick() })
       .filter({ hasText: HAPPY_CHANNEL })
       .first(),
   ).toBeVisible({ timeout: 10_000 });
@@ -176,7 +176,7 @@ test("UX-5 BK — /join +k without key shows ONE pseudo-row (closeable); × dism
   // Members list invariant (feedback_e2e_visitor_members_list): the
   // member list populates post-JOIN with count > 0 AND own nick visible.
   const membersPane = page.locator(".members-pane");
-  await expect(membersPane.locator("li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(membersPane.locator("li", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
   await expect(membersPane.locator("li")).not.toHaveCount(0);

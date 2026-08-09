@@ -35,17 +35,17 @@
 // contract, subject-shape-agnostic. Registered seed suffices.
 
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.setTimeout(60_000);
 
 test("ux-5-bm desktop — members aside carries the RailActions drawer", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
   // #71 INC-2 — desktop dropped the standalone .shell-chrome row (cog moved to
@@ -72,10 +72,10 @@ test("ux-5-bm desktop — members aside carries the RailActions drawer", async (
 test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer hosts settings+archive launchers; mutex enforced", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Topic-bar compression contract: hamburger is the ONLY affordance on
   // the right edge. The cog + archive are NOT inline — they live in the rail
@@ -99,7 +99,7 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   // Members populated per `feedback_e2e_visitor_members_list`.
   const memberNames = drawer.locator(".members-pane .member-name");
   await expect.poll(async () => await memberNames.count()).toBeGreaterThan(0);
-  await expect(drawer).toContainText(NETWORK_NICK);
+  await expect(drawer).toContainText(specNick());
 
   // #473 — the `.rail-actions` drawer hosts every affordance, including the
   // settings cog (`action-cluster-cog`) and the archive launcher
@@ -151,7 +151,7 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
 test("@webkit ux-5-bm mobile-non-channel — home keeps its own ☰ door to the rail", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Cold-load lands on home. BM scope is mobile-channel only — non-channel

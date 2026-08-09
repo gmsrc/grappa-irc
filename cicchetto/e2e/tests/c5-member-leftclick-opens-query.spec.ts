@@ -4,7 +4,7 @@
 // one-click variant the spec calls for.
 //
 // Pre-conditions:
-//   - vjt logged in, focused on #bofh (NETWORK_NICK is the autojoin user;
+//   - vjt logged in, focused on #bofh (specNick() is the autojoin user;
 //     IrcPeer "c5-buddy" joins and shows up in members list).
 //
 // Asserts:
@@ -16,16 +16,16 @@
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "c5-buddy";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test("C5 — left-click on member nick opens query window + switches focus", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Connect BEFORE the pre-condition so every locator below is keyed on the
   // nick the server GRANTED (#944). A connected-but-idle peer creates no

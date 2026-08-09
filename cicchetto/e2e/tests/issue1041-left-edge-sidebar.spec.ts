@@ -15,8 +15,8 @@
 //     this spec does not cover it and must not be read as if it did.
 import type { Page } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // iPhone-15-ish portrait: narrow enough for isMobile() (max-width query).
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
@@ -79,8 +79,8 @@ function leftEdgeOpenSwipe(): Pt[] {
 
 async function openChannel(page: Page): Promise<void> {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  await loginAs(page, getSeededVjt());
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await loginAs(page, specUser());
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 }
 
 // Fully slid in: the panel's left edge has reached the viewport's. Asserting

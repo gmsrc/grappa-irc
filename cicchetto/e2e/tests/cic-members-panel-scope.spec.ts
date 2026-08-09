@@ -31,8 +31,8 @@
 // (both gate on the same `windowIsJoined(key())` predicate).
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 // UX-5 bucket BT (2026-05-19) — UX-4 bucket C merged the Server window
@@ -45,9 +45,9 @@ const SERVER_WINDOW_LABEL = NETWORK_SLUG;
 const DM_PEER = "members-scope-peer";
 
 test("cic-members-panel-scope — joined channel shows MembersPane (baseline)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // Joined-channel render path — pane mounts inside .shell-members,
   // and the .shell does NOT carry the .shell-no-members modifier.
@@ -60,7 +60,7 @@ test("cic-members-panel-scope — joined channel shows MembersPane (baseline)", 
 });
 
 test("cic-members-panel-scope — Server window does NOT mount MembersPane", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await expect(sidebarWindow(page, NETWORK_SLUG, SERVER_WINDOW_LABEL)).toHaveCount(1);
   await selectChannel(page, NETWORK_SLUG, SERVER_WINDOW_LABEL, { awaitWsReady: false });
@@ -75,9 +75,9 @@ test("cic-members-panel-scope — Server window does NOT mount MembersPane", asy
 });
 
 test("cic-members-panel-scope — DM (query) window does NOT mount MembersPane", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
   // Open a DM via the /msg slash-command (compose.ts → openQueryWindow
   // server roundtrip → query_windows_list broadcast → sidebar entry).
   await composeSend(page, `/msg ${DM_PEER} hello`);

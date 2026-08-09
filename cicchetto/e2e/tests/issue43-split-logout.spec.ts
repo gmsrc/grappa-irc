@@ -34,13 +34,12 @@
 // interaction below is client-side state — zero server mutation.
 
 import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("issue #43 — registered user sees detach + quit in the rail, not a bare 'log out'", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await openRailMenu(page);
 
   const detach = page.getByTestId("detach-btn");
@@ -57,7 +56,7 @@ test("issue #43 — registered user sees detach + quit in the rail, not a bare '
 test("issue #43/#986 — quit opens a confirm modal that explains, and Cancel changes nothing", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await openRailMenu(page);
 
   // One tap must NOT tear anything down — it raises the modal.
@@ -77,7 +76,7 @@ test("issue #43/#986 — quit opens a confirm modal that explains, and Cancel ch
 });
 
 test("issue #43/#986 — detach's modal promises the opposite of quit's", async ({ page }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await openRailMenu(page);
 
   await page.getByTestId("detach-btn").click();

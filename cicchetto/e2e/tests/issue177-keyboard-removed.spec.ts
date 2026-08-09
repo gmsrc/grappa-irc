@@ -25,8 +25,8 @@ import {
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -34,11 +34,11 @@ test.describe("issue #177 — custom on-screen IRC keyboard removed", () => {
   test("no keyboard toggle in Settings, widget never mounts, native compose still sends", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // (a) Settings no longer offers the IRC keyboard opt-in. Reveal the rail
     // launcher menu (#500) then open the drawer via the desktop cog; assert the

@@ -17,8 +17,8 @@ import {
   scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern, see ux-6-f spec): the e2e sqlite
@@ -28,9 +28,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = `selection target: drag across me ${Date.now()}`;
 
 test("desktop — scrollback text is selectable while compose has focus", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, MESSAGE_BODY);
   const row = scrollbackLine(page, "privmsg", MESSAGE_BODY);
@@ -58,9 +58,9 @@ test("desktop — scrollback text is selectable while compose has focus", async 
 test("@webkit iOS — .scrollback re-enables user-select under the is-ios global kill", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const styles = await page.evaluate(() => {
     const scrollback = document.querySelector(".scrollback");

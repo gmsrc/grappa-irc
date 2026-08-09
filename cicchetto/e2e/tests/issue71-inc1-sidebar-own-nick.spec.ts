@@ -19,8 +19,8 @@
 
 import { expandArchiveGroup, loginAs, openArchive, sidebarWindow } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -28,13 +28,13 @@ test.afterEach(async () => {
   // The rail non-regression test PARTs #bofh to force it into the
   // archive; restore the seed-time joined state so later specs keep
   // working (mirrors archive-desktop-only.spec.ts).
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test.describe("#71 INC-1 — sidebar hierarchy", () => {
   test("desktop — own-nick footer surfaces the per-network IRC nick", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // `networks()` is keyed on `user()` (createResource(user, ...)), so by
@@ -42,11 +42,11 @@ test.describe("#71 INC-1 — sidebar hierarchy", () => {
     // resolved and the footer's `ownNickForNetwork(net, me)` yields the nick.
     const footer = page.getByTestId(`sidebar-own-nick-${NETWORK_SLUG}`);
     await expect(footer).toBeVisible();
-    await expect(footer).toContainText(NETWORK_NICK);
+    await expect(footer).toContainText(specNick());
   });
 
   test("desktop — network-header row has no leading ⚙️ (reverse-indent fix)", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     const header = page.locator("li.sidebar-network-header").first();
@@ -70,7 +70,7 @@ test.describe("#71 INC-1 — sidebar hierarchy", () => {
   test("desktop — grouping rail on live sidebar rows; parted channel moves to the archive modal", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // A LIVE channel row carries the rail. sidebarWindow returns the <li>

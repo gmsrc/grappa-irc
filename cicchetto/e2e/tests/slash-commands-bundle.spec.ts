@@ -32,8 +32,8 @@
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -43,12 +43,12 @@ const runId = () => crypto.randomUUID().slice(0, 8);
 
 test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => {
   test("/j auto-prepends # when no RFC channel-prefix is given", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const newChannel = `#slash-j-${runId()}`;
     const bareName = newChannel.slice(1); // strip leading #
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, newChannel)).toHaveCount(0);
 
     // Type `/j bareName` (no `#`) — the bundle's auto-prefix should
@@ -62,7 +62,7 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
         token: vjt.token,
         networkSlug: NETWORK_SLUG,
         channel: newChannel,
-        sender: NETWORK_NICK,
+        sender: specNick(),
         kind: "join",
       });
     } finally {
@@ -71,11 +71,11 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
   });
 
   test("/topic <body> on a channel window updates that channel's topic", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const newTopic = `topic-from-slash-${runId()}`;
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
     await composeSend(page, `/topic ${newTopic}`);
 
@@ -88,7 +88,7 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: SEED_CHANNEL,
-      sender: NETWORK_NICK,
+      sender: specNick(),
       body: newTopic,
       kind: "topic",
     });
@@ -97,12 +97,12 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
   test("/topic #channel <body> from any window operates on the named channel (#23)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const otherChannel = `#slash-topic-${runId()}`;
     const newTopic = `cross-window-topic-${runId()}`;
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
     try {
       // Join a second channel so we have a target that isn't the
@@ -139,7 +139,7 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
         token: vjt.token,
         networkSlug: NETWORK_SLUG,
         channel: otherChannel,
-        sender: NETWORK_NICK,
+        sender: specNick(),
         body: newTopic,
         kind: "topic",
         timeoutMs: 15_000,
@@ -150,7 +150,7 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
   });
 
   test("/q on a query window closes that window (bucket B)", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     // Arbitrary peer nick — bahamut-test accepts PRIVMSG to any nick;
     // cic optimistically opens the query window via /msg-handler
     // openQueryWindowState. Existing specs (cic-members-panel-scope,
@@ -158,7 +158,7 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
     const peerNick = `slash-q-peer-${runId()}`;
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
     // Open a query window via /msg — compose.ts /msg handler calls
     // openQueryWindowState which mounts the window in the sidebar
@@ -197,11 +197,11 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
   });
 
   test("/quote PING reaches the upstream wire without crashing the session", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const cookie = runId();
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
     // /quote PING <cookie> — server-side escape hatch added in
     // bucket C (Client.send_raw → Session.send_raw → handle_in("raw", _)).
@@ -219,7 +219,7 @@ test.describe("slash-commands bundle (24eb1d8 — issues #20, #22, #23)", () => 
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
       channel: SEED_CHANNEL,
-      sender: NETWORK_NICK,
+      sender: specNick(),
       body: `liveness-after-quote-${cookie}`,
       kind: "privmsg",
     });

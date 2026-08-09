@@ -26,8 +26,8 @@
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
@@ -56,10 +56,10 @@ async function scrollToTop(page: Page): Promise<void> {
 // taps the bottom-bar entry on mobile, so the ONE helper exercises both
 // re-tap surfaces.
 async function scrollUpThenRetapLandsAtBottom(page: Page): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect
     .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
     .toBeGreaterThanOrEqual(50);
@@ -100,7 +100,7 @@ async function scrollUpThenRetapLandsAtBottom(page: Page): Promise<void> {
 }
 
 test.beforeEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
@@ -108,7 +108,7 @@ test.beforeEach(async () => {
 // success, so the cursor is already at tail — but restore explicitly so a
 // mid-scroll FAILURE can't strand a later spec at a mid-history cursor.
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 

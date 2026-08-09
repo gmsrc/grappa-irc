@@ -53,8 +53,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel, restoreReadCursorToTail } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -67,28 +67,28 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // rows the predicate fix never controlled. Restore cursor to current
 // tail at start so the test exercises only its own /part → /join cycle.
 test.beforeEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test.afterEach(async () => {
   // Defensive restore — if any assertion failed mid-cycle, ensure #bofh
   // is back in the joined state for subsequent specs.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
 test("CP29 R-6 — operator's own /part → /join cycle does NOT raise an unread marker for their own presence rows", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // 1. Focus #bofh — initial cold load. The seeded autojoin already
   //    placed an own JOIN row on session boot; that row is visible.
   //    selection.ts's leave-arm runs against `prev=undefined` here, so
   //    no cursor advance fires for this initial mount.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // 2. PART #bofh via REST. The own PART row arrives on the per-channel
   //    topic; subscribe.ts's BUG5a own-PART path drops the channel from
@@ -113,7 +113,7 @@ test("CP29 R-6 — operator's own /part → /join cycle does NOT raise an unread
   //    own JOIN row) the assertion exercises.
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1, { timeout: 10_000 });
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // 4. The in-pane unread-marker MUST be absent. Pre-R-6 the marker
   //    derivation counted the own PART/JOIN rows in `(cursor,
@@ -127,7 +127,7 @@ test("CP29 R-6 — operator's own /part → /join cycle does NOT raise an unread
   await expect(
     page
       .locator('[data-testid="scrollback-line"][data-kind="join"]')
-      .filter({ hasText: NETWORK_NICK })
+      .filter({ hasText: specNick() })
       .filter({ hasText: CHANNEL })
       .last(),
   ).toBeVisible({ timeout: 10_000 });

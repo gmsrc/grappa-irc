@@ -17,8 +17,8 @@
 
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 const tag = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 6)}`;
@@ -26,14 +26,14 @@ const tag = (prefix: string) => `${prefix}-${crypto.randomUUID().slice(0, 6)}`;
 test("issue455 — *bold* _underline_ /italic/ render client-side with the markers kept", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, TEST_CHANNEL, { awaitWsReady: false });
 
   // Same live-WS gate as cp13-s10: members-pane rendering of the network
   // nick proves the per-channel Phoenix subscription is up, so the peer's
   // PRIVMSG broadcast is not lost before cic subscribes.
-  await expect(page.locator(".members-pane li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(page.locator(".members-pane li", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
 

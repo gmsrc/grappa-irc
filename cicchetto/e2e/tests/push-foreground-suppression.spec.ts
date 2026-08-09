@@ -37,8 +37,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "fg-suppressor";
 const SUB_ID = "foreground-suppression";
@@ -47,7 +47,7 @@ test("server suppresses push while a device reports visible, delivers once hidde
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   // Stub MUST install before page.goto (loginAs) — initScripts run for
@@ -56,7 +56,7 @@ test("server suppresses push while a device reports visible, delivers once hidde
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
@@ -65,13 +65,13 @@ test("server suppresses push while a device reports visible, delivers once hidde
     // whole fan-out; push-catcher sees nothing. setPageVisibility blocks
     // until WSPresence has acked visible=true, so the DM can't race it.
     await setPageVisibility(page, true);
-    peer.privmsg(NETWORK_NICK, "you are looking at the app — no toast please");
+    peer.privmsg(specNick(), "you are looking at the app — no toast please");
     await assertNoPushDelivery(SUB_ID);
 
     // Phase 2 — device HIDDEN (backgrounded). The server MUST now deliver.
     await resetPushCatcher();
     await setPageVisibility(page, false);
-    peer.privmsg(NETWORK_NICK, "now you backgrounded it — deliver this one");
+    peer.privmsg(specNick(), "now you backgrounded it — deliver this one");
 
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);

@@ -24,8 +24,8 @@
 
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — vjt's seeded autojoin channel
 // vjt + PEER_COUNT peers. Four extra members overflow the short viewport below
@@ -56,9 +56,9 @@ test("#500 — an overflowing member list keeps the rail launcher reachable and 
     peers.push(peer);
   }
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Wait for the peers' live JOINs to seed cic's member list, THEN shrink the
   // viewport so the (now long) list overflows the rail.
@@ -113,9 +113,9 @@ test("#500 — an overflowing member list keeps the rail launcher reachable and 
 test("#588 — an overflowing rail menu keeps its topmost action inside the viewport", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Short viewport: the collapsed action rows (home · rooms · themes · archive
   // · settings · denoise) cannot all fit in the space above the bottom-pinned

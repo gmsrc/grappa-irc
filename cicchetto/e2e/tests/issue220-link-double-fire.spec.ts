@@ -27,8 +27,8 @@
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded
 // here because the e2e tsconfig does not resolve src/ imports.
@@ -51,7 +51,7 @@ test.describe("#220 link-bearing surfaces double-fire", () => {
     page,
     context,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const channel = `#e2e220-${crypto.randomUUID().slice(0, 8)}`;
 
     // A peer creates the channel (first joiner → auto chanop +o) and
@@ -119,7 +119,7 @@ test.describe("#220 link-bearing surfaces double-fire", () => {
     page,
     context,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     // A per-run unique channel — NOT the shared seeded autojoin #bofh.
     // Mutating #bofh's topic would leak into later specs (the vjt-reset
     // fixture restores autojoin + scrollback, but NOT channel topics),
@@ -128,7 +128,7 @@ test.describe("#220 link-bearing surfaces double-fire", () => {
     const channel = `#e2e220t-${crypto.randomUUID().slice(0, 8)}`;
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     try {
       // Join the fresh channel, then set a URL-bearing topic on it.
@@ -138,7 +138,7 @@ test.describe("#220 link-bearing surfaces double-fire", () => {
       // TopicBar strip.
       await composeSend(page, `/join ${channel}`);
       await expect(sidebarWindow(page, NETWORK_SLUG, channel)).toBeVisible({ timeout: 10_000 });
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
       await composeSend(page, `/topic docs at ${LINK_URL} — see here`);
 
       const strip = page.locator(".topic-bar-topic");

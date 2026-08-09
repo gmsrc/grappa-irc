@@ -36,9 +36,9 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const REST_PAGE_SIZE = 50;
@@ -154,7 +154,7 @@ async function scrollToBottom(page: Page): Promise<void> {
 }
 
 async function focusChannelAndWaitForRows(page: Page): Promise<void> {
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect
     .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
     .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
@@ -165,18 +165,12 @@ async function focusChannelAndWaitForRows(page: Page): Promise<void> {
 test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   // ── B-Sentinel 1 (bare open) ──────────────────────────────────────
   test("bare window open does NOT advance cursor (programmatic scrollIntoView gated out)", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // Pin a known mid-pane cursor via real wheel + settle.
@@ -193,7 +187,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     // SKIP arming the 500ms settle timer.
     await page.getByRole("button", { name: "Home", exact: true }).click();
     await page.waitForTimeout(200);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await page.waitForTimeout(SETTLE_WAIT_LONG_MS);
 
     const cursorAfterReopen = await fetchCursor(vjt.token, CHANNEL);
@@ -205,7 +199,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     await focusChannelAndWaitForRows(page);
 
@@ -273,7 +267,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
   // ── B-Sentinel 3 (real wheel-down) ────────────────────────────────
   test("real wheel-down advances cursor to new visible-tail", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     await focusChannelAndWaitForRows(page);
 
@@ -312,7 +306,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     await focusChannelAndWaitForRows(page);
 
@@ -346,7 +340,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
   // ── UX-8-D scenario 2 (scroll-settle back-to-bottom) ──────────────
   test("scroll back to bottom advances cursor to tail", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     await focusChannelAndWaitForRows(page);
 
@@ -375,7 +369,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
   // ── UX-8-D scenario 3 (scroll-settle no-retreat) ──────────────────
   test("scroll up from bottom does NOT retreat cursor", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     await focusChannelAndWaitForRows(page);
 

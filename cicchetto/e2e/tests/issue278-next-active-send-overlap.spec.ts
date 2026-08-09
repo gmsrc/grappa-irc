@@ -49,8 +49,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const NEXT_ACTIVE_BTN = '[data-testid="next-active-btn"]';
 const NEXT_ACTIVE_COUNT = '[data-testid="next-active-btn"] .next-active-count';
@@ -80,7 +80,7 @@ function fmt(r: Rect): string {
 test("#278 @webkit — with the keyboard open the next-active circle does not overlap the send button and stays reachable", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = `t278peer-${Date.now() % 100000}`;
   await loginAs(page, vjt);
 
@@ -89,7 +89,7 @@ test("#278 @webkit — with the keyboard open the next-active circle does not ov
   // that still mounts a compose box (kindHasScrollback("server") === true)
   // — so the channel line below accrues unread AND we have a compose box
   // to focus for the keyboard-open leg.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
 
   const peer = await IrcPeer.connect({ nick: peerNick });

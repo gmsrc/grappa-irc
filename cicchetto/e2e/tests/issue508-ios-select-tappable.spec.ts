@@ -23,13 +23,12 @@
 // neither a stale rule nor a dropped fix can pass silently.
 
 import { loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("@webkit iOS — <select> is exempt from the inherited user-select:none so the native picker opens on a direct tap of the control, not only via its label", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // loginAs waits for the shell-ready signal, which guarantees boot ran and
   // lib/platform.ts applied the `is-ios` class before we probe the cascade.
   await loginAs(page, vjt);

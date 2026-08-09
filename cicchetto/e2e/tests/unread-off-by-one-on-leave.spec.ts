@@ -32,8 +32,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "unread-offbyone-buddy";
@@ -45,15 +45,9 @@ const PEER_NICK = "unread-offbyone-buddy";
 const LEAVE_SETTLE_MS = 800;
 
 test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("#163 last message stays read after leaving pinned-to-bottom", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Clean baseline: channel fully-read at first focus so any post-leave
     // unread is THIS bug, not a leftover from a prior spec.
@@ -63,7 +57,7 @@ test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
 
     // Focus #bofh — the pane loads scrollback and pins to the bottom
     // (`atBottom` starts true).
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // A peer sends a REAL tail message. Because the pane is pinned to the
     // bottom it auto-follows, so this row becomes the visible true tail —
@@ -102,7 +96,7 @@ test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
       // Re-select #bofh. Load-bearing assertion #2: NO `── 1 unread
       // message ──` divider is re-injected. The marker derives from the
       // cursor snapshot on focus; a one-short cursor re-injects it.
-      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
       await expect(scrollbackLine(page, "privmsg", tailBody)).toBeVisible({
         timeout: 5_000,
       });

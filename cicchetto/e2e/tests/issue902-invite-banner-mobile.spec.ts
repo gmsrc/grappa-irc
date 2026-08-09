@@ -44,8 +44,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique names — bahamut holds a ghosted nick + lingering channel
 // state for a window after disconnect, so literals collide on rapid
@@ -63,7 +63,7 @@ test.afterEach(async () => {
   // poisoner for every later spec whose layout the fixed banner region shifts.
   // Cleanup that only runs on the happy path is cleanup that is absent exactly
   // when it is needed. Idempotent; the helper swallows 404.
-  const { token } = getSeededVjt();
+  const { token } = specUser();
   await partChannel(token, NETWORK_SLUG, INVITED_CHANNEL).catch(() => {});
   await partChannel(token, NETWORK_SLUG, FAILED_CHANNEL).catch(() => {});
   if (peer) {
@@ -75,9 +75,9 @@ test.afterEach(async () => {
 test("@webkit #902 — an inbound INVITE reaches a phone via the banner, not the BottomBar", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const peerNick = `inv902m-${crypto.randomUUID().slice(0, 6)}`;
   peer = await IrcPeer.connect({ nick: peerNick });
@@ -86,7 +86,7 @@ test("@webkit #902 — an inbound INVITE reaches a phone via the banner, not the
   // invites to (else 442 ERR_NOTONCHANNEL), so the peer joins first. #78
   // routes the inbound INVITE to a not-joined `:invited` window state.
   await peer.join(INVITED_CHANNEL);
-  peer.rawInvite(NETWORK_NICK, INVITED_CHANNEL);
+  peer.rawInvite(specNick(), INVITED_CHANNEL);
 
   // (2) FAILED side. The peer founds a `+i` (invite-only) channel; the
   // operator's /join is rejected (473 ERR_INVITEONLYCHAN) → the channel

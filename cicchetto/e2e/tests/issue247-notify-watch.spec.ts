@@ -36,8 +36,8 @@
 import { composeSend, loginAs, openSettingsDrawer, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -47,7 +47,7 @@ const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 test.setTimeout(90_000);
 
 test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   let peer: IrcPeer | null = null;
 
   // #944 — this spec is the one shape `peer.nick` cannot serve: the whole
@@ -78,7 +78,7 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
 
     // Compose lives on channel windows — issue the add from the seed
     // channel, then open the settings watch-lists section to observe it.
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
     await composeSend(page, `/notify ${peerNick}`);
     await openWatchLists();
 
@@ -105,7 +105,7 @@ test("#247 — /notify → dots + toasts + snapshot repaint + settings remove", 
     //    transition occurs during the reload window). The drawer resets
     //    closed on reload, so reopen the watch-lists section.
     await page.reload();
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
     await openWatchLists();
     await expect(entryRow).toHaveCount(1, { timeout: 10_000 });
     await expect(dot).toHaveAttribute("data-state", "online", { timeout: 10_000 });

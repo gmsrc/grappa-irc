@@ -38,8 +38,8 @@ import {
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -194,21 +194,13 @@ const distOf = (s: Sample) => s.height - s.top - s.client;
 test.describe("issue #625 — a single send must not jump the pane up before settling", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  // The cursor persists on the shared seeded vjt across specs (last-write-wins).
-  // Restore to the tail so downstream #bofh specs inherit a fully-read channel.
-  test.afterAll(async () => {
-    const vjt = getSeededVjt();
-    if (!CHANNEL) return;
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("send while at the tail: distance-to-tail never spikes up over 2.5s", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await waitForScrollbackRefreshed(page, NETWORK_SLUG, CHANNEL);
 
     await expect
@@ -251,7 +243,7 @@ test.describe("issue #625 — a single send must not jump the pane up before set
   test("send while reading history (unread marker): pane settles at tail and stays", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Mid-page cursor → cold-mount lands on the unread marker, ABOVE the fold:
@@ -263,7 +255,7 @@ test.describe("issue #625 — a single send must not jump the pane up before set
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await waitForScrollbackRefreshed(page, NETWORK_SLUG, CHANNEL);
 
     await expect

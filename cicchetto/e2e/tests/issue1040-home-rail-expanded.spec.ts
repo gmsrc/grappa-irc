@@ -33,15 +33,15 @@
 // comfortably, are vjt's device-verify calls.
 
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — vjt's seeded autojoin channel
 
 test("#1040 — the home rail lays its actions out expanded, in flow, with no launcher", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Precondition: cold load lands on the home window. Without this the test
@@ -91,9 +91,9 @@ test("#1040 — the home rail lays its actions out expanded, in flow, with no la
 test("#1040 — a channel window keeps #500's collapsed launcher, floating above it", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // The launcher is back, and the actions are NOT in the DOM until it is tapped
   // — #500 verbatim, on the kind that still has a nick list to protect.
@@ -130,7 +130,7 @@ test("#1040 — a channel window keeps #500's collapsed launcher, floating above
 // flow-vs-popover shape is pinned on the desktop test above; what is
 // form-factor-specific is that the drawer opens straight onto the actions.
 test("@webkit #1040 — the mobile rail drawer opens straight onto the actions", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await expect(page.locator(".home-pane")).toBeVisible({ timeout: 15_000 });
 

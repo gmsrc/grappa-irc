@@ -22,8 +22,8 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -80,9 +80,9 @@ test.describe("CP14 B2 — scroll-up triggers loadMore (no end-of-history bounce
   test("scroll-to-top fetches older rows and preserves user's scroll position", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Wait for initial REST page (≥50 rows + the auto-joined own-nick
     // JOIN line that selectChannel waits for already).
@@ -125,9 +125,9 @@ test.describe("CP14 B2 — scroll-up triggers loadMore (no end-of-history bounce
   });
 
   test("repeated scroll-up loads progressively older rows until exhausted", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })

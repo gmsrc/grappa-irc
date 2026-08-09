@@ -29,18 +29,18 @@
 // table, so those toggles are present even though vjt holds none of them.
 
 import { composeSend, expectShellReady, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#229 — own umodes are visible from connect (cold-snapshot after reload), and tapping opens the umode modal", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   await loginAs(page, vjt);
   // Focus the autojoin channel to confirm login + the upstream session is
   // live (self-JOIN echo present) before issuing the umode change.
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   try {
     // Set +i mid-session. The self-MODE echo folds into the server's umode

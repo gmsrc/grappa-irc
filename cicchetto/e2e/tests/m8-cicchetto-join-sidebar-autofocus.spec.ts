@@ -1,5 +1,5 @@
 // M8 — cicchetto-driven /join. Type `/join #newchan` in compose; expected:
-//   - server-side persists the JOIN row (sender = NETWORK_NICK)
+//   - server-side persists the JOIN row (sender = specNick())
 //   - sidebar gains an entry for the new channel
 //   - cicchetto auto-focuses the new channel (compose.ts /join handler
 //     calls setSelectedChannel client-side immediately after postJoin —
@@ -26,8 +26,8 @@
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 // Random per-run suffix so /join's autojoin-persistence side-effect
@@ -40,26 +40,26 @@ test.afterEach(async () => {
   // Even if the test failed mid-flight, attempt to PART the channel
   // server-side so the next run starts clean. The HTTP DELETE is
   // idempotent — 404 if the channel was never joined is fine.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await partChannel(vjt.token, NETWORK_SLUG, NEW_CHANNEL).catch(() => {});
 });
 
 test("M8 — cicchetto /join adds sidebar entry + auto-focuses the new channel", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, NEW_CHANNEL)).toHaveCount(0);
 
   await composeSend(page, `/join ${NEW_CHANNEL}`);
 
   // Server-side: own JOIN row persisted at channel = NEW_CHANNEL,
-  // sender = NETWORK_NICK, kind = :join. JOIN rows have body=null;
+  // sender = specNick(), kind = :join. JOIN rows have body=null;
   // match by kind.
   await assertMessagePersisted({
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: NEW_CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     kind: "join",
   });
 

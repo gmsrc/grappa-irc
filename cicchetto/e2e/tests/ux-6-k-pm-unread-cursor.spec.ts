@@ -50,8 +50,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, getReadCursor } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "ux6k-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -60,11 +60,11 @@ const PM_BODY = "UX-6-K: inbound DM that should advance the cursor";
 test("UX-6 K — focus-leave on a peer DM window advances the server-side read cursor for the peer", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Channel-first focus to drive the WS-ready sync (own-nick subscribe
   // for the DM-listener boots off the same effect chain). Mirrors M4.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // FLAKE-D (2026-05-23) — same race shape as cp14-b3: peer.privmsg
   // can land before cic's own-nick DM-listener subscribe completes,
@@ -83,9 +83,9 @@ test("UX-6 K — focus-leave on a peer DM window advances the server-side read c
     expect(preCursor).toBeNull();
 
     // Peer sends an INBOUND DM to vjt. Persisted server-side at
-    // `channel = NETWORK_NICK, dm_with = PEER_NICK` — the storage
+    // `channel = specNick(), dm_with = PEER_NICK` — the storage
     // shape that exposed the K bug.
-    peer.privmsg(NETWORK_NICK, PM_BODY);
+    peer.privmsg(specNick(), PM_BODY);
 
     // Probe via REST against channel = PEER_NICK so the peer-DM
     // aggregation (channel == peer OR dm_with == peer) returns the
@@ -119,7 +119,7 @@ test("UX-6 K — focus-leave on a peer DM window advances the server-side read c
     // peer window, POSTs the cursor for PEER_NICK with the inbound
     // DM's id. Server-side `ReadCursor.set/4` is where the pre-K
     // bug surfaced: the literal `m.channel == ^channel` validator
-    // rejected the inbound row (whose channel field is NETWORK_NICK,
+    // rejected the inbound row (whose channel field is specNick(),
     // not PEER_NICK) with `:invalid_message`, and the POST got 422.
     // Post-K the shared `channel_or_dm_where/3` predicate accepts the
     // OR-shape and the persist succeeds.

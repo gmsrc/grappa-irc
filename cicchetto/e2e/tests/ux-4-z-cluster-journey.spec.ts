@@ -95,14 +95,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh
 
@@ -133,7 +127,7 @@ test.afterEach(async () => {
   // Re-join the autojoin channel so subsequent specs see the seeder
   // baseline. Bucket E + G arms PART or compose a transient `/join`
   // that might race the seeded autojoin restore.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
@@ -155,7 +149,7 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     }
 
     // Only the "registered" class drives the body today.
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     // Defensive: re-join the autojoin channel BEFORE login in case a
     // prior spec's afterEach left it parted (this spec runs late in
     // the suite; many predecessors PART → re-JOIN in their own
@@ -182,7 +176,7 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
       hasText: NETWORK_SLUG,
     });
     await expect(homeRow).toBeVisible();
-    await expect(homeRow.locator(".home-pane-network-nick")).toContainText(NETWORK_NICK);
+    await expect(homeRow.locator(".home-pane-network-nick")).toContainText(specNick());
 
     // ─── Bucket L — settings reachable from every window kind ─────────
     // #71 INC-2 — on mobile the settings cog lives in the rail's
@@ -198,7 +192,7 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     // channel (no `#BOFH` / `#bofh` partition). Server-side
     // EventRouter canonicalisation ensures the autojoin echo uses the
     // canonical key regardless of upstream casing.
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     const channelTab = sidebarWindow(page, NETWORK_SLUG, CHANNEL);
     await expect(channelTab).toBeVisible({ timeout: 10_000 });
     await expect(channelTab).toHaveCount(1);
@@ -243,7 +237,7 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
 
     // Own-nick MUST be in the members list (members-list-presence rule).
     const ownNickItem = membersDrawer.locator(".members-pane li", {
-      hasText: NETWORK_NICK,
+      hasText: specNick(),
     });
     await expect(ownNickItem.first()).toBeVisible();
 

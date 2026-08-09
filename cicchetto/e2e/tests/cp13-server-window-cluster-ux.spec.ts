@@ -18,8 +18,8 @@ import {
   sidebarMessageBadge,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const SERVER_WINDOW_LABEL = "Server";
 const TEST_CHANNEL = "#bofh";
@@ -28,7 +28,7 @@ test.describe("CP13 server-window cluster", () => {
   test("S6 — bottom numeric-inline pane is gone (no `.numeric-inline-pane` in DOM)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, TEST_CHANNEL);
     // The pane was rendered as a sibling of `.scrollback-pane` content
@@ -40,7 +40,7 @@ test.describe("CP13 server-window cluster", () => {
   test("S9 — ComposeBox renders on $server + slash-only gate rejects plain text", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     const serverEntry = sidebarWindow(page, NETWORK_SLUG, SERVER_WINDOW_LABEL);
@@ -67,7 +67,7 @@ test.describe("CP13 server-window cluster", () => {
   test("S8 — $server window surfaces unread message badge after live numeric arrives", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // Focus a different window so $server is NOT focused — unread

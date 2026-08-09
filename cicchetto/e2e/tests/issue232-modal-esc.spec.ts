@@ -35,8 +35,8 @@ import {
   sidebarCloseButton,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -68,9 +68,9 @@ for (const m of ESC_MODALS) {
   test(`#232 ${m.name} closes on Esc pressed from body focus (was focus-trapped)`, async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await m.open(page);
     const modal = page.getByTestId(m.testid);
@@ -88,9 +88,9 @@ for (const m of ESC_MODALS) {
 test("#232 ModeModal: the × button and backdrop click still close it (other doors intact)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // × button.
   await composeSend(page, `/mode ${CHANNEL}`);
@@ -109,9 +109,9 @@ test("#232 ModeModal: the × button and backdrop click still close it (other doo
 test("#232 ConfirmModal: Esc from body focus DISMISSES safely (channel not left)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // The destructive close × opens the leave-channel confirm (#195).
   await sidebarCloseButton(page, NETWORK_SLUG, CHANNEL).click();

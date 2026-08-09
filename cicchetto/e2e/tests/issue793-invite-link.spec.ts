@@ -29,8 +29,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, listChannelNames, partChannel, type SeededUser } from "../fixtures/grappaApi";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // Lowercase throughout: raw == ASCII-folded, so the sidebar window key (the
 // folded key IS the display) equals the spelling asserted on. The raw-vs-
@@ -61,7 +61,7 @@ async function openInvite(page: Page, vjt: SeededUser, path: string): Promise<vo
 }
 
 test("an invite link asks, then joins and switches (#793)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const target = freshChannel("join");
 
   await openInvite(page, vjt, inviteUrl(NETWORK_SLUG, target));
@@ -100,7 +100,7 @@ test("an invite link asks, then joins and switches (#793)", async ({ page }) => 
 });
 
 test("an invite to a channel we are already in switches with NO modal (#793)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const already = freshChannel("have");
 
   // The PRECONDITION is "already in the channel", so it has to be true before
@@ -129,7 +129,7 @@ test("an invite to a channel we are already in switches with NO modal (#793)", a
 });
 
 test("an invite for an unbound network joins nothing and says so (#793)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   await openInvite(page, vjt, inviteUrl("nowhere-bound", "somechannel"));
   await page.waitForFunction(() => window.__cicInviteLinkApplied === true, null, {

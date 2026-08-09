@@ -43,8 +43,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "Server";
@@ -54,20 +54,20 @@ const WITNESS = "issue-239-visible-witness";
 // Cursor was advanced mid-test (open #bofh → read). Restore to tail so
 // downstream specs inherit a clean at-tail cursor (BUGHUNT-3 cascade rule).
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
 test("#239 — hidden control message does NOT bump the unread badge; reading clears it", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus #bofh first so its per-channel WS topic is subscribed (the badge
   // only updates live for a subscribed channel — see M2). ownNick sync waits
   // for the auto-joined self-JOIN line, proving REST + WS both landed.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Pin #bofh to HIDE presence via the production toggle (no need to seed
   // LARGE_CHANNEL_THRESHOLD members — the size-default math is unit-tested;

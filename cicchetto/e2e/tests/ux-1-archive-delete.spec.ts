@@ -36,26 +36,26 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
   // Restore the seed-time joined state so later specs that assume
   // #bofh is joined keep working under retries.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test("UX-1 — × on archive entry confirms + deletes scrollback permanently", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus the channel first — ensures we're working from healthy
   // state + the join-line lands so we know there IS scrollback to
   // delete in step 5.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
 
   // PART so the channel moves into archive.
@@ -102,7 +102,7 @@ test("UX-1 — × on archive entry confirms + deletes scrollback permanently", a
   // scrollback lines from before the PART.
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1, { timeout: 5_000 });
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // ScrollbackPane carries only the fresh JOIN line; pre-PART rows
   // are gone. Assert no `:message` kind rows remain (privmsg/action/

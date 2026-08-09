@@ -38,8 +38,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "Server";
@@ -50,21 +50,21 @@ const SECOND_DM = "issue-973 second dm";
 // The spec focuses #bofh (advancing its cursor on leave). Restore it to tail so
 // downstream specs inherit a clean at-tail cursor (BUGHUNT-3 cascade rule).
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
 test("#973 — a mixed-case query window's unread badge clears on read and stays clear", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Channel-first focus so the boot chain is fully evaluated, then await the
   // own-nick DM-listener subscribe: without it the peer's PRIVMSG below
   // fan-outs to zero subscribers and the query window never auto-opens
   // (FLAKE-D — same guard as CP14 B3).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   // Sit on the Server window: a query window's badge is only observable while
@@ -76,7 +76,7 @@ test("#973 — a mixed-case query window's unread badge clears on read and stays
   const nick = peer.nick;
   try {
     // 1. Inbound DM auto-opens the query window and puts one on the badge.
-    peer.privmsg(NETWORK_NICK, FIRST_DM);
+    peer.privmsg(specNick(), FIRST_DM);
     await expect(sidebarMessageBadge(page, NETWORK_SLUG, nick)).toHaveText("1", {
       timeout: 10_000,
     });
@@ -103,7 +103,7 @@ test("#973 — a mixed-case query window's unread badge clears on read and stays
 
     // 4. A second DM arrives while the operator is away. The badge counts it —
     //    the fix must not have silenced the window, only unstuck the cursor.
-    peer.privmsg(NETWORK_NICK, SECOND_DM);
+    peer.privmsg(specNick(), SECOND_DM);
 
     // 5. Exactly "1", not "2". This is the monotonic growth from the report:
     //    with the cursor stuck, the first (already-read) DM was still being

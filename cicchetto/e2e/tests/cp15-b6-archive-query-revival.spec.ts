@@ -44,8 +44,8 @@ import {
   waitForQueryWindowReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = `cp15b6q-${crypto.randomUUID().slice(0, 6)}`;
@@ -68,9 +68,9 @@ test("CP15 B6 — /msg peer + close → archive entry; clicking the archive row 
   // closer to a normal user interaction with a live target).
   peer = await IrcPeer.connect({ nick: PEER_NICK });
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
   // Barrier against the documented DM-listener race (see
   // waitForDmListenerReady): `selectChannel` awaits the channel topic
   // join, NOT the own-nick topic join. Firing `/msg` before the own-nick

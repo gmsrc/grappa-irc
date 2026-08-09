@@ -26,8 +26,8 @@
 
 import { devices } from "@playwright/test";
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -45,9 +45,9 @@ async function asideWidth(
 test("ux-5-bs desktop — drag left handle widens sidebar + persists across reload", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
   // Baseline: default 256px (16rem at 16px base). Handle visible inside
@@ -83,16 +83,16 @@ test("ux-5-bs desktop — drag left handle widens sidebar + persists across relo
   expect(Number.parseInt(stored ?? "0", 10)).toBeLessThanOrEqual(widthAfter + 5);
 
   await page.reload();
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
   const widthReloaded = await asideWidth(page, ".shell-sidebar");
   expect(Math.abs(widthReloaded - widthAfter)).toBeLessThanOrEqual(5);
 });
 
 test("ux-5-bs desktop — drag right handle widens members pane + persists", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
   // Members pane mounted (joined channel; `.shell` lacks
@@ -134,9 +134,9 @@ test("ux-5-bs desktop — drag right handle widens members pane + persists", asy
 });
 
 test("ux-5-bs desktop — drag past min clamps to 160px", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
   const handle = page.locator(".shell-sidebar .resize-handle-left");
@@ -165,9 +165,9 @@ test("ux-5-bs mobile — drag handles NOT present (mobile branch never mounts th
   // (target.tap() needs hasTouch).
   const ctx = await browser.newContext({ ...devices["iPhone 15"] });
   const page = await ctx.newPage();
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Mobile shell uses BottomBar + .shell-mobile single-column grid; no
   // .shell-sidebar (sidebar replaced by bottom-bar) and members is a

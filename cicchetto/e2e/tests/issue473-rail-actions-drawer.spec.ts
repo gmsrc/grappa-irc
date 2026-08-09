@@ -52,8 +52,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — the seeded autojoin channel
 
@@ -98,7 +98,7 @@ test.afterEach(async () => {
   // so downstream specs still find the autojoin channel. Idempotent — a 404 on
   // an already-joined channel is treated as success by joinChannel's caller
   // contract (mirrors ux-1 / ux-2 / cp15-b6).
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
@@ -106,9 +106,9 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
   test("desktop channel window — rail hosts every labelled button; admin absent for a non-admin", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     // Desktop `.shell-members` is the permanent right rail — no drawer to open.
@@ -148,7 +148,7 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
   test("desktop home — archive is always-on (no selection) and opens the grouped modal", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     // Cold-load lands on the home window (non-channel, no network context). The
     // archive button is always shown regardless — the #473 ruling that the ONE
     // archive surface must be reachable from home / mentions / admin, not just a
@@ -175,9 +175,9 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
   test("desktop — PART → grouped modal lazy-loads the row → clicking it revives + closes the modal", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     // PART via REST → :parted → the channel leaves the active sidebar and moves
@@ -204,9 +204,9 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
   test("@webkit mobile — drawer hosts every labelled button; PART → rail archive → grouped modal row", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     // On mobile the rail is a collapsed drawer — open it via the members

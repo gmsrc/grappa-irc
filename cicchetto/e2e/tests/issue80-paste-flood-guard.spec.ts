@@ -34,8 +34,8 @@ import {
   scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -60,9 +60,9 @@ test("#80 — multi-line paste: dialog opens, Cancel drops it, Paste inserts it"
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const ta = composeTextarea(page);
   await expect(ta).toBeVisible();
@@ -97,9 +97,9 @@ test("#80 — multi-line paste: dialog opens, Cancel drops it, Paste inserts it"
 
 test("#816 — a one-message paste is frictionless; two messages already guard", async ({ page }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const ta = composeTextarea(page);
   await expect(ta).toBeVisible();
@@ -139,9 +139,9 @@ test("#816 — a paste over the hard cap uploads as a file instead of flooding",
     "shares the upload plumbing gated to chromium by the uploads specs; the paste half is browser-agnostic and covered above",
   );
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Pre-ack the embedded-host privacy modal so the upload runs unattended
   // (that flow is covered by ux-6-b-embedded-upload).
@@ -213,9 +213,9 @@ test("#816 — an under-cap paste offers the .txt upload beside Paste, and it wo
     "shares the upload plumbing gated to chromium by the uploads specs",
   );
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Pre-ack the embedded-host privacy modal so the upload runs unattended
   // (that flow is covered by ux-6-b-embedded-upload).

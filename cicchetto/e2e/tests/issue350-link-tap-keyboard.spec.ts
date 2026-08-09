@@ -26,8 +26,8 @@
 // through → not prevented). Real-device keyboard smoke stays vjt's iPhone.
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern, see text-selection-restored spec): the
@@ -40,9 +40,9 @@ const MESSAGE_BODY = `tap target: ${LINK_URL}`;
 test("@webkit iOS — a short tap on a scrollback link keeps the keyboard (mousedown focus-shift prevented, compose stays focused)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, MESSAGE_BODY);
   const row = scrollbackLine(page, "privmsg", LINK_URL);

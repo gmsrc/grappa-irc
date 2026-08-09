@@ -38,8 +38,8 @@ import type { Page } from "@playwright/test";
 import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "badge981-buddy";
@@ -98,23 +98,16 @@ async function clearSightings(page: Page): Promise<void> {
 }
 
 test.describe("#981 badge on a window read at the tail", () => {
-  // Cascade rule: leave #bofh fully read for whatever runs next.
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("never shows, not even for an instant, while the operator watches the tail", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Caught up and parked at the tail — the state the report is about.
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarMessageBadge(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, {
       timeout: 10_000,
     });

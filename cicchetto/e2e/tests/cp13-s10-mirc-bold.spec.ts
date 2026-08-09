@@ -14,15 +14,15 @@
 
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 
 test("CP13 S10 — peer's bold-formatted PRIVMSG renders with .scrollback-mirc-bold span", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // awaitWsReady=false: the bootstrap-time JOIN line for #bofh has
   // already arrived in the shared grappa session by the time this
@@ -40,7 +40,7 @@ test("CP13 S10 — peer's bold-formatted PRIVMSG renders with .scrollback-mirc-b
   // signal: it requires the after_join snapshot push of
   // `members_seeded` to have arrived AND been processed, which
   // only happens once the Phoenix channel join completes.
-  await expect(page.locator(".members-pane li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(page.locator(".members-pane li", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
 

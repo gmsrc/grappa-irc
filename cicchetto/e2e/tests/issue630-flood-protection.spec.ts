@@ -31,8 +31,8 @@
 
 import { loginAs } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededAdmin, getSeededFloodVictim, getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { getSeededAdmin, getSeededFloodVictim } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // A metered WRITE both subjects may issue (visitor-parity route, user
 // scope → guarded by GrappaWeb.Plugs.RequestBudget). An empty body is
@@ -168,7 +168,7 @@ test("sustained inbound flood 429s then severs the web session; a second subject
   // and this 200 flips to 401, failing HERE instead of cascading auth-death
   // across the tail of the suite.
   const sharedVjtMe = await request.get(`${GRAPPA_BASE_URL}/me`, {
-    headers: { authorization: `Bearer ${getSeededVjt().token}` },
+    headers: { authorization: `Bearer ${specUser().token}` },
   });
   expect(sharedVjtMe.status()).toBe(200);
 });

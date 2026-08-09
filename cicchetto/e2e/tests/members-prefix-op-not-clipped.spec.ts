@@ -33,25 +33,25 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "members-prefix-buddy";
 const CHANNEL = "#members-prefix-test";
 
 test("members pane renders @-prefix + full op nick (not clipped)", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus #bofh first to confirm login + ws-ready, then /join the
   // fresh per-spec channel so vjt is the first user and Bahamut
   // grants +o deterministically.
-  await selectChannel(page, NETWORK_SLUG, "#bofh", { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, "#bofh", { ownNick: specNick() });
   await composeSend(page, `/join ${CHANNEL}`);
   await expect(
     page.locator(".sidebar-network-section li").filter({ hasText: CHANNEL }),
   ).toHaveCount(1, { timeout: 10_000 });
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Wait for members pane to mount — gates on
   // `isActiveChannelJoined() && selectedChannel()` in Shell.tsx, which

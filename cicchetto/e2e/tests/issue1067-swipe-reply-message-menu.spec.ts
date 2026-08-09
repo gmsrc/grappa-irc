@@ -18,8 +18,8 @@
 //     must not be read as covering the rest.
 import type { Page } from "@playwright/test";
 import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 test.setTimeout(90_000);
@@ -135,8 +135,8 @@ function uniqueBody(tag: string): string {
 
 async function postMessage(page: Page, body: string): Promise<void> {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  await loginAs(page, getSeededVjt());
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await loginAs(page, specUser());
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await composeSend(page, body);
   await expect(page.locator('[data-testid="scrollback-line"]', { hasText: body })).toBeVisible({
     timeout: 5_000,
@@ -172,7 +172,7 @@ test("issue1067 — a left→right swipe on a message quotes it into the compose
   expect(result.transformAfter).toBe("");
 
   // THE outcome: the quote, exactly as the issue spells it, caret at the end.
-  const quote = `<${NETWORK_NICK}> ${body}<< `;
+  const quote = `<${specNick()}> ${body}<< `;
   await expect(composeTextarea(page)).toHaveValue(quote);
   const caret = await composeTextarea(page).evaluate(
     (el) => (el as HTMLTextAreaElement).selectionStart,
@@ -292,7 +292,7 @@ test("issue1067 — the menu's Reply item fills the compose with the same quote 
   await menuItem(page, "Reply").click();
 
   await expect(menu(page)).toHaveCount(0);
-  await expect(composeTextarea(page)).toHaveValue(`<${NETWORK_NICK}> ${body}<< `);
+  await expect(composeTextarea(page)).toHaveValue(`<${specNick()}> ${body}<< `);
 });
 
 // The clipboard is stubbed at the browser boundary rather than driven through
@@ -332,7 +332,7 @@ test("issue1067 — the menu's Copy item writes the whole rendered row to the pa
     () => (window as unknown as { __copied: string[] }).__copied[0] ?? "",
   );
   expect(copied).toContain(body);
-  expect(copied).toContain(NETWORK_NICK); // the sender lives OUTSIDE .scrollback-body
+  expect(copied).toContain(specNick()); // the sender lives OUTSIDE .scrollback-body
   // No failure toast on the happy path — a successful copy is silent.
   await expect(page.locator(".toast-stack .toast-error")).toHaveCount(0);
 });

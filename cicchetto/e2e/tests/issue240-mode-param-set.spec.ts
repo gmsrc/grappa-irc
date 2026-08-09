@@ -16,13 +16,13 @@
 // do this — it needs the live ircd MODE round-trip.
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#240 — an op sets +k <key> and +l <n> from the mode modal and the MODE is reflected", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t240-${Date.now()}`;
   const key = `s3cr3t${Date.now() % 100000}`;
   const limit = "42";
@@ -30,7 +30,7 @@ test("#240 — an op sets +k <key> and +l <n> from the mode modal and the MODE i
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready before
   // issuing the /join (mirrors issue216 boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   try {
     // vjt creates the channel → becomes op (@) → the modal's edit gate opens.
@@ -38,7 +38,7 @@ test("#240 — an op sets +k <key> and +l <n> from the mode modal and the MODE i
     await expect(
       page.locator(".sidebar-network-section li").filter({ hasText: channel }),
     ).toHaveCount(1, { timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // Open the editor for the fresh channel. `/mode #chan` (no mode args)
     // opens the modal deterministically — the TopicBar indicator is hidden

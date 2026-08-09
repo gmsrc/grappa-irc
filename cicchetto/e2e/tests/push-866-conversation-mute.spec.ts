@@ -37,8 +37,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "i866-muter";
 const MUTED_CHANNEL = "#866-muted";
@@ -49,14 +49,14 @@ test("a muted channel swallows even a direct mention, while its unmuted sibling 
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   await stubPushManager(context, { endpoint: pushCatcherEndpoint(SUB_ID) });
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
@@ -71,7 +71,7 @@ test("a muted channel swallows even a direct mention, while its unmuted sibling 
     for (const channel of [MUTED_CHANNEL, LOUD_CHANNEL]) {
       await page.locator(".compose-box textarea").fill(`/join ${channel}`);
       await page.locator(".compose-box textarea").press("Enter");
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
     }
 
     await openSettingsSection(page, "push");
@@ -99,16 +99,16 @@ test("a muted channel swallows even a direct mention, while its unmuted sibling 
     // Focus a third window so neither target is "being read", and background
     // the device so #182's foreground-suppression is not what decides either
     // arm.
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
     await setPageVisibility(page, false);
 
     // Negative arm — a MENTION in the muted channel. Pre-#866 this pushed.
-    peer.privmsg(MUTED_CHANNEL, `${NETWORK_NICK}: you will not hear this`);
+    peer.privmsg(MUTED_CHANNEL, `${specNick()}: you will not hear this`);
     await assertNoPushDelivery(SUB_ID, 1_500);
 
     // Positive arm — the same mention shape in the unmuted sibling. This is
     // what keeps the negative arm from passing because push broke outright.
-    peer.privmsg(LOUD_CHANNEL, `${NETWORK_NICK}: but you will hear this`);
+    peer.privmsg(LOUD_CHANNEL, `${specNick()}: but you will hear this`);
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
   } finally {

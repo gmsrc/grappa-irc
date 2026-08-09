@@ -29,8 +29,8 @@
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded
 // here because the e2e tsconfig does not resolve src/ imports. A
@@ -45,14 +45,14 @@ const PEER_CHANNEL = `#e2edir-${crypto.randomUUID().slice(0, 8)}`;
 test.afterEach(async () => {
   // PART PEER_CHANNEL server-side even on failure so the next run
   // starts clean. Idempotent: 404 if the channel was never joined.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await partChannel(vjt.token, NETWORK_SLUG, PEER_CHANNEL).catch(() => {});
 });
 
 test("channel-directory — browse, no /messages fetch (#81 guard), search filter, one-click join", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Connect an IRC peer and join PEER_CHANNEL so it exists in bahamut
   // before grappa issues LIST. The peer stays connected for the whole
@@ -69,7 +69,7 @@ test("channel-directory — browse, no /messages fetch (#81 guard), search filte
     // GET /messages for the autojoin channel has already fired BEFORE
     // we arm the request collector.
     await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], {
-      ownNick: NETWORK_NICK,
+      ownNick: specNick(),
     });
 
     // Arm the /messages request collector from this point forward, SCOPED

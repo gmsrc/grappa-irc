@@ -33,8 +33,8 @@
 // UI-shape/layout contract, subject-shape-agnostic. Registered seed suffices.
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -47,11 +47,11 @@ test.setTimeout(60_000);
 test('#319 landscape 5" — slim proportioned rails, center gets the majority, single-line topic', async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
   // Desktop three-pane shell IS rendered (width > 768px) — NOT the portrait

@@ -37,8 +37,8 @@
 import type { Page } from "@playwright/test";
 import { composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Per-run unique tag so retries / parallel runs don't strict-mode-collide
@@ -60,9 +60,9 @@ async function distanceToBottom(page: Page): Promise<number> {
 test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compose-send", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const ta = composeTextarea(page);
   await expect(ta).toBeVisible();
@@ -97,7 +97,7 @@ test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compos
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     body: MESSAGE_BODY,
   });
 

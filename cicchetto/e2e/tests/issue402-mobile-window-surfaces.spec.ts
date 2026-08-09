@@ -54,8 +54,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { listArchiveTargets, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique: bahamut holds channel state for a window after
 // disconnect, so a literal collides on rapid reruns (--repeat-each).
@@ -68,16 +68,16 @@ test.afterEach(async () => {
     await peer.disconnect("i402 cleanup").catch(() => {});
     peer = null;
   }
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await partChannel(vjt.token, NETWORK_SLUG, GATED_CHANNEL).catch(() => {});
 });
 
 test("@webkit #402 — a failed-JOIN window with scrollback stays reachable from exactly one mobile surface", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   peer = await IrcPeer.connect({ nick: `i402peer-${crypto.randomUUID().slice(0, 6)}` });
 
@@ -107,7 +107,7 @@ test("@webkit #402 — a failed-JOIN window with scrollback stays reachable from
   // `kind !== "channel"` (Shell.tsx) — so archive/settings/rooms are
   // unreachable while the failed channel holds focus. That is an adjacent
   // gap, not this defect; navigating away is also what the operator does.
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // The two mobile surfaces. The BottomBar stays in the DOM behind the
   // archive modal's backdrop, so both are countable at once — no tapping

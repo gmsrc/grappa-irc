@@ -16,8 +16,7 @@ import {
   awaitServiceWorkerActive,
   loginAs,
 } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 // #119 — the bundle-refresh banner folded into the unified stacked error
 // region as one typed source; it renders as a `.error-banner` slot with
@@ -35,7 +34,7 @@ const BANNER_SELECTOR = '.error-banner[data-source="bundle-refresh"]';
 test("BundleRefreshBanner appears on hash mismatch and click reloads the page", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await awaitServiceWorkerActive(page);
   await awaitServerBundleHashPush(page);
 
@@ -81,7 +80,7 @@ test("BundleRefreshBanner appears on hash mismatch and click reloads the page", 
 test("refresh bar shows current vs available version, refresh still applies (#292)", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await awaitServiceWorkerActive(page);
   await awaitServerBundleHashPush(page);
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
@@ -125,7 +124,7 @@ test("refresh bar shows current vs available version, refresh still applies (#29
 test("refresh bar appends the short build hash when the semver is unchanged (#292)", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await awaitServiceWorkerActive(page);
   await awaitServerBundleHashPush(page);
   await expect(page.locator(BANNER_SELECTOR)).toHaveCount(0);
@@ -156,7 +155,7 @@ test("refresh bar appends the short build hash when the semver is unchanged (#29
 });
 
 test("BundleRefreshBanner stays hidden when server pushes the same hash", async ({ page }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await awaitServiceWorkerActive(page);
   await awaitServerBundleHashPush(page);
 
@@ -190,7 +189,7 @@ test("UX-6-I — refresh button forces SW update + cache purge before reload", a
   // unit tests in bundleHash.test.ts cover the branching exhaustively;
   // this e2e validates the BROWSER actually invokes the patched path
   // when the live button is clicked.
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   // Gate on the real SW activation BEFORE stubbing SW state and clicking
   // — this UX-6-I case is the deterministic one: the stub below overwrites
   // `navigator.serviceWorker.controller` with a fake "activated" object

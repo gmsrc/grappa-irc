@@ -31,13 +31,12 @@
 // effect bucket. Single visitor login is sufficient.
 
 import { loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("@webkit UX-3 OCT — viewport meta carries interactive-widget=resizes-content", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const viewportContent = await page.evaluate(() => {
@@ -54,7 +53,7 @@ test("@webkit UX-3 OCT — viewport meta carries interactive-widget=resizes-cont
 test("@webkit UX-3 OCT — installViewportHeightTracker writes --viewport-height on <html>", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // The tracker fires at main.tsx boot, BEFORE render(). By the time
@@ -80,7 +79,7 @@ test("@webkit UX-3 OCT — installViewportHeightTracker writes --viewport-height
 test("@webkit UX-3 OCT — installScrollPin snaps window back to (0, 0) on programmatic scroll", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Force the document to be taller than the viewport so scrollTo
@@ -116,7 +115,7 @@ test("@webkit UX-3 OCT — installScrollPin snaps window back to (0, 0) on progr
 test("@webkit UX-3 OCT — .shell-mobile reads var(--viewport-height) with 100dvh fallback", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Walk the CSS source to confirm the rule shape. Webkit emulation

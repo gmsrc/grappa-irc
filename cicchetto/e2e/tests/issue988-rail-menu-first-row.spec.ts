@@ -80,8 +80,8 @@ import {
   openSettingsSection,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const WIDTH = 393;
@@ -231,11 +231,11 @@ test.setTimeout(120_000);
 test("@webkit #988 — the actions menu opens with `home` visible at every viewport height", async ({
   page,
 }, testInfo) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // A channel window so the menu carries its widest row set (rooms + denoise
   // are selection-gated) — the tall menu #988 is about.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // MEASURE EVERY HEIGHT FIRST, assert afterwards. The two phases are split on
   // purpose: this spec is a discriminator before it is a guard, and asserting
@@ -274,9 +274,9 @@ test("@webkit #988 — the actions menu opens with `home` visible at every viewp
 test("@webkit #988 — `home` stays visible at XXL text with the viewport at its shortest", async ({
   page,
 }, testInfo) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   try {
     // The production path, not a CSS var poke: the operator picks the size in

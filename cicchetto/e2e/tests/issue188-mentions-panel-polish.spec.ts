@@ -23,8 +23,8 @@
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m188-peer";
 const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // "#bofh" — already joined at login
@@ -43,12 +43,12 @@ const AWAY_REASON = "lunch break";
 // under --repeat-each). A fresh runId per test invocation makes each
 // wait a true "the FRESH mention landed" precondition.
 const mentionBody = (where: string, runId: string): string =>
-  `${NETWORK_NICK} ping in ${where} ${runId}`;
+  `${specNick()} ping in ${where} ${runId}`;
 
 test("#188 — away mentions panel: grouped restyle, open-button, close-x, clear-on-away", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Per-invocation unique suffix — see `mentionBody` comment: guards the
   // scrollback-render waits below against matching a stale prior-iteration
   // `#m188` row (which _vjtReset does not truncate).
@@ -58,9 +58,9 @@ test("#188 — away mentions panel: grouped restyle, open-button, close-x, clear
   await loginAs(page, vjt);
 
   // Join both channels (subscribed + confirmed via the self-JOIN line).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL_A, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL_A, { ownNick: specNick() });
   await composeSend(page, `/join ${CHANNEL_B}`);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL_B, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL_B, { ownNick: specNick() });
 
   // Go away — the server stamps the away-window start.
   await composeSend(page, `/away ${AWAY_REASON}`);

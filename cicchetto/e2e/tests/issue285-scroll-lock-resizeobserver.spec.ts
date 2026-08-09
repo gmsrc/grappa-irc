@@ -38,15 +38,8 @@
 import type { Page } from "@playwright/test";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { resetSubject } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-  VJT_USER,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // A small corpus: fits the real device viewport (the not-overflowing
@@ -112,7 +105,7 @@ test("@webkit #285 reopen — .scrollback base is fail-open pan-y and the lock g
   page,
 }) => {
   const admin = getSeededAdmin();
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Re-seed #bofh to a SMALL corpus so it does NOT overflow the real device
   // viewport (the not-overflowing baseline) but WILL overflow a shrunk one.
@@ -120,13 +113,13 @@ test("@webkit #285 reopen — .scrollback base is fail-open pan-y and the lock g
   // baseline (same verb #245 / #161 use), so no manual cleanup is needed.
   await resetSubject(
     admin.token,
-    VJT_USER,
+    specUser().name,
     { [NETWORK_SLUG]: AUTOJOIN_CHANNELS },
     { [NETWORK_SLUG]: [{ name: CHANNEL, seedCount: SMALL_SEED_COUNT, seedSender: "seed-bot" }] },
   );
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const scrollback = page.getByTestId("scrollback");
   await expect(scrollback).toBeVisible({ timeout: 10_000 });

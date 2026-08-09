@@ -46,14 +46,8 @@ import {
   restoreReadCursorToTail,
   setReadCursorToId,
 } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_SLUG,
-  VJT_USER,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -81,22 +75,16 @@ const countIn = (label: string, what: string): number => {
 test.describe("#1062 — the far-behind gesture is the bar's × and nothing else", () => {
   test.use({ viewport: { width: 800, height: 400 } });
 
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("a far-behind window adds no control to the float stack, and the bar still dismisses", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const admin = getSeededAdmin();
 
     await resetSubject(
       admin.token,
-      VJT_USER,
+      specUser().name,
       { [NETWORK_SLUG]: AUTOJOIN_CHANNELS },
       { [NETWORK_SLUG]: [{ name: CHANNEL, seedCount: LARGE_SEED_COUNT, seedSender: SEED_SENDER }] },
     );

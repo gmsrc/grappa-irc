@@ -33,8 +33,8 @@
 
 import { composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = `ux-6-f-arrow-glyph-${Date.now()}`;
@@ -44,9 +44,9 @@ test.setTimeout(60_000);
 test("@webkit ux-6-f mobile — send button is accessible by name + visible label is SVG glyph + tap submits", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // 1. Accessible-name contract: `getByRole({name: /send message/i})`
   // resolves via the new aria-label, so the bug7 family of specs +
@@ -75,7 +75,7 @@ test("@webkit ux-6-f mobile — send button is accessible by name + visible labe
     token: vjt.token,
     networkSlug: NETWORK_SLUG,
     channel: CHANNEL,
-    sender: NETWORK_NICK,
+    sender: specNick(),
     body: MESSAGE_BODY,
   });
 });

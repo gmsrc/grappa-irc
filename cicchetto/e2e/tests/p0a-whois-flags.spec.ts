@@ -30,8 +30,8 @@
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { awaitMail, extractFromMail, resetMailpit } from "../fixtures/mailpit";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "p0a-target";
 const PEER_PASSWORD = "p0a-test-password-not-secret";
@@ -49,9 +49,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 test("P-0a — /whois shows 'registered' tag for a NickServ-identified peer (307 RPL_WHOISREGNICK delegated)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Wipe any prior confirmation mail so the To-filter is unambiguous.
   await resetMailpit();

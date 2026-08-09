@@ -41,8 +41,8 @@ import {
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SETTINGS_COG_EMOJI = "\u{2699}\u{FE0F}"; // ⚙️ — the emoji-presentation cog (#332 item 3)
@@ -52,8 +52,8 @@ test.setTimeout(60_000);
 
 test.describe("#332/#473 — rail themes launcher: full-width labelled row + deep-link + ⚙️ cog emoji", () => {
   test("@webkit themes launcher deep-links to the themes gallery sub-page", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await loginAs(page, specUser());
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await openMembersDrawer(page);
@@ -76,8 +76,8 @@ test.describe("#332/#473 — rail themes launcher: full-width labelled row + dee
   test("@webkit themes launcher is a full-width row showing both its glyph and 'themes' label", async ({
     page,
   }) => {
-    await loginAs(page, getSeededVjt());
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await loginAs(page, specUser());
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await openMembersDrawer(page);
@@ -122,8 +122,8 @@ test.describe("#332/#473 — rail themes launcher: full-width labelled row + dee
   });
 
   test("@webkit settings cog renders the ⚙️ emoji, not the bare ⚙ glyph", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await loginAs(page, specUser());
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await openMembersDrawer(page);

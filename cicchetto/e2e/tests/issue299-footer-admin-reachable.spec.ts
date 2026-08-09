@@ -24,15 +24,8 @@
 // shared baseline is restored (mirrors #291).
 
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-  VJT_USER,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
@@ -48,7 +41,7 @@ async function findVjtUserId(adminToken: string): Promise<string> {
     throw new Error(`GET /admin/users → ${res.status} ${await res.text()}`);
   }
   const body = (await res.json()) as { users: { id: string; name: string }[] };
-  const vjt = body.users.find((u) => u.name === VJT_USER);
+  const vjt = body.users.find((u) => u.name === specUser().name);
   if (!vjt) {
     throw new Error(`vjt user not found in admin users list: ${JSON.stringify(body)}`);
   }
@@ -81,7 +74,10 @@ async function openRailDrawer(page: import("@playwright/test").Page) {
 test.describe("#299 — admin reachable from the rail actions drawer", () => {
   let vjtUserId: string;
 
-  test.beforeAll(async () => {
+  // beforeEACH, not beforeAll: the subject is per-test (#1078), so its
+  // user id has to be resolved per test — a once-per-file lookup would
+  // hold the id of a user that no longer exists.
+  test.beforeEach(async () => {
     vjtUserId = await findVjtUserId(getSeededAdmin().token);
   });
 
@@ -93,8 +89,8 @@ test.describe("#299 — admin reachable from the rail actions drawer", () => {
     page,
   }) => {
     await setAdminFlag(getSeededAdmin().token, vjtUserId, true);
-    await loginAs(page, getSeededVjt());
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await loginAs(page, specUser());
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     const drawer = await openRailDrawer(page);
@@ -138,8 +134,8 @@ test.describe("#299 — admin reachable from the rail actions drawer", () => {
   test("@webkit themes still reachable via the cog → themes nav row", async ({ page }) => {
     // Themes is not admin-gated — base vjt reaches it. Proves the rail's cog →
     // themes nav row reaches the themes sub-page (no launcher stranded it).
-    await loginAs(page, getSeededVjt());
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await loginAs(page, specUser());
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
 
     await openRailDrawer(page);

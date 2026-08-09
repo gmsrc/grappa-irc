@@ -95,14 +95,8 @@ import {
   restoreReadCursorToTail,
   setReadCursorToId,
 } from "../fixtures/grappaApi";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_SLUG,
-  VJT_USER,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -126,22 +120,16 @@ const OUTCOME_TIMEOUT_MS = 10_000;
 test.describe("#1019 — leaving a far-behind window marks it read", () => {
   test.use({ viewport: { width: 800, height: 400 } });
 
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("selecting another window drops the frozen badge and advances the server cursor", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     const admin = getSeededAdmin();
 
     await resetSubject(
       admin.token,
-      VJT_USER,
+      specUser().name,
       { [NETWORK_SLUG]: AUTOJOIN_CHANNELS },
       { [NETWORK_SLUG]: [{ name: CHANNEL, seedCount: LARGE_SEED_COUNT, seedSender: SEED_SENDER }] },
     );

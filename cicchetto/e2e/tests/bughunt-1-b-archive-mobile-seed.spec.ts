@@ -30,26 +30,26 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
   // Restore the seed-time joined state so later specs that assume
   // #bofh is joined keep working under retries. Mirror of cp15-b4.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test("@webkit BUGHUNT-1 B — mobile rail archive shows the row on expand", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Select the channel + PART it so there's a guaranteed archive
   // entry to populate the group with. selectChannel awaits the WS
   // join confirmation so we know the channel is live before PART.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
 
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
@@ -75,10 +75,10 @@ test("BUGHUNT-1 B — desktop rail archive shows the row on expand", async ({ pa
   // The archive is the SAME grouped modal on desktop, reached via the
   // always-on rail — there is no separate desktop Sidebar `<details>` any
   // more. Pins that the lazy per-group load path works on desktop too.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });
 

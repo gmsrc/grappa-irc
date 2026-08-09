@@ -21,8 +21,8 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded — the e2e
 // tsconfig does not resolve src/ imports; a rename must be mirrored here.
@@ -57,7 +57,7 @@ async function openList(page: Page): Promise<void> {
 }
 
 test("#677 defect 1 — the directory pages past 100 rows on scroll", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Stub BEFORE login: page 1 has 100 rows + a next_cursor; the cursor'd
   // GET returns page 2 (100 more rows, no further cursor).
@@ -94,7 +94,7 @@ test("#677 defect 1 — the directory pages past 100 rows on scroll", async ({ p
 test("#677 defect 2 — reopening the directory is unfiltered with an empty box", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Unfiltered GET → page 1 (no further pages, to keep the DOM small). A
   // GET carrying ?q= → a single matching row named after the query.

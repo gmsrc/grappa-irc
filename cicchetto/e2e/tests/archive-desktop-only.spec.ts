@@ -33,21 +33,21 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
   // Restore the seed-time joined state so later specs keep working.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test("desktop — rail archive button is present across every window kind and opens the grouped modal", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // The archive button is an always-on rail action (NOT selection-gated), so
@@ -68,7 +68,7 @@ test("desktop — rail archive button is present across every window kind and op
   await expect(archiveBtn).toBeVisible();
 
   // Channel selection.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
   await openRailMenu(page);
   await expect(archiveBtn).toBeVisible();
@@ -87,7 +87,7 @@ test("desktop — rail archive button is present across every window kind and op
 });
 
 test("desktop — archive modal rows inherit the canonical monospace style", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Real-browser-only proof: an archived row's entry `<button>` resolves

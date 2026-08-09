@@ -30,8 +30,9 @@
 // a JS-measured max-height and overlays the members list.
 
 import { expectShellReady, openRailMenu } from "../fixtures/cicchettoPage";
-import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import type { SeededUser } from "../fixtures/grappaApi";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // admin-vjt has no network bind — loginAs's `.sidebar-network-section h3`
 // shell-ready selector would time out. Wait on the always-visible
@@ -39,7 +40,7 @@ import { expect, test } from "../fixtures/test";
 // header via `aria-label="open settings"`).
 async function adminFriendlyLogin(
   page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededVjt>,
+  seed: SeededUser,
 ): Promise<void> {
   await page.addInitScript(
     ([token, subjectJson]) => {
@@ -61,7 +62,7 @@ const cases = [
   },
   {
     label: "non-admin user (vjt)",
-    seed: getSeededVjt,
+    seed: specUser,
     expectAdminEntry: false,
   },
 ];

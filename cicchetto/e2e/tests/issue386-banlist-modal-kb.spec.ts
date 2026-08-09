@@ -25,20 +25,20 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 test("#386 — banlist modal: add a ban by nick (mask builder), see it, remove it", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t386m-${Date.now()}`;
   const peer = await IrcPeer.connect({ nick: `bl386-${Date.now() % 1_000_000}` });
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   try {
     // vjt creates the channel → becomes op (@) → +b/-b are allowed.
@@ -46,7 +46,7 @@ test("#386 — banlist modal: add a ban by nick (mask builder), see it, remove i
     await expect(
       page.locator(".sidebar-network-section li").filter({ hasText: channel }),
     ).toHaveCount(1, { timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // Peer joins → grappa sees `:peer!user@host JOIN` and caches its userhost.
     // Waiting for the peer to render in the members pane proves that JOIN was
@@ -84,7 +84,7 @@ test("#386 — banlist modal: add a ban by nick (mask builder), see it, remove i
     const mask = modal.locator(".banlist-modal-mask");
     await expect(mask).toContainText("*!*@", { timeout: 20_000 });
     await expect(modal).toContainText("set by");
-    await expect(modal).toContainText(NETWORK_NICK);
+    await expect(modal).toContainText(specNick());
 
     // Remove it in one click → MODE -b → re-query → the row is gone (two more
     // fake-lag-subject upstream frames — same 20s ceiling rationale).
@@ -101,19 +101,19 @@ test("#386 — banlist modal: add a ban by nick (mask builder), see it, remove i
 });
 
 test("#386 — /kb <nick> bans (*!*@host) then kicks — the peer witnesses both", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t386kb-${Date.now()}`;
   const peer = await IrcPeer.connect({ nick: `kb386-${Date.now() % 1_000_000}` });
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   try {
     await composeSend(page, `/join ${channel}`);
     await expect(
       page.locator(".sidebar-network-section li").filter({ hasText: channel }),
     ).toHaveCount(1, { timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     await peer.join(channel);
     await expect(page.locator(".members-pane .member-name", { hasText: peer.nick })).toBeVisible({

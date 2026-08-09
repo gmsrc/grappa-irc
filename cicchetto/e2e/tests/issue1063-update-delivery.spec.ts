@@ -35,13 +35,12 @@
 
 import { snapshotBundle, swapServiceWorker } from "../fixtures/bundleSwap";
 import { awaitServiceWorkerActive, loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 test("#1063 — the SPA shell is served with a revalidation policy on the real wire", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
 
   // `page.request` is an APIRequestContext: it bypasses the page AND the
   // service worker, so this reads what the server actually put on the
@@ -72,7 +71,7 @@ test("#1063 — activating a new worker does not reload the window in use", asyn
   // browser can object.
   const snap = await snapshotBundle();
   try {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     await awaitServiceWorkerActive(page);
 
     // Sentinel on the document. If the window is navigated, the document

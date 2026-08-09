@@ -33,8 +33,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Fresh per-run channel so the founder-op + autojoin side-effects don't
 // pollute other specs (mirrors issue16 / cp15-b6). Lowercased — grappa
@@ -47,12 +47,12 @@ const NOTICE_BODY = `ops-only heads up ${SUFFIX}`;
 test(`#218 issue218 — a NOTICE to a STATUSMSG target (@#chan) lands in the channel window, not the network tab`, async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready and to
   // mount the compose box before issuing the /join (mirrors issue240 boot
   // order — after login cic lands on Home, which renders no ComposeBox).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
@@ -65,11 +65,11 @@ test(`#218 issue218 — a NOTICE to a STATUSMSG target (@#chan) lands in the cha
     // `ownNick` gates selection on vjt's own self-JOIN line landing.
     await composeSend(page, `/join ${CHANNEL}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible({ timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Op vjt-grappa so bahamut delivers the ops-only `@#chan` notice to it —
     // STATUSMSG `@` reaches only members at op status.
-    await peer.mode(CHANNEL, "+o", NETWORK_NICK);
+    await peer.mode(CHANNEL, "+o", specNick());
 
     // The peer (an op) emits the ops-only notice at the STATUSMSG target.
     peer.notice(`@${CHANNEL}`, NOTICE_BODY);

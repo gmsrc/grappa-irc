@@ -25,8 +25,8 @@
 
 import { composeTextarea, loginAs } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const SERVER_CHANNEL = "$server";
 
@@ -72,7 +72,7 @@ async function assertMotdPersisted(token: string): Promise<void> {
 test("M12 — MOTD persists into $server channel + cicchetto Server window renders with compose box", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Server-side first door: at least one :notice row exists for the
   // synthetic $server channel, sent by one of the testnet's leaves.

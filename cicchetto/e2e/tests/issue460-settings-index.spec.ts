@@ -22,8 +22,8 @@
 // parameterize here.
 
 import { composeSend, loginAs, openSettingsDrawer, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -39,7 +39,7 @@ async function openSettings(page: import("@playwright/test").Page): Promise<void
 test("#460 — settings main page renders as an index of nav rows, each with a visible subtitle", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await openSettings(page);
 
   // The always-present index rows render with their muted subtitle. Real CSS
@@ -65,7 +65,7 @@ test("#460 — settings main page renders as an index of nav rows, each with a v
 test("#460 — the display row opens the display sub-page in place; back returns to the index", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await openSettings(page);
 
   await page.getByTestId("display-settings-entry").click();
@@ -86,7 +86,7 @@ test("#460 — the display row opens the display sub-page in place; back returns
 test("#460 — the notifications row opens the push sub-page; the general row opens upload retention", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   await openSettings(page);
 
   // push sub-page carries the notifications surface (moved VERBATIM).
@@ -110,8 +110,8 @@ test("#460 — the notifications row opens the push sub-page; the general row op
 test("#460 — deep-link survives the restructure: bare /notify lands on the watch-lists sub-page, not the index", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await loginAs(page, specUser());
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // The requestOpenSettings deep-link path is untouched by #460; it must still
   // open the drawer DIRECTLY on a sub-page, bypassing the index.

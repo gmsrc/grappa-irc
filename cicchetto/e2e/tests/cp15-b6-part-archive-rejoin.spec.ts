@@ -39,8 +39,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -48,16 +48,16 @@ test.afterEach(async () => {
   // Defensive restore — if the re-join assertion failed, #bofh would
   // be left parted and subsequent specs that assume the seed state
   // (M1, BUG7) would fail.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
 });
 
 test("CP15 B6 — PART → archive → re-join: row moves from active to archive and back; archive list dedup holds", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(1);
 
   // PART via REST. server emits :parted → cic drops the channel from
@@ -98,7 +98,7 @@ test("CP15 B6 — PART → archive → re-join: row moves from active to archive
   // joined branch with vjt-grappa as @ founder. Asserted BEFORE re-opening
   // the modal so its backdrop doesn't cover the rail's members pane.
   const membersPane = page.locator(".members-pane");
-  await expect(membersPane.locator("li", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(membersPane.locator("li", { hasText: specNick() })).toBeVisible({
     timeout: 5_000,
   });
 

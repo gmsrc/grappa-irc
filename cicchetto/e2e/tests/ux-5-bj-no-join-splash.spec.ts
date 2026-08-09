@@ -21,21 +21,21 @@
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#ux-5-bj-${crypto.randomUUID().slice(0, 8)}`;
 
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await partChannel(vjt.token, NETWORK_SLUG, NEW_CHANNEL).catch(() => {});
 });
 
 test("ux-5-bj — joined channel does NOT render the join-splash row", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // MembersPane has had time to mount — JOIN settled. If the banner
   // ever returns, this is the canonical surface where it would.
@@ -46,9 +46,9 @@ test("ux-5-bj — joined channel does NOT render the join-splash row", async ({ 
 test("ux-5-bj — /join'ing a fresh channel does NOT render the splash + auto-focus still works", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, `/join ${NEW_CHANNEL}`);
   await expect(sidebarWindow(page, NETWORK_SLUG, NEW_CHANNEL)).toHaveCount(1, { timeout: 5_000 });

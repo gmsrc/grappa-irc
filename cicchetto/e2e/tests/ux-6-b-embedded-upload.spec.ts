@@ -35,8 +35,8 @@
 
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 import { EMBEDDED_MODAL_HEADING, pickFile, uploadViaPicker } from "../fixtures/uploadJourney";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -44,9 +44,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 test("UX-6-B — picker → privacy modal (embedded) → upload → 📸 link → GET serves bytes", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Picker → privacy modal (embedded host is the server-side default,
   // heading per embeddedHost.displayName) → Continue → POST 201 —
@@ -106,9 +106,9 @@ test("UX-6-B — privacy modal Cancel does NOT trigger upload (folded from i2 20
     }
   });
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const modal = await pickFile(
     page,

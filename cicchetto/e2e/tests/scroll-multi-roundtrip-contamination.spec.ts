@@ -38,8 +38,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const REST_PAGE_SIZE = 50;
@@ -81,7 +81,7 @@ async function scrollScrollbackTo(page: Page, scrollTop: number): Promise<void> 
 // poison the "land at bottom" contract. Same guard the
 // marker-target-window-regression spec uses.
 test.beforeEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
@@ -91,12 +91,12 @@ test.describe("scroll-multi-roundtrip — N back-and-forths preserve destination
   test("channel→empty-query→channel-back repeated 5× lands at bottom every return", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Step 1 — focus the seeded channel and confirm overflow.
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);

@@ -26,8 +26,8 @@
 
 import { expectShellReady, openAdminConsole, openSettingsDrawer } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 type Seed = ReturnType<typeof getSeededAdmin>;
 
@@ -89,7 +89,7 @@ test("#252 admin curates a vhost; a user customizes it via the sub-page and it p
   page,
 }) => {
   const admin = getSeededAdmin();
-  const user = getSeededVjt();
+  const user = specUser();
   const candidate = await firstHostCandidate(admin.token);
   let vhostId: number | null = null;
 

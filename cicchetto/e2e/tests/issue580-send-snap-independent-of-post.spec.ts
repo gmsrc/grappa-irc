@@ -58,9 +58,9 @@ import {
   selectChannel,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -95,7 +95,7 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
 // Test-only force endpoint (ReadCursor.force_set/4) — the production endpoint
 // is advance-only (#233), so a backward mid-page seed must go through force.
 async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
 }
 
@@ -141,7 +141,7 @@ async function installFailingSendPost(page: Page, hold: boolean): Promise<void> 
 // ABOVE the fold, so distance-to-tail starts above threshold (mirror of
 // issue168) and a later "we are at the bottom" assert means something.
 async function arriveParkedOnMarker(page: Page, channel: string): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const page0 = await fetchScrollbackPage(vjt.token, channel);
   expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
   const cursorRow = page0[25];
@@ -149,7 +149,7 @@ async function arriveParkedOnMarker(page: Page, channel: string): Promise<void> 
   await seedCursor(channel, cursorRow.id);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
   await waitForScrollbackRefreshed(page, NETWORK_SLUG, channel);
 
   await expect
@@ -174,15 +174,6 @@ async function sendAndAwaitEcho(page: Page, marker: string): Promise<Locator> {
 
 test.describe("issue #580 — own send snaps to the bottom independent of the POST", () => {
   test.use({ viewport: { width: 800, height: 300 } });
-
-  // The mid-page cursor persists on the shared seeded vjt across spec
-  // boundaries (last-write-wins). Restore to the tail so downstream #bofh
-  // specs inherit a fully-read channel (mirror of issue168).
-  test.afterAll(async () => {
-    const vjt = getSeededVjt();
-    if (!CHANNEL) return;
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
 
   test("send whose POST fails still snaps to the bottom (case 1)", async ({ page }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");

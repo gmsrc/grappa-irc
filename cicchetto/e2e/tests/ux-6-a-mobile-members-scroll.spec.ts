@@ -39,8 +39,8 @@
 // subject-shape-agnostic CSS contract — registered vjt suffices.
 
 import { closeMembersDrawer, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -58,12 +58,12 @@ async function computedTouchAction(page: import("@playwright/test").Page, select
 test("@webkit ux-6-a — mobile members pane (the actual scroller) asserts touch-action: pan-y + overscroll-behavior: contain", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Open the members drawer from a channel window (mobile path: the
   // hamburger trio lives in the topic bar on `.shell-mobile`).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
 
@@ -83,7 +83,7 @@ test("@webkit ux-6-a — mobile members pane (the actual scroller) asserts touch
 test("@webkit ux-6-a — opening members drawer adds html.overlay-open; closing removes it", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Baseline: no overlay open → no class on <html>.
@@ -92,7 +92,7 @@ test("@webkit ux-6-a — opening members drawer adds html.overlay-open; closing 
   expect(await hasOverlayClass()).toBe(false);
 
   // Open members drawer → class lands.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
   await expect.poll(hasOverlayClass).toBe(true);
@@ -108,7 +108,7 @@ test("@webkit ux-6-a — opening members drawer adds html.overlay-open; closing 
 test("@webkit ux-6-a — html.overlay-open suspends root touch-action so gesture-escalation can't reach installScrollPin", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // UX-6 bucket A v3 (2026-05-20) — the lock chain is `html + body +
@@ -151,7 +151,7 @@ test("@webkit ux-6-a — html.overlay-open suspends root touch-action so gesture
 test("@webkit ux-6-a v2 — descendants of .members-pane share the scroller's touch-action: pan-y (universal-selector carve-out)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Repro of the keyboard-up scroll-leak: when the operator drags
@@ -168,7 +168,7 @@ test("@webkit ux-6-a v2 — descendants of .members-pane share the scroller's to
   //
   // This assertion pins the contract on the deepest interactive
   // descendant — `.member-name` inside an `<li>` inside the `<ul>`.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
   // Wait for at least one member row to render.
@@ -192,7 +192,7 @@ test("@webkit ux-6-a v2 — descendants of .members-pane share the scroller's to
 test("@webkit ux-6-a v2 — members-pane nick-text renders with no inline color (sigil keeps mode color)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // vjt 2026-05-20: per-nick hash color on every members-pane row
@@ -203,7 +203,7 @@ test("@webkit ux-6-a v2 — members-pane nick-text renders with no inline color 
   // inline `style` color (the `.nick-prefix-{op|halfop|voiced}`
   // classes on the sigil still apply their dedicated color via
   // CSS class, unaffected).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
   await expect(
@@ -224,7 +224,7 @@ test("@webkit ux-6-a v2 — members-pane nick-text renders with no inline color 
 test("@webkit ux-6-a v2 — .member-name:hover underline is gated on (hover: hover) — no spurious underline on touch-only viewports", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Mobile Safari synthesizes :hover on tap-release that PERSISTS.
@@ -241,7 +241,7 @@ test("@webkit ux-6-a v2 — .member-name:hover underline is gated on (hover: hov
   // apply. We can't synthesize a hover via Playwright (would
   // bypass the media query); the deterministic guard is "the rule
   // is gated correctly so the media query controls it."
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
   await expect(

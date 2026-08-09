@@ -27,8 +27,8 @@
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const NEW_CHANNEL = `#i1047-${crypto.randomUUID().slice(0, 8)}`;
@@ -54,7 +54,7 @@ test.afterEach(async () => {
     await peer.disconnect("e2e cleanup").catch(() => {});
     peer = null;
   }
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await clearAliases(vjt.token);
   await partChannel(vjt.token, NETWORK_SLUG, NEW_CHANNEL).catch(() => {});
 });
@@ -62,10 +62,10 @@ test.afterEach(async () => {
 test("#1047 — `alias k kick $1 $2-` kicks with the WHOLE reason, upstream-witnessed", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await clearAliases(vjt.token);
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // vjt founds the channel → bahamut grants @ (needed to KICK).
   await composeSend(page, `/join ${NEW_CHANNEL}`);
@@ -76,7 +76,7 @@ test("#1047 — `alias k kick $1 $2-` kicks with the WHOLE reason, upstream-witn
   await expect(
     page
       .locator('[data-testid="scrollback-line"][data-kind="join"]')
-      .filter({ hasText: NETWORK_NICK })
+      .filter({ hasText: specNick() })
       .filter({ hasText: NEW_CHANNEL })
       .first(),
   ).toBeVisible({ timeout: 15_000 });

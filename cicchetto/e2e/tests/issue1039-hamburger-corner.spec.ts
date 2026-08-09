@@ -44,8 +44,8 @@ import {
   waitForQueryWindowReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique: a literal nick / channel collides with itself upstream on
 // rapid reruns (--repeat-each), the rule every peer-driven spec here follows.
@@ -76,7 +76,7 @@ test.setTimeout(120_000);
 test("@webkit #1039 — the ☰ occupies the same rectangle on a channel and on a query window", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const marker = `t1039-${RUN}`;
   // Long enough to wrap several times in the narrow mobile strip; under
   // bahamut's TOPICLEN so the peer's exact-echo await matches (as #262).
@@ -86,7 +86,7 @@ test("@webkit #1039 — the ☰ occupies the same rectangle on a channel and on 
     `anchor is put under load instead of being measured only in the easy case`;
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // PRECONDITION — we are on the CHANNEL branch, so the ☰ we measure is the
   // TopicBar's. Without this the whole test could compare the float to itself.
@@ -128,7 +128,7 @@ test("@webkit #1039 — the ☰ occupies the same rectangle on a channel and on 
     await peer.topic(WRAP_CHANNEL, longTopic);
     await composeSend(page, `/join ${WRAP_CHANNEL}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, WRAP_CHANNEL)).toBeVisible({ timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, WRAP_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, WRAP_CHANNEL, { ownNick: specNick() });
     // Anti-false-green: the long topic is RENDERED before anything is measured.
     await expect(page.locator(".topic-bar-topic")).toContainText(marker, { timeout: 15_000 });
 

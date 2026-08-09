@@ -41,8 +41,8 @@ import {
   setReadCursorToId,
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i576-peer";
@@ -57,7 +57,7 @@ const OWN_B = "#576: my own line B — read by definition, must not badge";
 const REPLY = "#576: peer reply after my lines — this one DOES badge";
 
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Restore the DM cursor to the tail so the own/peer rows this spec leaves
   // in the shared backend don't poison a later spec (or a --repeat-each
   // rerun) via a stale backward cursor. Idempotent + guarded.
@@ -65,12 +65,12 @@ test.afterEach(async () => {
 });
 
 test("#576 — own content lines don't badge; a later peer line does", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Channel-first focus drives the WS-ready sync the own-nick DM-listener
   // subscribe boots off (mirrors #532 B / ux-6-k / M4).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
@@ -79,7 +79,7 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
     // Peer opens the DM. Focus it so it renders (the send-time advance's
     // anti-poison gate #50 needs a non-empty pane), and read it — the
     // cursor baseline will be restored to exactly this line below.
-    peer.privmsg(NETWORK_NICK, OPENER);
+    peer.privmsg(specNick(), OPENER);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
@@ -101,7 +101,7 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
         token: vjt.token,
         networkSlug: NETWORK_SLUG,
         channel: peer.nick,
-        sender: NETWORK_NICK,
+        sender: specNick(),
         body,
       });
       await expect(scrollbackLine(page, "privmsg", body).last()).toBeVisible({ timeout: 5_000 });
@@ -134,7 +134,7 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
     // A PEER line after the own ones DOES count — proving the badge
     // mechanism is live (the 0 above is the own-exclusion, not a dead
     // badge). Exactly one unread peer line ⟹ "1".
-    peer.privmsg(NETWORK_NICK, REPLY);
+    peer.privmsg(specNick(), REPLY);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,

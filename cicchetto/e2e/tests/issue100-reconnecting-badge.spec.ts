@@ -27,8 +27,8 @@
 // session.
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PARK_REASON = "testing reconnect badge #100";
@@ -42,7 +42,7 @@ test.afterEach(async () => {
   // Best-effort reconnect + poll #bofh back to joined so a mid-run
   // failure doesn't leave the network parked for the next spec (same
   // rationale as cp15-b6-parked-disconnect-reconnect).
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const { patchNetworkConnectionState } = await import("../fixtures/grappaApi");
   await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
     connection_state: "connected",
@@ -65,10 +65,10 @@ test.afterEach(async () => {
 test("#100 — reconnecting badge shows while a parked network reconnects, then clears on connect", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
   const channelRow = sidebarWindow(page, NETWORK_SLUG, SEED_CHANNEL);
   await expect(channelRow).toHaveCount(1);
 

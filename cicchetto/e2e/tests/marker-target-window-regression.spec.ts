@@ -32,8 +32,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "marker-target-buddy";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -55,14 +55,14 @@ const replyBody = (tag: string): string => `marker-target T${tag} reply ${RUN_ID
 // the bottom and T2's `dist <= 50` fails. Restore at start of each
 // test so the spec is robust against intervening row arrivals.
 test.beforeEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 });
 
 test("focused-window send+reply does NOT spawn unread marker", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const own = ownBody("1");
   const reply = replyBody("1");
@@ -88,7 +88,7 @@ test("focused-window send+reply does NOT spawn unread marker", async ({ page }) 
     // socket and never render.
     await waitForDmListenerReady(page, NETWORK_SLUG);
     // Peer replies on the same DM topic.
-    peer.privmsg(NETWORK_NICK, reply);
+    peer.privmsg(specNick(), reply);
     // Wait for the reply to land.
     await expect(page.locator('[data-testid="scrollback-line"]', { hasText: reply })).toBeVisible({
       timeout: 5_000,
@@ -102,9 +102,9 @@ test("focused-window send+reply does NOT spawn unread marker", async ({ page }) 
 });
 
 test("switching to tall window after focused send scrolls target to bottom", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const own = ownBody("2");
   const reply = replyBody("2");
@@ -121,7 +121,7 @@ test("switching to tall window after focused send scrolls target to bottom", asy
       timeout: 5_000,
     });
     await waitForDmListenerReady(page, NETWORK_SLUG);
-    peer.privmsg(NETWORK_NICK, reply);
+    peer.privmsg(specNick(), reply);
     await expect(page.locator('[data-testid="scrollback-line"]', { hasText: reply })).toBeVisible({
       timeout: 5_000,
     });

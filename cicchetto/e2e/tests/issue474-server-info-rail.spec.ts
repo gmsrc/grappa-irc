@@ -28,8 +28,8 @@
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { expectRailFieldsStacked } from "../fixtures/railFieldGeometry";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SERVER_WINDOW_LABEL = "Server";
 
@@ -37,7 +37,7 @@ test.describe("#474 server-info rail card", () => {
   test("server window rail shows slug, nick, state, connected-since + dialled server / identified", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
 
     // Precondition: the server window entry exists, then focus it.
@@ -54,7 +54,7 @@ test.describe("#474 server-info rail card", () => {
 
     // Facts from the live-hydrated Network store, scoped to the card so a
     // stray match elsewhere in the shell can't false-green this.
-    await expect(card).toContainText(NETWORK_NICK);
+    await expect(card).toContainText(specNick());
     // The DB-canonical connection state — the seeded network is live
     // (cp13 S8 drives /away over it), so it reads "connected".
     await expect(card).toContainText("connected");

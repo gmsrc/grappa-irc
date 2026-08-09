@@ -38,15 +38,8 @@
 // references elsewhere don't shift.
 
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-  VJT_USER,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -61,7 +54,7 @@ async function findVjtUserId(adminToken: string): Promise<string> {
     throw new Error(`GET /admin/users → ${res.status} ${await res.text()}`);
   }
   const body = (await res.json()) as { users: { id: string; name: string }[] };
-  const vjt = body.users.find((u) => u.name === VJT_USER);
+  const vjt = body.users.find((u) => u.name === specUser().name);
   if (!vjt) {
     throw new Error(`vjt user not found in admin users list: ${JSON.stringify(body)}`);
   }
@@ -103,13 +96,13 @@ async function promoteVjtToAdmin(): Promise<{ revert: () => Promise<void> }> {
 
 test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () => {
   test("(a) html.is-ios class lands on iPhone UA after boot", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     const isIos = await page.evaluate(() => document.documentElement.classList.contains("is-ios"));
     expect(isIos).toBe(true);
   });
 
   test("(b) --vh CSS var is written from visualViewport.height in px", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     const vhVar = await page.evaluate(() =>
       document.documentElement.style.getPropertyValue("--vh"),
     );
@@ -120,7 +113,7 @@ test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () =>
   });
 
   test("(c) --viewport-height legacy CSS var writes from same source", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     const vpHeightVar = await page.evaluate(() =>
       document.documentElement.style.getPropertyValue("--viewport-height"),
     );
@@ -130,7 +123,7 @@ test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () =>
   });
 
   test("(e) smart-pin: programmatic window scroll snaps back to 0", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     const result = await page.evaluate(async () => {
       const before = window.scrollY;
       window.scrollTo(0, 50);
@@ -145,7 +138,7 @@ test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () =>
   test("(f) Admin → Debug tab renders diag panel + DiagFloat toggle", async ({ page }) => {
     const adminCtx = await promoteVjtToAdmin();
     try {
-      await loginAs(page, getSeededVjt());
+      await loginAs(page, specUser());
       // GREEN-CI batch 2 — the admin door is the rail launcher
       // (`mobile-panel-admin`), NOT the desktop shell-chrome cog. Mirrors
       // ux-6-c-mobile-admin-launcher.spec.ts: select channel → open members
@@ -153,7 +146,7 @@ test.describe("UX-6 D cluster close — iOS PWA keyboard pattern @webkit", () =>
       // settings drawer, where the admin entry sat outside the viewport on a
       // full-height bottom sheet and the click never landed — #986 deleted
       // that entry outright, so the rail is now the only door anyway.
-      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
       await page.getByLabel(/open members sidebar/i).tap();
       const drawer = page.locator(".shell-members.open");
       await expect(drawer).toBeVisible({ timeout: 5_000 });

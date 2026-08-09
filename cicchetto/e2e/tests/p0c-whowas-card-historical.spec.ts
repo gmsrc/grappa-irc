@@ -19,8 +19,8 @@
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "p0c-whowas-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -28,9 +28,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 test("P-0c — /whowas after peer disconnect surfaces WhowasCard with historical fields", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Peer connects, then disconnects — leaving an entry in WHOWAS history.
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
@@ -60,9 +60,9 @@ test("P-0c — /whowas after peer disconnect surfaces WhowasCard with historical
 test("P-0c — /whowas against unknown nick surfaces 'no history' (406 ERR_WASNOSUCHNICK)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Random nick that has never connected — Bahamut replies with 406.
   const ghost = `ghost-${Date.now().toString(36)}`;

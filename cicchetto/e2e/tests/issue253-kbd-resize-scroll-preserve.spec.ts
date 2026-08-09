@@ -29,8 +29,8 @@
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Mirror of ScrollbackPane.SCROLL_BOTTOM_THRESHOLD_PX (not exported) — the
@@ -87,7 +87,7 @@ test.describe("#253 — keyboard/viewport resize must not yank a scrolled-up rea
   // cold-mount marker-jump → scroll flake. afterEach, NOT afterAll (under
   // --repeat-each afterAll fires far too late). feedback_cascade_poisoner_pattern.
   test.afterEach(async () => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   });
 
@@ -95,9 +95,9 @@ test.describe("#253 — keyboard/viewport resize must not yank a scrolled-up rea
     page,
   }) => {
     test.slow();
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     const sc = page.getByTestId("scrollback");
 
@@ -173,9 +173,9 @@ test.describe("#253 — keyboard/viewport resize must not yank a scrolled-up rea
     page,
   }) => {
     test.slow();
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     const sc = page.getByTestId("scrollback");
 

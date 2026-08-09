@@ -32,8 +32,8 @@
 // subject-shaped branch. The registered seed suffices.
 
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -109,9 +109,9 @@ test.setTimeout(90_000);
 test("@webkit #1050 — the /list window drops the floating ☰, and its ✕ actually closes the directory", async ({
   page,
 }, testInfo) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // Reach the directory the way a phone does: the rail's rooms button. This
   // also proves the rail is still reachable from the window we START on — the

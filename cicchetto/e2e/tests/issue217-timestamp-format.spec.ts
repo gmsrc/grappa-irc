@@ -13,8 +13,8 @@ import {
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -30,9 +30,9 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
   page,
 }) => {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // At least one message row is present (seeded #bofh).
   await expect.poll(async () => await scrollbackLines(page).count()).toBeGreaterThan(0);
@@ -59,7 +59,7 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
 
   // Persistence: a full reload restores the stored preference (no-seconds).
   await page.reload();
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect.poll(async () => await scrollbackLines(page).count()).toBeGreaterThan(0);
   await expect(await firstTimeCell(page)).toHaveText(HM_RE);
   // And the drawer reflects the persisted choice.

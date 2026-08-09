@@ -49,8 +49,8 @@ import {
   openSettingsMobile,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -67,7 +67,7 @@ async function computedTouchAction(page: import("@playwright/test").Page, select
 test("@webkit ux-5-bo — settings drawer asserts touch-action: pan-y + overscroll-behavior: contain", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // #71 INC-2 — on mobile home the settings cog lives in the rail's
@@ -92,7 +92,7 @@ test("@webkit ux-5-bo — settings drawer asserts touch-action: pan-y + overscro
 test("@webkit ux-5-bo — settings drawer has an internal scroll authority (overflow-y: auto precondition)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Same #71 INC-2 rail-drawer path as above.
@@ -120,7 +120,7 @@ test("@webkit ux-5-bo — settings drawer has an internal scroll authority (over
 test("@webkit ux-5-bo — archive modal asserts touch-action: pan-y + overscroll-behavior: contain", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Archive button is only rendered when a channel/query window is
@@ -135,7 +135,7 @@ test("@webkit ux-5-bo — archive modal asserts touch-action: pan-y + overscroll
   // Mutex side-effect: tapping the archive launcher closes the
   // drawer, which is precisely the post-tap state the test cares
   // about (we want the archive modal open, not the drawer).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
   // #500 — the archive button lives behind the RailActions launcher menu (in the
@@ -154,7 +154,7 @@ test("@webkit ux-5-bo — archive modal asserts touch-action: pan-y + overscroll
 test("@webkit ux-5-bo — home pane asserts touch-action: pan-y (same .shell-mobile trap)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Home pane is the default mount on login (no channel selected) —

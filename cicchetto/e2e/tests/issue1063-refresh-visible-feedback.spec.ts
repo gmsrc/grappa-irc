@@ -39,8 +39,7 @@ import {
   awaitServiceWorkerActive,
   loginAs,
 } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 // #119 — the refresh banner is a slot in the stacked error region.
 const BANNER_SELECTOR = '.error-banner[data-source="bundle-refresh"]';
@@ -74,7 +73,7 @@ async function bootHashOf(page: Page): Promise<string> {
 
 /** Log in, get past the SW's own reload, and let the real `bundle_hash` push land. */
 async function readyOnBundleA(page: Page): Promise<string> {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
   // Both are load-bearing and both are documented at their definition: the SW
   // does one reload of its own after claiming, and the server pushes the REAL
   // hash on every user-topic join, which would overwrite a synthetic set after

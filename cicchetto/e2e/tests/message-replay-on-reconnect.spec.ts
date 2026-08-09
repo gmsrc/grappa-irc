@@ -27,8 +27,8 @@
 
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "replay-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -38,13 +38,13 @@ const MSG_BEFORE_GAP = "msg-before-ws-gap";
 test("message replay on reconnect — peer PRIVMSG during WS gap appears after re-join without refresh", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Focus the channel so its scrollback pane renders + its per-channel
   // topic is subscribed. The reconnect-backfill cursor (lastSeenIdByKey)
   // requires at least one rendered row to know where to resume from.
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {

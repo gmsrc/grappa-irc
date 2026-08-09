@@ -2,7 +2,7 @@
 // reconnect.
 //
 // A peer OPERs up against the testnet O:line (testoper/testoperpass) and
-// KILLs the seeded vjt session's upstream nick (NETWORK_NICK). The proof
+// KILLs the seeded vjt session's upstream nick (specNick()). The proof
 // is server-side via REST: the credential transitions to connection_state
 // "failed" with a reason starting "killed:", and STAYS failed — no
 // Backoff auto-reconnect flip back to "connected". This also proves the
@@ -20,8 +20,8 @@
 
 import { GRAPPA_BASE_URL, patchNetworkConnectionState } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const OPER_NAME = "testoper";
 const OPER_PASS = "testoperpass";
@@ -48,7 +48,7 @@ async function networkState(token: string): Promise<{ state: string; reason: str
 }
 
 test.afterEach(async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
     connection_state: "connected",
   }).catch(() => {});
@@ -67,7 +67,7 @@ test.afterEach(async () => {
 });
 
 test("#554 — operator KILL marks the network :failed with a killed reason and does not reconnect", async () => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Precondition: the seeded session is connected.
   await expect
@@ -77,7 +77,7 @@ test("#554 — operator KILL marks the network :failed with a killed reason and 
   const peer = await IrcPeer.connect({ nick: "kill554op" });
   try {
     await peer.oper(OPER_NAME, OPER_PASS);
-    peer.kill(NETWORK_NICK, "operator kill #554");
+    peer.kill(specNick(), "operator kill #554");
 
     // The credential goes :failed with a "killed:" reason.
     await expect

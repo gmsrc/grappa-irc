@@ -38,8 +38,8 @@ import {
   scrollbackLine,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Date.now() suffix (house pattern): the e2e sqlite scrollback persists
@@ -48,9 +48,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = `nick-selection target ${Date.now()}`;
 
 test("desktop — a selection drag across a message includes the author nick", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, MESSAGE_BODY);
   const row = scrollbackLine(page, "privmsg", MESSAGE_BODY);
@@ -58,10 +58,10 @@ test("desktop — a selection drag across a message includes the author nick", a
 
   // Sanity: the row really carries the author nick in its sender button,
   // so the assertion below is meaningful (not a vacuous "nick absent
-  // because nick never rendered"). NETWORK_NICK is vjt's own nick — the
+  // because nick never rendered"). specNick() is vjt's own nick — the
   // sender of the message we just sent.
   const sender = row.locator(".scrollback-sender");
-  await expect(sender).toContainText(NETWORK_NICK);
+  await expect(sender).toContainText(specNick());
 
   // Compose focused is the bug's precondition on the sibling spec; keep
   // it here too so we're testing the same surface.
@@ -85,5 +85,5 @@ test("desktop — a selection drag across a message includes the author nick", a
   expect(selected).toContain("nick-selection target");
   // #179: the author nick must ALSO be captured. This is the assertion
   // that fails on unfixed code.
-  expect(selected).toContain(NETWORK_NICK);
+  expect(selected).toContain(specNick());
 });

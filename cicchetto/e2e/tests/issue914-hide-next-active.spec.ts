@@ -31,8 +31,8 @@ import {
   waitForDmListenerReady,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const DM_LINE = "914 direct message";
@@ -49,20 +49,20 @@ async function seedOneUnreadDm(
   peerNick: string,
 ): Promise<IrcPeer> {
   if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
   // The own-nick DM topic must be subscribed before the peer DMs, or the
   // inbound broadcast fastlanes to zero subscribers (harness gotcha).
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   const peer = await IrcPeer.connect({ nick: peerNick });
-  peer.privmsg(NETWORK_NICK, DM_LINE);
+  peer.privmsg(specNick(), DM_LINE);
   await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
   return peer;
 }
 
 test("desktop: the toggle hides the button and Alt+A STILL jumps", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = "act914-d";
   await loginAs(page, vjt);
 
@@ -95,7 +95,7 @@ test("desktop: the toggle hides the button and Alt+A STILL jumps", async ({ page
 });
 
 test("@webkit mobile: the same toggle hides the overlay placement", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = "act914-m";
   await loginAs(page, vjt);
 

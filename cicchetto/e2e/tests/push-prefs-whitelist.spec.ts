@@ -37,8 +37,8 @@ import {
   setPageVisibility,
   stubPushManager,
 } from "../fixtures/push";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b5-prefser";
 const ALLOW_CHANNEL = "#b5-allow";
@@ -49,14 +49,14 @@ test("notification_prefs whitelist: messages in allow-list push, messages elsewh
   page,
   context,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await resetPushCatcher();
   await resetPushSubscriptions(vjt.token);
   await stubPushManager(context, { endpoint: pushCatcherEndpoint(SUB_ID) });
   await context.grantPermissions(["notifications"]);
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   await enablePushFromSettings(page, context, { id: SUB_ID, token: vjt.token });
 
@@ -90,13 +90,13 @@ test("notification_prefs whitelist: messages in allow-list push, messages elsewh
     for (const channel of [ALLOW_CHANNEL, OTHER_CHANNEL]) {
       await page.locator(".compose-box textarea").fill(`/join ${channel}`);
       await page.locator(".compose-box textarea").press("Enter");
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
     }
 
     // Refocus #bofh — keep both target channels unfocused so neither
     // can be mistaken for "user is reading this" (irrelevant server-
     // side, but keeps the spec's semantics clean).
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     // #182 — background the device so the delivery this spec asserts is
     // gated by PREFS, not foreground-suppression. Set hidden before BOTH

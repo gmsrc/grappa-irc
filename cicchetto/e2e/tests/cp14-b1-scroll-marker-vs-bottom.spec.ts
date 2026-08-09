@@ -57,9 +57,9 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -129,7 +129,7 @@ async function fetchScrollbackPage(
 // seed time; the cold-load `/me` envelope picks the value up when
 // `loginAs` triggers cic boot.
 async function seedCursor(page: Page, channel: string, messageId: number): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Delegates to the shared `setReadCursorToId` (test-only force endpoint,
   // `ReadCursor.force_set/4`) so the mid-page seed lands regardless of
   // prior cursor state — the production endpoint is advance-only since
@@ -149,27 +149,8 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
   // "is the marker mid-pane" become unmeasurable.
   test.use({ viewport: { width: 800, height: 300 } });
 
-  // BUGHUNT-3 cascade fix (2026-05-25) — `seedCursor` calls
-  // `ReadCursor.set/4`, which is last-write-wins with direction NOT
-  // enforced (see lib/grappa/read_cursor.ex:113-119). Scenario 2's
-  // mid-pane cursor on `vjt @ bahamut-test/#bofh` persists across spec
-  // boundaries on the shared seeded user. Downstream specs that focus
-  // `#bofh` (marker-target-window-regression T2, r6-own-action,
-  // cursor-forward-only, ux-5-bk, ux-6-k, p0e-invite-ack) assume a
-  // "fully-read" cursor at the tail — the persisted mid-pane cursor
-  // injects an unread-marker into the pane. Post-#168 the pane still lands
-  // at the tail (the divider is display-only, not a scroll anchor) so the
-  // scroll cascade no longer fires, but the stray divider would still trip
-  // a downstream marker-count assertion — restore to the tail for hygiene.
-  // afterAll restores the cursor to the current tail so the channel
-  // reads as "fully read" for whoever inherits the seeded user next.
-  test.afterAll(async () => {
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("no unreads → scroll lands at bottom, no unread-marker in DOM", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Fetch seeded rows from grappa-test BEFORE we boot the page so we
     // know the server_time of the tail row. Pre-seed cursor at the
@@ -182,7 +163,7 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
     await seedCursor(page, CHANNEL, tail.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Wait for the REST page to land in the DOM. ≥ REST_PAGE_SIZE
     // because the autojoined own-nick JOIN row pushes the count above
@@ -214,7 +195,7 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
   test("unreads exist → marker rendered (frozen), cold-mount jumps to the marker (#168 completion)", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
 
     // Fetch the latest REST page. Set the cursor at the row 25 from
     // the bottom → 25 rows are "unread" → marker injected mid-page.
@@ -230,7 +211,7 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
     await seedCursor(page, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Wait for REST page + marker. Marker injection happens reactively
     // when the page lands and the `rows` createMemo re-evaluates with

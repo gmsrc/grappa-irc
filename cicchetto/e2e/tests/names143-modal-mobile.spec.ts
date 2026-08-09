@@ -32,8 +32,8 @@
 
 import type { Page } from "@playwright/test";
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Stand-in for "the keyboard leaves ~300px of the screen visible". The
@@ -42,9 +42,9 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const FAKE_VISIBLE_PX = 300;
 
 async function openNamesModal(page: Page) {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await composeSend(page, `/names ${CHANNEL}`);
   const modal = page.getByTestId("names-modal");
   await expect(modal).toBeVisible({ timeout: 5_000 });

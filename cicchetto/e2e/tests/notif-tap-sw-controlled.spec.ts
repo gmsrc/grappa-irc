@@ -17,14 +17,14 @@
 
 import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
 import { buildPushDeepLink } from "../fixtures/pushTap";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const DM_PEER = "notif146-swctl";
 
 test.describe("#146 recurrence — SW-controlled deep-link serving", () => {
   test("channel deep-link survives SW-controlled precache serving", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     // loginAs seeds auth + goto("/") + waits for shell ready. The SW
     // registers on window.load during this navigation.
     await loginAs(page, vjt);
@@ -45,7 +45,7 @@ test.describe("#146 recurrence — SW-controlled deep-link serving", () => {
   });
 
   test("DM deep-link survives SW-controlled precache serving", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
     await page.waitForFunction(() => navigator.serviceWorker.controller !== null, null, {
       timeout: 15_000,

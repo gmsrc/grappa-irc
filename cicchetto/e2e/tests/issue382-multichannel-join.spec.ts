@@ -21,11 +21,11 @@
 // the live ircd multi-target JOIN round-trip.
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test("#382 — /join #a,#b joins BOTH channels from one comma-list command", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const stamp = Date.now();
   const chanA = `#t382a-${stamp}`;
   const chanB = `#t382b-${stamp}`;
@@ -33,7 +33,7 @@ test("#382 — /join #a,#b joins BOTH channels from one comma-list command", asy
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready before the
   // /join (mirrors issue240 boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   try {
     // ONE comma-list command → server sends ONE multi-target JOIN line.
@@ -51,8 +51,8 @@ test("#382 — /join #a,#b joins BOTH channels from one comma-list command", asy
     // BOTH are actually JOINED, not greyed/pending: selectChannel with
     // ownNick requires the per-channel self-JOIN line + WS-ready seam, which
     // only a resolved :joined window satisfies.
-    await selectChannel(page, NETWORK_SLUG, chanA, { ownNick: NETWORK_NICK });
-    await selectChannel(page, NETWORK_SLUG, chanB, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, chanA, { ownNick: specNick() });
+    await selectChannel(page, NETWORK_SLUG, chanB, { ownNick: specNick() });
   } finally {
     // Explicit-channel /part parts each regardless of focus (both are fresh
     // per-run channels, so cleanup keeps the shared testnet tidy).

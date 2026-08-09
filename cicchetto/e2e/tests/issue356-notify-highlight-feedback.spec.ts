@@ -28,8 +28,8 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i356-watched";
@@ -46,10 +46,10 @@ const deleteNotifyList = (token: string): Promise<unknown> =>
 test("#356 — with-arg /notify shows a green auto-dismissing notice; a bad command stays sticky", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   try {
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
     // WITH arg → execute AND a green NOTICE (role=status), naming the nick.
     await composeSend(page, `/notify ${PEER_NICK}`);
@@ -80,9 +80,9 @@ test("#356 — with-arg /notify shows a green auto-dismissing notice; a bad comm
 test("#356 — bare /notify and bare /hilight open the watch-lists section; home shows none", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   const subpage = page.getByTestId("watchlists-subpage");
 
@@ -113,9 +113,9 @@ test("#356 — bare /notify and bare /hilight open the watch-lists section; home
 test("#356 — settings keyword list add + × round-trips against real server state", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // Open the section via the settings nav row (proves the row exists too).
   await openSettingsDrawer(page);

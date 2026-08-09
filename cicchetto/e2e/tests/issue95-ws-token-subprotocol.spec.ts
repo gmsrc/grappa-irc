@@ -11,15 +11,15 @@
 // to a transport-auth assertion.
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test("subprotocol path — cic connects with the token OFF the URL, members seed", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Capture the WS handshake the app opens on login. The token must NOT
   // appear in the upgrade URL (it now rides the Sec-WebSocket-Protocol
@@ -27,7 +27,7 @@ test("subprotocol path — cic connects with the token OFF the URL, members seed
   const wsPromise = page.waitForEvent("websocket", { timeout: 15_000 });
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const ws = await wsPromise;
   const url = ws.url();
@@ -43,7 +43,7 @@ test("subprotocol path — cic connects with the token OFF the URL, members seed
   // `.member-name` rows render only inside the `list().length > 0` arm,
   // so the own-nick row present = the subprotocol-authed WS joined and
   // seeded members (mirrors issue16-keyed-join-members-seed.spec).
-  await expect(membersPane.locator(".member-name", { hasText: NETWORK_NICK })).toBeVisible({
+  await expect(membersPane.locator(".member-name", { hasText: specNick() })).toBeVisible({
     timeout: 10_000,
   });
 });
@@ -51,7 +51,7 @@ test("subprotocol path — cic connects with the token OFF the URL, members seed
 test("legacy query-string path — a raw ?token= WS handshake is now rejected (#202 dropped the fallback)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Land on the origin so the in-page WebSocket uses the same https
   // origin + cert as the app (the nginx-test vhost).
   await loginAs(page, vjt);

@@ -30,8 +30,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -44,9 +44,9 @@ const peerNick = (): string => `n546-${crypto.randomUUID().slice(0, 5)}`;
 test("#546 — a peer NOTICE with no open query window opens NO tab and lands in $server", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(composeTextarea(page)).toBeVisible();
 
   const nick = peerNick();
@@ -57,7 +57,7 @@ test("#546 — a peer NOTICE with no open query window opens NO tab and lands in
     // statement about the fixture, not about the fix).
     await expect(sidebarWindow(page, NETWORK_SLUG, nick)).toHaveCount(0);
 
-    peer.notice(NETWORK_NICK, body);
+    peer.notice(specNick(), body);
 
     // BARRIER — server-side proof the notice arrived AND where it was routed.
     // Pre-#546 this timed out: the row went to a query window keyed on `nick`.
@@ -83,9 +83,9 @@ test("#546 — a peer NOTICE with no open query window opens NO tab and lands in
 });
 
 test("#546 — a peer NOTICE lands in the query window when it is already open", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(composeTextarea(page)).toBeVisible();
 
   const nick = peerNick();
@@ -98,7 +98,7 @@ test("#546 — a peer NOTICE lands in the query window when it is already open",
     await composeSend(page, `/query ${nick}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, nick)).toHaveCount(1, { timeout: 10_000 });
 
-    peer.notice(NETWORK_NICK, body);
+    peer.notice(specNick(), body);
 
     // Server-side: the row is keyed on the PEER, not `$server`.
     await assertMessagePersisted({

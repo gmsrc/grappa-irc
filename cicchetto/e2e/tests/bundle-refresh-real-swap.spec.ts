@@ -43,8 +43,7 @@ import {
   awaitServiceWorkerActive,
   loginAs,
 } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 // #119 — bundle-refresh banner folded into the unified stacked error region;
 // renders as a `.error-banner` slot with data-source="bundle-refresh".
@@ -53,7 +52,7 @@ const BANNER_SELECTOR = '.error-banner[data-source="bundle-refresh"]';
 test("UX-6-I.2 — single-press refresh converges to new bundle (real swap)", async ({ page }) => {
   const snap = await snapshotBundle();
   try {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
 
     // SW must install + activate + claim before we assert on banner
     // state — shared gate + rationale in ../fixtures/cicchettoPage.

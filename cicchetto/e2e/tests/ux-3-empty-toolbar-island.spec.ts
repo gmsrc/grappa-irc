@@ -50,8 +50,7 @@
 // runs in UX-Z.
 
 import { loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 type SelectorPadding = {
   selector: string;
@@ -101,7 +100,7 @@ async function findRulePadding(
 test("@webkit UX-3 BIS — .shell.shell-mobile carries safe-area inset; bars do NOT", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // .shell-mobile rule lives inside @media (max-width: 768px) — must

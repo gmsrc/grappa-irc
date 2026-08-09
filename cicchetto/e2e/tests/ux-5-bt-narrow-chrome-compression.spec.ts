@@ -53,8 +53,8 @@ import {
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -63,7 +63,7 @@ test.setTimeout(60_000);
 test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sidebar network-name bold + left-aligned", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Cold-load lands on home. #71 INC-2 removed the desktop .shell-chrome row
@@ -92,7 +92,7 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
 
   // Switch to a joined channel — topic-bar mounts (no chrome row above it on
   // desktop anymore; the freed top is the topic's per INC-2).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toBeVisible();
   await expect(page.locator(".shell-chrome")).toHaveCount(0);
   await expect(page.locator(".topic-bar")).toHaveCount(1);
@@ -124,7 +124,7 @@ test("ux-5-bt desktop — #71 INC-2: NO chrome row; topic-bar + rail cog; sideba
 test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 moved chrome buttons into the RailActions drawer)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Cold-load lands on home — TopicBar absent. The chrome element STAYS on
@@ -140,7 +140,7 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 
 
   // Switch to channel via BottomBar (mobile selectChannel handles the
   // tap path internally).
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // BT compression contract: .shell-chrome row NOT mounted in the
   // mobile-channel branch; .topic-bar IS mounted.
@@ -199,5 +199,5 @@ test("@webkit ux-5-bt mobile — channel: NO standalone .shell-chrome row (#473 
   await expect(drawer).toBeVisible({ timeout: 5_000 });
   const memberNames = drawer.locator(".members-pane .member-name");
   await expect.poll(async () => await memberNames.count()).toBeGreaterThan(0);
-  await expect(drawer).toContainText(NETWORK_NICK);
+  await expect(drawer).toContainText(specNick());
 });

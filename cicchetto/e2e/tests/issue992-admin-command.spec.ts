@@ -43,8 +43,8 @@
 // is unit-tested in cicchetto/src/__tests__/{slashCommands,compose}.test.ts.
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -64,9 +64,9 @@ const BOGUS_SERVER = "no.such.admin.grappa.test";
 test("#992 — /admin renders the four-numeric reply in the modal, 259's contact address included", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, "/admin");
 
@@ -96,9 +96,9 @@ test("#992 — /admin renders the four-numeric reply in the modal, 259's contact
 test("#992 — /admin <unknown-server> surfaces the 402 under the admin source (target reached the wire)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   await composeSend(page, `/admin ${BOGUS_SERVER}`);
 

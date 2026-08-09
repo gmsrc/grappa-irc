@@ -21,8 +21,8 @@
 
 import { loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b4-linker";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -36,9 +36,9 @@ const BARE_DOMAIN_HREF = `https://${BARE_DOMAIN}`;
 test("B4 — peer URL renders as clickable <a>; trailing '.' stays outside the link", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
@@ -67,9 +67,9 @@ test("B4 — peer URL renders as clickable <a>; trailing '.' stays outside the l
 });
 
 test("B4 — balanced parentheses inside URL are preserved in href", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: `${PEER_NICK}-2` });
   try {
@@ -89,9 +89,9 @@ test("B4 — balanced parentheses inside URL are preserved in href", async ({ pa
 test("#212 — bare host.tld/path renders a clickable anchor with an implied https:// href", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: `${PEER_NICK}-212` });
   try {

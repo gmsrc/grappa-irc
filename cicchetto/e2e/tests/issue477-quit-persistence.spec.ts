@@ -45,8 +45,8 @@
 import type { Browser, Page } from "@playwright/test";
 import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
-import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { getSeededAdmin } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 // #986 — the lifecycle verbs left the settings drawer for the rail actions
 // menu. The persistence QUESTION this spec is about (`isPersistentIdentity`,
@@ -95,7 +95,7 @@ async function bootVisitor(
 
 test.describe("issue #477 — quit()/detach route on persistence, not class", () => {
   test("registered USER (persistent) → the rail offers BOTH detach and quit", async ({ page }) => {
-    await loginAs(page, getSeededVjt());
+    await loginAs(page, specUser());
     await openLifecycleMenu(page);
 
     // Persistent identity → isPersistentIdentity true → canDetach() renders

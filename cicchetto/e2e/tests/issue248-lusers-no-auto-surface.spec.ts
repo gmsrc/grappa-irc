@@ -38,8 +38,8 @@
 // a Playwright e2e via scripts/integration.sh.
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PARK_REASON = "testing #248 lusers auto-surface";
@@ -53,7 +53,7 @@ test.afterEach(async () => {
   // Best-effort restore: reconnect + poll #bofh back to joined so a
   // mid-run failure doesn't leave the network parked for the next spec
   // (same discipline as issue100-reconnecting-badge).
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const { patchNetworkConnectionState } = await import("../fixtures/grappaApi");
   await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
     connection_state: "connected",
@@ -75,11 +75,11 @@ test.afterEach(async () => {
 test("#248 — connect-welcome LUSERS does not auto-surface the LusersCard; operator /lusers still does", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   const channelRow = sidebarWindow(page, NETWORK_SLUG, SEED_CHANNEL);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   const lusersCard = page.locator("[data-testid='lusers-card']");
 
@@ -113,7 +113,7 @@ test("#248 — connect-welcome LUSERS does not auto-surface the LusersCard; oper
   // Re-select the rejoined channel so a ScrollbackPane is mounted — the
   // card, had the welcome bundle surfaced, would render in its top-pinned
   // overlay here.
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // THE FIX: the unsolicited connect-welcome LUSERS did NOT surface the
   // card. Pre-#248 the bundle was stored → the card floats over the top

@@ -53,8 +53,8 @@
 // gets the row back to its baseline live state.
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const PARK_REASON = "testing parked state cp19";
@@ -103,7 +103,7 @@ test.afterEach(async () => {
   // SASL → autojoin → JOIN echo → 353/366 NAMES → members seeded.
   // Empirically ~3-5s on a healthy testnet; the 30s ceiling absorbs
   // upstream rate-limit penalties accumulated by prior specs' churn.
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const { patchNetworkConnectionState } = await import("../fixtures/grappaApi");
   await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
     connection_state: "connected",
@@ -126,7 +126,7 @@ test.afterEach(async () => {
           const { members } = (await membersRes.json()) as {
             members: Array<{ nick: string }>;
           };
-          if (members.some((m) => m.nick === NETWORK_NICK)) return;
+          if (members.some((m) => m.nick === specNick())) return;
         }
       }
     }
@@ -137,12 +137,12 @@ test.afterEach(async () => {
 test("CP19 T32 — /disconnect parks network + redirects to Home; Reconnect ungreys + autojoin restores channel", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Establish baseline: focus the seeded autojoin channel, wait for
   // the self-JOIN scrollback line, then verify the row is NOT greyed.
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
   const channelRow = sidebarWindow(page, NETWORK_SLUG, SEED_CHANNEL);
   await expect(channelRow).toHaveCount(1);
   await expect(channelRow.locator(".sidebar-window-greyed")).toHaveCount(0);

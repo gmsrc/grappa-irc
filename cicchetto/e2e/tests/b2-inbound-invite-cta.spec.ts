@@ -38,8 +38,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b2-inviter";
 const TARGET_CHANNEL = "#b2-target";
@@ -47,7 +47,7 @@ const TARGET_CHANNEL = "#b2-target";
 test("B2 — inbound INVITE raises a banner naming the inviter; its [Join] mounts + focuses the channel", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
 
   // Confirm login on a real channel first. The INVITE lands in neither
@@ -55,7 +55,7 @@ test("B2 — inbound INVITE raises a banner naming the inviter; its [Join] mount
   // sidebar (#902 removed the greyed tab) — the banner is the surface, and
   // it is deliberately visible from ANY window, which is why we sit on an
   // unrelated channel for the whole test.
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
@@ -67,7 +67,7 @@ test("B2 — inbound INVITE raises a banner naming the inviter; its [Join] mount
     // Raw INVITE: `INVITE <target_nick> <channel>`. irc-framework doesn't
     // expose a typed invite() helper; raw goes straight to bahamut which
     // relays to the operator's session.
-    peer.rawInvite(NETWORK_NICK, TARGET_CHANNEL);
+    peer.rawInvite(specNick(), TARGET_CHANNEL);
 
     // #902: the invite raises a banner. `inviteBanner` keys on
     // `data-banner-id` (`invite:<slug>:<channel>`), the per-ENTRY identity —

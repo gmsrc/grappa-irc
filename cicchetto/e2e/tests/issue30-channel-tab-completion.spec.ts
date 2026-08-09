@@ -51,13 +51,13 @@ import {
   selectChannel,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 test.setTimeout(90_000);
 
 test("#30 — Tab completes a JOINED channel, and refuses an INVITED one", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   // Per-run identity so a stale row from an earlier run can never satisfy
   // either half, and so two `--repeat-each` workers entering this line in
   // the same millisecond cannot collide — on a shared stack a duplicate
@@ -74,7 +74,7 @@ test("#30 — Tab completes a JOINED channel, and refuses an INVITED one", async
   const invitedChannel = `${invitedPrefix}-sniffo`;
 
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const ta = composeTextarea(page);
   await expect(ta).toBeVisible();
@@ -84,11 +84,11 @@ test("#30 — Tab completes a JOINED channel, and refuses an INVITED one", async
     await composeSend(page, `/join ${joinedChannel}`);
     // Fully JOINED (not the greyed :pending pseudo-row): selectChannel with
     // ownNick requires the self-JOIN line + the WS-ready seam.
-    await selectChannel(page, NETWORK_SLUG, joinedChannel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, joinedChannel, { ownNick: specNick() });
 
     // Type in a DIFFERENT window: the candidate set is network-scoped, not
     // "the channel you are looking at".
-    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     await ta.click();
     await ta.fill(joinedPrefix);
@@ -102,7 +102,7 @@ test("#30 — Tab completes a JOINED channel, and refuses an INVITED one", async
     // the inviter to be in the channel (or be an oper), so the peer joins
     // first or the INVITE relay comes back 442 ERR_NOTONCHANNEL.
     await peer.join(invitedChannel);
-    peer.rawInvite(NETWORK_NICK, invitedChannel);
+    peer.rawInvite(specNick(), invitedChannel);
 
     // THE BARRIER, on the store under test. #902 removed the greyed
     // `:invited` pseudo-row this used to wait on; the invite banner replaced
@@ -134,10 +134,10 @@ test("#30 — Tab completes a JOINED channel, and refuses an INVITED one", async
     // moment by nick-completing in the same textarea on the next keystroke.
     // Without this, the negative half could pass for the wrong reason. It
     // doubles as the regression guard that #30 did not break nicks.
-    const nickPrefix = NETWORK_NICK.slice(0, NETWORK_NICK.length - 2);
+    const nickPrefix = specNick().slice(0, specNick().length - 2);
     await ta.fill(nickPrefix);
     await ta.press("Tab");
-    await expect(ta).toHaveValue(`${NETWORK_NICK}: `, { timeout: 5_000 });
+    await expect(ta).toHaveValue(`${specNick()}: `, { timeout: 5_000 });
   } finally {
     await composeSend(page, `/part ${joinedChannel}`).catch(() => {});
     await peer.disconnect("done").catch(() => {});

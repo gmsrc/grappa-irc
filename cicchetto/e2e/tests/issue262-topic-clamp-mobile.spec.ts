@@ -27,8 +27,8 @@
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Height caps. The clamped strip is 2 lines × line-height 1.5 × 14px =
 // 42px (#344 raised the line-height 1.25 → 1.5; was 35px); the cap leaves
@@ -50,7 +50,7 @@ async function boundingHeight(locator: import("@playwright/test").Locator): Prom
 test("#262/#307 @webkit — a long topic clamps to 2 lines with a native ellipsis (not a bare max-height clip)", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t262-${Date.now()}`;
   const marker = `t262-marker-${Date.now()}`;
   // Deliberately long (but under bahamut's TOPICLEN so the peer's exact-echo
@@ -63,7 +63,7 @@ test("#262/#307 @webkit — a long topic clamps to 2 lines with a native ellipsi
   await loginAs(page, vjt);
   // Focus the autojoin channel first — confirms login + WS-ready before the
   // /join (mirrors #237 / issue216 boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // A peer creates the channel (→ op) and sets the long topic BEFORE vjt
   // joins, so vjt learns it via the join-time 332 → topicByChannel → the
@@ -75,7 +75,7 @@ test("#262/#307 @webkit — a long topic clamps to 2 lines with a native ellipsi
 
     await composeSend(page, `/join ${channel}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, channel)).toBeVisible({ timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // Anti-false-green: prove the long topic is actually RENDERED in the strip
     // before measuring — otherwise a small height would pass vacuously.

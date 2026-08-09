@@ -25,8 +25,8 @@
 
 import { composeSend, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -38,7 +38,7 @@ test("#1088 — /who opens the modal only on the client that issued it", async (
   page,
   browser,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const peerNick = uniqueNick();
 
   // The bystander: a second device of the SAME account, in its own browser
@@ -51,10 +51,10 @@ test("#1088 — /who opens the modal only on the client that issued it", async (
 
   try {
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await loginAs(bystander, vjt);
-    await selectChannel(bystander, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(bystander, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     await peer.join(CHANNEL);
 

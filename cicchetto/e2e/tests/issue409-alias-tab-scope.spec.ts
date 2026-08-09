@@ -19,8 +19,8 @@
 
 import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
-import { getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = "#bofh";
 
@@ -39,14 +39,14 @@ const clearAliases = (token: string): Promise<unknown> =>
 test("#409 item 1 — Tab traverses a non-compose form while compose still nick-completes", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   try {
     await clearAliases(vjt.token);
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect(composeTextarea(page)).toBeVisible();
     // Members present so tab-complete has a nick to complete against.
-    await expect(page.locator(".members-pane li", { hasText: NETWORK_NICK })).toBeVisible({
+    await expect(page.locator(".members-pane li", { hasText: specNick() })).toBeVisible({
       timeout: 10_000,
     });
 
@@ -73,13 +73,13 @@ test("#409 item 1 — Tab traverses a non-compose form while compose still nick-
     const ta = composeTextarea(page);
     // A prefix that uniquely matches the own-nick member. First token on the
     // line → tab-complete appends ": ".
-    const prefix = NETWORK_NICK.slice(0, NETWORK_NICK.length - 2);
+    const prefix = specNick().slice(0, specNick().length - 2);
     await ta.click();
     await ta.fill(prefix);
     await ta.press("Tab");
     // Completed to the full nick — and focus stayed in compose (Tab did NOT
     // traverse away, because inside compose the cycle owns Tab).
-    await expect(ta).toHaveValue(`${NETWORK_NICK}: `, { timeout: 5_000 });
+    await expect(ta).toHaveValue(`${specNick()}: `, { timeout: 5_000 });
     await expect(ta).toBeFocused();
   } finally {
     await clearAliases(vjt.token);

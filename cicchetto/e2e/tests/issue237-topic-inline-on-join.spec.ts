@@ -35,13 +35,13 @@ import {
   topicJoinRow,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 // Shared body — run identically on desktop (chromium) and mobile (@webkit)
 // so the "every viewport" requirement is proven, not assumed.
 async function topicInlineOnJoinAndChange(page: import("@playwright/test").Page): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const channel = `#t237-${Date.now()}`;
   const topicOnJoin = `full topic set before join ${Date.now()} — must be readable on mobile`;
   const topicChanged = `topic changed mid-session ${Date.now()}`;
@@ -49,7 +49,7 @@ async function topicInlineOnJoinAndChange(page: import("@playwright/test").Page)
   await loginAs(page, vjt);
   // Focus the autojoin channel first to confirm login + WS-ready before the
   // /join (mirrors issue216 / issue240 boot order).
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   // A peer creates the channel (→ op) and sets the topic BEFORE vjt joins, so
   // vjt learns the topic only via the join-time 332, never a live TOPIC event.
@@ -64,7 +64,7 @@ async function topicInlineOnJoinAndChange(page: import("@playwright/test").Page)
     // viewport" spec waits on the surface the running project actually
     // renders (the left Sidebar is desktop-only; mobile uses the BottomBar).
     await expect(sidebarWindow(page, NETWORK_SLUG, channel)).toBeVisible({ timeout: 15_000 });
-    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
     // (a) ON JOIN — the full topic prints inline as a presentational buffer
     // row. The FULL text is present (not the truncated TopicBar strip), which

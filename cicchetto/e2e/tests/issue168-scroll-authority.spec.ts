@@ -45,9 +45,9 @@ import {
   selectChannel,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { setReadCursorToId } from "../fixtures/grappaApi";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -101,24 +101,15 @@ async function fetchScrollbackPage(
 // be clamped to the tail a prior spec left behind and no divider would
 // render.
 async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
 }
 
 test.describe("issue #168 — send pins to bottom, never jumps to the unread marker", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  // The mid-page cursor persists on the shared seeded vjt across spec
-  // boundaries (ReadCursor.set is last-write-wins). Restore to the tail so
-  // downstream #bofh specs inherit a fully-read channel (mirror of cp14-b1).
-  test.afterAll(async () => {
-    const vjt = getSeededVjt();
-    if (!CHANNEL) return;
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("unread divider present → send stays at bottom, divider clears", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Seed a cursor 25 rows from the tail → an unread divider is injected
@@ -130,7 +121,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     await seedCursor(CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     // #552 — await the join-ok REST backfill so its late DOM recreation can't
     // undo the send-snap under full-gate load (see waitForScrollbackRefreshed).
     await waitForScrollbackRefreshed(page, NETWORK_SLUG, CHANNEL);
@@ -171,7 +162,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
   });
 
   test("operator paged UP → send snaps back to the bottom (unconditional)", async ({ page }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Mid-page cursor → divider present, pane overflows.
@@ -182,7 +173,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     await seedCursor(CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     // #552 — await the join-ok REST backfill so its late DOM recreation can't
     // undo the send-snap under full-gate load (see waitForScrollbackRefreshed).
     await waitForScrollbackRefreshed(page, NETWORK_SLUG, CHANNEL);

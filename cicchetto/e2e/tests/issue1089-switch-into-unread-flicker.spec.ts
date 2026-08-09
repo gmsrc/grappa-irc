@@ -60,10 +60,10 @@ import {
   sidebarWindow,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
+import { setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -212,19 +212,10 @@ function compress(
 test.describe("issue #1089 — switching into an unread window must not flicker", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
-  // Cascade rule (feedback_cascade_poisoner_pattern): this spec seeds a
-  // MID-PAGE #bofh cursor on the shared seeded vjt. Restore the tail so the
-  // next spec inherits a fully-read channel instead of a phantom divider.
-  test.afterAll(async () => {
-    if (!CHANNEL) return;
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
-
   test("SWITCH into channel-with-unreads: the divider never leaves the viewport on a visible frame", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     await seedMidPageCursor(vjt.token, CHANNEL);
@@ -250,7 +241,7 @@ test.describe("issue #1089 — switching into an unread window must not flicker"
   test("live append while parked on the divider: the re-assert must not paint a displaced frame", async ({
     page,
   }) => {
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     await seedMidPageCursor(vjt.token, CHANNEL);

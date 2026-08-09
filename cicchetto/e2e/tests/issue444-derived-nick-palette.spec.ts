@@ -32,8 +32,7 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 // The two shipped base themes. The #444 derived `:root` rule references
 // `var(--nick-color-k)`, so switching `data-theme` re-resolves 16..31
@@ -104,7 +103,7 @@ const AUTHORED = Array.from({ length: 16 }, (_, k) => k); // 0..15
 test("issue444 — derived buckets 16..31 RESOLVE to a real colour on both themes (no undefined-var fallback)", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
 
   for (const theme of THEMES) {
     const { resolved, undefinedFallback, fg } = await resolvePalette(page, theme, DERIVED);
@@ -136,7 +135,7 @@ test("issue444 — derived buckets 16..31 RESOLVE to a real colour on both theme
 test("issue444 — each derived bucket differs from the authored bucket it is a tone-shift of (both themes)", async ({
   page,
 }) => {
-  await loginAs(page, getSeededVjt());
+  await loginAs(page, specUser());
 
   for (const theme of THEMES) {
     const { resolved: derived } = await resolvePalette(page, theme, DERIVED);

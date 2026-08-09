@@ -28,13 +28,13 @@ import {
   selectChannel,
   sidebarMessageBadge,
 } from "../fixtures/cicchettoPage";
-import { getSeededVjt, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specUser, test } from "../fixtures/test";
 
 const TEST_CHANNEL = "#bofh";
 
 test("CP13 S5 — /msg to nonexistent nick: 401 lands in the query window live", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, TEST_CHANNEL);
 

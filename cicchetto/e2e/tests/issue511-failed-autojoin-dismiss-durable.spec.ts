@@ -61,14 +61,8 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
-import {
-  AUTOJOIN_CHANNELS,
-  getSeededAdmin,
-  getSeededVjt,
-  NETWORK_NICK,
-  NETWORK_SLUG,
-} from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 const KEY = "k511-secret-key";
@@ -98,7 +92,7 @@ test.afterEach(async () => {
 // The User UUID the admin credentials endpoint keys on == the login subject
 // `id` stashed in the seeded vjt's subjectJson.
 function vjtUserId(): string {
-  return (JSON.parse(getSeededVjt().subjectJson) as { id: string }).id;
+  return (JSON.parse(specUser().subjectJson) as { id: string }).id;
 }
 
 test("#511 — a dismissed JOIN-FAILED autojoin row does NOT return after a reload, while a non-dismissed sibling does", async ({
@@ -125,9 +119,9 @@ test("#511 — a dismissed JOIN-FAILED autojoin row does NOT return after a relo
     KEPT_CHANNEL,
   ]);
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, SEED_CHANNEL, { ownNick: specNick() });
 
   // 3. Park + Reconnect so a fresh session reads the updated DB autojoin and
   //    JOINs both +k channels with no key → 475 ERR_BADCHANNELKEY each.

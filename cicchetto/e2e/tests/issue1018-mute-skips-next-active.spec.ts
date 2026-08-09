@@ -30,8 +30,8 @@ import {
 } from "../fixtures/cicchettoPage";
 import { clearMutedConversations, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "i1018-noise";
 const MUTED_CHANNEL = "#1018-muted";
@@ -43,7 +43,7 @@ const NEXT_ACTIVE_COUNT = '[data-testid="next-active-btn"] .next-active-count';
 test("Alt+A skips the muted channel and lands on the unmuted one, badge intact", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   // Focus the seeded autojoin channel before anything else, for TWO
   // reasons that both bite silently if skipped:
@@ -56,7 +56,7 @@ test("Alt+A skips the muted channel and lands on the unmuted one, badge intact",
   //     second stop on the cycle. Focusing it baselines the cursor to
   //     the tail, which is what makes the count assertion below read the
   //     two windows this spec drives and nothing else.
-  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });
   try {
@@ -70,7 +70,7 @@ test("Alt+A skips the muted channel and lands on the unmuted one, badge intact",
     for (const channel of [MUTED_CHANNEL, LOUD_CHANNEL]) {
       await page.locator(".compose-box textarea").fill(`/join ${channel}`);
       await page.locator(".compose-box textarea").press("Enter");
-      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: NETWORK_NICK });
+      await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
     }
 
     await openSettingsSection(page, "push");

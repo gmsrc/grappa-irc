@@ -25,8 +25,7 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, openSettingsDrawer } from "../fixtures/cicchettoPage";
-import { getSeededVjt } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specUser, test } from "../fixtures/test";
 
 // Seed the XXL font-size preference on the production localStorage key so
 // `applyFontSizeFromStorage()` writes `--font-size` before the first paint,
@@ -96,7 +95,7 @@ test("#962 — settings nav rows keep their content height when the drawer overf
   // 768px mobile breakpoint) while the drawer is too short for the XXL index.
   await page.setViewportSize({ width: 1024, height: 600 });
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await openSettingsDrawer(page);
 
@@ -108,7 +107,7 @@ test("@webkit #962 — settings nav rows keep their content height when the draw
 }) => {
   await seedXxlFontSize(page);
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
   await openSettingsDrawer(page);
 

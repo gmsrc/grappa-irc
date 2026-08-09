@@ -41,11 +41,9 @@ import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
   AUTOJOIN_CHANNELS,
-  getSeededVjt,
-  NETWORK_NICK,
   NETWORK_SLUG,
 } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -114,12 +112,12 @@ test.afterEach(async () => {
     max_per_ip: null,
   }).catch(() => {});
 
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await restoreNetwork(vjt);
 });
 
 test("UX-5 BR — Home pane [Reconnect] chip reconnects a parked network", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
 
   // Park bahamut-test via PATCH so the home row enters the parked
   // state. Mirrors the T32 X-button verb at the server layer.
@@ -232,15 +230,15 @@ test("UX-5 BR — Home pane [Reconnect] chip reconnects a parked network", async
   let members: string[] = [];
   for (let attempt = 0; attempt < 30; attempt++) {
     members = await fetchChannelMembers(vjt.token, SEED_CHANNEL).catch(() => []);
-    if (members.length > 0 && members.includes(NETWORK_NICK)) break;
+    if (members.length > 0 && members.includes(specNick())) break;
     await new Promise((r) => setTimeout(r, 500));
   }
   expect(members.length).toBeGreaterThan(0);
-  expect(members).toContain(NETWORK_NICK);
+  expect(members).toContain(specNick());
 });
 
 test("UX-5 BR — chip surfaces friendly error inline when cap is exceeded", async ({ page }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   const admin = await login(ADMIN_IDENTIFIER, ADMIN_PASSWORD);
 
   // Park bahamut-test (so the chip is visible to click) then saturate
