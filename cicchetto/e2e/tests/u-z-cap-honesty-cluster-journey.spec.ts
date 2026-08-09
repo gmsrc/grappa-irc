@@ -139,6 +139,7 @@ async function adminGetNetwork(
   slug: string;
   max_concurrent_user_sessions: number | null;
   max_concurrent_visitor_sessions: number | null;
+  live_counts: { users: number; visitors: number };
 }> {
   const res = await fetch(`${GRAPPA_BASE_URL}/admin/networks`, {
     headers: { authorization: `Bearer ${adminToken}` },
@@ -151,6 +152,7 @@ async function adminGetNetwork(
       slug: string;
       max_concurrent_user_sessions: number | null;
       max_concurrent_visitor_sessions: number | null;
+      live_counts: { users: number; visitors: number };
     }>;
   };
   const row = body.networks.find((n) => n.slug === slug);
@@ -158,6 +160,20 @@ async function adminGetNetwork(
     throw new Error(`adminGetNetwork: ${slug} not in /admin/networks index`);
   }
   return row;
+}
+
+// The tightest user cap that still admits ONE more session:
+// `Admission.check_network_total/2` admits iff `live < cap`.
+//
+// Derived, never hardcoded. A literal has rotted twice already — 2 for
+// (vjt + m9b-test), 3 once GREEN-CI batch-1 seeded m9b-victim — and #1078
+// rotted it a third time by giving every spec its OWN subject, a live
+// session no constant could have known about. `live_counts` is projected
+// from the same `count_live_sessions/2` the cap check itself calls, so this
+// is the number the server will compare, not an estimate of it.
+async function roomForOneMoreUser(adminToken: string, slug: string): Promise<number> {
+  const row = await adminGetNetwork(adminToken, slug);
+  return row.live_counts.users + 1;
 }
 
 // PATCH /networks/:slug {connection_state: "connected"} returning raw
@@ -296,31 +312,44 @@ test("U-Z cap-honesty journey: park → user-cap-reject → row-unchanged → bu
   const userRow = userViewBody.find((n) => n.slug === NETWORK_SLUG);
   expect(userRow?.connection_state).toBe("parked");
 
-  // STEP 4 — Admin bumps user cap to 3 (room for vjt's one session
-  // + m9b-test's bootstrap session + m9b-victim's bootstrap session —
-  // m9b-victim is seeded alongside vjt + m9b-test by compose.yaml since
-  // GREEN-CI batch-1 added it as the sacrificial Disconnect/Terminate
-  // target in m9b-admin-sessions-actions. Pre-m9b-victim the cap=2 was
-  // sufficient; post-m9b-victim the test must account for the third
-  // seeded user. vjt /connect succeeds with 200; spawn-orchestrator
-  // commits the DB transition.
-  await adminPatchCaps(admin.token, NETWORK_SLUG, { max_concurrent_user_sessions: 3 });
+  // STEP 4 — Admin bumps the user cap to exactly "room for one more",
+  // DERIVED from the live population rather than hardcoded.
+  //
+  // `Admission.check_network_total/2` admits iff `live < cap`, so
+  // `cap = live + 1` is the tightest value that lets this subject back in
+  // and still rejects a second one — a stronger statement than any round
+  // number, and it cannot rot. A literal here has already broken twice:
+  // it was 2 for (vjt + m9b-test), became 3 when GREEN-CI batch-1 seeded
+  // m9b-victim, and #1078 broke it again by making every spec its OWN
+  // subject — a fourth live session the constant knew nothing about.
+  // `live_counts` comes off the SAME `count_live_sessions/2` the cap check
+  // consults, so the number here is the number the server will compare.
+  await adminPatchCaps(admin.token, NETWORK_SLUG, {
+    max_concurrent_user_sessions: await roomForOneMoreUser(admin.token, NETWORK_SLUG),
+  });
 
   const reconnected = await tryConnect(vjt.token, NETWORK_SLUG);
   expect(reconnected.status).toBe(200);
 
   // STEP 5 — Visitor cap independence (UD1). Park again, then admin
-  // saturates VISITOR cap (=0) while leaving USER cap permissive
-  // (=10). vjt /connect MUST succeed — visitor saturation never
-  // blocks operator login. This is the load-bearing UD1 invariant;
-  // pre-U-1 the single shared cap would have rejected this.
+  // saturates VISITOR cap (=0) while leaving the USER cap satisfiable.
+  // vjt /connect MUST succeed — visitor saturation never blocks operator
+  // login. This is the load-bearing UD1 invariant; pre-U-1 the single
+  // shared cap would have rejected this.
+  //
+  // The user cap is derived here too, and TIGHT rather than "roomy". A
+  // roomy literal (it was 10) proves only that a cap far from the
+  // population doesn't interfere; `live + 1` proves the user cap was
+  // evaluated and satisfied at its exact boundary while the visitor cap
+  // sat saturated — the actual UD1 claim, and one no future seeded user
+  // can rot.
   await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, { connection_state: "parked" }).catch(
     () => {},
   );
 
   await adminPatchCaps(admin.token, NETWORK_SLUG, {
     max_concurrent_visitor_sessions: 0,
-    max_concurrent_user_sessions: 10,
+    max_concurrent_user_sessions: await roomForOneMoreUser(admin.token, NETWORK_SLUG),
   });
 
   const independentConnect = await tryConnect(vjt.token, NETWORK_SLUG);
