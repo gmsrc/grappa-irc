@@ -35914,6 +35914,7 @@ barrier removes the trigger, not the behaviour. The measurement is filed as its
 own issue against `ScrollbackPane`'s freeze rather than folded into this fix:
 an unexplained number that someone silently rounds off is how the next bug gets
 its hiding place.
+
 ---
 
 ## 2026-08-09 — #1140: the grants table printed the key, and the label was already someone's job
