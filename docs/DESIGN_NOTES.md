@@ -35985,3 +35985,56 @@ null", not "absent".
 `protocol_version` bump, and a client that ignores it is unaffected.
 
 _Deploy: **HOT** — server logic + `--cic`. No migration._
+## 2026-08-09 — a NICK with a blank parameter is not a rename
+
+`NICK` with no parameter has always fallen through `EventRouter`'s catch-all
+with no effects — the clause head matches `params: [new_nick | _]`, and an
+empty list does not. `NICK :` — a trailing parameter present but empty — parses
+to `params: [""]` and did match, so the router treated it as a rename to the
+empty name. Two spellings of the same malformed line, two different outcomes.
+That asymmetry, not the empty string on its own, is the defect.
+
+**The reachability was measured before the cure, because it decides how much
+of the story is real.** The two answers — the parser produces this from a
+genuine wire line, versus the value exists only because a property generator
+builds the struct by hand — lead to different cures. Measured against
+`Grappa.IRC.Parser`: `NICK` and `NICK ` both yield `params: []`; `NICK :`
+yields `params: [""]`; `NICK : ` yields `params: [" "]`. So the blank
+parameter is on the wire, not merely in a generator, and the whitespace
+variant comes with it for free.
+
+**The guard rejects at the boundary, where the effects are coined.**
+`{:own_nick_renamed, old, new}` and `{:peer_nick_renamed, old, new}` carry
+IDENTITIES; putting the check in `apply_effects/2` would mean every consumer
+re-validates a shape the producer already promised. One guard sits ahead of the
+self/peer split — the two arms descend from a single `do_route(:nick, ...)`
+clause, so this is one door, not two guards to keep in sync. The message is
+ignored entirely: state unchanged, no effects, exactly what a parameter-less
+`NICK` already does.
+
+**The predicate is narrow on purpose.** Not `Identifier.valid_nick?/1`: that
+one is anchored ASCII, capped at 30, and correct for what we send upstream —
+applying it to what an upstream sends us would refuse legitimate renames and
+leave `state.nick` on a name the server no longer knows us by, a worse failure
+than the one being fixed. Blank means empty or whitespace-only, and nothing
+more. A parameter with an interior space (`NICK :foo bar`) still passes; this
+guard makes no claim that every accepted parameter is a valid nick.
+
+**What the property test could and could not say.** The shape property's effect
+allowlist had drifted narrower than `@type effect` again — `{:own_nick_renamed,
+_, _}` had no arm at all — so its `flunk` fires on any self-rename the
+generator draws, blank or not, and the empty string in the reported
+counterexample is the shrinker's minimisation rather than the trigger. Measured
+after the guard and before the arm: 48 of 48 seeds green, because the property
+reaches the NICK boundary only when a prefix nick collides with the state's.
+The arm was added anyway (a contract mirror should not lie), asserting a
+non-blank name on both sides rather than `is_binary/1` — the certificate of
+nothing the #279 and #878 arms already exist to stop repeating. The witness,
+though, is a second property that puts a NICK on both rename branches for
+every generated example, plus unit tests that name the input.
+
+**Mutation matrix.** Guard removed: 5 unit tests and the per-example property
+red, shape property green. `String.trim/1` narrowed to `== ""`: exactly the two
+whitespace-only unit tests red, both properties green — so the whitespace
+sub-class is pinned by the named-input tests alone, which is the reason they
+exist rather than leaving the class to the fuzzer.
