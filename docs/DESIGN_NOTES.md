@@ -34962,6 +34962,7 @@ installed from **Firefox will not appear in the system share sheet** even with
 this shipped. The original requester installed from Firefox, so their case
 stays uncovered on that browser; the feature works for Chromium-based installs.
 There is no fix available to us — it is not a bug in this implementation.
+
 ## 2026-08-09 — #1086: the boot verbs answer for themselves, and the flag table is gated
 
 The first slice of #1086 left the ten boot verbs delegating their help to
