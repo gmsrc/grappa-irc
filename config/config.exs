@@ -528,6 +528,13 @@ config :logger, :console,
     # check: known_keys ⊆ metadata). `:new_nick` pre-exists above.
     :old_nick,
     :rows_migrated,
+    # #948 — the SELF-window sibling of that line reuses `:old_nick` /
+    # `:new_nick` / `:rows_migrated` and adds `:window`
+    # (`:renamed | :noop`), because the rows can migrate while no window
+    # row moves: the self window may be CLOSED with its history in
+    # Archive. Without it the line would claim work the `:noop` branch
+    # did not do.
+    :window,
     # #800 S7 — `Grappa.IRC.Client`'s per-frame outbound-cost line, at
     # DEBUG (silent in production, which runs at :info). `:sent_bytes` and
     # `:commands_10s` are MEASURED — what this process put on the wire and
