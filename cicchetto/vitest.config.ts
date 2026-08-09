@@ -1,5 +1,5 @@
-import { defineConfig } from "vitest/config";
 import solid from "vite-plugin-solid";
+import { defineConfig } from "vitest/config";
 
 // SolidJS components compile to fine-grained reactive primitives — vitest
 // needs the same `vite-plugin-solid` transform the dev server uses, or
