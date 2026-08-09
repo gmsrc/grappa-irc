@@ -36039,3 +36039,63 @@ red, shape property green. `String.trim/1` narrowed to `== ""`: exactly the two
 whitespace-only unit tests red, both properties green — so the whitespace
 sub-class is pinned by the named-input tests alone, which is the reason they
 exist rather than leaving the class to the fuzzer.
+## 2026-08-09 — #1147: a gate that guards spawning should not judge a connect that spawns nothing
+
+`SpawnOrchestrator.spawn/4` is the one verb every spawn-initiating surface goes
+through — Bootstrap's boot-time re-establish, `PATCH /networks/:slug`, the
+operator and visitor spawn paths. Its documented contract has always included
+an idempotent keep: if a session for this `(subject, network_id)` is already
+live, hold it and report `:already_started`. That property held for
+`Session.start_session/3`, which returns `{:error, {:already_started, pid}}`
+from the Registry's uniqueness. It did not hold end-to-end, because the
+orchestrator asked `Admission.check_capacity/1` first and only learned about
+the live session from the spawn's return value — which a capacity error made
+unreachable.
+
+So a network sitting at its cap refused a subject who was **already on it**.
+The cap counts live sessions on the network, and the subject's own session is
+one of them: the connect that should have been a silent no-op was rejected by
+the very count it had contributed to. Nothing was going to be spawned either
+way; the only thing the gate decided was whether to lie about it.
+
+**The gate is not a free read.** It is an ETS circuit check, a Registry count
+and a DB query, and on failure it *records* the refusal with
+`Telemetry.capacity_reject/4`. That last part is the half worth naming: a
+rejection counter was being incremented for requests that never made an
+admission attempt. An operator reading that series would see pressure that does
+not exist, and the noise scales with whatever polls or retries the connect.
+
+**The fix is ordering, not policy.** Look the session up in the
+`SessionRegistry` first and consult admission only when a spawn would really
+follow. No new state: the Registry already knows who is live, and deriving the
+answer from it beats any parallel structure that would need housekeeping.
+
+**Why a racy lookup is still correct.** The fast path is an optimisation over
+an authority that stays where it was. If the session dies between the lookup
+and the spawn, the normal path runs and admission gets its say. If one appears
+in that window, `start_session/3` still returns `{:error, {:already_started,
+pid}}` and the existing branch maps it to the same outcome. Two paths now reach
+`:already_started` and they agree by construction, so the Contract section's
+claim — the session GenServer and the Registry are the real synchronisation
+primitives — is unchanged. A lookup that only ever avoids work it cannot be
+wrong about does not need a lock.
+
+**What stays on the fast path.** `Backoff.reset/2`. A PATCH-while-already-up is
+still an operator action, and M-life-5 says an operator action clears stale
+failure history; moving the reset behind the gate would have been a second,
+undiscussed behaviour change riding in on a bug fix. `reconnect/5` is
+untouched and reaches admission every time: `stop_session/3` polls the Registry
+slot clear before the spawn, so the fast path reads an empty slot — the bounce
+really is about to spawn, which is the definitional contrast with the keep verb.
+
+**The test is a pair, and the second half is the one that gets forgotten.** At
+cap, an already-live subject keeps its session **and** records no reject; a
+subject with no live session still earns the capacity error **and** is still
+recorded. A test reading only the return value would pass while leaving the
+telemetry lying, and a guard that cannot fail is not a guard — hence the
+negative control. Both halves were checked by mutation: deleting the fast path
+kills only the first test's return-value assertion; running the gate for its
+side effect on the fast path (right return value, wrong telemetry) kills only
+the `refute_received`; deleting the emission in `Admission` kills only the
+negative control's `assert_received`. Three mutants, three distinct assertions,
+no overlap.
