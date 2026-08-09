@@ -34723,3 +34723,71 @@ issue's "Done when" asks for it explicitly and it has not been done: `cpu_sup`
 was exercised only in the Linux dev container, and its FreeBSD port program
 is a different binary. Whether `avg1/0` answers inside a jail is an
 expectation here, not a measurement.
+## 2026-08-09 — #1088: an informational reply belongs to a connection, not a subject
+
+The report is an operator whose IRC client kept opening the WHO modal in
+cicchetto on a device that had asked for nothing. The measurement in the issue
+is right and it is structural: `who_reply`, `names_reply`, `whois_bundle`,
+`whowas_bundle`, `server_reply`, `banlist_bundle` and `links_bundle` all ride
+`Topic.user/1`, and the whole topic vocabulary partitions by user, network and
+channel — never by connection. There was no dimension in which "the client that
+asked" could be expressed, so the answer to one question was delivered to every
+device of the account.
+
+**Form A, delivery narrowed, and the wire did not change.** The issue offered
+addressed delivery (A) or a client-local consume-once latch per surface (B, the
+#248 LUSERS pattern generalised); the maintainer preferred killing the fan-out,
+which is A. What the issue anticipated — "carrying a client id on the wire is
+acceptable" — turned out to be unnecessary: the requesting connection is the
+socket that carried the command, so the server already knows it and nothing has
+to be added to the payload in either direction. `UserSocket.connect/3` mints a
+`socket_ref` per WebSocket, the user-topic channel subscribes to
+`Topic.socket/2` on join, and `Session.Broadcaster.to_requester/3` publishes
+there instead of on the user topic. cicchetto is unchanged, to the line: the
+addressed frame arrives on the same channel, with the same `"event"` name and
+the same payload, at the same `userTopic.ts` arm. That also settles the case
+the reporter is in — a requester that is not a cicchetto client at all gets no
+modal anywhere, which B could not have delivered.
+
+**The accumulator is where a request already meets its reply.** The ircd answers
+minutes of numerics later and carries no correlation tag, so the only structure
+that spans the gap is the per-verb `*_pending` accumulator that #127/#140/#169/
+#376 already built to tell a solicited reply from an unsolicited one. `reply_to`
+rides there, exactly like #606's `source`, and the drain lifts it into the
+effect tuple; every one of the seven effects grew the same trailing element, so
+`apply_effects` has one way to read it rather than two. `nil` — an accumulator
+primed before a hot deploy, or a reply nobody asked for — falls back to the
+per-user fan-out: losing a reply is worse than showing it too widely.
+
+**Two collapses are inherited, not introduced.** `whois_pending` keys per target
+nick, so two clients WHOIS-ing one nick inside a single 318 window share an
+accumulator and the last writer wins — the same collapse #606 accepted for
+`source`, for the same reason (the numerics carry no request identity, so a
+second accumulator could not be matched to a second reply anyway). And a reply
+whose requester disconnected before the ircd answered is now dropped rather than
+shown to the survivors. Both are stated where they happen.
+
+**LUSERS keeps the fan-out, and that is the boundary of the class.** It is the
+one member whose accumulator is created by the REPLY rather than the request:
+bahamut auto-emits the sequence on connect-welcome with nobody having asked, and
+251 resets the accumulator on arrival, so a `reply_to` primed by `/lusers` would
+either be wiped by its own reply or, if carried across the reset, address a
+later unsolicited emit to a stale socket. Nothing is lost by leaving it —
+#248's consume-once client latch already denies the card to a bystander. That
+latch answers "did anyone ask", the axis this issue explicitly does not touch;
+it happens to answer "did I ask" too.
+
+**`links_bundle` was in the class and not in the issue's table.** The issue calls
+its list exhaustive for the arms in `userTopic.ts`; `links_bundle` (#238) is a
+seventh unconditional modal setter with the identical shape and is addressed
+here too.
+
+**Not established.** The e2e (`issue1088-addressed-informational-replies.spec.ts`)
+drives the reported scenario with two browser contexts on one account and is
+built to be falsifiable — the asking client's modal is the barrier, and the
+bystander proves it is live by rendering a post-reply channel message before the
+absence is asserted. It had not been run at the time of writing, and neither had
+the full integration suite. The per-surface behaviour is asserted for `/who` and
+`/whois` at the channel door and for `/who` at the session level; the other
+eight verbs are believed on the strength of a shared mechanism, not measured one
+by one.

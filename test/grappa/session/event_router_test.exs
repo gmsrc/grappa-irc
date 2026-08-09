@@ -1331,7 +1331,7 @@ defmodule Grappa.Session.EventRouterTest do
     # Explicit /motd primes state.motd_pending; the 375/372 burst folds and
     # 376 RPL_ENDOFMOTD drains ONE {:server_reply, :motd, lines} effect in
     # wire order — NOTHING persisted (mirror of the /who 315 drain).
-    test "primed /motd folds 375/372 and drains {:server_reply, :motd, lines} on 376" do
+    test "primed /motd folds 375/372 and drains {:server_reply, :motd, lines, reply_to} on 376" do
       state = base_state(%{motd_pending: %{lines: []}})
 
       {:cont, s1, []} =
@@ -1343,7 +1343,7 @@ defmodule Grappa.Session.EventRouterTest do
       {:cont, s3, []} =
         EventRouter.route(msg({:numeric, 372}, ["vjt", "- line two"], nil), s2)
 
-      assert {:cont, drained, [{:server_reply, :motd, lines}]} =
+      assert {:cont, drained, [{:server_reply, :motd, lines, _}]} =
                EventRouter.route(msg({:numeric, 376}, ["vjt", "End of /MOTD command"], nil), s3)
 
       assert lines == ["- irc.test Message of the Day -", "- line one", "- line two"]
@@ -1353,10 +1353,10 @@ defmodule Grappa.Session.EventRouterTest do
 
     # 422 ERR_NOMOTD carries the ONLY line (no 375/372 burst), so it folds
     # its own body before draining — an explicit /motd never dangles.
-    test "primed /motd with no MOTD drains {:server_reply, :motd, [line]} on 422" do
+    test "primed /motd with no MOTD drains {:server_reply, :motd, [line], reply_to} on 422" do
       state = base_state(%{motd_pending: %{lines: []}})
 
-      assert {:cont, drained, [{:server_reply, :motd, ["MOTD File is missing"]}]} =
+      assert {:cont, drained, [{:server_reply, :motd, ["MOTD File is missing"], _}]} =
                EventRouter.route(msg({:numeric, 422}, ["vjt", "MOTD File is missing"], nil), state)
 
       assert drained.motd_pending == nil
@@ -1379,10 +1379,10 @@ defmodule Grappa.Session.EventRouterTest do
     # the accumulator) so the failure surfaces to the operator who asked and
     # never dangles — mirror of the 422 ERR_NOMOTD terminator. NEVER swallowed
     # into a wrong-server MOTD.
-    test "primed /motd to an unknown server drains {:server_reply, :motd, [error]} on 402" do
+    test "primed /motd to an unknown server drains {:server_reply, :motd, [error], reply_to} on 402" do
       state = base_state(%{motd_pending: %{lines: []}})
 
-      assert {:cont, drained, [{:server_reply, :motd, ["No such server"]}]} =
+      assert {:cont, drained, [{:server_reply, :motd, ["No such server"], _}]} =
                EventRouter.route(
                  msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], nil),
                  state
@@ -1408,7 +1408,7 @@ defmodule Grappa.Session.EventRouterTest do
 
     # /info primes state.info_pending; 371 RPL_INFO burst folds, 374
     # RPL_ENDOFINFO drains {:server_reply, :info, lines}.
-    test "primed /info folds 371 and drains {:server_reply, :info, lines} on 374" do
+    test "primed /info folds 371 and drains {:server_reply, :info, lines, reply_to} on 374" do
       state = base_state(%{info_pending: %{lines: []}})
 
       {:cont, s1, []} =
@@ -1417,7 +1417,7 @@ defmodule Grappa.Session.EventRouterTest do
       {:cont, s2, []} =
         EventRouter.route(msg({:numeric, 371}, ["vjt", "Built 2026"], nil), s1)
 
-      assert {:cont, drained, [{:server_reply, :info, ["grappa test server", "Built 2026"]}]} =
+      assert {:cont, drained, [{:server_reply, :info, ["grappa test server", "Built 2026"], _}]} =
                EventRouter.route(msg({:numeric, 374}, ["vjt", "End of /INFO list"], nil), s2)
 
       assert drained.info_pending == nil
@@ -1425,12 +1425,12 @@ defmodule Grappa.Session.EventRouterTest do
 
     # /version primes state.version_pending; 351 RPL_VERSION is single-shot,
     # drains one assembled line immediately (no terminator).
-    test "primed /version drains {:server_reply, :version, [line]} on 351" do
+    test "primed /version drains {:server_reply, :version, [line], reply_to} on 351" do
       state = base_state(%{version_pending: %{lines: []}})
 
       m = msg({:numeric, 351}, ["vjt", "bahamut-2.2.1", "irc.test", "options"], nil)
 
-      assert {:cont, drained, [{:server_reply, :version, [line]}]} =
+      assert {:cont, drained, [{:server_reply, :version, [line], _}]} =
                EventRouter.route(m, state)
 
       assert line == "bahamut-2.2.1 irc.test options"
@@ -1466,7 +1466,7 @@ defmodule Grappa.Session.EventRouterTest do
     # UNLIKE 376 RPL_ENDOFMOTD, the terminator 259 RPL_ADMINEMAIL CARRIES
     # CONTENT, so it must fold its own line BEFORE draining or the contact
     # address — the single most useful line in the reply — is dropped.
-    test "primed /admin folds 256/257/258 and drains {:server_reply, :admin, lines} on 259" do
+    test "primed /admin folds 256/257/258 and drains {:server_reply, :admin, lines, reply_to} on 259" do
       state = base_state(%{admin_pending: %{lines: []}})
 
       {:cont, s1, []} =
@@ -1481,7 +1481,7 @@ defmodule Grappa.Session.EventRouterTest do
       {:cont, s3, []} =
         EventRouter.route(msg({:numeric, 258}, ["vjt", "Milano, IT"], nil), s2)
 
-      assert {:cont, drained, [{:server_reply, :admin, lines}]} =
+      assert {:cont, drained, [{:server_reply, :admin, lines, _}]} =
                EventRouter.route(msg({:numeric, 259}, ["vjt", "staff@azzurra.org"], nil), s3)
 
       assert lines == [
@@ -1502,7 +1502,7 @@ defmodule Grappa.Session.EventRouterTest do
     test "primed /admin drains on 423 ERR_NOADMININFO (no 256-259 burst arrives)" do
       state = base_state(%{admin_pending: %{lines: []}})
 
-      assert {:cont, drained, [{:server_reply, :admin, ["No administrative info available"]}]} =
+      assert {:cont, drained, [{:server_reply, :admin, ["No administrative info available"], _}]} =
                EventRouter.route(
                  msg({:numeric, 423}, ["vjt", "irc.test", "No administrative info available"], nil),
                  state
@@ -1518,7 +1518,7 @@ defmodule Grappa.Session.EventRouterTest do
     test "primed /admin drains on 447 ERR_RESTRICTED" do
       state = base_state(%{admin_pending: %{lines: []}})
 
-      assert {:cont, drained, [{:server_reply, :admin, ["You need a registered nick to issue commands!"]}]} =
+      assert {:cont, drained, [{:server_reply, :admin, ["You need a registered nick to issue commands!"], _}]} =
                EventRouter.route(
                  msg(
                    {:numeric, 447},
@@ -1570,10 +1570,10 @@ defmodule Grappa.Session.EventRouterTest do
     # unsolicited burst folds into the stale lines instead of reaching
     # $server); over-clearing costs one modal that the next explicit request
     # re-arms unconditionally. The two do not weigh the same.
-    test "402 with only /admin in flight drains {:server_reply, :admin, [error]}" do
+    test "402 with only /admin in flight drains {:server_reply, :admin, [error], reply_to}" do
       state = base_state(%{admin_pending: %{lines: []}})
 
-      assert {:cont, drained, [{:server_reply, :admin, ["No such server"]}]} =
+      assert {:cont, drained, [{:server_reply, :admin, ["No such server"], _}]} =
                EventRouter.route(
                  msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], nil),
                  state
@@ -1585,7 +1585,7 @@ defmodule Grappa.Session.EventRouterTest do
     test "402 with BOTH /motd and /admin in flight disarms both and surfaces once" do
       state = base_state(%{motd_pending: %{lines: []}, admin_pending: %{lines: []}})
 
-      assert {:cont, drained, [{:server_reply, :motd, ["No such server"]}]} =
+      assert {:cont, drained, [{:server_reply, :motd, ["No such server"], _}]} =
                EventRouter.route(
                  msg({:numeric, 402}, ["vjt", "nope.invalid", "No such server"], nil),
                  state
@@ -3820,7 +3820,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg({:numeric, 318}, ["vjt", "Alice", "End of /WHOIS list"], {:server, "irc.test.org"})
 
-      {:cont, new_state, [{:whois_bundle, target, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:whois_bundle, target, accum, _}]} = EventRouter.route(m, state)
       assert target == "Alice"
       assert accum[:user] == "alice_u"
       assert accum[:realname] == "Alice Liddell"
@@ -3843,7 +3843,7 @@ defmodule Grappa.Session.EventRouterTest do
       # Server may echo a different case for the target than what the user typed.
       m = msg({:numeric, 318}, ["vjt", "ALICE", "End of /WHOIS list"], {:server, "irc.test.org"})
 
-      {:cont, new_state, [{:whois_bundle, _, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:whois_bundle, _, accum, _}]} = EventRouter.route(m, state)
       assert accum[:user] == "u"
       assert new_state.whois_pending == %{}
     end
@@ -4102,7 +4102,7 @@ defmodule Grappa.Session.EventRouterTest do
         end)
 
       end_msg = msg({:numeric, 318}, ["vjt", "alice", "End of /WHOIS list"])
-      {:cont, _, [{:whois_bundle, target, accum}]} = EventRouter.route(end_msg, final_state)
+      {:cont, _, [{:whois_bundle, target, accum, _}]} = EventRouter.route(end_msg, final_state)
 
       payload = Wire.whois_bundle("test-net", target, accum)
 
@@ -4344,7 +4344,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       end_msg = msg({:numeric, 318}, ["vjt", "alice", "End of /WHOIS list"], {:server, "irc.libera.chat"})
 
-      {:cont, _, [{:whois_bundle, target, accum}]} = EventRouter.route(end_msg, final_state)
+      {:cont, _, [{:whois_bundle, target, accum, _}]} = EventRouter.route(end_msg, final_state)
       payload = Wire.whois_bundle("libera", target, accum)
 
       assert payload.account == "AliceAccount"
@@ -4425,7 +4425,7 @@ defmodule Grappa.Session.EventRouterTest do
       # for O(1) fold, and SessionWire.whois_bundle/3 reverses on emit. Drain
       # the bundle at 318 and check the wire payload is in arrival order.
       m318 = msg({:numeric, 318}, ["vjt", "alice", "End of /WHOIS list"], {:server, "irc.libera.chat"})
-      {:cont, _, [{:whois_bundle, "alice", accum}]} = EventRouter.route(m318, s2)
+      {:cont, _, [{:whois_bundle, "alice", accum, _}]} = EventRouter.route(m318, s2)
 
       payload = Wire.whois_bundle("libera", "alice", accum)
 
@@ -4790,7 +4790,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg({:numeric, 369}, ["vjt", "Alice", "End of WHOWAS"], {:server, "irc.test.org"})
 
-      {:cont, new_state, [{:whowas_bundle, target, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:whowas_bundle, target, accum, _}]} = EventRouter.route(m, state)
       assert target == "Alice"
       assert length(accum[:entries]) == 1
       assert new_state.whowas_pending == %{}
@@ -4813,7 +4813,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg({:numeric, 369}, ["vjt", "ALICE", "End of WHOWAS"], {:server, "irc.test.org"})
 
-      {:cont, new_state, [{:whowas_bundle, _, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:whowas_bundle, _, accum, _}]} = EventRouter.route(m, state)
       assert hd(accum[:entries])[:user] == "u"
       assert new_state.whowas_pending == %{}
     end
@@ -4828,7 +4828,7 @@ defmodule Grappa.Session.EventRouterTest do
           {:server, "irc.test.org"}
         )
 
-      {:cont, new_state, [{:whowas_bundle, target, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:whowas_bundle, target, accum, _}]} = EventRouter.route(m, state)
       assert target == "ghost"
       assert accum[:not_found] == true
       assert new_state.whowas_pending == %{}
@@ -4922,7 +4922,7 @@ defmodule Grappa.Session.EventRouterTest do
       {:cont, s2, []} = EventRouter.route(m2, s1)
 
       m368 = msg({:numeric, 368}, ["vjt", "#test", "End of Channel Ban List"], {:server, "irc.test.org"})
-      {:cont, _, [{:banlist_bundle, _, accum}]} = EventRouter.route(m368, s2)
+      {:cont, _, [{:banlist_bundle, _, accum, _}]} = EventRouter.route(m368, s2)
 
       # The EFFECT accum stores entries reversed (head = most recent 367,
       # O(1) prepend); `Wire.banlist_bundle/3` reverses to restore the wire
@@ -4948,7 +4948,7 @@ defmodule Grappa.Session.EventRouterTest do
           {:server, "irc.test.org"}
         )
 
-      {:cont, new_state, [{:banlist_bundle, channel, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:banlist_bundle, channel, accum, _}]} = EventRouter.route(m, state)
       # The router carries `channel_display` through VERBATIM (whatever was
       # primed) — proven here with a mixed-case value so a stray fold in the
       # router would fail. In production the facade (`Session.send_banlist/3`)
@@ -4985,7 +4985,7 @@ defmodule Grappa.Session.EventRouterTest do
       m368 =
         msg({:numeric, 368}, ["vjt", "#CHAN", "End"], {:server, "irc.test.org"})
 
-      {:cont, s2, [{:banlist_bundle, _, accum}]} = EventRouter.route(m368, s1)
+      {:cont, s2, [{:banlist_bundle, _, accum, _}]} = EventRouter.route(m368, s1)
       assert length(accum[:entries]) == 1
       assert s2.banlist_pending == %{}
     end
@@ -5047,7 +5047,7 @@ defmodule Grappa.Session.EventRouterTest do
       assert new_state.who_pending == %{}
     end
 
-    test "315 RPL_ENDOFWHO emits ONE {:who_reply, target, users} effect + drops entry" do
+    test "315 RPL_ENDOFWHO emits ONE {:who_reply, target, users, reply_to} effect + drops entry" do
       state =
         base_state(%{
           who_pending: %{
@@ -5084,7 +5084,7 @@ defmodule Grappa.Session.EventRouterTest do
       {:cont, new_state, effects} = EventRouter.route(m, state)
       # No scrollback persist — one ephemeral who_reply, entry dropped.
       assert new_state.who_pending == %{}
-      assert [{:who_reply, target, users}] = effects
+      assert [{:who_reply, target, users, _}] = effects
       assert target == "#bofh"
       # who_fold prepends each row LIFO, so the stored list is reverse-wire
       # order; the drain reverses it back. Fixture stores [bob, alice]
@@ -5145,7 +5145,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       {:cont, new_state, effects} = EventRouter.route(m, state)
       assert new_state.who_pending == %{}
-      assert [{:who_reply, target, users}] = effects
+      assert [{:who_reply, target, users, _}] = effects
       # target_display carries the full original arg string for the modal.
       assert target == "+s server.azzurra.chat"
       assert Enum.map(users, & &1.nick) == ["alice"]
@@ -5159,7 +5159,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg({:numeric, 315}, ["vjt", "#BOFH", "End of /WHO list"], {:server, "irc.test.org"})
 
-      {:cont, new_state, [{:who_reply, target, users}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:who_reply, target, users, _}]} = EventRouter.route(m, state)
       assert new_state.who_pending == %{}
       # Carries the canonical `target_display` (original case), empty roster.
       assert target == "#BOFH"
@@ -5194,7 +5194,7 @@ defmodule Grappa.Session.EventRouterTest do
       # Pre-#169 a joined channel routed the notices INTO #bofh's scrollback.
       # Now it is always a single ephemeral who_reply — no :persist effect,
       # so the joined channel window stays clean.
-      {:cont, _, [{:who_reply, target, users}]} = EventRouter.route(m, state)
+      {:cont, _, [{:who_reply, target, users, _}]} = EventRouter.route(m, state)
       assert target == "#bofh"
       assert Enum.map(users, & &1.nick) == ["alice"]
     end
@@ -5264,7 +5264,7 @@ defmodule Grappa.Session.EventRouterTest do
           {:server, "irc.libera.chat"}
         )
 
-      {:cont, new_state, [{:who_reply, target, users}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:who_reply, target, users, _}]} = EventRouter.route(m, state)
       assert new_state.who_pending == %{}
       assert target == "*!*@*.libera.chat"
       assert Enum.map(users, & &1.nick) == ["alice"]
@@ -5286,7 +5286,7 @@ defmodule Grappa.Session.EventRouterTest do
           {:server, "irc.libera.chat"}
         )
 
-      {:cont, new_state, [{:who_reply, target, users}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:who_reply, target, users, _}]} = EventRouter.route(m, state)
       assert new_state.who_pending == %{}
       assert target == "*!*@nonexistent"
       assert users == []
@@ -5351,7 +5351,7 @@ defmodule Grappa.Session.EventRouterTest do
       assert new_state.names_pending == %{}
     end
 
-    test "366 with pending entry drains ONE {:names_reply, channel, prefix-split roster} after members_seeded" do
+    test "366 with pending entry drains ONE {:names_reply, channel, prefix-split roster, reply_to} after members_seeded" do
       state =
         base_state(%{
           members: %{},
@@ -5759,7 +5759,7 @@ defmodule Grappa.Session.EventRouterTest do
       assert entry.description == ""
     end
 
-    test "365 RPL_ENDOFLINKS flushes {:links_bundle, accum} and clears links_pending" do
+    test "365 RPL_ENDOFLINKS flushes {:links_bundle, accum, reply_to} and clears links_pending" do
       state =
         base_state(%{
           links_pending: %{
@@ -5777,7 +5777,7 @@ defmodule Grappa.Session.EventRouterTest do
           {:server, "hub.azzurra.org"}
         )
 
-      {:cont, new_state, [{:links_bundle, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:links_bundle, accum, _}]} = EventRouter.route(m, state)
       assert new_state.links_pending == nil
       # Accumulator carries the entries as-stored (reversed); the wire
       # builder restores wire order.
@@ -5794,7 +5794,7 @@ defmodule Grappa.Session.EventRouterTest do
           {:server, "hub.azzurra.org"}
         )
 
-      {:cont, new_state, [{:links_bundle, accum}]} = EventRouter.route(m, state)
+      {:cont, new_state, [{:links_bundle, accum, _}]} = EventRouter.route(m, state)
       assert new_state.links_pending == nil
       assert accum[:entries] == []
     end

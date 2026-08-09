@@ -165,6 +165,21 @@ any casing and you land on the canonical window. Events push on the
 matching topic as `"event"` frames; treat unknown `kind` values as
 ignorable per §2.
 
+**Not every user-topic event reaches every connection (#1088).** The reply
+to an informational command you issued — `who_reply`, `names_reply`,
+`whois_bundle`, `whowas_bundle`, `server_reply`, `banlist_bundle`,
+`links_bundle` — is delivered on your user topic **only to the connection
+that issued the command**. Nothing changes for the client that asked: same
+topic, same `"event"` frame, same payload. What changed is that your other
+devices no longer receive it, so do not treat one of these as a cue to
+refresh shared state — it is an answer to a question this socket asked.
+
+Two consequences worth designing for: if your socket drops before the ircd
+answers, the reply is dropped with it (re-issue the command); and `lusers_bundle`
+is the one member of the family that still fans out to every connection,
+because the server also emits it unsolicited at connect — gate it on your own
+consume-once request flag.
+
 ---
 
 ## 5. Wire format

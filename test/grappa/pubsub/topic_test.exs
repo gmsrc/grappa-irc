@@ -131,6 +131,35 @@ defmodule Grappa.PubSub.TopicTest do
     end
   end
 
+  describe "socket/2 (#1088)" do
+    test "builds the per-connection addressed-delivery topic" do
+      assert Topic.socket("vjt", "ref-1") == "grappa:user:vjt/socket:ref-1"
+    end
+
+    test "two connections of one subject get two distinct topics" do
+      refute Topic.socket("vjt", "ref-1") == Topic.socket("vjt", "ref-2")
+    end
+
+    test "raises on an empty socket_ref" do
+      assert_raise FunctionClauseError, fn -> Topic.socket("vjt", "") end
+    end
+
+    test "raises on an empty user_name" do
+      assert_raise FunctionClauseError, fn -> Topic.socket("", "ref-1") end
+    end
+
+    # The security property, not an incidental one: the shape carries a
+    # connection's private replies, so it must stay outside the grammar
+    # `GrappaChannel.join/3` accepts. `parse/1`'s second-segment clause
+    # matches `"network:" <> slug` only, which is what excludes it — this
+    # pins that, so a future `"socket:"` clause added for convenience turns
+    # the topic joinable and this red.
+    test "is NOT joinable — excluded from the public topic grammar" do
+      assert Topic.parse(Topic.socket("vjt", "ref-1")) == :error
+      refute Topic.valid?(Topic.socket("vjt", "ref-1"))
+    end
+  end
+
   describe "parse/1" do
     test "parses a user topic" do
       assert Topic.parse("grappa:user:vjt") == {:ok, {:user, "vjt"}}

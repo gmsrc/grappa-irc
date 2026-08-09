@@ -78,6 +78,11 @@ defmodule GrappaWeb.UserSocket do
   controller-side `Subject.from_assigns/1` lift — V4 visitor-parity
   (2026-05-15).
 
+  Both branches also assign `:socket_ref` (#1088) — a per-CONNECTION
+  reference, distinct from every subject-level identifier on the socket,
+  used to address an informational reply back to the client that asked
+  for it instead of fanning it out to every device of the subject.
+
   Any failure (missing / empty subprotocol token, malformed UUID,
   unknown row, revoked, expired user session, expired or vanished
   visitor) returns `:error`
@@ -246,7 +251,25 @@ defmodule GrappaWeb.UserSocket do
   defp authenticate_and_assign(token, socket) do
     with {:ok, session} <- Accounts.authenticate(token),
          {:ok, socket} <- assign_subject(socket, session) do
-      socket = assign(socket, :current_session_id, session.id)
+      socket =
+        socket
+        |> assign(:current_session_id, session.id)
+        # #1088 — the per-CONNECTION discriminator. Minted here, at the one
+        # boundary where "a WebSocket" is created, so every channel process
+        # of this socket shares it and it dies with the transport.
+        #
+        # Nothing already on the socket can stand in for it, which is the
+        # whole reason it exists: `:current_session_id` is the
+        # `accounts_sessions` row, so two tabs of one login share it, and
+        # `Grappa.ClientId` is admission policy keyed per (client, network),
+        # not per connection. Both would re-create the fan-out they were
+        # asked to remove.
+        #
+        # Opaque and server-only: `GrappaChannel` subscribes the user-topic
+        # channel to `Topic.socket/2` on join, and a request carries it to
+        # the session implicitly (it is read off the socket that carried the
+        # command), so it never rides the wire in either direction.
+        |> assign(:socket_ref, Ecto.UUID.generate())
       # S3.1 + CP24 bucket E web/S5: register every WS pid (user AND
       # visitor) with WSPresence. The transport process (self() at
       # connect time) is the pid that owns the WS connection; when it

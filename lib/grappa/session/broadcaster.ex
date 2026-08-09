@@ -68,6 +68,36 @@ defmodule Grappa.Session.Broadcaster do
   end
 
   @doc """
+  Broadcasts `payload` to the ONE connection that asked for it (#1088),
+  falling back to the per-user fan-out when no requester is known.
+
+  `reply_to` is the `socket_ref` `UserSocket.connect/3` minted for the
+  WebSocket that issued the command, carried through the session's
+  `*_pending` accumulator and lifted back out by the drain. An informational
+  reply (`/who`, `/whois`, `/motd`, …) is the answer to a question one
+  client asked; on `to_user/2` it opened a modal on every other device of
+  the same subject.
+
+  `nil` — the safe default, mirroring #606's absent-`source` rule — routes
+  to `to_user/2`, i.e. exactly the pre-#1088 behaviour. Reached by a reply
+  with no requester at all (bahamut's connect-welcome auto-emit) and by an
+  accumulator primed before a hot deploy. Losing a reply is worse than
+  showing it too widely, so the degradation direction is deliberate.
+
+  A dead requester (the tab closed, reloaded, or lost its socket before
+  the ircd answered) leaves the topic with no subscriber and the reply is
+  dropped. That is the intended semantics, not a gap: the question died
+  with the connection that asked it, and a modal has no meaning on a page
+  that never issued the command.
+  """
+  @spec to_requester(ctx(), String.t() | nil, map()) :: :ok | {:error, term()}
+  def to_requester(ctx, nil, payload), do: to_user(ctx, payload)
+
+  def to_requester(ctx, reply_to, payload) when is_binary(reply_to) do
+    Grappa.PubSub.broadcast_event(Topic.socket(ctx.subject_label, reply_to), payload)
+  end
+
+  @doc """
   Broadcasts `payload` on the per-channel topic
   (`grappa:user:{subject_label}/network:{network_slug}/channel:{channel}`)
   — the carrier for post-join-handshake events (messages, topic, modes,

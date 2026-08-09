@@ -173,7 +173,7 @@ defmodule Grappa.Session.EventRouterPropertyTest do
           assert is_binary(by)
           assert is_binary(reason) or is_nil(reason)
 
-        {:whois_bundle, target, accum} ->
+        {:whois_bundle, target, accum, _} ->
           assert is_binary(target)
           assert is_map(accum)
 
@@ -188,7 +188,7 @@ defmodule Grappa.Session.EventRouterPropertyTest do
         {:lusers_bundle, accum} ->
           assert is_map(accum)
 
-        {:whowas_bundle, target, accum} ->
+        {:whowas_bundle, target, accum, _} ->
           assert is_binary(target)
           assert is_map(accum)
 
@@ -204,15 +204,15 @@ defmodule Grappa.Session.EventRouterPropertyTest do
         # `lib/grappa/session/event_router.ex` so no legitimate typed
         # effect flunks on a future seed (the recurring maintenance the
         # bucket-H comment above anticipated).
-        {:names_reply, channel, roster} ->
+        {:names_reply, channel, roster, _} ->
           assert is_binary(channel)
           assert is_list(roster)
 
-        {:who_reply, target, users} ->
+        {:who_reply, target, users, _} ->
           assert is_binary(target)
           assert is_list(users)
 
-        {:server_reply, source, lines} ->
+        {:server_reply, source, lines, _} ->
           # Read the SSOT, never a copy: this allowlist had already drifted
           # narrower than the union once (#992's :admin), and a hand-spelled
           # set here fails a legitimate effect on some future seed.

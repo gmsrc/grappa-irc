@@ -40,6 +40,11 @@ defmodule Grappa.PubSub.Topic do
       direction (edge → session) and audience (per-session subscribers,
       not browser clients) — never exposed via `parse/1` or `valid?/1`
       so an external `Channel.join/3` cannot subscribe to it.
+    * `grappa:user:{user_name}/socket:{socket_ref}` — per-CONNECTION
+      addressed delivery (#1088). The ONLY shape whose audience is one
+      WebSocket rather than a whole subject: the carrier for a reply
+      that belongs to the client that asked for it. Like `ws_presence/1`
+      it is excluded from `parse/1` / `valid?/1` — see `socket/2`.
 
   Topic-shape evolution must go through this module: every broadcaster,
   every subscriber-side validator, and every router-side wildcard share
@@ -98,6 +103,39 @@ defmodule Grappa.PubSub.Topic do
       "/network:" <>
       network_slug <>
       "/channel:" <> Grappa.IRC.Identifier.canonical_target(channel_name)
+  end
+
+  @doc """
+  Builds the per-CONNECTION addressed-delivery topic (#1088).
+
+  Every other shape here partitions by SUBJECT: a user's `/who` reply
+  broadcast on `user/1` reaches every browser tab, phone and desktop
+  authenticated as that user, so a modal requested on one device opened
+  on all the others. This shape adds the missing dimension — the
+  `socket_ref` is minted once per WebSocket in `UserSocket.connect/3`
+  and the socket's user-topic channel subscribes to it on join, so a
+  broadcast here reaches exactly the connection that issued the request.
+
+  Still user-rooted (`grappa:user:{name}/socket:{ref}`) so the segment
+  ordering matches every sibling shape and a topic string carries its
+  own authz discriminator. Excluded from `parse/1` / `valid?/1` for the
+  same reason as `ws_presence/1`: those validate the public topic
+  grammar `GrappaWeb.GrappaChannel.join/3` accepts, and an addressed
+  topic must never be joinable — a client that could type its way onto
+  another connection's topic would read replies addressed to it. The
+  exclusion is structural, not a rule to remember: `parse/1`'s
+  second-segment clause matches `"network:" <> slug` only, so
+  `"socket:" <> ref` falls through to `:error`.
+
+  The reference is opaque and never leaves the server: the requesting
+  connection is known from the socket that carried the request, so
+  nothing about it rides the wire in either direction.
+  """
+  @spec socket(String.t(), String.t()) :: t()
+  def socket(user_name, socket_ref)
+      when is_binary(user_name) and user_name != "" and
+             is_binary(socket_ref) and socket_ref != "" do
+    "grappa:user:" <> user_name <> "/socket:" <> socket_ref
   end
 
   @doc """

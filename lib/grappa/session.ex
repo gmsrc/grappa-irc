@@ -116,6 +116,26 @@ defmodule Grappa.Session do
   @type subject :: {:user, Ecto.UUID.t()} | {:visitor, Ecto.UUID.t()}
 
   @typedoc """
+  #1088 — the connection an informational reply is addressed to: the
+  `socket_ref` `GrappaWeb.UserSocket.connect/3` minted for the WebSocket
+  that issued the command, or `nil` when no live connection owns the
+  request.
+
+  Every `send_*` verb whose answer arrives asynchronously as a modal or
+  card (`/who`, `/names`, `/whois`, `/whowas`, `/banlist`, `/info`,
+  `/version`, `/motd`, `/admin`, `/links`) carries one: it rides the
+  session's `*_pending` accumulator, which is the only place that already
+  correlates a request with the reply the ircd sends back minutes of
+  numerics later. `nil` degrades to the per-user fan-out — see
+  `Grappa.Session.Broadcaster.to_requester/3` for both directions.
+
+  NOT a subject, NOT a credential, and NOT `Grappa.ClientId`: it
+  identifies one transport, which is precisely the dimension the
+  user-rooted topic vocabulary lacks.
+  """
+  @type reply_to :: String.t() | nil
+
+  @typedoc """
   REV-E (H11): the dead-socket / closed-mid-write error shape that any
   `Session.send_*` wrapper can return once the Session.Server's
   underlying `IRC.Client.send_*` call observes a dead socket. Mirrors
@@ -1614,11 +1634,12 @@ defmodule Grappa.Session do
   a typed `:server_reply` (source `:info`) wire event on `Topic.user/1` —
   cic renders a dismissable modal. Returns `:ok` or `{:error, :no_session}`.
   """
-  @spec send_info(subject(), integer()) ::
+  @spec send_info(subject(), integer(), reply_to()) ::
           :ok | {:error, :no_session | send_transport_error()}
-  def send_info(subject, network_id)
-      when is_subject(subject) and is_integer(network_id) do
-    call_session(subject, network_id, :send_info)
+  def send_info(subject, network_id, reply_to)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_info, reply_to})
   end
 
   @doc """
@@ -1627,11 +1648,12 @@ defmodule Grappa.Session do
   `:version`) wire event on `Topic.user/1`. Returns `:ok` or
   `{:error, :no_session}`.
   """
-  @spec send_version(subject(), integer()) ::
+  @spec send_version(subject(), integer(), reply_to()) ::
           :ok | {:error, :no_session | send_transport_error()}
-  def send_version(subject, network_id)
-      when is_subject(subject) and is_integer(network_id) do
-    call_session(subject, network_id, :send_version)
+  def send_version(subject, network_id, reply_to)
+      when is_subject(subject) and is_integer(network_id) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_version, reply_to})
   end
 
   @doc """
@@ -1646,12 +1668,13 @@ defmodule Grappa.Session do
   `Grappa.IRC.Client.send_motd/2` (mirror of `send_who/3`; the channel door
   validates first, but the context contract stays honest for every door).
   """
-  @spec send_motd(subject(), integer(), String.t() | nil) ::
+  @spec send_motd(subject(), integer(), String.t() | nil, reply_to()) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_motd(subject, network_id, target)
+  def send_motd(subject, network_id, target, reply_to)
       when is_subject(subject) and is_integer(network_id) and
-             (is_binary(target) or is_nil(target)) do
-    call_session(subject, network_id, {:send_motd, target})
+             (is_binary(target) or is_nil(target)) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_motd, target, reply_to})
   end
 
   @doc """
@@ -1667,12 +1690,13 @@ defmodule Grappa.Session do
   `{:error, :invalid_line}` if a non-nil target's syntax is rejected by
   `Grappa.IRC.Client.send_admin/2`.
   """
-  @spec send_admin(subject(), integer(), String.t() | nil) ::
+  @spec send_admin(subject(), integer(), String.t() | nil, reply_to()) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_admin(subject, network_id, target)
+  def send_admin(subject, network_id, target, reply_to)
       when is_subject(subject) and is_integer(network_id) and
-             (is_binary(target) or is_nil(target)) do
-    call_session(subject, network_id, {:send_admin, target})
+             (is_binary(target) or is_nil(target)) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_admin, target, reply_to})
   end
 
   @doc """
@@ -1694,13 +1718,14 @@ defmodule Grappa.Session do
   in-flight request's bundle. A stuck request (withheld 365 / 481 denial)
   self-heals: past the staleness window a fresh /links clobbers + re-sends.
   """
-  @spec send_links(subject(), integer(), String.t() | nil) ::
+  @spec send_links(subject(), integer(), String.t() | nil, reply_to()) ::
           :ok
           | {:error, :no_session | :invalid_line | :links_in_flight | send_transport_error()}
-  def send_links(subject, network_id, mask)
+  def send_links(subject, network_id, mask, reply_to)
       when is_subject(subject) and is_integer(network_id) and
-             (is_binary(mask) or is_nil(mask)) do
-    call_session(subject, network_id, {:send_links, mask})
+             (is_binary(mask) or is_nil(mask)) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_links, mask, reply_to})
   end
 
   @doc """
@@ -1761,11 +1786,12 @@ defmodule Grappa.Session do
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the channel syntax is rejected by `Grappa.IRC.Client.send_banlist/2`.
   """
-  @spec send_banlist(subject(), integer(), String.t()) ::
+  @spec send_banlist(subject(), integer(), String.t(), reply_to()) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_banlist(subject, network_id, channel)
-      when is_subject(subject) and is_integer(network_id) and is_binary(channel) do
-    call_session(subject, network_id, {:send_banlist, channel})
+  def send_banlist(subject, network_id, channel, reply_to)
+      when is_subject(subject) and is_integer(network_id) and is_binary(channel) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_banlist, channel, reply_to})
   end
 
   @doc """
@@ -1791,16 +1817,34 @@ defmodule Grappa.Session do
   The channel boundary normalizes an unknown/absent client token to
   `:user`, so the atom reaching here is always one of the two.
 
+  `origin` and `reply_to` (#1088) are orthogonal axes and both survive:
+  `origin` says WHICH STORE inside a client consumes the bundle,
+  `reply_to` says WHICH CLIENT receives it at all. #606's rule (a `:rail`
+  bundle never forges the `/whois` card; a `:user` bundle also refreshes
+  the rail when it is showing that nick) is a client-local rule and is
+  untouched — it now applies on the requesting client only, which is
+  where both stores live. The one behaviour that goes away is the
+  cross-device free refresh: a `/whois` typed on the phone no longer
+  refreshes the laptop's rail. That is the fan-out this issue removes,
+  not a #606 regression.
+
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the nick or server syntax is rejected by
   `Grappa.IRC.Client.send_whois/3`.
   """
-  @spec send_whois(subject(), integer(), String.t(), String.t() | nil, :user | :rail) ::
-          :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_whois(subject, network_id, nick, server, origin)
+  @spec send_whois(
+          subject(),
+          integer(),
+          String.t(),
+          String.t() | nil,
+          :user | :rail,
+          reply_to()
+        ) :: :ok | {:error, :no_session | :invalid_line | send_transport_error()}
+  def send_whois(subject, network_id, nick, server, origin, reply_to)
       when is_subject(subject) and is_integer(network_id) and is_binary(nick) and
-             (is_binary(server) or is_nil(server)) and origin in [:user, :rail] do
-    call_session(subject, network_id, {:send_whois, nick, server, origin})
+             (is_binary(server) or is_nil(server)) and origin in [:user, :rail] and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_whois, nick, server, origin, reply_to})
   end
 
   @doc """
@@ -1817,17 +1861,18 @@ defmodule Grappa.Session do
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the nick syntax is rejected by `Grappa.IRC.Client.send_whowas/2`.
   """
-  @spec send_whowas(subject(), integer(), String.t()) ::
+  @spec send_whowas(subject(), integer(), String.t(), reply_to()) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_whowas(subject, network_id, nick)
-      when is_subject(subject) and is_integer(network_id) and is_binary(nick) do
-    call_session(subject, network_id, {:send_whowas, nick})
+  def send_whowas(subject, network_id, nick, reply_to)
+      when is_subject(subject) and is_integer(network_id) and is_binary(nick) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_whowas, nick, reply_to})
   end
 
   @doc """
   Sends `WHO <target>` upstream and primes the per-target accumulator in
   `state.who_pending` so EventRouter folds 352 RPL_WHOREPLY rows into a
-  bundle, drained into ONE ephemeral `{:who_reply, target, users}` event
+  bundle, drained into ONE ephemeral `{:who_reply, target, users, reply_to}` event
   when 315 RPL_ENDOFWHO arrives. `<target>` is a channel OR a host/nick
   mask (#221, RFC 2812 §3.6.1).
 
@@ -1844,10 +1889,11 @@ defmodule Grappa.Session do
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the target syntax is rejected by `Grappa.IRC.Client.send_who/2`.
   """
-  @spec send_who(subject(), integer(), String.t()) ::
+  @spec send_who(subject(), integer(), String.t(), reply_to()) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_who(subject, network_id, target)
-      when is_subject(subject) and is_integer(network_id) and is_binary(target) do
+  def send_who(subject, network_id, target, reply_to)
+      when is_subject(subject) and is_integer(network_id) and is_binary(target) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
     # #540 A2 / #537 — the target is NOT necessarily a channel: it may be a
     # mask (#221) or bahamut's extended-WHO flag args (`+s <server>`). Folding
     # it corrupts a case-sensitive arg — the `+`-sigil token `+A HelloWorld`
@@ -1855,7 +1901,7 @@ defmodule Grappa.Session do
     # the bouncer. The raw target ships upstream; the Server derives the
     # accumulator KEY network-aware (`fold_key/2`, for concurrent channel-WHO
     # separation) separately in its handler.
-    call_session(subject, network_id, {:send_who, target})
+    call_session(subject, network_id, {:send_who, target, reply_to})
   end
 
   @doc """
@@ -1877,11 +1923,12 @@ defmodule Grappa.Session do
   Returns `:ok`, `{:error, :no_session}`, or `{:error, :invalid_line}`
   if the channel syntax is rejected by `Grappa.IRC.Client.send_names/2`.
   """
-  @spec send_names(subject(), integer(), String.t()) ::
+  @spec send_names(subject(), integer(), String.t(), reply_to()) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_names(subject, network_id, channel)
-      when is_subject(subject) and is_integer(network_id) and is_binary(channel) do
-    call_session(subject, network_id, {:send_names, channel})
+  def send_names(subject, network_id, channel, reply_to)
+      when is_subject(subject) and is_integer(network_id) and is_binary(channel) and
+             (is_binary(reply_to) or is_nil(reply_to)) do
+    call_session(subject, network_id, {:send_names, channel, reply_to})
   end
 
   @doc """

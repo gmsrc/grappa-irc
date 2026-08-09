@@ -99,7 +99,12 @@ defmodule GrappaWeb.GrappaChannelTest do
       # fixture must carry it too (a generated bearer is fine — the budget
       # only revokes on the sever crossing, which the generous test config
       # never reaches). Overridable for the budget/sever tests.
-      current_session_id: Keyword.get(opts, :session_id, Ecto.UUID.generate())
+      current_session_id: Keyword.get(opts, :session_id, Ecto.UUID.generate()),
+      # #1088 — `UserSocket.connect/3` mints one per CONNECTION, so two
+      # fixture sockets are two connections. Generated per call on purpose:
+      # a shared constant would make the addressed-delivery tests below pass
+      # for the wrong reason (one topic, two subscribers = the fan-out again).
+      socket_ref: Keyword.get(opts, :socket_ref, Ecto.UUID.generate())
     })
   end
 
@@ -2694,6 +2699,132 @@ defmodule GrappaWeb.GrappaChannelTest do
       end
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # #1088 — an informational reply belongs to the connection that asked
+  # ---------------------------------------------------------------------------
+  #
+  # Reported by an operator whose IRC client issued `/who` against their own
+  # grappa: the WHO modal opened in cicchetto, on a client that had asked for
+  # nothing. Every one of these replies rode `Topic.user/1`, which partitions
+  # by SUBJECT and has no per-connection dimension, so one question produced a
+  # modal on every device of that subject.
+  #
+  # The oracle here is a REAL second connection, not a bare PubSub subscriber:
+  # a bystander socket joined to the same user topic, in its own process (the
+  # transport pid is whoever calls `subscribe_and_join/3`, so a second socket
+  # in THIS process would be indistinguishable from the first). It reports
+  # what it saw; the requesting socket must see the reply and the bystander
+  # must see nothing.
+  describe "#1088 — addressed informational replies" do
+    setup do
+      {irc_server, port} = start_irc_server()
+      {user, network} = setup_user_and_network_with_session(port)
+      welcome_session_on_channel(irc_server, "#snap")
+
+      {:ok, _, socket} =
+        user.name
+        |> build_socket(subject: {:user, user.id})
+        |> subscribe_and_join(Topic.user(user.name), %{})
+
+      %{irc_server: irc_server, socket: socket, user: user, network: network}
+    end
+
+    test "a /who reply reaches the requesting connection only", %{
+      irc_server: irc_server,
+      socket: socket,
+      user: user,
+      network: network
+    } do
+      bystander = start_bystander(user)
+
+      ref = push(socket, "who", %{"network_id" => network.id, "channel" => "#snap"})
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "WHO #snap\r\n"), 1_000)
+
+      IRCServer.feed(
+        irc_server,
+        ":irc.test.org 352 grappa-snap #snap alice host irc.test.org alice H :0 Alice\r\n"
+      )
+
+      IRCServer.feed(irc_server, ":irc.test.org 315 grappa-snap #snap :End of /WHO list.\r\n")
+
+      # The operator who typed it gets the modal…
+      assert_push("event", %{kind: :who_reply, target: "#snap"})
+
+      # …and the other device of the same account gets nothing. Removing the
+      # addressing turns exactly this assertion red: the bystander's join is
+      # a plain second socket, which is what the report describes.
+      assert bystander_verdict(bystander) == :nothing
+    end
+
+    test "a /whois bundle reaches the requesting connection only", %{
+      irc_server: irc_server,
+      socket: socket,
+      user: user,
+      network: network
+    } do
+      bystander = start_bystander(user)
+
+      ref = push(socket, "whois", %{"network_id" => network.id, "nick" => "alice"})
+      assert_reply(ref, :ok)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &(&1 == "WHOIS alice\r\n"), 1_000)
+
+      IRCServer.feed(
+        irc_server,
+        ":irc.test.org 311 grappa-snap alice user host * :Alice\r\n"
+      )
+
+      IRCServer.feed(irc_server, ":irc.test.org 318 grappa-snap alice :End of /WHOIS list.\r\n")
+
+      assert_push("event", %{kind: :whois_bundle, target: "alice", source: :user})
+      assert bystander_verdict(bystander) == :nothing
+    end
+
+    # The addressed topic must never be reachable by typing it. It is
+    # deliberately absent from `Topic.parse/1`'s grammar, so a client that
+    # learned (or guessed) another connection's ref still cannot subscribe to
+    # the replies addressed to it.
+    test "the per-connection topic is not joinable", %{user: user, socket: socket} do
+      assert {:error, %{error: "unknown_topic"}} =
+               user.name
+               |> build_socket(subject: {:user, user.id})
+               |> subscribe_and_join(Topic.socket(user.name, socket.assigns.socket_ref), %{})
+    end
+  end
+
+  # Joins a second socket for `user` on the user topic, from its own process
+  # so its pushes land in ITS mailbox rather than the test's. Returns a task
+  # that resolves to `:leaked` if any informational reply arrived, `:nothing`
+  # otherwise. Blocks until the join has completed, so the caller can issue
+  # the command knowing the bystander was already listening — a bystander that
+  # joined late would report `:nothing` for the wrong reason.
+  defp start_bystander(user) do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        {:ok, _, _} =
+          user.name
+          |> build_socket(subject: {:user, user.id})
+          |> subscribe_and_join(Topic.user(user.name), %{})
+
+        send(parent, {:bystander_joined, self()})
+
+        receive do
+          %Phoenix.Socket.Message{event: "event", payload: %{kind: kind}}
+          when kind in [:who_reply, :whois_bundle, :names_reply, :whowas_bundle] ->
+            :leaked
+        after
+          300 -> :nothing
+        end
+      end)
+
+    assert_receive {:bystander_joined, _}, 2_000
+    task
+  end
+
+  defp bystander_verdict(task), do: Task.await(task, 2_000)
 
   describe "join rejects malformed topics" do
     test "rejects Phase 1 grappa:network: shape (regression check)" do

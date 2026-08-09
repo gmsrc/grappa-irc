@@ -2294,7 +2294,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
-      assert :ok = Session.send_links({:user, user.id}, network.id, "all")
+      assert :ok = Session.send_links({:user, user.id}, network.id, "all", nil)
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS all\r\n"), 1_000)
 
       # Restricted mask: a bare 365 with zero 364 rows.
@@ -2319,7 +2319,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
-      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil, nil)
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 364 grappa-test hub.test hub.test :0 Hub\r\n")
@@ -2343,12 +2343,12 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
-      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil, nil)
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
 
       # Second request within the window: refused, NOT clobbering the pending.
       assert {:error, :links_in_flight} =
-               Session.send_links({:user, user.id}, network.id, nil)
+               Session.send_links({:user, user.id}, network.id, nil, nil)
 
       # The first request's 364/365 still drains a bundle (its accumulator was
       # never reset by the refused second call — the pre-#513 lost-bundle bug).
@@ -2372,7 +2372,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = await_handshake(server)
       IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
-      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil, nil)
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
 
       # Restricted network: 481 denial, NO 365 — links_pending stays set (481
@@ -2384,7 +2384,7 @@ defmodule Grappa.Session.ServerTest do
 
       # Within the window the pending is honoured → refused (no clobber).
       assert {:error, :links_in_flight} =
-               Session.send_links({:user, user.id}, network.id, nil)
+               Session.send_links({:user, user.id}, network.id, nil, nil)
 
       # Age the pending past @links_stale_ms — simulates a request abandoned
       # long ago (a real 481 that never got a 365). The clobber recovery is
@@ -2393,7 +2393,7 @@ defmodule Grappa.Session.ServerTest do
         %{s | links_pending: %{s.links_pending | requested_at: System.monotonic_time(:millisecond) - 20_000}}
       end)
 
-      assert :ok = Session.send_links({:user, user.id}, network.id, nil)
+      assert :ok = Session.send_links({:user, user.id}, network.id, nil, nil)
       {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "LINKS\r\n"), 1_000)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -9595,7 +9595,7 @@ defmodule Grappa.Session.ServerTest do
       network: network,
       pid: pid
     } do
-      assert :ok = Session.send_banlist({:user, user.id}, network.id, "#test")
+      assert :ok = Session.send_banlist({:user, user.id}, network.id, "#test", nil)
 
       assert {:ok, "MODE #test b\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "MODE #test b\r\n"), 1_000)
@@ -9650,12 +9650,12 @@ defmodule Grappa.Session.ServerTest do
       assert {:error, :no_session} = Session.send_ban({:user, uid}, 9_999, "#x", "a")
       assert {:error, :no_session} = Session.send_unban({:user, uid}, 9_999, "#x", "*!*@h")
       assert {:error, :no_session} = Session.send_invite({:user, uid}, 9_999, "#x", "a")
-      assert {:error, :no_session} = Session.send_banlist({:user, uid}, 9_999, "#x")
+      assert {:error, :no_session} = Session.send_banlist({:user, uid}, 9_999, "#x", nil)
       assert {:error, :no_session} = Session.send_umode({:user, uid}, 9_999, "+i")
       assert {:error, :no_session} = Session.send_mode({:user, uid}, 9_999, "#x", "+m", [])
-      assert {:error, :no_session} = Session.send_whois({:user, uid}, 9_999, "alice", nil, :user)
-      assert {:error, :no_session} = Session.send_who({:user, uid}, 9_999, "#bofh")
-      assert {:error, :no_session} = Session.send_names({:user, uid}, 9_999, "#bofh")
+      assert {:error, :no_session} = Session.send_whois({:user, uid}, 9_999, "alice", nil, :user, nil)
+      assert {:error, :no_session} = Session.send_who({:user, uid}, 9_999, "#bofh", nil)
+      assert {:error, :no_session} = Session.send_names({:user, uid}, 9_999, "#bofh", nil)
     end
   end
 
@@ -9679,7 +9679,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "/whois <nick> sends WHOIS upstream", %{server: server, user: user, network: network, pid: pid} do
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user, nil)
 
       assert {:ok, "WHOIS alice\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
@@ -9705,7 +9705,7 @@ defmodule Grappa.Session.ServerTest do
           %{state | whois_pending: %{"ghost" => %{target_display: "ghost", __primed_at_ms: stale_at}}}
         end)
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS fresh\r\n"), 1_000)
 
       state = SessionStateHelpers.fetch(pid)
@@ -9728,7 +9728,7 @@ defmodule Grappa.Session.ServerTest do
           %{state | whois_pending: %{"recent" => %{target_display: "recent", __primed_at_ms: recent_at}}}
         end)
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "fresh", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS fresh\r\n"), 1_000)
 
       state = SessionStateHelpers.fetch(pid)
@@ -9775,7 +9775,7 @@ defmodule Grappa.Session.ServerTest do
     } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 311 grappa-test alice alice_u alice.host * :Alice Liddell\r\n")
@@ -9815,7 +9815,7 @@ defmodule Grappa.Session.ServerTest do
     } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :rail)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :rail, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 311 grappa-test alice alice_u alice.host * :Alice\r\n")
@@ -9836,7 +9836,7 @@ defmodule Grappa.Session.ServerTest do
     } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
@@ -9865,7 +9865,7 @@ defmodule Grappa.Session.ServerTest do
       assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
       assert QueryWindows.open?({:user, user.id}, network.id, "ghost")
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       # Subscribe AFTER the outbound send so the mailbox holds only the 401s.
@@ -9917,7 +9917,7 @@ defmodule Grappa.Session.ServerTest do
       # row would ALSO be duplicated into the WHOIS card's extra_lines.
       assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       :ok =
@@ -9970,7 +9970,7 @@ defmodule Grappa.Session.ServerTest do
       # bundle is approximate by construction (P-0a).
       assert {:ok, _} = Session.send_privmsg({:user, user.id}, network.id, "ghost", "hi")
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS ghost\r\n"), 1_000)
 
       :ok =
@@ -9982,7 +9982,7 @@ defmodule Grappa.Session.ServerTest do
 
       # Re-prime BETWEEN the absorption and the first WHOIS's own reply — the
       # interleaving that actually destroys the record.
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "ghost", nil, :user, nil)
 
       IRCServer.feed(server, ":irc.test.org 401 grappa-test ghost :No such nick/channel\r\n")
       IRCServer.feed(server, ":irc.test.org 318 grappa-test ghost :End of /WHOIS list\r\n")
@@ -10013,7 +10013,7 @@ defmodule Grappa.Session.ServerTest do
     } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user)
+      assert :ok = Session.send_whois({:user, user.id}, network.id, "alice", nil, :user, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHOIS alice\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 311 grappa-test ALICE alice_u alice.host * :Alice\r\n")
@@ -10133,7 +10133,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
       # Operator issues /whowas alice — primes whowas_pending["alice"].
-      assert :ok = Grappa.Session.send_whowas({:user, user.id}, network.id, "alice")
+      assert :ok = Grappa.Session.send_whowas({:user, user.id}, network.id, "alice", nil)
 
       # Bahamut emits the WHOWAS reply: 314 (historical user), 312
       # (server + ctime logoff_time), 369 (terminator).
@@ -10176,7 +10176,7 @@ defmodule Grappa.Session.ServerTest do
          } do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
-      assert :ok = Grappa.Session.send_whowas({:user, user.id}, network.id, "ghost")
+      assert :ok = Grappa.Session.send_whowas({:user, user.id}, network.id, "ghost", nil)
 
       IRCServer.feed(
         server,
@@ -10208,7 +10208,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
       # Operator issues /banlist #test — primes banlist_pending["#test"].
-      assert :ok = Grappa.Session.send_banlist({:user, user.id}, network.id, "#test")
+      assert :ok = Grappa.Session.send_banlist({:user, user.id}, network.id, "#test", nil)
 
       # Bahamut emits the ban list: 367 rows then 368 terminator.
       IRCServer.feed(
@@ -10277,7 +10277,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "/names #channel sends NAMES upstream", %{server: server, user: user, network: network, pid: pid} do
-      assert :ok = Session.send_names({:user, user.id}, network.id, "#bofh")
+      assert :ok = Session.send_names({:user, user.id}, network.id, "#bofh", nil)
 
       assert {:ok, "NAMES #bofh\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "NAMES #bofh\r\n"), 1_000)
@@ -10294,7 +10294,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.channel(user.name, network.slug, "$server"))
 
-      assert :ok = Session.send_names({:user, user.id}, network.id, "#bofh")
+      assert :ok = Session.send_names({:user, user.id}, network.id, "#bofh", nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "NAMES #bofh\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 353 grappa-test = #bofh :carol @alice +bob\r\n")
@@ -10347,7 +10347,7 @@ defmodule Grappa.Session.ServerTest do
         500 -> flunk("expected initial members_seeded after JOIN")
       end
 
-      assert :ok = Session.send_names({:user, user.id}, network.id, "#bofh")
+      assert :ok = Session.send_names({:user, user.id}, network.id, "#bofh", nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "NAMES #bofh\r\n"), 1_000)
 
       IRCServer.feed(server, ":irc.test.org 353 grappa-test = #bofh :grappa-test @alice +bob\r\n")
@@ -10400,7 +10400,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "/who #channel sends WHO upstream", %{server: server, user: user, network: network, pid: pid} do
-      assert :ok = Session.send_who({:user, user.id}, network.id, "#bofh")
+      assert :ok = Session.send_who({:user, user.id}, network.id, "#bofh", nil)
 
       assert {:ok, "WHO #bofh\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "WHO #bofh\r\n"), 1_000)
@@ -10413,7 +10413,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.channel(user.name, network.slug, "$server"))
 
-      assert :ok = Session.send_who({:user, user.id}, network.id, "#bofh")
+      assert :ok = Session.send_who({:user, user.id}, network.id, "#bofh", nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHO #bofh\r\n"), 1_000)
 
       IRCServer.feed(
@@ -10454,6 +10454,55 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #1088 — the addressing itself, at the level where it is decided. The
+    # test above is now also the safe-default pin: it passes `reply_to: nil`
+    # and still expects `Topic.user/1`, so a request with no owning
+    # connection (an accumulator primed before a hot deploy) keeps the
+    # pre-#1088 fan-out rather than vanishing.
+    #
+    # This one pins the other branch, and the `refute` is the half that
+    # matters: reaching the requester is not enough if the bundle ALSO still
+    # fans out — that was the bug, and a "did the right client get it" test
+    # alone would stay green through it.
+    test "a /who issued by a connection is delivered to that connection's topic only (#1088)",
+         %{server: server, user: user, network: network, pid: pid} do
+      socket_ref = "sock-#{System.unique_integer([:positive])}"
+      addressed = Topic.socket(user.name, socket_ref)
+      fanned_out = Topic.user(user.name)
+
+      # Subscribed to BOTH, and the assertions key on `%Broadcast{}.topic`:
+      # that is what makes this falsifiable. Matching on the payload alone
+      # would pass on the pre-#1088 fan-out too, since this process is an
+      # ear on the user topic as well.
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, addressed)
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, fanned_out)
+
+      assert :ok = Session.send_who({:user, user.id}, network.id, "#bofh", socket_ref)
+      _ = IRCServer.wait_for_line(server, &(&1 == "WHO #bofh\r\n"), 1_000)
+
+      IRCServer.feed(
+        server,
+        ":irc.test.org 352 grappa-test #bofh au ah irc.test.org alice H@ :0 Alice Liddell\r\n"
+      )
+
+      IRCServer.feed(server, ":irc.test.org 315 grappa-test #bofh :End of /WHO list\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^addressed,
+                       event: "event",
+                       payload: %{kind: :who_reply, target: "#bofh", users: [%{nick: "alice"}]}
+                     },
+                     1_500
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       topic: ^fanned_out,
+                       payload: %{kind: :who_reply}
+                     },
+                     200
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     # #221 — /who <mask> END-TO-END. The bug: a masked WHO produced TOTAL
     # SILENCE (no 352, no 315, nothing in cic). Two independent breaks —
     # (1) the outbound WHO was channel-gated so the mask never left, and
@@ -10467,7 +10516,7 @@ defmodule Grappa.Session.ServerTest do
 
       mask = "*!*@*.libera.chat"
 
-      assert :ok = Session.send_who({:user, user.id}, network.id, mask)
+      assert :ok = Session.send_who({:user, user.id}, network.id, mask, nil)
 
       # Break (1): the mask actually leaves the bouncer.
       assert {:ok, _} =
@@ -10502,7 +10551,7 @@ defmodule Grappa.Session.ServerTest do
 
       mask = "*!*@nonexistent.example"
 
-      assert :ok = Session.send_who({:user, user.id}, network.id, mask)
+      assert :ok = Session.send_who({:user, user.id}, network.id, mask, nil)
       _ = IRCServer.wait_for_line(server, &(&1 == "WHO #{mask}\r\n"), 1_000)
 
       # No 352 — just the terminator (zero-match case).

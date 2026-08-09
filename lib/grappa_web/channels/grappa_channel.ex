@@ -24,7 +24,10 @@ defmodule GrappaWeb.GrappaChannel do
      fastlane (encoded once and written directly to the transport →
      another WS frame). Net effect: 1 broadcast → 2 frames per
      message. This was BUG 6 — the sidebar unread badge bumped by 2
-     on every PRIVMSG.
+     on every PRIVMSG. The rule is about the channel's OWN topic: a
+     FOREIGN topic carries no fastlane, so subscribing to one is the
+     supported way to receive on a second channel (#1088's
+     `subscribe_socket_topic/2`, mirroring `AdminChannel`'s #215 leg).
   4. Kick off the after-join snapshot via `Process.send_after/3` with
      `:after_join` so the costly DB + session queries run after the
      join callback returns — `join/3` must be fast (Phoenix blocks the
@@ -149,9 +152,10 @@ defmodule GrappaWeb.GrappaChannel do
   dispatcher and the per-socket fastlane — a single WS frame per
   connected socket on the topic. The wire-shape contract lives at the
   broadcasting boundary (`Grappa.Session.Server` via
-  `Grappa.Scrollback.Wire.message_payload/1`). This module does NOT
-  define `handle_info({:event, _}, _)` — there is no manual subscribe
-  and the fastlane bypasses `handle_info/2` entirely.
+  `Grappa.Scrollback.Wire.message_payload/1`). For the channel's own
+  topic the fastlane bypasses `handle_info/2` entirely; the ONE
+  `handle_info(%Phoenix.Socket.Broadcast{}, _)` clause here serves
+  #1088's foreign per-connection topic, which has no fastlane.
 
   Accepted topic shapes (single source of truth in `Grappa.PubSub.Topic`):
 
@@ -240,9 +244,11 @@ defmodule GrappaWeb.GrappaChannel do
       # in `GrappaWeb.GrappaChannelTest`.
       parsed = canonicalize_topic(parsed)
 
-      # NO manual `Phoenix.PubSub.subscribe/2` here — the framework's
-      # fastlane subscription (installed by Phoenix.Channel.Server.init/1)
-      # is the ONLY subscriber needed. See moduledoc + BUG 6.
+      # NO manual `Phoenix.PubSub.subscribe/2` on THIS channel's own topic —
+      # the framework's fastlane subscription (installed by
+      # Phoenix.Channel.Server.init/1) is the ONLY subscriber needed. See
+      # moduledoc + BUG 6.
+      subscribe_socket_topic(parsed, socket)
       Process.send_after(self(), {:after_join, parsed}, 0)
       {:ok, join_reply(parsed), socket}
     else
@@ -250,6 +256,52 @@ defmodule GrappaWeb.GrappaChannel do
       {:error, :forbidden} -> {:error, %{error: "forbidden"}}
     end
   end
+
+  # #1088 — addressed delivery. This IS a manual `Phoenix.PubSub.subscribe/2`
+  # and it does NOT reintroduce BUG 6: the doubled push happened because a
+  # manual subscription sat on the SAME topic as the framework's fastlane, so
+  # one broadcast was written twice to one transport. `Topic.socket/2` is a
+  # DIFFERENT topic that no fastlane is installed on — the only subscriber is
+  # this process, delivery arrives as a `%Phoenix.Socket.Broadcast{}` in
+  # `handle_info/2`, and `push/3` turns it into exactly one frame. Same
+  # foreign-topic idiom `GrappaWeb.AdminChannel` already uses for #215's
+  # session log.
+  #
+  # Subscribed here rather than in `:after_join` on purpose: `after_join` is
+  # a `send_after(…, 0)`, so it races the first inbound verb, and a reply
+  # broadcast before the subscription lands is silently dropped. Also cheap
+  # (an ETS insert), which `join/3` requires — Phoenix blocks the client
+  # until it returns.
+  #
+  # ONLY the user topic subscribes. A socket holds one GrappaChannel process
+  # per joined topic (user + network + one per channel), all sharing the same
+  # `socket_ref`; subscribing from each would deliver N copies of one reply to
+  # one browser. The user topic is the right one because cic joins it first
+  # and dispatches every informational reply from `lib/userTopic.ts` — an
+  # addressed reply must arrive on the same client-side door the fan-out used,
+  # which is what makes this change invisible to cic.
+  @spec subscribe_socket_topic(Topic.parsed(), Phoenix.Socket.t()) :: :ok
+  defp subscribe_socket_topic({:user, user_name}, socket) do
+    :ok =
+      Phoenix.PubSub.subscribe(
+        Grappa.PubSub,
+        Topic.socket(user_name, socket.assigns.socket_ref)
+      )
+  end
+
+  defp subscribe_socket_topic(_, _), do: :ok
+
+  # #1088 — the connection an informational reply must come back to. Read off
+  # the socket that carried the command rather than off the payload: the
+  # client never names itself, so a hostile or buggy one cannot claim another
+  # connection's replies, and the whole change stays invisible to cic.
+  #
+  # Every GrappaChannel process of a socket sees the same value (it is a
+  # connect-time assign), so it does not matter which topic the verb was
+  # pushed on — the reply is delivered on the socket's user topic, which is
+  # where cic dispatches informational events from.
+  @spec reply_to(Phoenix.Socket.t()) :: Session.reply_to()
+  defp reply_to(socket), do: socket.assigns.socket_ref
 
   # UX-4 bucket A — canonicalise the channel segment of a per-channel
   # topic so the read-side (cursor, window_counts, snapshot) resolves the
@@ -400,6 +452,20 @@ defmodule GrappaWeb.GrappaChannel do
   def handle_info({:after_join, {:network, _, _}}, socket) do
     # No snapshot for network-level topics — they carry connection-state
     # events only; topic+modes are delivered per-channel.
+    {:noreply, socket}
+  end
+
+  # #1088 — the addressed-delivery leg. Only the user-topic channel is
+  # subscribed to `Topic.socket/2` (see `subscribe_socket_topic/2`), and that
+  # topic carries no fastlane, so the broadcast lands here as a struct and is
+  # forwarded verbatim: same `"event"` name, same payload the fan-out used to
+  # carry, one frame. cic cannot tell the difference — which is the point.
+  #
+  # No catch-all `handle_info/2` follows, deliberately: an unmatched message
+  # in a channel process should crash loudly rather than be absorbed by a net
+  # that hides the next bug (CLAUDE.md, "no silent-swallow at boundaries").
+  def handle_info(%Phoenix.Socket.Broadcast{event: event, payload: payload}, socket) do
+    push(socket, event, payload)
     {:noreply, socket}
   end
 
@@ -699,7 +765,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel) end,
-      fn subject -> Session.send_banlist(subject, network_id, channel) end
+      fn subject -> Session.send_banlist(subject, network_id, channel, reply_to(socket)) end
     )
   end
 
@@ -763,7 +829,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick, server: server) end,
-      fn subject -> Session.send_whois(subject, network_id, nick, server, origin) end
+      fn subject -> Session.send_whois(subject, network_id, nick, server, origin, reply_to(socket)) end
     )
   end
 
@@ -778,7 +844,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick) end,
-      fn subject -> Session.send_whois(subject, network_id, nick, nil, origin) end
+      fn subject -> Session.send_whois(subject, network_id, nick, nil, origin, reply_to(socket)) end
     )
   end
 
@@ -796,7 +862,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(nick: nick) end,
-      fn subject -> Session.send_whowas(subject, network_id, nick) end
+      fn subject -> Session.send_whowas(subject, network_id, nick, reply_to(socket)) end
     )
   end
 
@@ -840,7 +906,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> {:ok, :ok} end,
-      fn subject -> Session.send_info(subject, network_id) end
+      fn subject -> Session.send_info(subject, network_id, reply_to(socket)) end
     )
   end
 
@@ -853,7 +919,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> {:ok, :ok} end,
-      fn subject -> Session.send_version(subject, network_id) end
+      fn subject -> Session.send_version(subject, network_id, reply_to(socket)) end
     )
   end
 
@@ -875,7 +941,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_server_target(target) end,
-      fn subject -> Session.send_motd(subject, network_id, target) end
+      fn subject -> Session.send_motd(subject, network_id, target, reply_to(socket)) end
     )
   end
 
@@ -900,7 +966,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_server_target(target) end,
-      fn subject -> Session.send_admin(subject, network_id, target) end
+      fn subject -> Session.send_admin(subject, network_id, target, reply_to(socket)) end
     )
   end
 
@@ -924,7 +990,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_links_mask(mask) end,
-      fn subject -> Session.send_links(subject, network_id, mask) end
+      fn subject -> Session.send_links(subject, network_id, mask, reply_to(socket)) end
     )
   end
 
@@ -973,7 +1039,7 @@ defmodule GrappaWeb.GrappaChannel do
       # wire back-compat with cic (pushWho still sends `{network_id,
       # channel}`); the value may be a mask or a multi-token flag string.
       fn -> validate_args(who_target: channel) end,
-      fn subject -> Session.send_who(subject, network_id, channel) end
+      fn subject -> Session.send_who(subject, network_id, channel, reply_to(socket)) end
     )
   end
 
@@ -995,7 +1061,7 @@ defmodule GrappaWeb.GrappaChannel do
     dispatch_subject_verb(
       socket,
       fn -> validate_args(channel: channel) end,
-      fn subject -> Session.send_names(subject, network_id, channel) end
+      fn subject -> Session.send_names(subject, network_id, channel, reply_to(socket)) end
     )
   end
 

@@ -775,6 +775,18 @@ defmodule Grappa.Session.Server do
           # ever connected, process uptime when we died pre-connect.
           started_at: DateTime.t(),
           connected_at: DateTime.t() | nil,
+          # #1088 — EVERY accumulator below that is primed by a `:send_*`
+          # request also carries a `:reply_to` key: the `socket_ref` of the
+          # WebSocket that asked, or `nil`. It is routing metadata, not
+          # payload — the drain lifts it into the effect's last element and
+          # `apply_effects` addresses the bundle with it, while the wire
+          # builders extract their fields explicitly so it never reaches the
+          # client (same invisibility as `:__primed_at_ms`). The effect-shape
+          # comments below name the pre-#1088 arity; the current union is
+          # `t:Grappa.Session.EventRouter.effect/0`, which is the SSOT.
+          # `lusers_pending` is the one exception — see the `:lusers_bundle`
+          # arm of `apply_effects/2` for why it keeps the fan-out.
+          #
           # C2 — per-target WHOIS accumulator. Keyed by lowercased target
           # nick. Entry shape (all fields optional except target_display):
           # `%{target_display, user, host, realname, server, server_info,
@@ -1894,28 +1906,36 @@ defmodule Grappa.Session.Server do
   # what separates an on-demand /motd from the connect-time auto-MOTD). Priming
   # before the send is safe: replies can only arrive after the send returns
   # (same mailbox-serialized ordering :send_who relies on).
-  def handle_call(:send_info, _, state) do
-    {:reply, Client.send_info(state.client), %{state | info_pending: %{lines: []}}}
+  # #1088 — `reply_to` is stashed in the accumulator alongside the lines,
+  # because the accumulator is the only structure that already survives from
+  # the request to the reply burst that answers it. The drain lifts it back
+  # out into the effect; `apply_effects` addresses the bundle with it.
+  def handle_call({:send_info, reply_to}, _, state) do
+    {:reply, Client.send_info(state.client),
+     %{state | info_pending: %{lines: [], reply_to: reply_to}}}
   end
 
-  def handle_call(:send_version, _, state) do
-    {:reply, Client.send_version(state.client), %{state | version_pending: %{lines: []}}}
+  def handle_call({:send_version, reply_to}, _, state) do
+    {:reply, Client.send_version(state.client),
+     %{state | version_pending: %{lines: [], reply_to: reply_to}}}
   end
 
   # #374 — /motd [<target>]. The optional target routes the query through a
   # named server (or 402 ERR_NOSUCHSERVER when unknown); nil keeps the bare
   # /motd. Priming motd_pending is target-independent — the reply burst (or
   # 402 terminator) drains the modal either way.
-  def handle_call({:send_motd, target}, _, state) do
-    {:reply, Client.send_motd(state.client, target), %{state | motd_pending: %{lines: []}}}
+  def handle_call({:send_motd, target, reply_to}, _, state) do
+    {:reply, Client.send_motd(state.client, target),
+     %{state | motd_pending: %{lines: [], reply_to: reply_to}}}
   end
 
   # #992 — /admin [<target>]. Same optional-target shape as /motd (bahamut
   # routes both through the same `hunt_server`), and the same
   # target-independent priming: whichever of the four terminators comes back
   # — 259, 423, 402 or 447 — drains the modal and clears the flag.
-  def handle_call({:send_admin, target}, _, state) do
-    {:reply, Client.send_admin(state.client, target), %{state | admin_pending: %{lines: []}}}
+  def handle_call({:send_admin, target, reply_to}, _, state) do
+    {:reply, Client.send_admin(state.client, target),
+     %{state | admin_pending: %{lines: [], reply_to: reply_to}}}
   end
 
   # #238/#513 — /links [<mask>]. Prime the accumulator BEFORE the send so the
@@ -1934,7 +1954,7 @@ defmodule Grappa.Session.Server do
   # brick /links — past @links_stale_ms a fresh request clobbers + re-sends.
   # `is_integer(ts)` guard first: `now - nil` would raise, and `n < nil` is
   # `true` under Erlang term order — never compare against a possibly-nil ts.
-  def handle_call({:send_links, mask}, _, state) do
+  def handle_call({:send_links, mask, reply_to}, _, state) do
     now = System.monotonic_time(:millisecond)
 
     case state.links_pending do
@@ -1943,7 +1963,10 @@ defmodule Grappa.Session.Server do
 
       _ ->
         {:reply, Client.send_links(state.client, mask),
-         %{state | links_pending: %{entries: [], mask: mask, requested_at: now}}}
+         %{
+           state
+           | links_pending: %{entries: [], mask: mask, requested_at: now, reply_to: reply_to}
+         }}
     end
   end
 
@@ -2041,11 +2064,15 @@ defmodule Grappa.Session.Server do
   # MODE line ships the RAW `channel` upstream (wire stays as-typed). On
   # send_line failure the accumulator stays primed — harmless until the
   # next /banlist replaces the entry.
-  def handle_call({:send_banlist, channel}, _, state) when is_binary(channel) do
+  def handle_call({:send_banlist, channel, reply_to}, _, state) when is_binary(channel) do
     chan_key = fold_key(state, channel)
 
     next_pending =
-      prime_pending(state.banlist_pending, chan_key, %{channel_display: chan_key, entries: []})
+      prime_pending(state.banlist_pending, chan_key, %{
+        channel_display: chan_key,
+        entries: [],
+        reply_to: reply_to
+      })
 
     next_state = %{state | banlist_pending: next_pending}
     {:reply, Client.send_banlist(state.client, channel), next_state}
@@ -2072,13 +2099,24 @@ defmodule Grappa.Session.Server do
   # fixed by splitting the key (the ircd numerics carry no request identity):
   # the cic consumer rule (rail takes its own + the shown nick's user bundle)
   # turns that collapse into a harmless cache hit, not a race.
-  def handle_call({:send_whois, target, server, origin}, _, state)
+  # #1088 — `reply_to` shares that per-target key and therefore that collapse:
+  # if two CLIENTS whois the same nick inside one 318 window, the bundle goes
+  # to whoever asked last and the first sees nothing. Not fixed by splitting
+  # the key, for the same reason #606 declined to: the ircd numerics carry no
+  # request identity, so the second bundle could not be told from the first
+  # even with two accumulators. Losing a duplicate answer to a duplicate
+  # question beats the fan-out this issue is removing.
+  def handle_call({:send_whois, target, server, origin, reply_to}, _, state)
       when is_binary(target) and (is_binary(server) or is_nil(server)) and
              origin in [:user, :rail] do
     nick_key = fold_key(state, target)
 
     next_pending =
-      prime_pending(state.whois_pending, nick_key, %{target_display: target, source: origin})
+      prime_pending(state.whois_pending, nick_key, %{
+        target_display: target,
+        source: origin,
+        reply_to: reply_to
+      })
 
     next_state = %{state | whois_pending: next_pending}
     {:reply, Client.send_whois(state.client, target, server), next_state}
@@ -2093,11 +2131,15 @@ defmodule Grappa.Session.Server do
   # same target (running /whowas twice without a 369 in between drops
   # the first). On send_line failure the accumulator stays primed —
   # harmless until the next /whowas replaces the entry.
-  def handle_call({:send_whowas, target}, _, state) when is_binary(target) do
+  def handle_call({:send_whowas, target, reply_to}, _, state) when is_binary(target) do
     nick_key = fold_key(state, target)
 
     next_pending =
-      prime_pending(state.whowas_pending, nick_key, %{target_display: target, entries: []})
+      prime_pending(state.whowas_pending, nick_key, %{
+        target_display: target,
+        entries: [],
+        reply_to: reply_to
+      })
 
     next_state = %{state | whowas_pending: next_pending}
     {:reply, Client.send_whowas(state.client, target), next_state}
@@ -2118,9 +2160,16 @@ defmodule Grappa.Session.Server do
   # On send_line failure the accumulator stays primed — a transient send
   # error doesn't strand the WHO flow because no numerics will arrive to
   # drain it; the @pending_ttl_ms sweep on the next prime reaps it.
-  def handle_call({:send_who, target}, _, state) when is_binary(target) do
+  def handle_call({:send_who, target, reply_to}, _, state) when is_binary(target) do
     chan_key = fold_key(state, target)
-    next_pending = prime_pending(state.who_pending, chan_key, %{target_display: target, replies: []})
+
+    next_pending =
+      prime_pending(state.who_pending, chan_key, %{
+        target_display: target,
+        replies: [],
+        reply_to: reply_to
+      })
+
     next_state = %{state | who_pending: next_pending}
     {:reply, Client.send_who(state.client, target), next_state}
   end
@@ -2140,11 +2189,15 @@ defmodule Grappa.Session.Server do
   # ephemeral names_reply (Topic.user); the operator's focused window is
   # irrelevant, so no origin_window is threaded (modal renders
   # network-scoped, last-write-wins).
-  def handle_call({:send_names, target}, _, state) when is_binary(target) do
+  def handle_call({:send_names, target, reply_to}, _, state) when is_binary(target) do
     chan_key = fold_key(state, target)
 
     next_pending =
-      prime_pending(state.names_pending, chan_key, %{target_display: chan_key, names: []})
+      prime_pending(state.names_pending, chan_key, %{
+        target_display: chan_key,
+        names: [],
+        reply_to: reply_to
+      })
 
     next_state = %{state | names_pending: next_pending}
     {:reply, Client.send_names(state.client, target), next_state}
@@ -5091,13 +5144,18 @@ defmodule Grappa.Session.Server do
   # modal. Same mIRC-tier sort + per-member projection as :members_seeded
   # (the authoritative sidebar set) — this is a parallel VIEW, not a
   # second source of truth.
-  defp apply_effects([{:names_reply, channel, roster} | rest], state) do
+  defp apply_effects([{:names_reply, channel, roster, reply_to} | rest], state) do
     members =
       roster
       |> Enum.map(fn {nick, modes} -> %{nick: nick, modes: modes} end)
       |> Enum.sort_by(&{member_sort_tier(&1.modes), &1.nick})
 
-    :ok = Broadcaster.to_user(state, SessionWire.names_reply(state.network_slug, channel, members))
+    :ok =
+      Broadcaster.to_requester(
+        state,
+        reply_to,
+        SessionWire.names_reply(state.network_slug, channel, members)
+      )
 
     apply_effects(rest, state)
   end
@@ -5111,8 +5169,13 @@ defmodule Grappa.Session.Server do
   # so the sigil-tier sort the names arm applies does not fit — the flat
   # per-user table is shown in arrival order. Projection to the JSON-safe
   # wire shape lives in `SessionWire.who_reply/3`.
-  defp apply_effects([{:who_reply, target, users} | rest], state) do
-    :ok = Broadcaster.to_user(state, SessionWire.who_reply(state.network_slug, target, users))
+  defp apply_effects([{:who_reply, target, users, reply_to} | rest], state) do
+    :ok =
+      Broadcaster.to_requester(
+        state,
+        reply_to,
+        SessionWire.who_reply(state.network_slug, target, users)
+      )
 
     apply_effects(rest, state)
   end
@@ -5122,8 +5185,13 @@ defmodule Grappa.Session.Server do
   # ephemeral, NOT persisted (mirrors :who_reply). cic's serverReplyModal
   # keys by network and renders a dismissable retro modal; it maps `source`
   # to a human title (the server emits no display strings).
-  defp apply_effects([{:server_reply, source, lines} | rest], state) do
-    :ok = Broadcaster.to_user(state, SessionWire.server_reply(state.network_slug, source, lines))
+  defp apply_effects([{:server_reply, source, lines, reply_to} | rest], state) do
+    :ok =
+      Broadcaster.to_requester(
+        state,
+        reply_to,
+        SessionWire.server_reply(state.network_slug, source, lines)
+      )
 
     apply_effects(rest, state)
   end
@@ -5355,8 +5423,13 @@ defmodule Grappa.Session.Server do
   # aggregated payload on the user-level topic. Per spec #2: ephemeral
   # — NOT persisted in scrollback. cic's `whoisCard.ts` keys by network
   # and replaces on each new bundle.
-  defp apply_effects([{:whois_bundle, target, accum} | rest], state) do
-    :ok = Broadcaster.to_user(state, SessionWire.whois_bundle(state.network_slug, target, accum))
+  defp apply_effects([{:whois_bundle, target, accum, reply_to} | rest], state) do
+    :ok =
+      Broadcaster.to_requester(
+        state,
+        reply_to,
+        SessionWire.whois_bundle(state.network_slug, target, accum)
+      )
 
     apply_effects(rest, state)
   end
@@ -5367,8 +5440,13 @@ defmodule Grappa.Session.Server do
   # field). cic dispatches in `userTopic.ts`'s `whowas_bundle` arm into
   # the per-network `whowasCard.ts` store (last-write-wins replacement
   # per network). NOT persisted — operator types /whowas to refresh.
-  defp apply_effects([{:whowas_bundle, target, accum} | rest], state) do
-    :ok = Broadcaster.to_user(state, SessionWire.whowas_bundle(state.network_slug, target, accum))
+  defp apply_effects([{:whowas_bundle, target, accum, reply_to} | rest], state) do
+    :ok =
+      Broadcaster.to_requester(
+        state,
+        reply_to,
+        SessionWire.whowas_bundle(state.network_slug, target, accum)
+      )
 
     apply_effects(rest, state)
   end
@@ -5378,8 +5456,13 @@ defmodule Grappa.Session.Server do
   # `channel` fields). cic dispatches in `userTopic.ts`'s `banlist_bundle`
   # arm into the per-network `banlistCard.ts` store (last-write-wins per
   # network). NOT persisted — operator types /banlist to refresh.
-  defp apply_effects([{:banlist_bundle, channel, accum} | rest], state) do
-    :ok = Broadcaster.to_user(state, SessionWire.banlist_bundle(state.network_slug, channel, accum))
+  defp apply_effects([{:banlist_bundle, channel, accum, reply_to} | rest], state) do
+    :ok =
+      Broadcaster.to_requester(
+        state,
+        reply_to,
+        SessionWire.banlist_bundle(state.network_slug, channel, accum)
+      )
 
     apply_effects(rest, state)
   end
@@ -5418,6 +5501,22 @@ defmodule Grappa.Session.Server do
   # `lusers_bundle` arm into the per-network `lusersBundle.ts` store
   # (last-write-wins replacement). NOT persisted — operator types
   # /lusers to refresh.
+  #
+  # #1088 — the ONE member of the informational family that keeps the
+  # per-user fan-out, and it is a boundary, not an oversight. Every sibling
+  # accumulator is created by the REQUEST (`prime_pending` in the `:send_*`
+  # handler), which is what lets it carry the requesting connection. This one
+  # is created by the REPLY: bahamut emits the same 7-numeric sequence on
+  # connect-welcome with nobody having asked, and 251 RPL_LUSERCLIENT resets
+  # the accumulator on arrival — so a `reply_to` primed by `/lusers` would
+  # either be wiped by its own reply or, if preserved across the reset,
+  # survive a never-terminated request and address the NEXT auto-emit to a
+  # stale socket. Nothing is lost by leaving it: #248 already gates the card
+  # on a consume-once client-local latch set when the operator types
+  # `/lusers`, so a bystander client drops this bundle. That latch answers
+  # "did anyone ask", the axis this issue does not touch; it happens to
+  # answer "did I ask" too. Addressing this bundle would trade a working
+  # guarantee for a stale-addressing hazard.
   defp apply_effects([{:lusers_bundle, accum} | rest], state) do
     :ok = Broadcaster.to_user(state, SessionWire.lusers_bundle(state.network_slug, accum))
 
@@ -5430,8 +5529,13 @@ defmodule Grappa.Session.Server do
   # `userTopic.ts`'s `links_bundle` arm into the per-network `linksModal.ts`
   # store (last-write-wins replacement) and renders the interactive
   # topology map. NOT persisted — operator types /links to refresh.
-  defp apply_effects([{:links_bundle, accum} | rest], state) do
-    :ok = Broadcaster.to_user(state, SessionWire.links_bundle(state.network_slug, accum))
+  defp apply_effects([{:links_bundle, accum, reply_to} | rest], state) do
+    :ok =
+      Broadcaster.to_requester(
+        state,
+        reply_to,
+        SessionWire.links_bundle(state.network_slug, accum)
+      )
 
     apply_effects(rest, state)
   end

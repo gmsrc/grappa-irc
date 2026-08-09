@@ -198,22 +198,29 @@ defmodule Grappa.Session.EventRouter do
           | {:channel_created, String.t(), DateTime.t()}
           | {:away_confirmed, :present | :away}
           | {:members_seeded, String.t(), %{(nick :: String.t()) => modes :: [String.t()]}}
-          | {:names_reply, channel :: String.t(), roster :: [{String.t(), [String.t()]}]}
-          | {:who_reply, target :: String.t(), users :: [map()]}
-          | {:server_reply, source :: :info | :version | :motd, lines :: [String.t()]}
+          | {:names_reply, channel :: String.t(), roster :: [{String.t(), [String.t()]}],
+             Grappa.Session.reply_to()}
+          | {:who_reply, target :: String.t(), users :: [map()], Grappa.Session.reply_to()}
+          | {:server_reply, source :: :info | :version | :motd, lines :: [String.t()],
+             Grappa.Session.reply_to()}
           | {:joined, String.t()}
           | {:join_failed, channel :: String.t(), reason :: String.t(), numeric :: pos_integer()}
           | {:parted, String.t()}
           | {:kicked, channel :: String.t(), by :: String.t(), reason :: String.t() | nil}
-          | {:whois_bundle, target :: String.t(), accum :: map()}
+          # #1088 — every effect whose reply is an ANSWER to a client command
+          # carries the requesting connection as its last element. The router
+          # lifts it out of the `*_pending` accumulator it just drained; `nil`
+          # means no connection owns this reply and `Session.Server` falls
+          # back to the per-user fan-out.
+          | {:whois_bundle, target :: String.t(), accum :: map(), Grappa.Session.reply_to()}
           | {:peer_away, peer :: String.t(), away_message :: String.t()}
           | {:invite_ack, channel :: String.t(), peer :: String.t()}
           | {:rejoin_invited, channel :: String.t()}
           | {:invited, channel :: String.t(), inviter :: String.t()}
           | {:lusers_bundle, accum :: map()}
-          | {:whowas_bundle, target :: String.t(), accum :: map()}
-          | {:banlist_bundle, channel :: String.t(), accum :: map()}
-          | {:links_bundle, accum :: map()}
+          | {:whowas_bundle, target :: String.t(), accum :: map(), Grappa.Session.reply_to()}
+          | {:banlist_bundle, channel :: String.t(), accum :: map(), Grappa.Session.reply_to()}
+          | {:links_bundle, accum :: map(), Grappa.Session.reply_to()}
           | {:umode_changed, modes :: [String.t()]}
           | {:supported_umodes_changed, modes :: [String.t()]}
           | {:session_identity_changed, :acquired | :lost}
@@ -1302,7 +1309,11 @@ defmodule Grappa.Session.EventRouter do
     case Map.fetch(pending, nick_key) do
       {:ok, accum} ->
         next_state = %{state | whois_pending: Map.delete(pending, nick_key)}
-        {:cont, next_state, [{:whois_bundle, Map.get(accum, :target_display, target), accum}]}
+        {:cont, next_state,
+         [
+           {:whois_bundle, Map.get(accum, :target_display, target), accum,
+            Map.get(accum, :reply_to)}
+         ]}
 
       :error ->
         {:cont, state, []}
@@ -1610,7 +1621,7 @@ defmodule Grappa.Session.EventRouter do
         # restore server wire order before emitting.
         users = Enum.reverse(Map.get(accum, :replies, []))
 
-        {:cont, next_state, [{:who_reply, target_display, users}]}
+        {:cont, next_state, [{:who_reply, target_display, users, Map.get(accum, :reply_to)}]}
 
       _ ->
         {:cont, state, []}
@@ -2002,7 +2013,11 @@ defmodule Grappa.Session.EventRouter do
       {:ok, accum} ->
         next_state = %{state | whowas_pending: Map.delete(pending, nick_key)}
 
-        {:cont, next_state, [{:whowas_bundle, Map.get(accum, :target_display, target), accum}]}
+        {:cont, next_state,
+         [
+           {:whowas_bundle, Map.get(accum, :target_display, target), accum,
+            Map.get(accum, :reply_to)}
+         ]}
 
       :error ->
         {:cont, state, []}
@@ -2027,7 +2042,15 @@ defmodule Grappa.Session.EventRouter do
         next_state = %{state | whowas_pending: Map.delete(pending, nick_key)}
         target_display = Map.get(accum, :target_display, target)
 
-        {:cont, next_state, [{:whowas_bundle, target_display, %{target_display: target_display, not_found: true}}]}
+        # The not-found bundle is built fresh rather than drained, so
+        # `reply_to` is lifted off the accumulator explicitly — a 406 is as
+        # much an answer to the operator's /whowas as a 369 is, and must
+        # reach the same one connection.
+        {:cont, next_state,
+         [
+           {:whowas_bundle, target_display, %{target_display: target_display, not_found: true},
+            Map.get(accum, :reply_to)}
+         ]}
 
       :error ->
         {:cont, state, []}
@@ -2076,7 +2099,11 @@ defmodule Grappa.Session.EventRouter do
     case Map.fetch(pending, chan_key) do
       {:ok, accum} ->
         next_state = %{state | banlist_pending: Map.delete(pending, chan_key)}
-        {:cont, next_state, [{:banlist_bundle, Map.get(accum, :channel_display, channel), accum}]}
+        {:cont, next_state,
+         [
+           {:banlist_bundle, Map.get(accum, :channel_display, channel), accum,
+            Map.get(accum, :reply_to)}
+         ]}
 
       :error ->
         {:cont, state, []}
@@ -2129,7 +2156,8 @@ defmodule Grappa.Session.EventRouter do
         {:cont, state, []}
 
       accum when is_map(accum) ->
-        {:cont, %{state | links_pending: nil}, [{:links_bundle, accum}]}
+        {:cont, %{state | links_pending: nil},
+         [{:links_bundle, accum, Map.get(accum, :reply_to)}]}
     end
   end
 
@@ -2170,11 +2198,14 @@ defmodule Grappa.Session.EventRouter do
             {:cont, %{state | motd_pending: server_reply_fold(accum, msg)}, []}
 
           motd_numeric == 376 ->
-            {:cont, %{state | motd_pending: nil}, [{:server_reply, :motd, server_reply_drain(accum)}]}
+            {:cont, %{state | motd_pending: nil},
+             [{:server_reply, :motd, server_reply_drain(accum), Map.get(accum, :reply_to)}]}
 
           motd_numeric == 422 ->
             drained = server_reply_drain(server_reply_fold(accum, msg))
-            {:cont, %{state | motd_pending: nil}, [{:server_reply, :motd, drained}]}
+
+            {:cont, %{state | motd_pending: nil},
+             [{:server_reply, :motd, drained, Map.get(accum, :reply_to)}]}
         end
     end
   end
@@ -2225,7 +2256,8 @@ defmodule Grappa.Session.EventRouter do
         if admin_numeric in [256, 257, 258] do
           {:cont, %{state | admin_pending: folded}, []}
         else
-          {:cont, %{state | admin_pending: nil}, [{:server_reply, :admin, server_reply_drain(folded)}]}
+          {:cont, %{state | admin_pending: nil},
+           [{:server_reply, :admin, server_reply_drain(folded), Map.get(folded, :reply_to)}]}
         end
     end
   end
@@ -2255,9 +2287,15 @@ defmodule Grappa.Session.EventRouter do
         persist_server_notice(state, msg)
 
       [{key, source} | _] = armed ->
-        drained = server_reply_drain(server_reply_fold(Map.get(state, key), msg))
+        accum = Map.get(state, key)
+        drained = server_reply_drain(server_reply_fold(accum, msg))
         disarmed = Enum.reduce(armed, state, fn {k, _}, acc -> Map.put(acc, k, nil) end)
-        {:cont, disarmed, [{:server_reply, source, drained}]}
+        # #1088 — the surfaced error is addressed to whoever asked for the
+        # verb that WON the ownership order, which is the same request whose
+        # `source` is surfaced. When both are armed the loser is disarmed
+        # without a modal, exactly as before: over-clearing already cost a
+        # modal, and it now costs it on one connection instead of all of them.
+        {:cont, disarmed, [{:server_reply, source, drained, Map.get(accum, :reply_to)}]}
     end
   end
 
@@ -2279,7 +2317,8 @@ defmodule Grappa.Session.EventRouter do
         persist_server_notice(state, msg)
 
       accum ->
-        {:cont, %{state | info_pending: nil}, [{:server_reply, :info, server_reply_drain(accum)}]}
+        {:cont, %{state | info_pending: nil},
+         [{:server_reply, :info, server_reply_drain(accum), Map.get(accum, :reply_to)}]}
     end
   end
 
@@ -2292,9 +2331,11 @@ defmodule Grappa.Session.EventRouter do
       nil ->
         persist_server_notice(state, msg)
 
-      _ ->
+      accum ->
         line = rest |> Enum.filter(&is_binary/1) |> Enum.join(" ")
-        {:cont, %{state | version_pending: nil}, [{:server_reply, :version, [line]}]}
+
+        {:cont, %{state | version_pending: nil},
+         [{:server_reply, :version, [line], Map.get(accum, :reply_to)}]}
     end
   end
 
@@ -4034,7 +4075,7 @@ defmodule Grappa.Session.EventRouter do
   # Returns `{state_with_entry_removed, effects}`. Effects shape:
   #   - no entry: `[]` (route's members_seeded effect still fires — a
   #     bare JOIN seeds members but never opens a names modal).
-  #   - entry exists: `[{:names_reply, channel, roster}]`. `roster` is
+  #   - entry exists: `[{:names_reply, channel, roster, reply_to}]`. `roster` is
   #     the arrival-order `[{nick, modes}]` list — each accumulated
   #     `[prefix]nick` token split via `split_mode_prefix/1`. The
   #     mIRC-tier sort + wire projection happen in
@@ -4055,7 +4096,7 @@ defmodule Grappa.Session.EventRouter do
         next_state = %{state | names_pending: Map.delete(pending, chan_key)}
         target_display = Map.get(accum, :target_display, channel)
         roster = accum |> Map.get(:names, []) |> Enum.map(&split_mode_prefix/1)
-        {next_state, [{:names_reply, target_display, roster}]}
+        {next_state, [{:names_reply, target_display, roster, Map.get(accum, :reply_to)}]}
     end
   end
 
