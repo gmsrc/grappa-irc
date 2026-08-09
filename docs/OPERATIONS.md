@@ -34,6 +34,7 @@ production runs on the pi.
 - [Runtime Data](#runtime-data)
 - [Monitoring](#monitoring)
 - [Pending operator follow-ups](#pending-operator-follow-ups)
+- [Passkeys and account recovery](#passkeys-and-account-recovery)
 
 ## Operator dispatcher — `bin/grappa`
 
@@ -4233,7 +4234,7 @@ the retired `docs/todo.md`). Check the condition, then act or drop.
   contention between `async: true` Repo writes and the live dev container
   also writing `runtime/grappa_dev.db`. Benign noise during `ci.check`; not
   flaky on CI (fresh DB). No action unless it worsens.
-# Passkeys and account recovery
+## Passkeys and account recovery
 
 Each Grappa instance is a separate WebAuthn relying party. A passkey enrolled
 for one hostname cannot authenticate against another hostname. Changing the
