@@ -20,7 +20,7 @@ defmodule GrappaWeb.AdminChannelTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{AdminEvents, Repo, SessionLog}
+  alias Grappa.{AdminEvents, AdminOverview, Repo, SessionLog}
   alias Grappa.AdminEvents.Wire
   alias Grappa.PubSub.Topic
   alias GrappaWeb.UserSocket
@@ -128,6 +128,47 @@ defmodule GrappaWeb.AdminChannelTest do
       {:ok, _, _} = subscribe_and_join(socket, "grappa:admin:events", %{})
 
       assert_push "snapshot", %{events: []}
+    end
+  end
+
+  describe "overview push (#1075)" do
+    test "join pushes the overview snapshot the top bar renders" do
+      # Hostname and version are constants for the life of the socket;
+      # they ride the join push rather than the stream. The counts ride
+      # it too so the bar is populated before the first tick elapses
+      # (cold-WS-subscribe parity with the events snapshot above).
+      admin = user_fixture(is_admin: true)
+      socket = build_socket(admin.name, {:user, admin.id}, is_admin: true)
+
+      {:ok, _, _} = subscribe_and_join(socket, "grappa:admin:events", %{})
+
+      assert_push "overview", %{
+        sessions: sessions,
+        visitors: %{total: _, live: _},
+        hostname: hostname,
+        version: version
+      }
+
+      assert is_integer(sessions)
+      assert is_binary(hostname) and hostname != ""
+      assert version == Grappa.Version.current()
+    end
+
+    test "the tick re-pushes without the client asking" do
+      # Loadavg is a SAMPLED quantity — it has no event to hang off, so
+      # the channel ticks. Squeeze the interval to keep the test honest
+      # about cadence without sleeping the production default.
+      previous = AdminOverview.push_interval_ms()
+      :ok = AdminOverview.put_test_push_interval_ms(50)
+      on_exit(fn -> AdminOverview.put_test_push_interval_ms(previous) end)
+
+      admin = user_fixture(is_admin: true)
+      socket = build_socket(admin.name, {:user, admin.id}, is_admin: true)
+
+      {:ok, _, _} = subscribe_and_join(socket, "grappa:admin:events", %{})
+
+      assert_push "overview", _
+      assert_push "overview", _, 1_000
     end
   end
 

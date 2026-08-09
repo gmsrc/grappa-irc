@@ -52,7 +52,7 @@ defmodule GrappaWeb.AdminChannel do
   """
   use GrappaWeb, :channel
 
-  alias Grappa.AdminEvents
+  alias Grappa.{AdminEvents, AdminOverview}
   alias Grappa.PubSub.Topic
 
   @impl Phoenix.Channel
@@ -76,6 +76,13 @@ defmodule GrappaWeb.AdminChannel do
   @impl Phoenix.Channel
   def handle_info(:after_join, socket) do
     push(socket, "snapshot", %{events: AdminEvents.snapshot()})
+    push_overview(socket)
+    {:noreply, socket}
+  end
+
+  # #1075 — the admin top bar's cadence. See `push_overview/1`.
+  def handle_info(:overview_tick, socket) do
+    push_overview(socket)
     {:noreply, socket}
   end
 
@@ -96,6 +103,25 @@ defmodule GrappaWeb.AdminChannel do
   # down the admin socket.
   @impl Phoenix.Channel
   def handle_in(_, _, socket), do: {:reply, :ok, socket}
+
+  # #1075 — push the admin-bar projection, then arm the next tick.
+  #
+  # The counts could ride `Topic.admin_events/0` (they change because
+  # something happened), but loadavg cannot: it is a sampled quantity with
+  # no event to hang off. Rather than run an event path AND a sampler, one
+  # tick carries all five stats.
+  #
+  # The timer lives in THIS process, not in a supervised singleton: the bar
+  # only exists while an operator has the console open, so the sampling
+  # should too — it starts on join and dies with the socket, with no
+  # cross-console fan-out to manage. The interval is re-read per tick, so a
+  # hot-deployed change lands on the next one.
+  @spec push_overview(Phoenix.Socket.t()) :: :ok
+  defp push_overview(socket) do
+    push(socket, "overview", AdminOverview.snapshot())
+    Process.send_after(self(), :overview_tick, AdminOverview.push_interval_ms())
+    :ok
+  end
 
   @spec authorize(Phoenix.Socket.t()) :: :ok | {:error, :forbidden}
   defp authorize(%{assigns: %{is_admin: true}}), do: :ok

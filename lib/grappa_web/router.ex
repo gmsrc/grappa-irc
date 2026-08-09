@@ -115,6 +115,13 @@ defmodule GrappaWeb.Router do
     pipe_through [:api, :authn, :admin_authn]
 
     get "/me", MeController, :index
+    # #1075 — scalar projection for the operator top bar (#1073): session
+    # count, visitor total/live, hostname, loadavg, version. Top-level and
+    # NOT nested under an existing prefix: the nginx allowlist that made
+    # #269 nest under `/admin/sessions/` was deleted with the nginx
+    # container in #485 (`infra/snippets/locations-api.conf`), so a new
+    # admin path needs no proxy edit. `:admin_authn` is the whole gate.
+    get "/overview", OverviewController, :index
     get "/visitors", VisitorsController, :index
     delete "/visitors/:id", VisitorsController, :delete
     # #982 — recovery door for a locked-out visitor. Mints the SAME
