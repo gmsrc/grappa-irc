@@ -759,109 +759,30 @@ defmodule Grappa.Session.EventRouter do
     end
   end
 
+  # A NICK whose parameter is blank names nobody, so it is not a rename.
+  # RFC 2812 §2.3.1's `nickname` is at least one character and admits no
+  # space: there is nothing to rename TO. A parameter-less `NICK` already
+  # falls through to the catch-all clause; the parser distinguishes it
+  # (`params: []`) from an empty TRAILING param (`params: [""]`), but the
+  # router must not — both are the same malformed line, and treating them
+  # differently is the whole defect.
+  #
+  # The rejection belongs HERE, where the rename effects are coined, and
+  # not in their consumers: `{:own_nick_renamed, old, new}` and
+  # `{:peer_nick_renamed, old, new}` carry IDENTITIES, and a consumer is
+  # entitled to trust that shape rather than re-validate it. Same reason
+  # one guard covers both branches — one malformed line, one door.
+  #
+  # Deliberately narrow: the blank class only, NOT `Identifier.valid_nick?/1`.
+  # That predicate is anchored ASCII and capped at 30 — right for what WE
+  # send upstream, wrong for what an upstream may send us. Refusing a
+  # legitimate rename would leave `state.nick` on a name the server no
+  # longer knows us by, a worse failure than the one being fixed.
   defp do_route(%Message{command: :nick, params: [new_nick | _]} = msg, state)
        when is_binary(new_nick) do
-    old_nick = Message.sender_nick(msg)
-    channels = channels_with_member(state.members, old_nick)
-
-    members = rename_member_everywhere(state.members, channels, old_nick, new_nick)
-
-    # S2.4: NICK rename migrates the userhost entry from old_nick to new_nick.
-    # user+host don't change with a nick change — only the key moves.
-    userhost_cache =
-      rename_userhost_entry(
-        Map.get(state, :userhost_cache, %{}),
-        old_nick,
-        new_nick,
-        casemapping(state)
-      )
-
-    new_state =
-      if nick_eq?(old_nick, state.nick) do
-        %{state | nick: new_nick, members: members, userhost_cache: userhost_cache}
-      else
-        %{state | members: members, userhost_cache: userhost_cache}
-      end
-
-    persist_effects =
-      for ch <- channels do
-        {_, eff} =
-          build_persist(new_state, :nick_change, ch, old_nick, nil, %{new_nick: new_nick})
-
-        eff
-      end
-
-    # #61: the per-channel fan-out above is EMPTY when the operator shares
-    # no channel with their old nick — a self-rename then produced zero
-    # visible feedback. Always surface the operator's OWN rename on the
-    # synthetic "$server" window (which always exists, independent of
-    # channel membership) so confirmation appears even with zero channels
-    # joined, and in the always-reachable server tab when channels exist.
-    # cic renders it via the existing `:nick_change` line in the server
-    # tab. Like the per-channel self-rename rows it counts as an "event"
-    # (not a message) in cic's cursor-derived unread until the operator
-    # views the server tab — and the OS/notify badge ignores it (presence
-    # kinds fail `should_notify?`). Consistent with how a self-rename
-    # already surfaces in channel windows; the goal here is exactly that
-    # always-visible confirmation, zero channels or not.
-    self_server_effects =
-      if nick_eq?(old_nick, state.nick) do
-        {_, eff} =
-          build_persist(new_state, :nick_change, "$server", old_nick, nil, %{new_nick: new_nick})
-
-        [eff]
-      else
-        []
-      end
-
-    # V9 (visitor-parity cluster, 2026-05-15): on a self-NICK echo
-    # for a visitor subject, emit the persist-side effect so
-    # `Session.Server.apply_effects/2` rotates `visitors.nick` via the
-    # injected `visitor_nick_persister` callback. Mirror of the
-    # `:visitor_r_observed` shape — the closure-injection avoids a
-    # static `Session → Visitors` Boundary alias that would close a
-    # cycle (Visitors deps Session via Login). User subjects don't
-    # carry a persister; their nick lives in `Networks.Credential`,
-    # which is operator-driven.
-    visitor_persist_effects =
-      case state.subject do
-        {:visitor, _} ->
-          # ASCII self-rename detection (#121/#525) — can't fold inside a
-          # case-clause guard, so branch in the body.
-          if nick_eq?(old_nick, state.nick),
-            do: [{:visitor_nick_changed, new_nick}],
-            else: []
-
-        _ ->
-          []
-      end
-
-    # #373: a PEER rename (not our own) must migrate that peer's open query
-    # window + its DM scrollback old -> new, so the window follows the nick
-    # and outbound sends stop routing to the now-vanished old nick (401).
-    # Emitted only when the renamer is a tracked member (`channels != []`) —
-    # that is the only case IRC delivers a peer's NICK to us, and it mirrors
-    # the per-channel fan-out gate above. `Session.Server.apply_effects/2`
-    # gates the actual DB migration on a query window existing (no-op
-    # otherwise), so a peer we never queried costs one indexed lookup.
-    peer_rename_effects =
-      if not nick_eq?(old_nick, state.nick) and channels != [] do
-        [{:peer_nick_renamed, old_nick, new_nick}]
-      else
-        []
-      end
-
-    own_rename_effects = own_nick_rename_effects(state, old_nick, new_nick)
-
-    # #581 — mirror bahamut's SILENT +r-strip on our own genuine self-rename
-    # (see strip_r_on_self_rename/4) so the per-session umode set stays truthful.
-    {final_state, self_umode_effects} =
-      strip_r_on_self_rename(state, new_state, old_nick, new_nick)
-
-    {:cont, final_state,
-     persist_effects ++
-       self_server_effects ++
-       visitor_persist_effects ++ peer_rename_effects ++ own_rename_effects ++ self_umode_effects}
+    if blank_token?(new_nick),
+      do: {:cont, state, []},
+      else: route_nick(msg, new_nick, state)
   end
 
   # Unsolicited TOPIC: a channel operator changed the topic mid-session.
@@ -3608,6 +3529,118 @@ defmodule Grappa.Session.EventRouter do
       []
     end
   end
+
+  @spec route_nick(Message.t(), String.t(), state()) :: {:cont, state(), [effect()]}
+  defp route_nick(msg, new_nick, state) do
+    old_nick = Message.sender_nick(msg)
+    channels = channels_with_member(state.members, old_nick)
+
+    members = rename_member_everywhere(state.members, channels, old_nick, new_nick)
+
+    # S2.4: NICK rename migrates the userhost entry from old_nick to new_nick.
+    # user+host don't change with a nick change — only the key moves.
+    userhost_cache =
+      rename_userhost_entry(
+        Map.get(state, :userhost_cache, %{}),
+        old_nick,
+        new_nick,
+        casemapping(state)
+      )
+
+    new_state =
+      if nick_eq?(old_nick, state.nick) do
+        %{state | nick: new_nick, members: members, userhost_cache: userhost_cache}
+      else
+        %{state | members: members, userhost_cache: userhost_cache}
+      end
+
+    persist_effects =
+      for ch <- channels do
+        {_, eff} =
+          build_persist(new_state, :nick_change, ch, old_nick, nil, %{new_nick: new_nick})
+
+        eff
+      end
+
+    # #61: the per-channel fan-out above is EMPTY when the operator shares
+    # no channel with their old nick — a self-rename then produced zero
+    # visible feedback. Always surface the operator's OWN rename on the
+    # synthetic "$server" window (which always exists, independent of
+    # channel membership) so confirmation appears even with zero channels
+    # joined, and in the always-reachable server tab when channels exist.
+    # cic renders it via the existing `:nick_change` line in the server
+    # tab. Like the per-channel self-rename rows it counts as an "event"
+    # (not a message) in cic's cursor-derived unread until the operator
+    # views the server tab — and the OS/notify badge ignores it (presence
+    # kinds fail `should_notify?`). Consistent with how a self-rename
+    # already surfaces in channel windows; the goal here is exactly that
+    # always-visible confirmation, zero channels or not.
+    self_server_effects =
+      if nick_eq?(old_nick, state.nick) do
+        {_, eff} =
+          build_persist(new_state, :nick_change, "$server", old_nick, nil, %{new_nick: new_nick})
+
+        [eff]
+      else
+        []
+      end
+
+    # V9 (visitor-parity cluster, 2026-05-15): on a self-NICK echo
+    # for a visitor subject, emit the persist-side effect so
+    # `Session.Server.apply_effects/2` rotates `visitors.nick` via the
+    # injected `visitor_nick_persister` callback. Mirror of the
+    # `:visitor_r_observed` shape — the closure-injection avoids a
+    # static `Session → Visitors` Boundary alias that would close a
+    # cycle (Visitors deps Session via Login). User subjects don't
+    # carry a persister; their nick lives in `Networks.Credential`,
+    # which is operator-driven.
+    visitor_persist_effects =
+      case state.subject do
+        {:visitor, _} ->
+          # ASCII self-rename detection (#121/#525) — can't fold inside a
+          # case-clause guard, so branch in the body.
+          if nick_eq?(old_nick, state.nick),
+            do: [{:visitor_nick_changed, new_nick}],
+            else: []
+
+        _ ->
+          []
+      end
+
+    # #373: a PEER rename (not our own) must migrate that peer's open query
+    # window + its DM scrollback old -> new, so the window follows the nick
+    # and outbound sends stop routing to the now-vanished old nick (401).
+    # Emitted only when the renamer is a tracked member (`channels != []`) —
+    # that is the only case IRC delivers a peer's NICK to us, and it mirrors
+    # the per-channel fan-out gate above. `Session.Server.apply_effects/2`
+    # gates the actual DB migration on a query window existing (no-op
+    # otherwise), so a peer we never queried costs one indexed lookup.
+    peer_rename_effects =
+      if not nick_eq?(old_nick, state.nick) and channels != [] do
+        [{:peer_nick_renamed, old_nick, new_nick}]
+      else
+        []
+      end
+
+    own_rename_effects = own_nick_rename_effects(state, old_nick, new_nick)
+
+    # #581 — mirror bahamut's SILENT +r-strip on our own genuine self-rename
+    # (see strip_r_on_self_rename/4) so the per-session umode set stays truthful.
+    {final_state, self_umode_effects} =
+      strip_r_on_self_rename(state, new_state, old_nick, new_nick)
+
+    {:cont, final_state,
+     persist_effects ++
+       self_server_effects ++
+       visitor_persist_effects ++ peer_rename_effects ++ own_rename_effects ++ self_umode_effects}
+  end
+
+  # Blank = empty or whitespace-only. `String.trim/1` (not `== ""`) because
+  # `NICK : ` is on the wire exactly as reachable as `NICK :` and yields a
+  # one-space param; a space is not part of any nick grammar, so both
+  # spellings are the same non-name.
+  @spec blank_token?(String.t()) :: boolean()
+  defp blank_token?(token) when is_binary(token), do: String.trim(token) == ""
 
   defp nick_eq?(_, nil), do: false
 

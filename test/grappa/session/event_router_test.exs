@@ -11,7 +11,7 @@ defmodule Grappa.Session.EventRouterTest do
   """
   use ExUnit.Case, async: true
 
-  alias Grappa.IRC.Message
+  alias Grappa.IRC.{Message, Parser}
   alias Grappa.Session.{EventRouter, GhostRecovery, ISupport, Wire}
 
   @user_id "00000000-0000-0000-0000-000000000001"
@@ -2130,6 +2130,52 @@ defmodule Grappa.Session.EventRouterTest do
     test "NICK-other for stranger emits no effects + no mutation" do
       state = base_state(%{members: %{"#italia" => %{"vjt" => []}}})
       m = msg(:nick, ["stranger_"], {:nick, "stranger", "u", "h"})
+
+      assert {:cont, ^state, []} = EventRouter.route(m, state)
+    end
+  end
+
+  # A NICK whose parameter is blank names nobody, so it is not a rename.
+  # These tests name the INPUT rather than the seed: the shape property in
+  # `event_router_property_test.exs` reaches this class only when the
+  # generator happens to draw it, so it cannot be the only witness.
+  describe "route/2 — :nick with a blank parameter" do
+    test "the wire line `NICK :` reaches route/2 with an empty param and is rejected" do
+      state = base_state(%{nick: "vjt", members: %{"#italia" => %{"vjt" => ["@"]}}})
+
+      assert {:ok, %Message{command: :nick, params: [""]} = m} =
+               Parser.parse(":vjt!u@h NICK :")
+
+      assert {:cont, ^state, []} = EventRouter.route(m, state)
+    end
+
+    test "NICK-self with an empty param leaves state.nick and the members map alone" do
+      state = base_state(%{nick: "vjt", members: %{"#italia" => %{"vjt" => ["@"], "alice" => []}}})
+      m = msg(:nick, [""], {:nick, "vjt", "u", "h"})
+
+      assert {:cont, ^state, []} = EventRouter.route(m, state)
+    end
+
+    test "NICK-self with a whitespace-only param leaves state.nick and the members map alone" do
+      state = base_state(%{nick: "vjt", members: %{"#italia" => %{"vjt" => ["@"]}}})
+      m = msg(:nick, [" "], {:nick, "vjt", "u", "h"})
+
+      assert {:cont, ^state, []} = EventRouter.route(m, state)
+    end
+
+    # Same input shape, same class of consequence: the peer arm re-keys a
+    # query window and its DM scrollback (#373), so a blank param there is
+    # the same defect wearing the other branch.
+    test "NICK-peer with an empty param leaves the members map alone" do
+      state = base_state(%{nick: "vjt", members: %{"#italia" => %{"vjt" => [], "alice" => ["@"]}}})
+      m = msg(:nick, [""], {:nick, "alice", "u", "h"})
+
+      assert {:cont, ^state, []} = EventRouter.route(m, state)
+    end
+
+    test "NICK-peer with a whitespace-only param leaves the members map alone" do
+      state = base_state(%{nick: "vjt", members: %{"#italia" => %{"vjt" => [], "alice" => ["@"]}}})
+      m = msg(:nick, ["  "], {:nick, "alice", "u", "h"})
 
       assert {:cont, ^state, []} = EventRouter.route(m, state)
     end
