@@ -163,15 +163,21 @@ describe("replyQuote — a previous quote is dropped (#1123)", () => {
   });
 
   // A body that is nothing BUT a previous quote leaves the sender with no words
-  // of their own; `<alice> <bob> orig<<<< ` is not a reply to anything.
+  // of their own; `<alice> <bob> orig<<<< ` is not a reply to anything. Both
+  // spellings are asserted, but they are ONE input: the body is trimmed before
+  // the cut, so the tail sits flush against the end either way — which is also
+  // how a wire that eats trailing whitespace delivers it.
   it("refuses a body that is only a previous quote", () => {
     expect(replyQuote(msg({ sender: "alice", body: "<bob> original<< " }))).toBeNull();
+    expect(replyQuote(msg({ sender: "alice", body: "<bob> original<<" }))).toBeNull();
   });
 
-  // The wire (or a client) may eat the tail's trailing space, so the tail also
-  // counts when it sits flush against the end of the body.
-  it("refuses a body that is only a previous quote with the tail space eaten", () => {
-    expect(replyQuote(msg({ sender: "alice", body: "<bob> original<<" }))).toBeNull();
+  // The cut consumes exactly one space of the tail, so anything the sender
+  // typed after a wider gap would arrive with the gap still on it.
+  it("does not carry the gap after the tail into the new quote", () => {
+    expect(replyQuote(msg({ sender: "alice", body: "<bob> original<<   spaced" }))).toBe(
+      "<alice> spaced<< ",
+    );
   });
 });
 

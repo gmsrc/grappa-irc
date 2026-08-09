@@ -35642,3 +35642,50 @@ this: it triggers on pushes to `master` while the repository's default branch is
 `main`, and no run of it appears in the repository's history. That is a
 plausible reason the fatal stayed invisible, not a measured one — nobody has
 re-pointed the trigger and watched it go red.
+---
+
+## 2026-08-09 — #1123: a quote is what the sender wrote, and the shape is the only safe knife
+
+`replyQuote` built its quote out of the whole body. When the body was itself a
+reply it already carried a quote and the `<< ` tail, so each hop wrapped the
+previous one: three replies deep the line actually being answered sat buried
+mid-string, and on a narrow client the visible part of the message was all
+quote and no content.
+
+**The cut is on shape, never on the delimiter.** The obvious fix — find `<<`,
+cut there — is the one thing that must not be done. `<<` is ordinary text:
+`shift << 2`, C++ stream operators, `cat <<EOF`. Eating a real message on a
+substring hit is a worse defect than the nesting it removes, because the
+nesting is ugly while the substring cut is lossy. The match is therefore
+anchored at position 0 and shaped like what this module itself emits: a
+nick-shaped head, a space, text, and the `<< ` tail. Both heads count —
+`<nick> ` for speech and `* nick ` for an action, since #1126 gave actions
+their own quote form and both nest identically.
+
+**The nick charset is mirrored, not invented.** It comes from the server's
+`Grappa.IRC.Identifier` nick regex (RFC 2812 §2.3.1 — letter-or-special first,
+digits and `-` in the tail, 30 chars). A guess narrower than the wire would
+silently refuse to strip a real `<foo[1]> ` head; a guess wider than the wire
+starts matching prose. The mirror is a second copy of a server constant and
+carries the usual drift risk, but the alternative — a bespoke client charset —
+is drift with no reference point at all.
+
+**Two deliberate under-strips.** The cut lands on the LAST tail, so a body
+persisted before this fix sheds every hop it accumulated rather than all but
+the oldest. But the head must be at position 0, and `appendToCompose` drops
+the quote AFTER whatever draft is already in the box: a quote further in means
+the text before it is the sender's own words, and cutting there would delete
+what they wrote. Likewise a server notice quotes as `<irc.example.org> …`, and
+a hostname is not nick-shaped, so a reply to a reply to a server notice still
+nests. Both are misses, not corruptions — the safe direction.
+
+**What is NOT claimed: this is not false-positive free, and cannot be.** The
+guard recognises the shape the client emits, so a body that genuinely has that
+shape is indistinguishable from one the client built. A hand-typed
+`<html> tag stuff << x`, or a bullet line `* fix the << operator`, will be cut.
+The `* ` head is the weaker of the two — a markdown bullet is a common way to
+start a chat line, where a leading `<nick>` is not — and it is accepted only
+because the conjunction with a nick-shaped token and a later `<< ` makes the
+collision rare, and because the damage is confined to the quote being drafted:
+the sender's message, the compose box's existing draft, and the wire are all
+untouched.
