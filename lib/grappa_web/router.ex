@@ -215,6 +215,11 @@ defmodule GrappaWeb.Router do
     scope "/admin/test", GrappaWeb.Admin do
       pipe_through [:api, :authn, :admin_authn]
       post "/reset-subject", TestResetSubjectController, :reset
+      # #1078 — per-spec subject provisioning, the replacement for
+      # reset-subject's restore-to-baseline. Both live here while the
+      # suite migrates; reset-subject goes when the last spec does.
+      post "/subject", TestSubjectController, :create
+      delete "/subject/:name", TestSubjectController, :delete
     end
   end
 

@@ -70,7 +70,6 @@ if Mix.env() in [:dev, :test] do
       deps: [
         Grappa.Accounts,
         Grappa.Admission,
-        Grappa.IRC,
         Grappa.Networks,
         Grappa.Notify,
         Grappa.Push,
@@ -79,7 +78,7 @@ if Mix.env() in [:dev, :test] do
         Grappa.Repo,
         Grappa.Scrollback,
         Grappa.Session,
-        Grappa.SpawnOrchestrator,
+        Grappa.TestSupport.SubjectSession,
         Grappa.Uploads,
         Grappa.UserSettings,
         Grappa.WSPresence
@@ -97,16 +96,18 @@ if Mix.env() in [:dev, :test] do
       Repo,
       Scrollback,
       Session,
+      TestSupport.SubjectSession,
       Uploads,
       UserSettings,
       WSPresence
     }
 
+    import Grappa.TestSupport.SubjectSession, only: [measure: 1]
+
     require Logger
 
     @reset_timeout_ms 5_000
     @autojoin_timeout_ms 5_000
-    @autojoin_poll_interval_ms 50
 
     @type baseline_channel :: %{
             required(:name) => String.t(),
@@ -240,12 +241,6 @@ if Mix.env() in [:dev, :test] do
       :ok = WSPresence.reset_for_user(user.name)
     end
 
-    defp measure(fun) do
-      started_at = System.monotonic_time(:millisecond)
-      result = fun.()
-      {System.monotonic_time(:millisecond) - started_at, result}
-    end
-
     defp outcome_tag(:ok), do: :ok
     defp outcome_tag({:error, reason}), do: inspect(reason)
 
@@ -299,28 +294,7 @@ if Mix.env() in [:dev, :test] do
 
       {:ok, _} = Scrollback.delete_for_channel({:user, user.id}, cred.network_id, name)
 
-      if count > 0, do: seed_synthetic(user, cred.network_id, name, count, sender)
-    end
-
-    @seed_gap_ms 100
-
-    defp seed_synthetic(user, network_id, channel, count, sender) do
-      base_time = System.system_time(:millisecond) - count * @seed_gap_ms
-
-      Enum.each(1..count, fn i ->
-        attrs = %{
-          user_id: user.id,
-          network_id: network_id,
-          channel: channel,
-          server_time: base_time + i * @seed_gap_ms,
-          kind: :privmsg,
-          sender: sender,
-          body: "seed line ##{i}",
-          meta: %{}
-        }
-
-        {:ok, _} = Scrollback.persist_event(attrs)
-      end)
+      SubjectSession.seed_channel(user.id, cred.network_id, name, count, sender)
     end
 
     defp respawn_each(_, []), do: :ok
@@ -350,121 +324,17 @@ if Mix.env() in [:dev, :test] do
     # investigation inferring its existence from arithmetic).
     defp respawn_connected(user, cred, slug, network_id, rest) do
       {stop_ms, :ok} = measure(fn -> Session.stop_session({:user, user.id}, network_id) end)
-      {spawned, spawn_ms, welcome_ms} = spawn_and_await(user, cred, slug)
+      {settle, outcome} = SubjectSession.start_and_settle(user, cred)
 
-      {autojoin_ms, outcome} =
-        case spawned do
-          {:ok, autojoin} -> measure(fn -> await_autojoin(user, cred, slug, autojoin) end)
-          {:error, _} = err -> {0, err}
-        end
-
-      Logger.info("subject reset respawn",
-        network: slug,
-        outcome: outcome_tag(outcome),
-        stop_ms: stop_ms,
-        spawn_ms: spawn_ms,
-        welcome_ms: welcome_ms,
-        autojoin_ms: autojoin_ms
+      Logger.info(
+        "subject reset respawn",
+        [network: slug, outcome: outcome_tag(outcome), stop_ms: stop_ms] ++
+          Enum.sort(Map.to_list(settle))
       )
 
       case outcome do
         :ok -> respawn_each(user, rest)
         {:error, _} = err -> err
-      end
-    end
-
-    defp spawn_and_await(user, cred, slug) do
-      case Networks.SessionPlan.resolve(cred) do
-        {:ok, plan} -> do_spawn_and_await(user, cred, slug, plan)
-        {:error, reason} -> {{:error, {:reconnect_failed, slug, reason}}, 0, 0}
-      end
-    end
-
-    defp do_spawn_and_await(user, cred, slug, plan) do
-      ref = make_ref()
-      plan_with_notify = Map.merge(plan, %{notify_pid: self(), notify_ref: ref})
-
-      capacity_input = %{
-        network_id: cred.network_id,
-        # #171: reconnect helper is a boot-shaped path — no conn, no IP.
-        source_ip: nil,
-        flow: :bootstrap_user,
-        requesting_subject: nil
-      }
-
-      {spawn_ms, spawned} =
-        measure(fn ->
-          Grappa.SpawnOrchestrator.spawn(
-            {:user, user.id},
-            cred.network_id,
-            plan_with_notify,
-            capacity_input
-          )
-        end)
-
-      case spawned do
-        {:ok, _, pid} ->
-          {welcome_ms, ready} = measure(fn -> await_ready(pid, ref, slug) end)
-
-          case ready do
-            :ok -> {{:ok, Map.get(plan, :autojoin_channels, [])}, spawn_ms, welcome_ms}
-            {:error, _} = err -> {err, spawn_ms, welcome_ms}
-          end
-
-        {:error, reason} ->
-          {{:error, {:reconnect_failed, slug, reason}}, spawn_ms, 0}
-      end
-    end
-
-    defp await_ready(pid, ref, slug) do
-      monitor_ref = Process.monitor(pid)
-
-      receive do
-        {:session_ready, ^ref} ->
-          Process.demonitor(monitor_ref, [:flush])
-          :ok
-
-        {:DOWN, ^monitor_ref, :process, ^pid, reason} ->
-          {:error, {:reconnect_failed, slug, reason}}
-      after
-        @reset_timeout_ms ->
-          Process.demonitor(monitor_ref, [:flush])
-          {:error, {:reconnect_timeout, slug}}
-      end
-    end
-
-    defp await_autojoin(_, _, _, []), do: :ok
-
-    defp await_autojoin(user, cred, slug, autojoin) do
-      deadline = System.monotonic_time(:millisecond) + @autojoin_timeout_ms
-
-      pending =
-        autojoin
-        |> Enum.map(&Grappa.IRC.Identifier.canonical_target/1)
-        |> MapSet.new()
-
-      poll_autojoin({:user, user.id}, cred.network_id, slug, pending, deadline)
-    end
-
-    defp poll_autojoin(subject, network_id, slug, pending, deadline) do
-      remaining =
-        Enum.reduce(pending, pending, fn channel, acc ->
-          case Session.get_window_state(subject, network_id, channel) do
-            {:ok, %{state: :joined}} -> MapSet.delete(acc, channel)
-            _ -> acc
-          end
-        end)
-
-      cond do
-        MapSet.size(remaining) == 0 ->
-          :ok
-
-        System.monotonic_time(:millisecond) >= deadline ->
-          {:error, {:autojoin_timeout, slug, Enum.sort(MapSet.to_list(remaining))}}
-
-        true ->
-          Process.sleep(@autojoin_poll_interval_ms)
-          poll_autojoin(subject, network_id, slug, remaining, deadline)
       end
     end
   end

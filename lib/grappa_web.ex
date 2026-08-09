@@ -68,7 +68,10 @@ defmodule GrappaWeb do
         Grappa.WSPresence,
         GrappaWeb.BodyLimit
       ] ++
-        if(Mix.env() in [:dev, :test], do: [Grappa.TestSupport.SubjectReset], else: []),
+        if(Mix.env() in [:dev, :test],
+          do: [Grappa.TestSupport.SubjectProvision, Grappa.TestSupport.SubjectReset],
+          else: []
+        ),
     # `PasskeyOrigin` joins `Endpoint` on the export list for the same
     # reason: `Grappa.Application.start/2` reaches in to boot it, the
     # documented boot-time-config boundary. Nothing else outside
