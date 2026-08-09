@@ -36162,8 +36162,24 @@ each mutation asserts its pre-state first. Measured on all three: dropping a
 pin now kills the tree-wide case plus only the cases whose subject is that
 file.
 
+**Measured, and it refines the issue's framing.** Probing the pinned toolchain
+(`elixir -e ':file.native_name_encoding()'` under a controlled environment, dev
+container, OTP 28 / glibc) says the trigger is not an ABSENT locale but an
+effective C/POSIX one: LANG unset and LANG empty both answer `:utf8`, while
+`LANG=C` and `LANG=POSIX` answer `:latin1` and print the warning verbatim. So
+what these pins remove is a dependency on the host not setting a C locale —
+narrower than "not setting a locale", and worth saying out loud rather than
+inheriting the issue's wording. Two more results earned their place: `LC_ALL=C`
+beats `LANG=C.UTF-8` (`:latin1`), which is why the declared limit above is a
+measurement and not a hedge; and `ELIXIR_ERL_OPTIONS="+fnu"` does fix `LANG=C`
+for the CLI, so the choice against it is the one-spelling argument, not a claim
+that it does not work.
+
 **Not verified here, and deliberately not.** That the modified unit really
 boots the BEAM in utf8 is provable only on a host, and no worker touches m42 or
-production. What is proven is the content of the definitions, the guard's
-sensitivity, and the spelling's agreement with the two doors that already had
-it.
+production. The probe above is Linux/glibc in a container, not a FreeBSD jail
+under rc(8), where libc's locale handling is its own; and `C.UTF-8`'s presence
+on FreeBSD rests on the issue's own observation that the jail's login
+environment already carries it. What is proven here is the content of the
+definitions, the guard's sensitivity, the mechanism on one substrate, and the
+spelling's agreement with the two doors that already had it.
