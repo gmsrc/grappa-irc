@@ -35555,6 +35555,7 @@ non-empty range plus `is-selecting` present plus `text`/`default` resolved means
 WebKit installed everything and painted nothing — lead 1 — and the fix belongs
 in the ordering or the keyboard, not in the class or the CSS. It needs no new
 code.
+
 ## 2026-08-09 — #1066: a variable named after the knob it does not turn
 
 **The defect.** `cicchetto/e2e/compose.yaml` sets `SVC_AKILL_CLONES: "0"` under
