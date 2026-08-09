@@ -865,6 +865,17 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # (impossible in JSON, but a real bug if a typespec grows one) RAISES here
   # with the offending name instead of emitting code that stack-overflows.
 
+  @typep schema_key :: {module(), atom()}
+
+  @typep schema_ir ::
+           {:raw, String.t()}
+           | {:obj, [{String.t(), schema_ir()}]}
+           | {:arr, [schema_ir()]}
+
+  @typep schema_entries :: %{schema_key() => {schema_ir(), [schema_key()]}}
+
+  @typep schema_marks :: %{optional(schema_key()) => true}
+
   @doc false
   @spec generate_schema() :: String.t()
   def generate_schema do
@@ -1074,35 +1085,58 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
       entries
       |> Map.keys()
       |> Enum.sort_by(&schema_sort_key/1)
-      |> Enum.reduce({[], MapSet.new()}, fn key, {acc, perm} ->
-        visit_schema(key, entries, perm, MapSet.new(), acc)
-      end)
+      |> visit_schema_all(entries, %{}, %{}, [])
 
     Enum.reverse(order)
   end
 
   defp schema_sort_key({mod, name}), do: "#{inspect(mod)}.#{name}"
 
-  defp visit_schema(key, entries, perm, path, acc) do
-    cond do
-      MapSet.member?(perm, key) ->
-        {acc, perm}
+  # `emitted` is "already placed in the output"; `path` is "on the current DFS
+  # branch", and only the second detects a cycle. Both are plain maps rather
+  # than MapSets, and explicit recursion rather than `Enum.reduce/3`: a MapSet
+  # is opaque, threading one through reduce's type-variable accumulator loses
+  # that opacity, and Dialyzer then flags every well-typed `MapSet.member?/2`
+  # here as a call without an opaque term. A private visited-set has nothing
+  # to gain from the set API anyway.
+  @spec visit_schema_all(
+          [schema_key()],
+          schema_entries(),
+          schema_marks(),
+          schema_marks(),
+          [schema_key()]
+        ) :: {[schema_key()], schema_marks()}
+  defp visit_schema_all([], _, _, emitted, acc), do: {acc, emitted}
 
-      MapSet.member?(path, key) ->
+  defp visit_schema_all([key | rest], entries, path, emitted, acc) do
+    {acc, emitted} = visit_schema(key, entries, emitted, path, acc)
+    visit_schema_all(rest, entries, path, emitted, acc)
+  end
+
+  @spec visit_schema(
+          schema_key(),
+          schema_entries(),
+          schema_marks(),
+          schema_marks(),
+          [schema_key()]
+        ) :: {[schema_key()], schema_marks()}
+  defp visit_schema(key, entries, emitted, path, acc) do
+    cond do
+      Map.has_key?(emitted, key) ->
+        {acc, emitted}
+
+      Map.has_key?(path, key) ->
         raise "gen_wire_types: cyclic wire schema reference at #{schema_sort_key(key)}"
 
       true ->
         {_, deps} = Map.fetch!(entries, key)
-        path = MapSet.put(path, key)
 
-        {acc, perm} =
+        {acc, emitted} =
           deps
           |> Enum.sort_by(&schema_sort_key/1)
-          |> Enum.reduce({acc, perm}, fn dep, {a, p} ->
-            visit_schema(dep, entries, p, path, a)
-          end)
+          |> visit_schema_all(entries, Map.put(path, key, true), emitted, acc)
 
-        {[key | acc], MapSet.put(perm, key)}
+        {[key | acc], Map.put(emitted, key, true)}
     end
   end
 
