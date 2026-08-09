@@ -47,6 +47,7 @@ const ALIVE: AdminVisitor = {
   identified: false,
   ip: "1.2.3.4",
   inserted_at: "2026-05-16T00:00:00Z",
+  last_seen_at: null,
   networks: [
     {
       network_slug: "azzurra",
@@ -72,6 +73,7 @@ const ORPHANED: AdminVisitor = {
   identified: false,
   ip: "5.6.7.8",
   inserted_at: "2026-05-16T00:00:00Z",
+  last_seen_at: null,
   networks: [
     {
       network_slug: "azzurra",
@@ -90,6 +92,7 @@ const DEAD: AdminVisitor = {
   identified: false,
   ip: null,
   inserted_at: "2026-05-16T00:00:00Z",
+  last_seen_at: null,
   networks: [
     {
       network_slug: "azzurra",
@@ -118,6 +121,7 @@ const NICKSERV_IDENTIFIED: AdminVisitor = {
   identified: true,
   ip: "9.10.11.12",
   inserted_at: "2026-05-16T00:00:00Z",
+  last_seen_at: null,
   networks: [
     {
       network_slug: "azzurra",
@@ -152,6 +156,7 @@ const REGISTERED_WITH_TTL: AdminVisitor = {
   identified: true,
   ip: "13.14.15.16",
   inserted_at: "2026-07-12T00:00:00Z",
+  last_seen_at: null,
   networks: [
     {
       network_slug: "azzurra",
@@ -430,6 +435,7 @@ describe("AdminVisitorsTab", () => {
           identified: false,
           ip: null,
           inserted_at: "2026-07-12T00:00:00Z",
+          last_seen_at: null,
           networks: [
             {
               network_slug: "azzurra",
@@ -476,6 +482,7 @@ describe("AdminVisitorsTab", () => {
       identified: false,
       ip: "1.2.3.4",
       inserted_at: "2026-07-17T00:00:00Z",
+      last_seen_at: null,
       networks: [
         {
           network_slug: "azzurra",
@@ -504,6 +511,7 @@ describe("AdminVisitorsTab", () => {
       identified: false,
       ip: "5.6.7.8",
       inserted_at: "2026-07-17T00:00:00Z",
+      last_seen_at: null,
       networks: [
         {
           network_slug: "azzurra",

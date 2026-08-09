@@ -65,6 +65,7 @@ const NETWORK: AdminNetwork = {
 };
 
 const CRED: AdminCredential = {
+  last_seen_at: null,
   user_id: USER.id,
   network_id: NETWORK.id,
   network_slug: NETWORK.slug,
