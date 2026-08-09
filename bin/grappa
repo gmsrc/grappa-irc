@@ -360,6 +360,26 @@ list-visitors
 EOF
 }
 
+verb_help_db_latency() { cat <<'EOF'
+db-latency
+    Print the #357 SQLite write-latency / repo query-latency
+    aggregate as tab-separated tables. Same Grappa.DbLatency snapshot
+    the admin GET /admin/db_latency returns - one feature, one code
+    path, every door.
+
+    Counters are cumulative since the last reset, so the reading is
+    only as meaningful as the window: run db-latency-reset, wait out
+    the sample window (~25s under load), then read.
+EOF
+}
+
+verb_help_db_latency_reset() { cat <<'EOF'
+db-latency-reset
+    Zero the Grappa.DbLatency counters, opening a fresh sample window
+    for db-latency. Nothing else is affected.
+EOF
+}
+
 verb_help_remote_shell() { cat <<'EOF'
 remote-shell [--batch -e <expr>]
     Attach to the live BEAM via Erlang distribution.
@@ -461,6 +481,8 @@ declare -ag VERB_DISPLAY_ORDER=(
     list-sessions
     list-credentials
     list-visitors
+    db-latency
+    db-latency-reset
     remote-shell
     open-db
     shell

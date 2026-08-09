@@ -199,6 +199,48 @@ EOF
     [ "$status" -eq 64 ]
 }
 
+# --- VERBS table completeness --------------------------------------------
+#
+# db-latency + db-latency-reset (#357) were in VERBS but in neither
+# VERB_DISPLAY_ORDER nor the help functions, so they were invisible in the
+# banner and `bin/grappa help db-latency` died with 127
+# (`verb_help_db_latency: command not found`). Both halves of that are a
+# CLASS, not two typos: the banner is rendered by walking
+# VERB_DISPLAY_ORDER, and per-verb help is dispatched by name, so either
+# omission silently orphans a verb. These walk the table instead.
+
+# Every verb in the VERBS table, whatever its kind.
+table_verbs() {
+    sed -nE 's/^[[:space:]]*\[([a-z-]+)\]="(boot|rpc|attach|debug|meta)\|.*/\1/p' "$BIN_GRAPPA"
+}
+
+@test "the VERBS extractor is not silently empty (guard against a dead loop)" {
+    run table_verbs
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <<<"$output")" -ge 20 ]
+    [[ "$output" == *"db-latency"* ]]
+}
+
+@test "the banner lists every verb in the table (VERB_DISPLAY_ORDER covers VERBS)" {
+    run "$BIN_GRAPPA" help
+    [ "$status" -eq 0 ]
+    local banner="$output" verb
+    while read -r verb; do
+        [[ "$banner" == *"$verb"* ]] || {
+            printf 'verb %q is in VERBS but absent from the banner\n' "$verb" >&2
+            return 1
+        }
+    done < <(table_verbs)
+}
+
+@test "every verb in the table has per-verb help that exits 0" {
+    local verb
+    while read -r verb; do
+        run "$BIN_GRAPPA" help "$verb"
+        [ "$status" -eq 0 ]
+    done < <(table_verbs)
+}
+
 # --- debug verbs ----------------------------------------------------------
 
 @test "shell invokes docker compose exec grappa bash" {
