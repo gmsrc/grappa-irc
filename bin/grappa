@@ -276,12 +276,225 @@ verb_shell() {
 
 # --- per-verb help -------------------------------------------------------
 #
-# Boot verbs delegate to `mix help grappa.<task>` (mix's built-in reads
-# @shortdoc/@moduledoc). Live-state + debug verbs have inline heredocs.
+# EVERY verb has an inline `verb_help_<snake>` heredoc — one rule, no
+# per-kind branch in `dispatch_help`.
+#
+# #1086 second slice: the ten boot verbs used to delegate to
+# `scripts/mix.sh --env=dev help grappa.<task>`, letting mix print the
+# task's @shortdoc/@moduledoc. Two reasons that went away:
+#
+#   1. It answered a DIFFERENT question. The moduledoc documents the mix
+#      task — it spells the command `scripts/mix.sh grappa.create_user`,
+#      not `bin/grappa create-user`, and carries developer prose (Boundary
+#      declarations, the #251/#266 vhost-precedence history) that an
+#      operator asking "what flags does this take" did not ask for.
+#   2. It cost a container. With no live grappa container, scripts/mix.sh
+#      falls through _lib.sh's `in_container_or_oneshot` to
+#      `docker compose run --rm --no-deps` — booting an image to print a
+#      paragraph, and failing outright where docker is unavailable.
+#
+# The duplication this creates against @shortdoc/@moduledoc is DELIBERATE
+# and bounded: the prose is written for a different reader, but the FLAG
+# TABLE is the same contract twice, so it is gated. Every boot verb's
+# flag lines must name exactly the task's `@switches`, both directions —
+# see test/mix/tasks/grappa/operator_help_drift_test.exs. Generating the
+# whole block from the moduledoc was rejected: see the test's moduledoc
+# for why the `wireTypes.ts` codegen precedent does not transfer.
+#
+# FORMAT CONTRACT for the boot blocks: a flag DECLARATION sits at 8+
+# columns with `--flag` as its first token; prose sits at 4. The gate
+# reads the former and ignores the latter, so a prose sentence that wraps
+# onto a `--flag` does not register as a switch. Keep prose off column 8.
 
-help_boot_verb() {
-    local task=$1
-    exec "$SCRIPTS_DIR/mix.sh" --env=dev help "$task"
+verb_help_create_user() { cat <<'EOF'
+create-user --name <name> --password <secret> [--admin]
+    Create a Grappa user account. The password is hashed with Argon2
+    before insertion; the new user's id is printed on success.
+
+    Required:
+        --name <name>          account name
+        --password <secret>    plaintext, hashed on the way in
+    Optional:
+        --admin                grant is_admin at creation - the
+                               one-command first-admin bootstrap
+EOF
+}
+
+verb_help_bind_network() { cat <<'EOF'
+bind-network --user <name> --network <slug> --server <host:port>
+             --nick <nick> --auth <mode> [options]
+    Idempotently create the network, one server entry and the
+    per-(user, network) credential in a single call. Rebinding an
+    existing credential is a changeset error - use
+    update-network-credential to mutate one. Adding a server that is
+    already there is a silent no-op.
+
+    TLS posture is port-sniffed when neither --tls nor --no-tls is
+    given: 6697 means on, any other port means off.
+
+    Required:
+        --user <name>          Grappa account that owns the binding
+        --network <slug>       network slug (created when absent)
+        --server <host:port>   upstream endpoint
+        --nick <nick>          nick to use upstream
+        --auth <mode>          auto | sasl | server_pass |
+                               nickserv_identify | none
+    Optional:
+        --tls / --no-tls       force the TLS posture (default: sniffed)
+        --password <secret>    NickServ / server password
+        --autojoin <list>      comma-separated channel list
+        --realname <text>      IRC realname field
+        --sasl-user <name>     SASL account when it differs from the nick
+        --services-flavor <f>  services suite running on the network
+        --source <ip>          pin the outbound source address. Literal
+                               IPv4/IPv6 only, no hostname, no CIDR. It
+                               WINS over a subject's vhost selection and
+                               the rotation pool (#266).
+EOF
+}
+
+verb_help_add_server() { cat <<'EOF'
+add-server --network <slug> --server <host:port> [options]
+    Append another endpoint to an existing network's fail-over list.
+    The network must already exist - this verb never creates one.
+    Re-adding the same (network, host, port) is a no-op.
+
+    TLS posture is port-sniffed when neither --tls nor --no-tls is
+    given: 6697 means on, any other port means off. The old
+    always-on default was a footgun: a plain :6667 leaf added without
+    an explicit flag produces a handshake that never completes, and
+    the failure surfaces as :connect_timeout ~8s into every spawn.
+
+    Required:
+        --network <slug>       network the endpoint belongs to
+        --server <host:port>   endpoint to add
+    Optional:
+        --tls / --no-tls       force the TLS posture (default: sniffed)
+        --priority <n>         fail-over order, lower first (default 0)
+        --source <ip>          pin the outbound source address. Literal
+                               IPv4/IPv6 only, no hostname, no CIDR.
+EOF
+}
+
+verb_help_remove_server() { cat <<'EOF'
+remove-server --network <slug> --server <host:port>
+    Remove one (host, port) endpoint. The network row and its other
+    servers stay in place - use unbind-network to drop a binding.
+    Idempotent: removing an already-gone endpoint exits 0.
+
+    Required:
+        --network <slug>       network the endpoint belongs to
+        --server <host:port>   endpoint to remove
+EOF
+}
+
+verb_help_set_network_caps() { cat <<'EOF'
+set-network-caps --network <slug> <cap flag...>
+    Set or clear the admission caps on a network row. Pass only the
+    caps you want to change; the others keep their current value.
+    Setting a cap and clearing the same cap are mutually exclusive.
+
+    A cap of 0 is a degenerate lock-down (admit none); a cleared cap
+    is NULL, meaning unlimited.
+
+    Required:
+        --network <slug>       network to update
+    At least one of:
+        --max-visitor-sessions <n>     cap concurrent visitor sessions
+        --max-user-sessions <n>        cap concurrent user sessions
+        --max-per-ip <n>               cap concurrent sessions per IP
+        --clear-max-visitor-sessions   drop the visitor cap
+        --clear-max-user-sessions      drop the user cap
+        --clear-max-per-ip             drop the per-IP cap
+EOF
+}
+
+verb_help_unbind_network() { cat <<'EOF'
+unbind-network --user <name> --network <slug>
+    Remove the per-(user, network) credential and stop the live
+    session. The network row is never deleted, even when its last
+    binding goes away. Idempotent: unbinding nothing exits 0.
+
+    Required:
+        --user <name>          account that owns the binding
+        --network <slug>       network to unbind from
+EOF
+}
+
+verb_help_update_network_credential() { cat <<'EOF'
+update-network-credential --user <name> --network <slug> [options]
+    Mutate an existing credential. Pass only the fields you want to
+    change - every other field keeps its current value. Use
+    bind-network to create a binding; this verb only updates.
+
+    Required:
+        --user <name>          account that owns the binding
+        --network <slug>       network the credential belongs to
+    Optional:
+        --nick <nick>          nick to use upstream
+        --password <secret>    NickServ / server password
+        --auth <mode>          auto | sasl | server_pass |
+                               nickserv_identify | none
+        --autojoin <list>      REPLACES the channel list (comma-
+                               separated); omit it to keep the
+                               current one
+        --realname <text>      IRC realname field
+        --sasl-user <name>     SASL account when it differs from the nick
+EOF
+}
+
+verb_help_seed_scrollback() { cat <<'EOF'
+seed-scrollback --user <name> --network <slug> --channel <#chan>
+                --count <n> --sender <nick>
+    e2e fixture verb, NOT a production one: persist N synthetic
+    :privmsg rows so a scrollback spec gets a deterministically tall
+    pane without driving an IRC peer through bahamut-test, whose
+    fakelag throttle makes seeds over ~5 messages non-deterministic.
+
+    Each row's server_time increases monotonically from
+    now - count * 100ms, so the rows sort naturally and span a
+    timeline a test can place a read cursor inside.
+
+    Required:
+        --user <name>          account that owns the scrollback
+        --network <slug>       network slug
+        --channel <#chan>      channel to seed
+        --count <n>            row count; over 2000 is refused
+        --sender <nick>        synthetic peer nick on every row
+EOF
+}
+
+verb_help_gen_encryption_key() { cat <<'EOF'
+gen-encryption-key
+    Print a fresh base64-encoded 32-byte key for Grappa.Vault (Cloak
+    AES-GCM). Save it as GRAPPA_ENCRYPTION_KEY in your .env and back
+    it up separately: losing the key means losing the ability to
+    decrypt every stored upstream credential.
+
+    Run once per deployment, at first install. Rotating later needs a
+    re-encryption migration, which does not exist yet.
+
+    Takes no flags.
+EOF
+}
+
+verb_help_gen_vapid() { cat <<'EOF'
+gen-vapid
+    Print a fresh ECDSA P-256 VAPID keypair (RFC 8292) for Web Push
+    signing, as env lines ready to paste into the grappa service's
+    environment: block:
+
+        VAPID_PUBLIC_KEY=BJk...
+        VAPID_PRIVATE_KEY=z3p...
+        VAPID_SUBJECT=mailto:you@example.org   (optional)
+
+    Run once per deployment, at first install. Rotating the keypair
+    invalidates every push_subscriptions row - browsers reject pushes
+    signed by an unknown application server key - so expect users to
+    re-toggle push in cic settings afterwards.
+
+    Takes no flags.
+EOF
 }
 
 verb_help_delete_visitor() { cat <<'EOF'
@@ -491,8 +704,11 @@ declare -ag VERB_DISPLAY_ORDER=(
 
 # --- dispatch ------------------------------------------------------------
 
-# Per-verb help dispatch. Boot verbs delegate to `mix help grappa.<task>`;
-# all others have an explicit `verb_help_<snake>` function.
+# Per-verb help dispatch. EVERY verb, whatever its kind, has an explicit
+# `verb_help_<snake>` function — so this routes by name alone, with no
+# per-kind branch. A verb added to the VERBS table without one dies with
+# `command not found` rather than printing nothing; the bats suite walks
+# the whole table asserting help exits 0.
 dispatch_help() {
     if [ $# -eq 0 ]; then
         help_top
@@ -500,15 +716,9 @@ dispatch_help() {
     fi
     local verb=$1
     [ -n "${VERBS[$verb]:-}" ] || die_unknown_verb "$verb"
-    local kind
-    kind="$(verb_field "$verb" 1)"
-    if [ "$kind" = "boot" ]; then
-        help_boot_verb "$(verb_field "$verb" 2)"
-    else
-        local snake
-        snake="$(kebab_to_snake "$verb")"
-        "verb_help_${snake}"
-    fi
+    local snake
+    snake="$(kebab_to_snake "$verb")"
+    "verb_help_${snake}"
 }
 
 # Main verb dispatch. Routes by `kind`:

@@ -116,10 +116,12 @@ EOF
     [[ "$output" != *"STUB"* ]]
 }
 
-@test "help <boot-verb> delegates to scripts/mix.sh help grappa.<task>" {
+@test "help <boot-verb> prints inline help and never reaches mix" {
     run "$BIN_GRAPPA" help create-user
     [ "$status" -eq 0 ]
-    grep -q 'mix.sh --env=dev help grappa.create_user' "$ARGV_LOG"
+    [[ "$output" == *"create-user"* ]]
+    [[ "$output" == *"--password"* ]]
+    [ ! -s "$ARGV_LOG" ]
 }
 
 @test "help <debug-verb> prints inline help" {
@@ -146,23 +148,25 @@ EOF
 @test "#1086 <boot-verb> --help routes to per-verb help, not to the task" {
     run "$BIN_GRAPPA" bind-network --help
     [ "$status" -eq 0 ]
-    grep -q 'mix.sh --env=dev help grappa.bind_network' "$ARGV_LOG"
-    # The task itself must never be invoked — that is the crash path.
-    refute grep -q 'mix.sh grappa.bind_network' "$ARGV_LOG"
+    [[ "$output" == *"bind-network"* ]]
+    [[ "$output" == *"--auth"* ]]
+    # Neither the task NOR `mix help` may be reached: the first is the
+    # crash path, the second is the delegation this slice removed.
+    [ ! -s "$ARGV_LOG" ]
 }
 
 @test "#1086 <boot-verb> -h routes to per-verb help" {
     run "$BIN_GRAPPA" bind-network -h
     [ "$status" -eq 0 ]
-    grep -q 'mix.sh --env=dev help grappa.bind_network' "$ARGV_LOG"
-    refute grep -q 'mix.sh grappa.bind_network' "$ARGV_LOG"
+    [[ "$output" == *"bind-network"* ]]
+    [ ! -s "$ARGV_LOG" ]
 }
 
 @test "#1086 --help is honoured after other arguments, not only first" {
     run "$BIN_GRAPPA" bind-network --user vjt --network azzurra --help
     [ "$status" -eq 0 ]
-    grep -q 'mix.sh --env=dev help grappa.bind_network' "$ARGV_LOG"
-    refute grep -q 'mix.sh grappa.bind_network' "$ARGV_LOG"
+    [[ "$output" == *"bind-network"* ]]
+    [ ! -s "$ARGV_LOG" ]
 }
 
 @test "#1086 <rpc-verb> --help prints inline help without touching docker" {
@@ -233,12 +237,75 @@ table_verbs() {
     done < <(table_verbs)
 }
 
-@test "every verb in the table has per-verb help that exits 0" {
+@test "every verb in the table has per-verb help that exits 0 and prints something" {
+    # `prints something` only became assertable once the boot verbs
+    # answered inline (#1086): while they delegated, the stubbed
+    # scripts/mix.sh exited 0 with nothing on stdout.
     local verb
     while read -r verb; do
         run "$BIN_GRAPPA" help "$verb"
         [ "$status" -eq 0 ]
+        [ -n "$output" ]
     done < <(table_verbs)
+}
+
+# --- #1086 second slice: boot-verb help is INLINE ------------------------
+#
+# The ten boot verbs used to answer `--help` with
+# `exec scripts/mix.sh --env=dev help grappa.<task>`, i.e. mix's built-in
+# reader of the task's @shortdoc/@moduledoc. That answered a different
+# question than the one asked — the moduledoc documents
+# `scripts/mix.sh grappa.create_user`, not `bin/grappa create-user` — and
+# it cost a container: with no live grappa container, scripts/mix.sh falls
+# through _lib.sh's `in_container_or_oneshot` to
+# `docker compose run --rm --no-deps`, booting an image to print a
+# paragraph. These are the tests that state the REASON.
+
+# The boot verbs, read off the VERBS table so a verb added there is
+# covered without editing this file.
+boot_verbs() {
+    sed -nE 's/^[[:space:]]*\[([a-z-]+)\]="boot\|.*/\1/p' "$BIN_GRAPPA"
+}
+
+@test "#1086 the boot-verb extractor sees the whole table (guard against a dead loop)" {
+    run boot_verbs
+    [ "$status" -eq 0 ]
+    [ "$(wc -l <<<"$output")" -eq 10 ]
+    [[ "$output" == *"create-user"* ]]
+    [[ "$output" == *"gen-vapid"* ]]
+}
+
+@test "#1086 every boot verb answers --help with no working docker and no scripts/ dir" {
+    # Hostile environment: `docker` on PATH refuses to run at all, and
+    # SCRIPTS_DIR points at an empty directory, so `$SCRIPTS_DIR/mix.sh`
+    # does not exist. Any surviving delegation exits non-zero here — as
+    # all ten did before this slice, with 127.
+    cat > "$FAKE_DIR/docker" <<'EOF'
+#!/usr/bin/env bash
+printf 'docker: refusing to run in the no-docker help test\n' >&2
+exit 127
+EOF
+    chmod +x "$FAKE_DIR/docker"
+    mkdir -p "$BATS_TEST_TMPDIR/empty-scripts"
+    export SCRIPTS_DIR="$BATS_TEST_TMPDIR/empty-scripts"
+
+    local verb
+    while read -r verb; do
+        run "$BIN_GRAPPA" "$verb" --help
+        [ "$status" -eq 0 ]
+        # The help names the verb the operator typed (kebab), not the mix
+        # task the moduledoc documents.
+        [[ "$output" == *"$verb"* ]]
+        [ "${#output}" -gt 80 ]
+    done < <(boot_verbs)
+}
+
+@test "#1086 boot-verb help names bin/grappa's verb, never the mix task spelling" {
+    run "$BIN_GRAPPA" help update-network-credential
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"update-network-credential"* ]]
+    refute grep -q 'grappa.update_network_credential' <<<"$output"
+    refute grep -q 'scripts/mix.sh' <<<"$output"
 }
 
 # --- debug verbs ----------------------------------------------------------
