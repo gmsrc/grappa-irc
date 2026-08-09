@@ -59,6 +59,21 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       assert GenWireTypes.render_type([{:remote_type, [], [String, :t]}]) == "string[]"
     end
 
+    # #1073 — the admin-bar loadavg is the first `float()` on the wire, and it
+    # is nullable on purpose (`nil` = the sampler was unreachable, which is a
+    # different fact from a measured `0.0`). Before this, `float()` was absent
+    # from the primitive allowlist in `strip_typespec_metadata/1`, so it never
+    # reached `do_render/1` in stripped form and the task died with a
+    # FunctionClauseError on the raw Erlang abstract-format tuple. JSON has one
+    # numeric type, so it renders like the integers already do.
+    test "renders float() as number" do
+      assert GenWireTypes.render_type({:float, [], []}) == "number"
+    end
+
+    test "renders float() | nil as number | null" do
+      assert GenWireTypes.render_type({:|, [], [{:float, [], []}, nil]}) == "number | null"
+    end
+
     test "renders bare map() as Record<string, unknown>" do
       assert GenWireTypes.render_type({:map, [], []}) == "Record<string, unknown>"
     end

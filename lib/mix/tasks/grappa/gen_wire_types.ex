@@ -526,6 +526,10 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
               :integer,
               :non_neg_integer,
               :pos_integer,
+              # #1073 — the admin-bar loadavg is the first float on the wire.
+              # Absent from this list it never reached `do_render/1` stripped,
+              # and the task died on the raw abstract-format tuple.
+              :float,
               :boolean,
               :map,
               :binary,
@@ -642,6 +646,9 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   defp do_render({:integer, _, []}), do: "number"
   defp do_render({:non_neg_integer, _, []}), do: "number"
   defp do_render({:pos_integer, _, []}), do: "number"
+  # JSON has ONE numeric type, so a float lands on `number` exactly as the
+  # integers do. TypeScript cannot express the int/float split either.
+  defp do_render({:float, _, []}), do: "number"
   defp do_render({:boolean, _, []}), do: "boolean"
   defp do_render({:binary, _, []}), do: "string"
   defp do_render({:atom, _, []}), do: "string"
