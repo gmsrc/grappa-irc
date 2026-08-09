@@ -36219,3 +36219,72 @@ clones` over the 237 MB grappa container log returned **0**, with a sanity
 count of 126,802 `privmsg` lines from the same grep on the same file — so in
 that run they never appeared anywhere. That is one run's observation, not a
 general claim that the bump is inert.
+
+---
+
+## 2026-08-09 — #1159: the deployment system's comments moved to the docs, and the rule that decided which ones
+
+`compose.yaml` was 62% prose, `compose.oneshot.yaml` 74%, `Dockerfile`
+58%, `scripts/_lib.sh` 58%. The cost was not verbosity for its own sake:
+a reader who wanted to know which services the stack defines had to mine
+them out of an essay, so the file no longer answered the question it
+exists to answer.
+
+**The rule is vjt's, and it is harder than the one the issue proposed.**
+The issue offered keep / move / delete, where "keep" meant a comment that
+records a decision may stay in place as long as it carries its issue
+number. The ruling replaced that: **dev notes belong out of the comments.
+The file says WHAT IT DOES and points at `docs/` for the WHY. Traps paid
+for in production MOVE, they do not die; if one has no home in the docs
+yet, the move creates it.** So the "keep" arm collapsed — a decision does
+not stay in the file with a reference, it leaves and a pointer line stays
+behind. What remains inline is WHAT the adjacent code does, plus at most
+one `# Why: docs/OPERATIONS.md § "…"` line, placed only where a reader
+editing that code would otherwise re-introduce the bug.
+
+**Where the knowledge went.** Six new `docs/OPERATIONS.md` sections now
+hold it — the compose stack, the two images, the Docker deploy driver,
+the shared deploy library, the FreeBSD jail rails, native Linux plus the
+cloud box, and packaging — with three test-runner items added to
+`docs/TESTING.md` instead, because that is the canonical runbook for how
+gates are run. The three knowledges the issue named explicitly all
+survived: `CIC_BUILD_OUT` / #1020 (vite empties the out dir, and the
+default out dir is the one the BEAM serves per request), the
+named-volume-as-root versus container-as-UID-1000 `EACCES` trap together
+with its `tmpfs` uid/gid corollary, and the two roles of `Dockerfile`
+versus `Dockerfile.release`. The `code_reloader: true` half of that last
+one needed nothing: it already had a home in the 2026-07-31 "#503 unit C"
+entry, and its file is outside this issue's scope.
+
+**Shipped operator files were deliberately held near-flat.**
+`grappa.env.example`, `nfpm.yaml`, `grappa.service`, the AUR `PKGBUILD`,
+`grappa.install`, `grappa.sysusers` and `grappa.tmpfiles` are read by
+operators and packagers, not developers. There a "what this knob does"
+comment is the product, delivered at the only place its reader will look,
+so only dev narrative moved out — `grappa.env.example` lost exactly one
+line. Nine files in scope were left untouched because they had no slop.
+
+**Comments-only was verified structurally, not by eye.** Every file in
+scope was compared against `HEAD` with full-line comments and blanks
+stripped; the executable remainder is byte-identical everywhere. Shebangs,
+`# shellcheck` directives and `# syntax=` parser directives were counted
+before and after. `#` inside a heredoc, a quoted string or a printed help
+block is DATA — it lands in an operator's rc.d script, systemd unit or env
+file — and was left alone; the one judgement call was the `su -l grappa -c
+'…'` rail bodies in `jail_cic_build.sh`, which are executed rather than
+written, and so were swept.
+
+**One mechanical trap worth knowing before touching `compose.yaml`.**
+`test/grappa/config/env_registry_drift_test.exs` parses that file as text,
+and an operator-form `${VAR:-…}` written inside a COMMENT counts as a
+read. Exactly one such ghost exists, inside the grappa `environment:`
+block the test already subtracts, so removing it was inert — but a new
+comment written elsewhere in the file with that form would silently widen
+the allowed set. The test also depends on the block's indentation: a
+comment at four spaces or less inside `environment:` ends the block early.
+
+**The honest counter-observation.** The files lost 1185 comment lines; the
+docs gained more than that. Relocation was the ruling, not shrinkage, and
+a runbook is the right place for prose that a config file is the wrong
+place for — but the total volume of English in the repo went up, and if
+that is not the intended end state the docs want their own pass.
