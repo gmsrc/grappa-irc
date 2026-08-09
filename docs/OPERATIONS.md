@@ -36,6 +36,7 @@ worktree volumes via oneshot bindings (same machinery as
 ```
 bin/grappa help                  # list verbs grouped by category
 bin/grappa help <verb>           # per-verb help
+bin/grappa <verb> --help         # same, as a flag (or -h) — anywhere in the args
 
 # Boot-time verbs (mix tasks; auto-detect MIX_ENV from container):
 bin/grappa create-user --name <user> --password <pw>

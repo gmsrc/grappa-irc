@@ -110,6 +110,7 @@ grappa runs as a single container against a sqlite DB. There is no config file â
 ```sh
 bin/grappa help                # every verb (boot-time + live-state + debug)
 bin/grappa help <verb>         # per-verb usage
+bin/grappa <verb> --help       # the same per-verb usage, as a flag (or -h)
 bin/grappa create-user ...     # boot-time verb (mix task inside the container)
 bin/grappa list-visitors       # live-state verb (RPC into the running BEAM)
 bin/grappa remote-shell        # iex --remsh into the live node
