@@ -87,16 +87,34 @@ services:
       # services' validate_email() rejects the .test TLD; use the real
       # services network domain (azzurra.chat) for the envelope-from.
       SVC_RETURN: "noreply@azzurra.chat"
-      # GH #349 — DISABLE services' clone-autokill (conf.c CLONES →
-      # CONF_AKILL_CLONES; default 5, expiry 600s). grappa is a BOUNCER:
-      # bahamut-test + azzurra + azzurra-reg sessions ALL link to this one
-      # hub from grappa's single container IP, so services see them as
-      # clones and autokill the IP on the 5th connection — a false positive
-      # that turns the FULL suite red from a hard cliff (Autokilled →
-      # session :failed → resetSubject 500 → live-IRC specs time out).
-      # main sits at 4 concurrent (margin-of-1); azzurra-reg is the +1 that
-      # tips it. 0 = akill off (detection/globops still run). This testnet
-      # is single-tenant + hermetic — there are no real clones to police.
+      # GH #349 — keep services from autokilling grappa's container IP.
+      # grappa is a BOUNCER: bahamut-test + azzurra + azzurra-reg sessions
+      # ALL link to this one hub from grappa's single container IP, so
+      # services count them as clones and akill the IP on the 5th — a
+      # false positive that turns the FULL suite red from a hard cliff
+      # (Autokilled → session :failed → resetSubject 500 → live-IRC specs
+      # time out). Measured on this stack: 6 connections from one IP with
+      # the akill armed get `465 You have been Autokilled`.
+      #
+      # GH #1066 — what this value REALLY does. The submodule template
+      # (infra/services/conf.tmpl) writes it to the `CLONES` directive,
+      # NOT to `CLONEKILL`. They are different knobs in azzurra/services:
+      # `CLONES` is a BOOLEAN (conf.c:786 fatals unless 0 or 1) feeding
+      # CONF_SET_CLONE, the master switch that gates check_clones()
+      # outright (users.c:1316); `CLONEKILL` is the NUMERIC threshold
+      # (conf.c:940 — 0, or 5..50) feeding CONF_AKILL_CLONES. So "0" here
+      # turns clone DETECTION off entirely — no scan, no oper globops, and
+      # hence no autokill. CONF_AKILL_CLONES is never written at all and
+      # keeps its built-in 5, moot while detection is off. The effect we
+      # need holds, more bluntly than intended; "autokill off, detection
+      # and globops on" is what CLONEKILL:0 would give and is unreachable
+      # from here until the submodule is fixed.
+      #
+      # Only 0 and 1 are accepted. Every value in the 5..50 range the
+      # submodule's entrypoint.sh documents as valid FATALS services at
+      # startup (`FATAL ERROR: Value 5 for CLONES is not valid`) and takes
+      # the whole stack with it — test/scripts/e2e_clone_directive_test.bats
+      # guards this pairing.
       SVC_AKILL_CLONES: "0"
     networks:
       svc-net: null
