@@ -43,8 +43,8 @@ import {
   sidebarCloseButton,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -53,9 +53,9 @@ test.setTimeout(60_000);
 test("#407 the -full scrim spans to the viewport bottom, and a click there dismisses", async ({
   page,
 }) => {
-  const vjt = getSeededVjt();
+  const vjt = specUser();
   await loginAs(page, vjt);
-  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+  await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
   // #195 — the destructive close × opens the leave-channel confirm.
   await sidebarCloseButton(page, NETWORK_SLUG, CHANNEL).click();

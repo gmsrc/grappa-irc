@@ -33,10 +33,9 @@
 
 import { TINY_PNG_HEX } from "../fixtures/bytes";
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
-import { AUTOJOIN_CHANNELS, getSeededVjt, NETWORK_NICK, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
+import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
+import { expect, specNick, specUser, test } from "../fixtures/test";
 import { mediaScrollbackRow, uploadViaPicker } from "../fixtures/uploadJourney";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -47,26 +46,21 @@ const PEER_NICK = "arr1121-peer";
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 
 test.describe("#1121 — closing an overlay over a tail reader must not strand them", () => {
-  // This spec leaves the pane parked above the tail for part of its run, so its
-  // scroll-settle can advance the shared #bofh cursor to a mid-page position and
-  // leave the trailing peer lines unread. A downstream spec assuming a fully-read
-  // #bofh would then inherit an unread marker → cold-mount marker-jump → scroll
-  // flake. Restore after EACH run, not afterAll: under `--repeat-each` afterAll
-  // fires once after every repeat, far too late, and sibling specs interleave
-  // between our repeats. Cascade hygiene: feedback_cascade_poisoner_pattern.
-  test.afterEach(async () => {
-    const vjt = getSeededVjt();
-    await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
-  });
+  // No cursor restore afterwards. This spec parks the pane above the tail for
+  // part of its run, which used to leave the SHARED #bofh cursor mid-page and
+  // hand the next spec an unread marker → cold-mount marker-jump → scroll flake.
+  // #1078 gave every test its own subject and destroys it at teardown, so there
+  // is no cursor left to poison anyone with, and a restore written into a
+  // subject about to be deleted would only look like hygiene.
 
   test("closing the media viewer over a tail reader restores the button and keeps following (desktop)", async ({
     page,
   }) => {
     test.slow();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
-    const vjt = getSeededVjt();
+    const vjt = specUser();
     await loginAs(page, vjt);
-    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: NETWORK_NICK });
+    await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
     // Upload an image → a clickable media link lands at the tail, where our
     // reader already is. No scroll-up here: being AT the tail IS the precondition.
