@@ -1,31 +1,15 @@
-# grappa — oneshot override (layered AFTER the unified compose.yaml).
-# (compose.prod.yaml was collapsed into compose.yaml per CP23.)
+# grappa — oneshot override, layered after compose.yaml by scripts/_lib.sh
+# `in_oneshot()` for ephemeral mix tasks (test, credo, dialyzer, format,
+# deps.get, ecto.migrate) that have to coexist with a running container.
 #
-# Used by `scripts/_lib.sh` `in_oneshot()` for ephemeral mix tasks (test,
-# credo, dialyzer, format, deps.get, ecto.migrate, etc.) so they coexist
-# with a running long-lived container.
-#
-# Without this override, oneshots inherit the live service's
-# `container_name: grappa` (one-name-one-container in Docker) and any
-# host port-publish bindings — both collide with the long-running copy.
-#
-# Strategy:
-#   - container_name: !reset null lets compose generate a unique name
-#     per run (e.g. grappa-grappa-run-abc123) so multiple oneshots can
-#     run concurrently and never collide with the long-lived container.
-#   - ports: !reset [] drops any host-side port-publishes from the base
-#     compose file (and any compose.override.yaml personal binding).
-#     Oneshots run mix tasks against named volumes + host bind mounts,
-#     boot Phoenix on port 4002 bound to localhost inside the container
-#     for tests, and exit. Nothing external connects in.
-#   - healthcheck.disable: true skips the curl /healthz probe; oneshots
-#     don't run phx.server, the probe would always fail.
-#   - restart: "no" — oneshots are fire-and-forget; never auto-restart.
+# Without it a oneshot inherits `container_name: grappa` and the host
+# port-publishes, and both collide with the long-lived copy.
 
 services:
   grappa:
     container_name: !reset null
     ports: !reset []
+    # A oneshot never boots phx.server, so the /healthz probe would always fail.
     healthcheck:
       disable: true
     restart: "no"

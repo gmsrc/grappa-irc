@@ -1,28 +1,20 @@
-# grappa — IRC bouncer (Elixir/OTP + Phoenix)
+# grappa — IRC bouncer (Elixir/OTP + Phoenix).
 #
-# Single-stage image: dev = prod = CI = one path, one runtime, one
-# binary. `mix phx.server` boots in every environment. The release
-# build was dropped in CP23 cluster `cluster/code-reload` to enable
-# Phoenix.CodeReloader hot-deploy of running sessions.
-#
-# Base image: `elixir:1.19-otp-28-alpine` (Docker Hub official). The
-# previous multi-stage debian build used `hexpm/elixir:VSN-erlang-VSN-
-# debian-VSN` for tighter alpine-tuple pinning, but `hexpm/elixir`
-# does NOT publish alpine variants for Elixir 1.19 / OTP 28 — the
-# official `elixir:1.19-otp-28-alpine` is the upstream-supported alpine
-# path. Elixir + OTP are still pinned via the tag; alpine version
-# floats with whatever Docker library publishes for that tag.
+# The single-stage TOOLCHAIN image, used by dev, CI and the compose prod
+# stack: it bind-mounts the repo and boots `mix phx.server`, so
+# Phoenix.CodeReloader can hot-deploy running sessions. The self-contained
+# release image published to ghcr.io is a DIFFERENT file with a different
+# role — see Dockerfile.release, and docs/OPERATIONS.md § "The two images:
+# Dockerfile (toolchain) vs Dockerfile.release" for why there are two.
 
 FROM elixir:1.19-otp-28-alpine
 
-# build-base + git for hex deps; sqlite-dev for ecto_sqlite3 NIF link;
-# curl for the in-container /healthz probe + future hot-deploy POST;
-# inotify-tools for Phoenix code-reloader file watch (live in dev,
-# request-driven in prod, both rely on the same Erlang port driver).
-# exiftool + ffmpeg for Grappa.Uploads.MetadataStrip (#39): exiftool
-# strips images + mp4/mov losslessly; ffmpeg remuxes webm (the one
-# allowlisted upload type exiftool cannot write). Jail equivalent:
-# docs/OPERATIONS.md "Jail package dependencies".
+# build-base + git for hex deps; sqlite-dev for the ecto_sqlite3 NIF link;
+# curl for the in-container /healthz probe and the hot-deploy POST;
+# inotify-tools for the Phoenix code-reloader file watch; exiftool + ffmpeg
+# for Grappa.Uploads.MetadataStrip (#39) — exiftool strips images and
+# mp4/mov, ffmpeg remuxes webm. Jail equivalent: docs/OPERATIONS.md
+# "Jail package dependencies".
 RUN apk add --no-cache \
         build-base \
         git \
@@ -43,31 +35,19 @@ ENV LANG=C.UTF-8 \
 
 WORKDIR /app
 
-# Toolchain image ONLY — no baked hex/rebar, deps, or _build (#364 docker
-# S1). Every runtime shape bind-mounts the repo over /app (dev compose
-# `./:/app`; deploy.sh + quickstart.sh; both e2e services `../..:/app`),
-# and MIX_HOME/HEX_HOME + deps/ + _build/ all live UNDER /app — so any
-# image-baked `mix local.hex` / `COPY mix.exs mix.lock` / `mix deps.get` /
-# `mix compile` layer is 100% SHADOWED by that mount at runtime. It buys
-# nothing (it cannot seed the host tree), yet it made every `docker
-# compose build` re-run C-NIF dep compilation and invalidated the
-# `COPY . .` layer on any repo edit — and it made the "clone-and-go"
-# claim false (a fresh clone has no host-side hex/deps, and the baked
-# ones are invisible). Deps are installed into the BIND-MOUNTED tree at
-# first boot instead:
-#   - dev `docker compose up` → bin/start.sh self-heals (hex + deps.get
-#     when deps/ is empty), so it is genuinely clone-and-go;
-#   - scripts/quickstart.sh → installs them explicitly (standalone path);
-#   - scripts/deploy.sh → syncs deps on every deploy;
-#   - the e2e seeder → installs before grappa-test boots.
-# Result: image builds drop from minutes to seconds and the image shrinks.
+# Toolchain ONLY — deliberately no baked hex/rebar, deps or _build (#364
+# docker S1). Every runtime shape mounts the repo over /app, and MIX_HOME,
+# HEX_HOME, deps/ and _build/ all live under it, so a baked layer would be
+# shadowed at runtime. Deps are installed into the mounted tree at first
+# boot instead, by bin/start.sh, scripts/quickstart.sh, scripts/deploy.sh
+# and the e2e seeder. Do not add a `mix deps.get` layer here — why, and
+# what it cost last time: docs/OPERATIONS.md § "The two images: Dockerfile
+# (toolchain) vs Dockerfile.release".
 
 EXPOSE 4000
 
 HEALTHCHECK --interval=5s --timeout=5s --start-period=180s --retries=3 \
     CMD curl -fsS http://localhost:4000/healthz || exit 1
 
-# bin/start.sh exports BEAM resource caps (formerly rel/env.sh.eex) and
-# execs `mix phx.server`. Same shell idioms work in dev + prod because
-# MIX_ENV is the only env-distinguishing variable.
+# bin/start.sh exports the BEAM resource caps, then execs `mix phx.server`.
 CMD ["bin/start.sh"]

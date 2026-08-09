@@ -1,34 +1,20 @@
 # Dockerfile.shottino — the `shottino --ircd` bridge as a compose service
-# (#1027). DISTINCT from the top-level `Dockerfile` (the single-stage dev/CI
-# toolchain image that runs the bouncer) and from `Dockerfile.release`.
-#
-# Why its own file rather than a stage in the bouncer image: shottino's build
-# dependencies are not the bouncer's. `configure` probes the ncursesw and
-# openssl pkg-config MODULES, so it wants ncurses-dev + openssl-dev + pkgconf,
-# where the bouncer image installs the ncurses RUNTIME library and no
-# pkg-config at all. Adding them there would grow an image every operator
-# pulls for a feature most will never switch on, and the top-level Dockerfile
-# is deliberately single-stage ("dev = prod = CI = one path"). So the bridge
-# gets a small image of its own, built only when its compose profile is used.
-#
-# Both stages sit on the SAME alpine tag. Dockerfile.release needs an ABI
-# lockstep gate because its build base (elixir:…-alpine) and its runtime base
-# are different images that drift apart per arch; here there is nothing to
-# prove — one base, one musl, one openssl, by construction.
+# (#1027). A small image of its own, built only when the `ircd` profile is
+# used; why it is not a stage in the bouncer image, and why it needs no ABI
+# lockstep gate, is in docs/OPERATIONS.md § "The shottino --ircd bridge as a
+# compose service (#1027)".
 
 # ── Stage 1: build ──────────────────────────────────────────────────────────
 FROM alpine:3.24 AS build
 
-# build-base does NOT carry pkg-config on alpine, so `configure` fails at its
-# very first check without pkgconf — before it reaches either .pc module.
-# ncurses-dev ships ncursesw.pc (shottino links the WIDE build, it is UTF-8
-# end to end) and openssl-dev ships openssl.pc.
+# pkgconf is required: build-base does not carry pkg-config on alpine, and
+# `configure` fails at its first check without it. ncurses-dev ships
+# ncursesw.pc (shottino links the WIDE build) and openssl-dev ships openssl.pc.
 RUN apk add --no-cache build-base ncurses-dev openssl-dev pkgconf
 
 WORKDIR /src
-# Only what the client needs. The vendored libdatachannel is a submodule and
-# belongs to the opt-in `make call` helper, which this image does not build:
-# the bridge has no terminal and places no calls.
+# Only what the client needs. The vendored libdatachannel submodule belongs to
+# the opt-in `make call` helper, which this image does not build.
 COPY Makefile configure ./
 COPY frontends/shottino/ ./frontends/shottino/
 RUN ./configure --prefix=/usr \
@@ -38,28 +24,22 @@ RUN ./configure --prefix=/usr \
 # ── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM alpine:3.24
 
-# The two libraries the binary links, and the trust store it needs to reach
-# grappa over TLS when the operator points it at a public URL rather than at
-# the in-stack `http://grappa:4000`.
-#   ncurses-libs    — libncursesw, linked even headless (the tty is optional,
-#                     the link is not)
+#   ncurses-libs    — libncursesw, linked even headless
 #   openssl         — libssl/libcrypto for the HTTPS + websocket transport
-#   ca-certificates — the system CA bundle
+#   ca-certificates — the system CA bundle, for reaching grappa over TLS
 RUN apk add --no-cache ncurses-libs openssl ca-certificates
 
 COPY --from=build /src/frontends/shottino/shottino /usr/bin/shottino
 
-# Where the bridge keeps its state. compose mounts a host directory here; the
-# client appends its own name, so the log lands at $XDG_DATA_HOME/shottino/
-# ircd.log. Set explicitly rather than left to $HOME because the log is a
-# PLAINTEXT transcript of the session and it must be somewhere the operator
-# chose — that is the whole point of the variable (see the client's README,
-# "Where preferences are kept").
+# The bridge's state dir; the client appends its own name, so the log lands at
+# /state/shottino/ircd.log. Set explicitly, not left to $HOME, because that log
+# is a PLAINTEXT transcript of the session and it must be somewhere the
+# operator chose.
 ENV XDG_DATA_HOME=/state
 WORKDIR /state
 
 EXPOSE 6667
 
-# No CMD. The bridge cannot be started without a grappa URL and a username,
-# and guessing either would produce a container that restarts forever against
-# somebody else's server. compose.yaml supplies the whole command.
+# No CMD: the bridge cannot start without a grappa URL and a username, and
+# guessing either yields a container that restarts forever against somebody
+# else's server. compose.yaml supplies the whole command.

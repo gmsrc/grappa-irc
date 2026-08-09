@@ -1,40 +1,33 @@
 # syntax=docker/dockerfile:1
 #
 # Dockerfile.release — the self-contained grappa RELEASE image published to
-# ghcr.io (#503 scope 5 / unit C). DISTINCT from the top-level `Dockerfile`,
-# which is the single-stage dev/CI TOOLCHAIN image: it bind-mounts the repo,
-# boots `mix phx.server`, and HAS Phoenix.CodeReloader.
+# ghcr.io (#503 unit C). It ships a `mix release`: bundled ERTS, compiled
+# beams and the built cicchetto SPA, and nothing to compile with. It boots
+# `bin/grappa start`; a hot update swaps beams into `lib/grappa-<vsn>/ebin`
+# and fires `Grappa.HotReload` (unit E), never the dev reloader.
 #
-# This image ships a `mix release` — bundled ERTS + compiled beams + the built
-# cicchetto SPA — and NOTHING to compile with: no Elixir/mix, no source, no
-# Phoenix.CodeReloader, no inotify. It boots `bin/grappa start` directly. A hot
-# update on this image swaps beams into `lib/grappa-<vsn>/ebin` and fires
-# `Grappa.HotReload` (unit E), never the dev reloader — see docs/OPERATIONS.md.
-# The compose/dev stack (top-level Dockerfile) stays the development runtime.
+# The top-level `Dockerfile` is a different image with a different role —
+# docs/OPERATIONS.md § "The two images: Dockerfile (toolchain) vs
+# Dockerfile.release".
 #
-# Multi-arch: buildx builds linux/amd64 + linux/arm64 from this ONE file
-# (alpine/musl publishes both). The release CI `docker` job (release.yml)
-# drives it with QEMU; a local `docker buildx build` mirrors it.
+# Multi-arch: buildx builds linux/amd64 + linux/arm64 from this ONE file.
 
 # ── Stage 1: cicchetto SPA dist ─────────────────────────────────────────────
-# bun's binary is musl-built on alpine, so build the PWA in oven/bun's alpine
-# image (mirrors the release CI's setup-bun + infra/packaging/build.sh's
-# `bun run build`). node_modules is .dockerignore'd — installed fresh here.
-# Digest-pinned (#103 supply-chain — this is the alpine variant, a SEPARATE
-# tag/digest from the debian oven/bun:1 the dev scripts use). Refresh on a
+# bun's binary is musl-built on alpine, so the PWA is built in oven/bun's
+# alpine image. node_modules is .dockerignore'd and installed fresh here.
+# Digest-pinned (#103 supply-chain) — this is the alpine variant, a SEPARATE
+# tag and digest from the debian oven/bun:1 the dev scripts use. Refresh on a
 # bump: docker buildx imagetools inspect oven/bun:1-alpine --format '{{.Manifest.Digest}}'
 FROM oven/bun:1-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS cic
 WORKDIR /cic
-# Lockfile + manifest first for a cache-friendly, frozen install layer.
+# Lockfile + manifest first, for a cache-friendly frozen install layer.
 COPY cicchetto/package.json cicchetto/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY cicchetto/ ./
-# The vite build REFUSES to run without GRAPPA_VERSION (#538 — it bakes
-# <meta cicchetto-version> and won't ship it empty). Derive it via the SAME
-# version.sh SSOT the .deb/.rpm/AUR builds use — placed with the VERSION file
-# at the layout version.sh expects (SCRIPT_DIR/../.. == repo root, so it reads
-# ./VERSION, #652) so nothing re-implements the read. Same invocation as
-# build.sh: `bun run build` = `tsc --noEmit && vite build`; --emptyOutDir
+# The vite build REFUSES to run without GRAPPA_VERSION (#538). It is derived
+# through the same version.sh the .deb/.rpm/AUR builds use, placed at the
+# layout version.sh expects (SCRIPT_DIR/../.. == repo root, so it reads
+# ./VERSION, #652), so nothing re-implements the read. `--emptyOutDir`
 # because the outDir is outside the vite project root.
 COPY VERSION ./VERSION
 COPY infra/packaging/version.sh ./infra/packaging/version.sh
@@ -44,9 +37,8 @@ RUN GRAPPA_VERSION="$(sh infra/packaging/version.sh)" \
     && bun run build -- --outDir /cic-dist --emptyOutDir
 
 # ── Stage 2: mix release (self-contained ERTS + beams) ──────────────────────
-# Same toolchain tuple as the dev image + the .deb builder. build-base + git
-# for hex NIF compilation; exqlite bundles its own sqlite amalgamation, so no
-# sqlite-dev is needed (statically linked into the NIF).
+# Same toolchain tuple as the dev image and the .deb builder. exqlite bundles
+# its own sqlite amalgamation, so no sqlite-dev is needed here.
 FROM elixir:1.19-otp-28-alpine AS build
 RUN apk add --no-cache build-base git
 ENV LANG=C.UTF-8 \
@@ -56,37 +48,27 @@ ENV LANG=C.UTF-8 \
     MIX_ENV=prod
 WORKDIR /src
 RUN mix local.hex --force && mix local.rebar --force
-# Prod deps first (cache layer). VERSION rides with mix.exs: mix.exs reads it
-# via File.read! at project-eval time, so EVERY mix task (deps.get included)
-# needs it present, not just the later compile (#652).
+# VERSION must be COPYed alongside mix.exs, not later: mix.exs reads it at
+# project-eval time, so every mix task needs it present, deps.get included
+# (#652).
 COPY mix.exs mix.lock VERSION ./
 RUN mix deps.get --only prod
-# App source + config, then compile + assemble in ONE `mix compile` — the same
-# sequence infra/packaging/build.sh proves in the deb/rpm CI (deps.get →
-# compile → release). A separate `mix deps.compile` step was dropped: `mix
-# compile` compiles the deps anyway, and the extra step only added an
-# emulation-heavy compile pass under the arm64 QEMU leg.
+# Compile and assemble in ONE `mix compile`; a separate `mix deps.compile`
+# step only added an emulation-heavy pass under the arm64 QEMU leg.
 #
-# `.git` is EXCLUDED by .dockerignore, so at compile time Grappa.Version has no
-# git facts and takes the no-git path — the artifact reports the BARE X.Y.Z, the
-# same path the AUR source tarball uses (#391). The CI `docker` job checks out
-# the release tag and asserts `tag == VERSION` (#652), so the bare version
-# equals the tag. `mix release` runs the #542 version-sha guard, which logs the
-# no-git skip and proceeds (no HEAD to verify against).
+# `.git` is EXCLUDED by .dockerignore, so Grappa.Version takes its no-git path
+# and the artifact reports the bare X.Y.Z, like the AUR source tarball (#391).
+# The release CI asserts `tag == VERSION` (#652), so bare version equals tag.
 COPY config config
 COPY lib lib
 COPY priv priv
 RUN mix compile --warnings-as-errors
 RUN mix release --overwrite
 
-# Capture the ABI contract the release just linked against — the musl + openssl
-# SONAME majors AND package versions — for the runtime stage's lockstep gate.
-# The alpine minor is a cosmetic label (see the runtime stage); THESE are the
-# real contract. Emitted as KEY=VALUE lines the gate reads back.
-# The openssl package name is DERIVED from its SONAME (libcrypto<so>) so the
-# version stays as major-agnostic as the soname: on a future libcrypto.so.4
-# world the gate reports a real "SONAME major" verdict, never a misleading
-# "extraction failed". The musl package name is soname-stable, so it is fixed.
+# Capture the ABI contract the release linked against — musl + openssl SONAME
+# majors AND package versions — as KEY=VALUE lines the runtime stage's gate
+# reads back. The openssl package name is DERIVED from its SONAME so the
+# lookup survives a future libcrypto.so.4; musl's is soname-stable.
 RUN set -eu; \
     musl_so="$(ls /lib/libc.musl-*.so.* | sed 's/.*\.so\.//' | head -1)"; \
     musl_pkg="$(apk list --installed musl | head -1 | cut -d' ' -f1)"; \
@@ -100,20 +82,15 @@ RUN set -eu; \
     } > /abi-manifest
 
 # ── Stage 3: runtime (deps only, no toolchain) ──────────────────────────────
-# `alpine:3.24` is a deliberate FLOOR, not a mirror of the build base. The
-# `elixir:1.19-otp-28-alpine` build image resolves to DIFFERENT alpine minors
-# per arch at the same instant (amd64 3.23, arm64 3.24) and the tag floats, so
-# NO single runtime minor can ever "match" it — and the minor is cosmetic
-# anyway (3.23 and 3.24 share musl 1.x + openssl 3.x). What matters is the ABI
-# contract, which the gate below PROVES: same musl + openssl SONAME major, and
-# a runtime never older than what the release linked. This floor is chosen >=
-# the newest build-base minor across arches; `alpine:3.24` still floats within
-# the 3.24 patch line so security fixes flow; when a build base outgrows this
-# floor (an arch's elixir alpine passes 3.24) the gate fails loud → bump it.
+# `alpine:3.24` is a deliberate FLOOR, not a mirror of the build base: the
+# build image resolves to different alpine minors per arch, so no single
+# runtime minor can match it. Bump the floor when the gate below fails —
+# docs/OPERATIONS.md § "The two images: Dockerfile (toolchain) vs
+# Dockerfile.release".
 FROM alpine:3.24 AS runtime
 
-# Runtime deps ONLY, installed BEFORE the ABI gate — the gate inspects the
-# runtime's own libcrypto/musl, which `openssl` provides here:
+# Runtime deps ONLY, installed BEFORE the ABI gate, which inspects the
+# runtime's own libcrypto/musl:
 #   ncurses         — ERTS links libncursesw (tty/terminal driver)
 #   openssl         — libcrypto.so.3/libssl.so.3 for the crypto NIF + #89 TLS
 #   libstdc++/libgcc — musl C++/gcc runtime the BeamAsm JIT + NIFs link
@@ -122,20 +99,13 @@ FROM alpine:3.24 AS runtime
 #   curl            — /healthz probe (HEALTHCHECK) + the loopback hot-deploy
 #                     POST unit E fires
 #   sqlite          — the sqlite3 CLI for ops (exqlite bundles the LIBRARY;
-#                     this is just the operator/debug CLI, matching #503's dep
-#                     list)
+#                     this is just the operator/debug CLI)
 #   exiftool ffmpeg — Grappa.Uploads.MetadataStrip (#39). It fails CLOSED —
 #                     without them uploads 422 — so a self-contained image
-#                     bundles them for working uploads out of the box.
-#   bash            — runs infra/packaging/gen-secrets.sh, the ONE secret
-#                     generator (#862). Alpine's /bin/sh is busybox ash, which
-#                     has no `trap … RETURN`; the generator also leans on
-#                     `set -o pipefail` to catch a failed openssl mid-pipeline,
-#                     which Debian's dash (the .deb host's /bin/sh) lacks. Both
-#                     could be worked around by POSIX-ifying the generator —
-#                     at the cost of dropping pipefail on a script that writes
-#                     the Cloak key. Cheaper and safer to ship the 1.6 MB shell
-#                     than to fork or weaken the generator.
+#                     bundles them.
+#   bash            — runs infra/packaging/gen-secrets.sh (#862); alpine's ash
+#                     has no `trap … RETURN` and no `set -o pipefail`, which
+#                     that script needs to catch a failed openssl mid-pipeline
 RUN apk add --no-cache \
         ncurses \
         openssl \
@@ -148,12 +118,10 @@ RUN apk add --no-cache \
         exiftool \
         ffmpeg
 
-# Build↔runtime ABI lockstep gate. The alpine minor is cosmetic; the real
-# contract is the musl + openssl SONAME majors AND versions the release linked
-# against (captured into /abi-manifest in the build stage). The gate fails the
-# build loudly on a SONAME-major drift OR a runtime older than the build base
-# (musl has no symbol versioning — build-new/run-old can miss symbols). Logic
-# lives in a tested POSIX script: test/infra/abi_lockstep_test.bats.
+# Build↔runtime ABI lockstep gate: fails the build loudly on a SONAME-major
+# drift, or a runtime musl older than the build base (musl has no symbol
+# versioning, so build-new/run-old can miss symbols). Logic lives in a tested
+# POSIX script — test/infra/abi_lockstep_test.bats.
 COPY --from=build /abi-manifest /tmp/abi-manifest
 COPY infra/docker/assert-abi-lockstep.sh /tmp/assert-abi-lockstep.sh
 RUN set -eu; \
@@ -187,21 +155,16 @@ RUN addgroup -S grappa \
 COPY --from=build --chown=grappa:grappa /src/_build/prod/rel/grappa ./
 COPY --from=cic   --chown=grappa:grappa /cic-dist ./cicchetto-dist
 COPY --chown=grappa:grappa infra/docker/release-entrypoint.sh /app/release-entrypoint.sh
-# The .deb/.rpm secret generator, verbatim — the entrypoint runs it on first
-# boot against /data (#862). It resolves the path as `dirname $0`, so the two
-# files MUST stay siblings.
+# The .deb/.rpm secret generator, verbatim (#862). The entrypoint resolves it
+# as `dirname $0`, so the two files MUST stay siblings.
 COPY --chown=grappa:grappa infra/packaging/gen-secrets.sh /app/gen-secrets.sh
 RUN chmod 0755 /app/release-entrypoint.sh /app/gen-secrets.sh
 
-# Image-baked runtime defaults. SECRETS ARE NOT BAKED — baking them would ship
-# one identical Cloak key and SECRET_KEY_BASE to every puller. They are
-# GENERATED per-install instead, on the /data volume, by the entrypoint's
-# first-boot bootstrap (#862); anything the operator supplies via `-e` /
-# `--env-file` wins and is never overwritten. PHX_HOST is the one exception —
-# it cannot be invented, so a bare `docker run` still RAISES in
-# config/runtime.exs for that alone. Paths
-# default under the /data volume; CIC_DIST_ROOT points at the baked SPA;
-# GRAPPA_SUBSTRATE=docker selects the source-alias no-op adapter (#543).
+# Image-baked runtime defaults. SECRETS ARE NOT BAKED — they are generated
+# per-install on the /data volume by the entrypoint's first-boot bootstrap
+# (#862), and anything the operator supplies wins and is never overwritten.
+# PHX_HOST is the one exception: it cannot be invented, so a bare
+# `docker run` still RAISES in config/runtime.exs for that alone.
 ENV DATABASE_PATH=/data/grappa.db \
     UPLOADS_STORAGE_ROOT=/data/uploads \
     CIC_DIST_ROOT=/app/cicchetto-dist \
@@ -211,8 +174,8 @@ ENV DATABASE_PATH=/data/grappa.db \
 VOLUME /data
 EXPOSE 4000
 
-# Shell-form CMD → ${PORT} expands from the container env at probe time, so an
-# operator-overridden PORT (unit D) is followed instead of a hardcoded 4000.
+# Shell-form CMD so ${PORT} expands from the container env at probe time and
+# an operator-overridden PORT is followed instead of a hardcoded 4000.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS "http://localhost:${PORT:-4000}/healthz" || exit 1
 
@@ -224,8 +187,7 @@ LABEL org.opencontainers.image.title="grappa" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="https://github.com/vjt/grappa-irc"
 
-# The entrypoint sizes the BEAM resource caps (Docker-specific) then execs
-# `bin/grappa "$@"`; CMD `start` boots the release in the foreground. Override
-# the CMD for one-shots, e.g. `... eval 'Grappa.Release.migrate()'`.
+# The entrypoint sizes the BEAM resource caps, then execs `bin/grappa "$@"`.
+# Override the CMD for one-shots, e.g. `... eval 'Grappa.Release.migrate()'`.
 ENTRYPOINT ["/app/release-entrypoint.sh"]
 CMD ["start"]
