@@ -14,6 +14,27 @@ self-serves — #485 dropped the in-stack nginx container) used for dev,
 e2e, and self-hosters; it is NOT this project's production. Nothing
 production runs on the pi.
 
+## Contents
+
+- [Operator dispatcher — `bin/grappa`](#operator-dispatcher--bingrappa)
+- [Developer and deploy scripts (scripts/*.sh)](#developer-and-deploy-scripts-scriptssh)
+- [Hot vs cold deploy — when each path triggers](#hot-vs-cold-deploy--when-each-path-triggers)
+- [Emergency DB rollback (cold + irreversible migrations)](#emergency-db-rollback-cold--irreversible-migrations)
+- [Letting a locked-out visitor back in (#982)](#letting-a-locked-out-visitor-back-in-982)
+- [CSP / security headers (BEAM-emitted, NOT nginx — #485)](#csp--security-headers-beam-emitted-not-nginx--485)
+- [The Docker compose stack (compose.yaml)](#the-docker-compose-stack-composeyaml)
+- [The two images: Dockerfile (toolchain) vs Dockerfile.release](#the-two-images-dockerfile-toolchain-vs-dockerfilerelease)
+- [The Docker deploy driver (infra/docker/)](#the-docker-deploy-driver-infradocker)
+- [The shared deploy library (infra/lib/)](#the-shared-deploy-library-infralib)
+- [The FreeBSD jail rails (infra/freebsd/)](#the-freebsd-jail-rails-infrafreebsd)
+- [Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)](#native-linux-and-the-cloud-one-click-box-infralinux-infracloud)
+- [Packaging (infra/packaging/)](#packaging-infrapackaging)
+- [Per-host compose overrides](#per-host-compose-overrides)
+- [The shottino --ircd bridge as a compose service (#1027)](#the-shottino---ircd-bridge-as-a-compose-service-1027)
+- [Runtime Data](#runtime-data)
+- [Monitoring](#monitoring)
+- [Pending operator follow-ups](#pending-operator-follow-ups)
+
 ## Operator dispatcher — `bin/grappa`
 
 `bin/grappa` is the host-side operator interface. One verb per task,
