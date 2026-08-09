@@ -3051,14 +3051,14 @@ defmodule Grappa.ScrollbackTest do
     # the peer's inbound half migrates into our self window.
     test "does NOT touch an inbound DM from a peer that bears the old nick",
          %{user: user, network: net} do
-      {:ok, row} =
+      {:ok, inbound} =
         Scrollback.persist_event(sample(user, net, 100, %{channel: "alice", sender: "carol", dm_with: "carol"}))
 
       assert {:ok, 0} = Scrollback.rename_self_window({:user, user.id}, net.id, "carol", "dave")
 
-      row = Repo.get!(Message, row.id)
-      assert row.channel == "alice"
-      assert row.dm_with == "carol"
+      untouched = Repo.get!(Message, inbound.id)
+      assert untouched.channel == "alice"
+      assert untouched.dm_with == "carol"
     end
 
     # Guard 3 of 3, the `dm_with` conjunct. A non-CTCP NOTICE from a peer we
@@ -3075,7 +3075,7 @@ defmodule Grappa.ScrollbackTest do
     # That loss is the price of not corrupting this row.
     test "does NOT touch an orphan NOTICE row (dm_with IS NULL) from a peer bearing the old nick",
          %{user: user, network: net} do
-      {:ok, row} =
+      {:ok, orphan} =
         Scrollback.persist_event(
           sample(user, net, 200, %{
             channel: "carol",
@@ -3088,9 +3088,9 @@ defmodule Grappa.ScrollbackTest do
 
       assert {:ok, 0} = Scrollback.rename_self_window({:user, user.id}, net.id, "carol", "dave")
 
-      row = Repo.get!(Message, row.id)
-      assert row.channel == "carol"
-      assert row.dm_with == nil
+      untouched = Repo.get!(Message, orphan.id)
+      assert untouched.channel == "carol"
+      assert untouched.dm_with == nil
     end
 
     test "ASCII-folded match: a row stored at 'oldme' migrates when matched via 'OldMe' (#525)",

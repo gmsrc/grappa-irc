@@ -165,7 +165,20 @@ Key invariants — break only with deliberate cause + DESIGN_NOTES entry:
   be added to this migration set or a rename silently strands its
   old-nick rows. Boundary limit: IRC delivers a NICK only to
   channel-sharing peers, so a query with someone in no shared channel
-  cannot follow.
+  cannot follow. **Our OWN nick keys exactly one window — the SELF
+  window (`/msg <ownnick>`, GH #948) — and it has its own set** on
+  `{:own_nick_renamed, old, new}`: `Scrollback.rename_self_window/4`
+  (rows) → `ReadCursor.rename_dm_peer/4` → `QueryWindows.rename/4` →
+  broadcast, GATED on a non-zero row count (the inverse of the peer
+  arm, which gates on the window). A window at our old nick is EITHER
+  our self window OR a leftover query with a peer who bore that nick
+  before us, and the fold-unique index makes those ONE row — only the
+  scrollback's `sender` separates them, folded to MATCH and never
+  written. #514's `rename_own_nick/4` is the sibling that moves the
+  inbound-DM own-nick TAG (not a window key), disjoint by the `dm_with`
+  conjunct. cic does NOT mirror the self-window rename: the
+  `own_nick_changed` event carries neither the old nick nor whether the
+  migration ran, so a client mirror would originate state.
 - **Read state is server-owned, per (subject, network, channel).**
   Cursor = `last_read_message_id` (FK to `messages.id`). Removing
   server-side cursor is a breaking change. The write cadence (settle

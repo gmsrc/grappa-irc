@@ -35690,3 +35690,80 @@ because the conjunction with a nick-shaped token and a later `<< ` makes the
 collision rare, and because the damage is confined to the quote being drafted:
 the sender's message, the compose box's existing draft, and the wire are all
 untouched.
+## 2026-08-09 — #948: the one window our own nick keys, and the sender that names it
+
+`/msg <ownnick>` — the self window, the scratchpad some people keep. Both ends
+of the exchange are us, so the row lands with `channel == dm_with == sender ==
+own nick`. `#514` shipped `Scrollback.rename_own_nick/4` to move the stale
+own-nick TAG on inbound DM rows after a self-rename, and carved this window out
+by name, saying it was tracked apart. It was not; `#948` is that pointer, and
+this is the migration.
+
+**Why it is not the same defect.** For the rows `#514` owns, our own nick is not
+a window key at all: an inbound DM's window is `dm_with` (the peer), and its
+cursor is keyed there too. `channel` is a tag, read back against the live nick
+by `Push.Triggers.dm?/2`, so a stale one costs a badge. On a SELF row `channel`
+IS the window key — `channel_or_dm_where/3`'s own-nick arm reads `channel ==
+live own nick AND fold(dm_with) == live own nick`. Leave it and the conversation
+does not lose a badge, it disappears: the new self window is empty and the whole
+history resurfaces under `where_dm_peer/2` as a phantom query with a peer
+bearing our old nick.
+
+**The disambiguator `#514` named.** A self row is byte-identical to an outbound
+DM to a peer who bears our old nick — both are `channel == dm_with == old` —
+except for `sender`. `rename_self_window/4` therefore folds three columns to
+MATCH, and each conjunct excludes a real shape sharing the other two: `sender`
+excludes the outbound DM to such a peer, `channel` excludes an inbound DM FROM
+one, `dm_with` excludes the `channel = sender, dm_with = NULL` NOTICE that
+`route_non_channel_notice_non_chanserv/3` leaves in an open query. Folding
+`sender` is a MATCH, never a write: it is testimony about who spoke, and the
+migration sets only `channel` (folded, the KEY) and `dm_with` (raw, DISPLAY).
+The predicate is disjoint from `#514`'s by the `dm_with` conjunct (`!=` there,
+`==` here), so no row moves twice.
+
+**The gate is inverted relative to #373, and that is the design.** The peer arm
+gates on `QueryWindows.rename/4`: there the window row alone identifies what is
+being renamed. Here it cannot. A window standing at our old nick is EITHER our
+self window OR a leftover query with a peer who bore that nick before us, and
+the fold-unique index makes those one row — the identities have already
+collapsed. Only the scrollback carries the `sender` that separates them, so the
+row count gates the window and cursor moves. Zero rows: we vacate the nick and
+touch nothing, rather than dragging a peer's identity to our new name.
+`{:ok, :noop}` from the window rename stays a real state — a closed self window
+whose history lives in Archive still has to follow, or the archive entry reads
+as a stranded query bearing our old nick.
+
+**What it declines, and why no predicate can do better.** Once a self row has
+migrated once it is `channel == dm_with == b, sender == a`, which is byte-
+identical to an outbound DM to a peer named `b`. A second rename `b -> c`
+therefore leaves it behind. The same collision closes the other end: a
+pre-CP14-B3 self row carries `dm_with IS NULL` and is byte-identical to the peer
+NOTICE the third conjunct exists to protect. Both are the SAME ambiguity — a
+self row whose `sender` no longer folds to its own window key — and no predicate
+over `(channel, dm_with, sender)` can resolve it. Only a durable self-marker
+written at persist time could, and the backfill for it is available today
+(`fold(channel) == fold(dm_with) == fold(sender)` identifies every un-migrated
+self row exactly). That is a schema change, a read-path change, and a rework of
+archive grouping and `delete_for_dm/3`; it is deliberately not this unit. The
+migration declines rather than corrupting a peer's history: incompleteness,
+never a wrong move.
+
+**The client half needs a wire signal, so it is not here.** cic's caches are
+keyed by the own nick exactly like any query window (`channelKey(slug, ownNick)`
+for scrollback, `cacheKey` for the cursor, and a plain `channelName` selection),
+and `own_nick_changed` today only calls `mutateNetworkNick`. Mirroring the #373
+client set from that event UNCONDITIONALLY would break the invariant it is meant
+to serve: the server migrates only when self rows exist, cic cannot see that
+predicate, and a cic that renamed its caches on a rename the server declined
+would originate state the server disagrees with. Doing it right means making
+the event carry the old nick and whether the self window actually moved — an
+additive wire field plus codegen plus the protocol doc — which is a second unit.
+Until then the durable state is correct on the next load and the sidebar is
+truthful immediately; a device holding the self window focused across the rename
+keeps an orphan selection until it reloads.
+
+**Found on the way.** `rename_own_nick/4`'s own `fold(channel) == fold(old)`
+conjunct was killed by zero assertions: dropping it left the whole scrollback
+suite green while the mutant re-keys every row whose `dm_with` is some other
+peer, stamping our new nick over unrelated DM history. Pinned with one row — an
+inbound DM received while we were somebody else.
