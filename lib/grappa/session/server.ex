@@ -5778,14 +5778,18 @@ defmodule Grappa.Session.Server do
   end
 
   # #514: WE renamed. Deliberately NOT the peer arm above with the arguments
-  # swapped — our own nick is not a window key, so nothing moves: an inbound
-  # DM's window is `dm_with` (the peer) and its read cursor is keyed there
-  # too, both untouched by our rename. What goes stale is the own-nick TAG
-  # each inbound row carries in `channel`, which `Push.Triggers.dm?/2`
-  # compares to the LIVE nick (#498) when `Push.BadgeCount` folds the notify
-  # predicate back over history. One store, one UPDATE, and no
-  # `query_windows_list` broadcast — there is no window whose identity
-  # changed, so a barrier event would announce something that did not happen.
+  # swapped — for the rows #514 owns, our own nick is not a window key, so
+  # nothing moves: an inbound DM's window is `dm_with` (the peer) and its
+  # read cursor is keyed there too, both untouched by our rename. What goes
+  # stale is the own-nick TAG each inbound row carries in `channel`, which
+  # `Push.Triggers.dm?/2` compares to the LIVE nick (#498) when
+  # `Push.BadgeCount` folds the notify predicate back over history. One
+  # store, one UPDATE, no barrier.
+  #
+  # #948 then found the ONE window our own nick does key: the SELF window
+  # (`/msg <ownnick>`). `migrate_self_window/3` below handles it, and it is
+  # a genuine window-key migration with the full peer-rename set behind it
+  # — hence the barrier broadcast the tag re-key must not fire.
   #
   # `state` here is the POST-route state, so `state.nick` already reads the
   # NEW nick. The arm never consults it — both nicks travel in the effect —
@@ -5807,7 +5811,56 @@ defmodule Grappa.Session.Server do
       )
     end
 
+    migrate_self_window(state, old_nick, new_nick)
+
     apply_effects(rest, state)
+  end
+
+  # #948 — the SELF window (`/msg <ownnick>`) is the one window keyed on OUR
+  # nick, so our rename moves it exactly like #373 moves a peer's: rows,
+  # cursor, window row, then the barrier broadcast LAST.
+  #
+  # The scrollback count is the GATE, and it runs FIRST — the inversion of
+  # the #373 arm, which gates on `QueryWindows.rename/4` instead. There, the
+  # window row alone identifies the thing being renamed. Here it cannot: a
+  # window standing at our old nick is EITHER our self window or a leftover
+  # query with a peer who bore that nick before we took it, and the two are
+  # one row under the fold-unique index. Only the scrollback rows carry the
+  # `sender` that tells them apart (`Scrollback.rename_self_window/4`), so a
+  # zero count means "no self conversation here" and we touch neither the
+  # window nor the cursor — following the rename would otherwise file the
+  # peer's identity under our new nick.
+  @spec migrate_self_window(t(), String.t(), String.t()) :: :ok
+  defp migrate_self_window(state, old_nick, new_nick) do
+    {:ok, migrated} =
+      Scrollback.rename_self_window(state.subject, state.network_id, old_nick, new_nick)
+
+    if migrated > 0 do
+      # Else the migrated history reads fully unread under the new key
+      # (no cursor row → `WindowCounts` counts from 0), the #373 lesson.
+      :ok = ReadCursor.rename_dm_peer(state.subject, state.network_id, old_nick, new_nick)
+
+      case QueryWindows.rename(state.subject, state.network_id, old_nick, new_nick) do
+        {:ok, :renamed} ->
+          # LAST, and only when a window actually moved: the event is the
+          # truthful "rename fully applied" barrier (#373 rename-order fix).
+          :ok = QueryWindows.broadcast_windows_list(state.subject, state.subject_label)
+
+        {:ok, :noop} ->
+          # Rows but no window: the self window was closed and its history
+          # lives in Archive. It still had to follow, or the archive entry
+          # reads as a stranded query with our old nick.
+          :ok
+      end
+
+      Logger.info("self window followed our own NICK",
+        old_nick: old_nick,
+        new_nick: new_nick,
+        rows_migrated: migrated
+      )
+    end
+
+    :ok
   end
 
   # #349 — commit-on-+r for USER sessions, scoped to the REGISTER case. A

@@ -31,7 +31,7 @@ defmodule Grappa.Session.ServerTest do
   import Mox
 
   alias Grappa.IRC.Message
-  alias Grappa.{IRCServer, PubSub.Topic, QueryWindows, Repo, Scrollback, Session, WSPresence}
+  alias Grappa.{IRCServer, PubSub.Topic, QueryWindows, ReadCursor, Repo, Scrollback, Session, WSPresence}
   alias Grappa.Networks.{Credentials, SessionPlan}
   alias Grappa.Session.{AwayState, Backoff, GhostRecovery, ISupport, RecoverIdentity, Server, WindowState}
   alias Grappa.SessionStateHelpers
@@ -3112,6 +3112,124 @@ defmodule Grappa.Session.ServerTest do
       assert [row] = Scrollback.fetch({:user, user.id}, network.id, "NickTemporaneo", nil, 10, own, false)
       assert row.body == "ciao"
       assert Scrollback.fetch({:user, user.id}, network.id, "Guest87449", nil, 10, own, false) == []
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
+  describe "#948 — the SELF window follows OUR OWN NICK change" do
+    test "a self /nick migrates the self window row, its scrollback and its read cursor" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      own = "grappa-test"
+      subject = {:user, user.id}
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      net_id = network.id
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      # `/msg <ownnick>` — the ircd delivers our own PRIVMSG back to us
+      # because we ARE the target, so the row lands with
+      # `channel == dm_with == sender == own nick`.
+      IRCServer.feed(server, ":#{own}!~g@host PRIVMSG #{own} :nota per me\r\n")
+
+      # #422 auto-open: the self row mints its own query window. Waiting for
+      # that broadcast proves the window exists pre-rename AND drains it off
+      # the topic so it cannot race the rename assertion below.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{
+                         kind: :query_windows_list,
+                         windows: %{^net_id => [%{target_nick: ^own}]}
+                       }
+                     },
+                     1_000
+
+      assert [row] = Scrollback.fetch(subject, net_id, own, nil, 10, own, false)
+      row_id = row.id
+      {:ok, _} = ReadCursor.set(subject, net_id, own, row_id)
+
+      # WE rename.
+      IRCServer.feed(server, ":#{own}!~g@host NICK :grappa-new\r\n")
+
+      # Same barrier contract as #373: the broadcast is emitted only after
+      # the scrollback + cursor have moved, so receiving it makes the reads
+      # below deterministic rather than a race.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :query_windows_list, windows: windows}
+                     },
+                     1_000
+
+      assert [%{target_nick: "grappa-new"}] = Map.fetch!(windows, net_id)
+      assert [%{target_nick: "grappa-new"}] = QueryWindows.list_for_subject(subject)[net_id]
+
+      # History answers under the new nick, and nothing answers under the
+      # old one — pre-fix it was the exact reverse, with the conversation
+      # resurfacing as a phantom query with a peer bearing our old nick.
+      assert [%{id: ^row_id, body: "nota per me"}] =
+               Scrollback.fetch(subject, net_id, "grappa-new", nil, 10, "grappa-new", false)
+
+      assert Scrollback.fetch(subject, net_id, own, nil, 10, "grappa-new", false) == []
+
+      # The cursor follows too, else the migrated history reads fully unread.
+      assert %{last_read_message_id: ^row_id} = ReadCursor.get(subject, net_id, "grappa-new")
+      assert ReadCursor.get(subject, net_id, own) == nil
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # The gate. A self-rename with no self conversation must move NOTHING:
+    # a query window standing at our old nick then belongs to a peer who
+    # bore it before us, and following our rename would file their identity
+    # under our new nick. No self rows, no migration, no barrier broadcast.
+    test "a self /nick with no self conversation leaves a same-named peer window alone" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      own = "grappa-test"
+      subject = {:user, user.id}
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      net_id = network.id
+
+      # A window standing at the nick we are ABOUT TO VACATE, owned by a peer
+      # who bore it before we took it: we DM'd them back then, so `sender` is
+      # whoever we were, not the window key. Not a self row.
+      {:ok, _} =
+        Scrollback.persist_event(%{
+          user_id: user.id,
+          network_id: net_id,
+          channel: own,
+          server_time: System.system_time(:millisecond),
+          kind: :privmsg,
+          sender: "previous-me",
+          body: "ciao",
+          dm_with: own
+        })
+
+      {:ok, _} = QueryWindows.open(subject, net_id, own, user.name)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      IRCServer.feed(server, ":#{own}!~g@host NICK :grappa-new\r\n")
+
+      # No barrier broadcast, because nothing migrated. Other user-topic
+      # events (`own_nick_changed`) still ride this topic, so the refutation
+      # is scoped to the barrier kind.
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :query_windows_list}
+                     },
+                     300
+
+      assert [%{target_nick: ^own}] = QueryWindows.list_for_subject(subject)[net_id]
+
+      assert [%{body: "ciao"}] =
+               Scrollback.fetch(subject, net_id, own, nil, 10, "grappa-new", false)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
