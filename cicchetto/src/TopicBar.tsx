@@ -17,6 +17,7 @@ import { createOverlayLock } from "./lib/overlayScrollLock";
 import { pushChannelTopicClear } from "./lib/socket";
 import { windowIsJoined } from "./lib/windowState";
 import { MircBody } from "./MircText";
+import PaneTopBar from "./PaneTopBar";
 
 // Top bar of the middle pane. Hosts:
 //  * channel-name + modes box (#275): the channel name (bold accent) on line
@@ -268,7 +269,7 @@ const TopicBar: Component<Props> = (props) => {
   };
 
   return (
-    <div class="topic-bar">
+    <>
       {/* UX-4 bucket L (2026-05-19): TopicBar's left channel-sidebar
           hamburger was dropped (sidebar is always-visible on desktop,
           not rendered on mobile — no toggle needed). The settings cog
@@ -277,20 +278,25 @@ const TopicBar: Component<Props> = (props) => {
           every window" rule.
           UX-5 bucket A (2026-05-19): ShellChrome's own hamburger was
           also dropped — it was a desktop no-op and duplicated this
-          bar's right members hamburger on mobile. TopicBar's
-          `.topic-bar-hamburger` below (channel-only, CSS-hidden on
-          desktop via @media) is now the SINGLE hamburger across the
-          whole shell. */}
-      {/* #644 — the two text columns (namebox + topic strip) are grouped under
-          ONE wrapper so `.topic-bar { align-items: center }` centres this block
-          and the hamburger as UNITS (auto-centre, no magic constant), while
-          `.topic-bar-header { align-items: flex-start }` PRESERVES #344's
-          intra-block line-registration (topic line-1 beside the channel name,
-          line-2 beside +modes). Before this wrapper the columns top-aligned to
-          the taller 48px hamburger / stretched bar and floated high with empty
-          space below (#644). The members hamburger stays a SIBLING of this
-          wrapper (below), outside the centred block. */}
-      <div class="topic-bar-header">
+          bar's right members hamburger on mobile. `.topic-bar-hamburger`
+          (CSS-hidden on desktop via @media) is now the SINGLE hamburger
+          across the whole shell — and since #1073 it lives in
+          `PaneTopBar`, which is also where the admin console gets it.
+          #1073 — the band itself (`.topic-bar` + the `.topic-bar-header`
+          slot + the trailing ☰) moved to `PaneTopBar` so the admin
+          console renders the SAME bar with different content in it. What
+          stays here is what was always channel-shaped: the namebox, the
+          mode string, the topic strip and the two modals. The #644
+          grouping rationale — the two text columns centre as ONE unit
+          against the ☰, while the wrapper's own `flex-start` preserves
+          #344's line registration — now lives on the slot, in
+          `PaneTopBar`.
+          The modals are SIBLINGS of the bar rather than children of it
+          now. They are `position: fixed` at `z-index: 201` with no
+          selector descending from `.topic-bar`, so the move is inert;
+          and while closed `<Show>` renders no element, which is what
+          keeps the bar's child list at exactly two. */}
+      <PaneTopBar onOpenRail={props.onToggleMembers} railLabel="open members sidebar">
         {/* #275 — channel name + modes STACKED in ONE width-capped clickable
           box. The whole box opens the /mode viewer/editor modal (reuse
           `openModeModal` — the SAME verb `/mode #chan`, bare `/mode`, and the
@@ -351,28 +357,9 @@ const TopicBar: Component<Props> = (props) => {
             </Show>
           </span>
         </button>
-      </div>
+      </PaneTopBar>
       {/* #71 INC-2 — the presence-filter toggle (👁/🙈) moved to the right-rail
           RailActions drawer (channel-gated). It is no longer rendered here. */}
-      {/* #881 — UNCONDITIONAL. This ☰ is not a members toggle, it is the
-          rail door: on mobile it opens `.shell-members`, which since #71
-          INC-2 / #473 is the permanent right rail hosting Archive, Settings,
-          Rooms and Admin — and it is the ONLY door a channel window has
-          (ShellChrome's opener renders for `kind !== "channel"`). It used to
-          sit behind `windowIsJoined`, on the premise that it toggled a member
-          list; the member list is gated in Shell.tsx and this gate took the
-          whole navigation with it, stranding a `:failed`/`:kicked`/`:parked`
-          window with no way out. vjt's ruling: a non-joined window is not a
-          different window shape — same surface as a joined one, MINUS the
-          members list. So joinedness gates the list, never the door. */}
-      <button
-        type="button"
-        class="topic-bar-hamburger shell-chrome-btn"
-        aria-label="open members sidebar"
-        onClick={props.onToggleMembers}
-      >
-        ☰
-      </button>
 
       {/* Topic modal (#263) — opens read-only for everyone on strip click;
           shows full topic, setter, timestamp. An op (canEditTopic) also sees a
@@ -474,7 +461,7 @@ const TopicBar: Component<Props> = (props) => {
           </div>
         </div>
       </Show>
-    </div>
+    </>
   );
 };
 
