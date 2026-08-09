@@ -38,12 +38,30 @@ import { createHandlerBoundToURL, precacheAndRoute } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
 import { shouldSuppressPush } from "./lib/pushDedup";
 import { narrowPushPayload, type PushPayload, pushNotificationOptions } from "./lib/pushPayload";
+import { handleShareTargetRequest, isShareTargetRequest } from "./lib/shareTarget";
 import { isSkipWaitingMessage, navigateStaleClients } from "./lib/swLifecycle";
 import { deliverNavigate } from "./lib/swNavigate";
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<{ url: string; revision: string | null }>;
 };
+
+// ── Web Share Target (#1103) ───────────────────────────────────────
+//
+// FIRST, above `precacheAndRoute`, and that order is deliberate. Workbox
+// registers its own `fetch` listener the moment a route is added, and the
+// first listener to call `respondWith` wins. Workbox's routes are GET-only,
+// so it would decline this POST anyway — but "anyway" is a claim about a
+// dependency's defaults, and being first is a fact about this file.
+//
+// Nothing else is answered here: a request that is not the share POST leaves
+// without calling `respondWith`, so it falls through to Workbox exactly as
+// before. The handler itself lives in `lib/shareTarget.ts` — vitest can
+// exercise it there, and nothing in this file is reachable from a test.
+self.addEventListener("fetch", (event: FetchEvent) => {
+  if (!isShareTargetRequest(event.request)) return;
+  event.respondWith(handleShareTargetRequest(event.request, caches));
+});
 
 precacheAndRoute(self.__WB_MANIFEST);
 
