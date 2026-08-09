@@ -2903,6 +2903,22 @@ defmodule Grappa.ScrollbackTest do
       assert Repo.get!(Message, orphan.id).channel == "oldme"
     end
 
+    # #948 addendum. The `channel` conjunct above was killed by ZERO tests:
+    # dropping it left the whole of this file green while the mutant re-keys
+    # EVERY row whose `dm_with` is a peer other than our old nick — i.e. it
+    # stamps our new nick over unrelated DM history. Measured with the #948
+    # mutation harness, then pinned here. The row below is the cheapest
+    # witness: an inbound DM received while we were somebody else entirely.
+    test "does NOT touch a DM tagged at a nick that is not the old one",
+         %{user: user, network: net} do
+      {:ok, elsewhere} =
+        Scrollback.persist_event(sample(user, net, 100, %{channel: "alice", sender: "bob", dm_with: "bob"}))
+
+      assert {:ok, 0} = Scrollback.rename_own_nick({:user, user.id}, net.id, "oldme", "newme")
+
+      assert Repo.get!(Message, elsewhere.id).channel == "alice"
+    end
+
     test "leaves channel rows alone", %{user: user, network: net} do
       {:ok, chan} =
         Scrollback.persist_event(sample(user, net, 100, %{channel: "#sniffo", sender: "alice", dm_with: nil}))
