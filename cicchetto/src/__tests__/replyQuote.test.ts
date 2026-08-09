@@ -108,6 +108,101 @@ describe("replyQuote", () => {
   });
 });
 
+// #1123 — replying to a reply used to nest: the quoted body already carried a
+// quote plus its `<< ` tail, so every hop dragged the whole history forward and
+// the line actually being answered ended up buried mid-string.
+describe("replyQuote — a previous quote is dropped (#1123)", () => {
+  it("quotes only what the sender wrote, not the quote they were answering", () => {
+    expect(replyQuote(msg({ sender: "alice", body: "<bob> original<< answer" }))).toBe(
+      "<alice> answer<< ",
+    );
+  });
+
+  // The cut is at the LAST tail, not the first: a body persisted before this
+  // fix carries several hops, and stopping at the first `<< ` would keep every
+  // one of them but the oldest.
+  it("cuts at the last tail, not the first", () => {
+    expect(
+      replyQuote(msg({ sender: "carol", body: "<alice> <bob> original<< answer<< reply" })),
+    ).toBe("<carol> reply<< ");
+  });
+
+  // #1126 gave actions their own quote head (`* nick …`), so the client emits
+  // two shapes and both nest. One bug, both doors.
+  it("drops a previous action-shaped quote too", () => {
+    expect(replyQuote(msg({ sender: "alice", body: "* bob waves<< sure" }))).toBe(
+      "<alice> sure<< ",
+    );
+  });
+
+  it("drops a previous quote inside an action being quoted", () => {
+    expect(
+      replyQuote(
+        msg({ kind: "action", sender: "alice", body: "\x01ACTION <bob> orig<< nods\x01" }),
+      ),
+    ).toBe("* alice nods<< ");
+  });
+
+  // Every legal nick special (RFC 2812 `special` plus the tail-only dash),
+  // mirroring `Grappa.IRC.Identifier`'s nick regex. A charset invented here
+  // instead of derived would silently refuse to strip these.
+  it("recognises a head with every legal nick special", () => {
+    expect(replyQuote(msg({ sender: "alice", body: "<_a[b]\\c{d}|e^f`g-1> quoted<< mine" }))).toBe(
+      "<alice> mine<< ",
+    );
+  });
+
+  // 30 chars is the cap the server's nick regex enforces; a head at the cap is
+  // a real nick and must still be recognised.
+  it("recognises a head at the 30-char nick cap", () => {
+    const nick = `n${"x".repeat(29)}`;
+    expect(nick).toHaveLength(30);
+    expect(replyQuote(msg({ sender: "alice", body: `<${nick}> quoted<< mine` }))).toBe(
+      "<alice> mine<< ",
+    );
+  });
+
+  // A body that is nothing BUT a previous quote leaves the sender with no words
+  // of their own; `<alice> <bob> orig<<<< ` is not a reply to anything.
+  it("refuses a body that is only a previous quote", () => {
+    expect(replyQuote(msg({ sender: "alice", body: "<bob> original<< " }))).toBeNull();
+  });
+
+  // The wire (or a client) may eat the tail's trailing space, so the tail also
+  // counts when it sits flush against the end of the body.
+  it("refuses a body that is only a previous quote with the tail space eaten", () => {
+    expect(replyQuote(msg({ sender: "alice", body: "<bob> original<<" }))).toBeNull();
+  });
+});
+
+describe("replyQuote — what must NOT be mistaken for a quote (#1123)", () => {
+  // `<<` is ordinary text: a bare substring search would eat a real message,
+  // which is worse than the nesting it fixes.
+  it("leaves a shift expression alone", () => {
+    expect(replyQuote(msg({ body: "shift << 2 gives four" }))).toBe(
+      "<vjt> shift << 2 gives four<< ",
+    );
+  });
+
+  it("leaves a heredoc alone", () => {
+    expect(replyQuote(msg({ body: "cat <<EOF > f" }))).toBe("<vjt> cat <<EOF > f<< ");
+  });
+
+  it("leaves a leading angle bracket that is not a nick head alone", () => {
+    expect(replyQuote(msg({ body: "<3 you << me" }))).toBe("<vjt> <3 you << me<< ");
+    expect(replyQuote(msg({ body: "<two words> a << b" }))).toBe("<vjt> <two words> a << b<< ");
+  });
+
+  // The head must be at position 0. `appendToCompose` drops the quote AFTER an
+  // existing draft, so a mid-string quote means the leading text is the
+  // sender's own words — cutting there would delete what they wrote.
+  it("leaves a quote that is not at the start of the body alone", () => {
+    expect(replyQuote(msg({ sender: "alice", body: "bozza <bob> ciao<< risposta" }))).toBe(
+      "<alice> bozza <bob> ciao<< risposta<< ",
+    );
+  });
+});
+
 describe("appendToCompose", () => {
   it("appends to the draft and leaves the caret at the very end", async () => {
     const ta = mountCompose();
