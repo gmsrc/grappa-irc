@@ -35793,6 +35793,7 @@ conjunct was killed by zero assertions: dropping it left the whole scrollback
 suite green while the mutant re-keys every row whose `dm_with` is some other
 peer, stamping our new nick over unrelated DM history. Pinned with one row — an
 inbound DM received while we were somebody else.
+
 ## 2026-08-09 — #1078: the four ways a fixed subject was load-bearing
 
 Giving every spec its own subject (#1078 option A) turned ten e2e specs red.
