@@ -151,12 +151,12 @@ defmodule Mix.Tasks.Grappa.OperatorHelpDriftTest do
   # and reading the source is the point: this gate must fail on an edit
   # that never gets recompiled into anything the dispatcher can see.
   defp declared_switches(task) do
-    {_ast, switches} =
+    {_, switches} =
       "lib/mix/tasks/#{task}.ex"
       |> File.read!()
       |> Code.string_to_quoted!()
       |> Macro.prewalk([], fn
-        {:@, _, [{:switches, _, [list]}]} = node, _acc when is_list(list) -> {node, list}
+        {:@, _, [{:switches, _, [list]}]} = node, _ when is_list(list) -> {node, list}
         node, acc -> {node, acc}
       end)
 
