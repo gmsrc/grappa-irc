@@ -63,9 +63,27 @@ locale_pin_violations() {
     done < <(service_definitions)
 }
 
+# Violations under $1 that the pristine sandbox did not already have — the
+# DELTA a single mutation caused. Without it, one unpinned shipped file would
+# turn every sensitivity case below red at once, and the suite would say
+# "four things broke" when one did.
+added_violations() {
+    local root="$1" rel
+    while IFS= read -r rel; do
+        printf '%s\n' "$BASELINE_VIOLATIONS" | grep -qxF "$rel" || printf '%s\n' "$rel"
+    done < <(locale_pin_violations "$root")
+}
+
 # Rewrite a sandbox file through a sed expression — one mutation per RED case.
-mutate() {
+# The pre-state is asserted first: mutating a pin out of a file that never had
+# one is a no-op, and a no-op mutation proves nothing.
+mutate_out_the_pin() {
+    pins_utf8_locale "$1" || {
+        printf 'mutate_out_the_pin: %s has no pin to remove — the mutation would be a no-op\n' "$1" >&2
+        return 1
+    }
     sed "$2" "$1" > "$1.mutated" && mv "$1.mutated" "$1"
+    refute pins_utf8_locale "$1"
 }
 
 setup() {
@@ -75,6 +93,8 @@ setup() {
         mkdir -p "$SANDBOX/$(dirname "$rel")"
         cp "$REPO_SRC/$rel" "$SANDBOX/$rel"
     done < <(service_definitions)
+
+    BASELINE_VIOLATIONS="$(locale_pin_violations "$SANDBOX")"
 }
 
 @test "discovery lists exactly the three shipped service definitions" {
@@ -92,36 +112,36 @@ infra/packaging/grappa.service" ]
 }
 
 @test "dropping the pin from the linux systemd unit is a violation" {
-    mutate "$SANDBOX/infra/linux/systemd/grappa.service" '/LANG=C\.UTF-8/d'
+    mutate_out_the_pin "$SANDBOX/infra/linux/systemd/grappa.service" '/LANG=C\.UTF-8/d'
 
-    run locale_pin_violations "$SANDBOX"
+    run added_violations "$SANDBOX"
     [ "$output" = "infra/linux/systemd/grappa.service" ]
 }
 
 @test "dropping the pin from the packaged systemd unit is a violation" {
-    mutate "$SANDBOX/infra/packaging/grappa.service" '/LANG=C\.UTF-8/d'
+    mutate_out_the_pin "$SANDBOX/infra/packaging/grappa.service" '/LANG=C\.UTF-8/d'
 
-    run locale_pin_violations "$SANDBOX"
+    run added_violations "$SANDBOX"
     [ "$output" = "infra/packaging/grappa.service" ]
 }
 
 @test "dropping the pin from the FreeBSD rc.d service is a violation" {
-    mutate "$SANDBOX/infra/freebsd/rc.d/grappa" '/LANG=C\.UTF-8/d'
+    mutate_out_the_pin "$SANDBOX/infra/freebsd/rc.d/grappa" '/LANG=C\.UTF-8/d'
 
-    run locale_pin_violations "$SANDBOX"
+    run added_violations "$SANDBOX"
     [ "$output" = "infra/freebsd/rc.d/grappa" ]
 }
 
 @test "a non-UTF-8 locale (LANG=C) does not satisfy the pin" {
-    mutate "$SANDBOX/infra/linux/systemd/grappa.service" 's/LANG=C\.UTF-8/LANG=C/'
+    mutate_out_the_pin "$SANDBOX/infra/linux/systemd/grappa.service" 's/LANG=C\.UTF-8/LANG=C/'
 
-    run locale_pin_violations "$SANDBOX"
+    run added_violations "$SANDBOX"
     [ "$output" = "infra/linux/systemd/grappa.service" ]
 }
 
 @test "a commented-out pin does not satisfy the pin" {
-    mutate "$SANDBOX/infra/packaging/grappa.service" 's/^\(.*LANG=C\.UTF-8.*\)$/#\1/'
+    mutate_out_the_pin "$SANDBOX/infra/packaging/grappa.service" 's/^\(.*LANG=C\.UTF-8.*\)$/#\1/'
 
-    run locale_pin_violations "$SANDBOX"
+    run added_violations "$SANDBOX"
     [ "$output" = "infra/packaging/grappa.service" ]
 }
