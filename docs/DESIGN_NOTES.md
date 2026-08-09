@@ -35213,6 +35213,7 @@ follow-up slices — the machinery, the gate and the measurement pattern are wha
 this one had to establish. `wireTypesAssert.ts` is NOT in that count: it is a
 compile-time bridge between `api.ts` hand-mirrors and `wireTypes.ts`, and it
 disappears when those mirrors do, not when the narrowers do.
+
 ## 2026-08-09 — #499: the circuit was not bleeding across tests, it was healing inside one
 
 **The filed diagnosis did not survive measurement.** Issue #499 attributed an
