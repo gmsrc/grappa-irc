@@ -117,14 +117,15 @@ grappa_runas() {
 	# System.find_executable/1 without this prepend. Found live
 	# 2026-06-10: pkgs installed, yet every media upload 422'd
 	# fail-closed with "exiftool not found on PATH".
-	# LANG pins the BEAM's utf8 native name encoding (#425). `su -m` keeps
+	# LANG pins the BEAM's utf8 native name encoding (#425), which governs
+	# FILENAME handling — uploads carry user-supplied names. `su -m` KEEPS
 	# the invoking environment, so without this the encoding is whatever
-	# locale root happened to have when rc(8) ran — and a jail provisioned
-	# without one boots the release in latin1, which Elixir warns about and
-	# which governs FILENAME handling (uploads carry user-supplied names).
-	# Same spelling as infra/linux/systemd, infra/packaging and
-	# Dockerfile.release. An LC_ALL/LC_CTYPE inherited from root still
-	# outranks LANG — this pins the default, it does not fight an override.
+	# locale root happened to have when rc(8) ran; a C/POSIX one boots the
+	# release in latin1 (measured on OTP 28/glibc, along with the warning
+	# Elixir prints). Same spelling as infra/linux/systemd, infra/packaging
+	# and Dockerfile.release. An LC_ALL/LC_CTYPE inherited from root still
+	# outranks LANG (measured) — this pins the default, it does not fight an
+	# override.
 	su -m "${grappa_user}" -c "export RELEASE_TMP='${grappa_runtime_tmp}'; export LANG=C.UTF-8; export PATH=\"/usr/local/bin:/usr/local/sbin:\${PATH}\"; ${envsrc}${command} ${subcmd}"
 }
 

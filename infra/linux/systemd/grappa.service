@@ -49,14 +49,17 @@ EnvironmentFile=@ENV_FILE@
 # not because it's known to be needed on this substrate.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# UTF-8 locale so the BEAM boots with utf8 native name encoding. systemd
-# sets no LANG by default, and without a UTF-8 one Elixir warns "the VM is
-# running with native name encoding of latin1 which may cause Elixir to
-# malfunction" — that setting governs FILENAME handling, and grappa writes
-# user-supplied names to disk (uploads). Same spelling as the packaged unit
+# UTF-8 locale so the BEAM boots with utf8 native name encoding, which
+# governs FILENAME handling — and grappa writes user-supplied names to disk
+# (uploads). systemd sets no LANG by default; measured on OTP 28/glibc, an
+# ABSENT LANG still yields utf8, but an effective C/POSIX locale yields
+# latin1 and Elixir warns "the VM is running with native name encoding of
+# latin1". So this pins the encoding to the service instead of to whatever
+# locale the host hands it. Same spelling as the packaged unit
 # (infra/packaging/grappa.service) and Dockerfile.release: C.UTF-8 is always
-# present on glibc, no locale-gen. #425 — this pins a dependency that was
-# merely inherited from the host, it does not repair a live defect.
+# present on glibc, no locale-gen. An LC_ALL in the manager environment
+# still outranks LANG (measured) — this pins the default, it does not fight
+# an override. #425.
 Environment=LANG=C.UTF-8
 
 ExecStartPre=@REPO_ROOT@/infra/linux/grappa_beam_wait.sh wait-name-free grappa 15
