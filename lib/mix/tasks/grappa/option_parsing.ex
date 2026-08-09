@@ -60,7 +60,7 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
   @spec parse!([String.t()], keyword(), [atom()]) :: keyword()
   def parse!(args, switches, required)
       when is_list(args) and is_list(switches) and is_list(required) do
-    {opts, _rest, invalid} = OptionParser.parse(args, strict: switches)
+    {opts, _, invalid} = OptionParser.parse(args, strict: switches)
 
     reject_invalid!(invalid, switches)
     reject_missing!(opts, required)
@@ -115,10 +115,10 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
     |> Enum.map(&String.trim/1)
   end
 
-  defp reject_invalid!([], _switches), do: :ok
+  defp reject_invalid!([], _), do: :ok
 
   defp reject_invalid!(invalid, switches) do
-    known = Enum.map(switches, fn {name, _type} -> flag(name) end)
+    known = Enum.map(switches, fn {name, _} -> flag(name) end)
 
     Mix.raise(Enum.map_join(invalid, "; ", &invalid_message(&1, known)))
   end
