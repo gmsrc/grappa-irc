@@ -36109,6 +36109,7 @@ The mismatch is a static property of the call site, so the canary still fires
 the first time that site actually spawns; recovering it on the no-op path would
 mean exporting a validate-only verb from `Admission` purely to keep a detector
 warm, which is more surface than the detector is worth.
+
 ---
 
 ## 2026-08-09 — #425: the locale is a property of the machine until a service definition says otherwise
