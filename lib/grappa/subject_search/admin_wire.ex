@@ -4,14 +4,17 @@ defmodule Grappa.SubjectSearch.AdminWire do
   Sibling of `Grappa.Vhosts.AdminWire`; explicit per-field projection (no
   wildcard `Map.take/2`) so a future field is a deliberate edit here.
 
-  The closed-set `:type` atom is stringified to `"user"` / `"visitor"` so
-  it matches the vhost-grant body's `subject_type` 1:1 — cic mirrors the
+  The closed-set `:type` atom rides the wire as the atom itself — Jason
+  serializes it to `"user"` / `"visitor"`, matching the vhost-grant
+  body's `subject_type` 1:1. Typing it as the atom union (rather than
+  stringifying eagerly into a `String.t()` field) is what lets the
+  generated TS mirror narrow to a literal union (#448); cic mirrors the
   tag, it originates no state.
   """
   alias Grappa.SubjectSearch.Result
 
   @type result_json :: %{
-          type: String.t(),
+          type: :user | :visitor,
           id: String.t(),
           network: String.t() | nil,
           nick: String.t()
@@ -21,6 +24,6 @@ defmodule Grappa.SubjectSearch.AdminWire do
   @spec result_to_admin_json(Result.t()) :: result_json()
   def result_to_admin_json(%Result{type: type, id: id, network: network, nick: nick})
       when type in [:user, :visitor] do
-    %{type: Atom.to_string(type), id: id, network: network, nick: nick}
+    %{type: type, id: id, network: network, nick: nick}
   end
 end

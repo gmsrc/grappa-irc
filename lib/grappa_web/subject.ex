@@ -32,7 +32,7 @@ defmodule GrappaWeb.Subject do
   def to_session({:visitor, %Visitor{id: id}}), do: {:visitor, id}
 
   @doc """
-  Map a web-layer subject to the `Grappa.Admission.flow/0` used when
+  Map a web-layer subject to the `t:Grappa.Admission.flow/0` used when
   spawning/reconnecting that subject's upstream from a runtime web
   surface. U-2: the network-total cap atom + circuit are subject-keyed
   via the flow. A user connect/accretion is `:patch_network_connect`; a

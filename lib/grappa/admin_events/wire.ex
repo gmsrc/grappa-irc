@@ -46,7 +46,7 @@ defmodule Grappa.AdminEvents.Wire do
   operator-driven reset surface).
   """
 
-  alias Grappa.Networks
+  alias Grappa.{Admission, Networks}
 
   @typedoc "Closed enum of admin event kinds. Mirror on cic side: `WireAdminEvent[\"kind\"]`."
   @type event_kind ::
@@ -96,9 +96,15 @@ defmodule Grappa.AdminEvents.Wire do
           at: String.t()
         }
 
+  @typedoc """
+  `flow` names WHICH admission door was refused. It is the caller's
+  `t:Grappa.Admission.flow/0` atom verbatim (Jason stringifies it), so the
+  type REFERENCES that union rather than restating it — a new flow arm
+  reaches the generated TS mirror with no edit here (#448).
+  """
   @type capacity_reject_event :: %{
           kind: :capacity_reject,
-          flow: atom(),
+          flow: Admission.flow(),
           error: String.t(),
           network_id: integer(),
           network_slug: String.t() | nil,
@@ -500,8 +506,13 @@ defmodule Grappa.AdminEvents.Wire do
   end
 
   @doc false
-  @spec capacity_reject(atom(), term(), integer(), String.t() | nil, String.t() | nil) ::
-          capacity_reject_event()
+  @spec capacity_reject(
+          Admission.flow(),
+          term(),
+          integer(),
+          String.t() | nil,
+          String.t() | nil
+        ) :: capacity_reject_event()
   def capacity_reject(flow, error, network_id, network_slug, source_ip)
       when is_atom(flow) and is_integer(network_id) and
              (is_binary(network_slug) or is_nil(network_slug)) and

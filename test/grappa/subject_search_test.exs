@@ -144,22 +144,22 @@ defmodule Grappa.SubjectSearchTest do
   end
 
   describe "AdminWire.result_to_admin_json/1" do
-    test "maps a :user result to string-tagged JSON with a null network" do
+    test "maps a :user result to atom-tagged JSON with a null network" do
       result = %Result{type: :user, id: "u-123", network: nil, nick: "vjt"}
 
       assert AdminWire.result_to_admin_json(result) == %{
-               type: "user",
+               type: :user,
                id: "u-123",
                network: nil,
                nick: "vjt"
              }
     end
 
-    test "maps a :visitor result to string-tagged JSON carrying the network slug" do
+    test "maps a :visitor result to atom-tagged JSON carrying the network slug" do
       result = %Result{type: :visitor, id: "v-456", network: "azzurra", nick: "guest"}
 
       assert AdminWire.result_to_admin_json(result) == %{
-               type: "visitor",
+               type: :visitor,
                id: "v-456",
                network: "azzurra",
                nick: "guest"

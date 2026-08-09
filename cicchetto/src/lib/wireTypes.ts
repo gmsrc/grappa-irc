@@ -4,6 +4,16 @@
 
 // === External types (referenced by Wire modules) ===
 
+export const ADMISSION_FLOW = [
+  "login_fresh",
+  "login_existing",
+  "bootstrap_user",
+  "bootstrap_visitor",
+  "patch_network_connect",
+  "visitor_reconnect",
+] as const;
+export type AdmissionFlow = (typeof ADMISSION_FLOW)[number];
+
 export const CHANNEL_DIRECTORY_STATUS = ["fresh", "stale", "empty", "refreshing"] as const;
 export type ChannelDirectoryStatus = (typeof CHANNEL_DIRECTORY_STATUS)[number];
 
@@ -141,7 +151,7 @@ export type AdminEventsWireCircuitCloseEvent = {
 
 export type AdminEventsWireCapacityRejectEvent = {
   kind: "capacity_reject";
-  flow: string;
+  flow: AdmissionFlow;
   error: string;
   network_id: number;
   network_slug: string | null;
@@ -459,7 +469,7 @@ export type AdminOverviewWireT = {
 // === Grappa.Admission.NetworkCircuit.AdminWire ===
 
 export type AdmissionNetworkCircuitAdminWireT = {
-  state: string;
+  state: "closed" | "open";
   failure_count: number;
   window_start_ms: number;
   cooled_at_ms: number;
@@ -1300,7 +1310,7 @@ export type SessionLogWireListResult = {
 // === Grappa.SubjectSearch.AdminWire ===
 
 export type SubjectSearchAdminWireResultJson = {
-  type: string;
+  type: "user" | "visitor";
   id: string;
   network: string | null;
   nick: string;
@@ -1335,7 +1345,7 @@ export type VhostsAdminWireVhostJson = {
 export type VhostsAdminWireGrantJson = {
   id: number;
   vhost_id: number;
-  subject_type: string;
+  subject_type: "user" | "visitor";
   subject_id: string;
 };
 

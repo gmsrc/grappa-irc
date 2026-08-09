@@ -17,7 +17,7 @@ defmodule Grappa.Admission.NetworkCircuit.AdminWireTest do
       entry = {42, 3, 1_000, :closed, 0}
 
       assert %{
-               state: "closed",
+               state: :closed,
                failure_count: 3,
                window_start_ms: 1_000,
                cooled_at_ms: 0,
@@ -31,7 +31,7 @@ defmodule Grappa.Admission.NetworkCircuit.AdminWireTest do
       entry = {42, 5, 1_000, :open, cooled_at}
 
       assert %{
-               state: "open",
+               state: :open,
                failure_count: 5,
                retry_after_seconds: 8
              } = AdminWire.entry_to_admin_json(entry, now)
@@ -44,7 +44,7 @@ defmodule Grappa.Admission.NetworkCircuit.AdminWireTest do
       now = 10_000
       entry = {42, 5, 1_000, :open, now - 500}
 
-      assert %{state: "open", retry_after_seconds: 0} =
+      assert %{state: :open, retry_after_seconds: 0} =
                AdminWire.entry_to_admin_json(entry, now)
     end
 

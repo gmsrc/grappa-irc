@@ -29,8 +29,14 @@ defmodule Grappa.Admission.NetworkCircuit.AdminWire do
 
   alias Grappa.Admission.NetworkCircuit
 
+  @typedoc """
+  `state` carries the ETS entry's **atom** verbatim. Jason serializes it
+  to the identical wire bytes an eager `Atom.to_string/1` produced, and
+  the closed union is what lets the generated TS mirror narrow to
+  `"closed" | "open"` instead of a bare `string` (#448).
+  """
   @type t :: %{
-          state: String.t(),
+          state: :closed | :open,
           failure_count: non_neg_integer(),
           window_start_ms: integer(),
           cooled_at_ms: integer(),
@@ -52,7 +58,7 @@ defmodule Grappa.Admission.NetworkCircuit.AdminWire do
       )
       when is_integer(now_ms) do
     %{
-      state: Atom.to_string(state),
+      state: state,
       failure_count: count,
       window_start_ms: window_start_ms,
       cooled_at_ms: cooled_at_ms,

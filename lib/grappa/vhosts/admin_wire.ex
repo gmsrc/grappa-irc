@@ -20,7 +20,7 @@ defmodule Grappa.Vhosts.AdminWire do
   @type grant_json :: %{
           id: integer(),
           vhost_id: integer(),
-          subject_type: String.t(),
+          subject_type: :user | :visitor,
           subject_id: String.t()
         }
 
@@ -41,17 +41,24 @@ defmodule Grappa.Vhosts.AdminWire do
   Renders a grant row to the admin JSON shape. The subject is projected
   as a `(subject_type, subject_id)` pair (the XOR FK, never both) so the
   wire is subject-polymorphic without leaking which column is NULL.
+
+  `subject_type` carries the **atom**, not an eager string: Jason
+  serializes it to the identical wire bytes, and the closed atom union
+  is what lets the generated TS mirror be a literal union instead of a
+  bare `string` (#448).
   """
   @spec grant_to_admin_json(Grant.t()) :: grant_json()
   def grant_to_admin_json(%Grant{user_id: uid} = g) when is_binary(uid) do
-    base_grant_json(g, "user", uid)
+    base_grant_json(g, :user, uid)
   end
 
   def grant_to_admin_json(%Grant{visitor_id: vid} = g) when is_binary(vid) do
-    base_grant_json(g, "visitor", vid)
+    base_grant_json(g, :visitor, vid)
   end
 
-  defp base_grant_json(%Grant{} = g, subject_type, subject_id) do
+  @spec base_grant_json(Grant.t(), :user | :visitor, String.t()) :: grant_json()
+  defp base_grant_json(%Grant{} = g, subject_type, subject_id)
+       when subject_type in [:user, :visitor] do
     %{
       id: g.id,
       vhost_id: g.vhost_id,
