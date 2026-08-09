@@ -72,11 +72,8 @@
 // Seeding mirrors `issue1062-far-behind-float-stack.spec.ts` (same bar, same
 // precondition): the shared seeder plants 200 rows in #bofh and this needs a
 // gap ABOVE the 200-row page cap, so it re-seeds via the admin
-// `resetSubject(baselineSeed)` surface. The wrapped `test` fixture's afterEach
-// truncates #bofh back to the baseline; `restoreReadCursorToTail` in afterAll
-// undoes the early cursor (BUGHUNT-3 cascade rule — a spec that leaves a
-// mid-list cursor behind makes every downstream spec open its pane at a
-// divider instead of at the tail).
+// `resetSubject(baselineSeed)` surface. Nothing has to be undone afterwards:
+// #1078 destroys the whole subject at teardown, rows and cursor with it.
 //
 // No sleep is used as synchronisation: every step waits on an observable
 // condition (the bar attaching, the badge reaching count 0, the server cursor
@@ -92,7 +89,6 @@ import {
   fetchAllMessagesAsc,
   getReadCursor,
   resetSubject,
-  restoreReadCursorToTail,
   setReadCursorToId,
 } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";

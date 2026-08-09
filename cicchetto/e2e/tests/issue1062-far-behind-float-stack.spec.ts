@@ -30,22 +30,15 @@
 //
 // Seeding mirrors the #997 spec it replaces (itself mirroring #947 and #693):
 // the shared seeder plants 200 rows in #bofh and this needs unread > 200, so
-// it re-seeds via the admin `resetSubject(baselineSeed)` surface. The wrapped
-// `test` fixture's afterEach truncates #bofh back to the baseline;
-// `restoreReadCursorToTail` in afterAll undoes the early cursor (BUGHUNT-3
-// cascade rule — a spec that leaves a mid-list cursor behind makes every
-// downstream spec open its pane at a divider instead of at the tail).
+// it re-seeds via the admin
+// `resetSubject(baselineSeed)` surface. Nothing has to be undone afterwards:
+// #1078 destroys the whole subject at teardown, rows and cursor with it.
 //
 // Desktop viewport, as the spec it replaces: the removal is a DOM claim, not a
 // geometry one, and the sidebar badge is the clearer read of "the badge fell".
 
 import { loginAs, selectChannel, sidebarMessageBadge } from "../fixtures/cicchettoPage";
-import {
-  fetchAllMessagesAsc,
-  resetSubject,
-  restoreReadCursorToTail,
-  setReadCursorToId,
-} from "../fixtures/grappaApi";
+import { fetchAllMessagesAsc, resetSubject, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 

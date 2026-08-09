@@ -32,19 +32,11 @@
 //
 // Seeding mirrors the #693 spec: the shared seeder plants 200 rows in #bofh
 // and this needs unread > 200, so it re-seeds via the admin
-// `resetSubject(baselineSeed)` surface. The wrapped `test` fixture's afterEach
-// truncates #bofh back to the baseline, so no manual row cleanup is needed;
-// `restoreReadCursorToTail` in afterAll undoes the early cursor (BUGHUNT-3
-// cascade rule — a spec that leaves a mid-list cursor behind makes every
-// downstream spec open its pane at a divider instead of at the tail).
+// `resetSubject(baselineSeed)` surface. Nothing has to be undone afterwards:
+// #1078 destroys the whole subject at teardown, rows and cursor with it.
 
 import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
-import {
-  fetchAllMessagesAsc,
-  resetSubject,
-  restoreReadCursorToTail,
-  setReadCursorToId,
-} from "../fixtures/grappaApi";
+import { fetchAllMessagesAsc, resetSubject, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 
