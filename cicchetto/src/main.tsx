@@ -32,6 +32,7 @@ import { applyIosClass, isStandalonePwa } from "./lib/platform";
 import { installPushResubscribe } from "./lib/pushResubscribe";
 import { applyDeepLinkFromUrl, installPushTargetListener } from "./lib/pushTarget";
 import { browserProbePerformance, installResumeProbe } from "./lib/resumeProbe";
+import { applySharedFilesFromUrl } from "./lib/shareTargetDelivery";
 import { applySidebarWidthsFromStorage } from "./lib/sidebarWidths";
 import { notifyClientClosing, reportVisibility } from "./lib/socket";
 import { socketHealth } from "./lib/socketHealth";
@@ -200,6 +201,15 @@ bootstrapAuth();
 // is what lets an invite survive the login round-trip.
 installPushTargetListener();
 applyDeepLinkFromUrl();
+
+// #1103 — the THIRD boot-time shape, and the only one that is not a link: the
+// OS share sheet POSTs files at the service worker, which stashes them and
+// redirects here with `?shared=1`. Kept out of `applyDeepLinkFromUrl` on
+// purpose — the other two shapes name a window to FOCUS, this one carries a
+// payload to SEND, and folding a file handover into a target router would
+// have made both harder to read. Same deferral discipline though: the reader
+// waits for the stores before deciding where the files go.
+applySharedFilesFromUrl();
 
 // #181 — auto-renew a dropped push subscription on the SW-update /
 // app-resume seams. iOS silently drops `pushManager.getSubscription()`

@@ -34888,3 +34888,77 @@ acceptance criterion "prints that verb's help and exits 0, for every verb" does
 not hold. Closing it means inline help text for the boot verbs, doubling the
 surface that has to stay in lockstep with the `@shortdoc`s. That is a product
 call, deliberately not taken here.
+
+---
+
+## 2026-08-09 — #1103: the OS share sheet, and the one function that decides where a file lands
+
+Cicchetto could not be picked as a share destination: the generated manifest
+declared no `share_target`, and the custom service worker had no `fetch`
+listener to receive one. Requested on #grappa by someone trying to send a
+photo from Android straight into a channel.
+
+**Files only.** `share_target.params` declares `files` and NOT `title` / `text`
+/ `url`. Declaring them would register cicchetto as a destination for shared
+LINKS, and cic has no compose-insert path for one — the share would open the
+app and vanish. An app that appears in the share sheet and then eats the share
+is worse than an app that never appears. A link share is a separate feature
+with its own question (insert into which composer?), not a free extra.
+
+**The accept list is derived, not written.** It comes from
+`cicchetto/src/lib/uploadCategory.ts`, already a declared 1:1 mirror of the
+server's `@mime_categories` in `uploads_controller.ex` — the closed allowlist
+that answers 415. A hand-written third copy in the build config would drift
+invisibly, and its failure mode is the worst kind: the OS offers cicchetto for
+a file the endpoint then refuses, discovered only after the app has opened.
+`vite.config.ts` therefore imports `lib/shareTarget.ts`, which imports only
+`uploadCategory` (which imports nothing) so the build config does not drag the
+SolidJS graph in. Same discipline as `pwaIcons.ts` (S18).
+
+**Why the files travel through a Cache.** A share is a POST navigation: the SW
+answers it with a 303, the browser then GETs the shell, and the SPA boots
+FRESH. So the `File` objects have to survive both the navigation and a
+possible SW termination in between — a variable in the worker does not.
+`303` and not `302` because the browser must follow with a GET; a 302 leaves
+it free to re-POST the multipart body at the shell. The handover is one-shot:
+the read deletes the cache as it goes, because a leftover entry would re-post
+the same image into a channel on the next cold boot.
+
+**The destination is ONE function, deliberately.** A share arrives with no
+window selected — the operator was in another app — and whether cic should
+deliver to the window they were last in or ask them with a picker is a product
+decision that has not been made. So the whole policy is
+`resolveShareDestination` in `lib/shareTargetDelivery.ts` and nothing else
+knows how a destination is chosen; settling the question later replaces that
+one function rather than touching the service worker, the boot path and the
+delivery in three places.
+
+**Provisional answer, pending that decision: the last focused window.** The
+share came from OUTSIDE the app, so there is no window on screen to mean
+anything by "here", and the last-used one is the only place the operator has
+expressed an interest in. It reads `loadLastFocused` and NOT the live
+`selectedChannel()` — at boot the selection is null, and Shell's cold-load arm
+may land `$home` PROVISIONALLY before the saved window arrives (#187), so a
+reader watching the live signal would conclude "nowhere to deliver" for an
+operator who has a perfectly good channel. The saved record is checked against
+the live stores before use, because "can a file be sent here" is a different
+question from "can this window be focused": a channel parted while cic was
+closed restores fine as a selection but would swallow the upload URL.
+
+**No new upload plumbing.** Delivery is `dropUpload`, the same entry point
+drag-and-drop and clipboard paste use, which already owns the category filter,
+the privacy modal, the queue and the sequential pump.
+
+**A share that cannot be delivered says so.** New `share-target` banner source.
+It is the first REPORTED entry in a registry whose other sources are all
+DERIVED from a condition that stays true while the banner is up (offline,
+invited, a newer bundle); a failed share is an event with nothing left behind
+to observe, so it carries an explicit `dismiss` verb instead of the default
+hide-until-it-recurs, which would have nothing to recur on.
+
+**Known limitation, stated rather than cured.** On Android the share-target
+registration is minted into the **WebAPK**, which is Chromium machinery. A PWA
+installed from **Firefox will not appear in the system share sheet** even with
+this shipped. The original requester installed from Firefox, so their case
+stays uncovered on that browser; the feature works for Chromium-based installs.
+There is no fix available to us — it is not a bug in this implementation.

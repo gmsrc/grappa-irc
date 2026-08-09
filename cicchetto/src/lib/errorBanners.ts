@@ -4,6 +4,11 @@ import { requestBundleRefreshNow } from "./bundleRefreshNotice";
 import { acceptInvite, declineInvite } from "./channelJoin";
 import { isOffline } from "./connectivity";
 import { acceptPushOptin, declinePushOptin, shouldShowPushOptinBanner } from "./pushOptin";
+import {
+  clearShareTargetBlock,
+  shareTargetBannerMessage,
+  shouldShowShareTargetBanner,
+} from "./shareTargetOutcome";
 import { shouldShowBanner, socketHealth } from "./socketHealth";
 import { shouldShowSwRegBanner, swRegistration } from "./swRegistration";
 import { type InvitedWindow, invitedWindows } from "./windowState";
@@ -42,6 +47,7 @@ export const BANNER_SOURCES = [
   "bundle-refresh",
   "push-optin",
   "invite",
+  "share-target",
 ] as const;
 export type BannerSource = (typeof BANNER_SOURCES)[number];
 
@@ -190,6 +196,25 @@ export function activeBanners(): BannerEntry[] {
       source: "sw-registration",
       severity: "warn",
       message: swRegMessage(),
+    });
+  }
+
+  // #1103 — a share the OS handed us that could not be delivered. `warn`, and
+  // above the offer-shaped entries below: the operator did something a moment
+  // ago and the app has to answer for it, which outranks any standing prompt.
+  //
+  // Reported, not derived. Every other source here reads a condition that is
+  // still true while the banner is up (offline, invited, a newer bundle); a
+  // failed share is an EVENT with nothing left behind to observe, so the
+  // reader records it and the × ends it. Hence the explicit `dismiss` verb —
+  // the default × hides until the source recurs, and there is nothing to
+  // recur.
+  if (shouldShowShareTargetBanner()) {
+    entries.push({
+      source: "share-target",
+      severity: "warn",
+      message: shareTargetBannerMessage(),
+      dismiss: { label: "Dismiss", onAction: () => clearShareTargetBlock() },
     });
   }
 
