@@ -144,6 +144,16 @@ release_compose_env_keys() {
     grep -qE '^[[:space:]]*-[[:space:]]*"?[A-Za-z0-9_-]+:/data"?[[:space:]]*$' "$RELEASE_COMPOSE"
 }
 
+@test "the compose project name is pinned to the file, not the directory (#1160)" {
+    # Without a top-level `name:`, compose derives the project from the
+    # CONTAINING DIRECTORY, and the volume is named after the project. Rename
+    # or move the folder and the same file resolves to a DIFFERENT volume: an
+    # empty database, freshly generated secrets, and an operator who believes
+    # they lost their data. A file that detaches state when you move it does
+    # not keep this issue's promise.
+    grep -qE '^name:[[:space:]]*[A-Za-z0-9][A-Za-z0-9_.-]*[[:space:]]*$' "$RELEASE_COMPOSE"
+}
+
 @test "it says updates on this path are COLD, and gives the command (#1160)" {
     # The release image has no Phoenix.CodeReloader: pull + recreate is the
     # only correct update, and a compose file invites the hot-edit loop unless
