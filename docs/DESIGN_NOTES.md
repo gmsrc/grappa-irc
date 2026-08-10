@@ -36511,6 +36511,9 @@ from an application version the node did not boot raises questions about the
 here. What is proven is the observation set above: empty `reloaded`, live
 controller read, new beam on disk, new versioned lib directory, and the served
 string unchanged until the restart.
+
+---
+
 ## 2026-08-10 — #1169: the SASL PLAIN payload had a field too many, and the comment above it described a shape that was never emitted
 
 `Grappa.IRC.AuthFSM`'s encoder built `<<0, u, 0, u, 0, pw>>`. RFC 4616 §2
