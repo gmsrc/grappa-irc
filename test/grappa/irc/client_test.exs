@@ -1196,7 +1196,10 @@ defmodule Grappa.IRC.ClientTest do
       # empty exactly when the breadcrumb says "empty". Populating the
       # encoder's authzid without relabelling fails this, and so does
       # relabelling without touching the encoder.
-      assert (authzid == "") == (breadcrumb == "empty"),
+      sent_empty? = authzid == ""
+      claims_empty? = breadcrumb == "empty"
+
+      assert sent_empty? == claims_empty?,
              "breadcrumb says authzid=#{breadcrumb} but the payload sent #{inspect(authzid)}"
     end
   end
