@@ -68,6 +68,29 @@ const MIRROR_STYLE_PROPS = [
 // only the text BEFORE the caret would let that line end early and could
 // report a line too high. The div lives for one synchronous layout read and
 // is removed before anything can paint it.
+//
+// TWO markers, and the answer is their DIFFERENCE. A single marker's top is
+// not the line's top: an inline span sits inside its line box at an offset of
+// its own, so a caret on the FIRST line reported 1px instead of 0 and the
+// reveal landed one pixel short of the line — with the guard asserting an
+// exact 0, which is what caught it. Measured in chromium at 390px: marker
+// top 1, line-height 19.59375 (computed style rounds it to 19.6), glyph box
+// 16. Note 1 is NOT the half-leading, which is 1.8 — the offset is a font
+// metric that cannot be derived, only cancelled.
+//
+// So an identical span at offset 0 supplies the origin. Both markers carry the
+// same metrics, so their within-line offsets are identical and subtract out
+// EXACTLY: measured `deltaLine0 === 0` and, for the last of five lines,
+// `78.375 === 4 × 19.59375` — an exact multiple of the ACTUAL line height,
+// with no rounding residue. That exactness is the point: it makes the
+// first-line reveal 0 by construction on any engine, rather than a number that
+// happens to round well with one font. Rects, not `offsetTop`, because
+// `offsetTop` is an integer and would round the cancellation back open.
+//
+// The alternative — snapping the single marker's top onto a line grid with
+// `Math.floor(top / lineHeight)` — was rejected on the same measurement:
+// computed `lineHeight` (19.6) is not the laid-out one (19.59375), so the
+// quotient drifts low and a far-enough line floors to its predecessor.
 function caretLineTop(el: HTMLTextAreaElement, caret: number, cs: CSSStyleDeclaration): number {
   const contentWidth =
     el.clientWidth - Number.parseFloat(cs.paddingLeft) - Number.parseFloat(cs.paddingRight);
@@ -84,11 +107,13 @@ function caretLineTop(el: HTMLTextAreaElement, caret: number, cs: CSSStyleDeclar
   mirror.style.visibility = "hidden";
   mirror.style.pointerEvents = "none";
 
+  const origin = document.createElement("span");
+  origin.textContent = "\u200b";
   const marker = document.createElement("span");
   marker.textContent = "\u200b";
-  mirror.append(el.value.slice(0, caret), marker, el.value.slice(caret));
+  mirror.append(origin, el.value.slice(0, caret), marker, el.value.slice(caret));
   document.body.append(mirror);
-  const top = marker.offsetTop;
+  const top = marker.getBoundingClientRect().top - origin.getBoundingClientRect().top;
   mirror.remove();
   return top;
 }
