@@ -36704,3 +36704,75 @@ the amd64 leg of the multi-arch manifest is untested here; `PHX_HOST=localhost`
 exercises the boot, not a real TLS front door or a link minted for a public
 host; no upstream IRC network was connected; and the file has never been used
 on a host without a checkout, which is the population it exists for.
+## 2026-08-10 — #1157: the pan comes out, it does not move
+
+vjt, dogfooding `0.15.0` on an iPhone: the admin console still scrolls
+sideways. It was not a regression. It was the design, and this entry records
+reversing it.
+
+**#1074's premise was that a phone SHOULD pan a wide admin table.** Its
+`UX-6-G ownership` block said so in as many words — "below 900px the PANEL owns
+the horizontal scroll, not the table wrapper" — and the argument in the entry
+above is about WHICH element owns the scroll, never about whether a phone
+should have to swipe a record to read it. The same file even warned that moving
+the scroller again would keep the gesture while invalidating the guard watching
+the old element. vjt weighed the trade-off on the device and took the other
+side: below 900px a row becomes a CARD, one record per block, label beside
+value. Above 900px nothing moves.
+
+**The loss is real and was accepted, not argued away.** The nested-table block
+in `default.css` had a good reason for keeping main tables as tables: you read
+Sessions to find the odd row out, and stacking puts every value on its own line
+where no two can be compared. That argument still holds; it just lost to not
+having to pan. Both halves are now written where the code is, because a comment
+asserting the old conclusion next to code doing the opposite is worse than no
+comment.
+
+**Container vs. viewport stayed split, deliberately.** Tables NESTED in a detail
+panel keep their `@container (max-width: 56rem)` rule: a table two levels deep
+never has the screen's width, and a viewport breakpoint got tablets wrong
+(1180x820 left the Servers table panning). Main tables use `@media (max-width:
+899px)`, the breakpoint vjt named and the one `.adm-col-detail` already uses.
+The declarations are duplicated because a media query and a container query
+cannot share a block — the duplication is the price of asking two different
+questions, and it is named in both.
+
+**`data-label` is a contract now, not decoration.** `thead` is hidden at that
+width, so every `<td>` an admin tab writes must carry its label; a cell that
+heads a record takes `adm-cell-title`, which drops the label so the name is not
+indented behind a chip repeating what it already says.
+
+**The guard had stopped watching, and the numbers say how badly.**
+`ux-6-g-admin-mobile-h-scroll` looped three tabs but gated its width assertion
+on `networks` — the one tab vjt did not ask to change — while conceding in a
+comment that the other two were empty and would pass trivially. Reproducing the
+#1074 arrangement under the new oracle showed **six** tabs panning, including
+`events`, `session_log` and `debug`, which contain no `<td>` at all. The defect
+was wider than the issue described and reached tabs nobody called tables. The
+replacement asserts that at 393px no scroll container inside the admin pane has
+`scrollWidth > clientWidth`, on all nine tabs, seeded with real rows — a claim
+no relocation of the scroller can satisfy, demonstrated by watching the offender
+move from `.adm-table-wrap` to `.admin-tab-panel` when the old block is put
+back. `.adm-nav`, the nine-chip tab strip, is exempt by name: it is a
+navigation affordance you swipe to CHOOSE a tab, not a record you pan to READ.
+
+**Markup shipped without CSS, one cutover after the last time.** The Visitors
+tab once shipped a per-network `<ul>` with no stylesheet behind it and rendered
+`pelucheazzurraconnected`. The unified Sessions view shipped six classes with no
+rule anywhere in the project's only stylesheet, so three of the four dictated
+properties of the identity column did not exist while a code comment claimed one
+of them outright. jsdom has no layout, so the unit suite stayed green through
+all of it. The lesson is not "write the CSS" — it is that a cutover's layout
+needs a browser-truth lock the same day, which is why the dead Visitors layout
+spec was re-aimed rather than deleted with its subject.
+
+**A row-backed list outlives its pid, and that cuts both ways.** Because the
+row survives the process, verbs like disconnect and terminate finally have an
+observable outcome in the console — the row stays and the channels cell falls to
+the em-dash — where a registry-driven list left nothing to assert but the
+absence of an error banner. The same property broke a count: a visitor another
+spec minted and abandoned used to leave the list when its pid died, and now
+keeps its row until the reaper sweeps, so a total-row canary silently became a
+function of suite execution order. Any count over a row-backed admin list must
+name the population it means, or it is reporting on someone else's cleanup
+timing and calling it a regression.
