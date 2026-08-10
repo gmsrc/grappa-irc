@@ -20,6 +20,7 @@ defmodule Grappa.Session.WireTest do
   """
   use ExUnit.Case, async: true
 
+  alias Grappa.RelayFrameHelpers
   alias Grappa.Scrollback.Message
   alias Grappa.Session.{ISupport, Wire}
 
@@ -88,14 +89,23 @@ defmodule Grappa.Session.WireTest do
       assert payload.prefix == %{"o" => "@", "h" => "%", "v" => "+"}
     end
 
-    # #1108 — the builder takes LINELEN and publishes the BUDGET, so the
-    # projection is stated here independently of `LineSplit`: 512 minus the
-    # worst-case relayed framing for an empty target, which is the 107-byte
-    # source prefix `:nick!user@host ` (1+30+1+10+1+63+1) plus `PRIVMSG  :`
-    # (10) plus CRLF (2) = 119.
-    test "publishes the per-frame budget base derived from LINELEN" do
-      assert Wire.isupport_changed(7, ISupport.default(), 512).frame_budget_base == 512 - 119
-      assert Wire.isupport_changed(7, ISupport.default(), 1024).frame_budget_base == 1024 - 119
+    # #1108 — the builder takes LINELEN and publishes the BUDGET, and the
+    # number is checked the way a CLIENT will spend it: subtract the target's
+    # bytes, fill a body with that many, and the worst-case relayed frame
+    # (#246 ceilings, `Grappa.RelayFrameHelpers`) must come out EXACTLY at
+    # LINELEN. The oracle is the wire, not a second copy of the framing
+    # arithmetic — an expected value re-derived by hand would only check that
+    # the same sum can be written twice.
+    test "publishes a budget a client can spend to the last byte of the frame" do
+      for {linelen, target} <- [{512, "#sniffo"}, {1024, "#a"}, {512, "#café"}] do
+        base = Wire.isupport_changed(7, ISupport.default(), linelen).frame_budget_base
+
+        RelayFrameHelpers.assert_budget_fills_the_frame(
+          base - byte_size(target),
+          target,
+          linelen
+        )
+      end
     end
 
     test "the payload is JSON-encodable (no MapSet leaks)" do

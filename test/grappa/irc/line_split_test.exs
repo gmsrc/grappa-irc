@@ -2,8 +2,6 @@ defmodule Grappa.IRC.LineSplitTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
-  alias Grappa.IRC.{CTCP, LineSplit}
-
   # #246 — worst-case source prefix the RELAYING server prepends to our
   # outbound line before fanning it out to other channel members:
   #
@@ -14,22 +12,15 @@ defmodule Grappa.IRC.LineSplitTest do
   # on grappa's wire yet exceed linelen once relayed → the server truncates
   # the tail → the next fragment resumes past the cut → a silent byte hole.
   # The budget MUST reserve the WORST-CASE prefix (host/cloak grows between
-  # messages; never budget against the live prefix). Ceilings are the
-  # protocol maxima grappa validates its own identity against —
-  # Grappa.IRC.Identifier @nick_regex (≤30, Azzurra NICKLEN=30) and
-  # @ident_regex (≤10, common USERLEN) — plus the common ircd HOSTLEN 63
-  # (covers cloaks + bracketed IPv6 literals). Restated here as an
-  # INDEPENDENT statement of the on-wire worst case: the test builds the
-  # actual relayed bytes and checks byte_size, rather than trusting the
-  # splitter's own budget arithmetic.
-  @wc_nick String.duplicate("n", 30)
-  @wc_ident String.duplicate("u", 10)
-  @wc_host String.duplicate("h", 63)
-  @wc_source_prefix ":" <> @wc_nick <> "!" <> @wc_ident <> "@" <> @wc_host <> " "
+  # messages; never budget against the live prefix). The frame builder and
+  # its ceilings live in `Grappa.RelayFrameHelpers` — an INDEPENDENT
+  # restatement of the on-wire worst case, shared with `wire_test.exs` since
+  # #1108 so that the number this module publishes is checked against the
+  # bytes rather than against its own arithmetic.
+  import Grappa.RelayFrameHelpers, only: [worst_case_relayed_frame: 2]
 
-  # The concrete worst-case relayed wire frame around a fragment body.
-  defp worst_case_relayed_frame(target, fragment),
-    do: @wc_source_prefix <> "PRIVMSG #{target} :" <> fragment <> "\r\n"
+  alias Grappa.IRC.{CTCP, LineSplit}
+  alias Grappa.RelayFrameHelpers
 
   defp single_grapheme?(s), do: match?([_], String.graphemes(s))
 
@@ -322,10 +313,22 @@ defmodule Grappa.IRC.LineSplitTest do
   # tests pin the linearity AND pin the number against the splitter's actual
   # behaviour rather than against its internal arithmetic.
   describe "#1108: the per-frame body budget as a published number" do
-    test "a body of exactly the budget is one fragment; one byte more is two" do
+    # The published budget is checked against the WIRE, never against the
+    # arithmetic that produced it. Both halves matter and they fail apart:
+    # `assert_budget_fills_the_frame/3` builds the worst-case relayed frame
+    # from the #246 ceilings and demands EQUALITY with linelen, so a budget
+    # off by one in either direction dies there; the fragment counts below
+    # then say the splitter actually honours the number it published.
+    #
+    # Sizing the body from `frame_budget_base/1` and splitting with
+    # `frame_budget/2` would otherwise move BOTH sides of a defect together
+    # — measured: a `+ 1` inside `frame_budget/2` left the counts green.
+    test "the published budget fills the relayed frame exactly, and the splitter honours it" do
       target = "#sniffo"
       linelen = 512
       budget = LineSplit.frame_budget_base(linelen) - byte_size(target)
+
+      RelayFrameHelpers.assert_budget_fills_the_frame(budget, target, linelen)
 
       # Space-free so the #1109 word-boundary preference has no boundary to
       # take: the fragment count is then a pure statement about the budget.
@@ -333,6 +336,14 @@ defmodule Grappa.IRC.LineSplitTest do
 
       assert [_, _] =
                LineSplit.split_privmsg_body(String.duplicate("a", budget + 1), target, linelen)
+    end
+
+    test "the budget tracks LINELEN, not a hardcoded RFC default" do
+      RelayFrameHelpers.assert_budget_fills_the_frame(
+        LineSplit.frame_budget_base(1024) - byte_size("#a"),
+        "#a",
+        1024
+      )
     end
 
     property "base minus the target's own bytes IS the per-target budget" do
