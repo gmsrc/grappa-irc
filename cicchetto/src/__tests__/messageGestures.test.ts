@@ -27,26 +27,50 @@ let pane: HTMLDivElement;
 let row: HTMLDivElement;
 let body: HTMLSpanElement;
 let link: HTMLAnchorElement;
+// #1156 — a second row in the SAME pane that the call site refuses a reply
+// for (in production: a join/part/quit, which has nothing to quote). The
+// binder never learns why — it asks, per row.
+let refusedRow: HTMLDivElement;
+let refusedBody: HTMLSpanElement;
 let onReply: Mock<(row: HTMLElement) => void>;
 let onLongPress: Mock<(row: HTMLElement, at: { x: number; y: number }) => void>;
 let dispose: () => void;
+
+function makeRow(): { line: HTMLDivElement; text: HTMLSpanElement } {
+  const line = document.createElement("div");
+  line.className = "scrollback-line";
+  const text = document.createElement("span");
+  text.className = "scrollback-body";
+  line.appendChild(text);
+  return { line, text };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
   pane = document.createElement("div");
   pane.className = "scrollback";
-  row = document.createElement("div");
-  row.className = "scrollback-line";
-  body = document.createElement("span");
-  body.className = "scrollback-body";
+  const content = makeRow();
+  row = content.line;
+  body = content.text;
   link = document.createElement("a");
   link.className = "scrollback-link";
-  row.append(body, link);
-  pane.appendChild(row);
+  row.appendChild(link);
+  const refused = makeRow();
+  refusedRow = refused.line;
+  refusedBody = refused.text;
+  pane.append(row, refusedRow);
   document.body.appendChild(pane);
   onReply = vi.fn<(row: HTMLElement) => void>();
   onLongPress = vi.fn<(row: HTMLElement, at: { x: number; y: number }) => void>();
-  dispose = bindMessageGestures(pane, { viewportWidth: () => W, onReply, onLongPress });
+  dispose = bindMessageGestures(pane, {
+    viewportWidth: () => W,
+    // The call site's answer, stubbed as an identity check rather than a kind
+    // list: the binder is DOM-only, so a kind classifier in here (even in the
+    // test) would be modelling the wrong contract.
+    canReply: (r) => r === row,
+    onReply,
+    onLongPress,
+  });
 });
 
 afterEach(() => {
@@ -253,5 +277,60 @@ describe("bindMessageGestures — long press = message menu", () => {
     dispose();
     vi.advanceTimersByTime(LONG_PRESS_MS + 100);
     expect(onLongPress).not.toHaveBeenCalled();
+  });
+});
+
+// #1156 — a presence row (join/part/quit) armed the swipe like any other, slid
+// 72px, and then delivered nothing: `replyQuote` returns null for it, so the
+// compose box stayed empty. A 72px slide IS a promise. The gate is the SWIPE
+// alone — the long-press menu still opens, because Copy and Select… are useful
+// on a join and Reply is already disabled-but-visible there.
+describe("bindMessageGestures — a row the call site refuses (#1156)", () => {
+  it("never fires onReply on it, however far the finger travels", () => {
+    swipeRight(refusedBody, 200);
+    expect(onReply).not.toHaveBeenCalled();
+  });
+
+  it("never slides it: no promise is made in the first place", () => {
+    fireTouch(refusedBody, "touchstart", { clientX: CENTER_X, clientY: 300 });
+    fireTouch(refusedBody, "touchmove", { clientX: CENTER_X + 40, clientY: 302 });
+    expect(refusedRow.style.transform).toBe("");
+    expect(refusedRow.classList.contains(SWIPING_CLASS)).toBe(false);
+  });
+
+  // An unarmed row is not a dead row: with no claim the drag keeps its native
+  // drag-to-select, exactly like the unbound right→left direction.
+  it("never claims the drag, so native drag-to-select survives on it", () => {
+    const { moves } = swipeRight(refusedBody, 200);
+    expect(moves.some((m) => m.defaultPrevented)).toBe(false);
+  });
+
+  it("still opens the message menu on a long press (Copy / Select… live there)", () => {
+    fireTouch(refusedBody, "touchstart", { clientX: CENTER_X, clientY: 300 });
+    vi.advanceTimersByTime(LONG_PRESS_MS);
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    expect(onLongPress.mock.calls[0]?.[0]).toBe(refusedRow);
+  });
+
+  // The hold is cancelled by movement, and that cancellation cannot ride on the
+  // swipe's arming state: a scroll that starts on a join row must not leave a
+  // timer behind that opens the menu 500ms into the flick.
+  it("still cancels the pending hold when the finger scrolls off it", () => {
+    fireTouch(refusedBody, "touchstart", { clientX: CENTER_X, clientY: 300 });
+    fireTouch(refusedBody, "touchmove", {
+      clientX: CENTER_X,
+      clientY: 300 + HOLD_MOVE_TOLERANCE_PX + 5,
+    });
+    vi.advanceTimersByTime(LONG_PRESS_MS + 100);
+    expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  // Asked per ROW, not once per pane: the two rows sit in the same container
+  // behind the same listener, and the content one is untouched by the gate.
+  it("leaves the content row beside it armed", () => {
+    swipeRight(refusedBody, 200);
+    swipeRight(body, 90);
+    expect(onReply).toHaveBeenCalledTimes(1);
+    expect(onReply.mock.calls[0]?.[0]).toBe(row);
   });
 });

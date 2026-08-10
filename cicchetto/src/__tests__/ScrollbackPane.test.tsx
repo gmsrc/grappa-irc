@@ -3,6 +3,9 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScrollbackMessage, WhoisBundle } from "../lib/api";
 import { activeAudio, closeAudio } from "../lib/audioPlayer";
+// #1156 — the REAL compose store: the swipe's whole outcome is what lands in
+// the draft, and a mock here would assert that the pane called something.
+import { getDraft, setDraft } from "../lib/compose";
 import { closeMediaViewer, mediaViewerState } from "../lib/mediaViewer";
 import {
   popOverlay,
@@ -16,6 +19,9 @@ import { readingAtTailKey } from "../lib/readingAtTail";
 // #230 — the mocked `loadMore` (see vi.mock("../lib/scrollback")) so the
 // wheel-up-on-underfill trigger can be asserted directly.
 import { loadMore } from "../lib/scrollback";
+// #1156 — the shared point-carrying touch helper (the #230 block below has its
+// own clientY-only one, scoped to that describe).
+import { fireTouch as fireTouchPoint } from "./helpers/touchEvents";
 
 // Review fix (2026-06-11): same-host NON-media links delegate plain
 // clicks to the shared iOS-standalone escape handler. The handler's
@@ -286,7 +292,7 @@ vi.mock("../lib/auth", () => ({
   token: () => "test-token",
 }));
 
-import type { ChannelKey } from "../lib/channelKey";
+import { type ChannelKey, channelKey } from "../lib/channelKey";
 // #325 — the REAL channelTopic store (not mocked). `seedTopic` stages a topic
 // entry so ScrollbackPane derives the #237 on-JOIN topic-join line; the #325
 // block proves that line survives the #222 presence-hide filter.
@@ -5847,6 +5853,117 @@ describe("ScrollbackPane", () => {
       });
       render(() => <ScrollbackPane networkSlug="freenode" channelName="#t325" kind="channel" />);
       expect(screen.getAllByTestId("topic-join-line")).toHaveLength(1);
+    });
+  });
+
+  // #1156 — a presence row armed the reply swipe, slid 72px and delivered
+  // nothing, because `replyQuote` has nothing to build from a join. The gate
+  // lives at THIS call site: `bindMessageGestures` is DOM-only and is handed
+  // the answer, the way `viewportWidth` already is.
+  //
+  // The binder's own suite proves the gate with a stubbed predicate, which is
+  // exactly why this one drives the REAL pane against REAL message kinds: a
+  // call site wired to `() => true` would leave every one of those green.
+  describe("#1156 — the reply swipe arms only on a row that has a reply", () => {
+    // Derived with the pane's own key function (mocked to `${slug} ${name}` at
+    // the top of this file) rather than spelled out, so the draft this reads is
+    // the draft `appendToCompose` wrote.
+    const KEY = channelKey("freenode", "#grappa");
+    const CENTER_X = 200; // jsdom's innerWidth is 1024: clear of both edge zones
+
+    const joinThenSpeech: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 1_700_000_000_000,
+        kind: "join",
+        sender: "carol",
+        body: null,
+        meta: {},
+      },
+      {
+        id: 2,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 1_700_000_001_000,
+        kind: "privmsg",
+        sender: "alice",
+        body: "hello",
+        meta: {},
+      },
+    ];
+
+    let composeBox: HTMLDivElement;
+
+    afterEach(() => {
+      composeBox.remove();
+    });
+
+    // Rows, in render order, with a compose box for `appendToCompose` to find.
+    function renderPane(): HTMLElement[] {
+      setDraft(KEY, "");
+      composeBox = document.createElement("div");
+      composeBox.className = "compose-box";
+      composeBox.appendChild(document.createElement("textarea"));
+      document.body.appendChild(composeBox);
+      setScrollback({ [KEY]: joinThenSpeech });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      return screen.getAllByTestId("scrollback-line");
+    }
+
+    // A left→right drag on the row itself, past the 40px floor. Samples the
+    // slide MID-DRAG: after the release the transform is cleared either way
+    // (that is the snap-back), so only the middle of the gesture tells the two
+    // behaviours apart.
+    //
+    // Dead flat on Y, and that is load-bearing: #230's underfill rescue lives
+    // on the same container and preventDefaults any DOWNWARD drag while jsdom
+    // reports zero geometry, so a single px of dy would hand this test a claim
+    // that is not the gesture binder's. dy = 0 leaves the binder as the only
+    // possible claimer, and `horizontalClaim` still passes (ax ≥ ay·k).
+    function swipeRight(row: HTMLElement): { slid: boolean; claimed: boolean } {
+      const Y = 300;
+      fireTouchPoint(row, "touchstart", { clientX: CENTER_X, clientY: Y });
+      const m1 = fireTouchPoint(row, "touchmove", { clientX: CENTER_X + 30, clientY: Y });
+      const slid = row.style.transform !== "";
+      const m2 = fireTouchPoint(row, "touchmove", { clientX: CENTER_X + 60, clientY: Y });
+      fireTouchPoint(row, "touchend", { clientX: CENTER_X + 90, clientY: Y });
+      return { slid, claimed: m1.defaultPrevented || m2.defaultPrevented };
+    }
+
+    it("a join row does not follow the finger and does not claim the drag", () => {
+      const [joinRow] = renderPane();
+      if (joinRow === undefined) throw new Error("no join row rendered");
+      expect(joinRow.dataset.kind).toBe("join");
+
+      const { slid, claimed } = swipeRight(joinRow);
+
+      expect(slid).toBe(false);
+      // Unclaimed, so the row keeps its native drag-to-select.
+      expect(claimed).toBe(false);
+    });
+
+    // Regression guard, green before the fix too: `replyToMessage` was already
+    // a no-op on a join. It is the SLIDE above that was the lie.
+    it("a join row still leaves the compose box empty", () => {
+      const [joinRow] = renderPane();
+      if (joinRow === undefined) throw new Error("no join row rendered");
+      expect(getDraft(KEY)).toBe(""); // pre-state: a filled draft would prove nothing
+
+      swipeRight(joinRow);
+
+      expect(getDraft(KEY)).toBe("");
+    });
+
+    it("swiping the privmsg row beside it still quotes it into the compose box", () => {
+      const speechRow = renderPane()[1];
+      if (speechRow === undefined) throw new Error("no privmsg row rendered");
+      expect(speechRow.dataset.kind).toBe("privmsg");
+
+      swipeRight(speechRow);
+
+      expect(getDraft(KEY)).toBe("<alice> hello<< ");
     });
   });
 });
