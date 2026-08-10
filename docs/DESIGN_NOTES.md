@@ -36909,3 +36909,66 @@ only taps do — and that the arm survives as a cross-platform net. If that is
 true, the line will never print for a long-press on device and the plan cannot
 separate anything. Not verified on device either: this is the code contradicting
 the issue text, which is a result worth recording rather than a measurement.
+## 2026-08-10 — #1107: `!addquote` fills the box and stops, and the payload carries no nick
+
+A fourth item in the scrollback's message menu, beside Copy / Reply / Select….
+Picking it puts `!addquote ` plus the message text into the compose box and
+does nothing else: cic does not send it and does not know what it means. The
+command is interpreted by whatever bot sits in the channel, and the operator
+reads the line before pressing enter.
+
+**The payload is the BARE BODY — no nick.** The issue left this open because
+bots differ, and it is settled on the requester's literal words: the command,
+and then the message. The tiebreak that made it easy is that the two guesses
+are not symmetric. A bot that wants attribution can read the nick off the
+channel it received the command on; a bot that stores its input verbatim would
+bake `<vjt>` into every stored quote, invisible until someone recalls it months
+later. Guessing narrow is recoverable, guessing wide is not, and reversing the
+ruling is one string constant either way. An ACTION contributes its text
+without the `* nick` form Reply gives it, for the same reason: the payload
+carries no attribution for any kind, so attributing exactly one would be a
+shape the operator cannot predict from the menu.
+
+**The quotable-body rules moved out of `replyQuote` into
+`lib/quotableBody.ts`.** Deciding whether a row has anything quotable in it,
+and extracting the words the operator actually saw, is now shared; what stays
+in `replyQuote` is the `<nick> …<< ` wrapper, which is the only part reply
+owns. This is not tidying: every clause in that shared half is a ruling that
+cost an issue — #1067's content-kind gate, #1123's previous-quote cut and the
+nick charset it is anchored on, #1126's CTCP unwrap. Copying them would have
+copied five bugs' worth of history into a second module and let the two doors
+drift on the sixth. It is a named module rather than an export from
+`replyQuote` because importing "reply" from an addquote path is a name that
+lies.
+
+Nesting matters MORE here than it does for a reply. A reply that drags
+`<bob> original<< ` forward is ugly for one message; the same body handed to a
+quote DATABASE attributes bob's line to alice permanently.
+
+**Two guards were passing vacuously, and the mutation run is what said so.**
+Fourteen single-point mutations, twelve killed, two survivors — both mine.
+`refuses a presence row` fed a JOIN with a null body, so deleting the
+content-kind gate left it green: the empty-body check one line down refused the
+row instead. The input that separates them is a PART, which carries its reason
+in `body` — without the gate, parting a channel offers `!addquote Leaving`.
+And `leaves the caret at the end` asserted `selectionStart` in jsdom, which
+already parks the caret at the end of a freshly assigned `value`, so deleting
+the caret reveal from `appendToCompose` left it green too. The general lesson
+is the one worth keeping: an assertion whose subject is refused one line
+EARLIER by a different rule is not testing the rule it is named after, and the
+only way to find out is to delete the rule and watch.
+
+**A harness has to prove itself first.** The first pass of that mutation run
+reported all fourteen mutants killed, which was an artifact: it passed
+repo-relative test paths while bun's cwd is `cicchetto/`, so vitest matched
+nothing and returned rc=1 every time. A run with no unmutated baseline cannot
+tell a kill from a broken runner. The baseline came second and should have come
+first.
+
+**The e2e spec is written and has NOT been run** — this branch had no e2e lane.
+It covers the two things jsdom is structurally blind to: that a real engine
+scrolls the overflowing compose box down to the caret (the #1105/#1113
+dependency the issue names — `!addquote ` plus a body overflows the rows=1
+textarea nearly every time), and that nothing goes out on the wire. The static
+half of the gate did run: `bun run check` is biome plus tsc over
+`e2e/tsconfig.json`, rc=0.
