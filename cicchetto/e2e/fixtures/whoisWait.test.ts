@@ -111,11 +111,17 @@ describe("awaitWhoisAway", () => {
     await expect(wait).resolves.toBe(false);
   });
 
-  it("ignores a numeric that only appears in the away message's free text", async () => {
+  // The sharp case, and the reason the subject is read off field 3 rather
+  // than looked for anywhere in the line: this IS a 301, and our nick IS in
+  // it — in somebody else's away text, where a person may well put it.
+  // Matching on "the line mentions the nick" reports away for a user who is
+  // present, which is the one wrong answer the negative assertions cannot
+  // survive.
+  it("ignores a 301 about somebody else whose away text names our nick", async () => {
     const source = fakeSource();
     const wait = awaitWhoisAway(source, { nick: NICK, timeoutMs: 1_000 });
     source.server(
-      `:leaf4.azzurra.chat 311 i348-away-watcher ${NICK} u h * :gone, ask 301 about ${NICK}`,
+      `:leaf4.azzurra.chat 301 i348-away-watcher someone-else :back later, ask ${NICK}`,
     );
     source.server(END);
     await expect(wait).resolves.toBe(false);
