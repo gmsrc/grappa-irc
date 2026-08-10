@@ -30,7 +30,10 @@ defmodule Grappa.Networks.ServerPassSlotTest do
 
   defp uniq, do: System.unique_integer([:positive])
 
-  defp network, do: network_with_server(port: 6667, slug: "azzurra-#{uniq()}") |> elem(0)
+  defp network do
+    {net, _} = network_with_server(port: 6667, slug: "azzurra-#{uniq()}")
+    net
+  end
 
   # Read the column the way storage sees it: the Ecto type decrypts on load, so
   # a schema read cannot tell a stored ciphertext from a stored plaintext.
