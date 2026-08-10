@@ -36841,6 +36841,9 @@ frame overhead. `pastedMessageCount` therefore counts lines only, and a
 single long line has always been 1 there and N on the wire. Moving the
 breaks changes N; it does not create a divergence, and there is nothing
 to synchronise here.
+
+---
+
 ## 2026-08-10 — #1106: Select… installed its range under a focused compose box, and three of the four links are measured
 
 The report is narrow: on iOS, long-press → **Select…** with the keyboard UP
