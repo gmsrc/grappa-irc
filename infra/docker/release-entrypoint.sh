@@ -1,7 +1,8 @@
 #!/bin/sh
 # release-entrypoint.sh — container entrypoint for the self-contained grappa
 # RELEASE image (Dockerfile.release). It caps BEAM resources, bootstraps the
-# prod secrets on first boot, migrates, then execs the release.
+# prod secrets on first boot, migrates, seeds the built-in themes, then execs
+# the release.
 #
 # The caps mirror bin/start.sh's (see its header for the per-user derivation)
 # and travel via ERL_ZFLAGS, APPENDED to (never clobbering) any operator value:
@@ -123,6 +124,26 @@ if [ "$auto_migrate" = 1 ] && [ "$boots_the_release" = 1 ]; then
              "back with: docker run --rm -v <volume>:/data <image> eval" \
              "'Grappa.Release.rollback(Grappa.Repo, <version>)'" >&2
         exit 1
+    fi
+
+    # ── Built-in theme gallery (#1167) ─────────────────────────────────
+    # Same argument as the migration above: the palettes are compiled into
+    # this image and their wallpapers ride the cic bundle, but the gallery
+    # reads the DB and a bare `docker run` has no other door to the seeder.
+    # It rides GRAPPA_AUTO_MIGRATE rather than taking a knob of its own —
+    # an operator who sets that to 0 did so to keep boot from writing to
+    # the database, and seeding is a write.
+    # NON-FATAL, unlike the migration: a half-applied schema is a
+    # correctness defect, an empty gallery is cosmetic and the idempotent
+    # upsert converges on the next boot. Refusing to start here would
+    # trade a working bouncer for a missing colour scheme (the posture
+    # deploy_common has held on every substrate since #440).
+    if ! bin/grappa eval 'Grappa.Release.seed_themes()'; then
+        echo "grappa: built-in theme seeding FAILED — starting anyway." >&2
+        echo "grappa: the schema is applied and the bouncer is usable; the" \
+             "theme gallery may be empty or stale. The upsert converges, so" \
+             "the next boot heals it. Retry now with: docker run --rm" \
+             "-v <volume>:/data <image> eval 'Grappa.Release.seed_themes()'" >&2
     fi
 fi
 

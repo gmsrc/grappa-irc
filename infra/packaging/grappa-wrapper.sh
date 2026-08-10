@@ -9,6 +9,7 @@
 #
 # Usage:
 #   sudo grappa migrate          run pending Ecto migrations (no mix needed)
+#   sudo grappa seed-themes      materialise the built-in theme gallery
 #   sudo grappa gen-secrets      (re)generate missing secrets in the env file
 #   sudo grappa remote           attach an IEx remote shell to the running node
 #   sudo grappa version          print the release version
@@ -16,6 +17,7 @@
 #
 # `migrate` is sugar for `eval 'Grappa.Release.migrate()'` — the same
 # Ecto.Migrator the other deploy paths call, reachable WITHOUT mix.
+# `seed-themes` is its twin over `Grappa.Release.seed_themes()`.
 
 set -euo pipefail
 
@@ -40,6 +42,13 @@ fi
 # `migrate` → eval the release migrator.
 if [ "$cmd" = "migrate" ]; then
 	set -- eval 'Grappa.Release.migrate()'
+fi
+
+# `seed-themes` → eval the release theme seeder (#1167). Not sugar alone: the
+# install scriptlets call this verb, so it is the packaged host's ONLY door to
+# the built-in gallery, and the one an operator re-runs to heal a failed seed.
+if [ "$cmd" = "seed-themes" ]; then
+	set -- eval 'Grappa.Release.seed_themes()'
 fi
 
 [ -r "$ENV_FILE" ] || die "env file $ENV_FILE not readable (run as root, or join the grappa group)"

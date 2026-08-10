@@ -48,6 +48,23 @@ abort-*)
 		exit 1
 	fi
 
+	# ── Built-in theme gallery ─────────────────────────────────────────
+	# The curated palettes ship COMPILED into the release and their
+	# wallpapers ship in the cic bundle, but the gallery reads the DB — so
+	# without this step the package installs a bouncer with an empty theme
+	# section (#1167). Idempotent upsert (system owner + name), which is
+	# also how an upgrade picks up built-ins added since.
+	# NON-FATAL, unlike migrate: the gallery is cosmetic and the upsert
+	# converges, so failing a package transaction over it would cost the
+	# operator a working install for a missing colour scheme. Loud, never
+	# silent — same posture deploy_common holds on every substrate (#440).
+	if ! /usr/bin/grappa seed-themes; then
+		echo "grappa: built-in theme seeding FAILED (see error above)." >&2
+		echo "        The install is complete and the schema is applied;" >&2
+		echo "        the theme gallery may be empty or stale." >&2
+		echo "        Retry with: sudo grappa seed-themes" >&2
+	fi
+
 	# ── systemd: enable, do NOT start ──────────────────────────────────
 	# The operator must set a real PHX_HOST in /etc/grappa/grappa.env
 	# before the service can boot, so we enable-on-boot but leave the

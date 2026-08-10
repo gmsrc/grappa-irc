@@ -42,6 +42,19 @@ _bootstrap() {
 		echo "        Fix the cause and re-run: sudo grappa migrate" >&2
 		return 1
 	fi
+
+	# Built-in theme gallery (#1167): the palettes are compiled into the
+	# release and their wallpapers ride the cic bundle, but the gallery reads
+	# the DB, so without this the package lands with an empty theme section.
+	# Idempotent upsert — which is also how an upgrade picks up built-ins
+	# added since. NON-FATAL, unlike migrate: a cosmetic gallery must not
+	# abort a pacman transaction, and the upsert converges on the next run.
+	if ! /usr/bin/grappa seed-themes; then
+		echo "grappa: built-in theme seeding FAILED (see error above)." >&2
+		echo "        The install is complete and the schema is applied;" >&2
+		echo "        the theme gallery may be empty or stale." >&2
+		echo "        Retry with: sudo grappa seed-themes" >&2
+	fi
 }
 
 post_install() {
