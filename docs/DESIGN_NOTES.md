@@ -37437,3 +37437,101 @@ keybindings listener. The claim is the wiring and the ordering, not the pixels.
 The server-info arm has no unique killer among the four mutants — nothing in
 this change can make a card with no dismiss verb enrol — and is carried as a
 regression guard against a later over-enrolment, not as coverage.
+
+---
+
+## 2026-08-10 — #1168: the bridge image ships; the compose half is a guard collision, not an oversight
+
+Measured on the tree rather than carried in from the issue: `release.yml` held
+exactly ONE `docker/build-push-action` step and exactly ONE
+`name="ghcr.io/${owner}/…"` assignment, and `Dockerfile.shottino`'s only
+consumer in any tracked file was `compose.yaml:148`, as a local `build:` behind
+the `ircd` profile. deb, Arch and rpm all compile the client and assert its
+`--help` runs; the container was the one distribution channel where it was
+missing, so every operator who switched the bridge on compiled C against
+ncursesw/openssl themselves.
+
+**A second repository, not a second tag on the first.** A manifest list holds
+one image per PLATFORM, so `grappa:<tag>` for arm64 is already the bouncer's.
+`grappa-shottino` is the only shape that does not collide. This does not
+reverse "one package, not a `grappa-shottino` split": that ruling is about
+DISTRO PACKAGES, where the binary is 180 KB and its runtime libs are already
+`depends` of the bundled ERTS. For images the tree had already decided the
+other way and written down why — `Dockerfile.shottino` exists precisely because
+the bridge's BUILD deps (`ncurses-dev`, `openssl-dev`, `pkgconf`) are not the
+bouncer's, and folding them in would grow an image every operator pulls for a
+feature most never switch on.
+
+**The bridge builds SECOND, and the ordering is the argument.** Steps run in
+sequence, so the bouncer image is already pushed when the bridge starts: a
+shottino compile error leaves the release image published and reddens the job
+on its own. Reversed, one bad C commit would withhold the artifact people came
+for — the same call already made for the jail deploy, where a CLIENT compile
+must never fail a SERVER deploy.
+
+**One `:latest` gate, applied twice.** Both images are cut from the same tag,
+so the backport rule that keeps `:latest` off an older release has to reach
+both. The highest-semver comparison is computed once and fed to a shared
+emitter rather than hand-copied; a second comparison is exactly how two mutable
+pointers end up on different releases. The gha cache scopes became explicit and
+distinct for the mirror-image reason: two builds in one job share one cache
+backend, and unscoped they sit in the same bucket and evict each other every
+release — slow, never wrong, therefore never noticed.
+
+That scoping has one consumer outside the job, and only the rebase onto
+#1162 surfaced it: the new `smoke` job re-exports the release image from the
+layers the `docker` job wrote moments before, via an UNSCOPED `cache-from`.
+Naming a scope for the bridge's sake moves that write out of the default
+bucket, so the read finds nothing and rebuilds the whole image instead — the
+same failure signature as the collision it was fixing: slow, correct, silent.
+Its `cache-from` is scoped to match, and a guard now derives both ends from
+different regions of the workflow and compares them, because the next person
+to add a third build has no way to know the coupling exists.
+
+**Multi-arch, with the number.** The issue flagged the cross-build cost as
+unmeasured, since the bridge compiles C against ncursesw/openssl. Measured
+locally with `--no-cache`: **9s native, 22s emulated**. Shipping amd64-only
+would leave arm64 operators compiling — the exact problem this closes, closed
+for half the audience — and at tens of seconds there is nothing to trade. Two
+honest limits on that number: the host is arm64, so the EMULATED leg measured
+here is amd64-on-arm64 while CI's is arm64-on-amd64 under `tonistiigi/binfmt`;
+and Docker Desktop may have served that leg through Rosetta, which would make
+22s an understatement of QEMU. Neither moves the decision — the bridge is ~12 C
+files next to a full ERTS + SPA build already in this job — but the number is a
+bound, not a CI measurement.
+
+**The compose half was deliberately NOT done.** The issue asks to point
+`compose.yaml`'s `ircd` profile at the published image. #1160 pins the
+opposite, and not by accident: `release_compose_test.bats` asserts "compose.yaml
+stays the DEV stack — it never names the published image", by substring, which
+`grappa-shottino` also trips. Making the edit and running the suite reddens
+`not ok 10` — read, not deduced.
+
+Widening the grep was never mine to weigh: #1161 had already hit this same
+guard hours earlier, with a mere MENTION of the registry path in a comment,
+and settled it — "rewording is the fix, not widening the guard; that grep is
+the whole mechanism by which the two files stay separate, and it should keep
+failing on any occurrence it cannot tell apart." A guard that just refused a
+prose mention does not get relaxed for a live `image:` key.
+
+That ruling is also why the answer is not a cleverer spelling. Reframing the
+audience dissolves the conflict instead of trading it. `compose.yaml` is the from-source stack: it
+already has the checkout and the compile is seconds, so its `build:` is not the
+burden. The operators who genuinely cannot build the bridge are on the release
+paths — `compose.release.yaml`, `infra/docker/get.sh`, plain `docker run` —
+which have no checkout at all, and which offer no bridge in any form today.
+That is who the published image serves, and documenting the `docker run`
+invocation serves them without touching either compose file. Wiring a bridge
+SERVICE into the release path is the real remaining question, and it is not
+free either: `compose.release.yaml` is itself guarded to one service, no
+profiles, no `build:`, and images matching `ghcr.io/vjt/grappa:<tag>`. Both
+consumer-side doors need a #1160 ruling first, so neither was forced here.
+
+**Not proven, and not fixable from a branch.** The `docker` job runs only on a
+`v*` tag push or a `docker_validation` dispatch, neither of which a contributor
+can trigger — so the publish itself is unexercised. What was actually run: the
+image built for both arches, `shottino --help` exited 0 inside the built
+container, `actionlint` was clean, and ten mutants in the workflow each killed
+exactly one bats case. The tag logic, the label set and the push gate are held
+by derivation-and-compare against the bouncer's, never by a re-typed copy — so
+they follow the bouncer when it moves. Nothing here proves a byte reached ghcr.

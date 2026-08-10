@@ -4062,6 +4062,39 @@ ABI lockstep gate, unlike `Dockerfile.release`: both its stages sit on
 the SAME alpine tag, so there is one musl and one openssl by
 construction, with nothing to prove.
 
+**Pulling the bridge instead of building it (#1168).** Every `vX.Y.Z`
+release now publishes the bridge image too, multi-arch (`linux/amd64` +
+`linux/arm64`), next to the bouncer's:
+
+```
+ghcr.io/vjt/grappa-shottino:<tag>     # e.g. :v0.13.0, or :latest
+```
+
+Same tag scheme as `ghcr.io/vjt/grappa`, same `:latest`-only-on-the-highest
+rule, and both are cut from the same tag by the same release job — a bridge
+tag always has a bouncer tag of the same name. **This is for the operators
+who cannot build it**: the release-image paths (`compose.release.yaml`,
+`infra/docker/get.sh`, plain `docker run`) have no checkout, so
+`Dockerfile.shottino` is out of reach for them entirely. `compose.yaml`
+still BUILDS the bridge, deliberately — it is the from-source stack, it
+already has the tree, and the compile is seconds.
+
+The image ships **no CMD** (§ above), so the whole command is yours:
+
+```sh
+docker run -d --name grappa-shottino \
+    -p 127.0.0.1:6667:6667 \
+    -v /srv/shottino:/state \
+    -e SHOTTINO_PASSWORD=… \
+    ghcr.io/vjt/grappa-shottino:latest \
+    shottino --ircd=0.0.0.0:6667 --foreground https://grappa.example.net USER
+```
+
+Everything the compose service is careful about applies here and is now
+yours to get right: the published port stays on loopback unless you also
+set `SHOTTINO_IRCD_PASS` (off-loopback without it the bridge refuses to
+start), and `/state` is where the plaintext session transcript lands.
+
 **`--foreground` is required**, because compose supervises what it
 started and reads the default fork-after-bind as a crash. Inside the
 container it listens on `0.0.0.0`, which is what makes the published port

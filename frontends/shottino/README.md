@@ -173,6 +173,13 @@ sets `--foreground`, takes the two passwords from the environment, and puts
 the log under `runtime/` instead of wherever `$HOME` happens to point. See
 "The `shottino --ircd` bridge as a compose service" in `docs/OPERATIONS.md`.
 
+Without a checkout to build from, pull the bridge instead: every release
+publishes `ghcr.io/vjt/grappa-shottino` (`:<tag>` + `:latest`, `linux/amd64`
++ `linux/arm64`) alongside the bouncer image. The image carries no CMD, so
+you supply the whole command — the invocation, and what the compose service
+handles for you that a bare `docker run` will not, are in
+"Pulling the bridge instead of building it" in `docs/OPERATIONS.md`.
+
 **One connection is one network.** An IRC client has one nick, one MOTD and one
 channel namespace per connection, while grappa has several networks at once and
 `#ops` on two of them is two different rooms. So the client names the network it
