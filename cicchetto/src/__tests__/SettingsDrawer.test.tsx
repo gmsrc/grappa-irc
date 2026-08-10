@@ -246,6 +246,22 @@ vi.mock("../lib/uploadOrchestrator", () => ({
 // signal via openShareModal(); mock it so the click is observable here
 // without mounting the modal (its own behaviour lives in
 // ShareSessionModal.test.tsx).
+// #348 — the auto-away knob reads and writes through `lib/autoAway`.
+// The store's own behaviour (load / save / wire mirror) is exercised in
+// its module test; here the public surface is mocked so these cases stay
+// about the CONTROL: what it offers, what it sends, and what it shows
+// when the server refuses.
+const autoAwayHolder = vi.hoisted(() => ({ current: null as number | null }));
+vi.mock("../lib/autoAway", () => ({
+  loadAutoAwayDebounce: vi.fn(async () => {
+    /* no-op; the drawer test asserts on the call only */
+  }),
+  saveAutoAwayDebounce: vi.fn(async (_t: string, seconds: number | null) => {
+    autoAwayHolder.current = seconds;
+  }),
+  autoAwayDebounceValue: () => autoAwayHolder.current,
+}));
+
 const shareModalHolder = { opened: 0 };
 // #462 — spread the REAL module so `SHARE_SESSION_LABEL` comes from the one
 // place that declares it: a hand-written copy in the factory would be a
@@ -290,6 +306,7 @@ beforeEach(() => {
   // state where me() returns null. Admin entry MUST be hidden.
   meHolder.current = null;
   uploadTtlHolder.current = null;
+  autoAwayHolder.current = null;
   subjectHolder.current = null;
   selectedChannelHolder.current = null;
   windowCandidatesHolder.current = [];
@@ -1765,5 +1782,148 @@ describe("SettingsDrawer (#476/#478 — per-network identity, both subjects)", (
     const stub = screen.getByTestId("delete-account-modal-stub");
     expect(stub).toHaveTextContent("nick-b");
     expect(stub).not.toHaveTextContent("nick-a");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #348 — auto-away debounce control (General)
+// ---------------------------------------------------------------------------
+//
+// One control, three states, per vjt's ruling: a preset ladder, an
+// explicit "never", and a custom entry for a value no ladder can guess.
+// The interesting cases are the seams between them — picking "custom"
+// must not write anything on its own, and a stored value that matches no
+// preset must still be visible rather than silently rendering as the
+// nearest option.
+
+describe("SettingsDrawer — auto-away debounce (#348)", () => {
+  it("offers the presets, an off entry and a custom entry", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const select = screen.getByTestId("auto-away-select") as HTMLSelectElement;
+    const opts = Array.from(select.querySelectorAll("option")).map((o) => o.value);
+
+    expect(opts).toContain(""); // use site default
+    expect(opts).toContain("off");
+    expect(opts).toContain("custom");
+    expect(opts).toContain("600");
+  });
+
+  // cic does NOT know the server's default — it is a server constant, and
+  // a copy here would print a stale number the day it changes.
+  it("names no number on the site-default option", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const select = screen.getByTestId("auto-away-select") as HTMLSelectElement;
+    const dflt = Array.from(select.querySelectorAll("option")).find((o) => o.value === "");
+
+    expect(dflt?.textContent).toMatch(/default/i);
+    expect(dflt?.textContent).not.toMatch(/\d/);
+  });
+
+  it("loads the stored preference on mount", async () => {
+    const store = await import("../lib/autoAway");
+    wrap(true);
+    await waitFor(() => {
+      expect(store.loadAutoAwayDebounce).toHaveBeenCalledWith("test-bearer");
+    });
+  });
+
+  it("reflects a stored preset in the select", () => {
+    autoAwayHolder.current = 300;
+    wrap(true);
+    openSub("general-settings-entry");
+    expect((screen.getByTestId("auto-away-select") as HTMLSelectElement).value).toBe("300");
+  });
+
+  it("shows OFF as its own entry, not as the default one", () => {
+    autoAwayHolder.current = 0;
+    wrap(true);
+    openSub("general-settings-entry");
+    expect((screen.getByTestId("auto-away-select") as HTMLSelectElement).value).toBe("off");
+  });
+
+  it("picking a preset saves those seconds", async () => {
+    const store = await import("../lib/autoAway");
+    wrap(true);
+    openSub("general-settings-entry");
+    fireEvent.change(screen.getByTestId("auto-away-select"), { target: { value: "1800" } });
+    await waitFor(() => {
+      expect(store.saveAutoAwayDebounce).toHaveBeenCalledWith("test-bearer", 1800);
+    });
+  });
+
+  it("picking never saves 0, the off sentinel", async () => {
+    const store = await import("../lib/autoAway");
+    wrap(true);
+    openSub("general-settings-entry");
+    fireEvent.change(screen.getByTestId("auto-away-select"), { target: { value: "off" } });
+    await waitFor(() => {
+      expect(store.saveAutoAwayDebounce).toHaveBeenCalledWith("test-bearer", 0);
+    });
+  });
+
+  it("picking the site default clears the preference", async () => {
+    const store = await import("../lib/autoAway");
+    autoAwayHolder.current = 300;
+    wrap(true);
+    openSub("general-settings-entry");
+    fireEvent.change(screen.getByTestId("auto-away-select"), { target: { value: "" } });
+    await waitFor(() => {
+      expect(store.saveAutoAwayDebounce).toHaveBeenCalledWith("test-bearer", null);
+    });
+  });
+
+  // "custom" is a MODE, not a value: it reveals the input and waits. A
+  // write here would persist whatever the input happened to be seeded
+  // with, which is not something the user asked for.
+  it("picking custom reveals the input and writes nothing yet", async () => {
+    const store = await import("../lib/autoAway");
+    wrap(true);
+    openSub("general-settings-entry");
+    fireEvent.change(screen.getByTestId("auto-away-select"), { target: { value: "custom" } });
+
+    expect(screen.getByTestId("auto-away-custom-input")).toBeInTheDocument();
+    expect(store.saveAutoAwayDebounce).not.toHaveBeenCalled();
+  });
+
+  it("committing a custom value saves that number", async () => {
+    const store = await import("../lib/autoAway");
+    wrap(true);
+    openSub("general-settings-entry");
+    fireEvent.change(screen.getByTestId("auto-away-select"), { target: { value: "custom" } });
+
+    const input = screen.getByTestId("auto-away-custom-input") as HTMLInputElement;
+    fireEvent.input(input, { target: { value: "45" } });
+    fireEvent.click(screen.getByTestId("auto-away-custom-save"));
+
+    await waitFor(() => {
+      expect(store.saveAutoAwayDebounce).toHaveBeenCalledWith("test-bearer", 45);
+    });
+  });
+
+  // A value stored from another client (or a future, wider ladder) has to
+  // remain visible and editable — collapsing it onto the nearest preset
+  // would misreport what the bouncer is actually waiting.
+  it("shows a stored non-preset value in the custom input", () => {
+    autoAwayHolder.current = 47;
+    wrap(true);
+    openSub("general-settings-entry");
+
+    expect((screen.getByTestId("auto-away-select") as HTMLSelectElement).value).toBe("custom");
+    expect((screen.getByTestId("auto-away-custom-input") as HTMLInputElement).value).toBe("47");
+  });
+
+  it("surfaces the server's refusal instead of pretending it saved", async () => {
+    const store = await import("../lib/autoAway");
+    vi.mocked(store.saveAutoAwayDebounce).mockRejectedValueOnce(new Error("out_of_range"));
+
+    wrap(true);
+    openSub("general-settings-entry");
+    fireEvent.change(screen.getByTestId("auto-away-select"), { target: { value: "1800" } });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("auto-away-error")).toHaveTextContent("out_of_range");
+    });
   });
 });
