@@ -63,7 +63,8 @@ makepkg -sf
 `regen.sh` rewrites `PKGBUILD`/`.SRCINFO` in place; do **not** commit the
 result — the committed recipe stays the `@GRAPPA_VERSION@` sentinel template.
 
-Install what you built (runs the scriptlet: user, secrets, migrate, enable):
+Install what you built (runs the scriptlet: user, secrets, migrate, theme
+seed, enable):
 
 ```sh
 sudo pacman -U grappa-*-x86_64.pkg.tar.zst

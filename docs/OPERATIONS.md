@@ -1043,6 +1043,16 @@ downtime):
   WARNS and continues — the gallery is cosmetic, the upsert converges,
   and the next deploy heals it; the warning names the gallery, carries
   the retry command, and is repeated after the ✓ banner.
+  **Since #1167 the same seed also runs on the doors that have no deploy
+  script at all** — the `.deb`/`.rpm` postinstall, the Arch `_bootstrap`
+  (both through the `grappa seed-themes` verb) and `release-entrypoint.sh`
+  for a bare `docker run` — each right after its own migrate, and each
+  keeping the non-fatal posture above. In the container it rides
+  `GRAPPA_AUTO_MIGRATE` rather than taking a knob of its own: an operator
+  who sets that to 0 did so to keep boot from writing to the database, and
+  seeding is a write. Guarded by
+  `test/infra/packaging_seed_themes_test.bats` and the seed arms of
+  `test/infra/release_entrypoint_migrate_test.bats`.
   Deploy orchestrators
   (`scripts/deploy.sh`, `infra/freebsd/deploy.sh`),
   operator-on-demand verbs (`infra/freebsd/jail_*.sh`) and
@@ -3814,6 +3824,16 @@ BOTH `.deb`/`.rpm` postinstall and the Arch `_bootstrap`, because only
 PENDING migrations apply — and it FAILS LOUD in all three, so a broken
 migrate surfaces as a failed package transaction instead of a silently
 half-migrated install.
+
+**`grappa seed-themes` is its twin over `Grappa.Release.seed_themes()`
+(#1167)**, and it is not sugar alone: the two install scriptlets INVOKE
+this verb, so it is the packaged host's only door to the built-in gallery
+and the command an operator re-runs to heal a failed seed. It sits right
+after the migrate in both, schema-then-data, and unlike the migrate it is
+NON-FATAL — see the seed posture under the hot/cold classification above
+(#440). Before #1167 neither scriptlet seeded at all, so a `.deb`/`.rpm`
+or AUR install landed with an empty theme section while the palettes sat
+compiled inside the release it had just installed.
 
 ### The maintainer scripts — dpkg's `$1` is not rpm's
 

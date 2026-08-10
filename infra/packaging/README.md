@@ -144,7 +144,10 @@ curl http://127.0.0.1:4000/healthz
 ```
 
 `postinstall` creates the state dirs, copies the env template, generates
-the secrets (openssl), runs migrations, and **enables but does not start**
+the secrets (openssl), runs migrations, seeds the built-in theme gallery
+(#1167 — the palettes ship compiled into the release, but the gallery
+reads the DB, so the package has to unpack them itself), and **enables
+but does not start**
 the service (it cannot start until you set a real `PHX_HOST`).
 
 ## First user
@@ -168,6 +171,7 @@ Grappa.Accounts.create_user(%{name: "you", password: "change-me"})
 
 ```sh
 sudo grappa migrate        # apply pending migrations (no mix needed)
+sudo grappa seed-themes    # (re)materialise the built-in theme gallery
 sudo grappa gen-secrets    # (re)generate missing secrets in the env file
 sudo grappa version        # release version
 sudo grappa remote         # IEx into the running node

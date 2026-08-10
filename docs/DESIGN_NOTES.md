@@ -37193,3 +37193,95 @@ single-arch image, not a published artifact. And no path check can catch the
 failure one step past this one: a root that exists and holds a bundle that is
 simply the wrong one — stale, or from another deploy — still boots silently
 and serves it.
+
+---
+
+## 2026-08-10 — #1167: the package has to finish installing itself
+
+**The gap was never the assets.** The curated built-in palettes are compiled
+into the release (`Grappa.Themes.Builtins`) and their wallpapers are static
+WebP files inside the cic bundle — nothing is fetched at runtime, nothing is a
+DB blob. But the gallery READS the database, so until something turns the
+compiled data into rows the theme section is empty. `.deb`/`.rpm`, the AUR
+package and a bare `docker run` all migrated and stopped. This is #435
+recurring through the doors #435 did not cover: it taught
+`infra/linux/install.sh` to seed, and every path with a deploy script behind
+it already seeded via #440's `substrate_seed` hook, but the three doors that
+have no deploy script at all were never wired.
+
+**The issue's diagnosis held; its line numbers did not, and checking which is
+which is the point.** Every claim re-measured true on `origin/main`
+(`1aa0ae94`): the four files, the two seeding entry points, and
+`Themes.seed_builtins/0`'s idempotence — an `insert!` with
+`on_conflict: {:replace, [:payload, :published, :updated_at]}` against the
+partial unique index on `(user_id, name) WHERE user_id IS NOT NULL`, so
+re-running it converges rather than duplicating. The CITED LINES are stale:
+the issue measured at `3383abf6`, where they were exact, and `install.sh` has
+since gone from 351 lines to 284, moving its seed from `:299` to `:232`. A
+premise verified at a commit is not a premise verified today, and the cheap
+half of that check is re-running it.
+
+**One knob, not two.** The container seed rides `GRAPPA_AUTO_MIGRATE` instead
+of gaining a symmetric `GRAPPA_AUTO_SEED`. An operator who sets that flag to 0
+did so to keep boot from writing to the database, and seeding IS a write, so
+the coherent reading is one switch over "boot may touch the DB" rather than
+two over the same intent — and a second knob is new operator surface nobody
+asked for.
+
+**Seeding is NON-FATAL where migrating is fatal, and that reverses what the
+issue suggested.** The issue proposed failing loud "in the same style" as the
+packaged migrate. `docs/OPERATIONS.md` already records the opposite posture
+for this exact operation, held on every substrate since #440: a seed failure
+WARNS and continues, because the gallery is cosmetic and the upsert converges
+on the next run, while the warning carries the retry command. Adopting the
+issue's wording would have let a missing colour scheme abort a pacman
+transaction or refuse a container boot. The split is not an inconsistency —
+it tracks what the failure COSTS: a half-applied schema is a correctness
+defect, an empty gallery is a cosmetic one. Loud-and-continue is not a silent
+swallow; the operator gets the failure and `sudo grappa seed-themes`.
+
+**`seed-themes` is a verb, not sugar.** `/usr/bin/grappa` gains it as the twin
+of `migrate`, and both scriptlets INVOKE it — so it is the packaged host's
+only door to the gallery, not a convenience alias over an eval string.
+
+**Three scriptlets that had no automated gate of any kind now execute under
+bats.** `test/infra/packaging_seed_themes_test.bats` copies each into a
+sandbox with its host-absolute paths (`/usr/bin/grappa`, `/etc/grappa`,
+`/var/lib/grappa`) re-rooted, proves the rewrite was TOTAL before running
+anything, and drives them against a recorder stub of the packaged CLI. Two
+properties made the harness trustworthy rather than decorative. The
+re-root-totality check exists because a leaked absolute path would abort the
+run as an unprivileged user and leave every assertion below failing for the
+wrong reason — or, as root, touch the real host. And the migrate call doubles
+as a SANITY TOKEN in each case: without asserting that the scriptlet reached
+the recorder at all, "no seed was recorded" and "the script never ran" read
+identically, and the second one passes green for free once the assertion is
+inverted.
+
+**Read red first: 9 of 27 failed before the fix.** The other 18 included seven
+arms that were VACUOUS at that moment — every "never seeds" assertion is
+trivially satisfied by a product that cannot seed. Ten single-point mutants,
+one at a time, say which of them became real: all ten were killed, none
+survived. Removing the seed from each door kills that door's arms (postinstall
+1/2/4, Arch 6/7/8, container 22/24); dropping the wrapper verb, or pointing it
+at the migrator instead, kills 10; hoisting the container seed out of the
+`GRAPPA_AUTO_MIGRATE` guard kills 23 and 26; making either seed fatal kills 4
+and 24 respectively; seeding before migrating kills 1 and 5; gating the
+postinstall seed on the dpkg spelling kills 2 — the rpm arm exists because
+`case $1 in configure)` silently no-ops the entire rpm path, the trap
+`docs/OPERATIONS.md` already names.
+
+**Four arms have no killer, and are labelled as regression guards rather than
+counted as coverage**: "a dpkg rollback neither migrates nor seeds", "a failed
+Arch migrate aborts before the seed", "a failed migration never reaches the
+seed" (container), and "grappa migrate still reaches
+`Grappa.Release.migrate()`". No single-point mutation of this change can break
+them; they exist so a LATER edit cannot.
+
+**Not measured.** No real `.deb`/`.rpm` was installed, no pacman transaction
+and no `docker run` of the release image was executed — the container lane was
+held elsewhere. What is proven is the scriptlets' decision logic against a
+recorder, plus `Grappa.Release.seed_themes/0` being the same entry point four
+other substrates already call in production. The end-to-end "install the
+package, open the gallery, count the themes" check is the packaging suites'
+job (`infra/packaging/README.md` § Caveat) and remains a manual step.
