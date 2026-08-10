@@ -346,6 +346,48 @@ defmodule Grappa.IRC.LineSplitTest do
     end
   end
 
+  # #1108 — the CROSS-STACK pin, and the reason it is here rather than only
+  # in cic. The compose box must say how many messages a draft becomes BEFORE
+  # the POST, so there is no round trip to ask this module with: cic mirrors
+  # the chunker in `cicchetto/src/lib/frameBudget.ts`. A mirror measured once
+  # is a snapshot; this table is the gate. Every case below is duplicated
+  # verbatim in `frameBudget.test.ts`, keyed on the same (budget, body), and
+  # the two suites hold each other honest — change either splitter and its
+  # own side goes red.
+  #
+  # `linelen` is derived from the budget through the production function, so
+  # the table states budgets (what cic is handed) and not wire lengths.
+  #
+  # Not covered by count alone, and deliberately not faked: the NO-BREAK
+  # SPACE policy. Treating U+00A0 as a boundary changes WHERE the cut lands
+  # but not how many fragments come out, so a count table cannot witness it —
+  # the #1109 arms above are what pin that.
+  describe "#1108: the fragment counts cic's preview mirrors" do
+    for {budget, body, expected} <- [
+          {10, String.duplicate("a", 10), 1},
+          {10, String.duplicate("a", 11), 2},
+          {10, "aaaaa bbbbbbbb cc", 3},
+          {10, "aaaaa\tbbbbbbbb cc", 3},
+          {10, String.duplicate("a", 20), 2},
+          {2, "🍕🍕", 2},
+          {10, String.duplicate("é", 5), 1},
+          {10, String.duplicate("é", 6), 2},
+          {20, "\x01ACTION " <> String.duplicate("a", 15) <> "\x01", 2},
+          {20, String.duplicate("a", 15), 1},
+          {0, "hello", 1},
+          {5, "\x01ACTION hello\x01", 1}
+        ] do
+      test "budget #{budget}: #{inspect(body)} is #{expected} fragment(s)" do
+        budget = unquote(budget)
+        body = unquote(body)
+        linelen = budget + LineSplit.relay_frame_overhead("")
+
+        assert LineSplit.frame_budget("", linelen) == budget
+        assert length(LineSplit.split_privmsg_body(body, "", linelen)) == unquote(expected)
+      end
+    end
+  end
+
   describe "property: relay-safe, lossless, codepoint-whole splitting" do
     property "tiles the body, every fragment relay-safe + valid UTF-8" do
       check all(

@@ -13,8 +13,13 @@ import { frameBudgetForTarget, frameCount, framePreview, utf8ByteLength } from "
 // The COUNT is a mirror of `Grappa.IRC.LineSplit`'s chunker, and the cases
 // below are written against the WORD-BOUNDARY semantics (#1109): the cut
 // prefers the last ASCII space/tab at or before the budget, and the boundary
-// grapheme is CONSUMED. `wordBoundaryCase` is the one that a naive byte cut
+// grapheme is CONSUMED. `wordBoundaryBody` is the one that a naive byte cut
 // gets wrong — it is the reason this file exists rather than a ceil() call.
+//
+// Every (budget, body) below appears VERBATIM in the server's own table,
+// `test/grappa/irc/line_split_test.exs` → "#1108: the fragment counts cic's
+// preview mirrors". That pairing is what keeps the mirror a mirror: change
+// either splitter and its own suite goes red. Add a case here, add it there.
 
 // budget 10, "aaaaa bbbbbbbb cc" (17 bytes):
 //   byte cut  → "aaaaa bbbb" | "bbbb cc"                        = 2
