@@ -107,6 +107,7 @@ import type {
   SessionWireWindowInviteDeclinedPayload,
   SessionWireWindowInvitedPayload,
   SessionWireWindowPendingPayload,
+  UserSettingsWireAutoAwayDebounceChangedPayload,
   WindowCountsWireEvent,
 } from "./wireTypes";
 
@@ -241,6 +242,12 @@ export type _Assert_ArchiveChanged = Assert<
 >;
 export type _Assert_ArchivePurged = Assert<
   Equal<Extract<WireUserEvent, { kind: "archive_purged" }>, ScrollbackWireArchivePurgedPayload>
+>;
+export type _Assert_AutoAwayDebounceChanged = Assert<
+  Equal<
+    Extract<WireUserEvent, { kind: "auto_away_debounce_changed" }>,
+    UserSettingsWireAutoAwayDebounceChangedPayload
+  >
 >;
 export type _Assert_ServerSettingsChanged = Assert<
   Equal<

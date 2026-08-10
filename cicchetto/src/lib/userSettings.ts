@@ -91,6 +91,56 @@ export async function putNotificationPrefs(
 }
 
 // ---------------------------------------------------------------------------
+// auto_away_debounce_seconds — #348.
+//
+// How long the bouncer waits, after the subject's last device goes
+// hidden, before telling the network they are away. ONE scalar carries
+// three states, because the delay and the off switch are one control:
+//
+//   null  no preference — the server's own default applies. cic does NOT
+//         know that number and must not print one: it is a server
+//         constant, and a copy here would drift the day it changes.
+//   0     off. The bouncer arms no timer at all.
+//   N     seconds.
+//
+// The accepted range lives on the server, deliberately un-mirrored here
+// for the same reason: an out-of-range value comes back as a 422 whose
+// message names the bounds, which is one source of truth instead of two.
+// ---------------------------------------------------------------------------
+
+export type AutoAwayDebounceResponse = {
+  auto_away_debounce_seconds: number | null;
+};
+
+export async function getAutoAwayDebounceSeconds(token: string): Promise<number | null> {
+  const res = await fetch("/me/settings/auto-away-debounce-seconds", {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText || "auto_away_debounce_get_failed");
+  }
+  const body = (await res.json()) as AutoAwayDebounceResponse;
+  return body.auto_away_debounce_seconds;
+}
+
+export async function putAutoAwayDebounceSeconds(
+  token: string,
+  seconds: number | null,
+): Promise<number | null> {
+  const res = await fetch("/me/settings/auto-away-debounce-seconds", {
+    method: "PUT",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ auto_away_debounce_seconds: seconds }),
+  });
+  if (!res.ok) throw await readError(res);
+  const body = (await res.json()) as AutoAwayDebounceResponse;
+  return body.auto_away_debounce_seconds;
+}
+
+// ---------------------------------------------------------------------------
 // upload_ttl_seconds — UX-4 bucket M (2026-05-19).
 //
 // Server stores the operator's upload-TTL preference as an integer of

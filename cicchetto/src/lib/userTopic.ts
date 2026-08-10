@@ -14,6 +14,7 @@ import {
 } from "./api";
 import { loadArchive } from "./archive";
 import { clearLocalAuth, socketUserName, token } from "./auth";
+import { applyAutoAwayDebounceFromWire } from "./autoAway";
 import { setAwayState } from "./awayStatus";
 import { setBanlistBundle } from "./banlistCard";
 import { setServerBundleHash, setServerBundleVersion } from "./bundleHash";
@@ -898,6 +899,17 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // call-site switch below (different store keys per topic boundary
       // → "reuses the verb, not the noun").
       return narrowWindowStateEvent(r);
+    case "auto_away_debounce_changed":
+      // #348 — the auto-away preference moved. `null` (no preference)
+      // is a MEANINGFUL value here, not a missing field, so the
+      // narrower admits it explicitly and rejects anything that is
+      // neither null nor a number.
+      if (r.auto_away_debounce_seconds !== null && typeof r.auto_away_debounce_seconds !== "number")
+        return null;
+      return {
+        kind: "auto_away_debounce_changed",
+        auto_away_debounce_seconds: r.auto_away_debounce_seconds,
+      };
     case "archive_changed":
       // UX-1 (2026-05-17) — server broadcasts after a successful PART
       // (channel moves into archive list). Single-field envelope: cic
@@ -1442,6 +1454,14 @@ moduleRoot(() => {
           // F1 — see `joined` arm above. Same shape + setter as
           // `subscribe.ts` per-channel kicked arm.
           setKicked(channelKey(payload.network, payload.channel), payload.by, payload.reason);
+          return;
+
+        case "auto_away_debounce_changed":
+          // #348 — mirror the server's own announcement so the settings
+          // control converges across the subject's devices. cic never
+          // originates this state; it only reflects what the server
+          // stored, including for the write this device just made.
+          applyAutoAwayDebounceFromWire(payload.auto_away_debounce_seconds);
           return;
 
         case "archive_changed":

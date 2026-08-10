@@ -1188,6 +1188,11 @@ export type WireUserEvent =
       // (malformed / absent → []), threaded into applyServerSettings.
       http_host_aliases: string[];
     }
+  // #348 — the subject's auto-away debounce changed, on this device or
+  // another one. ONE scalar, three states: null = no preference (the
+  // server's own default applies), 0 = off, N = seconds. Mirrors
+  // `Grappa.UserSettings.Wire.auto_away_debounce_changed/1`.
+  | { kind: "auto_away_debounce_changed"; auto_away_debounce_seconds: number | null }
   | { kind: "archive_changed"; network_slug: string }
   // UX-7-B (2026-05-22) — `archive_purged` push after a destructive
   // archive-entry delete (operator dropped scrollback for the target).

@@ -14,6 +14,7 @@ import InlineConfirmButton from "./InlineConfirmButton";
 import { windowCandidates } from "./lib/activeWindows";
 import { ApiError, displayNick, type Network, visitorNetworkNick } from "./lib/api";
 import { getSubject, token } from "./lib/auth";
+import { autoAwayDebounceValue, loadAutoAwayDebounce, saveAutoAwayDebounce } from "./lib/autoAway";
 import { getColoredNicklist } from "./lib/colorNicklist";
 import {
   windowMuteKey,
@@ -95,6 +96,19 @@ export type Props = {
   onClose: () => void;
 };
 
+// #348 — the auto-away ladder the control offers. Deliberately coarse:
+// these are the answers to "how long before my friends see me as away",
+// and anything between the rungs is what the custom entry is for. The
+// site-default entry carries NO number — cic does not know the server's
+// constant and a copy here would go stale the day it moves.
+const AUTO_AWAY_PRESETS = [
+  { seconds: 60, label: "1 minute" },
+  { seconds: 300, label: "5 minutes" },
+  { seconds: 600, label: "10 minutes" },
+  { seconds: 1800, label: "30 minutes" },
+  { seconds: 3600, label: "1 hour" },
+];
+
 const SettingsDrawer: Component<Props> = (props) => {
   const [size, setSize] = createSignal<FontSizeKey>(getFontSize());
   const [timeFmt, setTimeFmt] = createSignal<TimeFormatKey>(getTimeFormat());
@@ -117,6 +131,14 @@ const SettingsDrawer: Component<Props> = (props) => {
   // cache on drawer mount, saveUploadTtlSeconds round-trips on
   // change. `null` = "use the active host's defaultTtl".
   const [uploadTtlSavingError, setUploadTtlSavingError] = createSignal<string | null>(null);
+  // #348 — auto-away debounce. The server owns the behaviour AND the
+  // accepted range; these three only drive the control. `customMode`
+  // is a MODE the user can enter without having written anything yet,
+  // which is why it is a signal and not derived from the stored value
+  // alone.
+  const [autoAwaySavingError, setAutoAwaySavingError] = createSignal<string | null>(null);
+  const [autoAwayCustomMode, setAutoAwayCustomMode] = createSignal(false);
+  const [autoAwayCustomDraft, setAutoAwayCustomDraft] = createSignal("");
   // #228, #251 — source-bind (vhost) selection. Server owns the allow-set +
   // current selection (no admin pin — #251). `null` view = not-yet-loaded
   // (the widget stays hidden until the first GET lands).
@@ -420,6 +442,9 @@ const SettingsDrawer: Component<Props> = (props) => {
       // fieldset's `<select>` reflects the server value before the
       // first user interaction.
       void loadUploadTtlSeconds(t);
+      // #348 — same reason: the auto-away control must show what the
+      // server stored, not a client-side guess.
+      void loadAutoAwayDebounce(t);
       // #228, #251 — load the source-bind (vhost) view so the widget
       // reflects the server's allow-set + current selection.
       void loadVhostSettings(t);
@@ -628,6 +653,72 @@ const SettingsDrawer: Component<Props> = (props) => {
     } catch {
       /* swallowed — UI will refresh on next drawer open */
     }
+  };
+
+  // #348 — which entry the auto-away `<select>` is showing.
+  //
+  // A stored value that matches no preset renders as "custom" with the
+  // input filled, rather than collapsing onto the nearest rung: the
+  // number decides when the bouncer says you are away, so showing a
+  // different one would misreport the setting.
+  const autoAwaySelectValue = (): string => {
+    if (autoAwayCustomMode()) return "custom";
+    const seconds = autoAwayDebounceValue();
+    if (seconds === null) return "";
+    if (seconds === 0) return "off";
+    return AUTO_AWAY_PRESETS.some((p) => p.seconds === seconds) ? String(seconds) : "custom";
+  };
+
+  const autoAwayCustomValue = (): string => {
+    if (autoAwayCustomMode()) return autoAwayCustomDraft();
+    const seconds = autoAwayDebounceValue();
+    return seconds === null || seconds === 0 ? "" : String(seconds);
+  };
+
+  // #348 — persist a new auto-away preference. `null` clears it, `0`
+  // switches auto-away off; the accepted range for anything else is the
+  // server's to enforce, so a refusal is surfaced verbatim rather than
+  // pre-empted by a second copy of the bounds here.
+  const saveAutoAway = async (seconds: number | null) => {
+    const t = token();
+    if (t === null) return;
+    setAutoAwaySavingError(null);
+    try {
+      await saveAutoAwayDebounce(t, seconds);
+    } catch (err) {
+      setAutoAwaySavingError(err instanceof Error ? err.message : "save_failed");
+    }
+  };
+
+  // Selecting "custom" only opens the input — it is a mode, not a value.
+  // Writing here would persist whatever the input was seeded with.
+  const onAutoAwayChange = async (e: Event) => {
+    const value = (e.currentTarget as HTMLSelectElement).value;
+
+    if (value === "custom") {
+      setAutoAwayCustomDraft(autoAwayCustomValue());
+      setAutoAwayCustomMode(true);
+      return;
+    }
+
+    setAutoAwayCustomMode(false);
+
+    if (value === "") return await saveAutoAway(null);
+    if (value === "off") return await saveAutoAway(0);
+    return await saveAutoAway(Number(value));
+  };
+
+  const onAutoAwayCustomSave = async () => {
+    // An empty box is not a zero: `Number("")` is 0, which is the OFF
+    // sentinel, so committing a blank input would silently switch
+    // auto-away off instead of asking for a number.
+    const raw = autoAwayCustomDraft().trim();
+    const seconds = Number(raw);
+    if (raw === "" || !Number.isInteger(seconds)) {
+      setAutoAwaySavingError("enter a whole number of seconds");
+      return;
+    }
+    await saveAutoAway(seconds);
   };
 
   // UX-4 bucket M (2026-05-19) — upload-TTL `<select>` change handler.
@@ -1295,6 +1386,65 @@ const SettingsDrawer: Component<Props> = (props) => {
                 </Show>
               </fieldset>
             </Show>
+
+            {/* #348 — how long after your last device goes away the bouncer
+                tells the network you are away. The delay and the off switch
+                are ONE control (vjt's ruling): they answer one question, and
+                two widgets could contradict each other. Outside the
+                host-gated Show above — this has nothing to do with uploads —
+                and shown to visitors too, whose sessions auto-away like
+                everyone else's. */}
+            <fieldset class="auto-away-fieldset">
+              <legend>auto-away</legend>
+              <label>
+                mark me away after:
+                <select
+                  data-testid="auto-away-select"
+                  value={autoAwaySelectValue()}
+                  onChange={(e) => {
+                    void onAutoAwayChange(e);
+                  }}
+                >
+                  <option value="">use site default</option>
+                  <option value="off">never — stay online</option>
+                  <For each={AUTO_AWAY_PRESETS}>
+                    {(preset) => <option value={String(preset.seconds)}>{preset.label}</option>}
+                  </For>
+                  <option value="custom">custom…</option>
+                </select>
+              </label>
+              <Show when={autoAwaySelectValue() === "custom"}>
+                <label>
+                  seconds:
+                  <input
+                    type="number"
+                    inputmode="numeric"
+                    data-testid="auto-away-custom-input"
+                    value={autoAwayCustomValue()}
+                    onInput={(e) => setAutoAwayCustomDraft(e.currentTarget.value)}
+                  />
+                  <button
+                    type="button"
+                    data-testid="auto-away-custom-save"
+                    onClick={() => {
+                      void onAutoAwayCustomSave();
+                    }}
+                  >
+                    save
+                  </button>
+                </label>
+              </Show>
+              <p class="settings-section-blurb" data-testid="auto-away-hint">
+                When every device of yours is closed or in the background, the bouncer waits this
+                long and then tells the network you are away. It stays connected either way — this
+                only changes what other people see. Pick "never" to keep the away flag off entirely.
+              </p>
+              <Show when={autoAwaySavingError() !== null}>
+                <p class="auto-away-error" role="alert" data-testid="auto-away-error">
+                  {autoAwaySavingError()}
+                </p>
+              </Show>
+            </fieldset>
           </section>
         </Show>
 
