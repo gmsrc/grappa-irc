@@ -3934,7 +3934,18 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "301 RPL_AWAY folds away_message into bundle when whois_pending entry exists" do
-      state = whois_pending_state("alice")
+      # The 311 comes FIRST on the wire and is what opens the bundle — observed
+      # on the testnet leaf: `311 → 312 → 301 → 317 → 318`. Routing it here is
+      # not scaffolding, it is the reply order the fold is allowed to assume.
+      {:cont, state, []} =
+        EventRouter.route(
+          msg(
+            {:numeric, 311},
+            ["vjt", "alice", "alice_u", "alice.host", "*", "Alice Realname"],
+            {:server, "irc.test.org"}
+          ),
+          whois_pending_state("alice")
+        )
 
       m =
         msg(
@@ -3945,6 +3956,32 @@ defmodule Grappa.Session.EventRouterTest do
 
       {:cont, new_state, []} = EventRouter.route(m, state)
       assert new_state.whois_pending["alice"][:away_message] == "Gone fishing"
+    end
+
+    # #944 — a pending WHOIS is NOT enough to claim a 301. Bahamut answers a
+    # WHOIS with `311 → 312 → 301 → 317 → 318` and answers a PRIVMSG to an away
+    # peer with a BARE 301 (both observed on the testnet leaf), so the 311 is
+    # what marks the bundle as open; before it, a 301 can only be the standalone
+    # reply to our own message.
+    #
+    # The race this closes: cic's rail auto-WHOISes the peer the moment the DM
+    # card comes on screen — measured 6 ms after the operator's `/msg` — so any
+    # upstream round trip slower than that window lost the away reply into the
+    # bundle and the DM banner never mounted. Gating on the entry alone made
+    # `peer_away` a coin flip on RTT; p0b-peer-away / issue270-peer-away-overlap
+    # were the specs that kept paying for it.
+    test "301 arriving before the bundle's own 311 is standalone (#944)" do
+      state = whois_pending_state("alice")
+
+      m =
+        msg(
+          {:numeric, 301},
+          ["vjt", "alice", "Gone fishing"],
+          {:server, "irc.test.org"}
+        )
+
+      {:cont, new_state, [{:peer_away, "alice", "Gone fishing"}]} = EventRouter.route(m, state)
+      refute Map.has_key?(new_state.whois_pending["alice"], :away_message)
     end
 
     test "301 with no whois_pending entry emits :peer_away typed effect (P-0b standalone)" do

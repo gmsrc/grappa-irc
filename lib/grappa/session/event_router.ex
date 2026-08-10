@@ -1265,15 +1265,31 @@ defmodule Grappa.Session.EventRouter do
 
   # 301 RPL_AWAY: `:server 301 own_nick target :away message`. Dual-purpose:
   #
-  #   * WHOIS-bundle case (whois_pending entry exists for target) — fold
+  #   * WHOIS-bundle case (the target's bundle is OPEN — see below) — fold
   #     `away_message` into the bundle accumulator. Bundle emits at 318.
   #
-  #   * Standalone case (no whois_pending entry) — operator just /msg'd an
-  #     away peer and upstream replied with the away note. Emit a typed
+  #   * Standalone case — operator just /msg'd an away peer and upstream
+  #     replied with the away note. Emit a typed
   #     `{:peer_away, target, msg}` effect; `Server.apply_effects` broadcasts
   #     a `peer_away` wire event on the user-level topic, cic dm-listener
   #     renders an inline ephemeral row in the peer's DM window. cic owns
   #     localization (no human-readable string baked into the wire payload).
+  #
+  # #944 — which case applies is decided by the bundle's OWN 311, not by the
+  # mere existence of a pending entry. A pending WHOIS says we asked; the 311
+  # says the answer has started arriving, and only from then on can a 301
+  # belong to it. Measured on the testnet leaf: a WHOIS answers
+  # `311 → 312 → 301 → 317 → 318`, a PRIVMSG to an away peer answers with a
+  # BARE 301.
+  #
+  # Gating on the entry alone made the two indistinguishable whenever both
+  # were in flight, which is the normal case and not an exotic one: cic's rail
+  # auto-WHOISes the peer as soon as the DM card is on screen, 6 ms after the
+  # operator's own `/msg` (measured). Any upstream round trip slower than that
+  # window — i.e. any real network — lost the away reply into the bundle, and
+  # the banner the operator was owed never mounted. The e2e specs
+  # (p0b-peer-away, issue270-peer-away-overlap) only passed because the
+  # testnet's RTT is ~1 ms, and flaked whenever it wasn't.
   defp do_route(
          %Message{command: {:numeric, 301}, params: [_, target | rest]},
          state
@@ -1283,7 +1299,7 @@ defmodule Grappa.Session.EventRouter do
     pending = Map.get(state, :whois_pending, %{})
     msg = whois_trailing(rest)
 
-    case Map.has_key?(pending, nick_key) do
+    case whois_bundle_open?(pending, nick_key) do
       true ->
         {:cont, whois_fold(state, target, %{away_message: msg}), []}
 
@@ -3654,6 +3670,20 @@ defmodule Grappa.Session.EventRouter do
   # special-case appends to the existing `:channels` list rather than
   # overwriting (319 may chunk over multiple lines).
   @spec whois_fold(state(), String.t(), map()) :: state()
+  # #944 — has the pending bundle for `nick_key` started ARRIVING? Derived from
+  # the 311 fold rather than tracked separately: 311 RPL_WHOISUSER is the first
+  # numeric of every WHOIS reply and the only one that folds `:user`, so its
+  # presence in the accumulator IS the "bundle open" fact. A primed-but-unopened
+  # entry means we asked and upstream has not answered yet, which is exactly
+  # when a 301 must be read as the standalone reply to our own PRIVMSG.
+  @spec whois_bundle_open?(map(), String.t()) :: boolean()
+  defp whois_bundle_open?(pending, nick_key) do
+    case Map.fetch(pending, nick_key) do
+      {:ok, accum} -> Map.has_key?(accum, :user)
+      :error -> false
+    end
+  end
+
   defp whois_fold(state, target, fold) when is_binary(target) and is_map(fold) do
     pending = Map.get(state, :whois_pending, %{})
     nick_key = normalize_nick(target, casemapping(state))
