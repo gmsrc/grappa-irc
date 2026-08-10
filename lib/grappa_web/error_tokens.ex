@@ -105,6 +105,8 @@ defmodule GrappaWeb.ErrorTokens do
           | :image_reencode_failed
           | :not_connected
           | :forbidden_vhost
+          | :client_token_scope
+          | :client_token_cap_reached
           | :invalid_credentials
           | :invalid_two_factor
           | :two_factor_challenge_expired

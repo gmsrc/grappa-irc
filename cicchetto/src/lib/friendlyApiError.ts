@@ -456,6 +456,20 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       // token the server can emit and the switch is exhaustive by
       // construction. Copy stays operator-shaped, not reassuring.
       return "The server needs a full restart to apply a database change.";
+    case "client_token_scope":
+      // #1196 — 403 for a per-client token on a credential-management
+      // route. cic authenticates with a browser session, so this arm is
+      // unreachable from here in practice; it exists because the union is
+      // generated from every REST token the server can emit. Copy is
+      // written for whoever does see it: a client author reading a
+      // grappa error body, who needs "use the browser", not "log in
+      // again".
+      return "That can only be done from a browser session, not with a client token.";
+    case "client_token_cap_reached":
+      // #1196 — 422, the account is holding its maximum number of live
+      // client tokens. A bounded list, so the remedy is to make room
+      // rather than to wait.
+      return "You already have the maximum number of client tokens. Revoke one first.";
 
     default:
       // Cic M2 reviewer fix: exhaustiveness assertion. Adding a token

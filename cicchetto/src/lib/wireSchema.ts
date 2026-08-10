@@ -1477,6 +1477,8 @@ export const S_ErrorTokensRestErrorToken = {
     { l: "image_reencode_failed" },
     { l: "not_connected" },
     { l: "forbidden_vhost" },
+    { l: "client_token_scope" },
+    { l: "client_token_cap_reached" },
     { l: "invalid_credentials" },
     { l: "invalid_two_factor" },
     { l: "two_factor_challenge_expired" },
