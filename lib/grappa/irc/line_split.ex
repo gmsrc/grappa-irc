@@ -133,6 +133,33 @@ defmodule Grappa.IRC.LineSplit do
   end
 
   @doc """
+  The per-frame body budget for `target` on a `linelen`-byte wire: the bytes a
+  fragment may hold once the worst-case relayed framing is reserved. Can go
+  non-positive on an absurdly small `linelen` — `split_privmsg_body/3` treats
+  that as "no useful split".
+  """
+  @spec frame_budget(String.t(), pos_integer()) :: integer()
+  def frame_budget(target, linelen) when is_binary(target) and is_integer(linelen) do
+    linelen - relay_frame_overhead(target)
+  end
+
+  @doc """
+  The TARGET-INDEPENDENT part of `frame_budget/2`, published to clients (#1108).
+
+  `frame_budget(target, linelen) == frame_budget_base(linelen) - byte_size(target)`,
+  because `relay_frame_overhead/1` is affine in the target's byte length. So one
+  per-network scalar is enough for a client to size the budget of any target it
+  can name, without owning a second copy of the #246 worst-case ceilings — the
+  numbers whose whole reason for living here is that a client-side copy drifts
+  silently in the direction that LOSES bytes.
+
+  The client's half of the arithmetic is the length of a string it already
+  holds; the ceilings stay here.
+  """
+  @spec frame_budget_base(pos_integer()) :: integer()
+  def frame_budget_base(linelen) when is_integer(linelen), do: frame_budget("", linelen)
+
+  @doc """
   Splits `body` into fragments that fit within `linelen` bytes
   per wire frame, given the target prefix.
 
@@ -153,7 +180,7 @@ defmodule Grappa.IRC.LineSplit do
   @spec split_privmsg_body(String.t(), String.t(), pos_integer()) :: [String.t(), ...]
   def split_privmsg_body(body, target, linelen)
       when is_binary(body) and is_binary(target) and is_integer(linelen) and linelen > 0 do
-    budget = linelen - relay_frame_overhead(target)
+    budget = frame_budget(target, linelen)
 
     cond do
       budget <= 0 -> [body]

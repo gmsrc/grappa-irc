@@ -314,6 +314,38 @@ defmodule Grappa.IRC.LineSplitTest do
     end
   end
 
+  # #1108 — the budget cic needs in order to warn, BEFORE sending, that the
+  # draft no longer fits one frame. The client may not re-derive it: the #246
+  # worst-case ceilings are exactly the numbers that drift silently in the
+  # byte-losing direction. So the server publishes ONE per-network scalar and
+  # the client subtracts its own target's byte length — which is why these
+  # tests pin the linearity AND pin the number against the splitter's actual
+  # behaviour rather than against its internal arithmetic.
+  describe "#1108: the per-frame body budget as a published number" do
+    test "a body of exactly the budget is one fragment; one byte more is two" do
+      target = "#sniffo"
+      linelen = 512
+      budget = LineSplit.frame_budget_base(linelen) - byte_size(target)
+
+      # Space-free so the #1109 word-boundary preference has no boundary to
+      # take: the fragment count is then a pure statement about the budget.
+      assert [_] = LineSplit.split_privmsg_body(String.duplicate("a", budget), target, linelen)
+
+      assert [_, _] =
+               LineSplit.split_privmsg_body(String.duplicate("a", budget + 1), target, linelen)
+    end
+
+    property "base minus the target's own bytes IS the per-target budget" do
+      check all(
+              target <- string(:utf8, min_length: 1, max_length: 60),
+              linelen <- integer(200..600)
+            ) do
+        assert LineSplit.frame_budget_base(linelen) - byte_size(target) ==
+                 linelen - LineSplit.relay_frame_overhead(target)
+      end
+    end
+  end
+
   describe "property: relay-safe, lossless, codepoint-whole splitting" do
     property "tiles the body, every fragment relay-safe + valid UTF-8" do
       check all(
