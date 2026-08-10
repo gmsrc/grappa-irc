@@ -37535,3 +37535,83 @@ container, `actionlint` was clean, and ten mutants in the workflow each killed
 exactly one bats case. The tag logic, the label set and the push gate are held
 by derivation-and-compare against the bouncer's, never by a re-typed copy — so
 they follow the bouncer when it moves. Nothing here proves a byte reached ghcr.
+## 2026-08-10 — #1108: the frame budget is published; the split PREVIEW is a declared mirror
+
+The compose box now tells the operator, before a send, that the draft no
+longer fits one IRC frame: an amber third state on the #356 feedback seam
+("your message will send as N separate messages"), and a byte countdown above
+the box for the last ten bytes of the frame.
+
+**The budget is a published number, not a client computation.** The per-frame
+body budget is `LINELEN - relay_frame_overhead(target)`, and that overhead
+reserves the #246 WORST-CASE relayed source prefix at grappa's own identity
+ceilings (nick ≤ 30, ident ≤ 10, host ≤ 63). Those ceilings are precisely what
+a second copy gets silently wrong, in the direction that TRUNCATES the wire —
+the data loss #246 exists to have fixed. So `LineSplit` grew
+`frame_budget_base/1` and the server publishes it. Because
+`relay_frame_overhead/1` is affine in the target's byte length, ONE
+per-network scalar is enough for any target: cic sizes a specific one with
+`base - byte_size(target)`, arithmetic over a string it already holds.
+`split_privmsg_body/3` now goes through the same `frame_budget/2`, so the
+published number and the number the splitter uses cannot come apart.
+
+**It rides `isupport_changed`, not a new endpoint.** The budget is a 005 fact,
+so it belongs on the payload already carrying the 005 capability table: same
+per-network carrier, same two doors (the live broadcast and the cold
+after-join snapshot), one additive snake_case field, no `protocol_version`
+bump. The broadcast trigger had to widen from "the capability table changed"
+to "or LINELEN changed" — a network may advertise LINELEN on a 005 line
+carrying no CHANMODES or PREFIX, and gating on the table alone would leave
+every connected client sizing its warning against the previous frame for the
+rest of the session.
+
+**Rejected: folding LINELEN into `Grappa.Session.ISupport`.** It is a 005
+token and the table is "the per-network 005 capability set", so the parse
+sitting in `Session.Server` instead is a genuine wart, and folding it in would
+have collapsed the broadcast trigger back to one condition and saved the
+second GenServer call the cold snapshot now makes. It also rewrites the SEND
+path (`state.linelen` feeds `split_privmsg_body/3`), which is #246 territory,
+for a display feature. Left alone deliberately; it is worth its own change.
+
+**The COUNT is a mirror, and this is the part to argue with.** The warning has
+to be on screen BEFORE the POST, so there is no round trip to ask the
+authority with, and the fragment count under word-boundary splitting (#1109)
+is not derivable from the budget by arithmetic — it depends on where the
+spaces fall. `cicchetto/src/lib/frameBudget.ts` therefore reimplements
+`LineSplit`'s chunker: greedy fill, prefer the last ASCII space/tab, consume
+it, fall back to the byte cut for a token that holds none.
+
+What makes that acceptable where a mirror of `relay_frame_overhead` is not:
+the split that reaches the wire is still the server's, so a drift costs an
+advisory number off by a frame and can never cost a byte. The two failure
+modes are not the same kind of thing. The mirror is written against #1109's
+semantics and its twelve cases were measured against that splitter's own
+fragment counts, one for one — but that is a measurement taken once, NOT a
+gate. There is no CI step that will notice the day the two diverge. The honest
+containment is a twin case table on the Elixir side asserting the same counts;
+it is owed, and it cannot be written until #1109 lands, because main's
+splitter still answers differently.
+
+**cic invents no budget.** `DEFAULT_ISUPPORT` has an honest default for the
+capability table (bahamut's, which is what prod advertises) and none for the
+budget: `frameBudgetBase: null`. An unseeded network, a parked session, or a
+server predating the field leaves both affordances dark rather than warning
+from a number nobody published. For the same reason the narrower takes the
+field permissively — absent or malformed means absent, never a rejected
+envelope, or an older server would stop seeding `/mode`'s toggles too.
+
+**Precedence on the seam is declared: an error outranks the split warning.**
+One line, and an error is the more urgent read. The collision is real rather
+than theoretical — a paced send that fails puts its residue back in the draft
+(#666) while its error is still sticky. A notice cannot collide in practice
+(the submit that produced one just emptied the draft, and any keystroke clears
+feedback), so it inherits the same precedence for free. The three severities
+now share ONE geometry rule: identical geometry is what keeps the line from
+reflowing when one swaps for another, and a third hand-copied block is how
+that would have started to drift.
+
+**The countdown is aria-hidden.** A live region that changes on every
+keystroke is noise; the event worth announcing is "this will split", and the
+seam line carries it politely. Zero is rendered rather than skipped — at
+exactly the budget the draft is still one message, so hiding it would blink
+the counter off for one byte before the warning appears.
