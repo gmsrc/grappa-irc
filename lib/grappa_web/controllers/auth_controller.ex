@@ -20,6 +20,23 @@ defmodule GrappaWeb.AuthController do
     * `DELETE /auth/logout` — revokes the session bound to the bearer
       token via the `:authn` pipeline. Idempotent.
 
+  ## Per-client tokens (GH #1196)
+
+  The `password` field of `/auth/login` also accepts a per-client token
+  (`Grappa.Accounts.authenticate_client_token/5`), checked before the
+  Argon2 ladder. On a match the account's second factor is not asked
+  for: it was cleared interactively when the token was issued, and a
+  headless client has nowhere to put a rotating code.
+
+  It is accepted in the `password` field rather than behind a header or
+  a dedicated endpoint because that is the shape every client that
+  speaks to grappa today already sends — the alternative is cleaner in
+  the abstract and obliges every one of them to learn a second
+  authentication mode for no gain. A wrong token is indistinguishable
+  from a wrong password on the wire, in the log, and in the throttle:
+  the fall-through charges `@mode1_bucket` exactly once, at the Argon2
+  branch, so the token door adds no free guesses.
+
   Login records the requesting `ip` + `user-agent` on the session row
   for audit (`Accounts.create_session/4`). The IP is read from
   `conn.remote_ip` AFTER the `GrappaWeb.Plugs.RemoteIpFromProxy` plug
@@ -395,23 +412,54 @@ defmodule GrappaWeb.AuthController do
   defp account_login(conn, name, password) when is_binary(password) do
     ip = format_ip(conn)
 
-    with :ok <- check_mode1_throttle(ip),
-         {:ok, user} <- authenticate_mode1(name, password, ip) do
-      cond do
-        user.passkey_mode == :passwordless ->
-          {:error, :invalid_credentials}
-
-        user.passkey_mode == :second_factor ->
-          passkey_second_factor(conn, user)
-
-        TOTP.enabled?(user) ->
+    with :ok <- check_mode1_throttle(ip) do
+      case Accounts.authenticate_client_token(name, password, ip, user_agent(conn),
+             client_id: conn.assigns[:current_client_id]
+           ) do
+        {:ok, {user, session}} ->
+          # #1196 — a per-client token in the `password` field. The row IS
+          # the bearer, so the answer is the token the client already
+          # holds, in the ordinary login envelope: nothing on the client
+          # side has to learn a second authentication mode, and a
+          # reconnecting client does not accrete a session row per
+          # reconnect.
+          #
+          # It does not descend the ladder below, and that is the whole
+          # point rather than a shortcut: the second factor was cleared
+          # once already, interactively, at the moment this token was
+          # issued. Asking a headless client to clear it again is the
+          # lockout #1196 exists to remove.
           conn
-          |> put_status(:accepted)
-          |> json(%{two_factor_required: true, challenge_token: sign_challenge(user, conn)})
+          |> put_status(:ok)
+          |> render(:login, token: session.id, subject: {:user, user})
 
-        true ->
-          mint_user_session(conn, user)
+        {:error, :no_match} ->
+          with {:ok, user} <- authenticate_mode1(name, password, ip) do
+            second_factor_ladder(conn, user)
+          end
       end
+    end
+  end
+
+  # The post-password ladder: which door (if any) the account still has
+  # to walk through before a bearer is minted.
+  @spec second_factor_ladder(Plug.Conn.t(), Accounts.User.t()) ::
+          Plug.Conn.t() | {:error, term()}
+  defp second_factor_ladder(conn, user) do
+    cond do
+      user.passkey_mode == :passwordless ->
+        {:error, :invalid_credentials}
+
+      user.passkey_mode == :second_factor ->
+        passkey_second_factor(conn, user)
+
+      TOTP.enabled?(user) ->
+        conn
+        |> put_status(:accepted)
+        |> json(%{two_factor_required: true, challenge_token: sign_challenge(user, conn)})
+
+      true ->
+        mint_user_session(conn, user)
     end
   end
 

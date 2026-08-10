@@ -81,6 +81,20 @@ defmodule GrappaWeb.Router do
   # signal. M-cluster M-2.
   pipeline :admin_authn do
     plug GrappaWeb.Admin.AuthPlug
+    # GH #1196 — the operator console is the first thing a per-client
+    # token must not reach. Mounted inside the admin pipeline rather
+    # than repeated per route so a new `/admin` route inherits the scope
+    # gate the same way it inherits the `is_admin` gate.
+    plug GrappaWeb.Plugs.RequireFullSession
+  end
+
+  # GH #1196 — the account's own credential-management surfaces. A
+  # per-client token authenticates fine and is refused here with a 403
+  # `client_token_scope`: it may read and send as the account, but it may
+  # not administer it, re-credential it, or mint another token. Mounted
+  # downstream of `:authn`, which assigns `:current_session_kind`.
+  pipeline :full_session do
+    plug GrappaWeb.Plugs.RequireFullSession
   end
 
   # GH #630 — coarse per-subject inbound request budget on the REST door.
@@ -266,6 +280,49 @@ defmodule GrappaWeb.Router do
     get "/config", ConfigController, :show
   end
 
+  # GH #1196 — the account's credential-management surfaces, grouped so
+  # the `:full_session` scope gate applies to all of them at once and a
+  # sibling added later inherits it. Everything here can change what the
+  # account IS; everything in the scope below only uses it.
+  #
+  # `GrappaWeb.RouterScopeTest` asserts the membership of this scope
+  # against the router table, so a credential route added to the wrong
+  # block fails the suite rather than shipping ungated.
+  scope "/", GrappaWeb do
+    # `:full_session` ahead of `:request_budget`: a scope refusal is
+    # cheaper than metering the call that is about to be refused.
+    pipe_through [:api, :authn, :full_session, :request_budget]
+
+    get "/me/totp", TotpController, :show
+    post "/me/totp/enrollment", TotpController, :start_enrollment
+    post "/me/totp/enrollment/confirm", TotpController, :confirm_enrollment
+    delete "/me/totp", TotpController, :delete
+    get "/me/passkeys", PasskeyController, :index
+    post "/me/passkeys/registration/options", PasskeyController, :registration_options
+    post "/me/passkeys/registration", PasskeyController, :register
+    post "/me/passkeys/mode/options", PasskeyController, :mode_options
+    post "/me/passkeys/passwordless/recovery", PasskeyController, :prepare_passwordless
+    post "/me/passkeys/passwordless/options", PasskeyController, :passwordless_options
+    post "/me/passkeys/mode", PasskeyController, :set_mode
+    delete "/me/passkeys/:id", PasskeyController, :delete
+
+    # #157 — self-service account deletion: an explicit, IRREVERSIBLE
+    # total wipe of the caller's OWN account + all state. Subject-routed
+    # (user / visitor) in `Grappa.AccountDeletion`; admins + anon visitors
+    # 403 (not offered self-delete). `/me` already rides the nginx
+    # allowlist + the SW navigation denylist, so no proxy/SW change.
+    # #1196 moved it into the gated block: it is strictly worse than the
+    # password change the token is already refused.
+    delete "/me", MeController, :delete
+
+    # #1196 — the token surface itself. A token that could mint tokens
+    # would make one leak permanent; a token that could list them would
+    # break the shown-once contract. Both refusals come from the pipeline.
+    get "/me/client-tokens", ClientTokenController, :index
+    post "/me/client-tokens", ClientTokenController, :create
+    delete "/me/client-tokens/:handle", ClientTokenController, :delete
+  end
+
   scope "/", GrappaWeb do
     pipe_through [:api, :authn, :request_budget]
 
@@ -286,25 +343,6 @@ defmodule GrappaWeb.Router do
     post "/session/networks", SessionController, :add_network
 
     get "/me", MeController, :show
-    get "/me/totp", TotpController, :show
-    post "/me/totp/enrollment", TotpController, :start_enrollment
-    post "/me/totp/enrollment/confirm", TotpController, :confirm_enrollment
-    delete "/me/totp", TotpController, :delete
-    get "/me/passkeys", PasskeyController, :index
-    post "/me/passkeys/registration/options", PasskeyController, :registration_options
-    post "/me/passkeys/registration", PasskeyController, :register
-    post "/me/passkeys/mode/options", PasskeyController, :mode_options
-    post "/me/passkeys/passwordless/recovery", PasskeyController, :prepare_passwordless
-    post "/me/passkeys/passwordless/options", PasskeyController, :passwordless_options
-    post "/me/passkeys/mode", PasskeyController, :set_mode
-    delete "/me/passkeys/:id", PasskeyController, :delete
-
-    # #157 — self-service account deletion: an explicit, IRREVERSIBLE
-    # total wipe of the caller's OWN account + all state. Subject-routed
-    # (user / visitor) in `Grappa.AccountDeletion`; admins + anon visitors
-    # 403 (not offered self-delete). `/me` already rides the nginx
-    # allowlist + the SW navigation denylist, so no proxy/SW change.
-    delete "/me", MeController, :delete
 
     # Per-user settings — push notifications cluster B3 (2026-05-14).
     # Visitor-parity V4 (2026-05-15) lifted the user-only gate; both

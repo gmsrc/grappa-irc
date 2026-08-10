@@ -51,7 +51,10 @@ defmodule GrappaWeb.AdminChannelTest do
     socket(UserSocket, "user_socket:test", %{
       user_name: user_name,
       current_subject: subject,
-      is_admin: is_admin
+      is_admin: is_admin,
+      # #1196 — `UserSocket.connect/3` assigns the authenticated row's
+      # kind; `:web` is what an ordinary browser handshake produces.
+      current_session_kind: Keyword.get(opts, :session_kind, :web)
     })
   end
 
@@ -66,6 +69,20 @@ defmodule GrappaWeb.AdminChannelTest do
     test "non-admin user rejected forbidden" do
       user = user_fixture(is_admin: false)
       socket = build_socket(user.name, {:user, user.id}, is_admin: false)
+
+      assert {:error, %{error: "forbidden"}} =
+               subscribe_and_join(socket, "grappa:admin:events", %{})
+    end
+
+    test "an admin's per-client token rejected forbidden" do
+      # #1196 — the console's live feed comes through this socket, not
+      # through REST, so the scope gate has to exist on both doors. An
+      # admin holding a client token is admin AND scoped: the token is
+      # for reading and sending, never for operating the bouncer.
+      admin = user_fixture(is_admin: true)
+
+      socket =
+        build_socket(admin.name, {:user, admin.id}, is_admin: true, session_kind: :client)
 
       assert {:error, %{error: "forbidden"}} =
                subscribe_and_join(socket, "grappa:admin:events", %{})

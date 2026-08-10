@@ -254,6 +254,11 @@ defmodule GrappaWeb.UserSocket do
       socket =
         socket
         |> assign(:current_session_id, session.id)
+        # #1196 — the WS twin of the `Plugs.Authn` assign. `AdminChannel`
+        # reads it to keep the operator console off a per-client token:
+        # the REST admin gate would otherwise be the only one, and the
+        # console's live feed rides this socket, not REST.
+        |> assign(:current_session_kind, session.kind)
         # #1088 — the per-CONNECTION discriminator. Minted here, at the one
         # boundary where "a WebSocket" is created, so every channel process
         # of this socket shares it and it dies with the transport.

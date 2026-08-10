@@ -124,6 +124,13 @@ defmodule GrappaWeb.AdminChannel do
   end
 
   @spec authorize(Phoenix.Socket.t()) :: :ok | {:error, :forbidden}
-  defp authorize(%{assigns: %{is_admin: true}}), do: :ok
+  # #1196 — admin-ness is necessary but no longer sufficient: a
+  # per-client token minted by an admin is still a scoped credential, and
+  # the operator console is the first surface it must not reach. The REST
+  # side refuses via `GrappaWeb.Plugs.RequireFullSession`; this is the
+  # same refusal on the door the console's live feed actually comes
+  # through. Both conditions in ONE clause so neither can be satisfied
+  # alone.
+  defp authorize(%{assigns: %{is_admin: true, current_session_kind: :web}}), do: :ok
   defp authorize(_), do: {:error, :forbidden}
 end

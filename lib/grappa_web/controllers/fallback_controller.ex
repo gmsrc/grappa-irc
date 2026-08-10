@@ -41,6 +41,8 @@ defmodule GrappaWeb.FallbackController do
            :bad_request
            | :forbidden
            | :forbidden_vhost
+           | :client_token_scope
+           | :client_token_cap_reached
            | :not_found
            | :no_session
            | :not_invited
@@ -369,6 +371,27 @@ defmodule GrappaWeb.FallbackController do
     conn
     |> put_status(:forbidden)
     |> json(%{error: "forbidden"})
+  end
+
+  # #1196 — the bearer is a per-client token and the route is one of the
+  # account's credential-management surfaces. Distinct 403 tag so a
+  # client author reads "this credential is scoped, use the browser" and
+  # not "log in again" — the token is perfectly valid, it is simply not
+  # the account. `GrappaWeb.Plugs.RequireFullSession` is the only caller.
+  def call(conn, {:error, :client_token_scope}) do
+    conn
+    |> put_status(:forbidden)
+    |> json(%{error: "client_token_scope"})
+  end
+
+  # #1196 — the account already holds the maximum number of live client
+  # tokens. 422 like `:list_full`: the request is well-formed and the
+  # resource is a bounded list, not a rate, so "revoke one first" is the
+  # remedy rather than "retry later".
+  def call(conn, {:error, :client_token_cap_reached}) do
+    conn
+    |> put_status(:unprocessable_entity)
+    |> json(%{error: "client_token_cap_reached"})
   end
 
   # #228 — a vhost selection outside the subject's allowed set. Distinct

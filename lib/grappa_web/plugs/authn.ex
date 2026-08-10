@@ -31,6 +31,13 @@ defmodule GrappaWeb.Plugs.Authn do
   the admission gates and `AuthController` for per-client session
   tracking.
 
+  `:current_session_kind` (#1196) carries the authenticated row's
+  `Session.kind` — `:web` for a browser bearer, `:client` for a
+  per-client token. It is assigned HERE, from the row this plug already
+  loaded, so the downstream scope gate
+  (`GrappaWeb.Plugs.RequireFullSession`) never re-reads the credential
+  to decide what it is allowed to do.
+
   Loading the subject here costs one DB round-trip per authenticated
   request but eliminates the `Accounts.get_user!/1` re-fetch each
   user-aware controller used to perform. The session FK is
@@ -67,7 +74,9 @@ defmodule GrappaWeb.Plugs.Authn do
     with {:ok, token} <- get_token(conn),
          {:ok, session} <- Accounts.authenticate(token),
          {:ok, conn} <- assign_subject(conn, session) do
-      assign(conn, :current_session_id, session.id)
+      conn
+      |> assign(:current_session_id, session.id)
+      |> assign(:current_session_kind, session.kind)
     else
       {:error, reason} ->
         # Reason stays in operator logs (greppable) but never reaches
