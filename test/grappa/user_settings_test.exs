@@ -33,6 +33,12 @@ defmodule Grappa.UserSettingsTest do
     user
   end
 
+  # The PubSub topic root a settings write broadcasts on, built by the
+  # same production function the web edge uses — never spelled out here.
+  defp label(%Grappa.Accounts.User{name: name}), do: Grappa.Subject.label({:user, name})
+
+  defp label(%Grappa.Visitors.Visitor{id: id}), do: Grappa.Subject.label({:visitor, id})
+
   # ---------------------------------------------------------------------------
   # get_or_init/1
   # ---------------------------------------------------------------------------
@@ -1157,7 +1163,7 @@ defmodule Grappa.UserSettingsTest do
       user = user_fixture()
 
       assert {:ok, %Settings{}} =
-               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120)
+               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, label(user))
 
       assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == 120
     end
@@ -1166,17 +1172,17 @@ defmodule Grappa.UserSettingsTest do
       user = user_fixture()
 
       assert {:ok, %Settings{}} =
-               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled)
+               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled, label(user))
 
       assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == :disabled
     end
 
     test "nil clears the preference (back to the server default)" do
       user = user_fixture()
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120)
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, label(user))
 
       assert {:ok, %Settings{}} =
-               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, nil)
+               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, nil, label(user))
 
       assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
     end
@@ -1186,10 +1192,10 @@ defmodule Grappa.UserSettingsTest do
       min = UserSettings.auto_away_debounce_seconds_min()
       max = UserSettings.auto_away_debounce_seconds_max()
 
-      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, min)
+      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, min, label(user))
       assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == min
 
-      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, max)
+      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, max, label(user))
       assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == max
     end
 
@@ -1200,7 +1206,7 @@ defmodule Grappa.UserSettingsTest do
 
       for bogus <- [0, -1, min - 1, max + 1, "120", 1.5, :off] do
         assert {:error, %Ecto.Changeset{} = cs} =
-                 UserSettings.put_auto_away_debounce_seconds({:user, user.id}, bogus)
+                 UserSettings.put_auto_away_debounce_seconds({:user, user.id}, bogus, label(user))
 
         assert Keyword.has_key?(cs.errors, :auto_away_debounce_seconds)
       end
@@ -1210,7 +1216,7 @@ defmodule Grappa.UserSettingsTest do
       user = user_fixture()
       {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo", "bar"])
 
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300)
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300, label(user))
 
       assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
       assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == 300
@@ -1219,8 +1225,88 @@ defmodule Grappa.UserSettingsTest do
     test "works for visitor subjects (visitor-parity at the store layer)" do
       visitor = visitor_fixture()
 
-      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:visitor, visitor.id}, 60)
+      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:visitor, visitor.id}, 60, label(visitor))
       assert UserSettings.get_auto_away_debounce_seconds({:visitor, visitor.id}) == 60
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # put_auto_away_debounce_seconds/3 — the two announcements (#348)
+  # ---------------------------------------------------------------------------
+  #
+  # A write has two audiences and they need different shapes: live
+  # `Session.Server` processes, which want a raw term on a bridge topic no
+  # WS client can join, and the subject's other devices, which want the
+  # JSON-encodable wire event on the public user topic. Both leave from
+  # the context, so no door can persist the value without announcing it.
+
+  describe "put_auto_away_debounce_seconds/3 broadcasts" do
+    setup do
+      user = user_fixture()
+      label = label(user)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Grappa.PubSub.Topic.user(label))
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Grappa.PubSub.Topic.user_settings(label))
+
+      {:ok, user: user, label: label}
+    end
+
+    test "a delay reaches sessions as a term and devices as a wire event", %{
+      user: user,
+      label: label
+    } do
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, label)
+
+      assert_receive {:auto_away_debounce_changed, 120}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{kind: :auto_away_debounce_changed, auto_away_debounce_seconds: 120}
+      }
+    end
+
+    test "OFF stays an atom for sessions and becomes 0 for devices", %{user: user, label: label} do
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled, label)
+
+      assert_receive {:auto_away_debounce_changed, :disabled}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{kind: :auto_away_debounce_changed, auto_away_debounce_seconds: 0}
+      }
+    end
+
+    test "clearing the preference is announced too, as nil/null", %{user: user, label: label} do
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, label)
+      assert_receive {:auto_away_debounce_changed, 120}
+
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, nil, label)
+
+      assert_receive {:auto_away_debounce_changed, nil}
+
+      assert_receive %Phoenix.Socket.Broadcast{
+        payload: %{kind: :auto_away_debounce_changed, auto_away_debounce_seconds: nil}
+      }
+    end
+
+    test "a rejected value announces nothing", %{user: user, label: label} do
+      over = UserSettings.auto_away_debounce_seconds_max() + 1
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, over, label)
+
+      refute_receive {:auto_away_debounce_changed, _}, 100
+      refute_receive %Phoenix.Socket.Broadcast{payload: %{kind: :auto_away_debounce_changed}}, 100
+    end
+
+    test "another subject's topics stay silent", %{user: user, label: label} do
+      other = user_fixture()
+      other_label = label(other)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Grappa.PubSub.Topic.user_settings(other_label))
+
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, label)
+
+      assert_receive {:auto_away_debounce_changed, 120}
+      refute_receive {:auto_away_debounce_changed, _}, 100
     end
   end
 end

@@ -131,6 +131,35 @@ defmodule Grappa.PubSub.TopicTest do
     end
   end
 
+  describe "user_settings/1 (#348)" do
+    test "builds the settings-change bridge topic" do
+      assert Topic.user_settings("vjt") == "grappa:user_settings:vjt"
+    end
+
+    test "preserves identifiers verbatim" do
+      assert Topic.user_settings("alice-2") == "grappa:user_settings:alice-2"
+    end
+
+    test "raises on empty subject_label" do
+      assert_raise FunctionClauseError, fn -> Topic.user_settings("") end
+    end
+
+    test "raises on non-binary subject_label" do
+      assert_raise FunctionClauseError, fn -> Topic.user_settings(nil) end
+    end
+
+    # The bridge carries raw Elixir terms to server processes, so a WS
+    # client must never be able to join it — same posture as
+    # `ws_presence/1`, and the reason both stay outside the public
+    # topic grammar `GrappaChannel.join/3` validates against.
+    test "is not part of the public topic grammar" do
+      topic = Topic.user_settings("vjt")
+
+      assert Topic.parse(topic) == :error
+      refute Topic.valid?(topic)
+    end
+  end
+
   describe "socket/2 (#1088)" do
     test "builds the per-connection addressed-delivery topic" do
       assert Topic.socket("vjt", "ref-1") == "grappa:user:vjt/socket:ref-1"

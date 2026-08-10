@@ -9057,6 +9057,25 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # #348 — the two halves of the visibility signal the auto-away tests
+  # drive, as named steps: a device that is present and foregrounded, and
+  # the moment it backgrounds. Registering + foregrounding is the
+  # PRE-STATE (WSPresence must have something visible to lose), so a test
+  # that skipped it would assert against a transition that never fired.
+  defp visible_device(user) do
+    :ok = WSPresence.reset_for_test()
+    device = spawn(fn -> Process.sleep(:infinity) end)
+    :ok = WSPresence.register(user.name, device)
+    :ok = WSPresence.set_visibility(user.name, device, true)
+    device
+  end
+
+  defp background(user, device), do: :ok = WSPresence.set_visibility(user.name, device, false)
+
+  # The subject's PubSub topic root, from the production builder — the
+  # same string the web edge hands the context on a settings PUT.
+  defp topic_label(user), do: Grappa.Subject.label({:user, user.name})
+
   describe "away_state transitions (S3.2)" do
     # All tests in this describe block use a real IRCServer so we can verify
     # the AWAY lines sent upstream. The handler accepts the handshake and
@@ -9392,6 +9411,131 @@ defmodule Grappa.Session.ServerTest do
       assert String.starts_with?(away_line, "AWAY :auto-away")
       state = SessionStateHelpers.fetch(pid)
       assert AwayState.state_of(SessionStateHelpers.away_state(state)) == :away_auto
+
+      Process.exit(device, :kill)
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # #348 — the debounce is a per-user preference now. What a user (or
+    # their peer) can observe is only ever the upstream AWAY: sooner,
+    # later, or never. These four drive the real chain — context write →
+    # PubSub → Session.Server — and assert the line, using the armed
+    # timer only where "nothing happened" needs a witness.
+
+    test "the session waits the per-user delay, not the server default (#348)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+
+      # Stored BEFORE the spawn: the value has to be read at the spawn
+      # boundary, not only by the live-refresh path.
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_debounce_seconds(
+          {:user, user.id},
+          Grappa.UserSettings.auto_away_debounce_seconds_min(),
+          topic_label(user)
+        )
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      device = visible_device(user)
+      :ok = background(user, device)
+
+      # The server-wide default is 600s. This line inside 3s can only be
+      # the 1s preference — nothing else shortens the wait.
+      assert {:ok, away_line} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto"), 3_000)
+
+      assert String.starts_with?(away_line, "AWAY :auto-away")
+
+      Process.exit(device, :kill)
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "OFF arms no timer at all and never goes away (#348)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_debounce_seconds(
+          {:user, user.id},
+          :disabled,
+          topic_label(user)
+        )
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      device = visible_device(user)
+      :ok = background(user, device)
+
+      # Silence alone would also be what a 10-minute timer looks like, so
+      # the state is the discriminator: disabled means NO armed timer,
+      # never a very large one.
+      assert {:error, :timeout} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto"), 200)
+
+      assert SessionStateHelpers.auto_away_timer(SessionStateHelpers.fetch(pid)) == nil
+
+      Process.exit(device, :kill)
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "switching OFF kills a timer armed before the switch (#348)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      device = visible_device(user)
+      :ok = background(user, device)
+
+      # Pre-state: with no preference stored the default debounce is
+      # armed and in flight. Without this the assertion below would pass
+      # against a timer that was never there.
+      assert SessionStateHelpers.auto_away_timer(SessionStateHelpers.fetch(pid)) != nil
+
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_debounce_seconds(
+          {:user, user.id},
+          :disabled,
+          topic_label(user)
+        )
+
+      assert SessionStateHelpers.auto_away_timer(SessionStateHelpers.fetch(pid)) == nil
+
+      Process.exit(device, :kill)
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a new delay takes effect on a live session, no restart (#348)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      # The session booted with the 600s default; the user retunes it
+      # from another device while the session keeps running.
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_debounce_seconds(
+          {:user, user.id},
+          Grappa.UserSettings.auto_away_debounce_seconds_min(),
+          topic_label(user)
+        )
+
+      device = visible_device(user)
+      :ok = background(user, device)
+
+      assert {:ok, away_line} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto"), 3_000)
+
+      assert String.starts_with?(away_line, "AWAY :auto-away")
 
       Process.exit(device, :kill)
       :ok = GenServer.stop(pid, :normal, 1_000)

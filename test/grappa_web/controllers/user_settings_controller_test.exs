@@ -726,7 +726,7 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "renders a stored delay", %{conn: conn} do
       {user, session} = user_and_session()
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120)
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, Grappa.Subject.label({:user, user.name}))
 
       conn =
         conn
@@ -738,7 +738,7 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "renders the OFF state as 0, not as null", %{conn: conn} do
       {user, session} = user_and_session()
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled)
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled, Grappa.Subject.label({:user, user.name}))
 
       conn =
         conn
@@ -787,7 +787,7 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "null clears back to the server default", %{conn: conn} do
       {user, session} = user_and_session()
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300)
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300, Grappa.Subject.label({:user, user.name}))
 
       conn =
         conn
