@@ -38085,3 +38085,78 @@ module's own header already says the gesture is dogfood-only. What is proven
 is that we stop calling `preventDefault` on that drag, which is the mechanism
 the report points at; that this is sufficient on a real Android is vjt's
 observation to make, not ours.
+
+---
+
+## 2026-08-10 — #1208: `/part <reason>` — the sigil decides the target, and the reason had no plumbing at all
+
+Reported on #grappa by strk-oli: `/part non trovo utili le bestemmie` from
+`irc.sindro.me` surfaced **"The request was malformed."** Two defects stacked,
+and only the first one was visible.
+
+**The parser had no sigil test, so the first word was always the target.** The
+handler took `rest` up to the first space as the channel, unconditionally. So
+that command issued `DELETE /networks/:slug/channels/non`, the server refused
+the sigil-less name, and the operator was told a channel they never typed was
+malformed. The fix is the same test `join` already runs — a first token matching
+`[#&+!]` is the target, anything else starts the reason — which is how every
+other IRC client resolves this ambiguity.
+
+**`/part` deliberately does NOT inherit `/join`'s bare-name sugar.** `/join`
+auto-prepends `#` so `/join sniffo` works. Copying that into `/part` is
+precisely what manufactures the phantom channel: a JOIN's first token has no
+second meaning, a PART's does. The two verbs look symmetric and are not, and
+the next person to "make them consistent" will reintroduce this bug.
+
+**The reason was parsed and then read by nobody.** Even spelled correctly,
+`/part #chan bye` left silently: `compose.ts` dropped `cmd.reason`, `postPart`
+was a bare DELETE, and `Session.send_part/3` had no parameter for it. So the
+second half of the fix is plumbing, not logic — compose → `?reason=` →
+controller → `Session.send_part/4` → the `:send_part` cast →
+`Client.send_part/3` → `PART <chan> :<reason>`.
+
+**Query param, not a DELETE body.** The reason is public by construction: it is
+broadcast to every member of the channel. There is nothing to keep out of a URL,
+and a query param assumes nothing about intermediaries forwarding a body on
+DELETE. The `/quit` reason travels in a JSON body only because PATCH already had
+one.
+
+**Absent or empty is the ABSENCE of a reason, byte for byte.** Not `PART #chan
+:`. This is the load-bearing constraint and it is not about `/part` at all:
+three other doors reach the same code — the sidebar ×, the window close, and
+the autojoin drop — and none of them is making a statement to the channel. Each
+passes `null` explicitly; no default argument hides the choice. `""` collapses
+to the bare form at the framing layer, mirroring `send_join/3`'s empty-key arm.
+
+**Each check sits at the boundary that owns it.** The controller refuses a
+non-binary param (a repeated key reaches Plug as a list) and CR/LF/NUL, up
+front — `delete/2` strips the channel from autojoin BEFORE it casts the PART,
+so a reason refused any later leaves a rejected request with the leave already
+half-applied. That ordering is the bug the first draft of this change shipped
+and a test caught. CR/LF earns `:invalid_line`, not `:bad_request`: free text
+whose only fault is smuggling a second command behind the trailing `:` is
+exactly the distinction `FallbackController` keeps that tag for. The byte cap is
+`BodyLimit`'s — the existing SSOT for user text bound for the wire, `byte_size`
+not graphemes — not a new number. `Session.send_part/4` re-checks CR/LF/NUL at
+the domain boundary as `send_join/4` does for its key: the controller is one
+door into PART, not the only one.
+
+**No 512-byte rejection, and that is deliberate.** `send_join/3`'s list clause
+rejects an over-512 framed line because ircd truncation there silently drops
+tail channels and strands their `:pending` windows forever. A truncated PART
+reason strands nothing — it is a shortened goodbye. `send_quit/2` and
+`send_topic/3`, the two closest siblings (user text, trailing param), do not cap
+either. Capping PART would be the inconsistent choice, not the safe one.
+
+**Measured: `/quit` is NOT the same class, contrary to the issue text.** The
+issue closes with "same class as the `/quit` reason path — worth checking that
+one while in there." It was checked, with a throwaway probe driving the real
+door: `PATCH /networks/:slug {connection_state: "parked", reason: "…"}` puts
+`QUIT :non trovo utili le bestemmie\r\n` on the wire, user text intact.
+`quitAll` → `patchNetwork` → `parse_reason` → `Networks.disconnect/2` →
+`best_effort_quit` → `Session.send_quit/3` has been plumbed since T32. Nothing
+to fix; the scope was not widened. The one real gap is evidentiary, not
+behavioural: no test pins a USER-SUPPLIED reason on the QUIT wire —
+`connection_state_test.exs` asserts the frame from the context function with a
+hardcoded string, and no controller test sends `reason` at all. Left as-is
+rather than widened on a worker's own initiative.
