@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 #
 # Bats suite for infra/docker/release-entrypoint.sh BOOT-TIME MIGRATION
-# (#867).
+# (#867) and the built-in theme seed that rides the same decision (#1167).
 #
 # With #862's secrets in place, `docker run <image> start` on a fresh volume
 # got one step further and died on `no such table: admin_events` — the image
@@ -54,15 +54,30 @@ setup() {
     : > "$CALL_LOG"
 
     # MIGRATE_RC injects a failing migrator (a broken migration, a locked DB,
-    # a read-only volume — all the same shape from out here).
+    # a read-only volume — all the same shape from out here). SEED_RC is its
+    # sibling for the theme seed: the two must be independently faultable, or
+    # the fatal/non-fatal split between them cannot be observed.
     export MIGRATE_RC=0
+    export SEED_RC=0
     cat > "$APP/bin/grappa" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$CALL_LOG"
 env > "$ENV_DIR/$1"
-if [ "$1" = eval ] && [ "${MIGRATE_RC:-0}" -ne 0 ]; then
-    echo "** (Exqlite.Error) some migration blew up" >&2
-    exit "$MIGRATE_RC"
+if [ "$1" = eval ]; then
+    case "$2" in
+        *migrate*)
+            if [ "${MIGRATE_RC:-0}" -ne 0 ]; then
+                echo "** (Exqlite.Error) some migration blew up" >&2
+                exit "$MIGRATE_RC"
+            fi
+            ;;
+        *seed_themes*)
+            if [ "${SEED_RC:-0}" -ne 0 ]; then
+                echo "** (Ecto.ConstraintError) seeding blew up" >&2
+                exit "$SEED_RC"
+            fi
+            ;;
+    esac
 fi
 EOF
     chmod 0755 "$APP/bin/grappa"
@@ -88,6 +103,7 @@ calls() {
 }
 
 MIGRATE_CALL="eval Grappa.Release.migrate()"
+SEED_CALL="eval Grappa.Release.seed_themes()"
 
 @test "a bare start migrates, and does it BEFORE the release boots" {
     run entrypoint start
@@ -202,6 +218,68 @@ MIGRATE_CALL="eval Grappa.Release.migrate()"
     GRAPPA_AUTO_MIGRATE='' run entrypoint start
     [ "$status" -eq 0 ]
     grep -qF "$MIGRATE_CALL" "$CALL_LOG"
+}
+
+# ── Built-in theme seeding (#1167) ──────────────────────────────────────────
+#
+# Same door, same argument as #867: a bare `docker run` has no other way to
+# reach the seeder, so the image landed with an empty theme gallery. The seed
+# rides GRAPPA_AUTO_MIGRATE rather than getting a knob of its own — an
+# operator who turns the flag off did so to keep boot from writing to the DB,
+# and the seed is a write.
+
+@test "a bare start seeds the built-in themes, after the schema is applied" {
+    run entrypoint start
+    [ "$status" -eq 0 ]
+
+    grep -qF "$SEED_CALL" "$CALL_LOG"
+    # Schema before data: an upsert against an unmigrated DB has no table.
+    [ "$(head -n1 "$CALL_LOG")" = "$MIGRATE_CALL" ]
+    [ "$(sed -n 2p "$CALL_LOG")" = "$SEED_CALL" ]
+    [ "$(tail -n1 "$CALL_LOG")" = "start" ]
+}
+
+@test "GRAPPA_AUTO_MIGRATE=0 boots without seeding either" {
+    # The ruling, pinned: one knob, not two. A seed that ignored the flag
+    # would write to the DB of an operator who asked for no boot-time writes.
+    export GRAPPA_AUTO_MIGRATE=0
+    run entrypoint start
+    [ "$status" -eq 0 ]
+
+    refute grep -qF "$SEED_CALL" "$CALL_LOG"
+    [ "$(calls)" = "start" ]
+}
+
+@test "a failed seed still boots — the gallery is cosmetic, the schema is not" {
+    # deploy_common has held this posture on every substrate since #440: the
+    # seed WARNS and continues, because the upsert converges and the next
+    # boot heals it. Refusing to start would trade a working bouncer for a
+    # missing colour scheme.
+    export SEED_RC=1
+    run entrypoint start
+
+    [ "$status" -eq 0 ]
+    grep -qF "$SEED_CALL" "$CALL_LOG"
+    [ "$(tail -n1 "$CALL_LOG")" = "start" ]
+    # Not a silent swallow: the operator gets the failure and the retry.
+    [[ "$output" == *"seed_themes"* ]]
+}
+
+@test "a failed migration never reaches the seed" {
+    export MIGRATE_RC=1
+    run entrypoint start
+
+    [ "$status" -ne 0 ]
+    refute grep -qF "$SEED_CALL" "$CALL_LOG"
+}
+
+@test "non-boot verbs never seed" {
+    for verb in rpc remote stop version pid; do
+        : > "$CALL_LOG"
+        run entrypoint "$verb"
+        [ "$status" -eq 0 ]
+        refute grep -qF "$SEED_CALL" "$CALL_LOG"
+    done
 }
 
 @test "the secret bootstrap and the resource caps still ride through" {
