@@ -37584,13 +37584,20 @@ it, fall back to the byte cut for a token that holds none.
 What makes that acceptable where a mirror of `relay_frame_overhead` is not:
 the split that reaches the wire is still the server's, so a drift costs an
 advisory number off by a frame and can never cost a byte. The two failure
-modes are not the same kind of thing. The mirror is written against #1109's
-semantics and its twelve cases were measured against that splitter's own
-fragment counts, one for one — but that is a measurement taken once, NOT a
-gate. There is no CI step that will notice the day the two diverge. The honest
-containment is a twin case table on the Elixir side asserting the same counts;
-it is owed, and it cannot be written until #1109 lands, because main's
-splitter still answers differently.
+modes are not the same kind of thing.
+
+**And the mirror is gated, not merely measured.** Twelve `(budget, body)`
+cases live verbatim in BOTH suites — `frameBudget.test.ts` and
+`line_split_test.exs`'s "#1108: the fragment counts cic's preview mirrors" —
+so each side pins its own splitter and neither can move quietly. Verified in
+both directions: dropping the word-boundary rule from the TS chunker fails
+exactly the two boundary cases there, and dropping it from `break_space?/1`
+fails exactly the same two here. Add a case to one table, add it to the other.
+This was written only because #1109 landed first: against the byte-cut
+splitter the shared table could only have been written red. What a count
+table still cannot witness is the NO-BREAK SPACE policy — treating U+00A0 as
+a boundary moves WHERE the cut lands without changing how many fragments come
+out — so that stays pinned by #1109's own arms, server-side only.
 
 **cic invents no budget.** `DEFAULT_ISUPPORT` has an honest default for the
 capability table (bahamut's, which is what prod advertises) and none for the
