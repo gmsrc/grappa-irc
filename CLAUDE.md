@@ -645,11 +645,20 @@ is due. Don't just look at todo.md.
    worktree onto main → merge to main → remove the now-merged worktree +
    delete its branch (step 0) → **bump the repo-root `VERSION` file as the
    LAST commit** → tag → push origin main → deploy-m42 → verify health. The
-   bump rides IN, never after — `Version.base/0` returns a compile-time
-   constant baked from `VERSION` (an `@external_resource`, #652), so the new
-   number travels with the reloaded `Grappa.Version` beam on a HOT deploy;
-   a `VERSION`-only bump is HOT (it no longer touches `mix.exs`, so
-   `Preflight.mix_deps?` no longer forces COLD — the #652 whole point).
+   bump rides IN, never after — and **the tag must exist BEFORE the build**,
+   because `Grappa.Version`'s git facts are a compile-time snapshot: build
+   first and prod reports the unreleased form `X.Y.Z-<sha>` instead of the
+   bare `X.Y.Z` that #391's tag-≡-CTCP-VERSION contract promises.
+   🔴 **A `VERSION`-only bump is COLD, not HOT — measured on m42 2026-08-10,
+   correcting what #652 claimed here.** `Version.base/0` is a compile-time
+   constant baked from `VERSION` (an `@external_resource`), and `mix.exs`
+   reads the same file to stamp the OTP application vsn — so the bump moves
+   the release's lib directory to `lib/grappa-<new>/ebin`, while
+   `Grappa.HotReload.reload_modified/0` walks `:code.lib_dir(:grappa)`, which
+   the RUNNING node resolves to its BOOT directory `lib/grappa-<old>/ebin`.
+   Nothing in the old directory changed, so `/admin/reload` answers
+   `{"failed":[],"reloaded":[]}` and the node keeps serving the old number
+   with the new code on disk. Plan a restart for any release bump.
    Do NOT re-hardcode `@version` in `mix.exs`: it reads `VERSION` at build
    time, and re-inlining a literal silently reinstates the COLD (guarded by
    `version_single_source_test.exs`). Invoke deploy scripts by ABSOLUTE

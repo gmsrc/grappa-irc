@@ -36449,3 +36449,56 @@ the HTTP door. cic renders no copy for the two new fields yet — it casts the
 response without validating, so they are inert there, and the honest signal it
 *does* now show is the row reading `parked` instead of a fictitious
 `connected`.
+## 2026-08-10 — a `VERSION`-only bump is a COLD deploy: the hot-reload walks the boot directory, not the built one
+
+#652 recorded that bumping the repo-root `VERSION` file is hot-deployable: the
+constant is baked at compile time via `@external_resource`, the bump dirties
+`Grappa.Version`, `mix compile` rebuilds it, and `reload_modified/0` picks the
+new beam up by md5 — "the reported version updates WITHOUT a cold restart".
+The v0.16.0 cut measured that claim and it is **false on the release
+substrate**.
+
+What happened: the batch shipped on a cold deploy with the bump forgotten, so
+prod came up reporting `0.15.0-76df5fd9` with the right code. The bump was
+committed and deployed `--force-hot`. `/admin/reload` answered
+`{"failed":[],"reloaded":[]}` and `/api/config` — which calls
+`Grappa.Version.current/0` per request, so it is a live read, not a cached one
+— kept reporting `0.15.0`. On disk, `_build/prod/lib/grappa/ebin/Elixir.Grappa.Version.beam`
+already carried `0.16.0`, and a **new** release directory `lib/grappa-0.16.0/ebin`
+had appeared beside the old `lib/grappa-0.15.0/ebin`.
+
+That last observation is the whole mechanism. `mix.exs` reads the same
+`VERSION` file to stamp the OTP application version, so a bump renames the
+release's lib directory. `HotReload.reload_modified/0` walks
+`:code.lib_dir(:grappa)`, and a running node resolves that to the directory it
+**booted** from. The new beams land in a directory the node's code path has
+never heard of; the old directory is genuinely unchanged; so the reload is
+honest when it reports that it reloaded nothing. `reloaded: []` was the product
+telling the truth, and the temptation to write it off as the known "`/api/config`
+is stale after a hot deploy" folklore was the trap — that folklore is also
+wrong, since the controller reads the module live.
+
+The consequence for the deploy path: **a release bump needs a restart**, and
+`Grappa.Deploy.Preflight` classifying a `VERSION`-only diff as HOT is a
+mis-classification, not a feature. #652's narrower point still stands — the
+bump must not force a *rebuild-from-scratch* cold via `mix.exs`/`mix.lock`
+churn — but "no new deps" and "no restart" are different claims and #652
+conflated them.
+
+A second, independent ordering constraint surfaced in the same cut. The git
+facts behind the version suffix (`@git_facts`) are a **build-time** snapshot,
+so a build made before the tag exists reports the unreleased form
+`X.Y.Z-<shortsha>` even when its tree is exactly the tagged commit. v0.16.0
+therefore runs in production as `0.16.0-9632e34d`. The cure is ordering, not
+code: cut and push the tag **before** the deploy builds, which is what
+CLAUDE.md's bump → tag → push → deploy sequence already prescribes. A third
+restart to buy the bare string was refused: the suffix is cosmetic, corrects
+itself at the next cold deploy, and every restart drops every live IRC session.
+
+**Not proven.** Whether `reload_modified/0` should follow the newest
+`lib/grappa-*/ebin` instead of the boot directory is left open — loading beams
+from an application version the node did not boot raises questions about the
+`.app` resource and about half-migrated code paths that nobody has measured
+here. What is proven is the observation set above: empty `reloaded`, live
+controller read, new beam on disk, new versioned lib directory, and the served
+string unchanged until the restart.
