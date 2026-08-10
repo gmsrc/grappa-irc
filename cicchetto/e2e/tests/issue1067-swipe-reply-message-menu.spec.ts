@@ -18,6 +18,7 @@
 //     must not be read as covering the rest.
 import type { Page } from "@playwright/test";
 import { composeSend, composeTextarea, loginAs, selectChannel } from "../fixtures/cicchettoPage";
+import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -354,4 +355,92 @@ test("issue1067 — Select… hands back a live selection over the row and arms 
   // the range has no draggable endpoints on iOS. The CLASS is asserted here;
   // whether the grab handles then appear is the iOS device call.
   await expect(page.locator("html.is-selecting")).toHaveCount(1);
+});
+
+// #1156 — the follow-up defect: a presence row (join / part / quit) armed the
+// same swipe, slid the full 72px, snapped back, and left the compose box
+// empty, because there is nothing in it to quote. The slide IS the promise.
+// Ruled (vjt, 2026-08-09): do not arm — and gate the SWIPE only, because the
+// menu's Copy and Select… are useful on a join and its Reply item already
+// renders disabled-but-visible.
+//
+// Differential in ONE session on purpose: the join row must refuse, and the
+// privmsg row a few lines above it must still work. Asserting only the refusal
+// would pass just as happily if the gesture never reached the pane at all.
+test("issue1156 — a join row refuses the swipe while the privmsg above it still quotes", async ({
+  page,
+}) => {
+  const body = uniqueBody("presence");
+  await postMessage(page, body);
+  if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
+
+  // A unique nick per run: the e2e sqlite scrollback survives KEEP_STACK=1, and
+  // a static one would leave two join rows to choose between.
+  const peer = await IrcPeer.connect({ nick: `p1156${Date.now() % 1_000_000}` });
+  try {
+    await peer.join(CHANNEL);
+    const joinRow = page
+      .locator('[data-testid="scrollback-line"][data-kind="join"]')
+      .filter({ hasText: peer.nick });
+    await expect(joinRow).toHaveCount(1, { timeout: 10_000 });
+    await expect(composeTextarea(page)).toHaveValue("");
+
+    // The join row: the SAME gesture that quotes a message two rows up.
+    const onJoin = await swipeRow(page, peer.nick, [
+      { x: 120, y: 400 },
+      { x: 175, y: 404 },
+      { x: 235, y: 407 },
+      { x: 280, y: 408 },
+    ]);
+
+    expect(onJoin.prevented).toBe(false); // unclaimed → native drag-to-select survives
+    expect(onJoin.transformDuring).toBe(""); // never followed the finger: no promise made
+    expect(onJoin.swipingClassDuring).toBe(false);
+    await expect(composeTextarea(page)).toHaveValue("");
+
+    // Same finger, same pane, a row that DOES have a reply — the control that
+    // makes the refusal above mean something.
+    const onSpeech = await swipeRow(page, body, [
+      { x: 120, y: 400 },
+      { x: 175, y: 404 },
+      { x: 235, y: 407 },
+      { x: 280, y: 408 },
+    ]);
+    expect(onSpeech.prevented).toBe(true);
+    expect(onSpeech.transformDuring).toMatch(/^translateX\(\d/);
+    await expect(composeTextarea(page)).toHaveValue(`<${specNick()}> ${body}<< `);
+  } finally {
+    await peer.disconnect("1156 witness done");
+  }
+});
+
+// The other half of the ruling: gating the swipe must not cost the menu. Copy
+// and Select… are what a long press on a join is FOR, and Reply keeps its
+// disabled-but-visible posture — the menu says "no reply here" before the
+// operator commits, which is the honesty the swipe now matches.
+test("issue1156 — a long press on that join row still opens the menu, Reply disabled", async ({
+  page,
+}) => {
+  const body = uniqueBody("presencemenu");
+  await postMessage(page, body);
+  if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
+
+  const peer = await IrcPeer.connect({ nick: `m1156${Date.now() % 1_000_000}` });
+  try {
+    await peer.join(CHANNEL);
+    const joinRow = page
+      .locator('[data-testid="scrollback-line"][data-kind="join"]')
+      .filter({ hasText: peer.nick });
+    await expect(joinRow).toHaveCount(1, { timeout: 10_000 });
+
+    await longPressRow(page, peer.nick, { x: 200, y: 400 }, HOLD_MS);
+
+    await expect(menu(page)).toBeVisible();
+    await expect(menuItem(page, "Copy")).toBeEnabled();
+    await expect(menuItem(page, "Select…")).toBeEnabled();
+    await expect(menuItem(page, "Reply")).toBeVisible();
+    await expect(menuItem(page, "Reply")).toBeDisabled();
+  } finally {
+    await peer.disconnect("1156 menu witness done");
+  }
 });
