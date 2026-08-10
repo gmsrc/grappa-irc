@@ -28,7 +28,7 @@
 // every other admin spec — out of scope here.
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { expectShellReady, openAdminSessionsTab } from "../fixtures/cicchettoPage";
 import { patchNetworkConnectionState } from "../fixtures/grappaApi";
 import { getSeededAdmin, getSeededM9bVictim, NETWORK_SLUG } from "../fixtures/seedData";
 
@@ -66,26 +66,25 @@ async function adminFriendlyLogin(
   await expectShellReady(page);
 }
 
-async function openAdminSessionsTab(page: import("@playwright/test").Page): Promise<void> {
-  await openAdminConsole(page);
-  await page.getByTestId("admin-tab-sessions").click();
-  await expect(page.getByTestId("admin-sessions-table")).toBeVisible({ timeout: 10_000 });
-}
-
-test("M-9b admin Sessions tab lists live sessions including m9b-test seeded row", async ({
-  page,
-}) => {
+test("M-9b admin Sessions view lists every seeded subject including m9b-test", async ({ page }) => {
   await adminFriendlyLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
   // vjt + m9b-test + m9b-victim (all bahamut-test) + wiz-test (azzurra-reg,
-  // GH #349's registration-wizard seed) rows seeded → 4 admin-session
-  // rows. m9b-victim was added in GREEN-CI batch-1 as the sacrificial
-  // target for destructive specs (see Disconnect / Terminate specs
-  // below); wiz-test joined in #349 as the register-wizard user, live at
-  // boot (--auth none, not yet +r). admin-vjt has no bind so doesn't
-  // appear. This exact count is a canary: a drop means a seeded session
-  // failed to connect; a rise means an unexpected session leaked.
+  // GH #349's registration-wizard seed) rows seeded → 4 rows. m9b-victim
+  // was added in GREEN-CI batch-1 as the sacrificial target for destructive
+  // specs (see Disconnect / Terminate specs below); wiz-test joined in #349
+  // as the register-wizard user, live at boot (--auth none, not yet +r).
+  // admin-vjt has no bind, so it has no credential and no row.
+  //
+  // #1157 changed what this number MEANS. The list used to be
+  // registry-driven, so 4 meant "4 pids are alive" and a drop caught a
+  // seeded session that failed to connect. The list is row-backed now: 4
+  // means "4 credentials exist", and a parked or failed subject keeps its
+  // row. So the count no longer watches connectivity — the live half is
+  // asserted per-row by the specs below, through the channels cell. What it
+  // still catches is population drift: a rise means an unexpected
+  // credential, or a visitor some spec minted and never reaped.
   const rows = page.locator("[data-testid^='admin-session-row-']");
   await expect(rows).toHaveCount(4, { timeout: 15_000 });
 });
@@ -109,31 +108,42 @@ test("#242 admin Sessions tab shows the network slug (not the raw network_id FK)
   const victimRow = page.getByTestId(`admin-session-row-${victim.sessionId}`);
   await expect(victimRow).toBeVisible({ timeout: 15_000 });
 
-  // The network column is the 3rd cell (state, who, network, …). We
-  // assert by column position rather than the `admin-session-network-*`
-  // testid so the RED run (fix stripped, testid absent) still fails on
-  // a VALUE mismatch — pre-fix the cell renders the raw integer FK
-  // ("1"); post-fix it renders the resolved slug ("bahamut-test").
-  const networkCell = victimRow.locator("td").nth(2);
+  // #1157 folded the network out of its own column and onto the identity
+  // cell's second line, so the by-position probe this spec used ("the 3rd
+  // td") no longer addresses it. The class is the replacement, and it keeps
+  // the property that made the position probe worth having: the assertion is
+  // on the VALUE, so a RED run where the slug resolution is stripped still
+  // fails on content — pre-fix the cell renders the raw integer FK ("1"),
+  // post-fix the resolved slug ("bahamut-test").
+  const networkCell = victimRow.locator(".admin-session-network");
   await expect(networkCell).toHaveText(NETWORK_SLUG, { timeout: 10_000 });
 });
 
-// IMPORTANT — mutex spec MUST run BEFORE the destructive Disconnect /
-// Terminate specs. The destructive specs leave the e2e DB in a
-// post-action state (sessions parked / pids stopped), so when this
-// spec opens the Sessions tab last it sees "no sessions" and the
-// row locator times out. Playwright runs file-internal tests in
-// declaration order, so keeping this above the destructive arms
-// is the simplest fix vs. spinning up an isolation layer.
+// The pre-#1157 version of this spec took `.first()` row and required it
+// to carry BOTH buttons. Neither half survives the merge: the unified view
+// orders visitors before users, and a visitor row offers exactly one verb
+// (`rowActions` — Reconnect is visitor-only, Terminate is not offered), so
+// `.first()` would now address a row with no Terminate at all. The mutex is
+// a property of a row that has two armable controls, which means a USER row,
+// so it is asserted on the same dedicated victim the destructive specs use.
+//
+// The declaration-order constraint this spec used to carry is GONE. It read:
+// "MUST run BEFORE the destructive specs, which leave the DB with sessions
+// parked / pids stopped, so this one would see no sessions". That was a
+// property of a registry-driven list. The list is row-backed now — a parked
+// credential keeps its row, buttons and all — so the ordering no longer
+// matters. Left in place regardless: moving it would be churn, not a fix.
 test("M-9b arming Disconnect on one row disarms the same row's Terminate (single mutex)", async ({
   page,
 }) => {
+  const victim = getSeededM9bVictim();
+
   await adminFriendlyLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
-  const firstRow = page.locator("[data-testid^='admin-session-row-']").first();
-  const disc = firstRow.locator("[data-testid^='admin-session-disconnect-']");
-  const term = firstRow.locator("[data-testid^='admin-session-terminate-']");
+  const disc = page.getByTestId(`admin-session-disconnect-${victim.sessionId}`);
+  const term = page.getByTestId(`admin-session-terminate-${victim.sessionId}`);
+  await expect(term).toHaveText(/^Terminate$/, { timeout: 15_000 });
 
   await term.click();
   await expect(term).toHaveText(/^Confirm terminate$/);
@@ -170,10 +180,19 @@ test("M-9b admin Disconnect inline-confirm transitions Disconnect → Confirm di
   await expect(victimDisconnect).toHaveClass(/confirming/);
 
   await victimDisconnect.click();
-  // Post-disconnect: table refreshes (the runAction re-fetches). The
-  // target user's credential transitions to :parked → the Bootstrap
-  // pid stops → row drops from /admin/sessions on the next list.
-  // At minimum the error banner MUST NOT appear.
+  // Post-disconnect: the table re-fetches (runAction does). The target
+  // user's credential transitions to :parked and the Bootstrap pid stops.
+  //
+  // Pre-#1157 the row DROPPED here — the list was registry-driven — so the
+  // only thing left to assert was the absence of an error banner, which is
+  // not an outcome. Row-backed, the row survives its own pid, so the verb
+  // now has a real oracle: the channels cell falls to the em-dash, which
+  // `renderChannels` emits if and only if `live` is null. A disconnect that
+  // silently no-opped would keep a count there and fail this.
+  await expect(page.getByTestId(`admin-session-row-${victim.sessionId}`)).toBeVisible();
+  await expect(page.getByTestId(`admin-session-channels-${victim.sessionId}`)).toHaveText("—", {
+    timeout: 10_000,
+  });
   await expect(page.getByTestId("admin-sessions-error")).toHaveCount(0, { timeout: 5_000 });
 });
 
@@ -198,7 +217,14 @@ test("M-9b admin Terminate inline-confirm fires DELETE", async ({ page }) => {
   await expect(victimTerminate).toHaveClass(/confirming/);
 
   await victimTerminate.click();
-  // 204 idempotent. Pid is gone; DB rows preserved (per M-9a spec).
-  // No error surface expected.
+  // 204 idempotent. Pid is gone; DB rows preserved (per M-9a spec) — and
+  // since #1157 the LIST preserves them too, so "DB row preserved, pid
+  // gone" is finally assertable from the console instead of being a claim
+  // about a row that vanished: the row stays, the channels cell reads the
+  // no-pid em-dash.
+  await expect(page.getByTestId(`admin-session-row-${victim.sessionId}`)).toBeVisible();
+  await expect(page.getByTestId(`admin-session-channels-${victim.sessionId}`)).toHaveText("—", {
+    timeout: 10_000,
+  });
   await expect(page.getByTestId("admin-sessions-error")).toHaveCount(0, { timeout: 5_000 });
 });

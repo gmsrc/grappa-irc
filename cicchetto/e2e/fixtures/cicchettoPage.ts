@@ -1005,6 +1005,53 @@ export async function openAdminConsole(page: Page): Promise<Locator> {
   return pane;
 }
 
+// Open the unified admin Sessions tab (#1157) — the single door for every
+// spec that used to reach EITHER the Sessions tab or the deleted Visitors tab.
+export async function openAdminSessionsTab(page: Page): Promise<Locator> {
+  await openAdminConsole(page);
+  await page.getByTestId("admin-tab-sessions").click();
+  const table = page.getByTestId("admin-sessions-table");
+  await expect(table).toBeVisible({ timeout: 10_000 });
+  return table;
+}
+
+// A row's testid suffix is the composite `<kind>:<subject_id>:<network_id>` —
+// the same string the `/admin/sessions/:id/*` verbs parse. A spec knows the
+// subject id (a minted visitor id, a seeded user id) but not the network's
+// integer FK, so rows are located by the two-thirds prefix and the full key is
+// read back off the DOM for the sibling controls that need it.
+export function adminSessionRows(page: Page, kind: "user" | "visitor", subjectId: string): Locator {
+  return page.locator(`[data-testid^="admin-session-row-${kind}:${subjectId}:"]`);
+}
+
+// Resolve the ONE row of a subject that is bound to a single network, and
+// return its composite key. Fails loudly on 0 or >1 matches rather than
+// silently taking `.first()`: a caller asking for "the" row of a multi-network
+// subject is asking the wrong question, and answering it arbitrarily would
+// make a destructive verb hit a network the spec never named.
+export async function adminSessionRowKey(
+  page: Page,
+  kind: "user" | "visitor",
+  subjectId: string,
+): Promise<string> {
+  const rows = adminSessionRows(page, kind, subjectId);
+  await expect(rows).toHaveCount(1, { timeout: 15_000 });
+  const testId = await rows.getAttribute("data-testid");
+  if (testId === null)
+    throw new Error(`admin session row for ${kind}:${subjectId} lost its testid`);
+  return testId.replace("admin-session-row-", "");
+}
+
+// Expand a row's drill-down and return the detail panel. The disclosure is the
+// row's identity cell (`AdminRowName`), so this is also the whole-cell tap
+// target the dictation asks for.
+export async function openAdminSessionDetail(page: Page, key: string): Promise<Locator> {
+  await page.getByTestId(`admin-session-details-${key}`).click();
+  const detail = page.getByTestId(`admin-session-detail-${key}`);
+  await expect(detail).toBeVisible({ timeout: 5_000 });
+  return detail;
+}
+
 // Close the settings drawer from ANY page — the exit counterpart to
 // openSettingsSection. #460 moved the "done" footer button onto the main index
 // only, so a spec sitting on a sub-page (where openSettingsSection leaves it)

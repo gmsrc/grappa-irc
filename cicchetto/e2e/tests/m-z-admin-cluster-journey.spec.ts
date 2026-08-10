@@ -1,10 +1,14 @@
 // M-cluster M-Z — full operator-journey end-to-end. Covers the
 // shipping reality of the entire M cluster (M-7..M-11) from the
-// admin's browser session: drawer → AdminPane mount → 4 tab
-// visits (Visitors / Sessions / Networks / Events) → real
+// admin's browser session: drawer → AdminPane mount → 3 tab
+// visits (Sessions / Networks / Events) → real
 // cap-saturation event flow (PATCH cap to 0 → mint visitor → 503
 // → typed `:capacity_reject` admin event lands in Events tab in
 // real time).
+//
+// Three tabs, not four: #1157 merged the Visitors tab into the unified
+// Sessions view, so the visitor population is asserted on the tab below
+// rather than on a tab of its own.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT —
 // only the admin user class reaches the pane; m7-admin-gate-settings-drawer.spec.ts
@@ -26,8 +30,8 @@
 // grappa-test boots.
 //
 // Test order discipline: this spec is INTENTIONALLY non-mutating
-// for the destructive surfaces — it asserts presence of Visitors
-// + Sessions + Networks rows without firing per-row Disconnect /
+// for the destructive surfaces — it asserts presence of the
+// unified Sessions + Networks rows without firing per-row Disconnect /
 // Terminate / Delete (those are covered by per-bucket specs
 // m8-admin-visitors-delete + m9b-admin-sessions-actions +
 // m10-admin-networks-cap-editor). The cap-saturation arm DOES
@@ -78,7 +82,7 @@ async function patchNetworkCap(adminToken: string, slug: string, cap: number): P
   }
 }
 
-test("M-Z admin operator journey: drawer → 4 tabs → cap-saturation event lands live", async ({
+test("M-Z admin operator journey: drawer → 3 tabs → cap-saturation event lands live", async ({
   page,
 }) => {
   const admin = getSeededAdmin();
@@ -96,37 +100,36 @@ test("M-Z admin operator journey: drawer → 4 tabs → cap-saturation event lan
   // the channel subscription is live by the time we hit cap-saturate.
   await openAdminConsole(page);
 
-  // STEP 2 — Visitors tab: list renders (table when populated, or
-  // the explicit "no visitors" marker when empty — seeder doesn't
-  // mint baseline visitors). Per-row delete is M-8 territory;
-  // here we only assert the tab mounts cleanly.
-  await page.getByTestId("admin-tab-visitors").click();
-  const visitorsTable = page.getByTestId("admin-visitors-table");
-  const visitorsEmpty = page.getByTestId("admin-visitors-empty");
-  await expect(visitorsTable.or(visitorsEmpty)).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByTestId("admin-visitors-error")).toHaveCount(0);
-
-  // STEP 3 — Sessions tab: at least 2 rows from seeded vjt + m9b-test.
-  // Per m9b-admin-sessions-actions.spec.ts this count holds when the
-  // destructive specs haven't run yet; M-Z runs against the same DB
-  // so we accept ">= 1" to stay robust to file-ordering quirks.
+  // STEP 2 — Sessions tab: the unified view (#1157 merged the Visitors tab
+  // into it, so the journey visits three tabs where it used to visit four).
+  // At least the seeded vjt + m9b-test rows. Per
+  // m9b-admin-sessions-actions.spec.ts an exact count holds when the
+  // destructive specs haven't run yet; M-Z runs against the same DB so we
+  // accept ">= 1" to stay robust to file-ordering quirks.
+  //
+  // The merge also makes this step strictly stronger than the two it
+  // replaces: the list is row-backed now, so a subject the old Sessions tab
+  // would have dropped (parked, failed, expired-but-unreaped) is still a row
+  // here. Per-row Disconnect / Terminate / Delete stay M-8 and M-9b
+  // territory — this spec is non-mutating on those surfaces.
   await page.getByTestId("admin-tab-sessions").click();
   await expect(page.getByTestId("admin-sessions-table")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId("admin-sessions-error")).toHaveCount(0);
   const sessionRows = page.locator("[data-testid^='admin-session-row-']");
   await expect.poll(() => sessionRows.count(), { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
 
-  // STEP 4 — Networks tab: bahamut-test + azzurra both seeded.
+  // STEP 3 — Networks tab: bahamut-test + azzurra both seeded.
   await page.getByTestId("admin-tab-networks").click();
   await expect(page.getByTestId("admin-networks-table")).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("admin-network-row-bahamut-test")).toBeVisible();
   await expect(page.getByTestId(`admin-network-row-${AZZURRA_SLUG}`)).toBeVisible();
 
-  // STEP 5 — Events tab: mounts cleanly (snapshot may include prior
+  // STEP 4 — Events tab: mounts cleanly (snapshot may include prior
   // test events from the same compose run; we don't assert empty).
   await page.getByTestId("admin-tab-events").click();
   await expect(page.getByTestId("admin-events-tab")).toBeVisible();
 
-  // STEP 6 — Cap-saturation: PATCH azzurra cap to 0, mint visitor
+  // STEP 5 — Cap-saturation: PATCH azzurra cap to 0, mint visitor
   // (expected to 503 with `network_busy`), assert the typed
   // `capacity_reject` admin event row lands in the Events tab in
   // real time. Revert in finally so subsequent specs see the
@@ -166,7 +169,7 @@ test("M-Z admin operator journey: drawer → 4 tabs → cap-saturation event lan
     });
   }
 
-  // STEP 7 — Non-admin gate: covered by m7-admin-gate-settings-drawer.spec.ts (the
+  // STEP 6 — Non-admin gate: covered by m7-admin-gate-settings-drawer.spec.ts (the
   // dedicated three-class parity gate). Re-asserting here would
   // duplicate the per-bucket spec's coverage without adding new
   // signal — M-Z is the cross-bucket compositional spec, not a
