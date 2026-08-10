@@ -12,8 +12,11 @@ defmodule Grappa.Repo.Migrations.AddClientTokensToSessions do
   # Mac") would otherwise flip the security boundary silently.
   #
   # Default `"web"` backfills every existing row to today's behaviour, so
-  # the deploy needs no data migration — but it DOES need a restart: the
-  # schema change is a COLD deploy.
+  # there is no data migration. Expand-only, which is why
+  # `Grappa.Deploy.Preflight` classifies it HOT: Ecto selects named
+  # columns, so a node still running the old `Session` module cannot see
+  # the two new ones, and the reload brings the schema and the column
+  # into agreement in either order.
   def change do
     alter table(:sessions) do
       add :kind, :string, null: false, default: "web"
