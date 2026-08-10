@@ -36572,3 +36572,54 @@ added to the Logger metadata allowlist in `config/config.exs`, and any
 edit there forces a COLD deploy. The fix above is HOT, and holding it
 behind a restart window would keep a live defect in production for no
 gain. The breadcrumb ships separately, batched with other COLD work.
+## 2026-08-10 — #1115: the message menu got a second door, and the exclude list decided who wins
+
+#1067 built the scrollback's message menu (Copy / Reply / Select…) and hung it
+off exactly one opener: a touch long-press. On a desktop the row therefore had
+no menu at all — right-clicking it produced the browser's own. The whole fix is
+a door, not a menu: `lib/messageContextMenu.ts` binds `contextmenu` on the
+scroll container, resolves the row with `closest`, and calls the same
+`openMessageMenu` the long-press calls.
+
+**One menu for both modalities.** #1115 offered trimming or reordering the
+items per input type — `Select…` exists because selecting by touch is awkward,
+`Copy` overlaps a mouse user's own selection. Rejected: every item is a verb on
+the ROW, none of them means something different under a mouse, and branching
+would require an "am I touch" signal that lies on the first touchscreen laptop.
+The two doors share one `openMenuForRow` closure at the call site so they
+cannot drift into two menus.
+
+**A separate binder, not a branch in `bindMessageGestures`.** That module is
+the scrollback's one TOUCH-gesture owner and exists because the swipe and the
+hold share `touchstart→move→end` state. A `contextmenu` handler shares none of
+it and would sit inert through every touch event it was handed.
+
+**`contextmenu` is the whole input matrix.** Right-click, Ctrl+click on macOS,
+and the keyboard Menu key all arrive as that one event, so nothing looks at
+`button` and no modality is special-cased. **Not claimed:** keyboard parity is
+not actually reachable today — a scrollback row is not focusable, so the Menu
+key can never target one. Making rows focusable is an a11y change with its own
+roving-tabindex questions and is deliberately not in this diff; the handler is
+written against the ELEMENT, so it inherits the fix if that ever lands.
+
+**Nick precedence falls out of `SELECTABLE_TEXT_EXCLUDE`, not out of event
+ordering.** The nick span is inside the row, and the row-level listener runs
+BEFORE the nick's — Solid delegates `contextmenu` to the document, which is the
+last hop of the bubble path, while ours sits on the container. Rather than race
+that with `stopPropagation`, the door reuses the exclude list `keepKeyboard`
+and the touch owner already share: inside a nick, a link, a channel or the
+[Join] CTA, we return WITHOUT `preventDefault`, so the nick's delegated handler
+inherits a live event and opens the nick menu. The same line hands a link's
+right-click back to the browser, where "open in new tab / copy link address"
+is worth more than anything we offer — a `stopPropagation` on the nick alone
+would not have covered that.
+
+**Yielding to a live selection is deliberately coarse.** #1115 asked whether to
+suppress the native menu unconditionally or yield when a selection covers the
+cursor. We yield on ANY non-collapsed selection: it is the predicate
+`bindMessageGestures` already uses for the same judgement ("the operator is
+adjusting a selection, stay out of the way"), so the two cannot drift, and
+"covers the cursor" is not something the engines agree on. The cost is a stale
+selection elsewhere in the pane suppressing our menu until it is dismissed —
+accepted, because the browser's copy/search menu is the reasonable answer while
+any selection is live.
