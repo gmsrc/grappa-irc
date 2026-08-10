@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, For, onCleanup } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { computeMenuPosition } from "./lib/menuPosition";
 
@@ -36,11 +36,24 @@ import { computeMenuPosition } from "./lib/menuPosition";
 // all four insets from one measurement, which is what the X axis (landscape
 // notch) and the bottom edge (home indicator) need.
 
-export type ContextMenuItem = {
+// An item either DOES something or OPENS something, never both — so the two
+// are separate shapes rather than one shape with an optional field, and
+// `"submenu" in item` narrows exhaustively.
+//
+// #1192 — a submenu holds ACTIONS ONLY, so nesting is impossible by
+// construction. That is not a limitation to lift later: the drill state below
+// is a single index into `props.items`, which is what keeps it from going stale
+// when the caller re-renders the list. Depth would need a path, and nothing
+// wants depth.
+export type ContextMenuAction = {
   label: string;
   enabled: boolean;
   action: () => void;
 };
+
+export type ContextMenuItem =
+  | ContextMenuAction
+  | { label: string; enabled: boolean; submenu: ContextMenuAction[] };
 
 export type Props = {
   items: ContextMenuItem[];
@@ -58,8 +71,48 @@ const ContextMenu: Component<Props> = (props) => {
     onCleanup(() => document.removeEventListener("keydown", onKeyDown));
   });
 
-  const handleItemClick = (item: ContextMenuItem): void => {
+  // #1192 — the drill-down level, held as an INDEX into `props.items` rather
+  // than as the submenu object itself. The caller rebuilds its item array on
+  // every access (a JSX prop is a getter, and `UserContextMenu` calls `items()`
+  // inline), so a captured object would go stale the moment anything upstream
+  // re-rendered; an index is re-resolved against the current props every read.
+  const [drilledIndex, setDrilledIndex] = createSignal<number | null>(null);
+
+  const drilled = (): ContextMenuAction[] | null => {
+    const index = drilledIndex();
+    if (index === null) return null;
+    const item = props.items[index];
+    return item !== undefined && "submenu" in item ? item.submenu : null;
+  };
+
+  const visibleItems = (): ContextMenuItem[] => drilled() ?? props.items;
+
+  // The parent's own label, shown on the back row so the drilled level says
+  // where it is as well as how to leave.
+  const drilledLabel = (): string => {
+    const index = drilledIndex();
+    return index === null ? "" : (props.items[index]?.label ?? "");
+  };
+
+  // A second open can reuse this component instance: both call sites gate on a
+  // `<Show>` whose signal goes value→value when the operator right-clicks a
+  // different nick while the menu is up, so nothing unmounts. The placement
+  // effect already has to re-run for that case; the drill level has to RESET for
+  // it, or the second nick opens straight into the first one's submenu.
+  createEffect(
+    on(
+      () => [props.position.x, props.position.y],
+      () => setDrilledIndex(null),
+      { defer: true },
+    ),
+  );
+
+  const handleItemClick = (item: ContextMenuItem, index: number): void => {
     if (!item.enabled) return;
+    if ("submenu" in item) {
+      setDrilledIndex(index);
+      return;
+    }
     item.action();
     props.onClose();
   };
@@ -78,6 +131,12 @@ const ContextMenu: Component<Props> = (props) => {
     // signal), so `onMount` alone would strand the menu at the first coords.
     const clickX = props.position.x;
     const clickY = props.position.y;
+    // #1192 — and track the drill level for the same reason: entering or
+    // leaving a submenu swaps the item list, so the box changes HEIGHT. Without
+    // this read the menu keeps the placement measured for the previous level,
+    // and a submenu opened near the bottom edge hangs off the fold — the exact
+    // #487 defect, re-entered through a door #487 could not have known about.
+    drilledIndex();
     if (!menuRef || !safeAreaRef) return;
     const rect = menuRef.getBoundingClientRect();
     const safe = safeAreaRef.getBoundingClientRect();
@@ -137,16 +196,34 @@ const ContextMenu: Component<Props> = (props) => {
         }}
         role="menu"
       >
-        <For each={props.items}>
-          {(item) => (
+        {/* #1192 — the way back UP a drill-down. Deliberately a peer of the
+            items (same `.context-menu-item` class, so it inherits the hit
+            target and the e2e's locator) rather than a floating chrome
+            affordance: on a long-press menu there is nowhere to put chrome, and
+            a row is the one thing a thumb already knows how to hit. Escape is
+            left alone — it still closes the whole menu, the behaviour every
+            existing caller of this shell already has. */}
+        <Show when={drilled()}>
+          <button
+            type="button"
+            class="context-menu-item context-menu-back"
+            onClick={() => setDrilledIndex(null)}
+          >
+            ‹ {drilledLabel()}
+          </button>
+        </Show>
+        <For each={visibleItems()}>
+          {(item, index) => (
             <button
               type="button"
               class="context-menu-item"
               classList={{ "context-menu-item-disabled": !item.enabled }}
               disabled={!item.enabled}
-              onClick={() => handleItemClick(item)}
+              onClick={() => handleItemClick(item, index())}
             >
-              {item.label}
+              {/* The ▸ is the shell's job, not the caller's: the caller names
+                  the group, the shell says it opens. */}
+              {"submenu" in item ? `${item.label} ▸` : item.label}
             </button>
           )}
         </For>

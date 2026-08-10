@@ -6660,6 +6660,13 @@ html.resize-dragging * {
   cursor: not-allowed;
 }
 
+/* #1192 — the drill-down's back row. Muted and ruled off so the level it
+   leaves reads as a header rather than as one more thing to invoke. */
+.context-menu-back {
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
 /* Mobile drawer mode (≤768px) */
 
 @media (max-width: 768px) {
