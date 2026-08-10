@@ -2,14 +2,14 @@ import { fireEvent, render, screen } from "@solidjs/testing-library";
 import type { Channel } from "phoenix";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// M-cluster M-8 / M-9b / M-10 / M-11 + UX-6-B2 — AdminPane mounts
-// Visitors + Sessions + Networks + Events + Settings tabs inside
-// their respective tabpanels. Mock all five so this suite stays
-// focused on the OUTER PANE contract (header + tab nav +
-// active-tab switching + admin-events subscription lifecycle).
-vi.mock("../AdminVisitorsTab", () => ({
-  default: () => <div data-testid="admin-visitors-tab-mock">visitors-tab</div>,
-}));
+// M-cluster M-8 / M-9b / M-10 / M-11 + UX-6-B2 — AdminPane mounts the
+// Sessions + Networks + Events + Settings tabs inside their respective
+// tabpanels. Mock them so this suite stays focused on the OUTER PANE
+// contract (header + tab nav + active-tab switching + admin-events
+// subscription lifecycle).
+//
+// #1157 — Visitors is no longer among them: it merged into Sessions,
+// which now lists both subject kinds, active and inactive.
 
 vi.mock("../AdminSessionsTab", () => ({
   default: () => <div data-testid="admin-sessions-tab-mock">sessions-tab</div>,
@@ -59,21 +59,18 @@ describe("AdminPane", () => {
     expect(screen.getByRole("heading", { name: /admin console/i })).toBeInTheDocument();
   });
 
-  it("renders all five tabs with Sessions as the default-active tab", () => {
+  it("renders the tabs with Sessions as the default-active tab", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
-    const visitorsTab = screen.getByTestId("admin-tab-visitors");
     const sessionsTab = screen.getByTestId("admin-tab-sessions");
     const networksTab = screen.getByTestId("admin-tab-networks");
     const eventsTab = screen.getByTestId("admin-tab-events");
     const settingsTab = screen.getByTestId("admin-tab-settings");
     // textContent assertion per `feedback_css_block_button_wraps_inline_prefix`.
-    expect(visitorsTab.textContent).toContain("Visitors");
     expect(sessionsTab.textContent).toContain("Sessions");
     expect(networksTab.textContent).toContain("Networks");
     expect(eventsTab.textContent).toContain("Events");
     expect(settingsTab.textContent).toContain("Settings");
     expect(sessionsTab.getAttribute("aria-selected")).toBe("true");
-    expect(visitorsTab.getAttribute("aria-selected")).toBe("false");
     expect(networksTab.getAttribute("aria-selected")).toBe("false");
     expect(eventsTab.getAttribute("aria-selected")).toBe("false");
     expect(settingsTab.getAttribute("aria-selected")).toBe("false");
@@ -84,21 +81,16 @@ describe("AdminPane", () => {
   it("mounts AdminSessionsTab inside the active tabpanel by default", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
     expect(screen.getByTestId("admin-sessions-tab-mock")).toBeInTheDocument();
-    expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-events-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-settings-tab-mock")).toBeNull();
   });
 
-  it("clicking the Visitors tab swaps the active panel + flips aria-selected", () => {
+  // #1157 — the tab is gone, so the handle must be gone too: a dead
+  // handle would still switch `currentTab` and render an empty panel.
+  it("has no Visitors tab handle at all", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
-    fireEvent.click(screen.getByTestId("admin-tab-visitors"));
-    expect(screen.getByTestId("admin-visitors-tab-mock")).toBeInTheDocument();
-    expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
-    expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
-    expect(screen.queryByTestId("admin-events-tab-mock")).toBeNull();
-    expect(screen.getByTestId("admin-tab-visitors").getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByTestId("admin-tab-sessions").getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByTestId("admin-tab-visitors")).toBeNull();
   });
 
   it("clicking the Networks tab swaps the active panel + flips aria-selected", () => {
@@ -113,7 +105,6 @@ describe("AdminPane", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-events"));
     expect(screen.getByTestId("admin-events-tab-mock")).toBeInTheDocument();
-    expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-settings-tab-mock")).toBeNull();
@@ -124,7 +115,6 @@ describe("AdminPane", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-session_log"));
     expect(screen.getByTestId("admin-session-log-tab-mock")).toBeInTheDocument();
-    expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-events-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-settings-tab-mock")).toBeNull();
     expect(screen.getByTestId("admin-tab-session_log").getAttribute("aria-selected")).toBe("true");
@@ -135,19 +125,18 @@ describe("AdminPane", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-settings"));
     expect(screen.getByTestId("admin-settings-tab-mock")).toBeInTheDocument();
-    expect(screen.queryByTestId("admin-visitors-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
     expect(screen.queryByTestId("admin-events-tab-mock")).toBeNull();
     expect(screen.getByTestId("admin-tab-settings").getAttribute("aria-selected")).toBe("true");
   });
 
-  it("clicking back to Visitors after Sessions returns the original panel", () => {
+  it("clicking back to Sessions after Networks returns the original panel", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
+    fireEvent.click(screen.getByTestId("admin-tab-networks"));
     fireEvent.click(screen.getByTestId("admin-tab-sessions"));
-    fireEvent.click(screen.getByTestId("admin-tab-visitors"));
-    expect(screen.getByTestId("admin-visitors-tab-mock")).toBeInTheDocument();
-    expect(screen.queryByTestId("admin-sessions-tab-mock")).toBeNull();
+    expect(screen.getByTestId("admin-sessions-tab-mock")).toBeInTheDocument();
+    expect(screen.queryByTestId("admin-networks-tab-mock")).toBeNull();
   });
 
   // #1073 — vjt: *"la x sparisce"*. Not relocated: DELETED. Selection is what

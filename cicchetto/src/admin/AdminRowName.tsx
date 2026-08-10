@@ -13,6 +13,13 @@ import { isMobile } from "../lib/theme";
 // The caret is the same `▸ / ▾` the Networks slug expander has used
 // since M-10, so the affordance is one the operator has already met in
 // this pane rather than a second convention.
+//
+// #1157 — that "nothing to open on desktop" reasoning is a statement
+// about a table that drops columns only below 900px, which is still
+// true of Networks, Credentials and Vhosts. The unified Sessions view
+// is not one of those: it carries four columns at EVERY width and keeps
+// the rest of the record in the panel, so there the disclosure is the
+// only door to it and `alwaysOpenable` keeps it on at all widths.
 
 export type Props = {
   /** The row's name, e.g. `vjt @ azzurra`. */
@@ -22,10 +29,16 @@ export type Props = {
   /** Accessible name for the disclosure, e.g. `details for vjt`. */
   label: string;
   testId?: string;
+  /** Render the disclosure at every width, not just on a phone. For a
+   * table whose panel holds fields no breakpoint puts back on screen. */
+  alwaysOpenable?: boolean;
 };
 
 const AdminRowName: Component<Props> = (props) => (
-  <Show when={isMobile()} fallback={<span class="adm-row-name">{props.children}</span>}>
+  <Show
+    when={props.alwaysOpenable === true || isMobile()}
+    fallback={<span class="adm-row-name">{props.children}</span>}
+  >
     <button
       type="button"
       class="adm-row-expand"

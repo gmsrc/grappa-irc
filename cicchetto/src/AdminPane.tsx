@@ -9,7 +9,6 @@ import AdminSessionsTab from "./AdminSessionsTab";
 import AdminSettingsTab from "./AdminSettingsTab";
 import AdminUsersTab from "./AdminUsersTab";
 import AdminVhostsTab from "./AdminVhostsTab";
-import AdminVisitorsTab from "./AdminVisitorsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
 import { adminOverview } from "./lib/adminOverview";
@@ -79,7 +78,6 @@ export type Props = {
 };
 
 type TabKey =
-  | "visitors"
   | "sessions"
   | "networks"
   | "vhosts"
@@ -102,7 +100,6 @@ const GROUPS: AdminNavGroup[] = [
 
 const TABS: (AdminNavTab & { key: TabKey })[] = [
   { key: "sessions", label: "Sessions", group: "live" },
-  { key: "visitors", label: "Visitors", group: "live" },
   { key: "events", label: "Events", group: "live" },
   { key: "session_log", label: "Session Log", group: "live" },
   { key: "networks", label: "Networks", group: "config" },
@@ -166,17 +163,6 @@ const AdminPane: Component<Props> = (props) => {
         current={currentTab()}
         onSelect={(key) => setCurrentTab(key as TabKey)}
       />
-      <Show when={isActive("visitors")}>
-        <div
-          role="tabpanel"
-          id="admin-tab-visitors"
-          aria-labelledby="admin-tab-visitors-handle"
-          class="admin-tab-panel"
-          data-adm-group={currentGroup()}
-        >
-          <AdminVisitorsTab />
-        </div>
-      </Show>
       <Show when={isActive("sessions")}>
         <div
           role="tabpanel"

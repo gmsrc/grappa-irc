@@ -9,93 +9,104 @@ import AdminTable from "./admin/AdminTable";
 import { useRefreshSlot } from "./admin/refreshSlot";
 import InlineConfirmButton from "./InlineConfirmButton";
 import {
+  type AdminSubjectRow,
+  buildSubjectRows,
+  channelCount,
+  rowActions,
+} from "./lib/adminSubjectRows";
+import {
+  type AdminCredential,
   type AdminNetwork,
   type AdminSession,
+  type AdminVisitor,
   ApiError,
+  adminDeleteVisitor,
   adminDisconnectSession,
+  adminListCredentials,
   adminListNetworks,
   adminListSessions,
-  adminSessionId,
+  adminListVisitors,
+  adminReconnectSession,
   adminTerminateSession,
 } from "./lib/api";
 import { token } from "./lib/auth";
 
-// M-cluster M-9b — Sessions admin tab. Mirror of AdminVisitorsTab
-// with TWO action buttons per row (Disconnect / Terminate). Both
-// route through the shared InlineConfirmButton; the singleton
-// `confirmingKey: "<id>:disconnect" | "<id>:terminate" | null`
-// signal enforces "only one action armed at a time across the
-// whole tab" — keeps the operator from priming two destructive
-// verbs simultaneously.
+// #1157 — the unified admin Sessions view. The Visitors tab is gone;
+// this one lists ACTIVE AND INACTIVE sessions for both subject kinds.
+//
+// The row set is built in `lib/adminSubjectRows.ts` — read the reasoning
+// there, it is the load-bearing part: the list is ROW-backed with live
+// process state joined on top, because a registry-driven list drops
+// every parked / failed / expired-but-unreaped subject out of the
+// console.
+//
+// Column shape is dictated (vjt, 2026-08-09):
+//   1. two lines — a visitor/user badge (both the SAME width, so the
+//      nicks line up into a readable column) + the nick, then the
+//      network underneath;
+//   2. last seen;  3. channel count;  4. actions.
+// Everything else moved into the per-row drill-down rather than being
+// deleted: a phone cannot show those columns side by side, and the
+// answer to that is fewer columns, not a table the operator has to pan.
+//
+// Delete lives in the drill-down, NOT in the actions cell, and says so:
+// `DELETE /admin/visitors/:id` is identity-wide while a row here is one
+// (subject, network) pair, so a visitor on two networks yields two rows
+// whose Delete buttons would each nuke both. Behind the disclosure, and
+// labelled with what it actually destroys, it stops being a footgun.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT.
-// Per `feedback_no_silent_drops_closed`: `introspection_degraded`
-// chip surfaces when the BEAM couldn't read a field within the
-// SessionEntry timeout — operator sees stale-data warning before
-// acting on the row.
-//
-// M-11 (NEXT in cluster) wires `grappa:admin:events` so the table
-// auto-updates on terminate/disconnect/respawn; until then the
-// refresh button is the only re-fetch surface. After a destructive
-// action we re-fetch from the registry: terminate de-registers the
-// pid (row disappears) and disconnect parks the credential (row
-// disappears on next list because Bootstrap won't respawn a
-// `:parked` credential). The `LiveBadge` `alive: false` branch is
-// only reachable in the brief window between BEAM crash + registry
-// sweep, not as a steady operator-visible state.
-//
-// U-3 (UD4): the tab now also renders a per-network cap-count summary
-// above the sessions table. Live counts come from `/admin/networks`'s
-// `live_counts:` projection (server-side authoritative — same
-// Registry match-spec the admission policy uses, so the projection
-// cannot drift from the policy itself). Cic fetches BOTH endpoints
-// in parallel on every refresh + post-action; the summary is a
-// read-only at-a-glance signal, not a separate state model.
 
-// who + state + the six `adm-col-detail` columns + actions. Feeds the
-// detail row's `colspan`.
-const SESSION_COLUMNS = 9;
+// who + last seen + channels + the detail-only columns + actions. Feeds
+// the detail row's colspan.
+const SESSION_COLUMNS = 4;
 
-type ActionKind = "disconnect" | "terminate";
+type ActionKind = "disconnect" | "reconnect" | "terminate";
 
-function confirmKey(id: string, kind: ActionKind): string {
-  return `${id}:${kind}`;
+const ACTION_FN: Record<ActionKind, (token: string, id: string) => Promise<void>> = {
+  disconnect: adminDisconnectSession,
+  reconnect: adminReconnectSession,
+  terminate: adminTerminateSession,
+};
+
+const ACTION_LABEL: Record<ActionKind, string> = {
+  disconnect: "Disconnect",
+  reconnect: "Reconnect",
+  terminate: "Terminate",
+};
+
+function confirmKey(key: string, kind: ActionKind | "delete"): string {
+  return `${key}:${kind}`;
 }
 
 function renderCap(cap: number | null): string {
   // Mirrors the AdminNetworksTab cap-cell convention: `null` is the
-  // "unlimited" sentinel per `Networks.update_network_caps/2`. ∞ is
-  // a single glyph so the summary stays scannable.
+  // "unlimited" sentinel per `Networks.update_network_caps/2`.
   return cap === null ? "∞" : String(cap);
 }
 
 const AdminSessionsTab: Component = () => {
+  const [visitors, setVisitors] = createSignal<AdminVisitor[] | null>(null);
+  const [credentials, setCredentials] = createSignal<AdminCredential[] | null>(null);
   const [sessions, setSessions] = createSignal<AdminSession[] | null>(null);
   const [networks, setNetworks] = createSignal<AdminNetwork[] | null>(null);
   const [confirmingKey, setConfirmingKey] = createSignal<string | null>(null);
-
-  // Which row's detail panel is open. Mobile-only in effect: on desktop
-  // every column is on screen, `AdminRowName` renders plain text and
-  // nothing can set this.
-  const [detailId, setDetailId] = createSignal<string | null>(null);
+  const [detailKey, setDetailKey] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
 
-  // #242 — the sessions wire carries `network_id` (the raw integer FK),
-  // not a human-readable name. When one account is connected to two
-  // networks the operator sees two identical rows distinguishable only
-  // by an opaque integer. Resolve the FK → slug via the networks list
-  // this tab ALREADY fetches in parallel (same `/admin/networks`
-  // projection the per-network summary above uses), so no server change
-  // is needed. Rebuilt only when `networks()` changes; falls back to the
-  // raw id when unresolved (deleted-network race / a session on a
-  // network `/admin/networks` didn't return) — the honest signal that
-  // the FK couldn't be mapped, never a silent blank.
-  const networkSlugById = createMemo<Map<number, string>>(() => {
-    const byId = new Map<number, string>();
-    for (const net of networks() ?? []) byId.set(net.id, net.slug);
-    return byId;
-  });
+  const loaded = (): boolean => visitors() !== null && credentials() !== null;
+
+  const rows = createMemo<AdminSubjectRow[]>(() =>
+    loaded()
+      ? buildSubjectRows({
+          visitors: visitors() ?? [],
+          credentials: credentials() ?? [],
+          sessions: sessions() ?? [],
+          networks: networks() ?? [],
+        })
+      : [],
+  );
 
   const refresh = async (): Promise<void> => {
     const t = token();
@@ -104,26 +115,25 @@ const AdminSessionsTab: Component = () => {
     setError(null);
     setConfirmingKey(null);
     try {
-      // Parallel fetch — sessions list (live BEAM pids) + networks
-      // list (operator caps + Registry-projected live_counts).
-      // Both endpoints are admin-gated; failure of either
-      // collapses the whole render to the error banner (don't show
-      // half-table that the operator can't trust). U-3 (UD4).
-      const [nextSessions, nextNetworks] = await Promise.all([
+      // Four endpoints, one table. The two row-backed ones supply the
+      // rows, /admin/sessions supplies the live join, /admin/networks
+      // supplies the capacity summary + the slug for an orphan row.
+      // Failure of ANY collapses the whole render to the banner: a
+      // half-built merge is worse than no table, because the operator
+      // cannot tell which half is missing.
+      const [nextVisitors, nextCredentials, nextSessions, nextNetworks] = await Promise.all([
+        adminListVisitors(t),
+        adminListCredentials(t),
         adminListSessions(t),
         adminListNetworks(t),
       ]);
+      setVisitors(nextVisitors);
+      setCredentials(nextCredentials);
       setSessions(nextSessions);
       setNetworks(nextNetworks);
     } catch (e) {
-      // Web M1 reviewer fix: clear BOTH signals on error so the
-      // banner stands alone. Pre-fix the catch path only set
-      // `error()`, leaving the prior successful rows rendered
-      // alongside the banner — contradicting the doc comment above
-      // ("failure of either collapses the whole render to the error
-      // banner; don't show half-table that the operator can't
-      // trust"). Now the operator sees only the banner + refresh
-      // CTA when a refresh after a successful prior fetch fails.
+      setVisitors(null);
+      setCredentials(null);
       setSessions(null);
       setNetworks(null);
       const code = e instanceof ApiError ? e.code : "fetch_failed";
@@ -133,39 +143,49 @@ const AdminSessionsTab: Component = () => {
     }
   };
 
-  const runAction = async (
-    s: AdminSession,
-    kind: ActionKind,
-    fn: (token: string, id: string) => Promise<void>,
-  ): Promise<void> => {
+  const runAction = async (row: AdminSubjectRow, kind: ActionKind): Promise<void> => {
     const t = token();
     if (t === null) return;
     setError(null);
     try {
-      await fn(t, adminSessionId(s));
+      await ACTION_FN[kind](t, row.key);
       setConfirmingKey(null);
-      // Re-fetch — M-9a actions mutate live BEAM state (pid stop,
-      // credential park) that the registry-driven /admin/sessions
-      // response reflects on the next call. Mirrors the operator's
-      // expectation that the table catches up after a destructive
-      // verb. M-11 will replace this with the live admin-events
-      // stream.
+      // Re-fetch rather than splice: every one of these verbs moves
+      // live BEAM state (and disconnect on a user subject also moves
+      // the DB connection_state), and the row STAYS either way — only
+      // its live/DB columns flip. The server projection is the only
+      // honest source for what they flipped to.
       await refresh();
     } catch (e) {
-      // Always prefix with the verb so the operator can tell which
-      // of the two per-row actions failed (M2 reviewer note). The
-      // ApiError.code path also gets the prefix — a bare
-      // `cannot_disconnect_self` could plausibly belong to either
-      // verb without it (terminate has the same 422 gate).
+      // Prefix with the verb: three actions share this cell and a bare
+      // `cannot_disconnect_self` would not say which one earned it.
       const code = e instanceof ApiError ? e.code : "request_failed";
       setError(`${kind}: ${code}`);
       setConfirmingKey(null);
     }
   };
 
-  // The pane header renders this tab's refresh (see
-  // `admin/refreshSlot.ts`): the toolbar that used to hold it said
-  // nothing the nav above does not already say.
+  const runDelete = async (row: AdminSubjectRow): Promise<void> => {
+    const t = token();
+    const id = row.visitor?.visitor_id;
+    if (t === null || id === undefined) return;
+    setError(null);
+    try {
+      await adminDeleteVisitor(t, id);
+      setConfirmingKey(null);
+      setDetailKey(null);
+      // Refetch, NOT splice: the verb is identity-wide, so it can take
+      // sibling rows on other networks with it. Splicing the one row
+      // the operator clicked would leave the others on screen as
+      // phantoms.
+      await refresh();
+    } catch (e) {
+      const code = e instanceof ApiError ? e.code : "delete_failed";
+      setError(`delete: ${code}`);
+      setConfirmingKey(null);
+    }
+  };
+
   useRefreshSlot({
     onRefresh: () => {
       void refresh();
@@ -209,20 +229,10 @@ const AdminSessionsTab: Component = () => {
                       data-testid={`admin-sessions-summary-row-${net.slug}`}
                     >
                       <td>{net.slug}</td>
-                      <td
-                        data-testid={`admin-sessions-summary-visitors-${net.slug}`}
-                        title={`${net.live_counts.visitors} live visitor sessions of ${renderCap(
-                          net.max_concurrent_visitor_sessions,
-                        )} cap`}
-                      >
+                      <td data-testid={`admin-sessions-summary-visitors-${net.slug}`}>
                         {net.live_counts.visitors}/{renderCap(net.max_concurrent_visitor_sessions)}
                       </td>
-                      <td
-                        data-testid={`admin-sessions-summary-users-${net.slug}`}
-                        title={`${net.live_counts.users} live user sessions of ${renderCap(
-                          net.max_concurrent_user_sessions,
-                        )} cap`}
-                      >
+                      <td data-testid={`admin-sessions-summary-users-${net.slug}`}>
                         {net.live_counts.users}/{renderCap(net.max_concurrent_user_sessions)}
                       </td>
                       <td data-testid={`admin-sessions-summary-per-ip-${net.slug}`}>
@@ -236,135 +246,122 @@ const AdminSessionsTab: Component = () => {
           </AdminCard>
         </Show>
 
-        <Show when={sessions() === null && error() === null}>
+        <Show when={!loaded() && error() === null}>
           <AdminEmpty message="loading…" />
         </Show>
 
-        <Show when={sessions() !== null && (sessions() ?? []).length === 0}>
+        <Show when={loaded() && rows().length === 0}>
           <AdminEmpty message="no sessions" testId="admin-sessions-empty" />
         </Show>
 
-        <Show when={sessions() !== null && (sessions() ?? []).length > 0}>
+        <Show when={loaded() && rows().length > 0}>
           <AdminCard
             hostsRefresh
-            title="Live sessions"
-            subtitle={`${(sessions() ?? []).length} session${(sessions() ?? []).length === 1 ? "" : "s"}`}
+            title="Sessions"
+            subtitle="row-backed — parked and failed subjects are listed too, with live state joined on"
             data-testid="admin-sessions-table-card"
           >
-            <AdminTable data-testid="admin-sessions-table">
+            <AdminTable class="admin-sessions-table" data-testid="admin-sessions-table">
               <thead>
                 <tr>
-                  {/* who + network merge into one identity cell on mobile
-                      (see `AdminRowName`); the rest carry
-                      `adm-col-detail` and move into the row's panel
-                      below 900px. What survives is what a phone is for:
-                      who, what state, what you can do about it. */}
-                  <th>who</th>
-                  <th>state</th>
-                  <th class="adm-col-detail">network</th>
-                  <th class="adm-col-detail">upstream</th>
-                  <th class="adm-col-detail">mailbox</th>
-                  <th class="adm-col-detail">memory</th>
-                  <th class="adm-col-detail">last seen</th>
-                  <th class="adm-col-detail">degraded</th>
-                  {/* Visible, like every other migrated tab: an unlabelled
-                      column reads as a rendering bug, and Disconnect and
-                      Terminate are destructive enough to deserve naming. */}
+                  <th class="adm-table-grow">who</th>
+                  <th>last seen</th>
+                  <th>channels</th>
                   <th class="adm-table-sticky-actions">actions</th>
                 </tr>
               </thead>
               <tbody>
-                <For each={sessions() ?? []}>
-                  {(s) => {
-                    const id = adminSessionId(s);
-                    return (
-                      <>
-                        <tr class="admin-sessions-row" data-testid={`admin-session-row-${id}`}>
-                          <td>
-                            <AdminRowName
-                              open={detailId() === id}
-                              onToggle={() => setDetailId(detailId() === id ? null : id)}
-                              label={`details for ${renderWho(s)}`}
-                              testId={`admin-session-details-${id}`}
-                            >
-                              {renderWho(s)}
-                            </AdminRowName>
-                          </td>
-                          <td>
-                            <LiveBadge live={s.live_state} />
-                          </td>
-                          <td class="adm-col-detail" data-testid={`admin-session-network-${id}`}>
-                            {networkSlugById().get(s.network_id) ?? String(s.network_id)}
-                          </td>
-                          <td
-                            class="adm-col-detail adm-table-truncate"
-                            data-testid={`admin-session-upstream-${id}`}
+                <For each={rows()}>
+                  {(row) => (
+                    <>
+                      <tr class="admin-sessions-row" data-testid={`admin-session-row-${row.key}`}>
+                        <td class="admin-session-who">
+                          <AdminRowName
+                            alwaysOpenable
+                            open={detailKey() === row.key}
+                            onToggle={() => setDetailKey(detailKey() === row.key ? null : row.key)}
+                            label={`details for ${renderWho(row)}`}
+                            testId={`admin-session-details-${row.key}`}
                           >
-                            {renderUpstream(s.live_state)}
-                          </td>
-                          <td class="adm-col-detail">{s.live_state.mailbox_len}</td>
-                          <td class="adm-col-detail">{renderKb(s.live_state.memory_bytes)}</td>
-                          <td
-                            class="adm-col-detail"
-                            title={s.last_seen_at ?? "no browser login on record"}
-                          >
-                            {renderLastSeen(s.last_seen_at)}
-                          </td>
-                          <td class="adm-col-detail">
-                            {renderDegraded(s.live_state.introspection_degraded, id)}
-                          </td>
-                          <td class="admin-sessions-actions adm-table-sticky-actions">
-                            <InlineConfirmButton
-                              idleLabel="Disconnect"
-                              confirmLabel="Confirm disconnect"
-                              armed={confirmingKey() === confirmKey(id, "disconnect")}
-                              onArm={() => setConfirmingKey(confirmKey(id, "disconnect"))}
-                              onConfirm={() => runAction(s, "disconnect", adminDisconnectSession)}
-                              testId={`admin-session-disconnect-${id}`}
-                              extraClass="disconnect-btn"
-                            />
-                            <InlineConfirmButton
-                              idleLabel="Terminate"
-                              confirmLabel="Confirm terminate"
-                              armed={confirmingKey() === confirmKey(id, "terminate")}
-                              onArm={() => setConfirmingKey(confirmKey(id, "terminate"))}
-                              onConfirm={() => runAction(s, "terminate", adminTerminateSession)}
-                              testId={`admin-session-terminate-${id}`}
-                              extraClass="terminate-btn"
-                            />
-                          </td>
-                        </tr>
-                        <Show when={detailId() === id}>
-                          <AdminDetailPanel
-                            title={renderWho(s)}
-                            subtitle="the columns the table drops on a phone"
-                            onClose={() => setDetailId(null)}
-                            closeLabel="close session details"
-                            columns={SESSION_COLUMNS}
-                            data-testid={`admin-session-detail-${id}`}
-                          >
-                            <AdminFacts
-                              facts={[
-                                {
-                                  label: "network",
-                                  value:
-                                    networkSlugById().get(s.network_id) ?? String(s.network_id),
-                                },
-                                { label: "upstream", value: renderUpstream(s.live_state) },
-                                { label: "mailbox", value: String(s.live_state.mailbox_len) },
-                                { label: "memory", value: renderKb(s.live_state.memory_bytes) },
-                                { label: "last seen", value: renderLastSeen(s.last_seen_at) },
-                                {
-                                  label: "degraded",
-                                  value: renderDegraded(s.live_state.introspection_degraded, id),
-                                },
-                              ]}
-                            />
-                          </AdminDetailPanel>
-                        </Show>
-                      </>
-                    );
-                  }}
+                            <span class="admin-session-identity">
+                              {/* Fixed-width kind badge: "visitor" and
+                                  "user" are different lengths, and an
+                                  unpadded pair makes every nick start at
+                                  a different x. */}
+                              <AdminBadge
+                                tone={row.subject_kind === "user" ? "info" : "neutral"}
+                                class="adm-badge--kind"
+                                ariaLabel={row.subject_kind}
+                              >
+                                {row.subject_kind}
+                              </AdminBadge>
+                              <span class="admin-session-nick">{renderLabel(row)}</span>
+                            </span>
+                            <span class="admin-session-network">
+                              {row.network_slug ?? `network ${row.network_id}`}
+                            </span>
+                          </AdminRowName>
+                        </td>
+                        <td
+                          class="admin-session-last-seen"
+                          data-testid={`admin-session-last-seen-${row.key}`}
+                          title={row.last_seen_at ?? "no browser session on record"}
+                        >
+                          {renderLastSeen(row.last_seen_at)}
+                        </td>
+                        <td data-testid={`admin-session-channels-${row.key}`}>
+                          {renderChannels(row)}
+                        </td>
+                        <td class="admin-sessions-actions adm-table-sticky-actions">
+                          <For each={rowActions(row)}>
+                            {(kind) => (
+                              <InlineConfirmButton
+                                idleLabel={ACTION_LABEL[kind]}
+                                confirmLabel={`Confirm ${kind}`}
+                                armed={confirmingKey() === confirmKey(row.key, kind)}
+                                onArm={() => setConfirmingKey(confirmKey(row.key, kind))}
+                                onConfirm={() => runAction(row, kind)}
+                                testId={`admin-session-${kind}-${row.key}`}
+                                extraClass={`${kind}-btn`}
+                              />
+                            )}
+                          </For>
+                        </td>
+                      </tr>
+                      <Show when={detailKey() === row.key}>
+                        <AdminDetailPanel
+                          title={renderWho(row)}
+                          subtitle="the rest of the record"
+                          onClose={() => setDetailKey(null)}
+                          closeLabel="close session details"
+                          columns={SESSION_COLUMNS}
+                          data-testid={`admin-session-detail-${row.key}`}
+                        >
+                          <AdminFacts facts={detailFacts(row)} />
+                          <Show when={row.visitor !== null}>
+                            <div class="admin-session-danger">
+                              {/* Named for what it destroys. The verb is
+                                  identity-wide: it deletes the visitor
+                                  and every one of its network rows, not
+                                  the row this panel hangs off. */}
+                              <span class="admin-session-danger-note">
+                                deletes the whole visitor identity, on every network
+                              </span>
+                              <InlineConfirmButton
+                                idleLabel="Delete visitor"
+                                confirmLabel="Confirm delete visitor"
+                                armed={confirmingKey() === confirmKey(row.key, "delete")}
+                                onArm={() => setConfirmingKey(confirmKey(row.key, "delete"))}
+                                onConfirm={() => runDelete(row)}
+                                testId={`admin-session-delete-${row.key}`}
+                                extraClass="delete-btn"
+                              />
+                            </div>
+                          </Show>
+                        </AdminDetailPanel>
+                      </Show>
+                    </>
+                  )}
                 </For>
               </tbody>
             </AdminTable>
@@ -375,61 +372,27 @@ const AdminSessionsTab: Component = () => {
   );
 };
 
-// Two-state badge (dead / alive), like AdminVisitorsTab.LiveBadge but
-// with `live_state` non-nullable (registry-driven — every row IS a live
-// pid). The `null` (U-0 honesty) branch lives on /admin/visitors +
-// /admin/credentials, not here.
-//
-// #428 / #550 — the server's `SessionEntry.degraded_field` allowlist is
-// `:joined_channels | :peer_address`: both are GenServer-call round-trips
-// that can time out, whereas `alive`/`mailbox_len`/`memory_bytes` come from
-// synchronous Process BIFs that never do. So there is NO "alive unknown"
-// state to render — the prior branch (guarded on `"alive"` ∈
-// introspection_degraded, M4 reviewer) checked a state the server can never
-// emit; the codegen-tightened union proved it dead code and tsc rejected it.
-// Removed. If per-field degradation of alive/mailbox/memory is ever wanted,
-// widen the SERVER `degraded_field` type first — the client then inherits it
-// through the generated mirror.
-const LiveBadge: Component<{ live: AdminSession["live_state"] }> = (props) => {
-  if (props.live.alive === false) {
-    return (
-      <AdminBadge tone="danger" class="dead" ariaLabel="pid registered but Session.Server is dead">
-        pid registered but dead
-      </AdminBadge>
-    );
-  }
-  const channels = props.live.joined_channels;
-  const count = channels === null ? "?" : channels.length;
-  return (
-    <AdminBadge tone="ok" class="alive" ariaLabel={`alive on ${count} channels`}>
-      {count} chan
-    </AdminBadge>
-  );
-};
-
-function renderWho(s: AdminSession): string {
-  // `subject_label` is the pre-joined display name (user.name /
-  // visitor.nick), or `null` when the DB row is gone for a live pid
-  // — the gemello of the U-0 honesty signal on /admin/visitors.
-  // Render "no DB row" prominently so the operator can see the
-  // orphan-pid class without paging through the registry directly.
-  if (s.subject_label === null) {
-    return `${s.subject_kind} ${s.subject_id.slice(0, 8)} (no DB row)`;
-  }
-  return `${s.subject_kind}: ${s.subject_label}`;
+function renderLabel(row: AdminSubjectRow): string {
+  // `null` only on an orphan pid whose DB row is gone. Say so rather
+  // than rendering a blank — it is the divergence, not a missing value.
+  return row.label ?? `${row.subject_id.slice(0, 8)} (no DB row)`;
 }
 
-function renderKb(bytes: number): string {
-  return `${Math.round(bytes / 1024)} KB`;
+function renderWho(row: AdminSubjectRow): string {
+  return `${row.subject_kind}: ${renderLabel(row)}`;
 }
 
-// Compact relative-time render for the operator console.
-// null → em-dash (no cookie session on record, see AdminSession
-// type comment). DateTime in the future (clock skew across host
-// vs jail) renders as "now". Past windows: "Ns" / "Nm" / "Nh" /
-// "Nd" — bumped at most once per minute by the server (the
-// underlying `last_seen_at` is cadence-capped), so sub-minute
-// precision is illusory anyway.
+// An unknown count is NOT zero. `null` means either no pid or an
+// introspection timeout, and "0 chan" would read as a connected session
+// sitting in no channels — a different, actionable fact.
+function renderChannels(row: AdminSubjectRow): string {
+  const n = channelCount(row);
+  if (n === null) return row.live === null ? "—" : "?";
+  return String(n);
+}
+
+// Compact relative time. `null` → em-dash. A future timestamp (host vs
+// jail clock skew) renders "now" rather than a negative age.
 function renderLastSeen(iso: string | null): string {
   if (iso === null) return "—";
   const then = Date.parse(iso);
@@ -442,50 +405,66 @@ function renderLastSeen(iso: string | null): string {
   if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  return `${d}d`;
+  return `${Math.floor(h / 24)}d`;
 }
 
-// #550 — the upstream peer (destination) this session's socket landed on.
-// Reverse-DNS name first (the readable part), the raw address:port second
-// AND as the title — the address is authoritative, the name is
-// attacker-controlled for third-party networks, so it renders as plain
-// (Solid-escaped) text and NEVER replaces the numeric address. `null`
-// address = not connected (the degraded column carries the ⚠ peer_address
-// marker); a `null` name with a live address = cold cache / no PTR, where
-// the raw address stands on its own.
-function renderUpstream(live: AdminSession["live_state"]) {
-  const addr = live.peer_address;
-  if (addr === null) return "—";
-  const hostport = live.peer_port === null ? addr : `${addr}:${live.peer_port}`;
-  const name = live.peer_name;
-  if (name === null) {
-    return (
-      <span class="admin-session-upstream" title={hostport}>
-        {hostport}
-      </span>
+function renderUpstream(row: AdminSubjectRow): string {
+  const up = row.upstream;
+  if (up === null || up.peer_address === null) return "—";
+  const hostport = up.peer_port === null ? up.peer_address : `${up.peer_address}:${up.peer_port}`;
+  return up.peer_name === null ? hostport : `${up.peer_name} (${hostport})`;
+}
+
+function renderExpires(row: AdminSubjectRow): string {
+  const v = row.visitor;
+  if (v === null) return "—";
+  if (v.identified) return "indefinite (NickServ)";
+  if (v.expires_at === null) return "indefinite (legacy)";
+  const at = Date.parse(v.expires_at);
+  if (Number.isNaN(at)) return "?";
+  const days = Math.ceil((at - Date.now()) / 86_400_000);
+  return days <= 0 ? "expired" : `in ${days}d`;
+}
+
+function detailFacts(row: AdminSubjectRow): { label: string; value: string }[] {
+  const facts: { label: string; value: string }[] = [
+    // DB intent and live pid are separate sources of truth and both
+    // render — `live: BEAM has no pid` against `connection: connected`
+    // IS the U-0 divergence signal, and computing one from the other
+    // would erase it.
+    { label: "connection", value: row.connection_state ?? "no DB row" },
+    { label: "live", value: renderLive(row) },
+    { label: "network", value: row.network_slug ?? `id ${row.network_id}` },
+    { label: "upstream", value: renderUpstream(row) },
+  ];
+
+  if (row.live !== null) {
+    facts.push(
+      { label: "mailbox", value: String(row.live.mailbox_len) },
+      { label: "memory", value: `${Math.round(row.live.memory_bytes / 1024)} KB` },
+    );
+    if (row.live.introspection_degraded.length > 0) {
+      facts.push({
+        label: "degraded",
+        value: `⚠ ${row.live.introspection_degraded.join(", ")}`,
+      });
+    }
+  }
+
+  if (row.visitor !== null) {
+    facts.push(
+      { label: "ip", value: row.visitor.ip ?? "—" },
+      { label: "expires", value: renderExpires(row) },
+      { label: "joined", value: row.visitor.inserted_at },
     );
   }
-  return (
-    <span class="admin-session-upstream" title={hostport}>
-      {name}
-      <span class="admin-session-upstream-addr"> ({hostport})</span>
-    </span>
-  );
+
+  return facts;
 }
 
-function renderDegraded(degraded: string[], id: string) {
-  if (degraded.length === 0) return "—";
-  return (
-    <span
-      class="introspection-degraded-warning"
-      role="status"
-      data-testid={`admin-session-degraded-${id}`}
-      title="introspection of these fields timed out — values may be stale"
-    >
-      ⚠ {degraded.join(", ")}
-    </span>
-  );
+function renderLive(row: AdminSubjectRow): string {
+  if (row.live === null) return "BEAM has no pid";
+  return row.live.alive ? "alive" : "pid registered but dead";
 }
 
 export default AdminSessionsTab;

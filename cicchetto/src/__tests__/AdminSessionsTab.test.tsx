@@ -1,7 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { refreshSlot } from "../admin/refreshSlot";
-import type { AdminNetwork, AdminSession } from "../lib/api";
+import type { AdminCredential, AdminNetwork, AdminSession, AdminVisitor } from "../lib/api";
 
 vi.mock("../lib/auth", () => ({
   token: () => "test-bearer",
@@ -11,639 +10,396 @@ vi.mock("../lib/api", async () => {
   const actual = await vi.importActual<typeof import("../lib/api")>("../lib/api");
   return {
     ...actual,
+    adminListVisitors: vi.fn(),
+    adminListCredentials: vi.fn(),
     adminListSessions: vi.fn(),
     adminListNetworks: vi.fn(),
     adminDisconnectSession: vi.fn(),
+    adminReconnectSession: vi.fn(),
     adminTerminateSession: vi.fn(),
+    adminDeleteVisitor: vi.fn(),
   };
 });
 
 import AdminSessionsTab from "../AdminSessionsTab";
 
-// M-cluster M-9b — Sessions tab unit suite. Mirror of
-// AdminVisitorsTab.test.tsx structure with TWO action buttons per
-// row (Disconnect + Terminate) sharing one mutex (per-row, per-
-// button). The mutex shape "<id>:<verb>" keeps a row's Disconnect
-// armed-state disjoint from its Terminate armed-state and disjoint
-// from sibling rows entirely — second-button click anywhere clears
-// the prior arm.
+// #1157 — the unified Sessions tab. The Visitors tab is gone and this
+// one lists both subject kinds, ACTIVE AND INACTIVE.
 //
-// Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT.
-// Per `feedback_css_block_button_wraps_inline_prefix`: textContent
-// assertions on both buttons.
+// The property most of these tests are really defending is that the
+// list is row-backed: /admin/sessions only ever returns live pids, so
+// every assertion below about a parked or pid-less row is an assertion
+// that the merge did NOT get rebuilt on the registry.
 
-const USER_SESSION: AdminSession = {
-  subject_kind: "user",
-  subject_id: "11111111-1111-1111-1111-111111111111",
-  subject_label: "vjt",
-  last_seen_at: null,
-  network_id: 1,
-  live_state: {
-    nick: "vjt",
-    alive: true,
-    pid_inspect: "#PID<0.123.0>",
-    mailbox_len: 3,
-    memory_bytes: 250_000,
-    joined_channels: ["#bofh", "#italia"],
-    peer_address: "2a01:4f8:201:2281:11::22",
-    peer_port: 6697,
-    peer_name: "allnight6.azzurra.chat",
-    introspection_degraded: [],
-  },
+const VISITOR_ID = "22222222-2222-2222-2222-222222222222";
+const USER_ID = "11111111-1111-1111-1111-111111111111";
+
+const LIVE = {
+  nick: "vjt",
+  alive: true,
+  pid_inspect: "#PID<0.123.0>",
+  mailbox_len: 3,
+  memory_bytes: 250_000,
+  joined_channels: ["#bofh", "#italia"],
+  introspection_degraded: [],
 };
 
-const VISITOR_SESSION: AdminSession = {
-  subject_kind: "visitor",
-  subject_id: "22222222-2222-2222-2222-222222222222",
-  subject_label: "M\\Grappa",
-  last_seen_at: null,
-  network_id: 1,
-  live_state: {
-    nick: "vjt",
-    alive: true,
-    pid_inspect: "#PID<0.456.0>",
-    mailbox_len: 0,
-    memory_bytes: 90_000,
-    joined_channels: ["#guest"],
-    peer_address: "192.0.2.10",
-    peer_port: 6667,
-    peer_name: null,
-    introspection_degraded: [],
-  },
-};
-
-const DEGRADED_SESSION: AdminSession = {
-  subject_kind: "user",
-  subject_id: "33333333-3333-3333-3333-333333333333",
-  subject_label: "degraded-user",
-  last_seen_at: null,
-  network_id: 2,
-  live_state: {
-    nick: "vjt",
-    alive: true,
-    pid_inspect: "#PID<0.789.0>",
-    mailbox_len: 0,
-    memory_bytes: 100_000,
-    joined_channels: null,
-    // A sick session degrading BOTH introspection calls: no peer known →
-    // nil address + the :peer_address marker (rendered "—" in the upstream
-    // column, never a fabricated/stale address).
-    peer_address: null,
-    peer_port: null,
-    peer_name: null,
-    introspection_degraded: ["joined_channels", "peer_address"],
-  },
-};
-
-const DEAD_SESSION: AdminSession = {
-  subject_kind: "user",
-  subject_id: "44444444-4444-4444-4444-444444444444",
-  subject_label: "dead-user",
-  last_seen_at: null,
-  network_id: 1,
-  live_state: {
-    nick: "vjt",
-    alive: false,
-    pid_inspect: "#PID<0.999.0>",
-    mailbox_len: 0,
-    memory_bytes: 0,
-    // `alive: false` is trustworthy here (pid registered, Session.Server
-    // genuinely dead between BEAM crash + registry sweep). A dead pid's
-    // GenServer.calls both exit :noproc → {:error, :no_session}:
-    // list_channels maps that to `[]` (empty, NOT degraded); peer_address
-    // maps it to nil + the `:peer_address` marker — the realistic degraded
-    // shape a dead-but-registered pid actually produces (#550).
-    joined_channels: [],
-    peer_address: null,
-    peer_port: null,
-    peer_name: null,
-    introspection_degraded: ["peer_address"],
-  },
-};
-
-// Bucket B/C orphan-pid sentinel — DB row gone, pid still registered.
-// `subject_label: null` is the honesty signal cic must surface as
-// "no DB row" so the operator sees the orphan class.
-const ORPHAN_SESSION: AdminSession = {
-  subject_kind: "visitor",
-  subject_id: "66666666-6666-6666-6666-666666666666",
-  subject_label: null,
-  last_seen_at: null,
-  network_id: 1,
-  live_state: {
-    nick: "vjt",
-    alive: true,
-    pid_inspect: "#PID<0.777.0>",
-    mailbox_len: 0,
-    memory_bytes: 80_000,
-    joined_channels: [],
-    peer_address: "198.51.100.7",
-    peer_port: 6697,
-    peer_name: null,
-    introspection_degraded: [],
-  },
-};
-
-function rowId(s: AdminSession): string {
-  return `${s.subject_kind}:${s.subject_id}:${s.network_id}`;
-}
-
-// U-3 (UD4): network fixtures backing the per-network cap-count
-// summary block. Every test renders the summary above the sessions
-// table, so we default-mock `adminListNetworks` in beforeEach to
-// return these fixtures (and tests that want to assert the summary
-// shape override the mock locally).
-const BAHAMUT_NET: AdminNetwork = {
+const NETWORK = {
   id: 1,
-  slug: "bahamut",
-  services_flavor: null,
-  visitor_enabled: true,
-  visitor_autoconnect: false,
-  max_concurrent_visitor_sessions: 50,
-  max_concurrent_user_sessions: 10,
-  max_per_ip: 1,
-  inserted_at: "2026-05-01T00:00:00Z",
-  updated_at: "2026-05-16T00:00:00Z",
-  circuit_state: null,
-  live_counts: { visitors: 7, users: 2 },
-};
-
-const AZZURRA_NET: AdminNetwork = {
-  id: 2,
   slug: "azzurra",
-  services_flavor: null,
-  visitor_enabled: false,
-  visitor_autoconnect: false,
-  max_concurrent_visitor_sessions: null, // unlimited
-  max_concurrent_user_sessions: 5,
-  max_per_ip: 2,
-  inserted_at: "2026-05-01T00:00:00Z",
-  updated_at: "2026-05-16T00:00:00Z",
-  circuit_state: null,
+  max_concurrent_visitor_sessions: null,
+  max_concurrent_user_sessions: null,
+  max_per_ip: null,
   live_counts: { visitors: 0, users: 0 },
-};
+} as unknown as AdminNetwork;
+
+const parkedVisitor = (over: Partial<AdminVisitor> = {}): AdminVisitor =>
+  ({
+    id: VISITOR_ID,
+    expires_at: "2099-01-01T00:00:00Z",
+    identified: false,
+    ip: "1.2.3.4",
+    inserted_at: "2026-05-16T00:00:00Z",
+    last_seen_at: null,
+    networks: [
+      {
+        network_slug: "azzurra",
+        network_id: 1,
+        nick: "guest1",
+        connection_state: "parked",
+        live_state: null,
+      },
+    ],
+    ...over,
+  }) as AdminVisitor;
+
+const userCredential = (over: Partial<AdminCredential> = {}): AdminCredential =>
+  ({
+    user_id: USER_ID,
+    network_id: 1,
+    network_slug: "azzurra",
+    nick: "vjt",
+    ident: null,
+    realname: null,
+    sasl_user: null,
+    auth_method: "sasl",
+    auth_command_template: null,
+    autojoin_channels: [],
+    last_joined_channels: [],
+    connection_state: "connected",
+    connection_state_reason: null,
+    connection_state_changed_at: null,
+    inserted_at: "2026-05-16T00:00:00Z",
+    updated_at: "2026-05-16T00:00:00Z",
+    last_seen_at: "2026-08-10T00:00:00Z",
+    live_state: LIVE,
+    ...over,
+  }) as AdminCredential;
+
+const userSession = (): AdminSession =>
+  ({
+    subject_kind: "user",
+    subject_id: USER_ID,
+    subject_label: "vjt",
+    last_seen_at: "2026-08-10T00:00:00Z",
+    network_id: 1,
+    live_state: {
+      ...LIVE,
+      peer_address: "2a01:4f8:201:2281:11::22",
+      peer_port: 6697,
+      peer_name: "allnight6.azzurra.chat",
+    },
+  }) as AdminSession;
+
+const VISITOR_KEY = `visitor:${VISITOR_ID}:1`;
+const USER_KEY = `user:${USER_ID}:1`;
+
+async function mountWith(over: {
+  visitors?: AdminVisitor[];
+  credentials?: AdminCredential[];
+  sessions?: AdminSession[];
+}) {
+  const api = await import("../lib/api");
+  vi.mocked(api.adminListVisitors).mockResolvedValue(over.visitors ?? []);
+  vi.mocked(api.adminListCredentials).mockResolvedValue(over.credentials ?? []);
+  vi.mocked(api.adminListSessions).mockResolvedValue(over.sessions ?? []);
+  vi.mocked(api.adminListNetworks).mockResolvedValue([NETWORK]);
+  render(() => <AdminSessionsTab />);
+  return api;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
-async function mockNetworksDefault(): Promise<void> {
-  const api = await import("../lib/api");
-  vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT_NET, AZZURRA_NET]);
-}
+describe("AdminSessionsTab — inactive sessions are listed (#1157)", () => {
+  // THE regression this tab exists to prevent. A parked visitor has no
+  // registry entry, so /admin/sessions is empty here: if the row shows
+  // up anyway, the list is row-backed.
+  it("renders a parked visitor even though /admin/sessions is empty", async () => {
+    await mountWith({ visitors: [parkedVisitor()], sessions: [] });
 
-describe("AdminSessionsTab", () => {
-  // Networks fetch runs in parallel with sessions on every refresh
-  // (U-3 UD4); each test gets a default `adminListNetworks` resolved
-  // to [] so the summary section is benignly absent unless the test
-  // overrides it. Cap-count assertions below override with fixtures.
-  beforeEach(async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListNetworks).mockResolvedValue([]);
+    expect(await screen.findByTestId(`admin-session-row-${VISITOR_KEY}`)).toBeTruthy();
   });
 
-  it("renders one row per session after the onMount fetch resolves", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION, VISITOR_SESSION]);
-
-    render(() => <AdminSessionsTab />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId(`admin-session-row-${rowId(USER_SESSION)}`)).toBeInTheDocument();
+  it("renders a parked user credential even though /admin/sessions is empty", async () => {
+    await mountWith({
+      credentials: [userCredential({ connection_state: "parked", live_state: null })],
+      sessions: [],
     });
-    expect(screen.getByTestId(`admin-session-row-${rowId(VISITOR_SESSION)}`)).toBeInTheDocument();
-    expect(api.adminListSessions).toHaveBeenCalledTimes(1);
+
+    expect(await screen.findByTestId(`admin-session-row-${USER_KEY}`)).toBeTruthy();
   });
 
-  it("renders subject_label (user.name / visitor.nick) in the 'who' column", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION, VISITOR_SESSION]);
+  it("lists both subject kinds in one table", async () => {
+    await mountWith({ visitors: [parkedVisitor()], credentials: [userCredential()] });
 
-    render(() => <AdminSessionsTab />);
+    await screen.findByTestId(`admin-session-row-${VISITOR_KEY}`);
+    expect(screen.getByTestId(`admin-session-row-${USER_KEY}`)).toBeTruthy();
+  });
+});
 
-    const userRow = await screen.findByTestId(`admin-session-row-${rowId(USER_SESSION)}`);
-    const visitorRow = screen.getByTestId(`admin-session-row-${rowId(VISITOR_SESSION)}`);
+describe("AdminSessionsTab — the dictated columns", () => {
+  it("shows the subject kind and the nick in the identity cell", async () => {
+    await mountWith({ credentials: [userCredential()] });
 
-    // The label is the pre-joined name, not a UUID slice. Bucket B
-    // fix; pre-fix the column rendered `user:11111111` etc.
-    expect(userRow.textContent).toContain("user: vjt");
-    expect(visitorRow.textContent).toContain("visitor: M\\Grappa");
-    expect(userRow.textContent).not.toContain("11111111");
-    expect(visitorRow.textContent).not.toContain("22222222");
+    const row = await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+    expect(row.textContent).toContain("user");
+    expect(row.textContent).toContain("vjt");
   });
 
-  it("renders the upstream peer: name + address, address-only, or — when not connected (#550)", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([
-      USER_SESSION,
-      VISITOR_SESSION,
-      DEGRADED_SESSION,
-    ]);
+  it("shows the network under the nick", async () => {
+    await mountWith({ credentials: [userCredential()] });
 
-    render(() => <AdminSessionsTab />);
-    await screen.findByTestId(`admin-session-row-${rowId(USER_SESSION)}`);
-
-    // Reverse-DNS name first (readable), the raw address:port kept visible
-    // next to it (authoritative) — the name NEVER replaces the address.
-    const withName = screen.getByTestId(`admin-session-upstream-${rowId(USER_SESSION)}`);
-    expect(withName.textContent).toContain("allnight6.azzurra.chat");
-    expect(withName.textContent).toContain("2a01:4f8:201:2281:11::22");
-    expect(withName.textContent).toContain("6697");
-
-    // Cold cache / no PTR: no name → the raw address:port stands on its own.
-    const addrOnly = screen.getByTestId(`admin-session-upstream-${rowId(VISITOR_SESSION)}`);
-    expect(addrOnly.textContent).toContain("192.0.2.10");
-    expect(addrOnly.textContent).toContain("6667");
-
-    // Not connected (peer_address null): em-dash, never a fabricated address.
-    const notConnected = screen.getByTestId(`admin-session-upstream-${rowId(DEGRADED_SESSION)}`);
-    expect(notConnected.textContent).toContain("—");
+    const row = await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+    expect(row.textContent).toContain("azzurra");
   });
 
-  it("renders an attacker-controlled reverse-DNS name as inert text, not HTML (#550)", async () => {
-    // PTR is attacker-controlled for third-party networks (issue failure
-    // mode #3). Solid escapes text interpolation, so a markup payload lands
-    // as literal characters and no live element is created.
-    const api = await import("../lib/api");
-    const hostile: AdminSession = {
-      ...USER_SESSION,
-      subject_id: "77777777-7777-7777-7777-777777777777",
-      live_state: {
-        ...USER_SESSION.live_state,
-        peer_name: "<img src=x onerror=alert(1)>",
-      },
-    };
-    vi.mocked(api.adminListSessions).mockResolvedValue([hostile]);
+  it("renders the channel count from the live session", async () => {
+    await mountWith({ credentials: [userCredential()] });
 
-    render(() => <AdminSessionsTab />);
-    const cell = await screen.findByTestId(`admin-session-upstream-${rowId(hostile)}`);
-
-    expect(cell.textContent).toContain("<img src=x onerror=alert(1)>");
-    expect(cell.querySelector("img")).toBeNull();
+    const cell = await screen.findByTestId(`admin-session-channels-${USER_KEY}`);
+    expect(cell).toHaveTextContent("2");
   });
 
-  it("renders 'no DB row' for orphan-pid sessions (subject_label === null)", async () => {
-    // Bucket B/C honesty signal — DB row deleted while pid alive.
-    // Operator must see the orphan class without remsh-ing.
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([ORPHAN_SESSION]);
+  // An unknown count is not zero: "0" would read as a connected session
+  // sitting in no channels, which is a different and actionable fact.
+  it("renders an em-dash, NOT 0, when there is no live session", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
 
-    render(() => <AdminSessionsTab />);
-
-    const row = await screen.findByTestId(`admin-session-row-${rowId(ORPHAN_SESSION)}`);
-    // Fallback shape carries the UUID prefix so the operator can
-    // grep / identify which orphan it is, plus the "(no DB row)"
-    // suffix as the explicit honesty signal.
-    expect(row.textContent).toContain("66666666");
-    expect(row.textContent).toContain("(no DB row)");
+    const cell = await screen.findByTestId(`admin-session-channels-${VISITOR_KEY}`);
+    expect(cell).toHaveTextContent("—");
+    expect(cell).not.toHaveTextContent("0");
   });
 
-  it("renders the alive badge with joined channel count for live sessions", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
+  it("renders a question mark when introspection timed out on a live row", async () => {
+    await mountWith({
+      credentials: [userCredential({ live_state: { ...LIVE, joined_channels: null } })],
+    });
 
-    render(() => <AdminSessionsTab />);
-
-    const badge = await screen.findByLabelText(/alive on 2 channels/i);
-    expect(badge).toBeInTheDocument();
-    expect(badge.textContent).toContain("2 chan");
+    const cell = await screen.findByTestId(`admin-session-channels-${USER_KEY}`);
+    expect(cell).toHaveTextContent("?");
   });
 
-  it("renders '?' for joined_channels when the field is degraded", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([DEGRADED_SESSION]);
+  // The reason last_seen_at was added to the row-backed wires: without
+  // it this cell could only ever be an em-dash on an inactive row.
+  it("renders last seen on a row with no live session", async () => {
+    await mountWith({
+      visitors: [parkedVisitor({ last_seen_at: new Date(Date.now() - 3_600_000).toISOString() })],
+    });
 
-    render(() => <AdminSessionsTab />);
-
-    const badge = await screen.findByLabelText(/alive on \? channels/i);
-    expect(badge.textContent).toContain("? chan");
+    const cell = await screen.findByTestId(`admin-session-last-seen-${VISITOR_KEY}`);
+    expect(cell).toHaveTextContent("1h");
   });
 
-  it("renders a dead badge when alive is false AND not in degraded", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([DEAD_SESSION]);
+  it("says no browser session on record when last_seen_at is null", async () => {
+    await mountWith({ visitors: [parkedVisitor({ last_seen_at: null })] });
 
-    render(() => <AdminSessionsTab />);
+    const cell = await screen.findByTestId(`admin-session-last-seen-${VISITOR_KEY}`);
+    expect(cell).toHaveTextContent("—");
+    expect(cell).toHaveAttribute("title", "no browser session on record");
+  });
+});
 
-    const badge = await screen.findByLabelText(/pid registered but/i);
-    expect(badge.classList.contains("dead")).toBe(true);
-    expect(badge.textContent).toContain("pid registered but dead");
+describe("AdminSessionsTab — actions differ by subject kind", () => {
+  it("offers Disconnect and Terminate on a user row", async () => {
+    await mountWith({ credentials: [userCredential()] });
+
+    expect(await screen.findByTestId(`admin-session-disconnect-${USER_KEY}`)).toBeTruthy();
+    expect(screen.getByTestId(`admin-session-terminate-${USER_KEY}`)).toBeTruthy();
   });
 
-  it("renders em-dash for last_seen_at when null (no cookie session)", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
+  // Reconnect is visitor-only on the server (`ensure_visitor_subject/1`
+  // answers 400 for a user), so rendering it here would be a button
+  // that cannot work.
+  it("never offers Reconnect on a user row", async () => {
+    await mountWith({ credentials: [userCredential({ live_state: null })] });
 
-    render(() => <AdminSessionsTab />);
-
-    const row = await screen.findByTestId(`admin-session-row-${rowId(USER_SESSION)}`);
-    // Null `last_seen_at` → em-dash in the cell, with the
-    // "no browser login on record" tooltip explaining the signal.
-    expect(row.textContent).toContain("—");
-    const lastSeenCell = row.querySelector("td[title='no browser login on record']");
-    expect(lastSeenCell).not.toBeNull();
-    expect(lastSeenCell?.textContent).toBe("—");
+    await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+    expect(screen.queryByTestId(`admin-session-reconnect-${USER_KEY}`)).toBeNull();
   });
 
-  it("renders relative time for last_seen_at when a cookie session exists", async () => {
-    const api = await import("../lib/api");
-    // 90 seconds ago → "1m" per the floor-by-60 bucketing.
-    const ninetySecondsAgo = new Date(Date.now() - 90_000).toISOString();
-    const RECENT_SESSION: AdminSession = {
-      ...USER_SESSION,
-      last_seen_at: ninetySecondsAgo,
-    };
-    vi.mocked(api.adminListSessions).mockResolvedValue([RECENT_SESSION]);
+  it("offers Reconnect on a visitor with no live session", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
 
-    render(() => <AdminSessionsTab />);
-
-    const row = await screen.findByTestId(`admin-session-row-${rowId(USER_SESSION)}`);
-    const lastSeenCell = row.querySelector(`td[title='${ninetySecondsAgo}']`);
-    expect(lastSeenCell).not.toBeNull();
-    expect(lastSeenCell?.textContent).toBe("1m");
+    expect(await screen.findByTestId(`admin-session-reconnect-${VISITOR_KEY}`)).toBeTruthy();
   });
 
-  it("renders an introspection_degraded warning chip when non-empty", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([DEGRADED_SESSION]);
+  it("offers Disconnect on a live visitor", async () => {
+    const liveVisitor = parkedVisitor({
+      networks: [
+        {
+          network_slug: "azzurra",
+          network_id: 1,
+          nick: "guest1",
+          connection_state: "connected",
+          live_state: LIVE,
+        },
+      ],
+    });
+    await mountWith({ visitors: [liveVisitor] });
 
-    render(() => <AdminSessionsTab />);
-
-    const chip = await screen.findByTestId(`admin-session-degraded-${rowId(DEGRADED_SESSION)}`);
-    expect(chip.textContent).toContain("joined_channels");
+    expect(await screen.findByTestId(`admin-session-disconnect-${VISITOR_KEY}`)).toBeTruthy();
   });
 
-  it("disconnect inline-confirm: first click arms, second click fires POST", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    vi.mocked(api.adminDisconnectSession).mockResolvedValue(undefined);
+  it("two-step confirm fires the verb with the composite row key", async () => {
+    const api = await mountWith({ credentials: [userCredential()] });
 
-    render(() => <AdminSessionsTab />);
-
-    const btn = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
-    expect(btn.textContent?.trim()).toBe("Disconnect");
+    const btn = await screen.findByTestId(`admin-session-disconnect-${USER_KEY}`);
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm disconnect");
     expect(api.adminDisconnectSession).not.toHaveBeenCalled();
+
     fireEvent.click(btn);
-    await waitFor(() => {
-      expect(api.adminDisconnectSession).toHaveBeenCalledWith("test-bearer", rowId(USER_SESSION));
-    });
+    await waitFor(() =>
+      expect(api.adminDisconnectSession).toHaveBeenCalledWith("test-bearer", USER_KEY),
+    );
   });
 
-  it("terminate inline-confirm: first click arms, second click fires DELETE", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    vi.mocked(api.adminTerminateSession).mockResolvedValue(undefined);
+  it("arming one row disarms the other", async () => {
+    await mountWith({ visitors: [parkedVisitor()], credentials: [userCredential()] });
 
-    render(() => <AdminSessionsTab />);
+    const userBtn = await screen.findByTestId(`admin-session-disconnect-${USER_KEY}`);
+    const visitorBtn = screen.getByTestId(`admin-session-reconnect-${VISITOR_KEY}`);
 
-    const btn = await screen.findByTestId(`admin-session-terminate-${rowId(USER_SESSION)}`);
+    fireEvent.click(userBtn);
+    expect(userBtn).toHaveTextContent("Confirm disconnect");
+
+    fireEvent.click(visitorBtn);
+    expect(userBtn).toHaveTextContent("Disconnect");
+    expect(visitorBtn).toHaveTextContent("Confirm reconnect");
+  });
+
+  it("prefixes a failed verb with which verb failed", async () => {
+    const api = await mountWith({ credentials: [userCredential()] });
+    vi.mocked(api.adminTerminateSession).mockRejectedValue(new Error("boom"));
+
+    const btn = await screen.findByTestId(`admin-session-terminate-${USER_KEY}`);
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm terminate");
     fireEvent.click(btn);
-    await waitFor(() => {
-      expect(api.adminTerminateSession).toHaveBeenCalledWith("test-bearer", rowId(USER_SESSION));
-    });
+
+    const banner = await screen.findByTestId("admin-sessions-error");
+    expect(banner).toHaveTextContent("terminate:");
+  });
+});
+
+describe("AdminSessionsTab — Delete is identity-wide and lives behind the drill-down", () => {
+  // The footgun this placement removes: DELETE /admin/visitors/:id kills
+  // the whole identity, but a row here is one (subject, network) pair,
+  // so a two-network visitor shows two rows. In the actions cell each
+  // would silently destroy the other.
+  it("does not put Delete in the row's actions cell", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
+
+    await screen.findByTestId(`admin-session-row-${VISITOR_KEY}`);
+    expect(screen.queryByTestId(`admin-session-delete-${VISITOR_KEY}`)).toBeNull();
   });
 
-  it("arming Disconnect on row A disarms Terminate on row A (single mutex per surface)", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
+  it("reveals Delete, named for what it destroys, in the drill-down", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
 
-    render(() => <AdminSessionsTab />);
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${VISITOR_KEY}`));
 
-    const disc = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
-    const term = screen.getByTestId(`admin-session-terminate-${rowId(USER_SESSION)}`);
-    fireEvent.click(term); // arm terminate
-    expect(term.textContent?.trim()).toBe("Confirm terminate");
-    expect(disc.textContent?.trim()).toBe("Disconnect");
-    fireEvent.click(disc); // arm disconnect → terminate disarms
-    expect(disc.textContent?.trim()).toBe("Confirm disconnect");
-    expect(term.textContent?.trim()).toBe("Terminate");
+    const panel = await screen.findByTestId(`admin-session-detail-${VISITOR_KEY}`);
+    expect(panel).toHaveTextContent("deletes the whole visitor identity, on every network");
+    expect(screen.getByTestId(`admin-session-delete-${VISITOR_KEY}`)).toBeTruthy();
   });
 
-  it("arming on row B disarms a confirm on row A", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION, VISITOR_SESSION]);
+  it("has no Delete at all on a user row — there is no such verb", async () => {
+    await mountWith({ credentials: [userCredential()] });
 
-    render(() => <AdminSessionsTab />);
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${USER_KEY}`));
 
-    const aDisc = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
-    const bDisc = screen.getByTestId(`admin-session-disconnect-${rowId(VISITOR_SESSION)}`);
-    fireEvent.click(aDisc);
-    expect(aDisc.textContent?.trim()).toBe("Confirm disconnect");
-    fireEvent.click(bDisc);
-    expect(bDisc.textContent?.trim()).toBe("Confirm disconnect");
-    expect(aDisc.textContent?.trim()).toBe("Disconnect");
+    await screen.findByTestId(`admin-session-detail-${USER_KEY}`);
+    expect(screen.queryByTestId(`admin-session-delete-${USER_KEY}`)).toBeNull();
   });
 
-  it("refresh button re-calls adminListSessions and disarms any pending confirm", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
+  it("two-step Delete calls the identity-wide verb with the visitor id", async () => {
+    const api = await mountWith({ visitors: [parkedVisitor()] });
 
-    render(() => <AdminSessionsTab />);
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${VISITOR_KEY}`));
+    const btn = await screen.findByTestId(`admin-session-delete-${VISITOR_KEY}`);
 
-    const btn = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
     fireEvent.click(btn);
-    expect(btn.textContent?.trim()).toBe("Confirm disconnect");
-    refreshSlot()?.onRefresh();
-    await waitFor(() => {
-      expect(api.adminListSessions).toHaveBeenCalledTimes(2);
-    });
-    await waitFor(() => {
-      const post = screen.getByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
-      expect(post.textContent?.trim()).toBe("Disconnect");
-    });
+    expect(api.adminDeleteVisitor).not.toHaveBeenCalled();
+
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(api.adminDeleteVisitor).toHaveBeenCalledWith("test-bearer", VISITOR_ID),
+    );
+  });
+});
+
+describe("AdminSessionsTab — the drill-down keeps both sources of truth", () => {
+  it("shows DB intent and live pid separately when they disagree", async () => {
+    // The U-0 divergence: the credential still says connected, the BEAM
+    // has no pid. Deriving one from the other would erase the signal.
+    await mountWith({ credentials: [userCredential({ live_state: null })] });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${USER_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${USER_KEY}`);
+    expect(panel).toHaveTextContent("connected");
+    expect(panel).toHaveTextContent("BEAM has no pid");
   });
 
-  it("renders the empty state when the fetch resolves to []", async () => {
+  it("shows the upstream peer joined from /admin/sessions", async () => {
+    await mountWith({ credentials: [userCredential()], sessions: [userSession()] });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${USER_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${USER_KEY}`);
+    expect(panel).toHaveTextContent("allnight6.azzurra.chat");
+  });
+
+  it("shows visitor-only facts on a visitor row", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${VISITOR_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${VISITOR_KEY}`);
+    expect(panel).toHaveTextContent("1.2.3.4");
+  });
+});
+
+describe("AdminSessionsTab — load and failure", () => {
+  it("renders the empty state when every source is empty", async () => {
+    await mountWith({});
+
+    expect(await screen.findByTestId("admin-sessions-empty")).toBeTruthy();
+  });
+
+  it("collapses the whole table when any one endpoint fails", async () => {
     const api = await import("../lib/api");
+    vi.mocked(api.adminListVisitors).mockResolvedValue([parkedVisitor()]);
+    vi.mocked(api.adminListCredentials).mockRejectedValue(new Error("boom"));
     vi.mocked(api.adminListSessions).mockResolvedValue([]);
+    vi.mocked(api.adminListNetworks).mockResolvedValue([NETWORK]);
 
     render(() => <AdminSessionsTab />);
 
-    await waitFor(() => {
-      expect(screen.getByTestId("admin-sessions-empty")).toBeInTheDocument();
-    });
+    await screen.findByTestId("admin-sessions-error");
+    // A half-built merge is worse than no table: the operator cannot
+    // tell which half is missing.
     expect(screen.queryByTestId("admin-sessions-table")).toBeNull();
-  });
-
-  it("renders the error banner when initial fetch fails", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockRejectedValue(new api.ApiError(500, "internal_error"));
-
-    render(() => <AdminSessionsTab />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("admin-sessions-error")).toBeInTheDocument();
-    });
-    expect(screen.getByTestId("admin-sessions-error").textContent).toContain("refresh to retry");
-  });
-
-  // Web M1 reviewer fix: refresh failure AFTER a successful prior
-  // fetch must collapse stale rows + summary block — banner stands
-  // alone per the inline doc contract. Pre-fix the catch path only
-  // set `error()`, leaving the prior successful tables rendered
-  // alongside the banner (operator could not trust the visible
-  // rows). Now both signals reset to null and the loading-state
-  // paths re-collapse the rendered surface to "error only".
-  it("collapses stale rows + summary on refresh failure after a prior success", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    await mockNetworksDefault();
-
-    render(() => <AdminSessionsTab />);
-
-    // Prior success: row + summary visible.
-    await waitFor(() => {
-      expect(screen.getByTestId(`admin-session-row-${rowId(USER_SESSION)}`)).toBeInTheDocument();
-    });
-    expect(screen.getByTestId("admin-sessions-network-summary")).toBeInTheDocument();
-
-    // Second refresh: networks endpoint fails.
-    vi.mocked(api.adminListNetworks).mockRejectedValue(new api.ApiError(500, "internal_error"));
-    refreshSlot()?.onRefresh();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("admin-sessions-error")).toBeInTheDocument();
-    });
-    expect(screen.queryByTestId(`admin-session-row-${rowId(USER_SESSION)}`)).toBeNull();
-    expect(screen.queryByTestId("admin-sessions-network-summary")).toBeNull();
-    expect(screen.queryByTestId("admin-sessions-table")).toBeNull();
-  });
-
-  it("surfaces a 422 cannot_disconnect_self error inline prefixed with the verb", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    vi.mocked(api.adminDisconnectSession).mockRejectedValue(
-      new api.ApiError(422, "cannot_disconnect_self"),
-    );
-
-    render(() => <AdminSessionsTab />);
-
-    const btn = await screen.findByTestId(`admin-session-disconnect-${rowId(USER_SESSION)}`);
-    fireEvent.click(btn); // arm
-    fireEvent.click(btn); // confirm → 422
-    await waitFor(() => {
-      const err = screen.getByTestId("admin-sessions-error");
-      expect(err.textContent).toContain("disconnect: cannot_disconnect_self");
-    });
-  });
-
-  // U-3 (UD4) — per-network cap-count summary block above the
-  // sessions table. Reads `live_counts` + caps from
-  // `/admin/networks`. Three assertions: (1) summary renders when
-  // networks present, (2) per-row cap formatting handles null
-  // ("unlimited" → ∞), (3) summary hidden when networks list empty.
-
-  it("renders per-network cap-count summary above the sessions table", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    await mockNetworksDefault();
-
-    render(() => <AdminSessionsTab />);
-
-    await waitFor(() => {
-      expect(screen.getByTestId("admin-sessions-network-summary")).toBeInTheDocument();
-    });
-    const bahamut = screen.getByTestId(`admin-sessions-summary-row-${BAHAMUT_NET.slug}`);
-    expect(bahamut).toBeInTheDocument();
-    expect(
-      screen.getByTestId(`admin-sessions-summary-visitors-${BAHAMUT_NET.slug}`).textContent,
-    ).toBe("7/50");
-    expect(screen.getByTestId(`admin-sessions-summary-users-${BAHAMUT_NET.slug}`).textContent).toBe(
-      "2/10",
-    );
-    expect(
-      screen.getByTestId(`admin-sessions-summary-per-ip-${BAHAMUT_NET.slug}`).textContent,
-    ).toBe("1");
-  });
-
-  it("renders null caps as ∞ in the summary block", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    await mockNetworksDefault();
-
-    render(() => <AdminSessionsTab />);
-
-    await waitFor(() => {
-      expect(
-        screen.getByTestId(`admin-sessions-summary-row-${AZZURRA_NET.slug}`),
-      ).toBeInTheDocument();
-    });
-    // azzurra visitor cap is null → "0/∞"
-    expect(
-      screen.getByTestId(`admin-sessions-summary-visitors-${AZZURRA_NET.slug}`).textContent,
-    ).toBe("0/∞");
-    // azzurra user cap is 5 (not null) → "0/5"
-    expect(screen.getByTestId(`admin-sessions-summary-users-${AZZURRA_NET.slug}`).textContent).toBe(
-      "0/5",
-    );
-  });
-
-  it("hides the summary block when /admin/networks returns []", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    // beforeEach already mocks adminListNetworks → []; no override needed.
-
-    render(() => <AdminSessionsTab />);
-
-    await screen.findByTestId(`admin-session-row-${rowId(USER_SESSION)}`);
-    expect(screen.queryByTestId("admin-sessions-network-summary")).toBeNull();
-  });
-
-  // #242 — the network column must render the human-readable slug
-  // resolved from the already-loaded networks list, NOT the raw
-  // integer `network_id` FK. Pre-fix two sessions on different
-  // networks for the same account were indistinguishable (both showed
-  // a bare integer). USER_SESSION.network_id === 1 === BAHAMUT_NET.id,
-  // so the cell must read "bahamut".
-  it("renders the network slug (not the raw network_id) resolved from the loaded networks", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    await mockNetworksDefault();
-
-    render(() => <AdminSessionsTab />);
-
-    const cell = await screen.findByTestId(`admin-session-network-${rowId(USER_SESSION)}`);
-    // Exact-match pins the slug AND proves the opaque FK integer ("1")
-    // no longer leaks — a `not.toContain("1")` would be both redundant
-    // and fixture-coupled (a future slug containing "1" would false-fail).
-    expect(cell.textContent?.trim()).toBe("bahamut");
-  });
-
-  // #242 honesty fallback — a session whose network_id isn't in the
-  // loaded networks list (deleted-network race, or /admin/networks
-  // returned []) renders the raw id rather than a silent blank, so the
-  // operator still sees the FK it couldn't map.
-  it("falls back to the raw network_id when the network is not in the loaded list", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    // beforeEach mocks adminListNetworks → [], so network 1 is unresolved.
-
-    render(() => <AdminSessionsTab />);
-
-    const cell = await screen.findByTestId(`admin-session-network-${rowId(USER_SESSION)}`);
-    expect(cell.textContent?.trim()).toBe("1");
-  });
-
-  it("fetches BOTH sessions + networks in parallel on refresh", async () => {
-    const api = await import("../lib/api");
-    vi.mocked(api.adminListSessions).mockResolvedValue([USER_SESSION]);
-    await mockNetworksDefault();
-
-    render(() => <AdminSessionsTab />);
-
-    await waitFor(() => {
-      expect(api.adminListSessions).toHaveBeenCalledTimes(1);
-      expect(api.adminListNetworks).toHaveBeenCalledTimes(1);
-    });
-
-    refreshSlot()?.onRefresh();
-    await waitFor(() => {
-      expect(api.adminListSessions).toHaveBeenCalledTimes(2);
-      expect(api.adminListNetworks).toHaveBeenCalledTimes(2);
-    });
   });
 });
