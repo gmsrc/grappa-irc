@@ -145,4 +145,94 @@ describe("selectMessageText", () => {
     document.dispatchEvent(new Event("selectionchange"));
     expect(document.documentElement.classList.contains(SELECTING_CLASS)).toBe(false);
   });
+
+  // #1106 — the keyboard-open half. Measured in jsdom against the shipped
+  // keepKeyboard handler: the tap that chooses Select… lands on a menu button
+  // portalled to <body>, so it is neither a text entry, nor inside
+  // `.scrollback`, nor a <select> — it falls to `handleMouseDown`'s final
+  // always-fire `preventDefault`, which cancels the focus shift and leaves the
+  // COMPOSE FIELD focused. With the keyboard closed nothing is focused, the
+  // same mousedown is not prevented, and the operator reports the selection
+  // appearing. That divergence is the whole bug surface, and it is ours.
+  //
+  // So the range must be installed with no editable holding focus. What
+  // follows is a regression guard on OUR behaviour — releasing focus and the
+  // order it happens in. It is NOT evidence that iOS then paints the
+  // selection: the final link ("WebKit paints one selection at a time, and a
+  // focused editable wins") is reproducible in neither jsdom nor Playwright
+  // webkit, and the issue's own Chromium measurement paints the range even
+  // with a focused textarea. Device verification is outstanding.
+  function focusedField(tag: "input" | "textarea"): HTMLElement {
+    const field = document.createElement(tag);
+    document.body.append(field);
+    field.focus();
+    return field;
+  }
+
+  it("releases a focused textarea before installing the range (#1106)", () => {
+    stubSelection("12:34 <vjt> ciao");
+    const compose = focusedField("textarea");
+    expect(document.activeElement).toBe(compose);
+
+    selectMessageText(scrollbackRow("12:34 <vjt> ciao"));
+
+    expect(document.activeElement).not.toBe(compose);
+  });
+
+  it("releases a focused input too — the compose box is an input in its other mode (#1106)", () => {
+    stubSelection("12:34 <vjt> ciao");
+    const compose = focusedField("input");
+
+    selectMessageText(scrollbackRow("12:34 <vjt> ciao"));
+
+    expect(document.activeElement).not.toBe(compose);
+  });
+
+  it("releases focus BEFORE adding the range, not after (#1106)", () => {
+    // Order is the claim, not a detail: the point is that the engine never
+    // sees the range while an editable still owns the selection. A blur that
+    // lands after `addRange` would satisfy the two assertions above and still
+    // install the range under a focused field.
+    const order: string[] = [];
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      removeAllRanges: vi.fn(),
+      addRange: vi.fn(() => order.push("addRange")),
+      toString: () => "12:34 <vjt> ciao",
+      isCollapsed: false,
+    } as unknown as Selection);
+    const compose = focusedField("textarea");
+    compose.addEventListener("blur", () => order.push("blur"));
+
+    selectMessageText(scrollbackRow("12:34 <vjt> ciao"));
+
+    expect(order).toEqual(["blur", "addRange"]);
+  });
+
+  it("leaves a focused NON-editable alone — only a text entry blocks the paint (#1106)", () => {
+    // Keyboard-closed path: the menu button itself takes focus, and blurring
+    // it buys nothing while costing focus position on every platform that
+    // never had the bug. The release is aimed at the editable, not at whatever
+    // happens to be focused.
+    stubSelection("12:34 <vjt> ciao");
+    const button = document.createElement("button");
+    document.body.append(button);
+    button.focus();
+
+    selectMessageText(scrollbackRow("12:34 <vjt> ciao"));
+
+    expect(document.activeElement).toBe(button);
+  });
+
+  it("still installs the range when it had to release a field (#1106)", () => {
+    // Non-regression rather than discrimination: this passes before the fix
+    // too. It exists so a future blur cannot buy focus release at the cost of
+    // the selection it was there to make visible.
+    const { addRange, ranges } = stubSelection("12:34 <vjt> ciao");
+    focusedField("textarea");
+    const row = scrollbackRow("12:34 <vjt> ciao");
+
+    expect(selectMessageText(row)).toBe(true);
+    expect(addRange).toHaveBeenCalledTimes(1);
+    expect(ranges[0]?.commonAncestorContainer).toBe(row);
+  });
 });
