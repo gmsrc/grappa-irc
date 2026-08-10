@@ -2,6 +2,8 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ScrollbackMessage } from "../lib/api";
+import { channelKey } from "../lib/channelKey";
+import { getDraft, setDraft } from "../lib/compose";
 import { closeMessageMenu, openMessageMenu, SELECTING_CLASS } from "../lib/messageMenu";
 import MessageContextMenu from "../MessageContextMenu";
 
@@ -101,5 +103,69 @@ describe("Select… with the compose keyboard up", () => {
     // And it survived because the guard found a LIVE selection, not because
     // nothing ever looked.
     expect(delivered.at(-1)).toBe("12:34 <vjt> ciao");
+  });
+});
+
+// #1107 — the `!addquote` item. It only fills the compose box; cic never sends
+// it and never interprets it, so what is asserted here is the item's presence,
+// its place in the list, and the text it deposits.
+
+const NET = "azzurra";
+const CHAN = "#grappa";
+const KEY = channelKey(NET, CHAN);
+
+function mountCompose(): HTMLTextAreaElement {
+  const box = document.createElement("div");
+  box.className = "compose-box";
+  const ta = document.createElement("textarea");
+  box.appendChild(ta);
+  document.body.appendChild(box);
+  return ta;
+}
+
+function openOver(row: HTMLElement, over: Partial<ScrollbackMessage>): void {
+  openMessageMenu({
+    msg: { ...msg(), ...over } as ScrollbackMessage,
+    row,
+    networkSlug: NET,
+    channelName: CHAN,
+    at: { x: 10, y: 20 },
+  });
+}
+
+function labels(): string[] {
+  return [...document.querySelectorAll(".context-menu-item")].map((b) => b.textContent ?? "");
+}
+
+describe("the !addquote item", () => {
+  beforeEach(() => setDraft(KEY, ""));
+
+  // Position included: `!addquote` is a quoting verb, so it belongs next to
+  // Reply, and Select… stays last as the escape hatch back to a native
+  // selection. Asserting the whole list makes a missing item and a misplaced
+  // one the same failure.
+  it("sits between Reply and Select…", () => {
+    render(() => <MessageContextMenu />);
+    openOver(scrollbackRow("12:34 <vjt> ciao"), {});
+    expect(labels()).toEqual(["Copy", "Reply", "!addquote", "Select…"]);
+  });
+
+  it("drops the command plus the message text into the compose box", () => {
+    mountCompose();
+    render(() => <MessageContextMenu />);
+    openOver(scrollbackRow("12:34 <vjt> ciao"), { body: "ciao mondo" });
+    fireEvent.click(screen.getByText("!addquote"));
+    expect(getDraft(KEY)).toBe("!addquote ciao mondo");
+  });
+
+  // Disabled but VISIBLE, the posture Reply already takes: the menu's shape
+  // must not jump between rows. A conditionally-rendered item would pass a
+  // "does nothing" assertion and still fail this one.
+  it("stays visible but disabled on a row with nothing to quote", () => {
+    render(() => <MessageContextMenu />);
+    openOver(scrollbackRow("12:34 → vjt joined"), { kind: "join", body: null });
+    const item = screen.getByText("!addquote");
+    expect(item).toBeTruthy();
+    expect((item as HTMLButtonElement).disabled).toBe(true);
   });
 });
