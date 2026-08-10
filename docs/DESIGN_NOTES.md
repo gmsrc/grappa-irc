@@ -36779,6 +36779,9 @@ keeps its row until the reaper sweeps, so a total-row canary silently became a
 function of suite execution order. Any count over a row-backed admin list must
 name the population it means, or it is reporting on someone else's cleanup
 timing and calling it a regression.
+
+---
+
 ## 2026-08-10 — #1109: word breaks, and the losslessness they cost
 
 `LineSplit` cut wherever the byte budget ran out, so a long message
