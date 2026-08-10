@@ -579,7 +579,7 @@ jobs:
           echo "TAGS_EOF" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           # The arm64 leg is emulated on the amd64 runner, and an OLD QEMU
           # crashes the emulated BEAM JIT (BeamAsm) at the first `mix` call with
