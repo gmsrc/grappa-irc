@@ -37359,3 +37359,81 @@ two-line `FROM ghcr.io/vjt/grappa:latest`.
 door or real `PHX_HOST`, and no `update` verb — only `install` plus a
 bare-run restart. A missing image fails the job and never skips it: a smoke
 test that quietly passes having tested nothing is worse than not having one.
+
+---
+
+## 2026-08-10 — #1199: the cards were never enrolled, and only three of them can be
+
+A self-hoster reported on IRC that a scrollback card opened with `/whois` will
+not close on Escape — the `×` is the only way out. The premise the issue offers
+is that this is enrolment into a mechanism that already exists, and that part
+holds: `createOverlayLock` + `runTopmostOverlayEscape` have carried every modal
+since #232, and `WhoisCard` / `WhowasCard` / `LusersCard` simply never
+registered.
+
+**The set of cards is not the set the issue names.** It names WHOIS, WHOWAS and
+server-info. `ServerInfoCard` has no dismiss verb at all — no `×`, no
+`onDismiss`, and its own moduledoc says why: it is the rail's persistent
+per-kind surface, present for as long as the server window is focused. Giving
+Escape a card with nothing to close is not an enrolment, it is inventing a
+dismissal, and it lands squarely on the constraint the issue itself states —
+a permanent surface Escape can close is one the operator cannot bring back.
+It stays out. `LusersCard`, which the issue omits, IS in the family: same
+ephemeral per-network snapshot, same `×`, same store verb. Leaving it out
+would half-migrate the family and leave the next reader two patterns to copy.
+
+**`createOverlayLock` is the wrong door, and the reason is already written
+down.** That verb does two things at once: it registers the ESC entry AND
+pushes the scroll-lock refcount. The second is wrong for a card. A card renders
+INSIDE the scrollback flow, not over it, so a refcount held for the card's
+whole life would freeze the scrollback snapshot behind it (`ScrollbackPane`'s
+`isOverlayFrozen`, whose trigger IS `overlayCount() > 0`) and add the iOS
+`overlay-open` touch-lock chain. `RailActions` records that exact hazard for
+the permanent rail column, and #608 is where it was paid for.
+
+So the ESC half is split out as `createOverlayEscape`: the SAME LIFO stack, the
+same open/close/unmount edges, no refcount. Reuse the verbs, not the nouns —
+the shared execution framework is the ordered stack, and the 20% that does not
+fit is the scroll lock. Sharing that stack is the whole point rather than an
+implementation detail: it is what makes a modal opened over a card close first,
+and it keeps the app to the one global keydown listener the stack exists to
+guarantee. A private `document` listener on the card would satisfy "Escape
+closes the card" and get the ordering wrong, which is the failure mode the
+`MediaViewerModal` comment warns about.
+
+`createOverlayEscape` does NOT defer a microtask, unlike its sibling. That
+deferral exists solely so Solid can commit the render before `querySelector`
+looks for the lock element, and there is no element to look for here.
+
+**The gate is the presence of `onDismiss`, because `WhoisCard` is mounted
+twice.** `ScrollbackPane` passes the dismiss handler; `RailContext` (#606)
+deliberately omits it, and that omission IS the statement that the rail card is
+not user-dismissable. Reading dismissability off the prop keeps one fact in one
+place instead of teaching the component a second flag. `WhowasCard` and
+`LusersCard` are unconditionally dismissable, so they enrol whenever their
+bundle is up.
+
+**Displacement.** Four mutants, applied one at a time to the committed tree by
+exact one-shot replacement, each re-running the two #1199 files. Dropping the
+`onDismiss` gate kills exactly one arm — the query-rail card, which then joins
+the stack. Replacing the enrolment with a private `document` keydown listener
+kills three, and the one that matters is the ordering arm's
+`expect(onDismiss).not.toHaveBeenCalled()`: the card jumps the queue and closes
+on the same Escape as the modal above it. Enrolling `WhowasCard` through
+`createOverlayLock` instead kills exactly the refcount arm. Removing
+`onCleanup(release)` kills exactly the unmount arm.
+
+The ordering test is deliberately a PAIR. One arm pins the premise (card and
+modal in one stack, modal on top) and the other pins the order with no depth
+assertion in it at all — otherwise the private-listener mutant dies on a
+precondition and never gets to demonstrate the out-of-order dismissal. For the
+same reason the Escape event is dispatched on an in-document target and left to
+bubble: an event whose target IS `window` never reaches a `document` listener,
+so a window-dispatch would make the two mechanisms indistinguishable and the
+ordering arms vacuous.
+
+**Not measured.** No browser run and no e2e spec: this is jsdom plus the real
+keybindings listener. The claim is the wiring and the ordering, not the pixels.
+The server-info arm has no unique killer among the four mutants — nothing in
+this change can make a card with no dismiss verb enrol — and is carried as a
+regression guard against a later over-enrolment, not as coverage.
