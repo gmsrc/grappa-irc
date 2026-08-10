@@ -37068,3 +37068,82 @@ reported state needs a scrolled-back pane whose window is the only unread one,
 which is a geometry the jsdom suite cannot assert and this change did not buy
 the stack time to build. The claim here is the arithmetic plus the wiring, not
 the pixels.
+
+---
+
+## 2026-08-10 — #1161: the bundle root is diagnosed at boot, and never quietly replaced
+
+A self-hoster ran the published release image with the repo's `compose.yaml`
+and got `cicchetto frontend bundle not built` on every document route, from a
+container that was healthy and whose API answered. `Dockerfile.release` bakes
+the SPA at `/app/cicchetto-dist` and sets `CIC_DIST_ROOT` to match; a compose
+`environment:` key overrides an image `ENV`; `compose.yaml` sets that variable
+for the stack that BUILDS the bundle into `runtime/`. So the file redirected
+the root to a directory the image does not have.
+
+**This is the third instance of one class, which is why the fix is a boot
+diagnosis rather than a compose edit.** #526: the FreeBSD jail sets no
+WorkingDirectory, so the repo-relative default resolved somewhere else and
+`/admin/cic-bundle-changed` answered 204 forever. The 2026-07-28 production
+incident recorded in `docs/OPERATIONS.md`: the same relative default out of
+reach of the BEAM's CWD, and a deploy that printed ✓. Now this. Every time,
+the root was resolved at boot into `:persistent_term` and then nobody asked
+about it until a browser did — and what the browser got back named a build
+step instead of the path. `Grappa.Cic.Bundle.boot/1` is the one place that
+holds the resolved root before any request exists, so it warns there, with
+the **expanded** path (a relative root is correct only where the CWD is what
+the operator assumed — that expansion is the #526 half of the class), what
+was missing at it, the variable that moves it, and the symptom:
+
+```
+[warning] cic bundle root does not exist: /tmp/cic-absent-843 — the SPA will
+404 on every document request. Set CIC_DIST_ROOT to the directory holding the
+built SPA (the one with index.html).
+```
+
+**Two arms, because the remedies differ.** A root that does not exist sends
+the operator to fix a path; a root that exists and is empty sends them to
+build or mount a bundle. Collapsing them into one message would send half of
+them to correct a path that is already right.
+
+**It warns and does not raise.** A bundle-less boot is legitimate — dev before
+a cic build, a release between deploy and the first `cicchetto-build` oneshot —
+and the API half of the server is worth serving meanwhile.
+
+**The issue's open question, answered no: an unresolvable `CIC_DIST_ROOT` is
+never replaced by a fallback.** Falling back to the image's baked path would
+rescue exactly the reported case, and it would make the variable advisory: a
+deliberate relocation with a typo would then serve a *different* bundle than
+the one configured, silently and plausibly, which is a worse failure than a
+404. There is also no substrate-neutral value to fall back TO — the baked path
+is a fact of `Dockerfile.release`, and the compile-time anchor is the repo
+checkout, wrong on every packaged install. The variable stays load-bearing and
+the diagnosis is what improves.
+
+**The 404 body changed too, by one clause.** "not built" is true on the dev
+path and misleading on every other, and it is what sent the reporter hunting a
+build step. It now reads `cicchetto frontend bundle not built, or
+CIC_DIST_ROOT names the wrong directory`. The resolved path deliberately does
+NOT go in the response: it belongs in the boot log, where the operator reads
+it and an unauthenticated client does not learn our filesystem layout. The
+test pins both halves — knob present, path absent — and a mutant that
+interpolates the path into the body kills only the absence assertion.
+
+**Which arms discriminate, measured one mutant at a time.** Three of four
+failed before the fix. The fourth — a real bundle boots silently — passed
+vacuously against the unguarded `boot/1` and is only a guard against the
+green one; the mutant that warns unconditionally kills it and nothing else,
+which is what earns it its place. Collapsing the missing-directory branch
+kills only `does not exist`; logging the configured value instead of the
+expanded one kills only the relative-root arm; dropping the variable name
+kills only that assertion; dropping the symptom clause kills only the `404`
+one; accepting any existing directory as a bundle kills only the empty-root
+arm. Six mutants, six single kills.
+
+**What this does not do, stated rather than implied.** It was not reproduced
+against `ghcr.io/vjt/grappa` — no image was pulled and no container booted
+here; the reported chain is read off `Dockerfile.release`, `compose.yaml` and
+compose's documented precedence, and the guard is measured in unit tests
+only. And no path check can catch the failure one step past this one: a root
+that exists and holds a bundle that is simply the wrong one — stale, or from
+another deploy — still boots silently and serves it.
