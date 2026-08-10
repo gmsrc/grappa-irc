@@ -1,5 +1,6 @@
 import { type Component, Show } from "solid-js";
 import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
+import { addQuoteCommand, addQuoteToCompose } from "./lib/addQuote";
 import {
   closeMessageMenu,
   copyMessageRow,
@@ -36,6 +37,18 @@ const MessageContextMenu: Component = () => {
       // so the menu's shape does not jump between rows.
       enabled: replyQuote(target.msg) !== null,
       action: () => replyToMessage(target.msg, target.networkSlug, target.channelName),
+    },
+    {
+      // #1107 — the bot command, spelled the way it goes on the wire so there
+      // is nothing to learn from the label. Next to Reply because it is the
+      // other quoting verb, and before Select… because that one is the escape
+      // hatch out of the menu entirely.
+      label: "!addquote",
+      // Same disabled-but-visible posture as Reply, and the same predicate
+      // underneath (`quotableBody`) — a row Reply refuses has nothing for a
+      // quote database either.
+      enabled: addQuoteCommand(target.msg) !== null,
+      action: () => addQuoteToCompose(target.msg, target.networkSlug, target.channelName),
     },
     {
       label: "Select…",
