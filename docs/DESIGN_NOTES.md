@@ -36626,3 +36626,78 @@ adjusting a selection, stay out of the way"), so the two cannot drift, and
 selection elsewhere in the pane suppressing our menu until it is dismissed —
 accepted, because the browser's copy/search menu is the reasonable answer while
 any selection is live.
+## 2026-08-10 — #1160: a compose for the published image, and the three things measuring it changed
+
+The gap was narrow and real: the fastest path that does not compile from
+source is a remote script piped into a shell, and the operators who refuse
+that had nowhere else to go. `compose.release.yaml` is the boring answer —
+the image, a named volume at `/data`, a published port, `PHX_HOST`.
+
+**It stays a separate file, and nothing auto-loads it.** `compose.yaml` is
+the development stack and keeps that job; merging the two recreates the
+confusion the issue is about. That separation is structural rather than
+declared: `infra/docker/deploy.sh` discriminates source-vs-release on the
+exact name `compose.yaml` with no glob, and `scripts/_lib.sh` pins its `-f`
+list explicitly, so a second compose file in the root is invisible to both.
+`test/grappa/config/env_registry_drift_test.exs` is likewise scoped to
+`@compose "compose.yaml"`, so no scoped invariant was widened to admit this.
+
+**Why the file is short, derived rather than believed.** The issue asserted
+that `PHX_HOST` is the only variable an operator must supply. It is, but the
+attribution in the issue was off: it credited the `/data/grappa.db` default
+to the entrypoint, when the entrypoint only uses that default to pick a
+directory to `mkdir`, and `config/runtime.exs` *raises* if `DATABASE_PATH` is
+absent. The default is baked as `ENV` in `Dockerfile.release`. The real
+arithmetic is eight prod-mandatory variables in `runtime.exs`, minus the one
+the image bakes, minus the six the entrypoint generates onto `/data` on first
+boot (#862) — residue `PHX_HOST`. Nothing enforced that arithmetic, so a
+ninth mandatory variable would have shipped a container that dies at boot.
+`test/infra/release_compose_test.bats` derives all three sets from the files
+that own them and fails when the residue and the compose's `environment:`
+keys stop agreeing, in either direction.
+
+**The project name is part of the contract.** Compose names the project after
+the containing directory when the file does not say otherwise, and the volume
+carries the project name — so the same file copied into a differently named
+folder, which is precisely what a copy-pasteable file invites, resolved to a
+different volume: empty database, regenerated secrets, no hint the old ones
+survived. Measured by displacement, not argued: before the pin the resolved
+volume tracked the folder; after it, `docker compose config` from the worktree
+and from an unrelated directory emit a byte-identical resolved config. The
+name is `grappa-release` rather than `grappa` because `compose.yaml` declares
+no project name and inherits the checkout directory's, and two stacks sharing
+one project name treat each other's containers as orphans.
+
+**Reading the guard red is what made it a guard.** Every absence check is a
+grep that must match nothing, and a grep over a missing file also matches
+nothing — so "no build context", "no profiles" and "no bind mounts" reported
+green on the run where `compose.release.yaml` did not exist. Three assertions
+of twelve were proving nothing until the file's existence moved into
+`setup()`. Five one-at-a-time mutants of the green file each kill only what
+they should; swapping the named volume for a bind kills two, because that one
+line carries two facts.
+
+**What was actually booted, and what that does not cover.** The file was
+copied to an unrelated directory, `PHX_HOST` set to `localhost`, and brought
+up as an operator would. `ghcr.io/vjt/grappa:latest` pulled clean; `/healthz`
+answered 200; `/data` came up with a `0600` `grappa.env` holding exactly the
+six generated keys, the sqlite DB, and the uploads root; the migrations ran
+from empty. The never-rotate promise is measured on two axes across both a
+`restart` and a full `down` + `up -d` recreate — the sha256 of `grappa.env` is
+unchanged and its mtime is still the first boot, so the file is reused rather
+than rewritten with equal values — and `/healthz` answered 200 after each. The
+running app reported `0.16.0`, so `:latest` is the v0.16.0 image the registry
+lists as its highest tag. Teardown left no container and no volume.
+
+Note the entrypoint logs `bootstrapped <keys> from /data/grappa.env` on *every*
+boot, including those that generate nothing: the keys are absent from the
+container environment each time, so the load-from-file branch always runs. The
+line is true — they are bootstrapped into the process environment — but it
+reads like regeneration to an operator watching a restart, and the evidence
+that it is not is the unchanged mtime rather than the log.
+
+Not covered, and not to be read as covered: this ran on `linux/arm64` only, so
+the amd64 leg of the multi-arch manifest is untested here; `PHX_HOST=localhost`
+exercises the boot, not a real TLS front door or a link minted for a public
+host; no upstream IRC network was connected; and the file has never been used
+on a host without a checkout, which is the population it exists for.
