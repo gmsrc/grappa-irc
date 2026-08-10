@@ -77,15 +77,31 @@ test("M-9b admin Sessions view lists every seeded subject including m9b-test", a
   // as the register-wizard user, live at boot (--auth none, not yet +r).
   // admin-vjt has no bind, so it has no credential and no row.
   //
-  // #1157 changed what this number MEANS. The list used to be
-  // registry-driven, so 4 meant "4 pids are alive" and a drop caught a
-  // seeded session that failed to connect. The list is row-backed now: 4
-  // means "4 credentials exist", and a parked or failed subject keeps its
-  // row. So the count no longer watches connectivity — the live half is
-  // asserted per-row by the specs below, through the channels cell. What it
-  // still catches is population drift: a rise means an unexpected
-  // credential, or a visitor some spec minted and never reaped.
-  const rows = page.locator("[data-testid^='admin-session-row-']");
+  // #1157 changed what this number MEANS, twice over.
+  //
+  // First: the list used to be registry-driven, so 4 meant "4 pids are
+  // alive" and a drop caught a seeded session that failed to connect. The
+  // list is row-backed now, so 4 means "4 credentials exist" and a parked or
+  // failed subject keeps its row. The connectivity half moved to the specs
+  // below, which read it per-row off the channels cell.
+  //
+  // Second, and this one was found by the full suite rather than reasoned
+  // about: counting EVERY row couples this canary to the whole suite's
+  // execution order. Registry-driven, a visitor another spec minted and left
+  // behind dropped off the list the moment its pid died. Row-backed, its row
+  // survives until the reaper takes it — so the total became 6 in a full run
+  // and 4 when this file runs alone. Moving the number to 6 would just be
+  // chasing whichever specs happened to run first.
+  //
+  // So it counts the population it was always about: the seeded USER binds.
+  // vjt + m9b-test + m9b-victim (bahamut-test) + wiz-test (azzurra-reg, GH
+  // #349's registration-wizard seed). admin-vjt has no bind, so it has no
+  // credential and no row. Visitors are transient and belong to the specs
+  // that mint them; they are keyed `visitor:` and are not this canary's
+  // business. A rise still means an unexpected credential, a drop still
+  // means a seeded bind vanished — and neither reading depends any more on
+  // what ran before.
+  const rows = page.locator("[data-testid^='admin-session-row-user:']");
   await expect(rows).toHaveCount(4, { timeout: 15_000 });
 });
 
