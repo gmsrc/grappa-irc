@@ -36841,3 +36841,68 @@ frame overhead. `pastedMessageCount` therefore counts lines only, and a
 single long line has always been 1 there and N on the wire. Moving the
 breaks changes N; it does not create a divergence, and there is nothing
 to synchronise here.
+## 2026-08-10 — #1106: Select… installed its range under a focused compose box, and three of the four links are measured
+
+The report is narrow: on iOS, long-press → **Select…** with the keyboard UP
+produces no visible selection; with the keyboard down the same gesture works.
+
+**The divergence is ours, not WebKit's, and it is measured.** The tap that
+chooses the item lands on a menu button portalled to `<body>`. That is not a
+text entry, not inside `.scrollback`, and not a `<select>` — so it falls
+through `keepKeyboard`'s `handleMouseDown` to the final always-fire
+`preventDefault`, which cancels the focus shift. In jsdom against the shipped
+handler: with the compose field focused that mousedown reports
+`defaultPrevented = true`; with nothing focused, `false`. So on the broken path
+the compose box KEEPS focus and `selectMessageText` installs its range while an
+editable owns the selection, and on the working path focus moves to the button
+and no editable is involved. The fix removes that difference:
+`selectMessageText` releases a focused text entry before installing the range.
+
+**Aimed at the editable, not at whatever holds focus.** On the keyboard-down
+path the focused element is the menu button itself; blurring that buys nothing
+and moves focus on platforms that never had the bug. `isTextEntry` moved from
+private to exported rather than being copied — one predicate for "what is a
+text entry", so a contenteditable composer lands in one place.
+
+**This does NOT contradict #79**, and the issue's framing of the fork ("drop
+the keyboard before selecting, contradicting #79's whole premise") over-states
+it. #79 duration-gates the long-press on `.scrollback` to hold the keyboard
+through the GESTURE. This is the explicit command the gesture leads to, on a
+different branch of the same handler, where the operator has asked for a
+selection and the keyboard is what is in the way. Accepted cost, stated up
+front: the keyboard closes and the layout reflows under the finger as the
+selection appears. The alternative — excluding `.context-menu` from the generic
+preventDefault — was rejected on the merits: it would take the keyboard away
+from **Reply**, which fills the compose box and wants it up, and Copy has no
+reason to lose it either.
+
+**The fourth link is not measured and this entry does not claim it.** That
+WebKit paints one selection at a time, so a document range under a focused
+editable never gets drawn, is reproducible in neither jsdom nor Playwright
+webkit — and the issue's own Chromium run paints the range *with* a focused
+textarea, which is why the bug is engine-specific in the first place. So: a
+causal chain that explains the symptom, and NO evidence that removing it makes
+the symptom go away on a phone. **Device verification is outstanding debt**,
+not something this change did. What landed is a regression guard on our own
+behaviour.
+
+**Which arms discriminate.** Three failed before the fix — a focused textarea
+surviving the call, a focused input surviving it, and the order being `addRange`
+with no blur at all. Two passed already and are labelled in the file as what
+they are, but neither is vacuous: single-mutation runs against the green
+implementation kill each arm alone. Blurring any focused element instead of
+only editables kills the non-editable arm and nothing else; blurring after
+`addRange` kills the order arm and nothing else; blurring only a textarea kills
+the input arm and nothing else; installing no range kills the non-regression
+arm. The order arm is the load-bearing one — a blur that lands after the range
+satisfies both focus assertions while still installing under a focused field.
+
+**A false premise in the issue, for whoever picks this up.** Its diagnostic
+plan proposes reading `kb: scrollback md held=<n>ms → HOLD keep-kbd` off a
+failing device to learn "whether the long-press arm is even reached", and to
+separate its lead 1 from leads 2-3 that way. But `keepKeyboard.ts` states in
+its own comment that on real iOS a long-press synthesizes NO mousedown at all —
+only taps do — and that the arm survives as a cross-platform net. If that is
+true, the line will never print for a long-press on device and the plan cannot
+separate anything. Not verified on device either: this is the code contradicting
+the issue text, which is a result worth recording rather than a measurement.
