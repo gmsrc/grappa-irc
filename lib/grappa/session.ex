@@ -265,7 +265,9 @@ defmodule Grappa.Session do
     full_opts =
       opts
       |> Map.put(:network_id, network_id)
-      |> Map.put_new(:auto_away_debounce_ms, Server.auto_away_debounce_for(subject))
+      |> Map.put_new_lazy(:auto_away_debounce_ms, fn ->
+        Server.auto_away_debounce_for(subject)
+      end)
 
     DynamicSupervisor.start_child(
       Grappa.SessionSupervisor,

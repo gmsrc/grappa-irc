@@ -714,7 +714,7 @@ defmodule GrappaWeb.UserSettingsControllerTest do
     end
 
     test "returns null when never persisted", %{conn: conn} do
-      {_user, session} = user_and_session()
+      {_, session} = user_and_session()
 
       conn =
         conn
@@ -726,7 +726,9 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "renders a stored delay", %{conn: conn} do
       {user, session} = user_and_session()
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, Grappa.Subject.label({:user, user.name}))
+
+      {:ok, _} =
+        UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, Grappa.Subject.label({:user, user.name}))
 
       conn =
         conn
@@ -738,7 +740,13 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "renders the OFF state as 0, not as null", %{conn: conn} do
       {user, session} = user_and_session()
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled, Grappa.Subject.label({:user, user.name}))
+
+      {:ok, _} =
+        UserSettings.put_auto_away_debounce_seconds(
+          {:user, user.id},
+          :disabled,
+          Grappa.Subject.label({:user, user.name})
+        )
 
       conn =
         conn
@@ -787,7 +795,9 @@ defmodule GrappaWeb.UserSettingsControllerTest do
 
     test "null clears back to the server default", %{conn: conn} do
       {user, session} = user_and_session()
-      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300, Grappa.Subject.label({:user, user.name}))
+
+      {:ok, _} =
+        UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300, Grappa.Subject.label({:user, user.name}))
 
       conn =
         conn
@@ -815,7 +825,7 @@ defmodule GrappaWeb.UserSettingsControllerTest do
     end
 
     test "422 below the accepted range (negative is not the OFF sentinel)", %{conn: conn} do
-      {_user, session} = user_and_session()
+      {_, session} = user_and_session()
 
       conn =
         conn
@@ -826,7 +836,7 @@ defmodule GrappaWeb.UserSettingsControllerTest do
     end
 
     test "400 when the body carries a non-integer", %{conn: conn} do
-      {_user, session} = user_and_session()
+      {_, session} = user_and_session()
 
       conn =
         conn

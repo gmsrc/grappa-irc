@@ -130,10 +130,8 @@ defmodule GrappaWeb.UserSettingsController do
   @spec show_auto_away_debounce_seconds(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def show_auto_away_debounce_seconds(conn, _) do
     subject = Subject.from_assigns(conn.assigns)
-
-    render(conn, :auto_away_debounce_seconds,
-      debounce: UserSettings.get_auto_away_debounce_seconds(subject)
-    )
+    debounce = UserSettings.get_auto_away_debounce_seconds(subject)
+    render(conn, :auto_away_debounce_seconds, debounce: debounce)
   end
 
   @doc """
@@ -159,9 +157,8 @@ defmodule GrappaWeb.UserSettingsController do
              decode_auto_away_debounce(seconds),
              subject_label
            ) do
-      render(conn, :auto_away_debounce_seconds,
-        debounce: UserSettings.get_auto_away_debounce_seconds(subject)
-      )
+      debounce = UserSettings.get_auto_away_debounce_seconds(subject)
+      render(conn, :auto_away_debounce_seconds, debounce: debounce)
     end
   end
 

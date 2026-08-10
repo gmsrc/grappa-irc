@@ -182,22 +182,6 @@ defmodule Grappa.UserSettings do
           presence_filter: %{String.t() => String.t()}
         }
 
-  @typedoc """
-  #348 — the stored auto-away debounce preference for one subject.
-
-  Three states, deliberately one value:
-
-    * `nil` — nothing stored; the session keeps the server-wide default.
-    * `:disabled` — auto-away is OFF: no debounce timer is ever armed.
-    * `pos_integer()` — seconds to wait after the last visible device hides.
-
-  `:disabled` is an atom here and the integer `0` in `data` / on the wire
-  (CLAUDE.md: atoms for closed sets, JSON scalars at the boundary). The
-  distinction is not cosmetic — a zero-second debounce and "no debounce
-  at all" share a wire number but mean opposite things.
-  """
-  @type auto_away_debounce :: pos_integer() | :disabled | nil
-
   @notification_prefs_key "notification_prefs"
   @upload_ttl_seconds_key "upload_ttl_seconds"
   @vhost_selection_key "vhost_selection"
@@ -271,6 +255,25 @@ defmodule Grappa.UserSettings do
   @auto_away_debounce_seconds_range 1..86_400
   @auto_away_debounce_seconds_min @auto_away_debounce_seconds_range.first
   @auto_away_debounce_seconds_max @auto_away_debounce_seconds_range.last
+
+  @typedoc """
+  #348 — the stored auto-away debounce preference for one subject.
+
+  Three states, deliberately one value:
+
+    * `nil` — nothing stored; the session keeps the server-wide default.
+    * `:disabled` — auto-away is OFF: no debounce timer is ever armed.
+    * `pos_integer()` — seconds to wait after the last visible device hides.
+
+  `:disabled` is an atom here and the integer `0` in `data` / on the wire
+  (CLAUDE.md: atoms for closed sets, JSON scalars at the boundary). The
+  distinction is not cosmetic — a zero-second debounce and "no debounce
+  at all" share a wire number but mean opposite things.
+  """
+  @type auto_away_debounce ::
+          unquote(@auto_away_debounce_seconds_min)..unquote(@auto_away_debounce_seconds_max)
+          | :disabled
+          | nil
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -611,14 +614,14 @@ defmodule Grappa.UserSettings do
   Exposed so callers and tests read the bound from the one constant that
   defines it instead of restating the number.
   """
-  @spec auto_away_debounce_seconds_min() :: pos_integer()
+  @spec auto_away_debounce_seconds_min() :: unquote(@auto_away_debounce_seconds_min)
   def auto_away_debounce_seconds_min, do: @auto_away_debounce_seconds_min
 
   @doc """
   Largest debounce, in seconds, this boundary accepts. See
   `auto_away_debounce_seconds_min/0`.
   """
-  @spec auto_away_debounce_seconds_max() :: pos_integer()
+  @spec auto_away_debounce_seconds_max() :: unquote(@auto_away_debounce_seconds_max)
   def auto_away_debounce_seconds_max, do: @auto_away_debounce_seconds_max
 
   @doc """

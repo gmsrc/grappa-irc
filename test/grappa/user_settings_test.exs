@@ -21,6 +21,7 @@ defmodule Grappa.UserSettingsTest do
   import Grappa.AuthFixtures, only: [visitor_fixture: 0]
 
   alias Grappa.{Accounts, Repo, UserSettings}
+  alias Grappa.PubSub.Topic
   alias Grappa.UserSettings.Settings
 
   # ---------------------------------------------------------------------------
@@ -1136,9 +1137,7 @@ defmodule Grappa.UserSettingsTest do
       {:ok, settings} = UserSettings.get_or_init({:user, user.id})
 
       for bogus <- ["600", -1, 1.5, %{"seconds" => 600}] do
-        Repo.update!(
-          Settings.changeset(settings, %{data: %{"auto_away_debounce_seconds" => bogus}})
-        )
+        Repo.update!(Settings.changeset(settings, %{data: %{"auto_away_debounce_seconds" => bogus}}))
 
         assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
       end
@@ -1245,8 +1244,8 @@ defmodule Grappa.UserSettingsTest do
       user = user_fixture()
       label = label(user)
 
-      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Grappa.PubSub.Topic.user(label))
-      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Grappa.PubSub.Topic.user_settings(label))
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(label))
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user_settings(label))
 
       {:ok, user: user, label: label}
     end
@@ -1301,7 +1300,7 @@ defmodule Grappa.UserSettingsTest do
       other = user_fixture()
       other_label = label(other)
 
-      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Grappa.PubSub.Topic.user_settings(other_label))
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user_settings(other_label))
 
       {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120, label)
 
