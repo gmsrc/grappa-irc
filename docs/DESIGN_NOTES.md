@@ -37001,3 +37001,70 @@ never reached the oracle: deleting the call left the import unused, `tsc
 --noEmit` failed inside the `cicchetto-build-test` oneshot, and the stack died
 before a single test ran. An e2e mutant has to keep the BUNDLE buildable, or the
 harness dies upstream of the thing being measured.
+
+---
+
+## 2026-08-10 — #1178: the `»` cycle can resolve to where you already are, and then it has to scroll
+
+A mobile report: scrolled back inside `#grappa`, the `»N` badge reading `1`,
+the scroll-to-bottom badge reading `4`, and tapping `»` did nothing at all.
+
+The arithmetic is deterministic. `stepActiveWindow` cycles `activeWindows()`,
+and that list is "windows with unread activity" — including the one currently
+selected. One element, and that element is the selection: `curIdx` is 0,
+`(0 + 1 + 1) % 1` is 0, and the target is the window already open.
+`setSelectedChannel` short-circuits identical tuples by design (the #243
+`sameSelection` rule), so the verb ran to completion and changed nothing.
+
+**What made it that state and not another.** The selected window only stays in
+the list while the pane is NOT at the tail: `selection.ts`'s read-at-the-tail
+suppression (#981) zeroes the count for the window the cursor arm is about to
+mark read, and that gate is geometric. So the single-element-is-the-selection
+case fires exactly when the operator is scrolled back with unread below them —
+the moment they most want the jump, and, on mobile, `»` is the only jump
+affordance #235 gives them.
+
+**The decision, stated rather than left to emerge.** The unread was never
+unreachable; it was BELOW. The jump wanted to be vertical, not lateral. So when
+the resolved target IS the current selection the verb takes #243's exit —
+`requestScrollToBottom()`, the same command a re-tap on the already-active
+Sidebar row or BottomBar tab fires — which also advances the read cursor
+(#310), so the count that advertised the jump falls instead of persisting.
+
+Hiding or disabling the button was rejected: it trades a lying affordance for
+an absent one in the state the operator most wants it, and `activeWindowCount()`
+would then have to disagree with the sidebar badges counting the same windows —
+two counters for one question, which is what #280 built the shared
+`isPriorityWindow` predicate to avoid.
+
+#693's `jumpToUnread` was rejected as the landing, though the issue text
+proposed it as the likelier expectation. It is far-behind-only: it returns
+`false` unless `farBehindByChannel[key]` is set, so in the reported state —
+scrolled back a few screens, four rows below — the button would have stayed
+just as dead. And in the state where it does apply the pane already renders
+#693's own in-pane "N unread — jump back" affordance, so routing `»` there
+would be a second door onto one gesture.
+
+The predicate is `isActiveSelection`, not a local compare against `sel`: it is
+the exact negation of the setter's short-circuit, both routing through
+`sameSelection`, so the new arm cannot drift from the non-transition rule that
+makes it necessary. `Ctrl+P` inherits it for free — one verb, both directions.
+
+**The guard is a sibling file, because the existing one structurally cannot
+reach this.** `activeWindows.test.ts` exercises the pure ordering with plain
+data, and the defect is not in the ORDER. `activeWindowsStep.test.ts` drives the
+impure verb by mocking the source modules the reactive memo reads, resetting the
+module registry per case (the mocks are plain functions, so the memo caches).
+
+**Displacement, twice.** Removing the whole guard kills the two single-element
+arms (Alt+A and Ctrl+P) and leaves the other three green — so exactly those two
+measure the cure. Making the scroll UNCONDITIONAL instead kills four of five:
+the two switch guards refuse it, which is the point of carrying regression arms
+that pass either way. Three of the five arms discriminate nothing about #1178 on
+their own and are labelled as such in the file.
+
+**Not measured.** Not reproduced in a live browser, and no e2e spec: the
+reported state needs a scrolled-back pane whose window is the only unread one,
+which is a geometry the jsdom suite cannot assert and this change did not buy
+the stack time to build. The claim here is the arithmetic plus the wiring, not
+the pixels.
