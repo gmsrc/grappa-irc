@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { channelKey } from "../lib/channelKey";
-import { LIST_WINDOW_NAME } from "../lib/windowKinds";
+import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "../lib/windowKinds";
 import { BLANK_BODY_ERROR, serverAcceptsBody } from "./serverBodyPredicate";
 
 vi.mock("../lib/api", () => {
@@ -4129,5 +4129,295 @@ describe("compose submit — $server slash-only gate (CP13 S9)", () => {
     expect(result).not.toEqual({
       error: "Server window accepts only slash-commands. Try /raw <line>",
     });
+  });
+});
+
+// #431 — /ame + /amsg: one message per JOINED channel of the CURRENT network.
+//
+// The fan-out list is derived from the server-owned `windowStateByChannel`
+// projection, the same one #30's channel tab-completion reads — no parallel
+// client-side channel list to drift. Three things are load-bearing here and
+// each has its own arm below: WHICH windows are targets (only `joined`), the
+// confirm gate above 10 channels, and the pacing against the send door.
+type ScrollbackModule = typeof import("../lib/scrollback");
+
+// The window-state map compose reads its fan-out list from. Seeded per test so
+// each arm states exactly which windows exist and in which state.
+const setWindows = async (states: Record<string, string>): Promise<void> => {
+  const ws = await import("../lib/windowState");
+  vi.mocked(ws.windowStateByChannel).mockReturnValue(
+    states as unknown as ReturnType<typeof ws.windowStateByChannel>,
+  );
+};
+
+const joinedOn = (slug: string, names: string[]): Record<string, string> =>
+  Object.fromEntries(names.map((n) => [channelKey(slug, n), "joined"]));
+
+// The wire log: who each PRIVMSG was addressed to, and what went out. Read off
+// the send stub in call order, so a drop shows as a missing entry and a
+// duplicate as a repeated one.
+const targetsOf = (sb: ScrollbackModule): string[] =>
+  vi.mocked(sb.sendMessage).mock.calls.map((c) => c[1]);
+
+const bodiesOf = (sb: ScrollbackModule): string[] =>
+  vi.mocked(sb.sendMessage).mock.calls.map((c) => c[2]);
+
+describe("compose /ame + /amsg fan-out (#431)", () => {
+  const k = channelKey("freenode", "#a");
+
+  it("fans out to every joined channel of THIS network, and no other network's", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setWindows({
+      ...joinedOn("freenode", ["#a", "#b"]),
+      ...joinedOn("libera", ["#z"]),
+    });
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg back in ten");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(targetsOf(sb).sort()).toEqual(["#a", "#b"]);
+    expect(bodiesOf(sb)).toEqual(["back in ten", "back in ten"]);
+  });
+
+  // THE exclusion arm. vjt's constraint 1 names queries / $server / the invite
+  // window; of those only the invite window can be a key in this map at all
+  // (queries live in `queryWindows`, $server is never joined — verified at the
+  // feeders: subscribe.ts's "joined" arm and userTopic.ts's, both channel-keyed
+  // by construction). What DOES the excluding is the `joined` predicate, and it
+  // covers the invite window along with every other not-actually-in-it state.
+  // Widening it to "present in the map" kills this.
+  it("targets only JOINED windows — never invited/pending/failed/kicked/parked", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setWindows({
+      [channelKey("freenode", "#a")]: "joined",
+      [channelKey("freenode", "#invited")]: "invited",
+      [channelKey("freenode", "#pending")]: "pending",
+      [channelKey("freenode", "#failed")]: "failed",
+      [channelKey("freenode", "#kicked")]: "kicked",
+      [channelKey("freenode", "#parked")]: "parked",
+    });
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg hi");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(targetsOf(sb)).toEqual(["#a"]);
+  });
+
+  it("/ame frames every copy as a CTCP ACTION", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setWindows(joinedOn("freenode", ["#a", "#b"]));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/ame waves");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(bodiesOf(sb)).toEqual(["\x01ACTION waves\x01", "\x01ACTION waves\x01"]);
+  });
+
+  it("/amsg sends plain text — no ACTION framing", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setWindows(joinedOn("freenode", ["#a", "#b"]));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg waves");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(bodiesOf(sb)).toEqual(["waves", "waves"]);
+  });
+
+  it("the reply echoes the target list", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setWindows(joinedOn("freenode", ["#b", "#a"]));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg hi");
+    expect(await compose.submit(k, "freenode", "#a")).toEqual({
+      ok: "/amsg: sent to #a, #b",
+    });
+  });
+
+  it("no joined channel on this network is an error, and the draft survives it", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setWindows(joinedOn("libera", ["#z"]));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg hi");
+    const r = await compose.submit(k, "freenode", "#a");
+
+    expect(r).toEqual({ error: "/amsg: no joined channel on freenode" });
+    expect(vi.mocked(sb.sendMessage)).not.toHaveBeenCalled();
+    expect(compose.getDraft(k)).toBe("/amsg hi");
+  });
+
+  // The fan-out is per-NETWORK, not per-window: typing it in the $server window
+  // (which has no IRC target of its own) still reaches the network's channels.
+  it("fans out from the $server window too — the source window is not the target", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setWindows(joinedOn("freenode", ["#a", "#b"]));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const compose = await import("../lib/compose");
+
+    const serverKey = channelKey("freenode", SERVER_WINDOW_NAME);
+    compose.setDraft(serverKey, "/amsg hi");
+    await compose.submit(serverKey, "freenode", SERVER_WINDOW_NAME);
+
+    expect(targetsOf(sb).sort()).toEqual(["#a", "#b"]);
+  });
+});
+
+// #431 constraint 2 — PACING, and this is the part that can do real harm.
+//
+// The send door is the #340 per-(subject, network) token bucket: capacity 5,
+// refill 0.5/s, and it is deliberately tuned to refuse BEFORE the ircd's flood
+// protection kills the connection (messages_controller `take_send_token`). So
+// honouring ITS retry-after IS the pacing — the same #666 verb a multi-line
+// paste already drains through, over channels instead of lines. A fan-out that
+// treats the 429 as fatal, or that ignores the server's hint, is the failure
+// mode this describe exists to keep out.
+describe("compose /ame + /amsg pacing against the send door (#431)", () => {
+  const k = channelKey("freenode", "#a");
+  const TEN = ["#c01", "#c02", "#c03", "#c04", "#c05", "#c06", "#c07", "#c08", "#c09", "#c10"];
+
+  it("waits the door's own retry-after and retries the refused channel — no drop, no dup", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      await setWindows(joinedOn("freenode", TEN));
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+
+      // The bucket admits its 5-token burst, then refuses the 6th ONCE with a
+      // retry_after of 3s — deliberately NOT the 2s client-side default, so an
+      // implementation that ignores the server's hint is a distinct mutant from
+      // one that has no pacing at all.
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 6 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 3 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "/amsg back in ten");
+      const done = compose.submit(k, "freenode", "#a");
+
+      // Paused on the refusal: five delivered, the sixth refused, and the door
+      // has NOT been hit again. A fan-out that swallowed the 429 would already
+      // be at ten here — and would have dropped #c06 on the way.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(targetsOf(sb)).toEqual(["#c01", "#c02", "#c03", "#c04", "#c05", "#c06"]);
+
+      // Still waiting at the client-side default. The server said three.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(targetsOf(sb)).toHaveLength(6);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      // #c06 appears twice on the CALL log — refused, then delivered — and
+      // every other channel exactly once. Advancing past a refusal would drop
+      // it; restarting the fan-out would duplicate the five before it.
+      expect(targetsOf(sb)).toEqual([
+        "#c01",
+        "#c02",
+        "#c03",
+        "#c04",
+        "#c05",
+        "#c06",
+        "#c06",
+        "#c07",
+        "#c08",
+        "#c09",
+        "#c10",
+      ]);
+      expect(await done).toEqual({ ok: `/amsg: sent to ${TEN.join(", ")}` });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// #431 constraint 3 — the blast-radius gate. One keystroke that writes to N
+// channels is a spam vector, so above TEN channels the fan-out asks first and
+// the question names every target. Ten is a DECIDED number (vjt, 2026-08-09):
+// the pair of arms below pins it from both sides, so moving the threshold one
+// step in either direction kills exactly one of them.
+describe("compose /ame + /amsg confirmation above ten channels (#431)", () => {
+  const k = channelKey("freenode", "#a");
+  const chans = (n: number): string[] =>
+    Array.from({ length: n }, (_, i) => `#c${String(i + 1).padStart(2, "0")}`);
+
+  const setJoined = (names: string[]): Promise<void> => setWindows(joinedOn("freenode", names));
+
+  it("ten channels go out without asking", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setJoined(chans(10));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const dialog = await import("../lib/confirmDialog");
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg hi");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(targetsOf(sb)).toEqual(chans(10));
+    expect(dialog.confirmRequest()).toBeNull();
+  });
+
+  it("eleven channels send NOTHING until the operator confirms, and the question names them all", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setJoined(chans(11));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const dialog = await import("../lib/confirmDialog");
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg hi");
+    await compose.submit(k, "freenode", "#a");
+
+    expect(vi.mocked(sb.sendMessage)).not.toHaveBeenCalled();
+    const req = dialog.confirmRequest();
+    expect(req).not.toBeNull();
+    // The blast radius is the point of the dialog: it states the count AND
+    // spells out every channel, so "11" is never the only thing on screen.
+    expect(req?.body).toContain("11 channels");
+    for (const c of chans(11)) expect(req?.body).toContain(c);
+
+    dialog.acceptConfirm();
+    await vi.waitFor(() => expect(targetsOf(sb)).toEqual(chans(11)));
+  });
+
+  it("dismissing the question sends nothing at all", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    await setJoined(chans(11));
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const dialog = await import("../lib/confirmDialog");
+    const compose = await import("../lib/compose");
+
+    compose.setDraft(k, "/amsg hi");
+    await compose.submit(k, "freenode", "#a");
+    dialog.dismissConfirm();
+
+    await new Promise((r) => setTimeout(r, 0));
+    expect(vi.mocked(sb.sendMessage)).not.toHaveBeenCalled();
   });
 });

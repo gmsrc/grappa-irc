@@ -99,6 +99,13 @@ export type SlashCommand =
   | { kind: "empty" }
   | { kind: "privmsg"; body: string }
   | { kind: "me"; body: string }
+  // #431 — /ame + /amsg, the mIRC "say it everywhere" pair. Same body grammar
+  // as /me, but the target is NOT the active window: compose.ts fans one copy
+  // out per JOINED channel of the current network. The parser stays pure — it
+  // knows nothing about which channels exist, the confirm gate above ten of
+  // them, or the pacing against the send door.
+  | { kind: "ame"; body: string }
+  | { kind: "amsg"; body: string }
   | { kind: "join"; channels: string[]; key: string | null }
   | { kind: "part"; channel: string | null; reason: string | null }
   | { kind: "topic-show"; channel: string | null }
@@ -314,6 +321,23 @@ function parseCtcp(rest: string): SlashCommand {
   return { kind: "ctcp", target, verb, args };
 }
 
+// #431 — shared grammar for the two fan-out verbs: the trimmed remainder is the
+// message, whole. `kind` is the discriminated-union literal (as `parseNicksVerb`
+// and `parseNickReason` do) so the loose `verb` string is never re-cast back to
+// the narrow set; `verb` supplies the error copy so it names what was typed.
+//
+// An EMPTY body is refused, where /me tolerates one. The asymmetry is the point:
+// /me's empty ACTION is one pointless frame to one window, whereas an empty
+// fan-out is one refused frame per joined channel, each burning a send token
+// against the #340 bucket on the way to delivering nothing.
+type FanOutKind = "ame" | "amsg";
+
+function parseFanOut(kind: FanOutKind, verb: string, rest: string): SlashCommand {
+  const body = rest.trim();
+  if (body === "") return err(verb, `/${verb} requires a message`);
+  return { kind, body };
+}
+
 // #591 — /ping <target>. Only the target survives the parser; compose.ts owns
 // the timestamp token + reply correlation. Trailing tokens are ignored (a nick
 // is a single word), mirroring /whois <server> <nick> <junk>.
@@ -329,6 +353,17 @@ type Handler = (verb: string, rest: string) => SlashCommand;
 
 const DISPATCH: Readonly<Record<string, Handler>> = {
   me: (_verb, rest) => ({ kind: "me", body: rest }),
+
+  // #431 — the fan-out pair. Registered as BUILTINS, which is the whole of what
+  // "builtin" buys them under #427: a same-named user alias shadows them like
+  // it shadows /join or /quit, because the non-shadowable set is the fixed
+  // two-name repair surface (/alias, /unalias) and nothing else. Issue #431's
+  // body claims the opposite ("builtins are never shadowed by aliases") — it
+  // predates #427, which reversed exactly that. The alias engine (#385) cannot
+  // express iteration, so this is not scriptable today; nothing here is
+  // pre-built for a future iteration primitive.
+  ame: (verb, rest) => parseFanOut("ame", verb, rest),
+  amsg: (verb, rest) => parseFanOut("amsg", verb, rest),
 
   // #591 — CTCP send verbs. /ctcp is the general form; /ping is the RTT sugar.
   ctcp: (_verb, rest) => parseCtcp(rest),

@@ -1546,3 +1546,46 @@ describe("parseSlash — /ping (#591)", () => {
     expect(parseSlash("/ping bob junk here")).toEqual({ kind: "ping", target: "bob" });
   });
 });
+
+// #431 — /ame and /amsg: the mIRC "say it in every channel" pair. The parser's
+// whole job is the body; WHICH channels, the confirm gate and the pacing all
+// live in compose.ts (this module stays pure — no store reads).
+describe("parseSlash — /ame + /amsg fan-out (#431)", () => {
+  it("/ame <text> parses to {kind:'ame', body}", () => {
+    expect(parseSlash("/ame waves at everyone")).toEqual({
+      kind: "ame",
+      body: "waves at everyone",
+    });
+  });
+
+  it("/amsg <text> parses to {kind:'amsg', body}", () => {
+    expect(parseSlash("/amsg back in ten")).toEqual({ kind: "amsg", body: "back in ten" });
+  });
+
+  // Unlike /me (whose empty body is a legal, if pointless, one-window ACTION),
+  // an empty fan-out is N empty frames the send door refuses one at a time.
+  it("bare /ame → error (a body is required)", () => {
+    expect(parseSlash("/ame")).toEqual({
+      kind: "error",
+      verb: "ame",
+      message: "/ame requires a message",
+    });
+  });
+
+  it("bare /amsg → error (a body is required)", () => {
+    expect(parseSlash("/amsg")).toEqual({
+      kind: "error",
+      verb: "amsg",
+      message: "/amsg requires a message",
+    });
+  });
+
+  // #431 constraint 4 as MEASURED, not as the issue text spells it: the issue
+  // says builtins are "never shadowed by a user alias (#427)", but #427 ruled
+  // the opposite — an alias shadows ANY builtin except the fixed two-name
+  // repair surface (/alias, /unalias). /ame is a builtin, so it inherits the
+  // rule that actually exists. Adding "ame" to NON_SHADOWABLE_VERBS kills this.
+  it("a user alias shadows /ame like any other builtin — #427", () => {
+    expect(parseSlash("/ame hello", { ame: "me" })).toEqual({ kind: "me", body: "hello" });
+  });
+});

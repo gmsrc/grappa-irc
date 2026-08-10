@@ -15,6 +15,7 @@ import { openBanlistModal } from "./banlistModal";
 import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
+import { requestConfirm } from "./confirmDialog";
 import { scrubCtcpDelimiters } from "./ctcpAction";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
 import { type FramePreview, framePreview } from "./frameBudget";
@@ -247,14 +248,20 @@ const DEFAULT_RETRY_AFTER_MS = 2_000;
 // waits, this bounds their DURATION).
 const MAX_RETRY_AFTER_MS = 60_000;
 
-// Safety valve: how many times ONE line is re-paced against a persistent 429
+// Safety valve: how many times ONE send is re-paced against a persistent 429
 // before the fan-out gives up and surfaces the throttle. An honest send door
 // admits on the FIRST retry once a token has refilled (we waited its own
 // retry-after), so the cap is only reached by a door that refuses PAST its own
 // hint (a misbehaving/severed server, or a proxy 429) — the guard that keeps
 // the composer from hanging on an unbounded retry loop. Generous enough to
 // absorb timer jitter around the refill boundary.
-const MAX_PACED_RETRIES_PER_LINE = 5;
+const MAX_PACED_RETRIES_PER_SEND = 5;
+
+// #431 — above this many channels an /ame|/amsg asks before it writes anything.
+// A DECIDED number (vjt, 2026-08-09), not a tuned one: one keystroke that
+// writes to N channels is a spam vector, and ten is where a fan-out stops
+// reading as "the rooms I am in" and starts reading as a broadcast.
+const FANOUT_CONFIRM_THRESHOLD = 10;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -275,59 +282,73 @@ const retryAfterMs = (e: ApiError): number => {
   return Math.min(ms, MAX_RETRY_AFTER_MS);
 };
 
-// Split a free-text body into one PRIVMSG per line (see messageLines.ts for
-// the wire-framing why) and send each, in order. `action` wraps every line in
-// CTCP ACTION framing for /me (via the shared `ctcpFrame` builder). Sequential
-// await preserves wire order; a single-line body loops exactly once (the
-// common path). Shared by the privmsg, me, and msg send sites — the only
-// free-text paths whose body can contain an operator-typed newline.
+// One outbound PRIVMSG: which target, which line of the body. The line is held
+// UNFRAMED (the CTCP wrap happens at the door) so the residue callback can hand
+// the operator back what they typed rather than what went on the wire.
+type PacedSend = { target: string; line: string };
+
+// Expand a body into the ordered send plan for `targets`, TARGET-MAJOR: every
+// line of the body for the first target, then every line for the second, and so
+// on. One target is the #666 single-window case (a paste = one PRIVMSG per
+// line, see messageLines.ts for the wire-framing why); N targets is the #431
+// /ame|/amsg fan-out. Building ONE flat plan rather than nesting a per-target
+// drain inside a per-line one is what keeps the retry safe: a paced retry
+// re-sends exactly one (target, line), never a target whose earlier lines
+// already landed.
 //
-// #666 — a send-door 429 retries the SAME line after the server's retry-after
-// (never advancing `sent` past a refusal → never a drop, never a dup); any
-// other error stops and propagates. `onProgress` (optional) fires after every
-// acked line AND before every pace/stop, with the count sent so far and the
-// unsent remainder joined back into a body — compose `submit` mirrors that
-// remainder into the draft so it holds ONLY what has not gone out. External
-// callers (ServiceModal, RegistrationWizardModal) pass no callback and simply
-// inherit the never-drop + pacing behaviour.
-export const sendBodyLines = async (
-  slug: string,
-  target: string,
-  body: string,
-  action: boolean,
-  onProgress?: (sent: number, total: number, residue: string) => void,
-): Promise<void> => {
-  // #1126 — the exit guard. This is the ONE free-text outbound door, and
-  // `ctcpFrame` (applied below, AFTER the scrub) is the ONE sanctioned producer
-  // of \x01. Anything the operator typed, pasted, or had written into their
-  // compose box by another verb is text, never framing. Scrubbing here rather
-  // than at each writer means the next path that learns to fill the compose box
-  // inherits the guarantee instead of having to remember it.
+// The lines come from `draftLines`, which owns the #1126 exit scrub, and each
+// one is framed at the door by `wireBody` — so a plan holds what the operator
+// typed and the drain turns it into wire bytes.
+const planSends = (targets: readonly string[], body: string): PacedSend[] => {
   const lines = draftLines(body);
-  const total = lines.length;
+  return targets.flatMap((target) => lines.map((line) => ({ target, line })));
+};
+
+// #666/#431 — THE paced drain, shared by both fan-outs that can burst the send
+// door. Sends `plan` in order, sequential await so wire order is preserved.
+// `action` wraps every line in CTCP ACTION framing (via the shared `ctcpFrame`
+// builder) for /me and /ame.
+//
+// A send-door 429 is a PAUSE, not a failure: wait the server's own retry-after,
+// then retry THE SAME entry — `sent` never advances past a refusal, so the
+// drain neither drops an entry nor duplicates a delivered one. Any other error
+// (WS down, invalid_line, a severed-session 401) stops it and propagates.
+// Pacing engages only for a plan of MORE than one send: a lone throttled send
+// surfaces immediately, preserving #342's throttle-copy affordance.
+//
+// #431 — why honouring the server's hint IS the pacing an /ame fan-out needs,
+// rather than a guessed inter-message sleep. The door is the #340
+// per-(subject, network) token bucket (capacity 5, refill 0.5/s), and it is
+// deliberately tuned to refuse BEFORE the ircd's flood protection kills the
+// connection (`messages_controller.take_send_token`, whose moduledoc says so).
+// The retry-after it hands back is that bucket's own refill interval, so
+// waiting it paces against the thing that actually decides. A constant here
+// would be a second, unmeasured opinion about the same limit, free to drift
+// from it the moment the bucket is retuned.
+//
+// `onProgress` fires after every acked send AND before every pace/stop, with
+// the count acked so far.
+const drainPaced = async (
+  plan: readonly PacedSend[],
+  slug: string,
+  action: boolean,
+  onProgress: (sent: number) => void,
+): Promise<void> => {
+  const total = plan.length;
   let sent = 0;
-  // Consecutive paced retries of the CURRENT line; reset when `sent` advances.
+  // Consecutive paced retries of the CURRENT entry; reset when `sent` advances.
   let retries = 0;
   while (sent < total) {
-    // `?? ""` satisfies noUncheckedIndexedAccess; `sent < total` guarantees a value.
-    const line = lines[sent] ?? "";
+    // `??` satisfies noUncheckedIndexedAccess; `sent < total` guarantees a value.
+    const { target, line } = plan[sent] ?? { target: "", line: "" };
     try {
       await sendPrivmsg(slug, target, wireBody(line, action));
       sent += 1;
       retries = 0;
-      onProgress?.(sent, total, lines.slice(sent).join("\n"));
+      onProgress(sent);
     } catch (e) {
-      // The residue always starts at `sent` — the first line NOT yet acked.
-      // On a 429 that is the refused line (retry it after pacing); on a fatal
-      // error it is the line that failed (kept, not dropped). Either way the
-      // caller's draft must hold exactly lines[sent..].
-      onProgress?.(sent, total, lines.slice(sent).join("\n"));
-      // Auto-pace ONLY a multi-line paste (the #666 domain): a SINGLE throttled
-      // send surfaces immediately, preserving #342's throttle-copy affordance.
-      // `retries` caps the wait against a door that refuses past its own
-      // retry-after (misbehaving/severed server) so the composer never hangs —
-      // an honest throttle admits on the first retry once a token has refilled.
-      if (isSendThrottled(e) && total > 1 && retries < MAX_PACED_RETRIES_PER_LINE) {
+      onProgress(sent);
+      if (isSendThrottled(e) && total > 1 && retries < MAX_PACED_RETRIES_PER_SEND) {
         retries += 1;
         await sleep(retryAfterMs(e));
         // loop retries the same `sent` index — never advanced past a refusal.
@@ -367,6 +388,57 @@ export const draftFramePreview = (
     draftLines(cmd.body).map((line) => wireBody(line, action)),
     budget,
   );
+};
+
+// Send a free-text body to ONE target, one PRIVMSG per line, paced. Shared by
+// the privmsg, me, and msg send sites — the only free-text paths whose body can
+// contain an operator-typed newline. External callers (ServiceModal,
+// RegistrationWizardModal) pass no callback and simply inherit the never-drop +
+// pacing behaviour.
+//
+// `onProgress` reports the count sent so far and the unsent remainder joined
+// back into a body — compose `submit` mirrors that remainder into the draft so
+// it holds ONLY what has not gone out. The residue always starts at `sent`, the
+// first line NOT yet acked: on a 429 that is the refused line (about to be
+// retried), on a fatal error the line that failed (kept, not dropped).
+export const sendBodyLines = async (
+  slug: string,
+  target: string,
+  body: string,
+  action: boolean,
+  onProgress?: (sent: number, total: number, residue: string) => void,
+): Promise<void> => {
+  const plan = planSends([target], body);
+  await drainPaced(plan, slug, action, (sent) =>
+    onProgress?.(
+      sent,
+      plan.length,
+      plan
+        .slice(sent)
+        .map((p) => p.line)
+        .join("\n"),
+    ),
+  );
+};
+
+// #431 — /ame + /amsg: one copy of the body to EVERY target, through the same
+// paced door. `onProgress` reports completed CHANNELS rather than sends, so a
+// fatal stop can tell the operator how far the fan-out actually got — the count
+// they need to decide whether to retype it.
+const sendFanOut = async (
+  slug: string,
+  targets: readonly string[],
+  body: string,
+  action: boolean,
+  onProgress: (channelsDone: number) => void,
+): Promise<void> => {
+  const plan = planSends(targets, body);
+  // Target-major and every target carries the same lines, so the plan divides
+  // evenly and a completed channel is a whole run of `perTarget` acks. Never a
+  // division by zero: an empty plan means the loop below never runs, so
+  // `onProgress` is never called.
+  const perTarget = plan.length / targets.length;
+  await drainPaced(plan, slug, action, (sent) => onProgress(Math.floor(sent / perTarget)));
 };
 
 const exports_ = identityScopedStore((onIdentityChange) => {
@@ -852,6 +924,70 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           );
           if ("error" in r) return r;
           result = r;
+          break;
+        }
+        // #431 — /ame + /amsg: the same body to EVERY joined channel of THIS
+        // network. Deliberately not addressed to the active window: the fan-out
+        // is per-NETWORK (vjt 2026-08-09 — cross-network is out of scope, and
+        // no flag for it), so it works from the $server window just as well as
+        // from a channel, and it includes the window it was typed in.
+        case "ame":
+        case "amsg": {
+          const action = cmd.kind === "ame";
+          // The joined-channel projection #30's channel tab-completion already
+          // reads: server-owned, so `invited` (the window an unsolicited INVITE
+          // opens), `pending`, `failed`, `kicked` and `parked` are all excluded
+          // by the same `joined` predicate, and there is no parallel
+          // client-side channel list to drift from it. Queries and $server
+          // cannot appear at all — `window_states` is channel-keyed by
+          // construction on the server, a DM lives in `queryWindows`.
+          const targets = joinedChannelsOnNetwork(key).sort();
+          if (targets.length === 0) {
+            return { error: `/${cmd.kind}: no joined channel on ${networkSlug}` };
+          }
+          // Channels the fan-out has finished, for the "how far did it get"
+          // half of a failure — the number that tells the operator whether
+          // retyping the line would double-send it.
+          let done = 0;
+          const run = (): Promise<void> =>
+            sendFanOut(networkSlug, targets, cmd.body, action, (n) => {
+              done = n;
+            });
+          if (targets.length > FANOUT_CONFIRM_THRESHOLD) {
+            // The question names every target, not just the count: the blast
+            // radius IS the thing being consented to, so "11 channels" alone
+            // would be consent without disclosure.
+            requestConfirm({
+              title: action ? "Send action to every channel" : "Send message to every channel",
+              body: `Send to ${targets.length} channels on ${networkSlug}? ${targets.join(", ")}`,
+              confirmLabel: "Send",
+              // Detached: `requestConfirm` resolves nothing, so the send cannot
+              // be awaited here and its failure cannot surface inline the way
+              // the un-gated path's does below. Logged with a grep key instead,
+              // mirroring `windowClose.disconnectNetwork` — the same shape of
+              // destructive-action-behind-a-confirm. Never bare: an unhandled
+              // rejection here would be a fan-out that stopped in silence.
+              onConfirm: () => {
+                void run().catch((err) => {
+                  console.warn(
+                    `[/${cmd.kind}] fan-out stopped after ${done} of ${targets.length} channels on ${networkSlug}:`,
+                    err,
+                  );
+                });
+              },
+              alternative: null,
+            });
+            result = { ok: `/${cmd.kind}: ${targets.length} channels — confirm to send` };
+            break;
+          }
+          try {
+            await run();
+          } catch (e) {
+            return {
+              error: `${friendlyError(e)} — sent to ${done} of ${targets.length} channels`,
+            };
+          }
+          result = { ok: `/${cmd.kind}: sent to ${targets.join(", ")}` };
           break;
         }
         // #591 — /ctcp <target> <VERB> [args]: a single CTCP frame to an
