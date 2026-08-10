@@ -8,6 +8,9 @@ defmodule Grappa.Accounts do
       `get_user/1`, `get_user_by_name!/1`, `get_user_by_name/1`,
       `list_all_users/0`, `update_admin_flags/2`
     * sessions: `create_session/4`, `authenticate/1`, `revoke_session/1`
+    * client tokens (#1196): `create_client_token/5`,
+      `list_client_tokens/1`, `revoke_client_token/2`,
+      `authenticate_client_token/5`
 
   Both `User` and `Session` schemas are exported so downstream callers
   (controllers, channels, plugs) can pattern-match on the structs —
@@ -43,6 +46,29 @@ defmodule Grappa.Accounts do
   call returns `{:error, :expired}`. To keep the per-request DB-write
   cost negligible, `last_seen_at` is bumped at most once every 60 s
   (`@last_seen_bump_threshold_seconds`).
+
+  ## Client tokens (GH #1196)
+
+  A `:client`-kind session is the credential a headless client presents
+  in place of the account password, so that arming TOTP or a passkey no
+  longer locks that client out. It is the same row primitive with two
+  deliberate departures, both keyed on `Session.kind`:
+
+    * the sliding idle window does NOT apply (`check_idle/1` and
+      `delete_expired_sessions/0` both exempt it) — a client that was
+      offline a fortnight must come back to a working token, and
+      revocation is the intended kill switch;
+    * it carries a restricted scope, enforced at the web edge by
+      `GrappaWeb.Plugs.RequireFullSession`, so it can read and send but
+      cannot administer, re-credential, or re-mint.
+
+  What is deliberately NOT special-cased: the revoke sweeps. Every
+  credential-material change that already evicts an account's other
+  sessions (`revoke_other_sessions_for_user!/2`, reached from TOTP
+  enrolment / disable; `revoke_sessions_for_user/1`, reached from the
+  operator resets) evicts its client tokens along with them. That is the
+  fail-closed direction and it costs no branch: arming or resetting a
+  second factor is exactly the moment a re-issue is wanted.
   """
   use Boundary,
     top_level?: true,
@@ -447,6 +473,162 @@ defmodule Grappa.Accounts do
     end
   end
 
+  # A device list a person reads, and a bound on a self-service writer.
+  # Neither number is load-bearing on the security boundary; the cap is
+  # here so an authenticated caller cannot grow the table without limit,
+  # and so `Session.handle/1`'s 48 bits stay collision-free by orders of
+  # magnitude within one account's live set.
+  @max_client_tokens 20
+
+  @doc """
+  Mints a per-client token for `user` (GH #1196) — a `:client`-kind
+  session row whose `:id` is the secret the client will present.
+
+  The caller is responsible for the door: a client token may only be
+  minted from a session that has already cleared the account's second
+  factor, which `GrappaWeb.Plugs.RequireFullSession` enforces by
+  refusing the minting route to a `:client` bearer. Any `:web` session
+  reached its bearer through the full `/auth/login` ladder, so
+  "already cleared the second factor" and "is not itself a client
+  token" are the same statement.
+
+  `label` is the human name of the device; it is validated (trimmed,
+  1..64 chars, no control characters) at the changeset boundary.
+  Refuses with `{:error, :client_token_cap_reached}` once the account
+  holds `#{@max_client_tokens}` live tokens.
+
+  The returned `Session.t().id` is the token, and this is the ONLY
+  moment it is knowable — `list_client_tokens/1` renders
+  `Session.handle/1` instead, so a later read cannot recover it.
+  """
+  @spec create_client_token(User.t(), String.t(), String.t() | nil, String.t() | nil, keyword()) ::
+          {:ok, Session.t()}
+          | {:error, Ecto.Changeset.t() | :client_token_cap_reached | :db_unavailable}
+  def create_client_token(%User{id: user_id}, label, ip, user_agent, opts)
+      when is_binary(user_id) and is_binary(label) do
+    if Repo.aggregate(live_client_tokens_query(user_id), :count, :id) >= @max_client_tokens do
+      {:error, :client_token_cap_reached}
+    else
+      do_create_session(
+        %{user_id: user_id, ip: ip, user_agent: user_agent, kind: :client, label: label},
+        opts
+      )
+    end
+  end
+
+  @doc """
+  The account's live per-client tokens, oldest first.
+
+  Returns the rows themselves so the caller keeps a domain type; the
+  wire shape (`Grappa.Accounts.Wire.client_token_to_json/1`) is what
+  drops the secret `:id` in favour of `Session.handle/1`.
+  """
+  @spec list_client_tokens(User.t()) :: [Session.t()]
+  def list_client_tokens(%User{id: user_id}) when is_binary(user_id) do
+    user_id
+    |> live_client_tokens_query()
+    |> order_by([s], asc: s.created_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  Revokes the caller's client token named by its public `handle`
+  (`Session.handle/1`), the one-way digest the device list publishes.
+
+  Addressing the row by handle rather than by id is what lets a token be
+  revoked without ever re-presenting the secret — and it is why the
+  match runs in Elixir over the account's own live tokens (at most
+  #{@max_client_tokens} rows) instead of as a SQL predicate: the digest
+  is derived, never stored, so there is no column to compare against and
+  nothing to drift out of sync with the id.
+
+  Scoped to `user`'s own rows, so a handle belonging to another account
+  is `{:error, :not_found}` and not a cross-account kill switch.
+  """
+  @spec revoke_client_token(User.t(), String.t()) ::
+          :ok | {:error, :not_found | :db_unavailable}
+  def revoke_client_token(%User{} = user, handle) when is_binary(handle) do
+    case Enum.find(list_client_tokens(user), &(Session.handle(&1) == handle)) do
+      nil -> {:error, :not_found}
+      %Session{id: id} -> revoke_session(id)
+    end
+  end
+
+  @doc """
+  Resolves a per-client token presented in place of `name`'s password.
+
+  Succeeds only for a live `:client`-kind row that belongs to the
+  account named `name` — a `:web` bearer, a revoked token, and a token
+  belonging to a different account all return `{:error, :no_match}`, so
+  the caller falls through to the ordinary password ladder (and charges
+  its throttle) exactly as if the value had been a wrong password.
+
+  The account name is compared the ACCOUNT way — byte-equal, as
+  `get_user_by_name/1` looks it up — not the ASCII nick fold: the login
+  door already treats the account namespace as case-sensitive, and
+  folding here would fork what "the account named X" means.
+
+  On a match the row's `ip`, `user_agent`, `client_id` and
+  `last_seen_at` are refreshed so the device list shows where the token
+  was last used. That refresh is best-effort: it is audit, and a
+  saturated writer must not deny a client whose credential is valid
+  (the same posture, and the same log line, as `touch_session/2`).
+  """
+  @spec authenticate_client_token(
+          String.t(),
+          String.t(),
+          String.t() | nil,
+          String.t() | nil,
+          keyword()
+        ) :: {:ok, {User.t(), Session.t()}} | {:error, :no_match}
+  def authenticate_client_token(name, token, ip, user_agent, opts)
+      when is_binary(name) and is_binary(token) do
+    with {:ok, _} <- Ecto.UUID.cast(token),
+         %Session{kind: :client, revoked_at: nil, user_id: user_id} = session
+         when is_binary(user_id) <- Repo.get(Session, token),
+         %User{name: ^name} = user <- Repo.get(User, user_id) do
+      {:ok, {user, record_client_token_use(session, ip, user_agent, opts)}}
+    else
+      _ -> {:error, :no_match}
+    end
+  end
+
+  @spec live_client_tokens_query(Ecto.UUID.t()) :: Ecto.Query.t()
+  defp live_client_tokens_query(user_id) do
+    from(s in Session,
+      where: s.user_id == ^user_id and s.kind == :client and is_nil(s.revoked_at)
+    )
+  end
+
+  # The audit refresh behind `authenticate_client_token/5`. Rides the
+  # monotonic guard in `Session.touch_changeset/2` for the same reason
+  # `touch_session/2` does, and degrades the same way: the contract
+  # returns a `Session.t()`, so a rejected write logs and the caller
+  # continues with the row it already read.
+  @spec record_client_token_use(Session.t(), String.t() | nil, String.t() | nil, keyword()) ::
+          Session.t()
+  defp record_client_token_use(%Session{} = session, ip, user_agent, opts) do
+    changes = [ip: ip, user_agent: user_agent, client_id: Keyword.get(opts, :client_id)]
+
+    changeset =
+      session
+      |> Session.touch_changeset(DateTime.utc_now())
+      |> Ecto.Changeset.change(changes)
+
+    case Repo.update(changeset) do
+      {:ok, updated} ->
+        updated
+
+      {:error, _} ->
+        Logger.warning("client token use not recorded; serving the token anyway",
+          session_ref: Session.handle(session),
+          reason: :touch_rejected
+        )
+
+        session
+    end
+  end
+
   @doc """
   Verifies a bearer token and returns the live `Session` on success.
 
@@ -458,6 +640,8 @@ defmodule Grappa.Accounts do
     * `:revoked`      — row exists but `revoked_at` is set.
     * `:expired`      — `last_seen_at` is older than the 7-day idle
       window. The row is left in place (audit + housekeeping cron).
+      A `:client`-kind row (#1196) is never `:expired`: the idle window
+      does not govern a per-client token, revocation does.
 
   On success, `last_seen_at` is bumped to `now` if the previous bump
   was more than 60 s ago — otherwise the row is returned untouched
@@ -530,7 +714,7 @@ defmodule Grappa.Accounts do
            {:ok, {subject, Repo.update_all(session_by_id_query(id), set: [revoked_at: DateTime.utc_now()])}}
          end) do
       {:ok, {subject, {affected, _}}} ->
-        Logger.info("session revoked", session_ref: session_handle(id), affected: affected)
+        Logger.info("session revoked", session_ref: Session.handle(id), affected: affected)
         if subject, do: Revocations.announce(subject)
         :ok
 
@@ -921,6 +1105,13 @@ defmodule Grappa.Accounts do
   on every use, cadence-capped at 60s). Any use would refresh it out of
   the window, so a stale timestamp is proof-of-non-use.
 
+  Scoped to `kind == :web` for the same drift-proofing reason it reuses
+  `@idle_timeout_seconds`: `authenticate/1` exempts a `:client` row from
+  the idle window (#1196), so sweeping one here would delete a
+  credential that is still perfectly able to authenticate — the GC and
+  the auth gate must agree on which rows the window governs, not just on
+  how wide it is.
+
   Scoped to `user_id IS NOT NULL` on purpose. Visitor sessions are NOT
   swept here — a visitor's `sessions` rows are removed by
   `Grappa.Visitors.Reaper` via the `sessions.visitor_id ON DELETE
@@ -938,7 +1129,7 @@ defmodule Grappa.Accounts do
 
     query =
       from(s in Session,
-        where: not is_nil(s.user_id) and s.last_seen_at < ^cutoff
+        where: not is_nil(s.user_id) and s.kind == :web and s.last_seen_at < ^cutoff
       )
 
     # #590 — this is a BACKGROUND writer (the #223 idle-session reaper is the
@@ -986,6 +1177,23 @@ defmodule Grappa.Accounts do
     |> Repo.all()
   end
 
+  # #1196 — a client token does not age out. The whole failure this
+  # feature exists to remove is an unattended client coming back after a
+  # long silence to a credential that died while it was away, so the
+  # idle window is not merely lengthened here, it does not apply. The
+  # `last_seen_at` bump still runs: it is what makes the device list
+  # honest about which tokens are actually in use, and it is the signal
+  # an operator reads before revoking one.
+  defp check_idle(%Session{kind: :client} = session) do
+    now = DateTime.utc_now()
+
+    if DateTime.diff(now, session.last_seen_at, :second) > @last_seen_bump_threshold_seconds do
+      {:ok, touch_session(session, now)}
+    else
+      {:ok, session}
+    end
+  end
+
   defp check_idle(session) do
     now = DateTime.utc_now()
     idle = DateTime.diff(now, session.last_seen_at, :second)
@@ -1018,25 +1226,11 @@ defmodule Grappa.Accounts do
 
       {:error, _} ->
         Logger.warning("touch_session backward-clock detected; ignoring",
-          session_ref: session_handle(session.id),
+          session_ref: Session.handle(session),
           reason: :backward_clock
         )
 
         session
     end
-  end
-
-  # S9: the bearer token IS the session-id (accounts/session.ex), so
-  # logging the raw id emits a live credential into the log stream —
-  # log-read access is broader than DB access, and this path fires for an
-  # ACTIVE, non-revoked session (the backward-clock warning). A truncated
-  # SHA-256 hex digest is a stable, non-reversible handle: it correlates
-  # log lines for one session without ever exposing a usable token. 12
-  # hex chars (48 bits) disambiguates concurrent sessions in a grep;
-  # reversing it would mean brute-forcing the 122-bit UUID space.
-  @spec session_handle(String.t()) :: String.t()
-  defp session_handle(id) when is_binary(id) do
-    digest = :crypto.hash(:sha256, id)
-    binary_part(Base.encode16(digest, case: :lower), 0, 12)
   end
 end

@@ -31,6 +31,35 @@ defmodule Grappa.Accounts.Session do
       only way to invalidate a session before its 7-day idle window
       elapses. Revoked sessions are kept (not deleted) so audit /
       housekeeping can see them; the Phase 5 cron does the actual GC.
+
+  ## Two kinds (GH #1196)
+
+  `kind` splits the table into the browser bearer (`:web`, the default
+  and everything that existed before) and the per-client token
+  (`:client`). A client token is the same primitive — a row whose `:id`
+  is the bearer — with three differences, and `kind` is what each of
+  them reads:
+
+    * **No idle expiry.** `Accounts.authenticate/1` never ages a
+      `:client` row out, and `Accounts.delete_expired_sessions/0` never
+      sweeps one. A headless client that was offline a fortnight comes
+      back to a working token; revocation is the intended kill switch.
+    * **A restricted scope.** `GrappaWeb.Plugs.RequireFullSession`
+      refuses the account's own credential-management surfaces to a
+      `:client` bearer, so a leaked token can read and send messages
+      but cannot become the account.
+    * **A label**, so the device list is readable. Required on a
+      `:client` row, refused on a `:web` one.
+
+  `kind` is a column rather than `label != nil` on purpose: the scope
+  and lifecycle rules must key off a field that MEANS "restricted,
+  non-expiring". Deriving them from the nullness of a display string
+  would let a later "name your browser session" feature flip the
+  security boundary by accident.
+
+  The `:id` of a client token is still the secret, so it must never be
+  listed back — `handle/1` is the public, one-way name a device list
+  and an operator log line use instead.
   """
   use Ecto.Schema
 
@@ -38,6 +67,13 @@ defmodule Grappa.Accounts.Session do
 
   alias Grappa.Accounts.User
   alias Grappa.Visitors.Visitor
+
+  @typedoc """
+  Which door minted the row, and therefore which lifecycle + scope it
+  obeys. `:web` is the browser bearer; `:client` is the #1196 per-client
+  token.
+  """
+  @type kind :: :web | :client
 
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
@@ -50,7 +86,9 @@ defmodule Grappa.Accounts.Session do
           revoked_at: DateTime.t() | nil,
           user_agent: String.t() | nil,
           ip: String.t() | nil,
-          client_id: Grappa.ClientId.t() | nil
+          client_id: Grappa.ClientId.t() | nil,
+          kind: kind() | nil,
+          label: String.t() | nil
         }
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -64,10 +102,27 @@ defmodule Grappa.Accounts.Session do
     field :user_agent, :string
     field :ip, :string
     field :client_id, Grappa.ClientId
+    field :kind, Ecto.Enum, values: [:web, :client], default: :web
+    field :label, :string
   end
 
-  @cast_fields [:user_id, :visitor_id, :created_at, :last_seen_at, :ip, :user_agent, :client_id]
+  @cast_fields [
+    :user_id,
+    :visitor_id,
+    :created_at,
+    :last_seen_at,
+    :ip,
+    :user_agent,
+    :client_id,
+    :kind,
+    :label
+  ]
   @required_fields [:created_at, :last_seen_at]
+
+  @label_max_length 64
+  # A label is rendered in a device list and in an operator's terminal.
+  # C0 / DEL / C1 are never legitimate there and would corrupt both.
+  @label_printable ~r/\A[^\x{0000}-\x{001F}\x{007F}-\x{009F}]+\z/u
 
   @doc """
   Changeset for inserting a new session row.
@@ -100,8 +155,57 @@ defmodule Grappa.Accounts.Session do
     |> cast(attrs, @cast_fields)
     |> validate_required(@required_fields)
     |> validate_subject_xor()
+    |> validate_label_matches_kind()
     |> assoc_constraint(:user)
     |> assoc_constraint(:visitor)
+  end
+
+  @doc """
+  The public, one-way name of a session row (GH #1196).
+
+  The bearer token IS `:id`, so `:id` may never be listed back to the
+  caller or written to a log. This truncated SHA-256 digest is the
+  stable handle that stands in for it: it correlates an operator log
+  line (`session_ref:`) with a row in the caller's own device list, and
+  it is what `DELETE /me/client-tokens/:handle` addresses — so revoking
+  a token never requires re-presenting the secret.
+
+  12 hex chars (48 bits) disambiguates every session an account will
+  ever hold concurrently; reversing it would mean brute-forcing the
+  122-bit UUID space. S9 introduced this digest for the log line; #1196
+  promoted it to the schema so the log and the wire cannot drift into
+  two different names for one row.
+  """
+  @spec handle(t() | Ecto.UUID.t()) :: String.t()
+  def handle(%__MODULE__{id: id}) when is_binary(id), do: handle(id)
+
+  def handle(id) when is_binary(id) do
+    digest = :crypto.hash(:sha256, id)
+    binary_part(Base.encode16(digest, case: :lower), 0, 12)
+  end
+
+  # A label is the readable name of a client token, so a `:client` row
+  # without one is an unreadable device list. A `:web` row with one is
+  # the inverse hazard: `kind` (not label-nullness) is the security
+  # discriminator precisely BECAUSE the two must not be confusable, and
+  # letting a browser session carry a label starts the confusion.
+  @spec validate_label_matches_kind(Ecto.Changeset.t()) :: Ecto.Changeset.t()
+  defp validate_label_matches_kind(changeset) do
+    case get_field(changeset, :kind) do
+      :client ->
+        changeset
+        |> update_change(:label, &String.trim/1)
+        |> validate_required([:label])
+        |> validate_length(:label, max: @label_max_length)
+        |> validate_format(:label, @label_printable, message: "must not contain control characters")
+
+      _ ->
+        if get_field(changeset, :label) do
+          add_error(changeset, :label, "is only valid on a client token")
+        else
+          changeset
+        end
+    end
   end
 
   @doc """
