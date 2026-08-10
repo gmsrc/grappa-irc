@@ -94,8 +94,8 @@ defmodule Grappa.Cic.Bundle do
   # content up to the closing quote.
   @version_re ~r{<meta[^>]+name="cicchetto-version"[^>]+content="([^"]+)"}
 
-  # #1161 boot diagnosis. Split from the two messages that share them so the
-  # symptom and the remedy read identically whichever way the root is wrong.
+  # #1161 boot diagnosis. Shared by both arms below, so the symptom and the
+  # remedy read identically whichever way the root turned out to be wrong.
   @symptom "the SPA will 404 on every document request."
   @knob "Set CIC_DIST_ROOT to the directory holding the built SPA (the one with index.html)."
 
