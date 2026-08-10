@@ -180,6 +180,30 @@ defmodule Grappa.Session.EventRouterTest do
       refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
     end
 
+    # #388 — the registered umode letter is per-flavour and EXCLUSIVE.
+    # Sources: oftc/oftc-hybrid@36f0431 src/s_user.c:114 (`R` =
+    # UMODE_NICKSERVREG) and :142 (`r` = UMODE_REJ, an oper notice mode).
+    test "OFTC self-MODE +R emits :acquired" do
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :oftc})
+      m = msg(:mode, ["vjt", "+R"], {:nick, "NickServ", "s", "s"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :acquired} in effects
+    end
+
+    test "OFTC self-MODE +r is NOT identity — it is the oper bot-rejection mode" do
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :oftc})
+      m = msg(:mode, ["vjt", "+r"], {:nick, "vjt", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+    end
+
+    test "bahamut self-MODE +R is NOT identity — uppercase is not its letter" do
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :azzurra})
+      m = msg(:mode, ["vjt", "+R"], {:nick, "vjt", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+    end
+
     test "PRIVMSG to DM target (nick) preserves nick case" do
       state = base_state(%{nick: "vjt"})
       m = msg(:privmsg, ["CristoBOT", "hi"], {:nick, "vjt", "u", "h"})
@@ -2481,7 +2505,7 @@ defmodule Grappa.Session.EventRouterTest do
     # responds by setting +r on the nick. The Server's pending_auth
     # state holds the in-flight password (S9 Task 14); when EventRouter
     # observes +r MODE on the session's own nick it emits
-    # :visitor_r_observed carrying the password so the Server can
+    # :identity_secret_confirmed carrying the password so the Server can
     # commit it atomically into the visitors row.
     #
     # #154(b): every own-nick MODE ALSO emits a `{:persist, :mode,
@@ -2491,7 +2515,7 @@ defmodule Grappa.Session.EventRouterTest do
     # `refute Enum.any?`) rather than an exact effect-list match — the
     # confirmation persist is expected but not this block's subject.
 
-    test "+r set with pending_auth emits :visitor_r_observed" do
+    test "+r set with pending_auth emits :identity_secret_confirmed" do
       deadline = System.monotonic_time(:millisecond) + 10_000
 
       state =
@@ -2507,7 +2531,7 @@ defmodule Grappa.Session.EventRouterTest do
       # `^state` (unchanged) pin no longer holds — the +r OBSERVATION
       # effect is this test's subject, asserted via membership.
       assert {:cont, _, effects} = EventRouter.route(m, state)
-      assert {:visitor_r_observed, "s3cret"} in effects
+      assert {:identity_secret_confirmed, "s3cret"} in effects
     end
 
     test "+r set without pending_auth → no observed effect" do
@@ -2521,7 +2545,7 @@ defmodule Grappa.Session.EventRouterTest do
       m = msg(:mode, ["vjt", "+r"], {:server, "irc.azzurra.chat"})
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
-      refute Enum.any?(effects, &match?({:visitor_r_observed, _}, &1))
+      refute Enum.any?(effects, &match?({:identity_secret_confirmed, _}, &1))
     end
 
     test "+i (no +r) with pending_auth → no observed effect" do
@@ -2535,7 +2559,7 @@ defmodule Grappa.Session.EventRouterTest do
       m = msg(:mode, ["vjt", "+i"], {:server, "irc.azzurra.chat"})
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
-      refute Enum.any?(effects, &match?({:visitor_r_observed, _}, &1))
+      refute Enum.any?(effects, &match?({:identity_secret_confirmed, _}, &1))
     end
 
     test "+ir mixed mode block detects r set" do
@@ -2549,7 +2573,7 @@ defmodule Grappa.Session.EventRouterTest do
       m = msg(:mode, ["vjt", "+ir"], {:server, "irc.azzurra.chat"})
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
-      assert {:visitor_r_observed, "s3cret"} in effects
+      assert {:identity_secret_confirmed, "s3cret"} in effects
     end
 
     test "+i-r (set i, unset r) does NOT emit observed effect" do
@@ -2563,7 +2587,7 @@ defmodule Grappa.Session.EventRouterTest do
       m = msg(:mode, ["vjt", "+i-r"], {:server, "irc.azzurra.chat"})
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
-      refute Enum.any?(effects, &match?({:visitor_r_observed, _}, &1))
+      refute Enum.any?(effects, &match?({:identity_secret_confirmed, _}, &1))
     end
 
     test "+r MODE on a different nick (channel-MODE path) does NOT emit observed effect" do
@@ -2580,7 +2604,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
       assert Enum.any?(effects, &match?({:persist, :mode, _}, &1))
-      refute Enum.any?(effects, &match?({:visitor_r_observed, _}, &1))
+      refute Enum.any?(effects, &match?({:identity_secret_confirmed, _}, &1))
     end
 
     # #129: the register→auth-code flow grants +r minutes-to-hours after
@@ -2588,7 +2612,7 @@ defmodule Grappa.Session.EventRouterTest do
     # `pending_registration_secret` slot holds the captured REGISTER
     # password until this +r transition. The same +r-observation primitive
     # commits it — no second detector.
-    test "+r set with only pending_registration_secret emits :visitor_r_observed" do
+    test "+r set with only pending_registration_secret emits :identity_secret_confirmed" do
       state =
         base_state(%{
           nick: "vjt",
@@ -2600,7 +2624,7 @@ defmodule Grappa.Session.EventRouterTest do
       m = msg(:mode, ["vjt", "+r"], {:server, "irc.azzurra.chat"})
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
-      assert {:visitor_r_observed, "regpass"} in effects
+      assert {:identity_secret_confirmed, "regpass"} in effects
     end
 
     test "+r with BOTH slots populated → register wins (commits the register secret)" do
@@ -2617,7 +2641,7 @@ defmodule Grappa.Session.EventRouterTest do
       m = msg(:mode, ["vjt", "+r"], {:server, "irc.azzurra.chat"})
 
       assert {:cont, _, effects} = EventRouter.route(m, state)
-      assert {:visitor_r_observed, "regpass"} in effects
+      assert {:identity_secret_confirmed, "regpass"} in effects
     end
   end
 
@@ -2795,9 +2819,10 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a garbage self-MODE echo cannot flip the +r identity signal" do
-      # session_identity_effects keys off the +r bit; a malformed string
-      # that happens to contain an `r` must not synthesise an identity
-      # transition out of upstream garbage.
+      # #388 — the identity verdict reads the FOLDED umode set, and #279
+      # rejects a malformed token wholesale, so the set never changes and no
+      # edge exists. A malformed string that happens to contain an `r` must
+      # not synthesise an identity transition out of upstream garbage.
       state = base_state(%{nick: "vjt", umodes: []})
       m = msg(:mode, ["vjt", "+r ?"], {:nick, "vjt", "u", "h"})
 
@@ -4257,6 +4282,138 @@ defmodule Grappa.Session.EventRouterTest do
   #                          shapes both occur.
   #   320 RPL_WHOISSPECIAL   "%s :%s"                   → free-form line;
   #                          folds into extra_lines for verbatim relay.
+  # GH #388 — the flavour-agnostic identity sources. These exist because the
+  # pre-#388 signal was bahamut's `+r` alone, so the #349 registration wizard
+  # could not detect completion on any other ircd. Every source below folds
+  # into the SAME normalized `:session_identity_changed` effect.
+  describe "#388 — account-notify / ACCOUNT as an identity source" do
+    test "inbound self ACCOUNT emits :acquired with no umode in sight" do
+      # The solanum/atheme case: no registered umode exists on that ircd, so
+      # this event IS the identify confirmation.
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      m = msg(:account, ["vjt"], {:nick, "vjt", "u", "h"})
+      {:cont, next, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :acquired} in effects
+      assert next.account == "vjt"
+    end
+
+    test "ACCOUNT * is a logout — emits :lost and clears the account" do
+      state = base_state(%{nick: "vjt", account: "vjt", services_flavor: :atheme})
+      m = msg(:account, ["*"], {:nick, "vjt", "u", "h"})
+      {:cont, next, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :lost} in effects
+      assert next.account == nil
+    end
+
+    test "a PEER's ACCOUNT never touches our identity" do
+      # account-notify is relayed for every user sharing a channel with us.
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      m = msg(:account, ["someone"], {:nick, "otherguy", "u", "h"})
+      {:cont, next, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+      assert Map.get(next, :account) == nil
+    end
+
+    test "a differently-cased echo of our own nick still routes to self" do
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      m = msg(:account, ["VJT"], {:nick, "VJT", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :acquired} in effects
+    end
+
+    test "re-asserting an already-held account emits nothing (edge, not level)" do
+      state = base_state(%{nick: "vjt", account: "vjt", services_flavor: :atheme})
+      m = msg(:account, ["vjt"], {:nick, "vjt", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+    end
+
+    test "a staged secret is confirmed by an ACCOUNT-driven acquisition" do
+      # The #349 wizard commit, now reachable on a network that never emits
+      # a registered umode — the whole point of #388.
+      state =
+        base_state(%{
+          nick: "vjt",
+          umodes: [],
+          services_flavor: :atheme,
+          pending_registration_secret: "s3cret"
+        })
+
+      m = msg(:account, ["vjt"], {:nick, "vjt", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      assert {:identity_secret_confirmed, "s3cret"} in effects
+    end
+  end
+
+  describe "#388 — self 330 RPL_WHOISLOGGEDIN as an identity confirmation" do
+    test "a 330 about US emits :acquired and records the account" do
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      m = msg({:numeric, 330}, ["vjt", "vjt", "acct", "is logged in as"])
+      {:cont, next, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :acquired} in effects
+      assert next.account == "acct"
+    end
+
+    test "a 330 about someone else does not touch our identity" do
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      m = msg({:numeric, 330}, ["vjt", "otherguy", "acct", "is logged in as"])
+      {:cont, next, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+      assert Map.get(next, :account) == nil
+    end
+  end
+
+  describe "#388 — 221 RPL_UMODEIS is an identity source too" do
+    test "a snapshot revealing the registered umode emits :acquired" do
+      # Pre-#388 ONLY the self-MODE echo emitted a transition, so a session
+      # that first learned its identity from the connect-time snapshot never
+      # logged :identified and never released the deferred autojoin.
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :azzurra})
+      m = msg({:numeric, 221}, ["vjt", "+ir"])
+      {:cont, _, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :acquired} in effects
+    end
+
+    test "a snapshot does NOT confirm a staged secret" do
+      # A reconciliation reports current state; the identity it describes may
+      # predate the staged secret entirely, so committing off it would bind a
+      # password the network never accepted.
+      state =
+        base_state(%{
+          nick: "vjt",
+          umodes: [],
+          services_flavor: :azzurra,
+          pending_registration_secret: "s3cret"
+        })
+
+      m = msg({:numeric, 221}, ["vjt", "+ir"])
+      {:cont, _, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :acquired} in effects
+      refute Enum.any?(effects, &match?({:identity_secret_confirmed, _}, &1))
+    end
+  end
+
+  describe "#388 — the two axes are OR'd across a self-rename" do
+    test "an account-identified session survives the rename umode strip" do
+      # bahamut strips the registered umode on a genuine rename (#581), but
+      # an account is not cleared by a nick change — so a session identified
+      # via the account axis must NOT report :lost.
+      state =
+        base_state(%{nick: "vjt", umodes: ["r"], account: "vjt", services_flavor: :azzurra})
+
+      m = msg(:nick, ["vjt2"], {:nick, "vjt", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+    end
+
+    test "a umode-only identity IS lost on a genuine rename" do
+      state = base_state(%{nick: "vjt", umodes: ["r"], services_flavor: :azzurra})
+      m = msg(:nick, ["vjt2"], {:nick, "vjt", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :lost} in effects
+    end
+  end
+
   describe "#221 — solanum WHOIS-leg numeric folds (330/671/276/338/320)" do
     test "330 RPL_WHOISLOGGEDIN folds account from the middle param" do
       state = whois_pending_state("alice")

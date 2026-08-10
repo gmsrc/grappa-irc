@@ -184,6 +184,13 @@ defmodule Grappa.Session do
           required(:subject) => subject(),
           required(:subject_label) => String.t(),
           required(:network_slug) => String.t(),
+          # GH #388 — the network's operator-set NickServ services flavour
+          # (mirrors `Grappa.Networks.Network.services_flavor/0`; typed as a
+          # bare atom to avoid a Session → Networks Boundary cycle). Drives
+          # the per-flavour registered-umode letter in
+          # `Grappa.Session.IdentityState`. Optional: pure session tests and
+          # any plan predating #388 omit it and inherit the lowercase default.
+          optional(:services_flavor) => atom() | nil,
           required(:nick) => String.t(),
           required(:ident) => String.t(),
           required(:realname) => String.t(),
@@ -1504,6 +1511,8 @@ defmodule Grappa.Session do
            %{
              umodes: [String.t()],
              supported_umodes: [String.t()],
+             identified: boolean(),
+             account: String.t() | nil,
              invited_windows: [Grappa.Session.Wire.window_invited_payload()]
            }}
           | {:error, :no_session}

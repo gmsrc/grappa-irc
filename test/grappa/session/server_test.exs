@@ -6861,7 +6861,7 @@ defmodule Grappa.Session.ServerTest do
           assert is_nil(SessionStateHelpers.pending_auth_timer(state))
         end)
 
-      assert log =~ "visitor_r_observed effect on user session"
+      assert log =~ "identity_secret_confirmed effect on user session"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -6989,7 +6989,7 @@ defmodule Grappa.Session.ServerTest do
           assert is_nil(SessionStateHelpers.pending_auth(SessionStateHelpers.fetch(pid)))
         end)
 
-      assert log =~ "visitor_r_observed effect on user session"
+      assert log =~ "identity_secret_confirmed effect on user session"
 
       reloaded = Credentials.get_credential!(user, network)
       assert reloaded.auth_method == :none

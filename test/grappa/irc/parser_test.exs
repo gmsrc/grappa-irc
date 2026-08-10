@@ -83,6 +83,23 @@ defmodule Grappa.IRC.ParserTest do
                Parser.parse(":irc.azzurra.chat CAP * LS :sasl message-tags server-time")
     end
 
+    # GH #388 — IRCv3 `account-notify`. Without the allowlist entry this
+    # parses as `{:unknown, "ACCOUNT"}` and EventRouter's identity arm is
+    # unreachable, so the verb is load-bearing, not decorative.
+    test "ACCOUNT (IRCv3 account-notify) parses to the :account verb" do
+      assert {:ok,
+              %Message{
+                prefix: {:nick, "vjt", "u", "h"},
+                command: :account,
+                params: ["vjt"]
+              }} = Parser.parse(":vjt!u@h ACCOUNT vjt")
+    end
+
+    test "ACCOUNT * (the logout form) keeps the sentinel as a param" do
+      assert {:ok, %Message{command: :account, params: ["*"]}} =
+               Parser.parse(":vjt!u@h ACCOUNT *")
+    end
+
     test "trailing CRLF is stripped" do
       assert {:ok, %Message{command: :ping, params: ["x"]}} = Parser.parse("PING :x\r\n")
     end

@@ -1407,6 +1407,19 @@ defmodule GrappaWeb.GrappaChannel do
             SessionWire.supported_umodes_changed(network.id, snapshot.supported_umodes)
           )
 
+          # #388 — the normalized services-identity verdict, reusing the same
+          # Wire verb the live edge emits so cic's dispatch never branches on
+          # snapshot-vs-event.
+          push(
+            socket,
+            "event",
+            SessionWire.session_identity_changed(
+              network.id,
+              snapshot.identified,
+              snapshot.account
+            )
+          )
+
           Enum.each(snapshot.invited_windows, &push(socket, "event", &1))
 
         {:error, _} ->

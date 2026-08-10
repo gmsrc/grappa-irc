@@ -90,7 +90,7 @@ defmodule Grappa.Session.EventRouter do
 
   alias Grappa.IRC.{CTCP, Identifier, Message}
   alias Grappa.{Scrollback, Session}
-  alias Grappa.Session.{ISupport, NumericRouter, Presence}
+  alias Grappa.Session.{IdentityState, ISupport, NumericRouter, Presence}
 
   @typedoc """
   The Session.Server state subset this module reads + mutates. The
@@ -191,7 +191,7 @@ defmodule Grappa.Session.EventRouter do
   @type effect ::
           {:persist, Grappa.Scrollback.Message.kind(), persist_attrs()}
           | {:reply, iodata()}
-          | {:visitor_r_observed, String.t()}
+          | {:identity_secret_confirmed, String.t()}
           | {:visitor_nick_changed, String.t()}
           | {:topic_changed, String.t(), topic_entry()}
           | {:channel_modes_changed, String.t(), channel_mode_entry()}
@@ -663,6 +663,28 @@ defmodule Grappa.Session.EventRouter do
     end
   end
 
+  # GH #388 — IRCv3 `account-notify`: `:nick!user@host ACCOUNT <account>`,
+  # where a literal `*` means "logged out". The ircd relays it for every
+  # user sharing a channel with us; only the SELF one is an identity signal
+  # here (a peer's account is not tracked — out of scope for #388).
+  #
+  # This is the FLAVOUR-AGNOSTIC identity axis, and the reason #388 exists:
+  # solanum/atheme networks (Libera) have no registered umode whatsoever, so
+  # on those this event IS the identify confirmation — there is nothing else
+  # to watch. `nick_eq?` rather than `==` for the #121/#525 fold, so a
+  # different-cased echo of our own nick still routes here.
+  defp do_route(%Message{command: :account, params: [account | _]} = msg, state)
+       when is_binary(account) do
+    if nick_eq?(Message.sender_nick(msg), state.nick) do
+      next_state = Map.put(state, :account, IdentityState.normalize_account(account))
+      effects = identity_effects(state, next_state)
+
+      {:cont, next_state, identity_secret_effects(next_state, effects) ++ effects}
+    else
+      {:cont, state, []}
+    end
+  end
+
   # MODE on a 2+-param target. The leading param is either the session's
   # OWN nick (user-MODE-on-self, Task 15) or a channel — discriminated by
   # ASCII nick-equality (#121/#525), NOT an exact-match dispatch guard, so a
@@ -688,22 +710,18 @@ defmodule Grappa.Session.EventRouter do
       {_, self_server_persist} =
         build_persist(state, :mode, "$server", sender, nil, %{modes: modes, args: args})
 
-      # The +r case is special: when NickServ-as-IDP confirms a visitor's
-      # IDENTIFY (or register→auth-code) it sets +r on the nick. +r is the
-      # cryptographic-proof signal that the captured secret was accepted;
-      # `visitor_r_effects/3` emits `:visitor_r_observed` carrying it so
-      # `Session.Server.apply_effects/2` can commit it atomically into the
-      # visitors row. Orthogonal to the confirmation row above — both
-      # effects coexist.
-      #
-      # #279 — ONE validity verdict for the token, shared by BOTH readers
-      # below (the +r detector and the umode fold). A mode string that is
+      # #279 — ONE validity verdict for the token. A mode string that is
       # not signs + mode letters is a malformed LINE, not a partially
-      # usable delta: neither reader may draw a conclusion from it. Parsed
-      # once here because `set_r_mode?/1` walks the same bytes.
+      # usable delta: no reader may draw a conclusion from it.
+      #
+      # #388 — the mode string is no longer READ for identity. Pre-#388 a
+      # second detector (`set_r_mode?/1`) re-walked these same bytes hunting
+      # a literal `+r`, which is a bahamut-only spelling. Identity is now
+      # derived from the folded umode SET via `IdentityState`, so this arm
+      # only has to fold; the transition falls out of the prev/next diff
+      # below, exactly like every other identity source.
       prev_umodes = Map.get(state, :umodes, [])
       parsed_umodes = apply_umode_string(prev_umodes, modes)
-      r_effects = visitor_r_effects(state, parsed_umodes, modes)
 
       # #229: fold the delta into the queryable per-session umode set so the
       # /mode <nick> modal reflects mid-session changes (an explicit
@@ -716,18 +734,19 @@ defmodule Grappa.Session.EventRouter do
       # `:umode_changed` only on an actual change to keep fan-out minimal.
       next_umodes = umodes_or_unchanged(parsed_umodes, prev_umodes)
       umode_effects = if next_umodes != prev_umodes, do: [{:umode_changed, next_umodes}], else: []
-      state = Map.put(state, :umodes, next_umodes)
+      next_state = Map.put(state, :umodes, next_umodes)
 
-      # #215 — the +r bit flip IS the session identity transition (NickServ
-      # confirmed / lost). Detected HERE where BOTH prev + next umode sets
-      # are in hand (the `:umode_changed` apply_effects arm only sees the
-      # post-state). Session.Server.apply_effects turns this into an
-      # `:identified` / `:deidentified` session-log event. Orthogonal to
-      # `:visitor_r_observed` (which only fires when a secret is staged —
-      # this covers ALL sessions, including already-SASL-authed users).
-      identity_effects = session_identity_effects(prev_umodes, next_umodes)
+      # #215 / #388 — the identity transition (services confirmed / lost).
+      # Detected HERE where BOTH the prev and next facts are in hand (the
+      # `:umode_changed` apply_effects arm only sees the post-state).
+      # Session.Server turns this into an `:identified` / `:deidentified`
+      # session-log event. Orthogonal to `:identity_secret_confirmed` (which
+      # only fires when a secret is staged — this covers ALL sessions,
+      # including already-SASL-authed users).
+      identity = identity_effects(state, next_state)
+      secret_effects = identity_secret_effects(next_state, identity)
 
-      {:cont, state, [self_server_persist | r_effects] ++ umode_effects ++ identity_effects}
+      {:cont, next_state, [self_server_persist | secret_effects] ++ umode_effects ++ identity}
     else
       sender = Message.sender_nick(msg)
 
@@ -1029,7 +1048,20 @@ defmodule Grappa.Session.EventRouter do
     prev_umodes = Map.get(state, :umodes, [])
     next_umodes = umodes_or_unchanged(apply_umode_string([], mode_str), prev_umodes)
     effects = if next_umodes != prev_umodes, do: [{:umode_changed, next_umodes}], else: []
-    {:cont, Map.put(state, :umodes, next_umodes), effects}
+    next_state = Map.put(state, :umodes, next_umodes)
+
+    # #388 — a 221 snapshot that reveals (or retracts) the registered umode
+    # is an identity transition like any other, and pre-#388 it emitted
+    # none: only the self-MODE echo did. That was a real gap — a session
+    # whose identity is first learned from the connect-time snapshot never
+    # logged `:identified` and never released the deferred autojoin.
+    #
+    # Deliberately does NOT feed `identity_secret_effects/2`: 221 is a
+    # RECONCILIATION of current state, not a confirmation of something we
+    # just sent. The identity it reports may predate the staged secret
+    # entirely, so committing that secret off a snapshot would bind a
+    # password the network never accepted.
+    {:cont, next_state, effects ++ identity_effects(state, next_state)}
   end
 
   # 004 RPL_MYINFO (#249): the connection-registration line advertising the
@@ -1420,12 +1452,27 @@ defmodule Grappa.Session.EventRouter do
   # in as`. The account name is the MIDDLE param (structured — NO localized
   # parse needed), emitted by modules/m_services.c:375
   # (form_str "%s %s :is logged in as").
+  #
+  # GH #388 — when the 330 is about US it is also a post-identify identity
+  # confirmation (the issue's "parse WHOIS-330 for self"), so it feeds the
+  # `:account` axis on top of the whois fold. 330 has no logged-OUT form:
+  # services simply omit the numeric for an unidentified target, so this is
+  # a set-only signal and absence of a 330 must never be read as a logout.
   defp do_route(
          %Message{command: {:numeric, 330}, params: [_, target, account | _]},
          state
        )
        when is_binary(target) and is_binary(account) do
-    {:cont, whois_fold(state, target, %{account: account}), []}
+    folded = whois_fold(state, target, %{account: account})
+
+    if nick_eq?(target, state.nick) do
+      next_state = Map.put(folded, :account, IdentityState.normalize_account(account))
+      effects = identity_effects(folded, next_state)
+
+      {:cont, next_state, identity_secret_effects(next_state, effects) ++ effects}
+    else
+      {:cont, folded, []}
+    end
   end
 
   # 671 RPL_WHOISSECURE: `:server 671 own_nick target :is using a secure
@@ -2936,66 +2983,67 @@ defmodule Grappa.Session.EventRouter do
   defp pop_arg([h | t]), do: {h, t}
   defp pop_arg([]), do: {nil, []}
 
-  # Sign-walking +r detector for user-MODE strings. IRC mode blocks
-  # have sticky-sign semantics: `"+ir"` means "set i AND set r" in
-  # one block, `"+i-r"` means "set i, unset r". `String.contains?` is
-  # semantically wrong on both shapes (the second would even false-
-  # positive on naive `"+r"` substring search). Mirrors the
-  # `walk_modes/4` recursive-pattern-match shape (CLAUDE.md
-  # "Recursive pattern match over `Enum.reduce_while/3`").
-  @spec set_r_mode?(String.t()) :: boolean()
-  defp set_r_mode?(modes), do: walk_for_set_r(modes, :add)
-
-  # #215 — session identity transition from the +r bit flip. Compares the
-  # per-session umode sets before/after the self-MODE echo: gaining "r" is
-  # `:acquired` (NickServ/SASL confirmed), losing it is `:lost`. Emits at
-  # most one effect; no change → `[]`.
-  @spec session_identity_effects([String.t()], [String.t()]) :: [{:session_identity_changed, :acquired | :lost}]
-  defp session_identity_effects(prev_umodes, next_umodes) do
-    cond do
-      "r" in next_umodes and "r" not in prev_umodes -> [{:session_identity_changed, :acquired}]
-      "r" in prev_umodes and "r" not in next_umodes -> [{:session_identity_changed, :lost}]
-      true -> []
+  # #215 / #388 — THE session identity transition. Every identity source
+  # funnels through this one diff: the self-MODE echo, the 221 RPL_UMODEIS
+  # snapshot, the self-rename +r strip, inbound IRCv3 `ACCOUNT`, and the
+  # self-targeted 330 RPL_WHOISLOGGEDIN. Each mutates its own fact on the
+  # state and then asks THIS function what changed, so there is exactly one
+  # place that decides what "identified" means — `IdentityState.identified?/1`
+  # — and adding a source can never fork the definition.
+  #
+  # Takes whole states rather than the changed axis: a caller passing only
+  # its own axis is how the pre-#388 `"r" in umodes` readers drifted apart.
+  # Emits at most one effect; no change → `[]`.
+  @spec identity_effects(state(), state()) :: [{:session_identity_changed, :acquired | :lost}]
+  defp identity_effects(prev_state, next_state) do
+    case {IdentityState.identified?(prev_state), IdentityState.identified?(next_state)} do
+      {false, true} -> [{:session_identity_changed, :acquired}]
+      {true, false} -> [{:session_identity_changed, :lost}]
+      _ -> []
     end
   end
 
-  # #581 — bahamut strips +r SILENTLY on a genuine nick change (m_nick.c:
-  # `mycmp(old,new) != 0 → umode &= ~UMODE_r`, no MODE echo — the same invariant
-  # Credentials.bind_identified_visitor_nick/3 documents). Mirror it so a
-  # self-rename leaves `state.umodes` truthful: on OUR OWN genuine rename drop
-  # "r" and emit `:umode_changed` + the identity transition (→ :lost, via
-  # session_identity_effects/2). A pure case-change is NOT a rename (mycmp is
-  # case-insensitive), so gate on `not nick_eq?(old, new)` — the #373
-  # rename-vs-fold distinction. Detection reads the ORIGINAL `state.nick` (the
-  # already-built `new_state.nick` holds the post-rename value); the strip
-  # applies to `new_state`. Without this a visitor who /nick's away from their
-  # registered nick keeps a PHANTOM +r and the #581 recover button
-  # (`canRecover() = recoverable && !"r"`) never appears. Drop ONLY "r" (the
-  # documented invariant), not other umodes; `Map.get`/`Map.put` (never
+  # #581 — bahamut strips the registered umode SILENTLY on a genuine nick
+  # change (m_nick.c: `mycmp(old,new) != 0 → umode &= ~UMODE_r`, no MODE echo —
+  # the same invariant Credentials.bind_identified_visitor_nick/3 documents).
+  # Mirror it so a self-rename leaves `state.umodes` truthful: on OUR OWN
+  # genuine rename drop the letter and emit `:umode_changed` + the identity
+  # transition (→ :lost, via identity_effects/2). A pure case-change is NOT a
+  # rename (mycmp is case-insensitive), so gate on `not nick_eq?(old, new)` —
+  # the #373 rename-vs-fold distinction. Detection reads the ORIGINAL
+  # `state.nick` (the already-built `new_state.nick` holds the post-rename
+  # value); the strip applies to `new_state`. Without this a visitor who
+  # /nick's away from their registered nick keeps a PHANTOM registered umode
+  # and the #581 recover button never appears.
+  #
+  # #388 — the letter stripped is the FLAVOUR's letter, not a hard-coded "r":
+  # on OFTC that is `+R`, and lowercase `r` there is an unrelated oper notice
+  # mode that must survive the rename untouched. Drop ONLY that one letter
+  # (the documented invariant), not other umodes; `Map.get`/`Map.put` (never
   # `%{... | umodes:}`) for the #216 hot-reload contract.
+  #
+  # The stripped umode is the only fact this touches: a services ACCOUNT is
+  # NOT cleared by a rename (the account survives a nick change), so a
+  # session identified via the account axis correctly stays identified —
+  # which is also why the transition must be computed from whole states.
   @spec strip_r_on_self_rename(state(), state(), String.t(), String.t()) ::
           {state(), [effect()]}
   defp strip_r_on_self_rename(state, new_state, old_nick, new_nick) do
     if nick_eq?(old_nick, state.nick) and not nick_eq?(old_nick, new_nick) do
       prev_umodes = Map.get(new_state, :umodes, [])
-      next_umodes = prev_umodes -- ["r"]
+      letter = IdentityState.registered_umode(Map.get(new_state, :services_flavor))
+      next_umodes = prev_umodes -- [letter]
 
       changed_effects =
         if next_umodes != prev_umodes, do: [{:umode_changed, next_umodes}], else: []
 
-      {Map.put(new_state, :umodes, next_umodes), changed_effects ++ session_identity_effects(prev_umodes, next_umodes)}
+      stripped_state = Map.put(new_state, :umodes, next_umodes)
+
+      {stripped_state, changed_effects ++ identity_effects(new_state, stripped_state)}
     else
       {new_state, []}
     end
   end
-
-  defp walk_for_set_r("", _), do: false
-  defp walk_for_set_r("+" <> rest, _), do: walk_for_set_r(rest, :add)
-  defp walk_for_set_r("-" <> rest, _), do: walk_for_set_r(rest, :remove)
-  defp walk_for_set_r("r" <> _, :add), do: true
-
-  defp walk_for_set_r(<<_::utf8, rest::binary>>, dir),
-    do: walk_for_set_r(rest, dir)
 
   defp update_member_mode(ch_members, nil, _, _), do: ch_members
 
@@ -3299,23 +3347,31 @@ defmodule Grappa.Session.EventRouter do
   defp toggle_umode(set, letter, :add), do: MapSet.put(set, letter)
   defp toggle_umode(set, letter, :remove), do: MapSet.delete(set, letter)
 
-  # #279 — the two readers of a self-MODE token, each gated by the SAME
-  # parse verdict so a malformed line can never yield a conclusion.
+  # The capture-confirmation slot (#90/#129): ONE identity-confirmation
+  # primitive serves both staged secrets. If BOTH are staged, REGISTER wins
+  # — it is correct-by-construction (a wrong register never gets confirmed),
+  # whereas a stale wrong identify could still be inside its 10s window.
+  # Both fields are optional from the pure router's POV (pure unit tests on
+  # user sessions skip them → `Map.get` nil).
   #
-  # `visitor_r_effects/3` is the +r capture-confirmation slot (#90/#129):
-  # ONE +r-observation primitive serves both staged secrets. If BOTH are
-  # staged, REGISTER wins — it is correct-by-construction (a wrong register
-  # never gets +r), whereas a stale wrong identify could still be inside
-  # its 10s window. Both fields are optional from the pure router's POV
-  # (pure unit tests on user sessions skip them → `Map.get` nil).
-  @spec visitor_r_effects(state(), {:ok, [String.t()]} | :error, String.t()) :: [effect()]
-  defp visitor_r_effects(_, :error, _), do: []
-
-  defp visitor_r_effects(state, {:ok, _}, modes) do
-    case {set_r_mode?(modes), Map.get(state, :pending_registration_secret), Map.get(state, :pending_auth)} do
-      {true, reg, _} when is_binary(reg) -> [{:visitor_r_observed, reg}]
-      {true, _, {pwd, _}} -> [{:visitor_r_observed, pwd}]
-      _ -> []
+  # #388 — driven by the NORMALIZED `:acquired` transition rather than a
+  # `+r` re-scan of the raw mode string. Two consequences, both wanted:
+  # a secret staged on a solanum/OFTC network now commits (it never could
+  # before — those ircds do not emit bahamut's `+r`), and a REDUNDANT
+  # re-assertion of an already-held identity no longer re-commits, because
+  # an edge is required rather than a mode letter's mere presence. The #279
+  # malformed-token gate is inherited for free: a rejected parse leaves the
+  # umode set unchanged, so there is no edge and no conclusion is drawn.
+  @spec identity_secret_effects(state(), [effect()]) :: [effect()]
+  defp identity_secret_effects(state, identity_effects) do
+    if {:session_identity_changed, :acquired} in identity_effects do
+      case {Map.get(state, :pending_registration_secret), Map.get(state, :pending_auth)} do
+        {reg, _} when is_binary(reg) -> [{:identity_secret_confirmed, reg}]
+        {_, {pwd, _}} -> [{:identity_secret_confirmed, pwd}]
+        _ -> []
+      end
+    else
+      []
     end
   end
 
@@ -3605,7 +3661,7 @@ defmodule Grappa.Session.EventRouter do
     # for a visitor subject, emit the persist-side effect so
     # `Session.Server.apply_effects/2` rotates `visitors.nick` via the
     # injected `visitor_nick_persister` callback. Mirror of the
-    # `:visitor_r_observed` shape — the closure-injection avoids a
+    # `:identity_secret_confirmed` shape — the closure-injection avoids a
     # static `Session → Visitors` Boundary alias that would close a
     # cycle (Visitors deps Session via Login). User subjects don't
     # carry a persister; their nick lives in `Networks.Credential`,

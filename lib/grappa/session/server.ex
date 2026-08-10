@@ -102,6 +102,7 @@ defmodule Grappa.Session.Server do
     Broadcaster,
     EventRouter,
     GhostRecovery,
+    IdentityState,
     ISupport,
     ModeChunker,
     NSInterceptor,
@@ -229,7 +230,7 @@ defmodule Grappa.Session.Server do
   @typedoc """
   Optional opaque callback the visitor-side `SessionPlan` injects into
   every visitor plan. Invoked by `apply_effects/2` when EventRouter emits
-  `:visitor_r_observed` so the confirmed NickServ password AND the nick held
+  `:identity_secret_confirmed` so the confirmed NickServ password AND the nick held
   at the identify instant land on the credential (#561). The function shape
   mirrors `Grappa.Visitors.commit_identity/4` (the closure captures
   `network_id`, so the args are `(visitor_id, password, nick)`). Carried as
@@ -764,6 +765,23 @@ defmodule Grappa.Session.Server do
           # cic as `umode_changed` on Topic.user for the `/mode <nick>` modal.
           # Defaults to `[]` until the 221 arrives.
           umodes: [String.t()],
+          # #388: the services ACCOUNT name this session is logged in as, or
+          # nil when logged out. Seeded by IRCv3 `account-notify` (inbound
+          # `ACCOUNT`, with `*` normalized to nil) and by a self-targeted 330
+          # RPL_WHOISLOGGEDIN. This is the FLAVOUR-AGNOSTIC half of the
+          # identity signal: solanum/atheme networks have no registered
+          # umode, so on those it is the only evidence an identify landed.
+          # Never read directly for an identity verdict — ask
+          # `IdentityState.identified?/1`, which folds it with the umode axis.
+          account: String.t() | nil,
+          # #388: the network's operator-set NickServ services flavour,
+          # injected at spawn by `Networks.SessionPlan.base_plan/6` (shared by
+          # user + visitor plans). Its ONLY job in the session is telling
+          # `IdentityState` which umode letter means "registered": lowercase
+          # `r` everywhere by default, uppercase `R` on OFTC — where the
+          # lowercase letter is an unrelated oper notice mode. nil for a
+          # network the operator never classified (treated as the default).
+          services_flavor: atom() | nil,
           # #249: per-session SUPPORTED user-mode set — the umode letters the
           # server advertises in 004 RPL_MYINFO (param index 3), a sorted list
           # of single-letter strings. Unlike `umodes` (the operator's ACTIVE
@@ -1261,6 +1279,12 @@ defmodule Grappa.Session.Server do
       presence_mechanism: nil,
       # #229: empty umode set until the 221 RPL_UMODEIS reply arrives.
       umodes: [],
+      # #388: no services account until an `ACCOUNT` or a self 330 says so.
+      account: nil,
+      # #388: which umode letter means "registered" on this network. `Map.get`
+      # (not a required fetch) so a plan predating the key — or a pure test
+      # opts map — takes the lowercase default rather than crashing at spawn.
+      services_flavor: Map.get(opts, :services_flavor),
       # #249: empty supported-umode set until the 004 RPL_MYINFO arrives.
       supported_umodes: [],
       # C2 — pending WHOIS accumulators keyed by lowercased target nick.
@@ -2396,7 +2420,11 @@ defmodule Grappa.Session.Server do
       server: state.peer_address,
       port: state.peer_port,
       tls: Map.get(state, :tls, false),
-      registered: "r" in Map.get(state, :umodes, []),
+      # #388 — the normalized verdict, not a hand-spelled `"r" in umodes`:
+      # this field is what cic's registration + recover launchers gate on,
+      # so on a solanum/OFTC network the bahamut-only spelling reported a
+      # permanent "not identified".
+      registered: IdentityState.identified?(state),
       connected_at: Map.get(state, :connected_at)
     }
 
@@ -2604,6 +2632,14 @@ defmodule Grappa.Session.Server do
       %{
         umodes: Map.get(state, :umodes, []),
         supported_umodes: Map.get(state, :supported_umodes, []),
+        # #388 — the normalized identity verdict rides the SAME snapshot, so
+        # a client that reloads mid-session re-learns it without a second
+        # round-trip. Without it cic's registration + recover launchers would
+        # reappear on every reload of an already-identified session: the live
+        # `session_identity_changed` edge fired long before the browser
+        # subscribed, and nothing else on the user topic carries the verdict.
+        identified: IdentityState.identified?(state),
+        account: Map.get(state, :account),
         invited_windows: WindowState.invited_windows(state.window_state, state.network_slug)
       }}, state}
   end
@@ -5130,25 +5166,45 @@ defmodule Grappa.Session.Server do
     apply_effects(rest, next_state)
   end
 
-  # #215 — the +r bit flipped (EventRouter self-MODE branch). Emit the
-  # `:identified` / `:deidentified` session-lifecycle event. Pure side
-  # effect (Logger + telemetry) — no state mutation.
+  # #215 — the session's services identity flipped (any of the #388 sources:
+  # self-MODE echo, 221 snapshot, self-rename strip, inbound `ACCOUNT`, self
+  # 330). Emit the `:identified` / `:deidentified` session-lifecycle event.
   defp apply_effects([{:session_identity_changed, transition} | rest], state) do
     event = if transition == :acquired, do: :identified, else: :deidentified
     SessionLog.emit(event, state, [])
 
-    # On +r acquisition, TWO consumers fire (both gated on `:acquired`,
-    # nested under one rebind — Credo VariableRebinding):
-    #   #347 — +r is the identify-confirmed signal the deferred
+    # #388 — fan the NORMALIZED verdict out to cic on Topic.user. This is
+    # what the registration + recover launchers gate on; before #388 cic
+    # re-derived it from the `umode_changed` letter list, which is a
+    # bahamut-only spelling AND is never re-seeded after a page reload.
+    # Re-reads `identified?/1` rather than mapping the transition atom so
+    # the pushed value and the `GET /networks` cold twin cannot disagree.
+    :ok =
+      Broadcaster.to_user(
+        state,
+        SessionWire.session_identity_changed(
+          state.network_id,
+          IdentityState.identified?(state),
+          Map.get(state, :account)
+        )
+      )
+
+    # On identity acquisition, TWO consumers fire (both gated on
+    # `:acquired`, nested under one rebind — Credo VariableRebinding):
+    #   #347 — acquisition is the identify-confirmed signal the deferred
     #   `:nickserv_identify` autojoin waits for. Fire the JOINs now
     #   (cancelling the fallback timer) so they land AFTER identify — +R
     #   channels accept and ChanServ ops. No-op for any path that didn't
     #   defer (latch nil): SASL/:none fired on 001.
-    #   #581 — +r IS the recover FSM's `:r_observed` signal. Reuse
-    #   EventRouter's `set_r_mode?` detection (it already produced this
-    #   effect) instead of re-parsing the MODE echo; only feed while a
-    #   recover is armed (`advance_recover/2` no-ops the FSM off-phase).
+    #   #581 — acquisition IS the recover FSM's `:r_observed` signal. Reuse
+    #   the transition EventRouter already computed instead of re-parsing
+    #   the MODE echo; only feed while a recover is armed
+    #   (`advance_recover/2` no-ops the FSM off-phase).
     # A `:lost` transition triggers neither.
+    #
+    # #388 — both consumers now also fire for an identity learned from
+    # `ACCOUNT` or a self 330, so the deferred autojoin is released and a
+    # recover completes on networks that never emit a registered umode.
     state =
       if transition == :acquired do
         after_autojoin = fire_deferred_autojoin(state)
@@ -5682,7 +5738,7 @@ defmodule Grappa.Session.Server do
   # cycle. User sessions don't carry a committer; if a {:user, _}
   # somehow staged pending_auth (e.g. operator manually issued
   # NickServ IDENTIFY), the +r is logged and dropped.
-  defp apply_effects([{:visitor_r_observed, password} | rest], state) do
+  defp apply_effects([{:identity_secret_confirmed, password} | rest], state) do
     # #561 — bind the password AND the nick this +r confirms. Normally
     # that is `state.nick`: bahamut clears +r on a genuine nick change
     # (`m_nick.c:594-602`) and services set it only on `sameNick`, so at
@@ -5694,7 +5750,7 @@ defmodule Grappa.Session.Server do
     # is robust if that invariant ever weakens (binding the worn nick
     # instead of the identity is wrong regardless).
     # #229 hot-reload safety — `Map.get`, never `state.recover_identity`
-    # dot-access: `visitor_r_observed` fires on EVERY visitor +r (whenever
+    # dot-access: `identity_secret_confirmed` fires on EVERY visitor +r (whenever
     # `pending_auth` was staged), so a session predating the #581 field
     # (force-hot-reloaded) would KeyError here on the common identify path.
     # Absent key → nil → the `state.nick` fallback (pre-#581 behaviour).
@@ -5729,7 +5785,7 @@ defmodule Grappa.Session.Server do
         )
 
       {{:user, user_id}, _} ->
-        commit_user_registration_on_r(user_id, password, state)
+        commit_user_registration(user_id, password, state)
     end
 
     :ok = cancel_and_drain(state.pending_auth_timer, :pending_auth_timeout)
@@ -5954,7 +6010,7 @@ defmodule Grappa.Session.Server do
   # is NOT a registration — leave the credential's auth posture untouched
   # (#124's territory), same drop-and-log as before. Multi-clause so the
   # apply_effects +r arm stays flat.
-  defp commit_user_registration_on_r(user_id, password, %{
+  defp commit_user_registration(user_id, password, %{
          pending_registration_secret: secret,
          registration_committer: committer
        })
@@ -5971,15 +6027,15 @@ defmodule Grappa.Session.Server do
     end
   end
 
-  defp commit_user_registration_on_r(user_id, _, %{pending_registration_secret: secret})
+  defp commit_user_registration(user_id, _, %{pending_registration_secret: secret})
        when is_binary(secret) do
     Logger.error("user +r observed with staged registration but no committer — drop",
       user_id: user_id
     )
   end
 
-  defp commit_user_registration_on_r(_, _, _) do
-    Logger.warning("visitor_r_observed effect on user session — ignored")
+  defp commit_user_registration(_, _, _) do
+    Logger.warning("identity_secret_confirmed effect on user session — ignored")
   end
 
   # #116: on a 473 (+i) / 475 (+k) failure for a channel in the boot

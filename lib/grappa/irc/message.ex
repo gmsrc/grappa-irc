@@ -68,6 +68,7 @@ defmodule Grappa.IRC.Message do
           | :oper
           | :away
           | :ison
+          | :account
           | {:numeric, 1..999}
           | {:unknown, String.t()}
 

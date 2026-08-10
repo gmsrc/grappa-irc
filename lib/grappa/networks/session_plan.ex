@@ -232,6 +232,13 @@ defmodule Grappa.Networks.SessionPlan do
       subject: subject,
       subject_label: subject_label,
       network_slug: network.slug,
+      # GH #388 — the operator-set services flavour, threaded into the
+      # session so `Session.IdentityState` knows which umode letter means
+      # "registered" on this network (uppercase `R` on OFTC, lowercase `r`
+      # everywhere else). Set HERE, in the plan shared by the user AND
+      # visitor paths, so both subject kinds detect identity identically.
+      # nil for an unclassified network — the lowercase default.
+      services_flavor: network.services_flavor,
       nick: cred.nick,
       ident: Credential.effective_ident(cred),
       realname: Identity.effective_realname(cred.realname, realname_fallback),

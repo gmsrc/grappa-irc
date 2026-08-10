@@ -352,6 +352,39 @@ defmodule Grappa.IRC.AuthFSMTest do
       assert send_lines(sends) == ["CAP REQ :sasl labeled-response"]
     end
 
+    # GH #388 — `account-notify` joins `labeled-response` as an opportunistic
+    # cap: it carries the flavour-agnostic identity signal (inbound `ACCOUNT`),
+    # which is the only identify evidence a solanum/atheme network offers.
+    test "CAP LS advertising account-notify requests it alongside sasl", %{state: state} do
+      msg = %Message{
+        command: :cap,
+        params: ["*", "LS", "sasl=PLAIN labeled-response account-notify"]
+      }
+
+      assert {:cont, %AuthFSM{phase: :awaiting_cap_ack_combined}, sends} =
+               AuthFSM.step(state, msg)
+
+      assert send_lines(sends) == ["CAP REQ :sasl labeled-response account-notify"]
+    end
+
+    test "account-notify without labeled-response still rides the combined REQ", %{state: state} do
+      msg = %Message{command: :cap, params: ["*", "LS", "sasl=PLAIN account-notify"]}
+
+      assert {:cont, %AuthFSM{phase: :awaiting_cap_ack_combined}, sends} =
+               AuthFSM.step(state, msg)
+
+      assert send_lines(sends) == ["CAP REQ :sasl account-notify"]
+    end
+
+    test "a server advertising NEITHER opportunistic cap sends the pre-#388 line", %{state: state} do
+      # The Azzurra/bahamut shape — all of prod. #388 must be byte-identical
+      # here or it changes the handshake on every production network.
+      msg = %Message{command: :cap, params: ["*", "LS", "sasl=PLAIN"]}
+
+      assert {:cont, %AuthFSM{phase: :awaiting_cap_ack}, sends} = AuthFSM.step(state, msg)
+      assert send_lines(sends) == ["CAP REQ :sasl"]
+    end
+
     test "combined CAP REQ NAK -> fallback CAP REQ :sasl + phase :awaiting_cap_ack_sasl_only (NO :stop)",
          %{state: state} do
       combined_state = %{state | phase: :awaiting_cap_ack_combined}

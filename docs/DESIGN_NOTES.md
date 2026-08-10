@@ -38814,3 +38814,88 @@ untouched: it measures the one thing the bug never touched. It still
 earns its place — it is the only thing that catches the label being
 changed without the encoder — but the count is what catches the encoder
 being changed without anyone noticing.
+
+---
+
+## 2026-08-10 — #388: identity is one verdict with three sources, and the mode letter is not portable
+
+The #349 registration wizard shipped on Azzurra keyed off the lowercase
+`+r` user mode. That is a bahamut spelling, so the wizard could not detect
+completion anywhere else, and #388 was filed to make detection
+flavour-agnostic. Four boxes: negotiate `account-notify` and handle inbound
+`ACCOUNT`, read numeric 330 for self, recognise OFTC's uppercase `+R`, and
+have the wizard consume a normalized event rather than a raw mode.
+
+**The fourth box was the actual work; the first three are its sources.**
+"Is this session identified?" was answered independently in four places —
+`EventRouter.session_identity_effects/2`, a second detector
+(`set_r_mode?/1`) re-walking the same MODE bytes for the visitor
+secret-commit, `Session.Server`'s `registered:` wire field, and cicchetto's
+own `umodes.includes("r")`. Four spellings of one predicate is how the
+definition forks. `Grappa.Session.IdentityState` now owns it: pure
+functions over the session state, asked via `identified?/1`. Adding a
+source cannot fork the definition because no caller spells the rule.
+
+**Every source funnels through one prev/next diff.** `identity_effects/2`
+takes whole STATES, not the axis that changed, and asks `identified?/1`
+twice. Passing only your own axis is precisely how the old readers drifted,
+and it also gets the cross-axis cases right for free: an account-identified
+session survives the #581 rename umode strip, because a nick change does
+not clear a services account.
+
+**A gap fell out of the collapse.** 221 RPL_UMODEIS replaces the umode set
+wholesale and emitted no transition at all pre-#388, so a session that
+first learned its identity from the connect-time snapshot never logged
+`:identified` and never released the #347 deferred autojoin. It now emits
+the transition — but deliberately does NOT confirm a staged secret. A
+snapshot reconciles current state; the identity it reports may predate the
+staged secret entirely, and committing off it would bind a password the
+network never accepted. Confirmation needs an event, reconciliation is not
+one.
+
+**The umode letter is per-flavour and EXCLUSIVE — verified at source, not
+assumed.** The issue asserted OFTC uses `+R`; that is true, and the
+tempting shortcut of accepting `r` OR `R` everywhere is wrong in both
+directions:
+
+- OFTC (`oftc/oftc-hybrid@36f0431`, `src/s_user.c`, blob `e325095`):
+  `s_user.c:114` maps `R` to `UMODE_NICKSERVREG` — "user is registered with
+  nickserv and identified" (`include/client.h:401`). But `s_user.c:142`
+  maps lowercase `r` to `UMODE_REJ`, an oper bot-rejection notice mode. A
+  union would mark an OFTC oper identified and let the wizard commit a
+  registration that never happened.
+- solanum (`ircd/s_user.c`, `user_modes[256]`): `/* R */ 0` — unassigned in
+  core, the table being `D/Q/S/Z/a/i/o/s/w/z`. Uppercase `R` being free is
+  exactly why honouring it off OFTC is unsafe: an extension may claim it
+  for anything.
+
+So `registered_umode/1` returns ONE letter per flavour, defaulting to
+lowercase `r` for `nil` and for any flavour added later — an unclassified
+network therefore behaves exactly as it did pre-#388. This is also why
+`services_flavor` is now threaded into the session, via
+`Networks.SessionPlan.base_plan/6` (shared by the user and visitor paths so
+both subject kinds detect identity identically).
+
+**Libera needs no letter at all**, which is the point of the account axis:
+solanum has no registered umode, so `ACCOUNT` / 330 is the only evidence an
+identify landed there. `account-notify` joins `labeled-response` as an
+opportunistic cap; a server that does not advertise it produces a
+byte-identical `CAP REQ` line, so the handshake on every production network
+is unchanged. The known edge is that the H9 combined-NAK fallback
+re-requests `:sasl` alone and would drop `account-notify` — that fallback
+exists for bahamut-family servers, which do not offer the cap.
+
+**What the client sees.** One additive user-topic event,
+`session_identity_changed`, carrying `identified` (the verdict) and
+`account` (display data, `null` even while identified on bahamut). It rides
+the cold user-topic snapshot too, which closes a defect the umode store
+still has: after a page reload nothing re-seeded the letters, so cic
+re-showed the "Register nick" and "Recover identity" buttons on an
+already-identified session.
+
+**What was NOT claimed.** Whether OFTC's services actually set `+R` at the
+identify instant is taken from the `UMODE_NICKSERVREG` declaration comment,
+not observed on the wire — grappa has never connected to OFTC. The gate
+limits the blast radius to networks an operator explicitly classified
+`:oftc`. Peer identities are also out of scope: inbound `ACCOUNT` for
+another user is dropped rather than folded into the members map.

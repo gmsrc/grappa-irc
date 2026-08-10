@@ -192,7 +192,7 @@ defmodule Grappa.Session.EventRouterPropertyTest do
           assert is_binary(target)
           assert is_map(accum)
 
-        {:visitor_r_observed, nick} ->
+        {:identity_secret_confirmed, nick} ->
           assert is_binary(nick)
 
         {:visitor_nick_changed, nick} ->

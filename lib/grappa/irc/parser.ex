@@ -56,7 +56,7 @@ defmodule Grappa.IRC.Parser do
     * Anything else becomes `{:unknown, "UPPERCASED"}` so consumers can
       pattern-match on the tagged shape without atom-table-DoS risk.
 
-  The allowlist is closed (~24 verbs) and lives in this module's
+  The allowlist is closed (~25 verbs) and lives in this module's
   `@known_commands` attribute; expanding it for a new RFC verb is a
   one-line edit.
   """
@@ -90,7 +90,11 @@ defmodule Grappa.IRC.Parser do
     "KILL" => :kill,
     "OPER" => :oper,
     "AWAY" => :away,
-    "ISON" => :ison
+    "ISON" => :ison,
+    # GH #388 — IRCv3 `account-notify`. Delivered for any user sharing a
+    # channel with us; `EventRouter` keeps only the self-targeted one, as
+    # the flavour-agnostic half of the identity signal.
+    "ACCOUNT" => :account
   }
 
   @doc """

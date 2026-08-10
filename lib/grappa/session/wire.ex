@@ -71,6 +71,7 @@ defmodule Grappa.Session.Wire do
           | :own_nick_changed
           | :isupport_changed
           | :umode_changed
+          | :session_identity_changed
           | :supported_umodes_changed
           | :topic_changed
           | :channel_modes_changed
@@ -156,6 +157,37 @@ defmodule Grappa.Session.Wire do
           kind: :umode_changed,
           network_id: integer(),
           modes: [String.t()]
+        }
+
+  @typedoc """
+  The NORMALIZED services-identity signal (#388): whether this session is
+  identified to the network's services, and under which account.
+
+  This is the event a client gates registration / recovery affordances on.
+  It exists so no client has to know what a "registered umode" is: the
+  server folds bahamut's `+r`, OFTC's `+R`, and the flavour-agnostic
+  account signals (IRCv3 `account-notify`, numeric 330) into ONE verdict
+  via `Grappa.Session.IdentityState`. cicchetto previously spelled
+  `umodes.includes("r")` itself, which was correct on Azzurra and wrong
+  everywhere else.
+
+  `account` is the services account name when known and `nil` otherwise —
+  including when `identified` is `true` via the umode axis alone, which is
+  the normal bahamut case (it exposes no account). So `account` is
+  supplementary display data; `identified` is the verdict, and a client
+  MUST NOT infer identity from `account` being present or absent.
+
+  Carries `:network_id` (not slug) and rides `Topic.user/1` — per
+  (subject, network), the same carrier as `umode_changed/2` +
+  `isupport_changed/2`. The COLD twin of this event is the `registered`
+  field of `GET /networks`' `connection` object, which reports the same
+  `IdentityState.identified?/1` verdict for a client that just loaded.
+  """
+  @type session_identity_changed_payload :: %{
+          kind: :session_identity_changed,
+          network_id: integer(),
+          identified: boolean(),
+          account: String.t() | nil
         }
 
   @typedoc """
@@ -877,6 +909,24 @@ defmodule Grappa.Session.Wire do
   def umode_changed(network_id, modes)
       when is_integer(network_id) and is_list(modes) do
     %{kind: :umode_changed, network_id: network_id, modes: modes}
+  end
+
+  @doc """
+  The normalized services-identity verdict (#388) — see
+  `t:session_identity_changed_payload/0` for why clients gate on this
+  instead of reading a umode letter.
+  """
+  @spec session_identity_changed(integer(), boolean(), String.t() | nil) ::
+          session_identity_changed_payload()
+  def session_identity_changed(network_id, identified, account)
+      when is_integer(network_id) and is_boolean(identified) and
+             (is_binary(account) or is_nil(account)) do
+    %{
+      kind: :session_identity_changed,
+      network_id: network_id,
+      identified: identified,
+      account: account
+    }
   end
 
   @doc """

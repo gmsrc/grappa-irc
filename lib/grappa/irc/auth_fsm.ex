@@ -680,27 +680,54 @@ defmodule Grappa.IRC.AuthFSM do
   #     NAK declares `:sasl_unavailable` immediately — no labeled-response involved
   #     so no fallback shape applies)
   #   - Neither → fall through to cap_unavailable (existing behaviour)
+  #
+  # GH #388 generalised the "opportunistic" half from the single
+  # `labeled-response` entry to the `@opportunistic_caps` list, adding
+  # `account-notify`: the flavour-agnostic identity signal (inbound
+  # `ACCOUNT` → `EventRouter`), which is how a solanum/atheme network tells
+  # us an identify landed at all — it has no registered umode to watch.
+  # Like `labeled-response` it is requested purely because it is advertised,
+  # needs no follow-up exchange, and a NAK is non-fatal.
+  #
+  # The four shapes above are unchanged in BYTES for every existing case:
+  # the list is ordered `labeled-response` first, and a server that does not
+  # advertise `account-notify` (bahamut / all of prod) produces exactly the
+  # pre-#388 REQ line.
+  #
+  # KNOWN EDGE: the H9 combined-NAK fallback re-requests `:sasl` ALONE, so
+  # an ircd that both offers `account-notify` and NAKs the combined blob
+  # loses it. That fallback exists for bahamut-family servers, which do not
+  # offer `account-notify` in the first place, and SASL is the cap we cannot
+  # trade away — so the loss is theoretical and the alternative (an extra
+  # per-cap REQ ladder) buys nothing real.
+  @opportunistic_caps ["labeled-response", "account-notify"]
+
   defp finalize_cap_ls(caps, state) do
     sasl_wanted = "sasl" in caps and state.auth_method in [:auto, :sasl]
-    labeled_response = "labeled-response" in caps
+    opportunistic = Enum.filter(@opportunistic_caps, &(&1 in caps))
 
-    cond do
-      sasl_wanted and labeled_response ->
-        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack_combined), ["CAP REQ :sasl labeled-response\r\n"]}
+    case {sasl_wanted, opportunistic} do
+      {true, []} ->
+        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack), [cap_req(["sasl"])]}
 
-      sasl_wanted ->
-        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack), ["CAP REQ :sasl\r\n"]}
+      {true, extras} ->
+        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack_combined),
+         [cap_req(["sasl" | extras])]}
 
-      labeled_response ->
-        # No SASL, but labeled-response is available. Request it and close
-        # CAP negotiation with CAP END — labeled-response has no follow-up
-        # exchange (unlike SASL). Session.Server detects the ACK independently.
-        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack), ["CAP REQ :labeled-response\r\n"]}
-
-      true ->
+      {false, []} ->
         cap_unavailable(state)
+
+      {false, extras} ->
+        # No SASL, but at least one opportunistic cap is available. Request
+        # it and close CAP negotiation with CAP END — none of them has a
+        # follow-up exchange (unlike SASL). Session.Server detects the ACK
+        # independently.
+        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack), [cap_req(extras)]}
     end
   end
+
+  @spec cap_req([String.t()]) :: String.t()
+  defp cap_req(caps), do: "CAP REQ :#{Enum.join(caps, " ")}\r\n"
 
   # SASL not on offer (or NAK'd). Mandatory SASL (`:sasl`) crashes;
   # `:auto` falls back to the PASS-handoff path (PASS already sent at

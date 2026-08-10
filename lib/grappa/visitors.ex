@@ -331,7 +331,7 @@ defmodule Grappa.Visitors do
   #561 — the `+r`-observed identity commit: writes the confirmed NickServ
   password AND binds the nick held at the identify instant onto the
   `(visitor_id, network_id)` Credential. Called from
-  `Grappa.Session.Server`'s `apply_effects/2` on `:visitor_r_observed` (the
+  `Grappa.Session.Server`'s `apply_effects/2` on `:identity_secret_confirmed` (the
   visitor branch) via the injected `visitor_committer` closure.
 
   Both bindings matter. The password promotes the credential to
