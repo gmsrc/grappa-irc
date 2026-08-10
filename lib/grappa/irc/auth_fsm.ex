@@ -711,8 +711,7 @@ defmodule Grappa.IRC.AuthFSM do
         {:cont, leave_cap_negotiation(state, :awaiting_cap_ack), [cap_req(["sasl"])]}
 
       {true, extras} ->
-        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack_combined),
-         [cap_req(["sasl" | extras])]}
+        {:cont, leave_cap_negotiation(state, :awaiting_cap_ack_combined), [cap_req(["sasl" | extras])]}
 
       {false, []} ->
         cap_unavailable(state)
