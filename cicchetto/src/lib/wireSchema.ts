@@ -941,6 +941,7 @@ export const S_SessionWireIsupportChangedPayload = {
     chanmodes_c: { a: "s" },
     chanmodes_d: { a: "s" },
     prefix: { r: "s" },
+    frame_budget_base: "i",
   },
 } as const;
 

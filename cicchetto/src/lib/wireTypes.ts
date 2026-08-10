@@ -900,6 +900,7 @@ export type SessionWireIsupportChangedPayload = {
   chanmodes_c: string[];
   chanmodes_d: string[];
   prefix: Record<string, string>;
+  frame_budget_base: number;
 };
 
 export type SessionWireUmodeChangedPayload = {
