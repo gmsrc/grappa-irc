@@ -37778,3 +37778,93 @@ HOT** — Ecto selects named columns, so a node still running the old `Session`
 module cannot see the two new ones, and reload brings schema and column into
 agreement in either order. The first commit's message says COLD; the
 classifier disagrees and it is right.
+
+---
+
+## 2026-08-10 — #431: `/ame` + `/amsg` — the exclusions were already there, and the pacing belonged to #666
+
+mIRC's "say it in every channel" pair, asked for by a long-time mIRC user who
+moved to cicchetto. vjt's ruling (2026-08-09) settled the one open question in
+the issue body: the fan-out is the joined-channel set of the **current network
+only**. Cross-network is out of scope and gets no flag — a multi-network client
+that sprays an action across every network at once is a different, worse
+feature wearing the same name.
+
+**The target list is not new, and that is the point.** `joinedChannelsOnNetwork`
+already existed in `compose.ts` for #30's channel tab-completion, reading the
+server-owned `windowStateByChannel` projection. The fan-out reads the same
+function, so it inherits the exclusions rather than restating them.
+
+That matters for the three exclusions the issue asks for, because only one of
+them is a filter. The `:invited` window — the greyed not-joined tab an
+unsolicited INVITE opens — IS a key in that map, and what keeps it (along with
+`pending`, `failed`, `kicked` and `parked`) out of the fan-out is the `joined`
+predicate. Queries and `$server` are a different case: they cannot be in the map
+at all. The server keys `window_states` by channel, a DM lives in
+`queryWindows`, and `$server` is never joined — verified at the feeders
+(`subscribe.ts`'s `joined` arm, `userTopic.ts`'s `joined`/`window_pending`
+arms), all channel-keyed by construction. So no sigil guard was added. One was
+written for #30, measured against the suite at zero failing tests, and deleted;
+re-adding it here would reinstate dead code and buy an arm that can only be
+killed by injecting a state production cannot produce.
+
+Stated plainly because it is easy to misread as a dropped constraint: the
+exclusion vjt asked for is enforced, and the mutant that removes it kills an
+arm. It is just that the arm it kills is shared with #30's, because there is one
+predicate serving both callers. The fan-out's own arm is therefore a regression
+guard on that reuse, not independent coverage of the predicate.
+
+**Pacing is #666's verb, generalised — not a new sleep.** The two hazards are
+one hazard: N PRIVMSGs in a burst against the `#340` per-`(subject, network)`
+token bucket. One PRIVMSG per line of a paste and one per channel of a fan-out
+differ only in what the list is made of. So `sendBodyLines`' loop became
+`drainPaced`, over a flat `(target, line)` plan that `planSends` builds
+target-major; the single-target case is the old behaviour byte for byte.
+
+**Flat, not nested,** and this is the part worth remembering. The obvious shape
+— call `sendBodyLines` once per channel — nests one paced retry inside another.
+A multi-line body whose third line is refused would throw out of the inner
+drain with two lines already delivered, and the outer drain would pace and
+retry *that whole channel*, re-sending the two. A flat plan makes a retry
+re-send exactly one `(target, line)`, so the never-drop / never-dup property
+#666 established survives the second dimension.
+
+**Why the server's `retry-after` and not a constant.** The bucket is capacity 5,
+refill 0.5/s, and `messages_controller.take_send_token` says out loud what it is
+for: it is tuned at or below the upstream flood allowance so grappa's 429 always
+trips before bahamut k-lines the connection. The `retry-after` it hands back IS
+that bucket's refill interval. Waiting it paces against the thing that actually
+decides; a hardcoded inter-message delay would be a second, unmeasured opinion
+about the same limit, free to drift the moment the bucket is retuned. The test
+proves the difference by having the stub answer `retry_after: 3` — deliberately
+not the 2s client-side fallback — so "ignores the hint" is a distinct mutant
+from "has no pacing", and it is: it kills exactly one arm, and only that one.
+
+**Ten channels, and the question names them.** Above ten the fan-out asks first.
+Ten is decided, not tuned. The dialog spells out every target rather than only
+the count, because the blast radius is the thing being consented to and "11
+channels?" is consent without disclosure.
+
+**What the confirm costs, honestly.** `requestConfirm` resolves nothing — it
+carries a `() => void` — so the gated send cannot be awaited by `submit`, and
+unlike the un-gated path its failure cannot surface inline. It is logged with a
+`[/ame]` grep key instead, mirroring `windowClose.disconnectNetwork`, which is
+the same shape of destructive-action-behind-a-confirm. Making the confirm
+awaitable was considered and refused: the store is last-write-wins, so a second
+request replacing a pending one would strand a promise that never settles, and
+`submit` holds the window's outbox while it waits — a composer dead until
+reload, which is worse than the log line. The other cost is that the arm returns
+`ok`, so the pump clears the draft when the dialog opens; a cancel loses the
+typed line from the box but not from the composer history, because `takeDraft`
+pushes to history before it clears.
+
+**The issue text contradicted the codebase on shadowing, and the codebase won.**
+#431's body says builtins are "never shadowed by a user alias (#427)". #427 ruled
+the exact opposite — it reversed #385's decision #3 — leaving a deliberately
+fixed two-name deny list, `/alias` and `/unalias`, the command-side repair
+surface. `/ame` is a builtin in the only sense #427 leaves available: it is in
+`DISPATCH`, and a same-named user alias shadows it exactly as one shadows
+`/join`. Widening the deny list for a convenience verb would start the drift
+that comment exists to prevent. The alias engine still cannot express iteration,
+so none of this is user-scriptable today, and nothing here is pre-built for a
+future iteration primitive.
