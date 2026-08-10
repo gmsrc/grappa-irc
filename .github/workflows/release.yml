@@ -23,13 +23,17 @@ name: release
 #              (dnf) so %post's openssl secrets + packaged migrate run for
 #              real. The Fedora-built ERTS is why the .rpm cannot be a flag on
 #              the deb job — see #438 + the packaging README.
-#   * docker — the self-contained RELEASE image (Dockerfile.release), built
-#              multi-arch (linux/amd64 + linux/arm64 via buildx + QEMU) and
-#              PUSHED to ghcr.io/<owner>/grappa as :<tag> + :latest with OCI
-#              source/version/revision labels (#503 unit C / scope 5). It is a
-#              standalone leg — it publishes to the container registry itself,
-#              NOT a GitHub Release asset, so it is NOT in `publish`'s needs and
-#              runs in parallel with the package jobs.
+#   * docker — TWO images, each multi-arch (linux/amd64 + linux/arm64 via
+#              buildx + QEMU) and each PUSHED as :<tag> + :latest with OCI
+#              source/version/revision labels: the self-contained RELEASE
+#              image (Dockerfile.release) to ghcr.io/<owner>/grappa (#503
+#              unit C / scope 5), then the `shottino --ircd` BRIDGE image
+#              (Dockerfile.shottino) to ghcr.io/<owner>/grappa-shottino
+#              (#1168), so the bridge can be PULLED instead of compiled by
+#              every operator who switches it on. It is a standalone leg — it
+#              publishes to the container registry itself, NOT a GitHub
+#              Release asset, so it is NOT in `publish`'s needs and runs in
+#              parallel with the package jobs.
 #   * smoke  — DEPLOYS the image the docker job just produced and probes it
 #              (#1162). Every other gate in this repo tests the deploy SCRIPTS
 #              with `docker` stubbed; this one boots the artifact and asks it
@@ -501,7 +505,7 @@ jobs:
           if-no-files-found: error
 
   docker:
-    name: build + push release image (ghcr, amd64 + arm64)
+    name: build + push release images (ghcr, amd64 + arm64)
     # Runs on a tag push (real release → PUBLISHES) and on an EXPLICIT
     # docker_validation dispatch (dry-run → push:false, publishes NOTHING). A
     # plain repair dispatch (docker_validation=false) does NOT run docker: no
@@ -560,31 +564,51 @@ jobs:
           # on a dry-run) — never github.sha, which is main's HEAD on a dispatch.
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Compute image name + tag list
+      - name: Compute image names + tag lists
         id: img
         run: |
           # ghcr repositories MUST be lowercase; the owner may not be.
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           name="ghcr.io/${owner}/grappa"
+          # The bridge is a SECOND repository, not a tag of the first: a
+          # manifest list holds one image per PLATFORM, so `grappa:<tag>` for
+          # arm64 is already taken by the bouncer (#1168).
+          shottino_name="ghcr.io/${owner}/grappa-shottino"
           version="${{ steps.ver.outputs.version }}"
           echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "shottino_name=${shottino_name}" >> "$GITHUB_OUTPUT"
 
           # :v<version> always; :latest ONLY when v<version> is the highest semver
           # tag in the repo — a backport tag push (v0.7.5 after v0.8.0) must not
           # re-point `:latest` at an OLDER image. deb/rpm/arch are immune (they
-          # attach to a tag-keyed Release); only the docker image has a MUTABLE
+          # attach to a tag-keyed Release); only the docker images have a MUTABLE
           # `:latest`. These tags are USED only when push:true — a dry-run
           # (push:false) computes but discards them. `-v:refname` sorts by semver.
           highest="$(git tag -l 'v*' --sort=-v:refname | head -1)"
-          echo "tags<<TAGS_EOF" >> "$GITHUB_OUTPUT"
-          echo "${name}:v${version}" >> "$GITHUB_OUTPUT"
           if [ "v${version}" = "${highest}" ]; then
-            echo "${name}:latest" >> "$GITHUB_OUTPUT"
+            latest=yes
             echo "v${version} is the highest tag — tagging :latest"
           else
+            latest=no
             echo "v${version} is NOT the highest (${highest}) — NOT tagging :latest"
           fi
-          echo "TAGS_EOF" >> "$GITHUB_OUTPUT"
+
+          # ONE gate, BOTH images (#1168). Bouncer and bridge are cut from the
+          # SAME tag, so the backport decision above has to reach both — and a
+          # second hand-copied semver comparison is exactly how two `:latest`
+          # pointers drift onto different releases.
+          emit_tags() {
+            repo="$1"
+            key="$2"
+            echo "${key}<<TAGS_EOF" >> "$GITHUB_OUTPUT"
+            echo "${repo}:v${version}" >> "$GITHUB_OUTPUT"
+            if [ "${latest}" = yes ]; then
+              echo "${repo}:latest" >> "$GITHUB_OUTPUT"
+            fi
+            echo "TAGS_EOF" >> "$GITHUB_OUTPUT"
+          }
+          emit_tags "${name}" tags
+          emit_tags "${shottino_name}" shottino_tags
 
       - name: Set up QEMU (arm64 emulation)
         uses: docker/setup-qemu-action@v4
@@ -636,11 +660,41 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
             org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # SCOPED (#1168): two builds in one job share the gha cache backend,
+          # and the default scope is one bucket — unscoped, the bridge build
+          # would evict the bouncer's layers on every release and vice versa.
+          cache-from: type=gha,scope=release
+          cache-to: type=gha,mode=max,scope=release
           # Keep the manifest a plain multi-arch image (no attestation manifest)
           # so `docker pull ghcr.io/<owner>/grappa` resolves cleanly on both
           # arches without the extra unknown/unknown provenance entry.
+          provenance: false
+
+      - name: Build multi-arch bridge image (push only on a real tag)
+        # SECOND, deliberately. Steps run in order and the bouncer image is
+        # already pushed by the time this runs, so a shottino compile error
+        # leaves the release image published and turns the job red on its own
+        # — the same call DESIGN_NOTES makes for the jail deploy, where a
+        # CLIENT compile must never withhold a SERVER artifact. Reversed, one
+        # bad C commit would hold back the thing people actually came for.
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.shottino
+          # Same matrix as the bouncer: an arm64 operator who has to compile
+          # the bridge is the exact problem #1168 exists to remove, and
+          # halving the audience would only half-close it. Cheap, too — the
+          # bridge is ~12 C files against ncursesw/openssl, tens of seconds
+          # under emulation, next to a full ERTS + SPA build in this same job.
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.img.outputs.shottino_tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
+          cache-from: type=gha,scope=release-shottino
+          cache-to: type=gha,mode=max,scope=release-shottino
           provenance: false
 
   smoke:
@@ -707,7 +761,12 @@ jobs:
           load: true
           push: false
           tags: grappa-release:smoke
-          cache-from: type=gha
+          # MUST name the same scope the docker job's bouncer build writes
+          # (#1168). That build is scoped now, because the bridge build shares
+          # this job's gha cache backend; an unscoped `cache-from` here would
+          # look in the default bucket, find nothing, and silently rebuild the
+          # whole release image instead of re-exporting it.
+          cache-from: type=gha,scope=release
           provenance: false
 
       - name: Deploy the image for real and probe it
