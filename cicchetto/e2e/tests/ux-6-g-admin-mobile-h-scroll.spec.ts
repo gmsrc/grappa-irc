@@ -2,44 +2,48 @@
 // horizontal scrollbar but ignore the iOS pan-x gesture (vjt iPhone
 // dogfood: "horiz content, scrollbar, but content doesn't move").
 //
-// Root cause: `.admin-pane` carries `touch-action: pan-y` (UX-5 BO
-// defensive carve-out against the `.shell-mobile { touch-action: none }`
-// blanket). Browser `touch-action` is the INTERSECTION across the
-// ancestor chain — even when `.admin-tab-panel` declares `pan-x pan-y`,
-// the parent's `pan-y` clamps back to `pan-y` only. Result: the
-// table renders an overflow-x scrollbar (visual cue) but iOS rejects
-// the horizontal pan, so the operator cannot read columns past the
-// viewport.
+// Root cause was `.admin-pane`'s `touch-action: pan-y` (a UX-5 BO carve-out
+// against the `.shell-mobile { touch-action: none }` blanket) clamping the
+// ancestor INTERSECTION so a child's `pan-x` could never take effect. The
+// gesture PERMISSION half of that fix is still asserted below, verbatim.
 //
-// Fix (CSS-only, two declarations):
-//   1. `.admin-pane { touch-action: pan-x pan-y }` — relaxes the
-//      ancestor INTERSECTION ceiling so child pan-x can take effect.
-//   2. `.admin-tab-panel { overflow-x: auto; touch-action: pan-x pan-y }`
-//      — table scrolls inside the panel (not the page); the panel
-//      itself owns the gesture authority for pan-x.
+// #1157 REPLACED the other half, and the spec has to be read as a whole to
+// see why. The 2026-05 fix, and #1074 after it, both took for granted that a
+// phone SHOULD pan a wide admin table, and argued only about which element
+// owns the scroll. vjt reversed the premise after dogfooding 0.15.0: the pan
+// is what goes. Rows become cards below 900px, and there is nothing wide
+// left to travel across.
 //
-// #1074 INVERTED the other half of this contract. The gesture
-// PERMISSION survives verbatim and is still asserted below: a table
-// that fits must not trap a horizontal swipe, and a future hand
-// re-tightening either declaration back to `pan-y` would silently
-// re-break the pane. What flipped is the positive-width twin. This
-// spec used to name Networks as `DETERMINISTIC_WIDE_TAB` and assert it
-// was WIDER than its panel, to prove the permission wasn't trivially
-// passing on an empty tab. Networks now drops its secondary columns
-// into the row's detail like every other tab, so the claim is the
-// opposite one: on a phone, NO admin tab is wider than its panel.
+// That reversal forced a new oracle, because the old one had stopped
+// watching. It looped `["visitors", "sessions", "networks"]` but gated the
+// width assertion on `DETERMINISTIC_POPULATED_TAB = "networks"`, with a
+// comment conceding that Visitors and Sessions were empty in the baseline
+// seed and "would pass the fits-the-panel check trivially". So it measured
+// ONE tab, the only one vjt did not ask to change — and `"visitors"` does
+// not exist any more.
 //
-// The row-detail case at the bottom is the other half of the same
-// knot. The detail panel sat OUTSIDE the table, rendered before it,
-// precisely because the table was wider than a phone; opening a row
-// therefore pushed the list down and sent the viewport to the top
-// ("l'expansion delle righe non deve portare top"). It is an expand
-// row now, and the oracle is that the row it belongs to does not move
-// when it opens.
+// The replacement is a claim no relocation of the scroller can satisfy: at
+// 393px, on EVERY tab, no scroll container inside the admin pane may have
+// `scrollWidth > clientWidth`. Moving `overflow-x` one level in or out —
+// the exact trap the deleted CSS comment documented, and the thing #1074
+// did — fails it, because the offender is reported wherever it lands.
 //
-// Per `feedback_e2e_user_class_parity_matrix`: AdminPane is admin-
-// gated (EXEMPT). This spec runs the admin arm only; non-admin
-// can't reach the surface at all.
+// Restricted to containers whose computed `overflow-x` is `auto` or
+// `scroll`, which is precisely the set that CAN pan. Not every overflowing
+// box: an inline element reports `clientWidth: 0` and would false-positive
+// on any text at all, and `overflow: hidden` is a deliberate idiom here
+// (`.adm-table-truncate` clips to an ellipsis with the full value on a
+// `title`), so flagging it would fail on a feature.
+//
+// Seeded rather than trusted: an empty tab cannot overflow, which is how
+// the old spec came to be green while watching nothing. The arrange block
+// mints a visitor (a Sessions row on top of the four seeded credentials)
+// and creates a vhost (a Vhosts row, the tab vjt called "un puttanaio"),
+// and both are torn down in `finally`.
+//
+// Per `feedback_e2e_user_class_parity_matrix`: AdminPane is admin-gated
+// (EXEMPT). This spec runs the admin arm only; non-admin can't reach the
+// surface at all.
 //
 // Seed shape: same as UX-6-C — PATCH the seeded `vjt` user to admin
 // via admin-vjt bearer at test start, revert in afterEach. admin-vjt
@@ -48,23 +52,38 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const GRAPPA_BASE_URL = "http://grappa-test:4000";
 
-// The tabs the pre-#1074 contract named as candidates for pan-x.
-// Networks is still the only one with rows in the baseline seed, so it
-// is still the only one whose width assertion carries information —
-// hence `DETERMINISTIC_POPULATED_TAB` below. Visitors / Sessions are
-// empty here and would pass the fits-the-panel check trivially; they
-// stay in the loop for the touch-action half, which does not depend on
-// content.
-const ADMIN_TABLE_TABS = ["visitors", "sessions", "networks"] as const;
-const DETERMINISTIC_POPULATED_TAB = "networks" as const;
+// Every tab AdminPane mounts (`TABS` in AdminPane.tsx). The pan is a
+// property of the pane, not of the three tabs that happened to have tables
+// when this spec was written, so the oracle visits all of them.
+const ADMIN_TABS = [
+  "sessions",
+  "events",
+  "session_log",
+  "networks",
+  "vhosts",
+  "credentials",
+  "users",
+  "settings",
+  "debug",
+] as const;
 
-test.setTimeout(90_000);
+test.setTimeout(180_000);
+
+type Offender = {
+  tab: string;
+  tag: string;
+  testId: string | null;
+  cls: string;
+  scrollW: number;
+  clientW: number;
+};
 
 async function findVjtUserId(adminToken: string): Promise<string> {
   const res = await fetch(`${GRAPPA_BASE_URL}/admin/users`, {
@@ -95,6 +114,39 @@ async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean
       `PATCH /admin/users/${userId} is_admin=${isAdmin} → ${res.status} ${await res.text()}`,
     );
   }
+}
+
+// A Vhosts row to measure. Mirrors issue252's candidate rule: the address
+// must be one with no vhost row yet, or the create 409s.
+async function createSeedVhost(adminToken: string): Promise<number | null> {
+  const idx = await fetch(`${GRAPPA_BASE_URL}/admin/vhosts`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (!idx.ok) throw new Error(`GET /admin/vhosts → ${idx.status}`);
+  const body = (await idx.json()) as {
+    host_candidates: string[];
+    vhosts: { address: string }[];
+  };
+  const configured = new Set(body.vhosts.map((v) => v.address));
+  const address = body.host_candidates.find((a) => !configured.has(a));
+  // Already-configured is fine: the tab has a row either way, which is all
+  // this spec needs. Only a total absence of candidates is worth a null.
+  if (address === undefined) return null;
+  const res = await fetch(`${GRAPPA_BASE_URL}/admin/vhosts`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ address, generally_available: true }),
+  });
+  if (!res.ok) throw new Error(`POST /admin/vhosts ${address} → ${res.status} ${await res.text()}`);
+  return ((await res.json()) as { id: number }).id;
+}
+
+async function deleteSeedVhost(adminToken: string, id: number | null): Promise<void> {
+  if (id === null) return;
+  await fetch(`${GRAPPA_BASE_URL}/admin/vhosts/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${adminToken}` },
+  }).catch(() => undefined);
 }
 
 test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
@@ -129,80 +181,104 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     await expect(page.getByTestId("admin-pane")).toBeVisible({ timeout: 5_000 });
   }
 
-  test("@webkit admin on mobile — admin tables permit pan-x and need none of it", async ({
+  test("@webkit admin on mobile — no tab can be panned sideways", async ({ page }) => {
+    const admin = getSeededAdmin();
+    const visitor = await mintVisitor(`ux6g-${Date.now()}`);
+    let vhostId: number | null = null;
+
+    try {
+      vhostId = await createSeedVhost(admin.token);
+      await openAdminPane(page);
+
+      const offenders: Offender[] = [];
+
+      for (const tab of ADMIN_TABS) {
+        await page.getByTestId(`admin-tab-${tab}`).tap();
+        const panel = page.locator(`#admin-tab-${tab}`);
+        await expect(panel).toBeVisible({ timeout: 10_000 });
+
+        // The pane, not just the panel: the pre-#1157 arrangement made the
+        // PANEL the scroller, and a future one could push it further out.
+        const found = await page.getByTestId("admin-pane").evaluate((root) => {
+          const out: Omit<Offender, "tab">[] = [];
+          const consider = (el: Element): void => {
+            // NAMED EXEMPTION, not a filter that makes the red go away.
+            // `.adm-nav` is the tab strip: nine chips, `overflow-x: auto`
+            // by design (default.css), 717px in a 365px pane. It is a
+            // navigation affordance an operator swipes to CHOOSE a tab,
+            // which is the same gesture every phone tab bar uses — not a
+            // record whose columns you must pan to READ, which is the
+            // defect vjt reported and this bucket exists for. Stacking it
+            // would cost most of the screen before the first row. If it is
+            // ever meant to be in scope, that is a separate product call.
+            if (el.classList.contains("adm-nav")) return;
+            const overflowX = window.getComputedStyle(el).overflowX;
+            if (overflowX !== "auto" && overflowX !== "scroll") return;
+            if (el.scrollWidth <= el.clientWidth + 1) return;
+            out.push({
+              tag: el.tagName.toLowerCase(),
+              testId: el.getAttribute("data-testid"),
+              cls: String((el as HTMLElement).className ?? "").slice(0, 90),
+              scrollW: el.scrollWidth,
+              clientW: el.clientWidth,
+            });
+          };
+          consider(root);
+          for (const el of root.querySelectorAll("*")) consider(el);
+          return out;
+        });
+
+        offenders.push(...found.map((o) => ({ ...o, tab })));
+      }
+
+      expect(
+        offenders,
+        `nothing in the admin pane may be pannable at 393px, on any tab — ` +
+          `offenders: ${JSON.stringify(offenders, null, 2)}`,
+      ).toEqual([]);
+    } finally {
+      await deleteSeedVhost(admin.token, vhostId);
+      await reapVisitors(admin.token, visitor.id);
+    }
+  });
+
+  test("@webkit admin on mobile — the pane still permits pan-x", async ({ page }) => {
+    await openAdminPane(page);
+
+    // Kept from the original fix and deliberately NOT deleted along with
+    // the overflow it was paired to. Nothing needs to pan any more, but a
+    // pane that REFUSES a horizontal gesture is the bug this bucket was
+    // opened for, and a future hand re-tightening either declaration back
+    // to `pan-y` would silently restore it. Cheap to keep, and it fails on
+    // a cause the width oracle above cannot see.
+    const paneTouch = await page
+      .getByTestId("admin-pane")
+      .evaluate((el) => window.getComputedStyle(el).touchAction);
+    expect(paneTouch, "admin-pane touch-action must allow pan-x").toMatch(/pan-x/);
+
+    for (const tab of ADMIN_TABS) {
+      await page.getByTestId(`admin-tab-${tab}`).tap();
+      const panel = page.locator(`#admin-tab-${tab}`);
+      await expect(panel).toBeVisible({ timeout: 10_000 });
+      const panelTouch = await panel.evaluate((el) => window.getComputedStyle(el).touchAction);
+      expect(panelTouch, `admin-tab-panel(${tab}) touch-action must allow pan-x`).toMatch(/pan-x/);
+    }
+  });
+
+  test("@webkit admin on mobile — vertical scroll inside the pane still works", async ({
     page,
   }) => {
     await openAdminPane(page);
 
-    const pane = page.getByTestId("admin-pane");
-
-    // Pre-fix: `.admin-pane` declared `touch-action: pan-y` and the
-    // CSS-spec INTERSECTION rule meant any descendant declaring
-    // `pan-x pan-y` got clamped back to `pan-y` only. iOS rejected
-    // the horizontal pan, the scrollbar appeared but the table did
-    // not move. The permission stays asserted even though nothing
-    // needs to pan any more: a tab whose content grows past the
-    // viewport again (a long vhost address, a wide error) must still
-    // be readable, and a swipe that does nothing is the bug this
-    // bucket was opened for.
-    const paneTouch = await pane.evaluate((el) => window.getComputedStyle(el).touchAction);
+    // Negative twin: relaxing `.admin-pane` from `pan-y` to `pan-x pan-y`
+    // must keep pan-y intact (a careless rewrite to `pan-x` alone would
+    // silently drop vertical scroll while passing the pan-x asserts
+    // above). Both axes must remain in the touch-action declaration.
+    const paneTouch = await page
+      .getByTestId("admin-pane")
+      .evaluate((el) => window.getComputedStyle(el).touchAction);
+    expect(paneTouch, "admin-pane touch-action must STILL allow pan-y").toMatch(/pan-y/);
     expect(paneTouch, "admin-pane touch-action must allow pan-x").toMatch(/pan-x/);
-
-    for (const tab of ADMIN_TABLE_TABS) {
-      await page.getByTestId(`admin-tab-${tab}`).tap();
-      const panel = page.locator(`#admin-tab-${tab}`);
-      await expect(panel).toBeVisible({ timeout: 5_000 });
-      const panelStyle = await panel.evaluate((el) => {
-        const cs = window.getComputedStyle(el);
-        return {
-          touchAction: cs.touchAction,
-          overflowX: cs.overflowX,
-          scrollW: el.scrollWidth,
-          clientW: el.clientWidth,
-        };
-      });
-      expect(
-        panelStyle.touchAction,
-        `admin-tab-panel(${tab}) touch-action must allow pan-x`,
-      ).toMatch(/pan-x/);
-      expect(
-        panelStyle.overflowX,
-        `admin-tab-panel(${tab}) overflow-x must be auto/scroll so overflow scrolls the panel, not the page`,
-      ).toMatch(/auto|scroll/);
-      // #1074 — the inverted twin. Networks is the tab with rows in the
-      // baseline seed, so it is the one where "nothing is wider than
-      // the panel" is a claim about real content rather than about an
-      // empty tab.
-      if (tab === DETERMINISTIC_POPULATED_TAB) {
-        expect(
-          panelStyle.scrollW,
-          `admin-tab-panel(${tab}) must not be wider than its panel on a phone`,
-        ).toBeLessThanOrEqual(panelStyle.clientW);
-      }
-    }
-  });
-
-  test("@webkit admin on mobile — the populated tab has nothing to pan to", async ({ page }) => {
-    await openAdminPane(page);
-
-    await page.getByTestId(`admin-tab-${DETERMINISTIC_POPULATED_TAB}`).tap();
-    const panel = page.locator(`#admin-tab-${DETERMINISTIC_POPULATED_TAB}`);
-    await expect(panel).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByTestId("admin-networks-table")).toBeVisible({ timeout: 10_000 });
-
-    // The behavioural twin of the width assertion above, driven through
-    // the same `el.scrollLeft` channel WebKit's pan handler mutates.
-    // Pre-#1074 this asked for scrollLeft=100 and demanded it stick;
-    // now the demand is that the browser CLAMP it back to 0, because
-    // there is no overflow to travel into. A tab that quietly grows
-    // wide again fails here, not only in the computed-width check.
-    const before = await panel.evaluate((el) => el.scrollLeft);
-    expect(before, "panel starts at scrollLeft=0").toBe(0);
-    const after = await panel.evaluate((el) => {
-      el.scrollLeft = 100;
-      return el.scrollLeft;
-    });
-    expect(after, "no admin tab may have horizontal content to scroll into").toBe(0);
   });
 
   test("@webkit admin on mobile — opening a row's detail does not move the row", async ({
@@ -210,7 +286,7 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
   }) => {
     await openAdminPane(page);
 
-    await page.getByTestId(`admin-tab-${DETERMINISTIC_POPULATED_TAB}`).tap();
+    await page.getByTestId("admin-tab-networks").tap();
     await expect(page.getByTestId("admin-networks-table")).toBeVisible({ timeout: 10_000 });
 
     const expander = page.locator("[data-testid^='admin-network-expand-']").first();
@@ -233,21 +309,5 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
       Math.abs((after?.y ?? 0) - (before?.y ?? 0)),
       "the row an operator tapped must not move when its detail opens",
     ).toBeLessThanOrEqual(1);
-  });
-
-  test("@webkit admin on mobile — vertical scroll inside the pane still works", async ({
-    page,
-  }) => {
-    await openAdminPane(page);
-
-    // Negative twin: relaxing `.admin-pane` from `pan-y` to `pan-x pan-y`
-    // must keep pan-y intact (a careless rewrite to `pan-x` alone would
-    // silently drop vertical scroll while passing the pan-x asserts
-    // above). Both axes must remain in the touch-action declaration.
-    const paneTouch = await page
-      .getByTestId("admin-pane")
-      .evaluate((el) => window.getComputedStyle(el).touchAction);
-    expect(paneTouch, "admin-pane touch-action must STILL allow pan-y").toMatch(/pan-y/);
-    expect(paneTouch, "admin-pane touch-action must allow pan-x").toMatch(/pan-x/);
   });
 });
