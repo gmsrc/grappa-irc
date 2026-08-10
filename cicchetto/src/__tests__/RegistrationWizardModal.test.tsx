@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // #349 — RegistrationWizardModal reactive regression guard.
@@ -15,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // over-counts if the loop ever comes back.
 //
 // Boundaries mocked: the wire send (`sendBodyLines` — the spy under test),
-// the reactive stores it reads (networks / umodes / scrollback), the
+// the reactive stores it reads (networks / identity / scrollback), the
 // overlay lock, and MircBody (the NOTICE renderer). registrationTemplates
 // and the registrationWizard store stay REAL — the send body + step machine
 // are exactly what we're guarding.
@@ -23,7 +24,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sendBodyLinesMock = vi.fn<
   (slug: string, target: string, body: string, notice: boolean) => Promise<void>
 >(() => Promise.resolve());
-const umodesForNetworkMock = vi.fn<(id: number) => string[]>(() => []);
+// Reactive on purpose: the step-6 terminator is a `createMemo`, so a plain
+// `mockReturnValue` would change the answer without ever waking the memo and
+// the guard below could not distinguish "reads the wrong source" from "is not
+// reactive at all".
+const [identifiedSignal, setIdentifiedSignal] = createSignal(false);
+const identifiedForNetworkMock = vi.fn<(id: number) => boolean>(() => identifiedSignal());
 
 vi.mock("../lib/compose", () => ({
   sendBodyLines: (slug: string, target: string, body: string, notice: boolean) =>
@@ -31,14 +37,19 @@ vi.mock("../lib/compose", () => ({
 }));
 
 // networkBySlug feeds both flavorForSlug (real registrationTemplates) and
-// the modal's ownNick; networkIdBySlug feeds the +r umode lookup.
+// the modal's ownNick; networkIdBySlug feeds the identity lookup.
 vi.mock("../lib/networks", () => ({
   networkBySlug: (slug: string) => ({ slug, nick: "wiz-reg-nick", services_flavor: "azzurra" }),
   networkIdBySlug: () => 7,
 }));
 
-vi.mock("../lib/umodes", () => ({
-  umodesForNetwork: (id: number) => umodesForNetworkMock(id),
+// #388 — the step-6 terminator reads the server's NORMALIZED identity
+// verdict. This mock used to stand in for `umodesForNetwork`, the
+// bahamut-only `+r` spelling #388 exists to abolish: pinning the test to
+// that module is what let the modal keep reading a mode letter while the
+// rest of the migration moved on, with the whole unit suite green.
+vi.mock("../lib/identity", () => ({
+  identifiedForNetwork: (id: number) => identifiedForNetworkMock(id),
 }));
 
 // Empty $server scrollback — the NOTICE mirror stays in its waiting state
@@ -64,7 +75,7 @@ const REG_PASSWORD = "wizregpw1";
 describe("RegistrationWizardModal", () => {
   beforeEach(() => {
     sendBodyLinesMock.mockClear();
-    umodesForNetworkMock.mockReturnValue([]);
+    setIdentifiedSignal(false);
   });
 
   afterEach(() => {
@@ -107,5 +118,48 @@ describe("RegistrationWizardModal", () => {
     fireEvent.click(screen.getByTestId("registration-wizard-next"));
     await waitFor(() => expect(dialog).toHaveAttribute("data-step", "5"));
     expect(sendBodyLinesMock).toHaveBeenCalledTimes(1);
+  });
+
+  // #388 — step 6 completes on the server's normalized identity VERDICT,
+  // with no umode anywhere in the stimulus.
+  //
+  // This is the arm that was missing, and its absence is why the migration
+  // shipped half-done: the suite drove the wizard to step 5 and stopped, so
+  // the terminator had no coverage at all while a mock of `umodesForNetwork`
+  // sat in the file looking like it did.
+  //
+  // Flavour-agnosticism is the whole point of #388. On atheme there is no
+  // registered umode to emit, so a terminator spelled `+r` can never fire
+  // there — and this test cannot pass unless the modal reads the verdict.
+  it("completes step 6 on the identity verdict alone (no umode in the stimulus)", async () => {
+    render(() => <RegistrationWizardModal />);
+    openRegistrationWizard("azzurra-reg");
+
+    const dialog = await screen.findByTestId("registration-wizard");
+    fireEvent.click(screen.getByTestId("registration-wizard-next"));
+    fireEvent.input(screen.getByTestId("registration-wizard-email"), {
+      target: { value: REG_EMAIL },
+    });
+    fireEvent.click(screen.getByTestId("registration-wizard-next"));
+    fireEvent.input(screen.getByTestId("registration-wizard-password"), {
+      target: { value: REG_PASSWORD },
+    });
+    fireEvent.click(screen.getByTestId("registration-wizard-next"));
+    await waitFor(() => expect(dialog).toHaveAttribute("data-step", "4"));
+    fireEvent.click(screen.getByTestId("registration-wizard-next"));
+    await waitFor(() => expect(dialog).toHaveAttribute("data-step", "5"));
+    fireEvent.input(screen.getByTestId("registration-wizard-code"), {
+      target: { value: "123456" },
+    });
+    fireEvent.click(screen.getByTestId("registration-wizard-next"));
+    await waitFor(() => expect(dialog).toHaveAttribute("data-step", "6"));
+
+    // Pre-state: the celebration is NOT already on screen, so the assertion
+    // below witnesses the flip rather than a banner that was always there.
+    expect(screen.queryByTestId("registration-wizard-success")).toBeNull();
+
+    setIdentifiedSignal(true);
+
+    await waitFor(() => expect(screen.queryByTestId("registration-wizard-success")).not.toBeNull());
   });
 });

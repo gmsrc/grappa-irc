@@ -12,6 +12,7 @@ import {
 } from "solid-js";
 import { sendBodyLines } from "./lib/compose";
 import { friendlyError } from "./lib/friendlyError";
+import { identifiedForNetwork } from "./lib/identity";
 import { networkBySlug, networkIdBySlug } from "./lib/networks";
 import { nickEquals } from "./lib/nickEquals";
 import { createOverlayLock } from "./lib/overlayScrollLock";
@@ -30,13 +31,12 @@ import {
   wizardNext,
 } from "./lib/registrationWizard";
 import { serviceMirrorRows } from "./lib/serviceModal";
-import { umodesForNetwork } from "./lib/umodes";
 import { MircBody } from "./MircText";
 
 // #349 — guided NickServ registration wizard. Launched from the Home
 // pane's ConnectedRow ("📝 Register nick"), one per network, gated on a
-// registerable services_flavor AND no live +r (see HomePane + the launch
-// button's Show guard).
+// registerable services_flavor AND not already identified (see HomePane +
+// the launch button's Show guard).
 //
 // Six steps (see registrationWizard.ts). The wizard mirrors the proven
 // ServiceModal shell (backdrop scrim + role=dialog + createOverlayLock +
@@ -49,9 +49,10 @@ import { MircBody } from "./MircText";
 //   * Step 4 (REGISTER) has no structural terminator (register-accepted ≠
 //     +r), so it is USER-advanced with a bounded timeout guard — never an
 //     auto-detected success/fail.
-//   * Step 6 (verify) auto-completes ONLY on the server-pushed +r umode
-//     flip (`umodesForNetwork(id).includes("r")`) — the same signal that
-//     reactively hides the launch button. No optimistic success.
+//   * Step 6 (verify) auto-completes ONLY on the server's normalized
+//     services-identity verdict (`identifiedForNetwork(id)`, #388) — the
+//     same signal that reactively hides the launch button. No optimistic
+//     success.
 //
 // SECURITY: email + password are held in the store for the modal lifetime
 // only and dropped on close. The REGISTER/verify sends go wire-only (the
@@ -170,15 +171,22 @@ const RegistrationWizardModal: Component = () => {
           }),
         );
 
-        // Step-6 auto-complete: the ONLY success terminator is the server
-        // +r umode flip (no NickServ text parse). Memoized (same reason as
-        // currentStep — `on` doesn't value-dedupe) so the effect fires only
-        // on a real +r change; when it flips false→true, celebrate +
-        // auto-close (the launch button is already reactively hidden by the
-        // same signal).
+        // Step-6 auto-complete: the ONLY success terminator is the server's
+        // normalized identity verdict (no NickServ text parse). Memoized
+        // (same reason as currentStep — `on` doesn't value-dedupe) so the
+        // effect fires only on a real change; when it flips false→true,
+        // celebrate + auto-close (the launch button is already reactively
+        // hidden by the same signal).
+        //
+        // #388 — this read used to be `umodesForNetwork(id).includes("r")`.
+        // That is bahamut's spelling, not a portable one: atheme emits no
+        // registered umode at all, so the terminator could never fire there,
+        // and on OFTC lowercase `r` is an oper notice mode that would have
+        // celebrated a registration that never happened. Which letter (if
+        // any) means identity is the SERVER's judgement — cic mirrors it.
         const registeredNow = createMemo(() => {
           const id = networkIdBySlug(st().networkSlug);
-          return id !== undefined && umodesForNetwork(id).includes("r");
+          return id !== undefined && identifiedForNetwork(id);
         });
         createEffect(
           on(registeredNow, (isReg) => {
