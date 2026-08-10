@@ -448,8 +448,31 @@ defmodule Grappa.IRC.AuthFSMTest do
       assert {:cont, ^state, sends} = AuthFSM.step(state, msg)
       [line] = send_lines(sends)
       "AUTHENTICATE " <> b64 = line
-      # PLAIN: \0authzid\0authcid\0password — authzid=authcid=sasl_user
-      assert Base.decode64!(b64) == <<0, "vjt", 0, "vjt", 0, "swordfish">>
+      # PLAIN: \0authzid\0authcid\0password — authzid empty (GH #1169)
+      assert Base.decode64!(b64) == <<0, "vjt", 0, "swordfish">>
+    end
+
+    # GH #1169. RFC 4616 §2 fixes the payload at `[authzid] NUL authcid
+    # NUL passwd` — exactly two separators, three fields. The encoder used
+    # to emit three separators (`\0 u \0 u \0 pw`), so an upstream that
+    # splits on the first two NULs read authzid="", authcid=u and a passwd
+    # of `u\0pw`: the wrong password, answered by atheme with an opaque
+    # 904 ERR_SASLFAIL that looks exactly like a bad credential.
+    #
+    # This asserts the field STRUCTURE rather than a byte string: the
+    # sibling test above pins the exact bytes and would also fail on a
+    # fixture rename, whereas this one can only fail for the reason it
+    # names — a field count other than three, or a non-empty authzid.
+    test "SASL PLAIN payload carries exactly [empty authzid, authcid, passwd] (#1169)",
+         %{state: state} do
+      msg = %Message{command: :authenticate, params: ["+"]}
+
+      assert {:cont, _, sends} = AuthFSM.step(state, msg)
+      [line] = send_lines(sends)
+      "AUTHENTICATE " <> b64 = line
+
+      assert :binary.split(Base.decode64!(b64), <<0>>, [:global]) ==
+               ["", state.sasl_user, state.password]
     end
 
     test "903 SASL ok -> CAP END + phase :pre_register + caps_buffer cleared",
@@ -911,7 +934,7 @@ defmodule Grappa.IRC.AuthFSMTest do
       assert {:cont, ^pending, sends} = AuthFSM.step(pending, msg)
       [line] = send_lines(sends)
       "AUTHENTICATE " <> b64 = line
-      assert Base.decode64!(b64) == <<0, "vjt", 0, "vjt", 0, "swordfish">>
+      assert Base.decode64!(b64) == <<0, "vjt", 0, "swordfish">>
     end
   end
 end

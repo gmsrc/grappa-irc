@@ -1048,8 +1048,8 @@ defmodule Grappa.IRC.ClientTest do
       payload_line = Enum.at(lines, auth_payload)
       "AUTHENTICATE " <> b64 = String.trim_trailing(payload_line, "\r\n")
       decoded = Base.decode64!(b64)
-      # PLAIN: \0authzid\0authcid\0password — we use authzid=authcid=sasl_user
-      assert decoded == <<0, "vjt", 0, "vjt", 0, "swordfish">>
+      # PLAIN: \0authzid\0authcid\0password — authzid empty (GH #1169)
+      assert decoded == <<0, "vjt", 0, "swordfish">>
     end
 
     test "sasl-failed: 904 from server crashes the client (let it crash)" do

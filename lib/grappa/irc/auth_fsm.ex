@@ -684,10 +684,22 @@ defmodule Grappa.IRC.AuthFSM do
     %{state | phase: new_phase, caps_buffer: []}
   end
 
-  # SASL PLAIN payload is `\0<authzid>\0<authcid>\0<password>`. We use
-  # `sasl_user` for both authzid and authcid — they only differ when the
-  # operator wants to authenticate as one identity but appear as another,
-  # which Grappa doesn't expose in the credential schema.
+  # SASL PLAIN payload is `[authzid] NUL authcid NUL passwd` (RFC 4616 §2)
+  # — exactly two separators. The authzid is left EMPTY, which the RFC
+  # defines as "authorize as the authenticated identity": the only case
+  # Grappa can express, since the credential schema has no authzid column
+  # separate from `sasl_user`.
+  #
+  # GH #1169: this used to emit `<<0, u, 0, u, 0, pw>>` — THREE separators,
+  # four fields. An upstream splits on the first two NULs and takes the
+  # remainder as the password, so atheme (Libera.Chat and every
+  # atheme-fronted network) read `authcid=u` with a password of `u\0pw`
+  # and answered with an opaque 904 ERR_SASLFAIL indistinguishable from a
+  # wrong credential. The comment that stood here claimed the encoder put
+  # `sasl_user` in BOTH fields; it never did — that shape would have been
+  # `<<u, 0, u, 0, pw>>`, with no leading NUL. Whether atheme would also
+  # reject an explicitly-equal authzid is untested and does not matter:
+  # empty is what the RFC calls for and what every mainstream client sends.
   #
   # S29 H10: explicit `is_binary(pw)` guard so a contract violation
   # (state.password somehow nil at the AUTHENTICATE + step) crashes
@@ -719,7 +731,7 @@ defmodule Grappa.IRC.AuthFSM do
               "sasl_plain_payload: NUL byte in password (RFC 4616 forbids; reject at irc/S5 boundary)"
 
       true ->
-        Base.encode64(<<0, u::binary, 0, u::binary, 0, pw::binary>>)
+        Base.encode64(<<0, u::binary, 0, pw::binary>>)
     end
   end
 
