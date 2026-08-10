@@ -38243,3 +38243,76 @@ testnet only: that the WHOIS/301 collision the gate now closes ever bit a
 real operator — the reasoning that a 20-100 ms RTT would lose the race
 every time is inference, and the delay measured here is the ircd
 deferring the parse, not the network.
+
+---
+
+## 2026-08-11 — #348: one knob for the auto-away delay, its off switch, and everyone
+
+The grace period between "every device of this subject went hidden" and the
+upstream `AWAY` was one compile-time constant for the whole deployment
+(`Session.Server.@auto_away_debounce_ms`, 600_000 since the 2026-07-19 bump
+away from a twitchy 30s). #671 had already built the injection seam — boot →
+`:persistent_term` → the spawn boundary — so what was missing was a per-user
+value, a way to switch the behaviour off, and a way for either to reach a
+session that is already running.
+
+**One scalar, three states.** vjt ruled that the delay and the off switch are
+ONE control, so the store keeps one key: absent = no preference (the
+deployment default applies), `0` = off, N = seconds. The context speaks
+`:disabled` because a closed set deserves an atom; JSON has no atoms, so `0`
+is the sentinel on the wire, translated at exactly two places (the controller
+decoding a body, the JSON view rendering a response) and nowhere else. `0` is
+therefore NOT an accepted delay: passing it as one is a 422, because a
+zero-second debounce and "no debounce at all" would otherwise be the same
+number meaning opposite things. No migration — `user_settings` is a single
+JSON `data` map and the schema is deliberately key-agnostic.
+
+**Off means no timer, not a long one.** `arm_auto_away_debounce/1` is now the
+single arm site and refuses to arm on `:disabled`. A very large window would
+still flap the user AWAY eventually, which is the thing the switch exists to
+prevent. Switching off also cancels a timer already in flight: a switch that
+lets one last AWAY through, up to a window later, is the same surprise wearing
+a delay.
+
+**A second bridge topic, not a second channel.** A settings write announces on
+two surfaces because it has two audiences with incompatible payloads. Live
+`Session.Server` processes need a raw Elixir term, and the user topic cannot
+carry one — a non-JSON-encodable payload crashes Phoenix's fastlane during
+fan-out. So `Topic.user_settings/1` joins `Topic.ws_presence/1` as an internal
+write-edge-to-session fan-out, excluded from `parse/1`/`valid?/1` so no WS
+client can join it, while the subject's other devices get the
+`auto_away_debounce_changed` wire event on `Topic.user/1`. Both leave from the
+context, so no door can persist a value without announcing it. The subject
+label is a parameter (the `Notify.add/4` precedent) rather than a hidden
+lookup: routing is the caller's knowledge, and deriving it here would make
+every write pay for a second query.
+
+**A retune re-arms.** We never recorded when the hide happened, so the honest
+options were "restart the window now" or "ignore this until the next hide".
+vjt ruled restart: a knob that visibly does nothing until you background the
+tab again is the worse surprise.
+
+**Visitors auto-away too — the old policy was reversed.** The presence-bridge
+subscription used to be gated to `{:user, _}` subjects, reasoning that a
+visitor's disconnect is a bouncer disconnect so auto-away was moot. That is
+true of the DISCONNECT case and misses the one auto-away exists for: a device
+that BACKGROUNDS while its socket lives. A visitor who locked their phone
+stayed visibly present upstream for as long as the socket held. Storage was
+never the obstacle (`user_settings` has been subject-scoped, XOR
+user_id/visitor_id, since 2026-05-15), and vjt set the default: visitors
+resolve the same deployment default users do, overridable through their own
+settings row. Nothing in the session is visitor-specific any more.
+
+**Two numbers cic deliberately does not know.** The settings control (General:
+a preset ladder plus a custom seconds entry, both per vjt's ruling) does not
+print the deployment default on its "use site default" option, and does not
+bound the custom input with a copy of the accepted range. Both are server
+constants; a client-side copy goes stale the day one moves. An out-of-range
+value comes back as a 422 whose message names the bounds, and cic surfaces it
+verbatim. The accepted range itself is ONE constant in `Grappa.UserSettings`,
+with the type and both accessors derived from it.
+
+**Unproven here:** the e2e (`issue348-auto-away-knob.spec.ts`) is written but
+has not been run — the integration stack belonged to another worker for the
+duration of this work. Everything else is measured: the full Elixir gate and
+both cic gates are green.
