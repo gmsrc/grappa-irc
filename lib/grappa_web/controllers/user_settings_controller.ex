@@ -121,6 +121,56 @@ defmodule GrappaWeb.UserSettingsController do
   def update_upload_ttl_seconds(_, _), do: {:error, :bad_request}
 
   @doc """
+  `GET /me/settings/auto-away-debounce-seconds` — the subject's
+  auto-away grace period (#348).
+
+  `null` = no preference, so the session keeps the server-wide default;
+  `0` = auto-away is OFF for this subject; any other integer = seconds.
+  """
+  @spec show_auto_away_debounce_seconds(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  def show_auto_away_debounce_seconds(conn, _) do
+    subject = Subject.from_assigns(conn.assigns)
+
+    render(conn, :auto_away_debounce_seconds,
+      debounce: UserSettings.get_auto_away_debounce_seconds(subject)
+    )
+  end
+
+  @doc """
+  `PUT /me/settings/auto-away-debounce-seconds` — persists the subject's
+  auto-away grace period. Body: `{"auto_away_debounce_seconds": N}` with
+  `N` an integer in the accepted range, `0` to switch auto-away off, or
+  `null` to clear the preference.
+
+  Validation in `Grappa.UserSettings.put_auto_away_debounce_seconds/2`.
+  422 + `field_errors.auto_away_debounce_seconds` on rejection; a
+  non-integer, non-null body is a 400.
+  """
+  @spec update_auto_away_debounce_seconds(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t() | :db_unavailable}
+  def update_auto_away_debounce_seconds(conn, %{"auto_away_debounce_seconds" => seconds})
+      when is_integer(seconds) or is_nil(seconds) do
+    subject = Subject.from_assigns(conn.assigns)
+
+    with {:ok, _} <-
+           UserSettings.put_auto_away_debounce_seconds(subject, decode_auto_away_debounce(seconds)) do
+      render(conn, :auto_away_debounce_seconds,
+        debounce: UserSettings.get_auto_away_debounce_seconds(subject)
+      )
+    end
+  end
+
+  def update_auto_away_debounce_seconds(_, _), do: {:error, :bad_request}
+
+  # `0` is the OFF sentinel on the wire (JSON has no atoms); the context
+  # speaks `:disabled`. Every other integer travels untouched so the
+  # range verdict — including a negative one — stays the context's to
+  # give, as a 422 rather than a silent reinterpretation here.
+  @spec decode_auto_away_debounce(integer() | nil) :: UserSettings.auto_away_debounce()
+  defp decode_auto_away_debounce(0), do: :disabled
+  defp decode_auto_away_debounce(seconds), do: seconds
+
+  @doc """
   `GET /me/settings/vhost` — the subject's vhost self-service view
   (#228, #251): the allowed set, each option marked `in_pool` + `granted`,
   plus the current selection. The allowed set is mode-dependent (#596):

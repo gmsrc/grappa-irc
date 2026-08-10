@@ -361,6 +361,19 @@ defmodule GrappaWeb.Router do
     get "/me/settings/upload-ttl-seconds", UserSettingsController, :show_upload_ttl_seconds
     put "/me/settings/upload-ttl-seconds", UserSettingsController, :update_upload_ttl_seconds
 
+    # #348 — the WS-disconnect -> upstream AWAY grace period, per subject.
+    # ONE scalar carries three states: `null` = no preference (the
+    # server-wide default applies), `0` = OFF (no timer is ever armed),
+    # N = seconds. The `0` sentinel is translated to/from the context's
+    # `:disabled` atom at this boundary and nowhere else.
+    get "/me/settings/auto-away-debounce-seconds",
+        UserSettingsController,
+        :show_auto_away_debounce_seconds
+
+    put "/me/settings/auto-away-debounce-seconds",
+        UserSettingsController,
+        :update_auto_away_debounce_seconds
+
     # #228 — per-subject vhost (source-bind) self-selection. GET returns
     # the allowed set (generally-available ∪ granted) + current selection
     # + pin; PUT persists a selection authz-clamped to the allowed set.

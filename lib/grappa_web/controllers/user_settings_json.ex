@@ -22,6 +22,16 @@ defmodule GrappaWeb.UserSettingsJSON do
         }
 
   @typedoc """
+  Wire shape for the auto_away_debounce_seconds envelope (#348).
+
+  `null` = no preference (the server default applies), `0` = auto-away
+  OFF, any other integer = seconds.
+  """
+  @type auto_away_debounce_seconds_response :: %{
+          auto_away_debounce_seconds: non_neg_integer() | nil
+        }
+
+  @typedoc """
   One allowed vhost in the self-service view (#228, #251, #252).
 
   `name` is the address's reverse-DNS (cloak) string — the human label
@@ -77,6 +87,20 @@ defmodule GrappaWeb.UserSettingsJSON do
   def upload_ttl_seconds(%{seconds: seconds}) do
     %{upload_ttl_seconds: seconds}
   end
+
+  @doc """
+  Renders the `:auto_away_debounce_seconds` action — GET/PUT 200 shape (#348).
+
+  The context's `:disabled` atom becomes the `0` sentinel here, the one
+  place that translation is allowed to happen on the way out; `nil`
+  stays JSON `null` and means "no preference, use the server default".
+  """
+  @spec auto_away_debounce_seconds(%{debounce: UserSettings.auto_away_debounce()}) ::
+          auto_away_debounce_seconds_response()
+  def auto_away_debounce_seconds(%{debounce: :disabled}), do: %{auto_away_debounce_seconds: 0}
+
+  def auto_away_debounce_seconds(%{debounce: seconds}),
+    do: %{auto_away_debounce_seconds: seconds}
 
   @doc "Renders the `:vhost` action — GET/PUT 200 response shape (#228, #251)."
   @spec vhost(%{available: [vhost_option()], selection: [String.t()]}) ::
