@@ -67,11 +67,14 @@ const networksMock = vi.fn<() => unknown[]>(() => []);
 // asserts the row REUSES that path (not raw disconnectNetwork / patchNetwork).
 const confirmDisconnectNetworkMock = vi.fn<(slug: string) => void>();
 // #349 — the "Register nick" launcher's three lib boundaries: the flavor
-// resolver, the umode (+r) source, and the wizard open verb. Defaults
+// resolver, the identity source, and the wizard open verb. Defaults
 // hide the button (no flavor), so the pre-#349 row assertions are
-// unaffected. `networkIdBySlugMock` drives the +r lookup path.
+// unaffected. `networkIdBySlugMock` drives the identity lookup path.
+//
+// #388 — the identity source is the server's NORMALIZED verdict, not a
+// umode letter list. The launcher no longer knows what `+r` is.
 const flavorForSlugMock = vi.fn<(slug: string) => string | null>(() => null);
-const umodesForNetworkMock = vi.fn<(id: number) => string[]>(() => []);
+const identifiedForNetworkMock = vi.fn<(id: number) => boolean>(() => false);
 const openRegistrationWizardMock = vi.fn<(slug: string) => void>();
 const networkIdBySlugMock = vi.fn<(slug: string) => number | undefined>(() => undefined);
 // #392 — the home "open on another device" button flips the shared share-
@@ -127,7 +130,8 @@ vi.mock("../lib/networks", () => ({
   refetchUser: () => refetchUserMock(),
   refetchNetworks: () => refetchNetworksMock(),
   // #349 — the registration button resolves the network id here to look
-  // up the +r umode. Controllable so a test can exercise the +r branch.
+  // up the identity verdict. Controllable so a test can exercise the
+  // identified branch.
   networkIdBySlug: (slug: string) => networkIdBySlugMock(slug),
 }));
 // channelKey is a pure fn — use the real one (mock at boundaries, not
@@ -165,8 +169,8 @@ vi.mock("../lib/socket", () => ({
   pushRecover: (id: number) => pushRecoverMock(id),
 }));
 
-vi.mock("../lib/umodes", () => ({
-  umodesForNetwork: (id: number) => umodesForNetworkMock(id),
+vi.mock("../lib/identity", () => ({
+  identifiedForNetwork: (id: number) => identifiedForNetworkMock(id),
 }));
 
 vi.mock("../lib/selection", () => ({
@@ -206,7 +210,7 @@ describe("HomePane", () => {
     networksMock.mockReturnValue([]);
     confirmDisconnectNetworkMock.mockClear();
     flavorForSlugMock.mockReturnValue(null);
-    umodesForNetworkMock.mockReturnValue([]);
+    identifiedForNetworkMock.mockReturnValue(false);
     openRegistrationWizardMock.mockClear();
     networkIdBySlugMock.mockReturnValue(undefined);
     openShareModalMock.mockClear();
@@ -284,11 +288,11 @@ describe("HomePane", () => {
   });
 
   describe("#349 register-nick launcher", () => {
-    it("shows the button on a connected row for a registerable flavor with no +r, and opens the wizard", async () => {
+    it("shows the button on a connected row for a registerable flavor while unidentified, and opens the wizard", async () => {
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       flavorForSlugMock.mockReturnValue("azzurra");
       networkIdBySlugMock.mockReturnValue(7);
-      umodesForNetworkMock.mockReturnValue([]); // not registered yet
+      identifiedForNetworkMock.mockReturnValue(false); // not registered yet
       render(() => <HomePane />);
 
       const btn = await screen.findByTestId("home-register-nick-azzurra");
@@ -302,11 +306,11 @@ describe("HomePane", () => {
       expect(openRegistrationWizardMock).toHaveBeenCalledWith("azzurra");
     });
 
-    it("hides the button once the +r umode is set (registration complete)", () => {
+    it("hides the button once the server reports identified (registration complete)", () => {
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       flavorForSlugMock.mockReturnValue("azzurra");
       networkIdBySlugMock.mockReturnValue(7);
-      umodesForNetworkMock.mockReturnValue(["r"]); // registered → hidden
+      identifiedForNetworkMock.mockReturnValue(true); // registered → hidden
       render(() => <HomePane />);
 
       expect(screen.queryByTestId("home-register-nick-azzurra")).toBeNull();
@@ -337,11 +341,11 @@ describe("HomePane", () => {
       available_networks: [],
     });
 
-    it("shows the button for a visitor with a recoverable credential and no +r, and pushes recover", async () => {
+    it("shows the button for a visitor with a recoverable credential while unidentified, and pushes recover", async () => {
       userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
       homeDataMock.mockReturnValue(recoverableHome("azzurra", true));
       networkIdBySlugMock.mockReturnValue(7);
-      umodesForNetworkMock.mockReturnValue([]); // not identified yet
+      identifiedForNetworkMock.mockReturnValue(false); // not identified yet
       render(() => <HomePane />);
 
       const btn = await screen.findByTestId("home-recover-identity-azzurra");
@@ -354,11 +358,11 @@ describe("HomePane", () => {
       expect(pushRecoverMock).toHaveBeenCalledWith(7);
     });
 
-    it("hides the button once the +r umode is set (identified)", () => {
+    it("hides the button once the server reports identified", () => {
       userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
       homeDataMock.mockReturnValue(recoverableHome("azzurra", true));
       networkIdBySlugMock.mockReturnValue(7);
-      umodesForNetworkMock.mockReturnValue(["r"]); // identified → hidden
+      identifiedForNetworkMock.mockReturnValue(true); // identified → hidden
       render(() => <HomePane />);
 
       expect(screen.queryByTestId("home-recover-identity-azzurra")).toBeNull();
@@ -368,7 +372,7 @@ describe("HomePane", () => {
       userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
       homeDataMock.mockReturnValue(recoverableHome("azzurra", false));
       networkIdBySlugMock.mockReturnValue(7);
-      umodesForNetworkMock.mockReturnValue([]);
+      identifiedForNetworkMock.mockReturnValue(false);
       render(() => <HomePane />);
 
       expect(screen.queryByTestId("home-recover-identity-azzurra")).toBeNull();
@@ -378,7 +382,7 @@ describe("HomePane", () => {
       userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
       homeDataMock.mockReturnValue(recoverableHome("azzurra", true));
       networkIdBySlugMock.mockReturnValue(7);
-      umodesForNetworkMock.mockReturnValue([]);
+      identifiedForNetworkMock.mockReturnValue(false);
       render(() => <HomePane />);
 
       expect(screen.queryByTestId("home-recover-identity-azzurra")).toBeNull();
@@ -833,7 +837,7 @@ describe("HomePane", () => {
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       flavorForSlugMock.mockReturnValue("azzurra");
       networkIdBySlugMock.mockReturnValue(7);
-      umodesForNetworkMock.mockReturnValue([]);
+      identifiedForNetworkMock.mockReturnValue(false);
       render(() => <HomePane />);
 
       const register = await screen.findByTestId("home-register-nick-azzurra");

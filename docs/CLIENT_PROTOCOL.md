@@ -180,6 +180,29 @@ is the one member of the family that still fans out to every connection,
 because the server also emits it unsolicited at connect — gate it on your own
 consume-once request flag.
 
+**Never re-derive services identity from a mode letter (#388).** Whether
+the operator is identified to NickServ arrives as one user-topic event:
+
+```json
+{"kind": "session_identity_changed", "network_id": 3,
+ "identified": true, "account": "vjt"}
+```
+
+`identified` is the verdict and the ONLY thing to gate on; the server folds
+every flavour's evidence behind it (bahamut's `+r` umode, OFTC's `+R`,
+IRCv3 `account-notify`, numeric 330 RPL_WHOISLOGGEDIN). `account` is the
+services account name when the ircd exposes one and `null` otherwise —
+including while `identified` is `true`, which is the normal bahamut case.
+It is display data; absence of an account is not absence of identity.
+
+A client that instead reads the `umode_changed` letters and tests for `"r"`
+gets a bahamut-only answer: solanum (Libera) assigns no registered umode at
+all, so it reads permanently unidentified, and on OFTC lowercase `r` is an
+unrelated oper notice mode, so it reads identified for the wrong reason.
+The event is pushed on both the live edge and the user-topic cold snapshot,
+so a reload re-learns the verdict; the REST twin is the `registered` field
+of `GET /networks`' `connection` object.
+
 ---
 
 ## 5. Wire format

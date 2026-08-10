@@ -24,6 +24,7 @@ import { diagPush } from "./diagLog";
 import { setSeveredForFlood } from "./floodSever";
 import { refreshHighlights } from "./highlightList";
 import { patchHomeNetwork } from "./home";
+import { seedIdentity } from "./identity";
 import { appendInviteAck } from "./inviteAck";
 import { isupportEntryFromWire, seedIsupport } from "./isupport";
 import { setLinksReply } from "./linksModal";
@@ -461,6 +462,19 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       if (typeof r.network_id !== "number" || !Array.isArray(r.modes)) return null;
       if (!r.modes.every((m) => typeof m === "string")) return null;
       return { kind: "umode_changed", network_id: r.network_id, modes: r.modes as string[] };
+    }
+    case "session_identity_changed": {
+      // #388 — the NORMALIZED services-identity verdict. User-topic-only, so
+      // narrowed inline here (mirror of umode_changed). `account` is
+      // nullable and is display data only — `identified` is the verdict.
+      if (typeof r.network_id !== "number" || typeof r.identified !== "boolean") return null;
+      if (r.account !== null && typeof r.account !== "string") return null;
+      return {
+        kind: "session_identity_changed",
+        network_id: r.network_id,
+        identified: r.identified,
+        account: r.account,
+      };
     }
     case "supported_umodes_changed": {
       // #249 — per-session SUPPORTED umode set. User-topic-only, narrowed
@@ -1194,6 +1208,14 @@ moduleRoot(() => {
           // snapshot (user-topic after-join) both flow here; last-write-wins
           // idempotent.
           seedUmodes(payload.network_id, payload.modes);
+          return;
+
+        case "session_identity_changed":
+          // #388 — seed the per-network services-identity verdict the
+          // registration + recover launchers gate on. Live edge (any of the
+          // server's identity sources) + cold snapshot (user-topic
+          // after-join) both flow here; last-write-wins idempotent.
+          seedIdentity(payload.network_id, payload.identified, payload.account);
           return;
 
         case "supported_umodes_changed":

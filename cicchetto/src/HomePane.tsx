@@ -19,13 +19,13 @@ import {
   homeSessionLifetime,
   type SessionLifetimeCopy,
 } from "./lib/homeSessionCopy";
+import { identifiedForNetwork } from "./lib/identity";
 import { networkIdBySlug, refetchNetworks, refetchUser, user } from "./lib/networks";
 import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
 import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
 import { openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
 import { pushLinks, pushRecover } from "./lib/socket";
-import { umodesForNetwork } from "./lib/umodes";
 import { confirmDisconnectNetwork } from "./lib/windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
 import { windowStateByChannel } from "./lib/windowState";
@@ -311,31 +311,34 @@ const ConnectedRow: Component<{ row: HomeRow }> = (props) => {
   // #349 — the "Register nick" launcher is gated on TWO reactive signals:
   // (a) the network runs a services suite cic has a REGISTER template for
   // (registerable services_flavor, resolved from the networks store — the
-  // HomeRow itself doesn't carry it), and (b) we're NOT already registered
-  // (no live +r umode). Both are reactive, so the button auto-hides the
-  // instant registration completes (the +r flip) or on an unknown flavor —
-  // zero polling. `networkIdBySlug` can be undefined before the networks
-  // resource lands; treat that as "no umodes seeded yet" (button shows).
+  // HomeRow itself doesn't carry it), and (b) we're NOT already identified
+  // to services. Both are reactive, so the button auto-hides the instant
+  // registration completes or on an unknown flavor — zero polling.
+  // `networkIdBySlug` can be undefined before the networks resource lands;
+  // treat that as "not seeded yet" (button shows).
+  //
+  // #388 — (b) asks the server's NORMALIZED verdict instead of spelling
+  // `umodes.includes("r")` here. That spelling was bahamut-only: on Libera
+  // there is no registered umode at all, so the button never hid and the
+  // wizard could not tell registration had succeeded.
   const canRegister = () => {
     const slug = props.row.slug;
     if (!registerableFlavor(flavorForSlug(slug))) return false;
     const id = networkIdBySlug(slug);
-    const umodes = id === undefined ? [] : umodesForNetwork(id);
-    return !umodes.includes("r");
+    return id === undefined ? true : !identifiedForNetwork(id);
   };
   // #581 — the "Recover identity" launcher, sibling of canRegister(): shown
   // when (a) the credential carries a NickServ secret (`recoverable`, D2),
   // (b) this is a VISITOR session (recover is visitor-only server-side — a
   // user seeing it would only earn a `forbidden`), and (c) we're NOT already
-  // identified (no live +r umode). All reactive, so the button auto-hides the
-  // instant recovery lands the +r flip. Mirrors canRegister's undefined-id
-  // "no umodes seeded yet" tolerance (button shows).
+  // identified. All reactive, so the button auto-hides the instant recovery
+  // lands. Mirrors canRegister's undefined-id "not seeded yet" tolerance
+  // (button shows), and reads the same #388 normalized verdict.
   const canRecover = () => {
     if (!props.row.recoverable) return false;
     if (!isVisitorSubject()) return false;
     const id = networkIdBySlug(props.row.slug);
-    const umodes = id === undefined ? [] : umodesForNetwork(id);
-    return !umodes.includes("r");
+    return id === undefined ? true : !identifiedForNetwork(id);
   };
   // Fire-and-forget like onTopology: the RecoverModal opens off the SERVER's
   // first recover_progress event (cic never originates state), and the

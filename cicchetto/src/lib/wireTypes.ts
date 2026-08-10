@@ -856,6 +856,7 @@ export const SESSION_WIRE_WIRE_EVENT_KIND = [
   "own_nick_changed",
   "isupport_changed",
   "umode_changed",
+  "session_identity_changed",
   "supported_umodes_changed",
   "topic_changed",
   "channel_modes_changed",
@@ -916,6 +917,13 @@ export type SessionWireUmodeChangedPayload = {
   kind: "umode_changed";
   network_id: number;
   modes: string[];
+};
+
+export type SessionWireSessionIdentityChangedPayload = {
+  kind: "session_identity_changed";
+  network_id: number;
+  identified: boolean;
+  account: string | null;
 };
 
 export type SessionWireSupportedUmodesChangedPayload = {
@@ -1275,6 +1283,7 @@ export type WireSessionEvent =
   | SessionWireOwnNickChangedPayload
   | SessionWireIsupportChangedPayload
   | SessionWireUmodeChangedPayload
+  | SessionWireSessionIdentityChangedPayload
   | SessionWireSupportedUmodesChangedPayload
   | SessionWirePresenceChangedPayload
   | SessionWirePresenceErrorPayload

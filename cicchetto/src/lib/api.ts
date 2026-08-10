@@ -978,6 +978,26 @@ export type WireUserEvent =
       modes: string[];
     }
   | {
+      // #388 — the NORMALIZED services-identity verdict. The server folds
+      // every flavour's evidence (bahamut `+r`, OFTC `+R`, IRCv3
+      // `account-notify`, numeric 330) into ONE boolean via
+      // `Grappa.Session.IdentityState`, so cic never has to know what a
+      // "registered umode" is. The registration + recover launchers gate on
+      // this; reading `umode_changed`'s letters instead was a bahamut-only
+      // spelling that never hid the button on Libera. Rides `Topic.user/1`
+      // and is cold-snapshotted on the user-topic after-join push, so a
+      // reload re-learns it. userTopic.ts dispatches into
+      // `seedIdentity(network_id, identified, account)`.
+      //
+      // `account` is the services account name when known, `null` otherwise
+      // — including while identified on an ircd that exposes no account.
+      // Display data only: `identified` is the verdict.
+      kind: "session_identity_changed";
+      network_id: number;
+      identified: boolean;
+      account: string | null;
+    }
+  | {
       // #249 — per-session SUPPORTED user-mode set, parsed from 004 RPL_MYINFO
       // server-side. The AVAILABILITY set (distinct from umode_changed's ACTIVE
       // set): the `/umode` modal drives its togglable letters from this, exactly
