@@ -342,17 +342,26 @@ export const sendBodyLines = async (
  * #1108 — what the current draft will do to the wire, or `null` when there is
  * nothing honest to say: the server has published no budget for this network
  * (`budget === null`), or the draft is a command that sends no PRIVMSG to
- * THIS window. `/msg peer …` is excluded on purpose — it addresses a
- * different target, whose budget is a different number.
+ * `target`. `/msg peer …` is excluded on purpose — it addresses a DIFFERENT
+ * target, whose budget is a different number.
+ *
+ * The `$server` window refuses plain text outright (CP13 S9, the same
+ * refusal `submit` returns below), so a draft there is previewed as nothing
+ * rather than as a split of a message that will never be sent.
  *
  * Resolved through the same `parseSlash` dispatch, line split and CTCP
  * framing the submit path runs, so the preview is a statement about the bytes
  * that will actually be POSTed rather than about the raw draft.
  */
-export const draftFramePreview = (draft: string, budget: number | null): FramePreview | null => {
+export const draftFramePreview = (
+  target: string,
+  draft: string,
+  budget: number | null,
+): FramePreview | null => {
   if (budget === null) return null;
   const cmd = parseSlash(draft, aliases());
   if (cmd.kind !== "privmsg" && cmd.kind !== "me") return null;
+  if (target === SERVER_WINDOW_NAME && cmd.kind === "privmsg") return null;
   const action = cmd.kind === "me";
   return framePreview(
     draftLines(cmd.body).map((line) => wireBody(line, action)),

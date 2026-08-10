@@ -36,6 +36,11 @@ vi.mock("../lib/isupport", () => ({
   frameBudgetBaseForNetwork: () => mockFrameBudgetBase,
 }));
 
+// #1108 — `frameBudgetForTarget` is NOT mocked: turning the published base
+// into this window's budget is the view's own job, and mocking it would
+// leave the only place the target's byte length is ever subtracted with no
+// test at all.
+
 vi.mock("../lib/channelKey", () => ({
   channelKey: (slug: string, name: string) => `${slug} ${name}`,
 }));
@@ -1700,6 +1705,19 @@ describe("ComposeBox", () => {
       mockFramePreview = { messages: 1, remainingBytes: 11 };
       render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
       expect(screen.queryByTestId("compose-frame-countdown")).toBeNull();
+    });
+
+    it("budgets against THIS window's target, counted in bytes", async () => {
+      // The wiring nothing else witnesses: base minus the target's own UTF-8
+      // length. "#caffè" is 6 characters and 7 bytes, so a view that reached
+      // for `.length` would hand the preview one byte too many — and every
+      // number the operator reads would be off by it.
+      const compose = await import("../lib/compose");
+      vi.mocked(compose.getDraft).mockReturnValue("ciao");
+      mockFrameBudgetBase = 400;
+      render(() => <ComposeBox networkSlug="freenode" channelName="#caffè" />);
+
+      expect(compose.draftFramePreview).toHaveBeenCalledWith("#caffè", "ciao", 393);
     });
 
     it("is silent about a decision it cannot make — no budget, no affordance", () => {

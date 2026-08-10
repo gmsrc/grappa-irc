@@ -1,4 +1,4 @@
-import { type Component, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { isDiagEnabled } from "./DiagFloat";
 import { channelKey } from "./lib/channelKey";
 import {
@@ -388,11 +388,14 @@ const ComposeBox: Component<Props> = (props) => {
   // parked session, or a server older than the field. Both affordances below
   // then stay dark — a warning computed from an invented budget would be a
   // number the operator cannot act on.
-  const framePreviewNow = () => {
+  // A memo, not a plain accessor: both surfaces below read it, and the work
+  // behind it is a `parseSlash` plus a full grapheme walk of the draft — per
+  // keystroke, twice, if each caller recomputed it.
+  const framePreviewNow = createMemo(() => {
     const base = frameBudgetBaseForNetwork(networkBySlug(props.networkSlug)?.id ?? null);
     const budget = frameBudgetForTarget(base, props.channelName);
-    return budget === null ? null : draftFramePreview(getDraft(key()), budget);
-  };
+    return budget === null ? null : draftFramePreview(props.channelName, getDraft(key()), budget);
+  });
 
   // The seam's third state: the draft no longer fits one frame. Copy states
   // the message COUNT and nothing else — a character tally in the seam was

@@ -288,12 +288,15 @@ describe("compose draft state", () => {
 describe("compose draftFramePreview (#1108)", () => {
   it("counts a plain draft that still fits, and the bytes left in the frame", async () => {
     const compose = await import("../lib/compose");
-    expect(compose.draftFramePreview("hello", 10)).toEqual({ messages: 1, remainingBytes: 5 });
+    expect(compose.draftFramePreview("#a", "hello", 10)).toEqual({
+      messages: 1,
+      remainingBytes: 5,
+    });
   });
 
   it("counts the frames of a draft past the budget, with no countdown", async () => {
     const compose = await import("../lib/compose");
-    expect(compose.draftFramePreview("a".repeat(25), 10)).toEqual({
+    expect(compose.draftFramePreview("#a", "a".repeat(25), 10)).toEqual({
       messages: 3,
       remainingBytes: null,
     });
@@ -302,35 +305,51 @@ describe("compose draftFramePreview (#1108)", () => {
   it("charges /me its CTCP ACTION envelope, like the send path does", async () => {
     const compose = await import("../lib/compose");
     // 15 bytes of text fit a 20-byte frame as a plain message…
-    expect(compose.draftFramePreview("a".repeat(15), 20)).toMatchObject({ messages: 1 });
+    expect(compose.draftFramePreview("#a", "a".repeat(15), 20)).toMatchObject({ messages: 1 });
     // …but `/me` puts `\x01ACTION `…`\x01` around EVERY fragment, so the same
     // text no longer does. Ten of the twenty bytes are envelope.
-    expect(compose.draftFramePreview(`/me ${"a".repeat(15)}`, 20)).toMatchObject({ messages: 2 });
+    expect(compose.draftFramePreview("#a", `/me ${"a".repeat(15)}`, 20)).toMatchObject({
+      messages: 2,
+    });
   });
 
   it("counts a pasted multi-line draft as the messages it fans out to", async () => {
     const compose = await import("../lib/compose");
     // Newline splitting is the client's half; a blank line yields no frame.
-    expect(compose.draftFramePreview("one\n\ntwo", 100)).toMatchObject({ messages: 2 });
+    expect(compose.draftFramePreview("#a", "one\n\ntwo", 100)).toMatchObject({ messages: 2 });
   });
 
   it("previews nothing for a command that is not a message", async () => {
     const compose = await import("../lib/compose");
     // `/join #x` sends no PRIVMSG, and `/msg peer …` addresses a DIFFERENT
     // target whose budget is not this window's. Neither gets a warning.
-    expect(compose.draftFramePreview("/join #x", 100)).toBeNull();
-    expect(compose.draftFramePreview("/msg gigi hello", 100)).toBeNull();
+    expect(compose.draftFramePreview("#a", "/join #x", 100)).toBeNull();
+    expect(compose.draftFramePreview("#a", "/msg gigi hello", 100)).toBeNull();
   });
 
   it("previews nothing when the server has published no budget", async () => {
     const compose = await import("../lib/compose");
-    expect(compose.draftFramePreview("hello", null)).toBeNull();
+    expect(compose.draftFramePreview("#a", "hello", null)).toBeNull();
+  });
+
+  it("previews nothing for plain text in the server window, which refuses it", async () => {
+    const compose = await import("../lib/compose");
+    // CP13 S9: $server accepts only slash-commands, and submit says so. A
+    // "will send as 3 separate messages" over a message that will never be
+    // sent — budgeted against a target that is not one — is worse than
+    // silence.
+    expect(compose.draftFramePreview("$server", "a".repeat(25), 10)).toBeNull();
+    // A slash-command there is the normal case and was never previewed.
+    expect(compose.draftFramePreview("$server", "/raw PING x", 10)).toBeNull();
   });
 
   it("previews the literal text of a //-escaped draft, not the escape", async () => {
     const compose = await import("../lib/compose");
     // `//foo` sends the five bytes `/foo`, so that is what gets counted.
-    expect(compose.draftFramePreview("//foo", 10)).toEqual({ messages: 1, remainingBytes: 6 });
+    expect(compose.draftFramePreview("#a", "//foo", 10)).toEqual({
+      messages: 1,
+      remainingBytes: 6,
+    });
   });
 });
 
