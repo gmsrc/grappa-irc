@@ -1674,7 +1674,10 @@ defmodule Grappa.IRC.Client do
   # The reason atom carries the structured data; the AuthFSM struct
   # supplies `sasl_user` for the SASL-related lines.
   defp log_stop_reason({:sasl_failed, code}, fsm) do
-    Logger.error("sasl auth failed", numeric: code, sasl_user: fsm.sasl_user)
+    Logger.error(
+      "sasl auth failed",
+      [numeric: code, sasl_user: fsm.sasl_user] ++ AuthFSM.sasl_breadcrumb()
+    )
   end
 
   defp log_stop_reason(:sasl_unavailable, fsm) do

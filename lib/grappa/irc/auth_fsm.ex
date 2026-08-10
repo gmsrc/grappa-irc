@@ -96,6 +96,13 @@ defmodule Grappa.IRC.AuthFSM do
 
   @auth_methods [:auto, :sasl, :server_pass, :nickserv_identify, :none]
 
+  # GH #1169. The only SASL mechanism this FSM drives. It names the
+  # `AUTHENTICATE <mech>` line AND the operator breadcrumb on a failure
+  # numeric, from one place: the defect that motivated the breadcrumb was
+  # a comment restating the encoder's shape and drifting from it, and a
+  # mechanism string restated at the log site would drift the same way.
+  @sasl_mechanism "PLAIN"
+
   @type auth_method :: :auto | :sasl | :server_pass | :nickserv_identify | :none
 
   @type phase ::
@@ -298,6 +305,26 @@ defmodule Grappa.IRC.AuthFSM do
 
     {final_state, Enum.reverse(reversed_sends)}
   end
+
+  @doc """
+  The SASL parameters an operator needs to read a failure numeric: the
+  mechanism driven, and the form of the authzid field the encoder sends.
+
+  GH #1169. A 904 says only "authentication failed" — a wrong password and
+  a payload the server could not parse are the same numeric. These two
+  fields separate them at a glance.
+
+  `mechanism` comes from the same attribute that writes the `AUTHENTICATE`
+  line, so it cannot name a mechanism the FSM does not drive. `authzid`
+  is a label, not a derivation: the encoder hard-codes an empty authzid
+  and has no state to read it back from, so the tie between the label and
+  the bytes is held by a test that decodes an emitted payload and checks
+  its first field really is empty. Change the encoder's authzid and that
+  test fails — which is the point, since the defect this breadcrumb was
+  written for was prose about the encoder drifting from the encoder.
+  """
+  @spec sasl_breadcrumb() :: [{:mechanism, String.t()} | {:authzid, String.t()}]
+  def sasl_breadcrumb, do: [mechanism: @sasl_mechanism, authzid: "empty"]
 
   defp maybe_send_pass({%__MODULE__{auth_method: m, password: pw} = state, sends})
        when m in [:auto, :server_pass] and is_binary(pw) and pw != "" do
@@ -561,7 +588,7 @@ defmodule Grappa.IRC.AuthFSM do
     acked = parse_cap_list(caps_blob)
 
     if "sasl" in acked do
-      {:cont, %{state | phase: :sasl_pending}, ["AUTHENTICATE PLAIN\r\n"]}
+      {:cont, %{state | phase: :sasl_pending}, ["AUTHENTICATE #{@sasl_mechanism}\r\n"]}
     else
       # SASL not ACK'd — `labeled-response` alone (or CAP END fallback).
       # Session.Server handles the `labeled-response` flag independently;

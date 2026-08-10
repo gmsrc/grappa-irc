@@ -20,7 +20,7 @@ defmodule Grappa.IRC.ClientTest do
 
   import ExUnit.CaptureLog
 
-  alias Grappa.IRC.{Client, FakeLag, Message}
+  alias Grappa.IRC.{AuthFSM, Client, FakeLag, Message}
   alias Grappa.IRCServer
 
   # Default handler: ignore everything; tests that need scripted replies
@@ -1127,6 +1127,77 @@ defmodule Grappa.IRC.ClientTest do
       lines = IRCServer.sent_lines(server)
       assert Enum.any?(lines, &(&1 == "AUTHENTICATE PLAIN\r\n"))
       assert Enum.any?(lines, &String.starts_with?(&1, "AUTHENTICATE "))
+    end
+
+    # GH #1169. A 904 is the same numeric for a wrong password and for a
+    # payload the server could not parse, so the failure line has to say
+    # which mechanism was driven and what shape of authzid went out.
+    #
+    # This asserts the FORMATTED output, not the call arguments, because
+    # the failure mode being guarded against is the formatter silently
+    # dropping a metadata key that is absent from the `config :logger,
+    # :console` allowlist — the call site and the test would both read
+    # correctly while the operator gets nothing.
+    test "a 904 failure line carries the mechanism and authzid as metadata (#1169)" do
+      {_server, port} = start_server(sasl_handler("904 grappa-test :SASL auth failed"))
+
+      Process.flag(:trap_exit, true)
+
+      log =
+        capture_log(fn ->
+          {:ok, client} =
+            Client.start_link(%{
+              host: "127.0.0.1",
+              port: port,
+              tls: false,
+              dispatch_to: self(),
+              logger_metadata: [],
+              nick: "grappa-test",
+              ident: "grappa-test",
+              realname: "grappa-test",
+              sasl_user: "vjt",
+              password: "wrong",
+              auth_method: :sasl
+            })
+
+          assert_receive {:EXIT, ^client, {:sasl_failed, 904}}, 1_000
+        end)
+
+      assert log =~ "sasl auth failed"
+      assert log =~ "numeric=904"
+      assert log =~ "mechanism=PLAIN"
+      assert log =~ "authzid=empty"
+    end
+
+    # The `authzid=empty` label is a constant: the encoder hard-codes an
+    # empty authzid and keeps no state to read it back from. This is the
+    # tie that stops the label drifting from the bytes — decode what the
+    # client actually put on the wire and check the first NUL-delimited
+    # field is empty, exactly when the breadcrumb claims it is.
+    test "the authzid breadcrumb describes the payload the client really sent (#1169)" do
+      {server, port} = start_server(sasl_handler())
+
+      _ = start_client(port, %{auth_method: :sasl, sasl_user: "vjt", password: "swordfish"})
+
+      assert {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "CAP END\r\n"), 1_000)
+
+      "AUTHENTICATE " <> b64 =
+        server
+        |> IRCServer.sent_lines()
+        |> Enum.find(fn line ->
+          String.starts_with?(line, "AUTHENTICATE ") and line != "AUTHENTICATE PLAIN\r\n"
+        end)
+        |> String.trim_trailing("\r\n")
+
+      [authzid | _] = :binary.split(Base.decode64!(b64), <<0>>, [:global])
+      breadcrumb = Keyword.fetch!(AuthFSM.sasl_breadcrumb(), :authzid)
+
+      # Correspondence, not a second copy of the constant: the field is
+      # empty exactly when the breadcrumb says "empty". Populating the
+      # encoder's authzid without relabelling fails this, and so does
+      # relabelling without touching the encoder.
+      assert (authzid == "") == (breadcrumb == "empty"),
+             "breadcrumb says authzid=#{breadcrumb} but the payload sent #{inspect(authzid)}"
     end
   end
 
