@@ -59,6 +59,30 @@ defmodule Grappa.IRC.LineSplit do
   loses data. For a silent-data-loss bug, worst-case is the only
   safe budget. See `relay_frame_overhead/1`.
 
+  ## Word boundaries and the whitespace policy (#1109)
+
+  Within the byte budget the cut prefers the LAST word boundary at or
+  before the budget; only when the chunk holds no boundary does it fall
+  back to the byte cut. A single token longer than the budget — a URL, a
+  base64 blob, a wall of CJK — therefore still splits mid-token rather
+  than looping or being dropped.
+
+  The boundary search may only ever SHRINK a fragment, never grow one, so
+  the #246 relay-safety guarantee above is preserved by construction: no
+  fragment can gain a byte from this.
+
+  **The boundary whitespace is CONSUMED** — exactly one grapheme, the one
+  the break lands on. That is what every word-wrap does, and it drops no
+  non-whitespace byte, so the fragments no longer rejoin byte-identically:
+  they TILE the body, separated by at most that one consumed grapheme.
+  Callers that need the original bytes back must keep the original.
+
+  A boundary is an ASCII space or tab, deliberately and not a broader
+  Unicode whitespace class: NO-BREAK SPACE (U+00A0) and its relatives
+  exist precisely to forbid a break, so treating them as boundaries would
+  invert their meaning. A newline cannot appear in a body — it would have
+  ended the wire frame.
+
   ## Why server-side
 
   Per CLAUDE.md "IRC is bytes; the web is UTF-8" + "one parser,
@@ -120,6 +144,11 @@ defmodule Grappa.IRC.LineSplit do
   Returns a non-empty list of UTF-8 strings, each one a valid
   PRIVMSG body for `target`. Single-fragment input returns
   `[body]` unchanged (fast path).
+
+  Fragments break on word boundaries where the chunk has one, and the
+  boundary whitespace is consumed — see the moduledoc's whitespace
+  policy. Rejoining the fragments therefore reproduces the body only up
+  to those consumed graphemes.
   """
   @spec split_privmsg_body(String.t(), String.t(), pos_integer()) :: [String.t(), ...]
   def split_privmsg_body(body, target, linelen)
@@ -175,13 +204,55 @@ defmodule Grappa.IRC.LineSplit do
         chunk_by_bytes(rest, budget, [], [g | acc], 0)
 
       current_size + g_size > budget ->
-        chunk_str = IO.iodata_to_binary(Enum.reverse(current_chunk))
-        chunk_by_bytes(rest, budget, [g], [chunk_str | acc], g_size)
+        # Budget reached. Prefer the last word boundary inside the chunk
+        # (#1109); `g` goes back on the input because the carry-over may
+        # already leave no room for it.
+        {chunk_str, carry, carry_size} = break_at_word(current_chunk)
+        chunk_by_bytes([g | rest], budget, carry, [chunk_str | acc], carry_size)
 
       true ->
         chunk_by_bytes(rest, budget, [g | current_chunk], acc, current_size + g_size)
     end
   end
+
+  # Cut `reversed_chunk` at its LAST word boundary, returning the fragment
+  # to emit plus the graphemes that carry over into the next chunk (still
+  # reversed, with their byte size). The boundary whitespace is CONSUMED.
+  #
+  # Falls back to the byte cut — emit the whole chunk, carry nothing — when
+  # there is no boundary to use, which is both the single-oversized-token
+  # case (URL, base64, CJK wall) and the case where the only whitespace is
+  # the chunk's first grapheme, since breaking there would emit an empty
+  # fragment. This can only ever SHRINK a fragment, never grow one, so the
+  # #246 relay-safety budget is untouched by construction.
+  defp break_at_word(reversed_chunk) do
+    case split_at_last_break(reversed_chunk, []) do
+      {[_ | _] = before_reversed, carry_in_order} ->
+        fragment = IO.iodata_to_binary(Enum.reverse(before_reversed))
+        {fragment, Enum.reverse(carry_in_order), IO.iodata_length(carry_in_order)}
+
+      _ ->
+        {IO.iodata_to_binary(Enum.reverse(reversed_chunk)), [], 0}
+    end
+  end
+
+  # Walks the reversed chunk head-first, so the FIRST break grapheme it
+  # meets is the LAST one in reading order. Returns the graphemes before
+  # the boundary (still reversed) and those after it (in order); `:none`
+  # when the chunk holds no boundary at all.
+  defp split_at_last_break([], _carry), do: :none
+
+  defp split_at_last_break([g | rest], carry) do
+    if break_space?(g), do: {rest, carry}, else: split_at_last_break(rest, [g | carry])
+  end
+
+  # ASCII space and tab only, deliberately. A broader Unicode class would
+  # drag in NO-BREAK SPACE (U+00A0) and friends, whose entire purpose is to
+  # forbid the break we would then take — and IRC's own word separator is
+  # the space. A newline cannot reach here: it would have ended the frame.
+  defp break_space?(" "), do: true
+  defp break_space?("\t"), do: true
+  defp break_space?(_), do: false
 
   defp flush_chunk([], acc), do: acc
 
