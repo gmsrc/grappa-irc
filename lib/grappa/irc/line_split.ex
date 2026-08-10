@@ -240,7 +240,7 @@ defmodule Grappa.IRC.LineSplit do
   # meets is the LAST one in reading order. Returns the graphemes before
   # the boundary (still reversed) and those after it (in order); `:none`
   # when the chunk holds no boundary at all.
-  defp split_at_last_break([], _carry), do: :none
+  defp split_at_last_break([], _), do: :none
 
   defp split_at_last_break([g | rest], carry) do
     if break_space?(g), do: {rest, carry}, else: split_at_last_break(rest, [g | carry])
