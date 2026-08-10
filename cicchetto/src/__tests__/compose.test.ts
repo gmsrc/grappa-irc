@@ -4291,13 +4291,18 @@ describe("compose /ame + /amsg fan-out (#431)", () => {
 // mode this describe exists to keep out.
 describe("compose /ame + /amsg pacing against the send door (#431)", () => {
   const k = channelKey("freenode", "#a");
-  const TEN = ["#c01", "#c02", "#c03", "#c04", "#c05", "#c06", "#c07", "#c08", "#c09", "#c10"];
+  // SEVEN, not ten: enough to outrun the bucket's five-token burst, few enough
+  // to stay clear of the confirm gate. At ten this arm sat exactly on the
+  // threshold and died to a mutant that moved it — a coupling in the test, not
+  // in the product, which made "the pacing broke" and "the gate moved" report
+  // as the same failure.
+  const SEVEN = ["#c01", "#c02", "#c03", "#c04", "#c05", "#c06", "#c07"];
 
   it("waits the door's own retry-after and retries the refused channel — no drop, no dup", async () => {
     vi.useFakeTimers();
     try {
       localStorage.setItem("grappa-token", "tok");
-      await setWindows(joinedOn("freenode", TEN));
+      await setWindows(joinedOn("freenode", SEVEN));
       const sb = await import("../lib/scrollback");
       const api = await import("../lib/api");
       const compose = await import("../lib/compose");
@@ -4322,7 +4327,7 @@ describe("compose /ame + /amsg pacing against the send door (#431)", () => {
 
       // Paused on the refusal: five delivered, the sixth refused, and the door
       // has NOT been hit again. A fan-out that swallowed the 429 would already
-      // be at ten here — and would have dropped #c06 on the way.
+      // be at seven here — and would have dropped #c06 on the way.
       await vi.advanceTimersByTimeAsync(0);
       expect(targetsOf(sb)).toEqual(["#c01", "#c02", "#c03", "#c04", "#c05", "#c06"]);
 
@@ -4344,11 +4349,8 @@ describe("compose /ame + /amsg pacing against the send door (#431)", () => {
         "#c06",
         "#c06",
         "#c07",
-        "#c08",
-        "#c09",
-        "#c10",
       ]);
-      expect(await done).toEqual({ ok: `/amsg: sent to ${TEN.join(", ")}` });
+      expect(await done).toEqual({ ok: `/amsg: sent to ${SEVEN.join(", ")}` });
     } finally {
       vi.useRealTimers();
     }
