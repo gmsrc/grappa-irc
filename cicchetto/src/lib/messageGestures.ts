@@ -53,6 +53,12 @@ export type MessageGestureParams = {
   // Injected (not read off the element) so the zone geometry is testable in
   // jsdom, which has no layout. Call site passes `() => window.innerWidth`.
   viewportWidth: () => number;
+  // #1156 — does this row have a reply to give? Injected the same way, and for
+  // a stricter reason: this module is DOM-only and must stay that way. It knows
+  // rows, points and zones; a message KIND in here would be a second classifier
+  // racing the one in `lib/api.ts`, and the drift would surface as the two
+  // doors of one verb disagreeing — which is the defect #1156 reports.
+  canReply: (row: HTMLElement) => boolean;
   onReply: (row: HTMLElement) => void;
   onLongPress: (row: HTMLElement, at: Point) => void;
 };
@@ -62,8 +68,11 @@ function firstTouch(e: TouchEvent): Touch | undefined {
 }
 
 export function bindMessageGestures(el: HTMLElement, params: MessageGestureParams): () => void {
+  // The touch origin, kept for BOTH gestures: the hold reads it to decide the
+  // finger has drifted, the swipe to measure the travel. Non-null ⇒ a touch is
+  // in flight on a row.
   let start: Point | null = null;
-  let row: HTMLElement | null = null; // non-null ⇒ armed
+  let row: HTMLElement | null = null; // non-null ⇒ the SWIPE is armed on it
   let claimed = false; // rightward intent proven → we own the gesture
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let held = false; // the menu opened during THIS touch
@@ -112,7 +121,12 @@ export function bindMessageGestures(el: HTMLElement, params: MessageGestureParam
     // back-swipe.
     if (touchZone(t.clientX, params.viewportWidth()) !== "center") return;
     start = { x: t.clientX, y: t.clientY };
-    row = line;
+    // #1156 — the SWIPE arms only where there is something to quote. A presence
+    // row used to arm, slide the full 72px and then deliver nothing: the slide
+    // is the promise, so the honest fix is not to make it. The HOLD is armed
+    // unconditionally below — the menu's Copy and Select… are useful on a join,
+    // and its Reply item already renders disabled-but-visible.
+    if (params.canReply(line)) row = line;
     const at = start;
     const held_ = line;
     holdTimer = setTimeout(() => {
@@ -127,7 +141,7 @@ export function bindMessageGestures(el: HTMLElement, params: MessageGestureParam
   };
 
   const onMove = (e: TouchEvent): void => {
-    if (start === null || row === null || e.touches.length !== 1) return;
+    if (start === null || e.touches.length !== 1) return;
     const t = firstTouch(e);
     if (t === undefined) return;
     const current = { x: t.clientX, y: t.clientY };
@@ -137,6 +151,10 @@ export function bindMessageGestures(el: HTMLElement, params: MessageGestureParam
     ) {
       cancelHold(); // moving — a scroll or a swipe, no longer a press
     }
+    // Everything below is the swipe, and only the swipe is gated (#1156). The
+    // hold cancellation above is NOT: a scroll that starts on an unarmed row
+    // must still drop the pending timer, or the menu opens 500ms into a flick.
+    if (row === null) return;
     if (!claimed) {
       // Claim LATE and RIGHTWARD only: a vertical-dominant drag is left whole
       // to native scroll (the #308 hard constraint), and a leftward one is left

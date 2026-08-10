@@ -43,7 +43,7 @@ import {
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
 import { getReadCursor } from "./lib/readCursor";
 import { setReadingAtTailKey } from "./lib/readingAtTail";
-import { replyToMessage } from "./lib/replyQuote";
+import { replyQuote, replyToMessage } from "./lib/replyQuote";
 import { isSettled, nextFollowMode, resolveIntent, type ScrollIntent } from "./lib/scrollAuthority";
 import {
   dismissFarBehind,
@@ -1857,6 +1857,17 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (listRef) {
       const disposeGestures = bindMessageGestures(listRef, {
         viewportWidth: () => window.innerWidth,
+        // #1156 — the binder is DOM-only, so the "has this row a reply?"
+        // question is answered HERE, where a row is already a message. The
+        // answer is `replyQuote` itself, the same expression the menu's Reply
+        // item takes its `enabled` from: anything else would be a third opinion
+        // on one verb, and the two doors disagreeing is what filed the issue.
+        // A presence row (and a presentational one, which has no message at
+        // all) therefore never arms, and keeps its native drag-to-select.
+        canReply: (row) => {
+          const msg = messageForRow(row);
+          return msg !== null && replyQuote(msg) !== null;
+        },
         onReply: (row) => {
           const msg = messageForRow(row);
           if (msg === null) return;
