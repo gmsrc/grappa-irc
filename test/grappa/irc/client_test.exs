@@ -1139,7 +1139,7 @@ defmodule Grappa.IRC.ClientTest do
     # :console` allowlist — the call site and the test would both read
     # correctly while the operator gets nothing.
     test "a 904 failure line carries the mechanism and authzid as metadata (#1169)" do
-      {_server, port} = start_server(sasl_handler("904 grappa-test :SASL auth failed"))
+      {_, port} = start_server(sasl_handler("904 grappa-test :SASL auth failed"))
 
       Process.flag(:trap_exit, true)
 
