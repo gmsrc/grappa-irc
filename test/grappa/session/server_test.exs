@@ -9541,6 +9541,73 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "retuning re-arms the timer already in flight (#348)" do
+      {server, port} = start_server_with_001()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      :ok = await_handshake(server)
+      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
+
+      device = visible_device(user)
+      :ok = background(user, device)
+
+      # Pre-state: the 600s default is armed and in flight. The retune
+      # below happens INSIDE that window and there is no second hide, so
+      # only a re-arm can produce an AWAY here.
+      assert SessionStateHelpers.auto_away_timer(SessionStateHelpers.fetch(pid)) != nil
+
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_debounce_seconds(
+          {:user, user.id},
+          Grappa.UserSettings.auto_away_debounce_seconds_min(),
+          topic_label(user)
+        )
+
+      assert {:ok, away_line} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto"), 3_000)
+
+      assert String.starts_with?(away_line, "AWAY :auto-away")
+
+      Process.exit(device, :kill)
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # #348 — visitors auto-away too. Until this, `Session.Server` only
+    # subscribed to the presence bridge for `{:user, _}` subjects, so a
+    # visitor who backgrounded their tab stayed visibly present upstream
+    # forever. The knob and its storage are subject-scoped already, so
+    # the only thing in the way was the subscribe gate.
+    test "a visitor session goes auto-away when its last device hides (#348)" do
+      {server, port} = start_server_with_001()
+      {visitor, network} = visitor_with_network(port)
+      label = Grappa.Subject.label({:visitor, visitor.id})
+
+      {:ok, _} =
+        Grappa.UserSettings.put_auto_away_debounce_seconds(
+          {:visitor, visitor.id},
+          Grappa.UserSettings.auto_away_debounce_seconds_min(),
+          label
+        )
+
+      pid = start_visitor_session_for(visitor, network)
+      :ok = await_handshake(server)
+
+      :ok = WSPresence.reset_for_test()
+      device = spawn(fn -> Process.sleep(:infinity) end)
+      :ok = WSPresence.register(label, device)
+      :ok = WSPresence.set_visibility(label, device, true)
+      :ok = WSPresence.set_visibility(label, device, false)
+
+      assert {:ok, away_line} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "AWAY :auto"), 3_000)
+
+      assert String.starts_with?(away_line, "AWAY :auto-away")
+
+      Process.exit(device, :kill)
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "set_auto_away when :away_explicit is a no-op (explicit takes precedence)" do
       {server, port} = start_server_with_001()
       {user, network, _} = setup_user_and_network(port)
