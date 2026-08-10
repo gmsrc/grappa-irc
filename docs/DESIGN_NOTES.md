@@ -36288,6 +36288,9 @@ docs gained more than that. Relocation was the ruling, not shrinkage, and
 a runbook is the right place for prose that a config file is the wrong
 place for — but the total volume of English in the repo went up, and if
 that is not the intended end state the docs want their own pass.
+
+---
+
 ### 2026-08-09 — #1051 — a z-index cannot decide a hit test across a stacking context
 
 **The report that outlived its own fix.** The floated ☰ (#985) overflows a
@@ -36384,6 +36387,9 @@ was verified against a production install. And #1042 — whether the pane's
 top-right corner is a contract for every window kind — is still open and still
 untouched: #1050 denies the rail to one window kind, #1051 lets a card cover
 the ☰, and neither settles the question.
+
+---
+
 ## 2026-08-10 — #1163: the bind door never learned the sequence every other spawn surface knows
 
 `POST /admin/credentials` wrote the credential, returned `201`, and stopped.
@@ -36449,6 +36455,9 @@ the HTTP door. cic renders no copy for the two new fields yet — it casts the
 response without validating, so they are inert there, and the honest signal it
 *does* now show is the row reading `parked` instead of a fictitious
 `connected`.
+
+---
+
 ## 2026-08-10 — a `VERSION`-only bump is a COLD deploy: the hot-reload walks the boot directory, not the built one
 
 #652 recorded that bumping the repo-root `VERSION` file is hot-deployable: the
