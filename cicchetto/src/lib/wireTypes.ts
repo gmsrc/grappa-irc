@@ -99,6 +99,15 @@ export type AccountsWireCredentialJson = {
   name: string;
 };
 
+export type AccountsWireClientTokenJson = {
+  handle: string;
+  label: string;
+  created_at: string;
+  last_seen_at: string;
+  ip: string | null;
+  user_agent: string | null;
+};
+
 // === Grappa.AdminEvents.Wire ===
 
 export const ADMIN_EVENTS_WIRE_EVENT_KIND = [

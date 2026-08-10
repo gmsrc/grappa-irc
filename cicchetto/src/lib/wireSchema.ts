@@ -45,6 +45,18 @@ export const S_AccountsAdminWireT = {
   },
 } as const;
 
+// Grappa.Accounts.Wire.client_token_json/0
+export const S_AccountsWireClientTokenJson = {
+  o: {
+    handle: "s",
+    label: "s",
+    created_at: "s",
+    last_seen_at: "s",
+    ip: { u: ["s", "z"] },
+    user_agent: { u: ["s", "z"] },
+  },
+} as const;
+
 // Grappa.Accounts.Wire.credential_json/0
 export const S_AccountsWireCredentialJson = { o: { id: "s", name: "s" } } as const;
 
