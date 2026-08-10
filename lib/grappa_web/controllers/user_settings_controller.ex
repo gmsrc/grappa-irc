@@ -151,9 +151,14 @@ defmodule GrappaWeb.UserSettingsController do
   def update_auto_away_debounce_seconds(conn, %{"auto_away_debounce_seconds" => seconds})
       when is_integer(seconds) or is_nil(seconds) do
     subject = Subject.from_assigns(conn.assigns)
+    subject_label = GrappaWeb.Subject.topic_label(conn.assigns.current_subject)
 
     with {:ok, _} <-
-           UserSettings.put_auto_away_debounce_seconds(subject, decode_auto_away_debounce(seconds)) do
+           UserSettings.put_auto_away_debounce_seconds(
+             subject,
+             decode_auto_away_debounce(seconds),
+             subject_label
+           ) do
       render(conn, :auto_away_debounce_seconds,
         debounce: UserSettings.get_auto_away_debounce_seconds(subject)
       )

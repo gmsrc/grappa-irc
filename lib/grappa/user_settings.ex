@@ -84,12 +84,24 @@ defmodule Grappa.UserSettings do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.IRC, Grappa.Repo, Grappa.Subject, Grappa.Visitors.Visitor],
+    deps: [
+      Grappa.Accounts,
+      Grappa.IRC,
+      Grappa.PubSub,
+      Grappa.Repo,
+      Grappa.Subject,
+      Grappa.UserSettings.Wire,
+      Grappa.Visitors.Visitor
+    ],
     exports: [Settings]
 
   import Ecto.Query
 
+  alias Grappa.PubSub.Topic
+
   alias Grappa.{Accounts.User, IRC.Identifier, Repo, Subject, UserSettings.Settings, Visitors.Visitor}
+
+  alias Grappa.UserSettings.Wire
 
   @typedoc """
   Per-conversation notification mutes (#866) — the one DENY-list in
@@ -629,7 +641,7 @@ defmodule Grappa.UserSettings do
   end
 
   @doc """
-  Sets the auto-away debounce preference for `subject`.
+  Sets the auto-away debounce preference for `subject` and announces it.
 
   Accepts `nil` (clear — back to the server default), `:disabled` (OFF —
   stored as the `0` sentinel) or an integer in
@@ -638,12 +650,24 @@ defmodule Grappa.UserSettings do
   on `:auto_away_debounce_seconds`: `0` is the OFF *sentinel*, not a
   zero-second delay a caller may ask for.
 
+  `subject_label` is the user-rooted PubSub topic root
+  (`Grappa.Subject.label/1`), taken as an argument rather than looked up
+  here for the same reason `Grappa.Notify.add/4` takes it: routing is
+  the caller's knowledge, and a hidden second query to recover it would
+  make every write pay for it.
+
+  On success the change goes out on BOTH surfaces (see
+  `broadcast_auto_away_debounce/2`) — a value nobody hears about would
+  leave live sessions waiting on the old delay until they restart.
+  Nothing is announced when the write is rejected or the DB is down.
+
   Preserves other keys in `data` (merge semantics, mirror of
   `put_upload_ttl_seconds/2`).
   """
-  @spec put_auto_away_debounce_seconds(Subject.t(), auto_away_debounce()) ::
+  @spec put_auto_away_debounce_seconds(Subject.t(), auto_away_debounce(), String.t()) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
-  def put_auto_away_debounce_seconds({_, _} = subject, value) do
+  def put_auto_away_debounce_seconds({_, _} = subject, value, subject_label)
+      when is_binary(subject_label) do
     with :ok <- validate_auto_away_debounce_seconds(value, subject),
          {:ok, settings} <- get_or_init(subject) do
       merged_data =
@@ -654,8 +678,40 @@ defmodule Grappa.UserSettings do
         end
 
       cs = Settings.changeset(settings, %{data: merged_data})
-      persist(cs)
+
+      with {:ok, saved} <- persist(cs) do
+        :ok = broadcast_auto_away_debounce(value, subject_label)
+        {:ok, saved}
+      end
     end
+  end
+
+  # Two audiences, two shapes, one write.
+  #
+  #   * the bridge topic — a raw term for the subject's live
+  #     `Session.Server` processes, which need the atom to tell OFF from
+  #     a delay and must not have to parse a wire map;
+  #   * the user topic — the JSON-encodable wire event for the subject's
+  #     other devices, so a knob turned on the phone shows up on the
+  #     laptop.
+  #
+  # A wire map on the bridge would be a lie about the audience; a raw
+  # term on the user topic would crash Phoenix's fastlane during fan-out
+  # (the CLAUDE.md PubSub invariant).
+  @spec broadcast_auto_away_debounce(auto_away_debounce(), String.t()) :: :ok
+  defp broadcast_auto_away_debounce(value, subject_label) do
+    :ok =
+      Phoenix.PubSub.broadcast(
+        Grappa.PubSub,
+        Topic.user_settings(subject_label),
+        {:auto_away_debounce_changed, value}
+      )
+
+    :ok =
+      Grappa.PubSub.broadcast_event(
+        Topic.user(subject_label),
+        Wire.auto_away_debounce_changed(value)
+      )
   end
 
   @spec decode_auto_away_debounce(term()) :: auto_away_debounce()

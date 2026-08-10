@@ -252,15 +252,20 @@ defmodule Grappa.Session do
       when is_subject(subject) and is_integer(network_id) and is_map(opts) do
     ^subject = Map.fetch!(opts, :subject)
 
-    # #671 — inject the boot-resolved auto-away debounce at the single
-    # spawn choke point (the CLAUDE.md start_link-opts pattern for a
-    # dynamically-spawned GenServer: boot reads env → persistent_term →
-    # the spawn boundary injects). `put_new` so a caller/test that already
-    # set the key (a substituted short window) wins.
+    # #671 — inject the auto-away debounce at the single spawn choke
+    # point (the CLAUDE.md start_link-opts pattern for a dynamically-
+    # spawned GenServer: boot reads env → persistent_term → the spawn
+    # boundary injects). `put_new` so a caller/test that already set the
+    # key (a substituted short window) wins.
+    #
+    # #348 — the value is now the SUBJECT's preference resolved over that
+    # boot default (and `:disabled` when they switched auto-away off), so
+    # a session starts on the window its user chose. A subject with no
+    # preference resolves to the same boot default as before.
     full_opts =
       opts
       |> Map.put(:network_id, network_id)
-      |> Map.put_new(:auto_away_debounce_ms, Server.auto_away_debounce_ms())
+      |> Map.put_new(:auto_away_debounce_ms, Server.auto_away_debounce_for(subject))
 
     DynamicSupervisor.start_child(
       Grappa.SessionSupervisor,

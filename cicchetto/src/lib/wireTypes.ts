@@ -1360,6 +1360,13 @@ export type ThemesWireT = {
   inserted_at: string;
 };
 
+// === Grappa.UserSettings.Wire ===
+
+export type UserSettingsWireAutoAwayDebounceChangedPayload = {
+  kind: "auto_away_debounce_changed";
+  auto_away_debounce_seconds: number | null;
+};
+
 // === Grappa.Vhosts.AdminWire ===
 
 export type VhostsAdminWireVhostJson = {

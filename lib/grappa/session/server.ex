@@ -539,9 +539,11 @@ defmodule Grappa.Session.Server do
           # omits it and inherits `@autojoin_defer_ms`.
           optional(:autojoin_defer_ms) => pos_integer(),
           # #671 auto-away debounce window. Normally injected by
-          # `Grappa.Session.start_session/3` from the boot-resolved default;
-          # a test / integration env may substitute a short window.
-          optional(:auto_away_debounce_ms) => non_neg_integer(),
+          # `Grappa.Session.start_session/3`, which resolves the subject's
+          # #348 preference over the boot-resolved default; a test /
+          # integration env may substitute a short window. `:disabled` is
+          # the #348 OFF state — no debounce timer is ever armed.
+          optional(:auto_away_debounce_ms) => non_neg_integer() | :disabled,
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
           # decrypted plaintext from the credential (nil when unset). Run at 001
           # before the built-in identify and before autojoin. The `$nickserv_pass`
@@ -673,8 +675,11 @@ defmodule Grappa.Session.Server do
           away_state: AwayState.t(),
           auto_away_timer: reference() | nil,
           # #671 — the auto-away debounce window (ms), injected from
-          # `start_session/3` (boot-resolved default; opts override in tests).
-          auto_away_debounce_ms: non_neg_integer(),
+          # `start_session/3` (the subject's #348 preference over the
+          # boot-resolved default; opts override in tests). `:disabled`
+          # (#348) means auto-away is off for this subject: the arm site
+          # arms nothing rather than arming a very long timer.
+          auto_away_debounce_ms: non_neg_integer() | :disabled,
           # S4.2: IRCv3 caps confirmed active by upstream CAP ACK. Keys are
           # lowercase cap names (e.g. "labeled-response"). Empty until the
           # upstream ACKs at least one cap. Caps added on ACK; never removed
@@ -966,6 +971,39 @@ defmodule Grappa.Session.Server do
   @spec auto_away_debounce_ms() :: non_neg_integer()
   def auto_away_debounce_ms do
     :persistent_term.get(@auto_away_debounce_key, @auto_away_debounce_ms)
+  end
+
+  @doc """
+  Turns a stored #348 preference into the window this session waits.
+
+  `nil` (no preference) resolves to the boot-resolved default, so a
+  subject who never touched the knob is byte-identical to pre-#348;
+  `:disabled` passes through as the OFF state the arm site refuses to
+  arm on; a seconds integer becomes milliseconds.
+
+  The single resolver for both entry points — the spawn boundary, which
+  reads the stored preference, and the live refresh, which is handed the
+  new one by the settings broadcast.
+  """
+  @spec resolve_auto_away_debounce(UserSettings.auto_away_debounce()) ::
+          non_neg_integer() | :disabled
+  def resolve_auto_away_debounce(nil), do: auto_away_debounce_ms()
+  def resolve_auto_away_debounce(:disabled), do: :disabled
+
+  def resolve_auto_away_debounce(seconds) when is_integer(seconds) and seconds > 0,
+    do: seconds * 1_000
+
+  @doc """
+  The auto-away window for `subject`: their #348 preference resolved
+  over the boot default. Read at the spawn boundary
+  (`Grappa.Session.start_session/3`) so a session starts on the value
+  the user chose, not only on the one they choose next.
+  """
+  @spec auto_away_debounce_for(Grappa.Subject.t()) :: non_neg_integer() | :disabled
+  def auto_away_debounce_for({_, _} = subject) do
+    subject
+    |> UserSettings.get_auto_away_debounce_seconds()
+    |> resolve_auto_away_debounce()
   end
 
   @doc """
@@ -1307,6 +1345,16 @@ defmodule Grappa.Session.Server do
         Phoenix.PubSub.subscribe(
           Grappa.PubSub,
           Topic.ws_presence(opts.subject_label)
+        )
+
+      # #348 — and to the settings bridge, so retuning (or switching off)
+      # the auto-away debounce takes effect on a live session instead of
+      # waiting for its next restart. Same subject gate as above: only
+      # user sessions run auto-away, so only they care.
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Topic.user_settings(opts.subject_label)
         )
     end
 
@@ -2858,8 +2906,7 @@ defmodule Grappa.Session.Server do
     # (lifecycle review HIGH S3).
     :ok = cancel_and_drain(state.auto_away_timer, :auto_away_debounce_fire)
 
-    timer = Process.send_after(self(), :auto_away_debounce_fire, state.auto_away_debounce_ms)
-    {:noreply, %{state | auto_away_timer: timer}}
+    {:noreply, arm_auto_away_debounce(%{state | auto_away_timer: nil})}
   end
 
   # S3.2 — Auto-away debounce fired. If still `:away_explicit`, skip (user
@@ -2872,6 +2919,15 @@ defmodule Grappa.Session.Server do
   def handle_info(:auto_away_debounce_fire, state) do
     next_state = set_auto_away_internal(%{state | auto_away_timer: nil})
     {:noreply, next_state}
+  end
+
+  # #348 — the subject retuned the auto-away debounce, or switched it
+  # off, from any of their devices. `Grappa.UserSettings` announces the
+  # new preference on the settings bridge topic and every live session
+  # of that subject hears it, on every network — the point being that a
+  # knob turned now applies now, not at the session's next restart.
+  def handle_info({:auto_away_debounce_changed, preference}, state) do
+    {:noreply, apply_auto_away_debounce(state, resolve_auto_away_debounce(preference))}
   end
 
   # Linked Client crashed abnormally. Record a backoff failure (so the
@@ -6341,6 +6397,40 @@ defmodule Grappa.Session.Server do
   # messages; the single-shot drain would leak one. Constant overhead
   # in the steady state (queue empty), zero correctness obligation on
   # call sites.
+  # #348 — the ONE place a debounce timer is armed. `:disabled` arms
+  # nothing: the ruling is that off means no timer exists, not that the
+  # timer is very long, and a long timer would still flap the user AWAY
+  # eventually. The caller cancels-and-drains first either way, so a
+  # timer armed before the switch cannot outlive it.
+  @spec arm_auto_away_debounce(t()) :: t()
+  defp arm_auto_away_debounce(%{auto_away_debounce_ms: :disabled} = state), do: state
+
+  defp arm_auto_away_debounce(state) do
+    timer = Process.send_after(self(), :auto_away_debounce_fire, state.auto_away_debounce_ms)
+    %{state | auto_away_timer: timer}
+  end
+
+  # #348 — adopt a new debounce window on a LIVE session.
+  #
+  # Switching off also cancels whatever is in flight: a switch that let
+  # one last timer fire, up to a full window later, would produce
+  # exactly the surprise AWAY it exists to prevent.
+  #
+  # Any other change deliberately leaves an armed timer alone, so a
+  # retune applies from the NEXT hide. Whether it should instead restart
+  # the window the session is currently inside of is #348's open
+  # question (we do not record when the hide happened, so "restart" is
+  # the only alternative we could implement honestly) — it is confined
+  # to this function so the ruling is a one-clause change.
+  @spec apply_auto_away_debounce(t(), non_neg_integer() | :disabled) :: t()
+  defp apply_auto_away_debounce(state, :disabled) do
+    :ok = cancel_and_drain(state.auto_away_timer, :auto_away_debounce_fire)
+    %{state | auto_away_debounce_ms: :disabled, auto_away_timer: nil}
+  end
+
+  defp apply_auto_away_debounce(state, debounce_ms) when is_integer(debounce_ms),
+    do: %{state | auto_away_debounce_ms: debounce_ms}
+
   @spec cancel_and_drain(reference() | nil, atom()) :: :ok
   def cancel_and_drain(nil, _), do: :ok
 

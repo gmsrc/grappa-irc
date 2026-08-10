@@ -1335,6 +1335,11 @@ export const S_ThemesWireT = {
   },
 } as const;
 
+// Grappa.UserSettings.Wire.auto_away_debounce_changed_payload/0
+export const S_UserSettingsWireAutoAwayDebounceChangedPayload = {
+  o: { kind: { l: "auto_away_debounce_changed" }, auto_away_debounce_seconds: { u: ["i", "z"] } },
+} as const;
+
 // Grappa.Vhosts.AdminWire.grant_json/0
 export const S_VhostsAdminWireGrantJson = {
   o: {

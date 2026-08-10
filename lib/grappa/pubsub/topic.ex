@@ -227,6 +227,32 @@ defmodule Grappa.PubSub.Topic do
   end
 
   @doc """
+  Builds the settings-change bridge topic (#348).
+
+  Second instance of the `ws_presence/1` shape and subscribed by the
+  same processes: an internal grappa-side fan-out from a settings write
+  to the subject's live `Grappa.Session.Server` processes, so a knob a
+  session reads (today the auto-away debounce) takes effect without a
+  session restart.
+
+  Distinct from `user/1` in the same three ways: direction (write edge →
+  session), audience (per-session subscribers, NOT browsers), and
+  payload (raw Elixir terms, where `user/1` carries only JSON-encodable
+  wire maps and would crash the WS fastlane on anything else). A
+  settings write announces on BOTH — this one for the sessions, `user/1`
+  for the subject's other devices.
+
+  Excluded from `parse/1` and `valid?/1` on purpose, like
+  `ws_presence/1`: those validate the public topic grammar enforced at
+  `GrappaWeb.GrappaChannel`'s `join/3`, and this bridge must never be
+  subscribable by an external WS client.
+  """
+  @spec user_settings(String.t()) :: t()
+  def user_settings(subject_label) when is_binary(subject_label) and subject_label != "" do
+    "grappa:user_settings:" <> subject_label
+  end
+
+  @doc """
   Decodes a topic string back into its tagged-tuple form.
 
   Returns `{:ok, parsed}` for any of the three documented shapes,
