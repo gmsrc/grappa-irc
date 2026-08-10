@@ -7,7 +7,12 @@ import { describe, expect, it } from "vitest";
 // derives identity from a umode letter, which is what the registration and
 // recover launchers used to do and why they only worked on Azzurra.
 
-import { accountForNetwork, identifiedForNetwork, identityByNetwork, seedIdentity } from "../lib/identity";
+import {
+  accountForNetwork,
+  identifiedForNetwork,
+  identityByNetwork,
+  seedIdentity,
+} from "../lib/identity";
 
 describe("identity store", () => {
   it("reads as NOT identified before any seed", () => {
