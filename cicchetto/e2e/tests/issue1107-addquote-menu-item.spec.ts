@@ -159,6 +159,11 @@ test.describe("the caret, where the overflow is real", () => {
     // cannot stand in for. The oracle's own overflow guard is what makes this
     // non-vacuous, so the margin stays at the value the desktop viewport could
     // not meet.
+    // Measured here, not assumed: clientHeight 42, scrollHeight 151 — 109px of
+    // overflow against the 40 this call demands, where the 1280px viewport
+    // managed 31 and the guard refused. The margin is ~1.5 wrapped lines at
+    // this width, so the compose box would have to grow about 1.8x wider at
+    // the same font before the fixture stopped overflowing.
     expectEndCaretVisible(await composeCaretGeometry(page), 40);
   });
 });
