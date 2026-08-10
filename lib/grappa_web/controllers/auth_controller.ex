@@ -416,28 +416,35 @@ defmodule GrappaWeb.AuthController do
       case Accounts.authenticate_client_token(name, password, ip, user_agent(conn),
              client_id: conn.assigns[:current_client_id]
            ) do
-        {:ok, {user, session}} ->
-          # #1196 — a per-client token in the `password` field. The row IS
-          # the bearer, so the answer is the token the client already
-          # holds, in the ordinary login envelope: nothing on the client
-          # side has to learn a second authentication mode, and a
-          # reconnecting client does not accrete a session row per
-          # reconnect.
-          #
-          # It does not descend the ladder below, and that is the whole
-          # point rather than a shortcut: the second factor was cleared
-          # once already, interactively, at the moment this token was
-          # issued. Asking a headless client to clear it again is the
-          # lockout #1196 exists to remove.
-          conn
-          |> put_status(:ok)
-          |> render(:login, token: session.id, subject: {:user, user})
-
-        {:error, :no_match} ->
-          with {:ok, user} <- authenticate_mode1(name, password, ip) do
-            second_factor_ladder(conn, user)
-          end
+        {:ok, {user, session}} -> client_token_login(conn, user, session)
+        {:error, :no_match} -> password_login(conn, name, password, ip)
       end
+    end
+  end
+
+  # #1196 — a per-client token was presented in the `password` field. The
+  # row IS the bearer, so the answer is the token the client already
+  # holds, in the ordinary login envelope: nothing on the client side has
+  # to learn a second authentication mode, and a reconnecting client does
+  # not accrete a session row per reconnect.
+  #
+  # It does not descend the second-factor ladder, and that is the point
+  # rather than a shortcut: the factor was cleared once already,
+  # interactively, at the moment this token was issued. Asking a headless
+  # client to clear it again is the lockout #1196 exists to remove.
+  @spec client_token_login(Plug.Conn.t(), Accounts.User.t(), Accounts.Session.t()) ::
+          Plug.Conn.t()
+  defp client_token_login(conn, user, session) do
+    conn
+    |> put_status(:ok)
+    |> render(:login, token: session.id, subject: {:user, user})
+  end
+
+  @spec password_login(Plug.Conn.t(), String.t(), String.t(), String.t() | nil) ::
+          Plug.Conn.t() | {:error, term()}
+  defp password_login(conn, name, password, ip) do
+    with {:ok, user} <- authenticate_mode1(name, password, ip) do
+      second_factor_ladder(conn, user)
     end
   end
 

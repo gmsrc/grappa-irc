@@ -52,9 +52,10 @@ defmodule GrappaWeb.RouterScopeTest do
   end
 
   defp credential_routes do
-    GrappaWeb.Router.__routes__()
-    |> Enum.filter(&credential_management?/1)
-    |> Enum.reject(&(&1.plug == @loopback_plug))
+    Enum.filter(
+      GrappaWeb.Router.__routes__(),
+      &(credential_management?(&1) and &1.plug != @loopback_plug)
+    )
   end
 
   # `:id` / `:handle` / `:network_id` only have to be routable; the scope

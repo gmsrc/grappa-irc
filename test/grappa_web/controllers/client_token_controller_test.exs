@@ -112,7 +112,7 @@ defmodule GrappaWeb.ClientTokenControllerTest do
 
   describe "visitors" do
     test "have no account to issue a token for", %{conn: conn} do
-      {_visitor, session} = visitor_and_session()
+      {_, session} = visitor_and_session()
 
       conn = conn |> recycle() |> put_bearer(session.id)
 

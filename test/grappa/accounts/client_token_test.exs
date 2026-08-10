@@ -7,9 +7,8 @@ defmodule Grappa.Accounts.ClientTokenTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.Accounts
+  alias Grappa.{Accounts, Repo}
   alias Grappa.Accounts.{Session, Wire}
-  alias Grappa.Repo
 
   @thirty_days 30 * 24 * 3600
 

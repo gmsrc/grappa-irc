@@ -35,7 +35,7 @@ defmodule GrappaWeb.AuthControllerClientTokenTest do
   defp arm_totp(user) do
     now = System.system_time(:second)
     {:ok, code} = TOTP.code_at(@rfc_secret, now)
-    {:ok, _codes} = TOTP.confirm_enrollment(user, @rfc_secret, code, now)
+    {:ok, _} = TOTP.confirm_enrollment(user, @rfc_secret, code, now)
     :ok
   end
 
