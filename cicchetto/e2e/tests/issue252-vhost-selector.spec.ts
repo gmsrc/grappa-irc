@@ -54,16 +54,36 @@ async function openVhostsTab(page: import("@playwright/test").Page): Promise<voi
 // container — 127.0.0.1 is filtered (loopback), but the container's
 // eth0 address is present. Read the candidate list from the REST index
 // so the test picks a real one rather than hard-coding an env-specific IP.
-async function firstHostCandidate(token: string): Promise<string> {
+//
+// #1157 — it must be a candidate with NO vhost row yet. The create form's
+// `<select>` now omits every already-configured address (vjt: "it must not
+// show addresses that are already configured"), because such an address can
+// only ever answer 409. `host_candidates` is the unfiltered interface list,
+// so taking `[0]` blindly would hand `selectOption` a value that is no
+// longer an option — the spec would die on a missing option instead of
+// exercising the flow. This mirrors the tab's own `availableAddresses` memo:
+// candidates minus configured.
+async function firstUnconfiguredHostCandidate(token: string): Promise<string> {
   const res = await fetch(`${GRAPPA_BASE_URL}/admin/vhosts`, {
     headers: { authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error(`GET /admin/vhosts → ${res.status}`);
-  const body = (await res.json()) as { host_candidates: string[] };
+  const body = (await res.json()) as {
+    host_candidates: string[];
+    vhosts: { address: string }[];
+  };
   if (body.host_candidates.length === 0) {
     throw new Error("no host_candidates — getifaddrs returned no egressable address");
   }
-  return body.host_candidates[0];
+  const configured = new Set(body.vhosts.map((v) => v.address));
+  const available = body.host_candidates.filter((a) => !configured.has(a));
+  if (available.length === 0) {
+    throw new Error(
+      `every host_candidate already has a vhost row (${body.host_candidates.join(", ")}) — ` +
+        `a previous spec leaked one, or the seeder now pre-configures them all`,
+    );
+  }
+  return available[0];
 }
 
 async function vhostSelectionFor(token: string): Promise<{ selection: string[] }> {
@@ -90,7 +110,7 @@ test("#252 admin curates a vhost; a user customizes it via the sub-page and it p
 }) => {
   const admin = getSeededAdmin();
   const user = specUser();
-  const candidate = await firstHostCandidate(admin.token);
+  const candidate = await firstUnconfiguredHostCandidate(admin.token);
   let vhostId: number | null = null;
 
   try {
