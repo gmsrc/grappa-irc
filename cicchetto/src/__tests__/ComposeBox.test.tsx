@@ -1707,7 +1707,9 @@ describe("ComposeBox", () => {
       // NOT guess one (the #246 reserve is not the client's to compute), so
       // both surfaces stay dark rather than warn from an invented number.
       mockFrameBudgetBase = null;
-      mockFramePreview = null;
+      // A preview that WOULD warn, so the only thing keeping the seam dark
+      // is the missing budget — not an empty preview the mock handed back.
+      mockFramePreview = { messages: 5, remainingBytes: 2 };
       render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
       expect(screen.queryByTestId("compose-frame-countdown")).toBeNull();
       expect(screen.queryByText(/separate messages/i)).toBeNull();
