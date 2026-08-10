@@ -207,6 +207,40 @@ describe("parseSlash — /part", () => {
       reason: "byebye",
     });
   });
+
+  // #1208 — the reported defect. Without a sigil test the first word of a
+  // bare reason was taken as the target, so the user got "The request was
+  // malformed." about a channel called "non" that they never typed. Every
+  // IRC client resolves this ambiguity by sigil: no sigil ⇒ it is the reason.
+  it("/part with a sigil-less first token is all reason, not a target (#1208)", () => {
+    expect(parseSlash("/part non trovo utili le bestemmie")).toEqual({
+      kind: "part",
+      channel: null,
+      reason: "non trovo utili le bestemmie",
+    });
+  });
+
+  it("/part with a single sigil-less word is a reason, not a channel (#1208)", () => {
+    expect(parseSlash("/part ciao")).toEqual({
+      kind: "part",
+      channel: null,
+      reason: "ciao",
+    });
+  });
+
+  // Unlike /join, /part must NOT auto-prepend `#` to a bare name: doing so
+  // is what created the phantom target. The three non-`#` RFC sigils still
+  // name a channel, so they keep the target arm.
+  it.each(["&local", "+modeless", "!safe"])(
+    "/part %s is a target, not a reason (#1208)",
+    (chan) => {
+      expect(parseSlash(`/part ${chan} ciao`)).toEqual({
+        kind: "part",
+        channel: chan,
+        reason: "ciao",
+      });
+    },
+  );
 });
 
 describe("parseSlash — /topic (context-aware, #23)", () => {

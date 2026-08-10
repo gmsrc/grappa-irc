@@ -410,10 +410,27 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
   },
 
   part: (_verb, rest) => {
+    // #1208 — `/part <reason>` is the common form and it MUST NOT eat its
+    // first word as a target. Pre-fix the first token was the channel
+    // unconditionally, so `/part non trovo utili le bestemmie` issued a
+    // DELETE against a channel named "non" and the operator was told "The
+    // request was malformed." about a name they never typed.
+    //
+    // The sigil resolves the ambiguity, as it does in every other IRC
+    // client: a first token matching [#&+!] is the target, anything else is
+    // the start of the reason and the target falls back to the current
+    // window (in compose.ts).
+    //
+    // Deliberately NOT symmetric with `join` above: /join auto-prepends `#`
+    // to a bare name because a JOIN has no second meaning for its first
+    // token. /part does, so the same sugar here is precisely what
+    // manufactures the phantom channel.
     if (rest === "") return { kind: "part", channel: null, reason: null };
     const sp = rest.search(/\s/);
-    if (sp === -1) return { kind: "part", channel: rest, reason: null };
-    return { kind: "part", channel: rest.slice(0, sp), reason: rest.slice(sp + 1).trim() };
+    const first = sp === -1 ? rest : rest.slice(0, sp);
+    if (!/^[#&+!]/.test(first)) return { kind: "part", channel: null, reason: rest };
+    if (sp === -1) return { kind: "part", channel: first, reason: null };
+    return { kind: "part", channel: first, reason: rest.slice(sp + 1).trim() };
   },
 
   topic: (_verb, rest) => {
