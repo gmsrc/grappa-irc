@@ -126,7 +126,13 @@ PHX_HOST=localhost \
 #   (a) GET / is 2xx            — #1161's 404 SPA (a missing bundle is a 404;
 #                                 the "not built" text rides WITH that status)
 #   (b) the body parses to a hash — a shell served 200 that boots nothing
-#   (c) the chunk it names is 2xx — a shell pointing at bytes nobody serves
+#   (c) the chunk it names arrives AS JAVASCRIPT — a shell pointing at bytes
+#       nobody serves. Status alone is blind here, MEASURED: delete
+#       cicchetto-dist/assets from the image and GET /assets/index-<hash>.js
+#       still answers 200, because Plug.Static misses and the SPA history
+#       fallback hands back the shell with content-type text/html. The
+#       browser then loads the page, fetches the module, gets HTML, and
+#       white-screens — the exact silent shape of #1161.
 say "probe 1: the SPA served at / can boot"
 body="$SMOKE_HOME/index.html"
 curl -fsS --max-time 20 -o "$body" "http://$PUBLISH/" \
@@ -142,9 +148,14 @@ hash="$(docker exec "$BOX" bin/grappa rpc \
     die "GET / returned 200 but carries no SPA bundle tag"
 }
 
-curl -fsS --max-time 20 -o /dev/null "http://$PUBLISH/assets/index-${hash}.js" \
+chunk_type="$(curl -fsS --max-time 20 -o /dev/null \
+    -w '%{content_type}' "http://$PUBLISH/assets/index-${hash}.js")" \
     || die "the shell names /assets/index-${hash}.js and the box does not serve it"
-pass "GET / serves a shell that boots index-${hash}.js"
+case "$chunk_type" in
+    *javascript*) ;;
+    *) die "/assets/index-${hash}.js came back as '${chunk_type}', not JavaScript — the shell boots nothing" ;;
+esac
+pass "GET / serves a shell that boots index-${hash}.js (${chunk_type})"
 
 # ---- probe 2: /api/config answers, and the node is the image under test ----
 #
