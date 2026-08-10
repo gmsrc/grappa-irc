@@ -12,7 +12,7 @@ import {
   submit,
   tabComplete,
 } from "./lib/compose";
-import { placeCaretAtEndInView } from "./lib/composeCaret";
+import { placeCaretAtEndInView, placeCaretInView } from "./lib/composeCaret";
 import { composePlaceholder } from "./lib/composePlaceholder";
 import { diagPush } from "./lib/diagLog";
 import { networkBySlug } from "./lib/networks";
@@ -322,8 +322,10 @@ const ComposeBox: Component<Props> = (props) => {
         const ta = e.currentTarget as HTMLTextAreaElement;
         const result = tabComplete(key(), getDraft(key()), ta.selectionEnd, true);
         if (!result) return;
+        // #1113 — same reveal as the keybinding door (Shell.cycleNickComplete):
+        // one completion engine, one caret placement.
         queueMicrotask(() => {
-          ta.setSelectionRange(result.newCursor, result.newCursor);
+          placeCaretInView(ta, result.newCursor);
         });
         break;
       }

@@ -14,8 +14,11 @@
 //
 // Scope: END-of-draft callers only. Paste (`pasteRoute.insertPastedText`) and
 // tab-complete land the caret at an arbitrary offset, where
-// `scrollTop = scrollHeight` would scroll past it — those need
-// caret-position-aware scrolling, which is a different mechanism.
+// `scrollTop = scrollHeight` would scroll past it — they take
+// `placeCaretInView` below instead. The two are kept apart on purpose: the
+// end case needs no measurement at all (the caret is on the last line, so the
+// bottom IS the answer), and paying for a mirror layout on every history
+// recall to reach the same number would be a cost with no reader.
 //
 // `queueMicrotask` is load-bearing: a Solid signal write does not reflect in
 // the textarea synchronously, so both the caret and the measurement must run
@@ -28,4 +31,107 @@ export function placeCaretAtEndInView(el: HTMLTextAreaElement): void {
     el.setSelectionRange(end, end);
     el.scrollTop = el.scrollHeight;
   });
+}
+
+// The computed properties that can move a soft wrap. Anything outside this
+// list cannot change where a line breaks, so copying it onto the mirror would
+// be noise — and the mirror deliberately does NOT copy padding or border,
+// because it is sized to the textarea's CONTENT width and measured in content
+// coordinates.
+const MIRROR_STYLE_PROPS = [
+  "fontFamily",
+  "fontSize",
+  "fontStretch",
+  "fontStyle",
+  "fontVariant",
+  "fontWeight",
+  "letterSpacing",
+  "lineHeight",
+  "overflowWrap",
+  "tabSize",
+  "textIndent",
+  "textTransform",
+  "whiteSpace",
+  "wordBreak",
+  "wordSpacing",
+] as const;
+
+// Where the caret's line starts, in the textarea's own content coordinates
+// (0 = the first line), or NaN when the element has no layout to measure —
+// jsdom, or a textarea that is not displayed. NaN rather than null so the
+// caller folds it into the one arithmetic guard it already needs.
+//
+// A textarea exposes no "where does offset N render" API, so the line is
+// measured on a throwaway mirror div carrying the same wrap-deciding styles at
+// the same content width. The REST of the draft rides after the marker so the
+// caret's own line wraps exactly as it does in the textarea; a mirror holding
+// only the text BEFORE the caret would let that line end early and could
+// report a line too high. The div lives for one synchronous layout read and
+// is removed before anything can paint it.
+function caretLineTop(el: HTMLTextAreaElement, caret: number, cs: CSSStyleDeclaration): number {
+  const contentWidth =
+    el.clientWidth - Number.parseFloat(cs.paddingLeft) - Number.parseFloat(cs.paddingRight);
+  if (!(contentWidth > 0)) return Number.NaN;
+
+  const mirror = document.createElement("div");
+  for (const prop of MIRROR_STYLE_PROPS) mirror.style[prop] = cs[prop];
+  mirror.style.position = "absolute";
+  mirror.style.top = "0";
+  mirror.style.left = "0";
+  mirror.style.width = `${contentWidth}px`;
+  mirror.style.padding = "0";
+  mirror.style.border = "0";
+  mirror.style.visibility = "hidden";
+  mirror.style.pointerEvents = "none";
+
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.append(el.value.slice(0, caret), marker, el.value.slice(caret));
+  document.body.append(mirror);
+  const top = marker.offsetTop;
+  mirror.remove();
+  return top;
+}
+
+// #1113 — "the caret is at an arbitrary offset, and visible", the ONE copy.
+//
+// Three doors move the compose caret to an offset that is not the end: paste
+// (`pasteRoute.insertPastedText`) and the two tab-complete paths (`Shell`'s
+// keybinding, `ComposeBox`'s swipe gesture). None of them could reuse
+// `placeCaretAtEndInView`: `scrollTop = scrollHeight` is right only for a
+// caret on the LAST line, and on a caret near the top it scrolls past it —
+// the wrong fix that looks like the right one, which is why #1105 scoped
+// these three out rather than guessing. The defect reached three doors
+// because "move the caret" existed in three copies, so the cure is one
+// function, not three patches.
+//
+// Reveal is MINIMAL and two-directional: a caret already inside the box does
+// not move the scroll at all, one above it scrolls up to its line, one below
+// scrolls down to it — never further. Scroll coordinates start at the padding
+// box, which is why the line's position adds `paddingTop` and the two targets
+// subtract the padding back out: revealing the first line then yields exactly
+// 0, and the last line exactly the maximum scroll.
+//
+// Unlike its end-of-draft sibling this is SYNCHRONOUS: the callers already own
+// a `queueMicrotask` (the Solid controlled value has not committed yet when
+// they run) and one of them must `focus()` inside it first, so owning the
+// microtask here would fight the caller for the ordering instead of serving
+// it. Call it after the value has committed.
+export function placeCaretInView(el: HTMLTextAreaElement, caret: number): void {
+  el.setSelectionRange(caret, caret);
+
+  const cs = window.getComputedStyle(el);
+  const top = caretLineTop(el, caret, cs);
+  const paddingTop = Number.parseFloat(cs.paddingTop);
+  const paddingBottom = Number.parseFloat(cs.paddingBottom);
+  const lineHeight = Number.parseFloat(cs.lineHeight);
+  if (Number.isNaN(top + paddingTop + paddingBottom + lineHeight)) return;
+
+  const lineTop = paddingTop + top;
+  const lineBottom = lineTop + lineHeight;
+  if (lineTop < el.scrollTop) {
+    el.scrollTop = lineTop - paddingTop;
+  } else if (lineBottom > el.scrollTop + el.clientHeight) {
+    el.scrollTop = lineBottom + paddingBottom - el.clientHeight;
+  }
 }

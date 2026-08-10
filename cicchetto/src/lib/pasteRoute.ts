@@ -1,5 +1,6 @@
 import { channelKey } from "./channelKey";
 import { getDraft, isDraining, setDraft } from "./compose";
+import { placeCaretInView } from "./composeCaret";
 import { requestConfirm } from "./confirmDialog";
 import { dropUpload } from "./dropUpload";
 import { classifyPaste, PASTE_HARD_MESSAGE_LIMIT, pastedMessageCount } from "./pasteFlood";
@@ -29,6 +30,11 @@ import { categoryOf } from "./uploadCategory";
 // off the textarea, and the operator wants to keep typing / hit Enter.
 // queueMicrotask mirrors the recall-caret precedent — run AFTER the controlled
 // value re-render commits to the DOM.
+//
+// #1113 — and REVEAL that caret. The draft may already wrap past the rows=1
+// textarea, in which case the paste point can land outside the visible box in
+// either direction, so the scroll has to follow the caret. `focus()` stays
+// first: it is what restores the selection this then overwrites.
 export function insertPastedText(
   ta: HTMLTextAreaElement,
   networkSlug: string,
@@ -44,7 +50,7 @@ export function insertPastedText(
   const caret = start + text.length;
   queueMicrotask(() => {
     ta.focus();
-    ta.setSelectionRange(caret, caret);
+    placeCaretInView(ta, caret);
   });
 }
 

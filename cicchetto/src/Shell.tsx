@@ -29,6 +29,7 @@ import { token } from "./lib/auth";
 import { channelKey } from "./lib/channelKey";
 import { getDraft, tabComplete } from "./lib/compose";
 import { appendToCompose } from "./lib/composeAppend";
+import { placeCaretInView } from "./lib/composeCaret";
 import { install, registerHandlers, uninstall } from "./lib/keybindings";
 import { loadLastFocused } from "./lib/lastFocusedChannel";
 import { mentionsBundleBySlug } from "./lib/mentionsWindow";
@@ -404,8 +405,11 @@ const Shell: Component = () => {
       // tabComplete wrote the draft via writeState (calling setDraft here
       // would null the cycle). We only place the caret. Solid signal write
       // doesn't reflect immediately — schedule on the next microtask.
+      //
+      // #1113 — and reveal it: the completion can sit on any line of a draft
+      // that wraps past the rows=1 textarea, above or below the visible box.
       queueMicrotask(() => {
-        ta.setSelectionRange(result.newCursor, result.newCursor);
+        placeCaretInView(ta, result.newCursor);
       });
     },
   });
