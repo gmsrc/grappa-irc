@@ -107,14 +107,22 @@ defmodule GrappaWeb.SpaController do
     if File.regular?(path) do
       send_file(conn, 200, path)
     else
-      # No bundle on disk (dev/CI before a cic build, or a release
-      # deployed without one). Honest 404 — never a 500. An
+      # No bundle at the resolved root (dev/CI before a cic build, a
+      # release deployed without one — or, #1161, a CIC_DIST_ROOT that
+      # names the wrong directory). Honest 404 — never a 500. An
       # nginx-fronted prod never reaches here: nginx serves the shell
       # itself.
+      #
+      # "not built" alone was true on the first case and misleading on
+      # the last: the release image ships a bundle, so its operator went
+      # hunting a build step this path does not have. Naming the variable
+      # costs nothing and points at the boot warning that carries the
+      # resolved path — which stays out of the response body, where it
+      # would only tell an anonymous client about our filesystem.
       conn
       |> put_status(:not_found)
       |> put_resp_content_type("text/plain")
-      |> text("cicchetto frontend bundle not built")
+      |> text("cicchetto frontend bundle not built, or CIC_DIST_ROOT names the wrong directory")
     end
   end
 

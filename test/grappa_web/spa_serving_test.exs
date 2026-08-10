@@ -230,5 +230,23 @@ defmodule GrappaWeb.SpaServingTest do
       conn = get(html_conn(), "/")
       assert conn.status == 404
     end
+
+    test "the 404 names the knob, so it does not read as a missing build (#1161)" do
+      original = Bundle.root()
+      tmp = Path.join(System.tmp_dir!(), "cic-absent-#{System.unique_integer([:positive])}")
+      on_exit(fn -> Bundle.boot(original) end)
+      Bundle.boot(tmp)
+
+      conn = get(html_conn(), "/")
+
+      assert conn.status == 404
+      # "not built" is true on the dev path and misleading on every other:
+      # the release image ships a bundle, and an operator whose CIC_DIST_ROOT
+      # points elsewhere goes looking for a build step that path does not have.
+      assert conn.resp_body =~ "CIC_DIST_ROOT"
+      # The resolved path stays OUT of the response. It is in the boot log,
+      # where the operator can read it and an anonymous client cannot.
+      refute conn.resp_body =~ tmp
+    end
   end
 end
