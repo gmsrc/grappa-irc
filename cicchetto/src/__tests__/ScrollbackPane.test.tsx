@@ -5956,6 +5956,41 @@ describe("ScrollbackPane", () => {
       expect(getDraft(KEY)).toBe("");
     });
 
+    // The predicate is `replyQuote(msg) !== null`, NOT a fresh `isContentKind`
+    // call: the swipe must agree with the menu's Reply item exactly, and the
+    // kinds are only the loudest reason a row has nothing to quote. #1123 —
+    // a message that was nothing but a quote of another leaves an empty body
+    // once the nesting is cut, and it is a privmsg. It promises nothing either.
+    it("a privmsg with nothing but a quote in it does not arm the swipe", () => {
+      setDraft(KEY, "");
+      composeBox = document.createElement("div");
+      composeBox.className = "compose-box";
+      composeBox.appendChild(document.createElement("textarea"));
+      document.body.appendChild(composeBox);
+      setScrollback({
+        [KEY]: [
+          {
+            id: 1,
+            network: "freenode",
+            channel: "#grappa",
+            server_time: 1_700_000_000_000,
+            kind: "privmsg",
+            sender: "alice",
+            body: "<bob> the thing I am answering<< ",
+            meta: {},
+          },
+        ],
+      });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const row = screen.getByTestId("scrollback-line");
+      expect(row.dataset.kind).toBe("privmsg"); // a CONTENT kind, and still no reply in it
+
+      const { slid } = swipeRight(row);
+
+      expect(slid).toBe(false);
+      expect(getDraft(KEY)).toBe("");
+    });
+
     it("swiping the privmsg row beside it still quotes it into the compose box", () => {
       const speechRow = renderPane()[1];
       if (speechRow === undefined) throw new Error("no privmsg row rendered");
