@@ -36909,6 +36909,9 @@ only taps do — and that the arm survives as a cross-platform net. If that is
 true, the line will never print for a long-press on device and the plan cannot
 separate anything. Not verified on device either: this is the code contradicting
 the issue text, which is a result worth recording rather than a measurement.
+
+---
+
 ## 2026-08-10 — #1107: `!addquote` fills the box and stops, and the payload carries no nick
 
 A fourth item in the scrollback's message menu, beside Copy / Reply / Select….
