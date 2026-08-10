@@ -36779,3 +36779,62 @@ keeps its row until the reaper sweeps, so a total-row canary silently became a
 function of suite execution order. Any count over a row-backed admin list must
 name the population it means, or it is reporting on someone else's cleanup
 timing and calling it a regression.
+## 2026-08-10 — #1109: word breaks, and the losslessness they cost
+
+`LineSplit` cut wherever the byte budget ran out, so a long message
+arrived fragmented mid-word. The fix prefers the LAST word boundary at or
+before the budget and keeps the byte cut as the fallback, so a token
+longer than the whole budget — a URL, a base64 blob, a wall of CJK — is
+still emitted rather than looping or being dropped.
+
+**The search only ever shrinks a fragment.** That is not a style note, it
+is what keeps #246 intact: the worst-case relayed-frame budget holds only
+if nothing can make a fragment bigger, and a boundary search that could
+grow one would silently re-open that truncation. Every arm of the new
+suite re-asserts the relayed-frame bound alongside the word assertion for
+exactly this reason.
+
+**The boundary whitespace is CONSUMED — one grapheme, the one the break
+lands on.** This is the reversible half of the change and it was a call,
+not a discovery: keeping the whitespace would have preserved
+byte-identical rejoining, at the price of a trailing space on most
+fragments. Consuming it is what word-wrap does everywhere, and it drops
+no non-whitespace byte. If that trade is ever judged wrong it moves in
+one clause.
+
+What it costs is worth writing down, because it retires a guarantee an
+earlier incident bought: `IO.iodata_to_binary(fragments) == body`, the
+byte-identical reconstruction that guarded #246, is no longer true for
+any body containing spaces. It was replaced rather than deleted. The
+suite now asserts that the fragments **tile** the body — each one is the
+next literal run, with at most a single whitespace grapheme between
+consecutive fragments, and that gap is required to BE whitespace. A lost
+letter, a duplicated run, a reorder, or a two-character gap all still
+fail; the only thing newly admitted is the policy itself. Where a fixture
+has no whitespace, the stronger byte-identical form is kept deliberately.
+
+**A boundary is an ASCII space or tab, not a Unicode whitespace class.**
+NO-BREAK SPACE (U+00A0) and its relatives exist precisely to forbid the
+break we would otherwise take there, so a broader class would invert
+their meaning. A newline cannot appear in a body — it would have ended
+the wire frame.
+
+**Why the old suite never saw the bug.** Nearly every fixture was
+whitespace-free — 800 `a`, 800 `b`, 400 pizza emoji — so it exercised
+only the fallback the change leaves alone. A splitter cutting mid-word
+passes all of them. The new arms use fixed-width words on a 9-byte
+stride that divides neither the plain budget (391) nor the CTCP one
+(382), so a byte cut provably lands inside a word rather than by luck,
+and each asserts that trap before asserting the escape. Read failing
+against the old splitter: it bisected `word0044` into `word` + `0044` in
+the plain arm and `word0043` in the CTCP arm.
+
+**The cic-side "will send as X separate messages" warning is NOT out of
+sync with this** — a point the issue's Related section assumes the other
+way round. `messageLines.ts` splits the job deliberately: newline
+splitting (operator intent) is the client's, length splitting (wire
+limit) is the server's, because only the server knows the per-target
+frame overhead. `pastedMessageCount` therefore counts lines only, and a
+single long line has always been 1 there and N on the wire. Moving the
+breaks changes N; it does not create a divergence, and there is nothing
+to synchronise here.
