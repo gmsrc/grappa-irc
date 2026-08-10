@@ -7,7 +7,13 @@ import { channelsBySlug, networks } from "./networks";
 import { notificationPrefs } from "./notificationPrefs";
 import { queryWindowsByNetwork } from "./queryWindows";
 import { scrollbackByChannel } from "./scrollback";
-import { messagesUnread, selectedChannel, setSelectedChannel } from "./selection";
+import { requestScrollToBottom } from "./scrollToBottomCommand";
+import {
+  isActiveSelection,
+  messagesUnread,
+  selectedChannel,
+  setSelectedChannel,
+} from "./selection";
 import type { MutedTargets } from "./userSettings";
 
 // GH #235 — "jump to next active window" (irssi Alt+A).
@@ -243,11 +249,47 @@ function stepActiveWindow(dir: 1 | -1): void {
   const nextIdx = (start + dir + list.length) % list.length;
   const target = list[nextIdx];
   if (!target) return;
-  setSelectedChannel({
+  const next = {
     networkSlug: target.networkSlug,
     channelName: target.channelName,
     kind: target.kind,
-  });
+  };
+  // #1178 — the cycle can resolve to the window the operator is already
+  // in: one unread window, and it is this one. That happens exactly when
+  // they are scrolled back with unread below them (the read-at-the-tail
+  // suppression in selection.ts only drops the selected window from the
+  // list once the pane is AT the tail), which is the moment they most
+  // want the jump. Handing that to `setSelectedChannel` is a
+  // non-transition it short-circuits, so the badge said "1" and nothing
+  // moved.
+  //
+  // The unread is not unreachable, it is BELOW: the jump is vertical
+  // rather than lateral. So take the #243 exit — the same
+  // `requestScrollToBottom` a re-tap on the already-active Sidebar row /
+  // BottomBar tab fires — which also advances the read cursor (#310), so
+  // the count that advertised the jump actually falls.
+  //
+  // NOT hidden and NOT disabled: there IS unread and it IS reachable, and
+  // `»` is the only jump affordance on mobile (#235). Hiding it in the
+  // one state where the operator wants it trades a lying button for an
+  // absent one, and would put `activeWindowCount()` at odds with the
+  // sidebar badges counting the same windows.
+  //
+  // NOT #693's `jumpToUnread` either: that verb is far-behind-only
+  // (`farBehindByChannel[key]` or it returns false), so in the reported
+  // state — scrolled back a few screens — it would leave the button just
+  // as dead; and in the state where it does apply, the pane already
+  // renders #693's own in-pane "N unread — jump back" affordance.
+  //
+  // The predicate is `isActiveSelection`, not a local compare: it is the
+  // exact negation of the setter's short-circuit (both route through
+  // `sameSelection`), so this arm cannot drift from the non-transition
+  // rule that makes it necessary.
+  if (isActiveSelection(next)) {
+    requestScrollToBottom();
+    return;
+  }
+  setSelectedChannel(next);
 }
 
 export const jumpToNextActiveWindow = (): void => stepActiveWindow(1);
