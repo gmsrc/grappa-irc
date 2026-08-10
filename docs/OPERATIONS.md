@@ -1129,6 +1129,23 @@ silently. `cic_dist_root` is stashed in `:persistent_term` at BEAM boot,
 so a fresh `CIC_DIST_ROOT` only takes effect after a **COLD** deploy
 (BEAM restart) — a hot cic-only deploy will keep returning 204 until then.
 
+**Since #1161 the BEAM says this at boot, before anything asks it for a
+file.** `Grappa.Cic.Bundle.boot/1` warns when the resolved root holds no
+`index.html`, naming the **expanded** path (the part a relative default
+hides), what was missing there, and the variable that moves it:
+
+```
+[warning] cic bundle root does not exist: /home/grappa/runtime/cicchetto-dist
+ — the SPA will 404 on every document request. Set CIC_DIST_ROOT to the
+ directory holding the built SPA (the one with index.html).
+```
+
+So the first grep on a frontend-404 report is the startup log, not the
+deploy wrapper's exit code. It warns and never raises — a bundle-less boot
+is legitimate between a release and the first `cicchetto-build` — and it
+never falls back to another path: a root that misses stays missed, so a
+typo cannot quietly serve a different bundle than the one configured.
+
 ### m42 (FreeBSD bastille jail) — host-side wrapper
 
 The `infra/freebsd/jail_*.sh` scripts run INSIDE the jail as root

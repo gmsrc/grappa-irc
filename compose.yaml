@@ -78,6 +78,14 @@ services:
       UPLOADS_STORAGE_ROOT: ${UPLOADS_STORAGE_ROOT:-/app/runtime/uploads}
       # The built SPA dist the BEAM self-serves (Plug.Static + history
       # fallback). Same dir the cicchetto-build service writes (#399).
+      #
+      # This default belongs to THIS stack, which builds the bundle here.
+      # Do not point this file at ghcr.io/vjt/grappa: that image bakes the
+      # SPA at /app/cicchetto-dist and sets CIC_DIST_ROOT to match, but a
+      # compose `environment:` key overrides an image ENV — so the line
+      # below would redirect the root to a directory the image does not
+      # have and 404 the frontend on a container that is otherwise healthy
+      # (#1161). Use compose.release.yaml for the published image.
       CIC_DIST_ROOT: ${CIC_DIST_ROOT:-/app/runtime/cicchetto-dist}
       # Literal defaults, NOT the empty-default form used above: an empty
       # string reaches String.to_integer/1 and crashes at boot (#369 X1).
