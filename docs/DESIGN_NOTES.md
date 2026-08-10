@@ -38893,6 +38893,31 @@ still has: after a page reload nothing re-seeded the letters, so cic
 re-showed the "Register nick" and "Recover identity" buttons on an
 already-identified session.
 
+**The migration shipped half-done first, and a mock is why nobody saw it.**
+The launchers in `HomePane` moved to `identifiedForNetwork/1` while
+`RegistrationWizardModal`'s step-6 terminator kept reading
+`umodesForNetwork(id).includes("r")` — in the very commit titled "let the
+wizard read the verdict instead of a mode letter", whose diff does not
+contain the modal. The e2e caught it, but only by accident and only on the
+launcher: its socket mock fabricated `umode_changed` alone, so the old store
+was fed and the new one was not, and the arm asserting the button asserted
+the half that had moved.
+
+The unit suite could not have caught it at all. `RegistrationWizardModal`'s
+test mocked `umodesForNetwork` — the exact module the migration existed to
+remove — and drove the wizard only as far as step 5, so the terminator had
+no coverage while a mock sat in the file looking like it did. **A mock
+pinned to the spelling you are replacing cannot witness the replacement**,
+and 4997 green unit tests said nothing. The rule this leaves: when a
+migration removes a source, the tests that MOCK that source are part of the
+migration, not bystanders.
+
+Both stimulus sites are now faithful to what the server actually sends —
+one identify produces `umode_changed` AND `session_identity_changed`, so
+the mocks send both — and each suite gained an arm whose stimulus is the
+verdict ALONE, no letter anywhere. That arm is the atheme shape, and it is
+what fails if either reader regresses to a mode letter.
+
 **What was NOT claimed.** Whether OFTC's services actually set `+R` at the
 identify instant is taken from the `UMODE_NICKSERVREG` declaration comment,
 not observed on the wire — grappa has never connected to OFTC. The gate
