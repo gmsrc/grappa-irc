@@ -707,7 +707,7 @@ const AdminNetworksTab: Component = () => {
                   {(net) => (
                     <>
                       <tr class="admin-networks-row" data-testid={`admin-network-row-${net.slug}`}>
-                        <td>
+                        <td class="adm-cell-title">
                           <button
                             type="button"
                             class="admin-network-expand-btn"
@@ -721,16 +721,23 @@ const AdminNetworksTab: Component = () => {
                           </button>
                         </td>
                         <Show when={!isMobile()}>
-                          <td>{liveCount(net, "visitors")}</td>
-                          <td>{capEditor(net, "max_concurrent_visitor_sessions")}</td>
-                          <td>{liveCount(net, "users")}</td>
-                          <td>{capEditor(net, "max_concurrent_user_sessions")}</td>
-                          <td>{capEditor(net, "max_per_ip")}</td>
-                          <td>
+                          <td data-label="visitors">{liveCount(net, "visitors")}</td>
+                          <td data-label="max visitors">
+                            {capEditor(net, "max_concurrent_visitor_sessions")}
+                          </td>
+                          <td data-label="users">{liveCount(net, "users")}</td>
+                          <td data-label="max users">
+                            {capEditor(net, "max_concurrent_user_sessions")}
+                          </td>
+                          <td data-label="max per ip">{capEditor(net, "max_per_ip")}</td>
+                          <td data-label="circuit">
                             <CircuitBadge net={net} />
                           </td>
                         </Show>
-                        <td class="admin-networks-actions adm-table-sticky-actions">
+                        <td
+                          class="admin-networks-actions adm-table-sticky-actions"
+                          data-label="actions"
+                        >
                           <button
                             type="button"
                             class="adm-btn adm-btn--ok"

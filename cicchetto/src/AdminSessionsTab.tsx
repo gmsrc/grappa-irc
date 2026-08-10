@@ -228,14 +228,23 @@ const AdminSessionsTab: Component = () => {
                       class="admin-sessions-summary-row"
                       data-testid={`admin-sessions-summary-row-${net.slug}`}
                     >
-                      <td>{net.slug}</td>
-                      <td data-testid={`admin-sessions-summary-visitors-${net.slug}`}>
+                      <td class="adm-cell-title">{net.slug}</td>
+                      <td
+                        data-label="visitors"
+                        data-testid={`admin-sessions-summary-visitors-${net.slug}`}
+                      >
                         {net.live_counts.visitors}/{renderCap(net.max_concurrent_visitor_sessions)}
                       </td>
-                      <td data-testid={`admin-sessions-summary-users-${net.slug}`}>
+                      <td
+                        data-label="users"
+                        data-testid={`admin-sessions-summary-users-${net.slug}`}
+                      >
                         {net.live_counts.users}/{renderCap(net.max_concurrent_user_sessions)}
                       </td>
-                      <td data-testid={`admin-sessions-summary-per-ip-${net.slug}`}>
+                      <td
+                        data-label="per-ip"
+                        data-testid={`admin-sessions-summary-per-ip-${net.slug}`}
+                      >
                         {renderCap(net.max_per_ip)}
                       </td>
                     </tr>
@@ -275,7 +284,7 @@ const AdminSessionsTab: Component = () => {
                   {(row) => (
                     <>
                       <tr class="admin-sessions-row" data-testid={`admin-session-row-${row.key}`}>
-                        <td class="admin-session-who">
+                        <td class="admin-session-who adm-cell-title">
                           <AdminRowName
                             alwaysOpenable
                             open={detailKey() === row.key}
@@ -316,15 +325,19 @@ const AdminSessionsTab: Component = () => {
                         </td>
                         <td
                           class="admin-session-last-seen"
+                          data-label="last seen"
                           data-testid={`admin-session-last-seen-${row.key}`}
                           title={row.last_seen_at ?? "no browser session on record"}
                         >
                           {renderLastSeen(row.last_seen_at)}
                         </td>
-                        <td data-testid={`admin-session-channels-${row.key}`}>
+                        <td data-label="channels" data-testid={`admin-session-channels-${row.key}`}>
                           {renderChannels(row)}
                         </td>
-                        <td class="admin-sessions-actions adm-table-sticky-actions">
+                        <td
+                          class="admin-sessions-actions adm-table-sticky-actions"
+                          data-label="actions"
+                        >
                           <For each={rowActions(row)}>
                             {(kind) => (
                               <InlineConfirmButton

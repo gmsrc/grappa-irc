@@ -465,7 +465,7 @@ const AdminCredentialsTab: Component = () => {
                         class="admin-credentials-row"
                         data-testid={`admin-credential-row-${credKey(c)}`}
                       >
-                        <td>
+                        <td class="adm-cell-title">
                           <AdminRowName
                             open={detailId() === credKey(c)}
                             onToggle={() =>
@@ -477,14 +477,18 @@ const AdminCredentialsTab: Component = () => {
                             {userName(c.user_id)} @ {c.network_slug}
                           </AdminRowName>
                         </td>
-                        <td class="adm-col-detail">{c.nick}</td>
-                        <td class="adm-col-detail">{c.auth_method}</td>
-                        <td class="adm-col-detail">
+                        <td class="adm-col-detail" data-label="nick">
+                          {c.nick}
+                        </td>
+                        <td class="adm-col-detail" data-label="auth">
+                          {c.auth_method}
+                        </td>
+                        <td class="adm-col-detail" data-label="connection">
                           <AdminBadge tone={connectionTone(c.connection_state)}>
                             {c.connection_state}
                           </AdminBadge>
                         </td>
-                        <td>
+                        <td data-label="live">
                           {/* The three live-pid readings were a bare ternary
                               emitting raw text (one arm even carrying its own
                               "●"). They are the U-0 honesty signal, so they get
@@ -509,7 +513,10 @@ const AdminCredentialsTab: Component = () => {
                                 : "pid dead"}
                           </AdminBadge>
                         </td>
-                        <td class="admin-credentials-actions adm-table-sticky-actions">
+                        <td
+                          class="admin-credentials-actions adm-table-sticky-actions"
+                          data-label="actions"
+                        >
                           <button
                             type="button"
                             class="adm-btn"

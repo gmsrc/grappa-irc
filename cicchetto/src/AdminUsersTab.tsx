@@ -315,7 +315,7 @@ const AdminUsersTab: Component = () => {
                   {(u) => (
                     <>
                       <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
-                        <td>
+                        <td class="adm-cell-title">
                           <AdminRowName
                             open={detailId() === u.id}
                             onToggle={() => setDetailId(detailId() === u.id ? null : u.id)}
@@ -325,7 +325,7 @@ const AdminUsersTab: Component = () => {
                             {u.name}
                           </AdminRowName>
                         </td>
-                        <td>
+                        <td data-label="admin">
                           {/* The WORD stays: admin-users.spec.ts reads this
                               cell as text (`td.nth(1)` matching /yes|no/), and
                               it is a yes/no question a colour alone cannot
@@ -335,9 +335,16 @@ const AdminUsersTab: Component = () => {
                             {u.is_admin ? "yes" : "no"}
                           </AdminBadge>
                         </td>
-                        <td class="adm-col-detail">{u.live_session_count}</td>
-                        <td class="adm-col-detail">{formatInstant(u.inserted_at)}</td>
-                        <td class="admin-users-actions adm-table-sticky-actions">
+                        <td class="adm-col-detail" data-label="live">
+                          {u.live_session_count}
+                        </td>
+                        <td class="adm-col-detail" data-label="inserted">
+                          {formatInstant(u.inserted_at)}
+                        </td>
+                        <td
+                          class="admin-users-actions adm-table-sticky-actions"
+                          data-label="actions"
+                        >
                           <button
                             type="button"
                             class={`adm-btn ${u.is_admin ? "adm-btn--danger" : "adm-btn--ok"}`}

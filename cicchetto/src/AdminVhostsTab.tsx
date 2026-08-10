@@ -390,8 +390,8 @@ const AdminVhostsTab: Component = () => {
                   {(v) => (
                     <>
                       <tr class="admin-vhosts-row" data-testid={`admin-vhost-row-${v.id}`}>
-                        <td>{v.address}</td>
-                        <td>
+                        <td class="adm-cell-title">{v.address}</td>
+                        <td data-label="in pool">
                           <label class="adm-check">
                             <input
                               type="checkbox"
@@ -405,7 +405,7 @@ const AdminVhostsTab: Component = () => {
                             {v.in_pool ? "yes" : "no"}
                           </label>
                         </td>
-                        <td>
+                        <td data-label="public">
                           <label class="adm-check">
                             <input
                               type="checkbox"
@@ -428,7 +428,10 @@ const AdminVhostsTab: Component = () => {
                               : "no"}
                           </label>
                         </td>
-                        <td class="admin-vhosts-actions adm-table-sticky-actions">
+                        <td
+                          class="admin-vhosts-actions adm-table-sticky-actions"
+                          data-label="actions"
+                        >
                           <InlineConfirmButton
                             idleLabel="Delete"
                             confirmLabel="Confirm delete"
@@ -546,7 +549,7 @@ const GrantsDisclosure: Component<{
             <For each={props.grants}>
               {(g) => (
                 <tr data-testid={`admin-vhost-grant-row-${g.id}`}>
-                  <td>{g.subject_type}</td>
+                  <td class="adm-cell-title">{g.subject_type}</td>
                   {/* #1140 — the operator picks the subject BY NAME in the
                       autocomplete above; the table answers in the same
                       language. `subject_label: null` is the server's
@@ -554,10 +557,14 @@ const GrantsDisclosure: Component<{
                       to the uuid rather than invent a placeholder. The
                       uuid stays reachable as the title: it is the stable
                       key, the label is display. */}
-                  <td title={g.subject_id} data-testid={`admin-vhost-grant-subject-${g.id}`}>
+                  <td
+                    data-label="subject"
+                    title={g.subject_id}
+                    data-testid={`admin-vhost-grant-subject-${g.id}`}
+                  >
                     {g.subject_label ?? g.subject_id}
                   </td>
-                  <td>
+                  <td data-label="actions">
                     <InlineConfirmButton
                       idleLabel="Revoke"
                       confirmLabel="Confirm revoke"

@@ -5367,15 +5367,15 @@ html.resize-dragging * {
    viewport breakpoint is measuring the wrong box and gets tablets wrong
    (1180x820 left the Servers table panning).
 
-   This is the one place stacked rows are right, and it is not a
-   contradiction of the argument that kept the main tables as tables.
-   That argument was about scanning: you read Sessions to find the odd
-   row out, and stacking puts every value on its own line where no two
-   can be compared. These are different — a handful of servers or
-   featured channels inside a detail panel you already opened, where the
-   job is to act on one, not to compare twenty. And they are nested two
-   scroll containers deep, which is where sideways panning stops being
-   survivable and starts being a bug.
+   This used to be "the one place stacked rows are right", against an
+   argument that kept the main tables as tables: you read Sessions to find
+   the odd row out, and stacking puts every value on its own line where no
+   two can be compared. #1157 overruled that — vjt weighed the same
+   trade-off on a real phone and took the loss of cross-record scanning
+   over a table you have to pan sideways to read. So the main tables stack
+   too now, below 900px, in the `@media` twin further down. What survives
+   here unchanged is the CONTAINER question: these are nested two scroll
+   containers deep and must react to their panel's width, not the screen's.
 
    Column dropping was tried here first and could not go far enough: even
    at three columns the source editor plus Disable TLS plus Delete
@@ -5559,34 +5559,116 @@ html.resize-dragging * {
   padding: 0;
 }
 
-/* UX-6-G ownership: BELOW 900px the PANEL owns the horizontal scroll,
-   not the table wrapper.
+/* #1157 — BELOW 900px an admin table's rows become CARDS: one record per
+   block, label beside value, no column alignment between records. Above it
+   the table is unchanged.
 
-   `.adm-table-wrap` carrying `overflow-x: auto` is the right call on
-   desktop — the card header stays put while the columns pan. On mobile
-   it is not mine to make: `ux-6-g-admin-mobile-h-scroll` locks the panel
-   as the scroller, and that lock exists because of a real iPhone report
-   ("horiz content, scrollbar, but content doesn't move"). Moving the
-   scroller one level in would have kept the gesture working and quietly
-   invalidated the regression guard — the assertion would then be
-   measuring an element that can no longer overflow, which is a green
-   test that has stopped watching anything.
+   This REPLACES the UX-6-G ownership block, which read "below 900px the
+   PANEL owns the horizontal scroll, not the table wrapper" and set
+   `.adm-table-wrap { overflow-x: visible }` + `.adm-card { width:
+   max-content }` so the overflow landed on the panel. That was a deliberate
+   decision to let a phone pan a wide table, and vjt reversed it after
+   dogfooding 0.15.0: panning a table on a 393px viewport is the thing to
+   remove, not to relocate. #1074 had already moved this scroller once, and
+   the CSS comment here warned that moving it again would keep the gesture
+   while quietly invalidating the guard watching it.
 
-   So on a phone the wrapper stops scrolling, the card is allowed to grow
-   to its widest content, and the overflow lands back on the panel where
-   the spec looks for it. `min-width: 100%` keeps a narrow card
-   full-width; `overflow: visible` is required because the card clips by
-   default and would otherwise cut the table off instead of letting it
-   push. */
+   So the pan is not re-hidden anywhere: there is nothing wide left to pan.
+   A stacked row is as wide as its container by construction, `.adm-card`
+   goes back to its default `overflow: hidden` and intrinsic width, and
+   `.adm-table-wrap` keeps `overflow-x: auto` at every width — harmless when
+   nothing overflows, and still correct above 900px. Whether that holds is
+   not taken on trust: `ux-6-g-admin-mobile-h-scroll` asserts that at 393px
+   NO element inside the admin pane has `scrollWidth > clientWidth`, on
+   every tab, which is an assertion no relocation of the scroller can
+   satisfy.
+
+   Twin of the `@container (max-width: 56rem)` block above, which stacks
+   tables NESTED in a detail panel. The declarations are duplicated because
+   a media query and a container query cannot share a block, and the two
+   genuinely ask different questions: the nested tables must react to their
+   panel's width (a table two levels deep never has the screen's, and a
+   1180x820 tablet got it wrong), while these react to the viewport, which
+   is the breakpoint vjt named and the one `.adm-col-detail` already uses.
+
+   `white-space: normal` matters as much as the display switch: `.adm-table`
+   sets `nowrap`, and a long unbroken value (a vhost address, a reverse-DNS
+   name) would keep a stacked cell wider than the screen and put the pan
+   straight back. */
 @media (max-width: 899px) {
-  .adm-table-wrap {
-    overflow-x: visible;
+  .adm-table,
+  .adm-table tbody,
+  .adm-table tr,
+  .adm-table td {
+    display: block;
+    width: auto;
   }
 
-  .adm-card {
-    overflow: visible;
-    width: max-content;
-    min-width: 100%;
+  /* The header row's labels move onto the cells via `data-label`. */
+  .adm-table thead {
+    display: none;
+  }
+
+  .adm-table tr {
+    border: 1px solid var(--adm-line);
+    border-radius: var(--adm-radius-sm);
+    padding: var(--adm-space-2);
+    margin-bottom: var(--adm-space-2);
+    background: var(--adm-surface-0);
+  }
+
+  /* `flex-wrap` is load-bearing, not tidiness. An actions cell holds two
+     or three buttons, and buttons do not shrink below their label: on the
+     Users tab that measured 373px of content in a 331px wrapper, which is
+     a 42px pan straight back. Wrapping lets the value fall under its own
+     label instead of pushing the card wider. */
+  .adm-table td {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--adm-space-3);
+    row-gap: var(--adm-space-2);
+    border-bottom: 0;
+    padding: var(--adm-space-1) 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    min-width: 0;
+  }
+
+  .adm-table td::before {
+    content: attr(data-label);
+    flex: 0 0 5rem;
+    font-family: var(--adm-font);
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--adm-text-dim);
+  }
+
+  /* The identity cell is the card's HEADING, not a labelled field: a
+     "WHO" chip in front of the name would indent it past the values it is
+     supposed to head, and repeat what the name already says. */
+  .adm-table td.adm-cell-title {
+    display: block;
+    padding-bottom: var(--adm-space-2);
+  }
+
+  .adm-table td.adm-cell-title::before {
+    content: none;
+  }
+
+  /* Nothing is wide, so nothing may claim it is: the desktop slack
+     absorber and the 220px truncation both stop applying. */
+  .adm-table-grow,
+  .adm-table-truncate {
+    max-width: none;
+    width: auto;
+  }
+
+  /* An expanded detail row is a block inside the card, not a colspan cell
+     spanning columns that no longer exist. */
+  .adm-expand-row td {
+    padding: var(--adm-space-3) 0 0;
   }
 }
 
