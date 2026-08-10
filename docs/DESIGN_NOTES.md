@@ -37656,3 +37656,125 @@ always-on bouncer long after the 005 burst ever uses — had no isupport arm at
 all. `subscribe.test.ts` now asserts the budget lands in the REAL store
 (`frameBudgetBaseForNetwork`), not on a `seedIsupport` spy, so the shared fold
 has one killer per door and the door itself has its first guard.
+
+---
+
+## 2026-08-10 — #1196: a credential a headless client can hold
+
+Arming TOTP or a passkey locked out every client that logs in with a name and
+a password. `/auth/login` is the only door and it has no non-interactive path:
+the account answers 202 `two_factor_required`, and an unattended client has
+nowhere to put a code that rotates every thirty seconds, no channel to be
+prompted on at reconnect, and a recovery code it would burn on the first one.
+The shape of that in practice is a hard either/or — a second factor, or an
+always-on client — on exactly the account most worth protecting.
+
+**The primitive already existed and the issue said so; the work was checking
+that it did.** `Grappa.Accounts.Session` is a bearer-token row whose `:id` IS
+the token, already carrying `client_id`, `last_seen_at` and `revoked_at`. What
+a client token needs on top is a different lifecycle, a label, and a smaller
+scope — three behaviours, not a second domain. A separate `client_tokens`
+table would have duplicated the bearer lookup, the revoke, the revocation
+broadcast, the WS auth and the admin listing, and forced `/auth/login` to try
+two tables; the 20% that does not fit is behaviour, so it rides `kind` on the
+one table.
+
+**`kind` is a column and not a derived `label != nil`.** Deriving it is
+tempting — a client token is, today, exactly the row that has a label — and
+CLAUDE.md's own design discipline says derive rather than duplicate. It is
+wrong here because the field would be load-bearing for a *security* boundary
+while looking like presentation: a later "name your browser session" feature
+would flip the scope gate and the idle exemption by accident, in a commit that
+appears to touch only a display string. The discriminator has to mean
+"restricted, non-expiring".
+
+**The token IS the bearer, so login answers with what it was given.** The
+alternative — mint a fresh session row per token login — needs a parent FK, a
+cascade revoke, and grows a row on every reconnect of a client that reconnects
+unattended forever. Returning the same row instead makes revocation one UPDATE
+and makes `last_seen_at` the device list's honesty signal for free.
+
+**The consequence is that the id can never be listed back**, and that is what
+decided how a token is addressed. `Session.handle/1` — the truncated SHA-256
+the operator log (S9) already used for the same row — was promoted out of
+`Accounts` into the schema, so the log line and the wire cannot drift into two
+names for one thing. `DELETE /me/client-tokens/:handle` revokes without ever
+re-presenting the secret, and the match runs in Elixir over the caller's own
+tokens because the digest is derived, never stored: there is no column to
+compare against and nothing that can fall out of sync with the id. The label
+was the other candidate for the key and lost — it would have needed a
+uniqueness constraint and a URL-safe charset, and it correlates with nothing
+in the logs.
+
+**The scope is not a follow-up to the feature, it is the feature.** A token
+that can administer, re-credential, or mint another token IS the account, and
+then the second factor on the account is decorative. The refusal
+(`RequireFullSession`, 403 `client_token_scope`) is mounted on pipelines
+rather than on routes: `:admin_authn` gains it so the whole console inherits
+it the way it inherits `is_admin`, and a new `:full_session` pipeline carries
+the second factors, self-service deletion, and the token routes. Grouping is
+the point — the hazard is not the route we wrote today, it is the credential
+route someone adds next year without thinking about tokens at all.
+
+`GrappaWeb.RouterScopeTest` is the backstop for that: it walks the compiled
+route table, DRIVES every credential-management path with a token bearer, and
+demands the scope refusal from each. Exercising rather than introspecting
+`pipe_through` was forced by Phoenix (`__routes__/0` does not expose the
+pipelines) and turned out better — it survives a plug moving between pipelines
+and fails on the response rather than on a spelling. The bearer belongs to an
+ADMIN account deliberately: a non-admin would be turned away by
+`Admin.AuthPlug` first and every `/admin` arm would pass for the wrong reason.
+Its sibling arm asserts the filter still matches something, because a
+path-prefix filter that matches nothing passes vacuously forever.
+
+**The console's live feed is a second door, so `AdminChannel` carries the same
+refusal.** Admin-ness is necessary and no longer sufficient; both conditions
+sit in one clause so neither can be satisfied alone.
+
+**Deliberately NOT special-cased: the revoke sweeps.** Every credential change
+that already evicts an account's other sessions —
+`revoke_other_sessions_for_user!/2` from TOTP enrolment and disable,
+`revoke_sessions_for_user/1` from the operator resets — evicts its client
+tokens with them. Fail-closed, zero branches, and arming or resetting a factor
+is exactly the moment a re-issue is wanted. An arm asserts it so the absence
+of a branch cannot quietly become one.
+
+**Two departures the issue asked for and one it did not.** The idle window
+does not apply (both at `check_idle/1` and at the reaper — the GC and the auth
+gate have to agree on which rows the window governs, not merely on how wide it
+is), the label is required, and — not in the issue — minting is
+password-gated, mirroring `TotpController.start_enrollment`: a borrowed
+browser bearer alone must not issue a credential that outlives it. That
+inherits the sibling's known limitation, that an account in passkey
+`passwordless` mode whose owner no longer knows the password cannot mint. A
+per-account cap of 20 live tokens is likewise ours, not the issue's: an
+unbounded self-service writer is a hole in a security feature, and the bound
+is what keeps `handle/1`'s 48 bits collision-free by orders of magnitude.
+
+**Where it is accepted: the `password` field, and the argument for it is about
+other people's code.** A header or a dedicated endpoint is cleaner in the
+abstract and obliges every client that speaks to grappa to learn a second
+authentication mode for no gain. In the `password` field, nothing changes
+client-side. The cost is that the login door now has two credentials behind
+one input, so it must not become two oracles: a wrong token returns the same
+`401 invalid_credentials`, and the throttle is charged exactly once per
+attempt (at the Argon2 branch, never at the token miss). An arm spends five of
+the ten-per-window budget on UUID-shaped wrong passwords, succeeds mid-way to
+show the budget was not exhausted, spends the rest, and requires the eleventh
+attempt to be 429 — the count is what proves the two doors share one charge.
+
+**Sixteen single-point mutants, one at a time, each killed.** The kill sets are
+disjoint and named in the PR. The arms with NO unique killer are labelled
+regression guards rather than counted as coverage: the inverse-direction guard
+that a web session still expires and is still swept, the sweep-takes-tokens
+arm above, the 404s for an unknown and for another account's handle, the 400
+for an absent password, the visitor 403, the router test's anti-vacuity arm,
+and the browser-session controls that pair each refusal. Honest ordering, too:
+the production code was written before the arms, so the red for each guard
+came from displacement rather than chronologically.
+
+**Deploy: expand-only, so `Grappa.Deploy.Preflight` classifies the migration
+HOT** — Ecto selects named columns, so a node still running the old `Session`
+module cannot see the two new ones, and reload brings schema and column into
+agreement in either order. The first commit's message says COLD; the
+classifier disagrees and it is right.

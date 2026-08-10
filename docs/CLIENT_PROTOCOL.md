@@ -241,5 +241,57 @@ safely (the 429 status / the socket close remain unambiguous).
 
 ---
 
+## 7. Per-client tokens (#1196)
+
+If the account you connect as has a second factor armed — TOTP or a
+passkey — `POST /auth/login` with the account password answers **202
+`two_factor_required`**, and there is nothing an unattended client can
+do with that: a TOTP code rotates every thirty seconds, WebAuthn needs
+an authenticator and an origin, and a recovery code is single-use.
+
+A **per-client token** is the credential to use instead. Its owner mints
+it from a browser session and pastes it into your config; **you send it
+in the `password` field of `POST /auth/login`, exactly where the account
+password would go.** Nothing else about your login changes:
+
+```
+POST /auth/login  { "identifier": "vjt", "password": "<the token>" }
+200               { "token": "<the same token>", "subject": {...} }
+```
+
+Three properties worth designing around:
+
+- **The reply is the token you sent.** The token IS the bearer, so a
+  reconnect does not mint a new session; store it once and reuse it. You
+  may also skip `/auth/login` entirely and present it directly as
+  `Authorization: Bearer <token>` / the WS bearer subprotocol (§3a).
+- **It does not expire while idle.** A browser session dies after seven
+  days of silence; a client token does not. Revocation by its owner is
+  the only thing that ends it — expect a `401`, and surface it as "this
+  token was revoked", not as a transient network error.
+- **It is scoped.** A client token can read and send as the account, and
+  that is all. The account's own credential surfaces — `/admin/*`,
+  `/me/totp*`, `/me/passkeys*`, `DELETE /me`, and the token routes
+  themselves — answer **403 `client_token_scope`**. That is not a
+  credential problem and retrying will not help: the operation needs a
+  browser session. Do not treat it like a `401`.
+
+A wrong token is indistinguishable from a wrong password: same `401
+invalid_credentials`, same login throttle (`429 too_many_attempts` after
+ten failures from one address in fifteen minutes). Back off accordingly.
+
+Minting, listing and revoking are the account owner's job, from a
+browser session, and are documented here only so a client author knows
+what to tell them: `POST /me/client-tokens {label, password}` returns
+`token` **once**; `GET /me/client-tokens` lists `{handle, label,
+created_at, last_seen_at, ip, user_agent}` and never the secret again;
+`DELETE /me/client-tokens/:handle` revokes one.
+
+Source: `lib/grappa_web/controllers/auth_controller.ex`
+(`account_login/3`), `lib/grappa_web/plugs/require_full_session.ex`,
+`lib/grappa_web/controllers/client_token_controller.ex`.
+
+---
+
 *This document tracks a live contract. When it disagrees with the code,
 the code is right — start from the `file:line` anchors above.*

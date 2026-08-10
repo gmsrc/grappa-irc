@@ -4339,6 +4339,20 @@ not accept the account password or TOTP, and shottino cannot complete WebAuthn.
 If a user loses both passkey and recovery codes, restore password login from the
 instance host:
 
+**A headless client uses a per-client token instead (#1196).** Arming TOTP or a
+passkey does not have to lock shottino, weechat, or any other unattended client
+out any more: the account holder mints a token from a browser session (`POST
+/me/client-tokens`, label plus the account password) and the client sends it in
+the `password` field of the ordinary login. Nothing on the client side changes.
+The token does not age out, is revocable one at a time, and cannot reach
+`/admin/*`, the account password, the second factors, or the token surface
+itself — a leaked one reads and sends as the account, and nothing more. The
+account's own device list is `GET /me/client-tokens`, which shows a `handle`,
+the label, `last_seen_at` and the last source IP, and never the secret again.
+
+The two reset verbs below revoke client tokens along with everything else, so
+a user whose factors you reset has to mint a new one for each client.
+
 ```sh
 bin/grappa reset-passkeys ACCOUNT_NAME
 ```
