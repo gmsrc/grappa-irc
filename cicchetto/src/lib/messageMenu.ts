@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import type { ScrollbackMessage } from "./api";
 import { copyText } from "./clipboard";
+import { isTextEntry } from "./keepKeyboard";
 import type { Point } from "./swipe";
 import { createToastQueue } from "./toasts";
 
@@ -73,6 +74,25 @@ export const SELECTING_CLASS = "is-selecting";
 export function selectMessageText(row: HTMLElement): boolean {
   const selection = window.getSelection();
   if (selection === null) return false;
+  // #1106 — release the compose field FIRST, or on iOS the range goes in
+  // while an editable still owns the paint and nothing appears.
+  //
+  // The tap that chose this item landed on a menu button portalled to <body>:
+  // not a text entry, not inside `.scrollback`, not a <select>, so
+  // keepKeyboard's final always-fire `preventDefault` cancelled its focus
+  // shift and the compose box KEPT focus. With the keyboard down nothing is
+  // focused, that mousedown is not prevented, and the selection is reported
+  // working — the difference between the two is ours, not WebKit's.
+  //
+  // Aimed at the editable rather than at whatever holds focus: on the
+  // keyboard-down path the focused thing is the menu button itself, and
+  // blurring that buys nothing while moving focus on platforms that never had
+  // the bug. This does NOT contradict #79 — that duration-gates the long-press
+  // on `.scrollback` to keep the keyboard through the GESTURE; this is the
+  // explicit command the gesture leads to, where the operator has asked for a
+  // selection and the keyboard is what is in its way.
+  const focused = document.activeElement;
+  if (isTextEntry(focused)) focused.blur();
   const range = document.createRange();
   range.selectNodeContents(row);
   selection.removeAllRanges();

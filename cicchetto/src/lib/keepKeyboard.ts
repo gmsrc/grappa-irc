@@ -127,7 +127,12 @@ export const SELECTABLE_TEXT_EXCLUDE =
 // for one handler and a tap for the other.
 export const LONG_PRESS_MS = 500;
 
-function isTextEntry(el: Element | null): boolean {
+// Exported since #1106: `lib/messageMenu`'s Select… has to release a focused
+// editable before it installs its range, and "what counts as a text entry" must
+// be ONE predicate — a second copy would drift the moment a contenteditable
+// composer lands (ComposeBox already contemplates one). Narrowing predicate so
+// callers can reach `.blur()` without re-testing the type.
+export function isTextEntry(el: Element | null): el is HTMLInputElement | HTMLTextAreaElement {
   return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
 }
 
