@@ -112,34 +112,39 @@ GRAPPA_IMAGE="$GRAPPA_IMAGE" \
 PHX_HOST=localhost \
     sh "$REPO_ROOT/infra/docker/get.sh" install
 
-# ---- probe 1: GET / serves the SPA shell, not the not-built fallback -------
+# ---- probe 1: the SPA the box serves can actually boot ---------------------
 #
-# The oracle is the RUNNING NODE's own answer: Grappa.Cic.Bundle.current_hash()
-# parses the deployed index.html with the production regex, so this compares
-# what the node believes it serves against what HTTP actually returned — no
-# copy of the regex here to drift. #1161 fails BOTH halves at once (a wrong
-# CIC_DIST_ROOT means a nil hash and a fallback body), which is why the empty
-# hash is its own assertion rather than a silently-matching empty string.
-say "probe 1: GET / carries the SPA shell"
+# Three claims, three INDEPENDENT oracles — deliberately not a comparison
+# between two reads of one file. Asking the node for Cic.Bundle.current_hash()
+# and grepping the response for it looks like a cross-check and is not: both
+# sides resolve Bundle.root() and open the same index.html, so they cannot
+# disagree and the assertion can never fail. So the hash is parsed FROM THE
+# HTTP RESPONSE, by shipping the received bytes back into the container and
+# running the production parser (Cic.Bundle.parse_hash/1, exposed for exactly
+# this) over them — no second copy of the Vite regex to drift.
+#
+#   (a) GET / is 2xx            — #1161's 404 SPA (a missing bundle is a 404;
+#                                 the "not built" text rides WITH that status)
+#   (b) the body parses to a hash — a shell served 200 that boots nothing
+#   (c) the chunk it names is 2xx — a shell pointing at bytes nobody serves
+say "probe 1: the SPA served at / can boot"
 body="$SMOKE_HOME/index.html"
 curl -fsS --max-time 20 -o "$body" "http://$PUBLISH/" \
     || die "GET / did not return 2xx"
 
+docker cp "$body" "$BOX:/tmp/smoke-index.html" >/dev/null
 hash="$(docker exec "$BOX" bin/grappa rpc \
-    'IO.puts("cic-hash=" <> to_string(Grappa.Cic.Bundle.current_hash()))' \
+    'IO.puts("cic-hash=" <> to_string(Grappa.Cic.Bundle.parse_hash(File.read!("/tmp/smoke-index.html"))))' \
     | sed -n 's/^cic-hash=//p' | tail -n1 | tr -d '\r')"
 [ -n "$hash" ] || {
     printf '\n----- GET / returned (first 300 bytes) -----\n' >&2
     head -c 300 "$body" >&2; printf '\n' >&2
-    die "the running node reports NO cic bundle hash — it cannot read its own dist (CIC_DIST_ROOT?)"
+    die "GET / returned 200 but carries no SPA bundle tag"
 }
 
-grep -q "src=\"/assets/index-${hash}\.js\"" "$body" || {
-    printf '\n----- GET / returned (first 300 bytes) -----\n' >&2
-    head -c 300 "$body" >&2; printf '\n' >&2
-    die "GET / does not carry the bundle the node reports (index-${hash}.js)"
-}
-pass "GET / serves index-${hash}.js"
+curl -fsS --max-time 20 -o /dev/null "http://$PUBLISH/assets/index-${hash}.js" \
+    || die "the shell names /assets/index-${hash}.js and the box does not serve it"
+pass "GET / serves a shell that boots index-${hash}.js"
 
 # ---- probe 2: /api/config answers, and the node is the image under test ----
 #
