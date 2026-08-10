@@ -1,5 +1,6 @@
 import { type Component, Show } from "solid-js";
 import { dismissLusersCard, lusersBundleByNetwork } from "./lib/lusersBundle";
+import { createOverlayEscape } from "./lib/overlayScrollLock";
 
 // P-0d — LUSERS card. Renders a structured snapshot of network state
 // (clients, operators, channels, servers, local/global counts) folded
@@ -27,6 +28,14 @@ const fmt = (n: number | null): string => (n === null ? "—" : n.toLocaleString
 
 const LusersCard: Component<Props> = (props) => {
   const snapshot = () => lusersBundleByNetwork()[props.networkSlug];
+  // #1199 — Escape dismisses through the shared ordered ESC stack (the same
+  // door every modal uses), invoking the SAME verb the × does, so a modal
+  // opened over the card still closes first. Escape-only, no scroll-lock
+  // refcount: the card sits IN the scrollback flow, not over it.
+  createOverlayEscape(
+    () => snapshot() !== undefined,
+    () => dismissLusersCard(props.networkSlug),
+  );
 
   return (
     <Show when={snapshot()} keyed>

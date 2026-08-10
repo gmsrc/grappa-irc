@@ -290,3 +290,47 @@ export function createOverlayLock(
     release();
   });
 }
+
+/**
+ * #1199 — the ESC half of `createOverlayLock` on its own: the SAME ordered
+ * stack and the same open/close/unmount edges, WITHOUT the scroll-lock
+ * refcount. Call from a component body:
+ *
+ *   createOverlayEscape(() => myBundle() !== undefined, dismissMyCard);
+ *
+ * For a surface that is dismissable but covers nothing — the inline scrollback
+ * cards (whois / whowas / lusers), which render in the message flow rather than
+ * over it. Going through `createOverlayLock` would ALSO hold a refcount for the
+ * whole life of the card, which freezes the scrollback snapshot behind it
+ * (`ScrollbackPane`'s `isOverlayFrozen`) and adds the iOS `overlay-open` touch
+ * lock: the hazard `RailActions.tsx` already records for the permanent rail
+ * column. A surface that DOES cover the pane still wants `createOverlayLock`.
+ *
+ * Membership of the one shared stack is the point, not an implementation
+ * detail: it is what makes a modal opened over a card close FIRST. A private
+ * `document` keydown listener on the card would close the card instead, and
+ * would be the second global ESC listener this stack exists to prevent.
+ *
+ * No deferred microtask, unlike `createOverlayLock`: that deferral exists only
+ * so Solid can commit the render before `querySelector` looks for the lock
+ * element, and there is no element to look for here.
+ */
+export function createOverlayEscape(isOpen: () => boolean, onEscape: () => void): void {
+  const escapeToken = {};
+  let registered = false;
+  const release = (): void => {
+    if (!registered) return;
+    unregisterEscape(escapeToken);
+    registered = false;
+  };
+  createEffect(() => {
+    if (!isOpen()) {
+      release();
+      return;
+    }
+    if (registered) return;
+    registerEscape(escapeToken, onEscape);
+    registered = true;
+  });
+  onCleanup(release);
+}

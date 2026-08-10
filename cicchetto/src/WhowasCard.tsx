@@ -1,4 +1,5 @@
 import { type Component, Show } from "solid-js";
+import { createOverlayEscape } from "./lib/overlayScrollLock";
 import { dismissWhowasCard, whowasCardBySlug } from "./lib/whowasCard";
 import { MircBody } from "./MircText";
 import NickText from "./NickText";
@@ -27,6 +28,14 @@ export type Props = {
 
 const WhowasCard: Component<Props> = (props) => {
   const bundle = () => whowasCardBySlug()[props.networkSlug];
+  // #1199 — Escape dismisses through the shared ordered ESC stack (the same
+  // door every modal uses), invoking the SAME verb the × does, so a modal
+  // opened over the card still closes first. Escape-only, no scroll-lock
+  // refcount: the card sits IN the scrollback flow, not over it.
+  createOverlayEscape(
+    () => bundle() !== undefined,
+    () => dismissWhowasCard(props.networkSlug),
+  );
 
   return (
     <Show when={bundle()}>

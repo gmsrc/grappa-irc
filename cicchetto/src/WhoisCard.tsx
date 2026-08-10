@@ -1,6 +1,7 @@
 import { type Component, For, Show } from "solid-js";
 import type { WhoisBundle } from "./lib/api";
 import { formatDuration } from "./lib/duration";
+import { createOverlayEscape } from "./lib/overlayScrollLock";
 import { whoisBundleHasFields } from "./lib/whoisBundle";
 import { MircBody } from "./MircText";
 import NickText from "./NickText";
@@ -80,6 +81,17 @@ const collectTags = (b: WhoisBundle): TagChip[] => {
 
 const WhoisCard: Component<Props> = (props) => {
   const bundle = () => props.bundle;
+  // #1199 — Escape closes the card through the shared ordered ESC stack, the
+  // same door every modal uses, so a modal opened over the card still closes
+  // first. Gated on `onDismiss`: it is the dismissability of the mount site,
+  // and the rail card (which omits it) must NOT be closable — a persistent
+  // per-window surface Escape can close is one the operator cannot bring back.
+  // Escape-only, no scroll-lock refcount: the card sits IN the scrollback flow,
+  // not over it.
+  createOverlayEscape(
+    () => bundle() !== undefined && props.onDismiss !== undefined,
+    () => props.onDismiss?.(),
+  );
   const hasFields = (): boolean => {
     const b = bundle();
     return b !== undefined && whoisBundleHasFields(b);
