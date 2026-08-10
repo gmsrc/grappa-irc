@@ -3,8 +3,6 @@ import { getSubject, token } from "./auth";
 import { channelKey } from "./channelKey";
 import { requestConfirm } from "./confirmDialog";
 import { closeQueryWindowState } from "./queryWindows";
-import { selectedChannel, setSelectedChannel } from "./selection";
-import { SERVER_WINDOW_NAME } from "./windowKinds";
 import { forceParted } from "./windowState";
 
 // Shared close-window helpers. Two call sites today: Sidebar × on
@@ -78,13 +76,16 @@ export function closeQueryWindow(networkId: number, targetNick: string): void {
 
 // #71 INC-3 — THE shared verb for dismissing a non-joined pseudo-row
 // (pending/failed/kicked/parked) via its ×. Was previously inline in
-// Sidebar.handleClosePseudo; the mobile bar's raw setParted let the
-// bucket-E close-watcher pick MRU, a per-surface divergence the INC-3
-// review caught. #902 left the desktop Sidebar its only caller — the mobile
-// BottomBar's sole pseudo-row was the `:invited` tab, and that is a banner
-// now — but the verb stays HERE rather than moving back inline: it is a
-// window-lifecycle verb, and the file it lives in is the one that owns the
-// PART.
+// Sidebar.handleClosePseudo, where a per-surface divergence had grown:
+// the mobile bar's raw setParted deferred to the bucket-E close-watcher
+// while the Sidebar redirected to $server — same action, two navigations.
+// INC-3 unified on the Sidebar's spelling to keep the change behaviour-
+// free; #445 has since settled the target the other way (see below), so
+// the surviving unification is the VERB, not the destination. #902 left
+// the desktop Sidebar its only caller — the mobile BottomBar's sole
+// pseudo-row was the `:invited` tab, and that is a banner now — but the
+// verb stays HERE rather than moving back inline: it is a window-lifecycle
+// verb, and the file it lives in is the one that owns the PART.
 //
 // #511 — the dismissal goes through the SAME `partAndForget` DELETE path
 // `closeChannelWindow` uses, not a client-only `forceParted`. Pre-fix this
@@ -97,20 +98,24 @@ export function closeQueryWindow(networkId: number, targetNick: string): void {
 // banner takes its own DELETE door instead (#902 removed the row, #976 gave
 // the refusal its own verb).
 //
-// If the dismissed row IS the focused window, redirect to the network's
-// $server window FIRST, pre-empting the bucket-E watcher (which would
-// otherwise pick the most-recently-viewed window). $server-vs-MRU is a
-// deferred product choice — see DESIGN_NOTES 2026-07-26 #71 INC-3 + the
-// follow-up issue; today both surfaces land on $server. The redirect runs
-// before `partAndForget`, so in the (unreachable in-UI) no-token case focus
-// still moves to $server while the row stays put — harmless because a
-// pseudo-row is never rendered without a token; revisit only if some
-// token-expiry edge ever makes this path reachable.
+// #445 — this verb steers NO focus. INC-3 shipped an explicit "if the
+// dismissed row is the focused window, go to $server" redirect here and
+// deferred whether $server was the right destination; vjt ruled MRU. That
+// ruling deletes code rather than replacing it: selection.ts's bucket-E
+// close-watcher ALREADY resolves MRU → $server → home for every other
+// close in the app (/part, a server-side kick, the /disconnect cascade, a
+// query close), and it fires here too the moment `forceParted` drops the
+// key — a pseudo-row is live to that watcher precisely because
+// `windowIsPresent` says so (UX-7-E). The old redirect's only effect was
+// to PRE-EMPT it, making the dismissal the one close that ignored MRU.
+// Removing it leaves one owner of the close target, per CLAUDE.md "don't
+// duplicate state — derive it".
+//
+// Do not re-add a redirect here, not even "to MRU": calling the picker
+// from this side would duplicate the derivation AND fire for an unfocused
+// row, stealing focus from a window the operator is looking at. The
+// watcher is focus-gated by construction; this verb must not be.
 export function dismissPseudoWindow(networkSlug: string, name: string): void {
-  const sel = selectedChannel();
-  if (sel !== null && sel.networkSlug === networkSlug && sel.channelName === name) {
-    setSelectedChannel({ networkSlug, channelName: SERVER_WINDOW_NAME, kind: "server" });
-  }
   partAndForget(networkSlug, name);
 }
 

@@ -15,6 +15,11 @@ vi.mock(import("../lib/api"), async (importOriginal) => {
     listChannels: vi.fn().mockResolvedValue([]),
     listMessages: vi.fn(),
     sendMessage: vi.fn(),
+    // #445 — the bucket-E arms below drive the REAL `dismissPseudoWindow`
+    // (lib/windowClose) rather than poking windowState directly, so the
+    // whole dismiss composition is under test. That verb DELETEs upstream;
+    // stub it or the unmocked `fetch` errors on jsdom's relative URL.
+    postPart: vi.fn().mockResolvedValue(undefined),
     // UX-4 bucket D — selection.ts now imports `networks` from
     // `lib/networks` to drive the parked-network → home redirect.
     // networks.ts's `createResource` chain fires `me()` on every token
@@ -1299,6 +1304,113 @@ describe("selection store", () => {
       await new Promise((r) => setTimeout(r, 20));
 
       // The re-joined selection SURVIVES — no focus theft to $server.
+      expect(sel.selectedChannel()?.channelName).toBe("#bofh");
+      expect(sel.selectedChannel()?.kind).toBe("channel");
+      expect(sel.selectedChannel()?.networkSlug).toBe("freenode");
+    });
+
+    // #445 — the × on a greyed pseudo-row (invited/failed/kicked/parked)
+    // lands focus on the MOST-RECENTLY-VIEWED window, exactly like every
+    // other window close. Until #445 `dismissPseudoWindow` pre-empted this
+    // picker with an explicit `$server` redirect (#71 INC-3's unification
+    // target), so a dismissal was the ONE close in the app that ignored
+    // MRU. Deleting that redirect leaves one owner of the close target —
+    // this watcher — per CLAUDE.md "don't duplicate state, derive it".
+    //
+    // These two arms drive the REAL `dismissPseudoWindow` rather than
+    // calling `forceParted` directly: the thing #445 changes is the
+    // COMPOSITION (verb drops the key → this watcher picks the target),
+    // and a test that skips the verb cannot see a redirect put back.
+    it("#445: dismissing the FOCUSED pseudo-row lands on MRU, not $server", async () => {
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks).mockResolvedValue([userNet("freenode", 1, "connected")]);
+      vi.mocked(api.listChannels)
+        .mockResolvedValueOnce([
+          { name: "#bofh", joined: true, source: "autojoin" },
+          { name: "#new", joined: true, source: "joined" },
+        ])
+        .mockResolvedValue([{ name: "#bofh", joined: true, source: "autojoin" }]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      const windowState = await import("../lib/windowState");
+      const { channelKey } = await import("../lib/channelKey");
+      const { dismissPseudoWindow } = await import("../lib/windowClose");
+      auth.setToken("tokE-445-focused");
+      await vi.waitFor(() => {
+        expect(networks.channelsBySlug()?.freenode?.length).toBe(2);
+      });
+
+      // MRU := [#new, #bofh] — #bofh viewed first, then #new.
+      sel.setSelectedChannel({ networkSlug: "freenode", channelName: "#bofh", kind: "channel" });
+      sel.setSelectedChannel({ networkSlug: "freenode", channelName: "#new", kind: "channel" });
+
+      // Peer KICK turns #new into a greyed pseudo-row: gone from cbs,
+      // still in windowStateByChannel. UX-7-E keeps focus on it (the
+      // operator must see the kick reason) — assert that PRE-STATE, or a
+      // post-dismiss "focus is #bofh" could just mean focus was never on
+      // #new to begin with.
+      windowState.setKicked(channelKey("freenode", "#new"), "operator", "spam");
+      networks.refetchChannels();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(sel.selectedChannel()?.channelName).toBe("#new");
+
+      // The × — the real verb, the whole composition.
+      dismissPseudoWindow("freenode", "#new");
+
+      await vi.waitFor(() => {
+        expect(sel.selectedChannel()?.channelName).toBe("#bofh");
+      });
+      expect(sel.selectedChannel()?.kind).toBe("channel");
+      // Named explicitly: `$server` is the pre-#445 landing, and it is
+      // reachable from here (the network IS connected, so it is this
+      // picker's own step-2 fallback). Only the MRU hit distinguishes.
+      expect(sel.selectedChannel()?.channelName).not.toBe("$server");
+    });
+
+    it("#445: dismissing a NON-focused pseudo-row does not move focus at all", async () => {
+      // The other half of the target rule: a × on a row the operator is
+      // not looking at is housekeeping, not navigation. Green before #445
+      // too (the deleted redirect was already focus-gated) — it is here to
+      // pin the gate that survives the rewrite. Its killer is the
+      // plausible wrong fix: calling the fallback picker from
+      // `dismissPseudoWindow` unconditionally instead of deriving it.
+      vi.resetModules();
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      vi.mocked(api.listNetworks).mockResolvedValue([userNet("freenode", 1, "connected")]);
+      vi.mocked(api.listChannels)
+        .mockResolvedValueOnce([
+          { name: "#bofh", joined: true, source: "autojoin" },
+          { name: "#new", joined: true, source: "joined" },
+        ])
+        .mockResolvedValue([{ name: "#bofh", joined: true, source: "autojoin" }]);
+      const auth = await import("../lib/auth");
+      const sel = await import("../lib/selection");
+      const networks = await import("../lib/networks");
+      const windowState = await import("../lib/windowState");
+      const { channelKey } = await import("../lib/channelKey");
+      const { dismissPseudoWindow } = await import("../lib/windowClose");
+      auth.setToken("tokE-445-unfocused");
+      await vi.waitFor(() => {
+        expect(networks.channelsBySlug()?.freenode?.length).toBe(2);
+      });
+
+      sel.setSelectedChannel({ networkSlug: "freenode", channelName: "#new", kind: "channel" });
+      windowState.setKicked(channelKey("freenode", "#new"), "operator", "spam");
+      networks.refetchChannels();
+      await new Promise((r) => setTimeout(r, 20));
+
+      // Focus AWAY from the pseudo-row; it stays in the sidebar, greyed.
+      sel.setSelectedChannel({ networkSlug: "freenode", channelName: "#bofh", kind: "channel" });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(sel.selectedChannel()?.channelName).toBe("#bofh");
+
+      dismissPseudoWindow("freenode", "#new");
+
+      await new Promise((r) => setTimeout(r, 20));
       expect(sel.selectedChannel()?.channelName).toBe("#bofh");
       expect(sel.selectedChannel()?.kind).toBe("channel");
       expect(sel.selectedChannel()?.networkSlug).toBe("freenode");

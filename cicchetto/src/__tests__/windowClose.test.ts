@@ -69,10 +69,13 @@ vi.mock("../lib/windowState", () => ({
   forceParted: vi.fn(),
 }));
 
-// dismissPseudoWindow (#71 INC-3) imports selection to redirect focus off a
-// dismissed, currently-focused pseudo-row. Mock it as controllable spies —
-// same "boundary spy, don't pull the reactive chain" rationale as the
-// windowState mock above.
+// #445 — windowClose no longer imports selection AT ALL: the pseudo-row ×
+// stopped steering focus and left the target to selection.ts's bucket-E
+// close-watcher. These spies stay as the tripwire for putting a redirect
+// back — mocking the module means ANY future import of it from this unit
+// routes through them, so a re-added `setSelectedChannel` call is visible
+// here even though the green run never touches them. Where focus actually
+// LANDS is selection.test.ts's business (the two #445 bucket-E arms).
 const selectedChannelMock = vi.hoisted(() => vi.fn<() => unknown>());
 const setSelectedChannelMock = vi.hoisted(() => vi.fn());
 vi.mock("../lib/selection", () => ({
@@ -209,16 +212,18 @@ describe("disconnectNetwork — registered-user branch", () => {
   });
 });
 
-// #71 INC-3 — dismissPseudoWindow is THE shared verb behind the × on a
-// non-joined pseudo-row (invited/failed/kicked/parked): drop its
-// windowState key AND, if the row was the FOCUSED window, redirect to the
-// network's $server window BEFORE dropping it. Both the desktop Sidebar
-// and the mobile BottomBar route their pseudo-row × through this — one
-// implementation, one navigation outcome on both surfaces (the divergence
-// the INC-3 review caught: BottomBar previously did a raw setParted and
-// let the bucket-E watcher pick MRU). The $server-vs-MRU destination is a
-// deferred product choice (DESIGN_NOTES 2026-07-26 + follow-up issue).
-describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focused", () => {
+// #71 INC-3 / #445 — dismissPseudoWindow is THE shared verb behind the ×
+// on a non-joined pseudo-row (failed/kicked/parked): drop its windowState
+// key, forward the PART, and NOTHING ELSE. INC-3 unified the two surfaces
+// on the Sidebar's explicit `$server` redirect and deferred whether that
+// was the right destination; #445 answered MRU, which is not a different
+// redirect but ONE FEWER — the bucket-E close-watcher already picks MRU
+// for every other close, so the verb stops pre-empting it.
+//
+// Consequently this file no longer pins a destination: it pins the two
+// side effects the verb still owns, plus the negative (it steers no
+// focus). The destination lives with its owner, in selection.test.ts.
+describe("dismissPseudoWindow — drops a pseudo-row; the landing is bucket E's", () => {
   // #511 — a × on an :invited pseudo-row USED to be client-only
   // (forceParted only), so the server kept `window_states[ch] = :invited`
   // and #482's cold-subscribe backfill re-emitted `window_invited` on the
@@ -262,10 +267,27 @@ describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focuse
     const { dismissPseudoWindow } = await import("../lib/windowClose");
     dismissPseudoWindow("freenode", "#inv");
     expect(windowState.forceParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
-    expect(setSelectedChannelMock).not.toHaveBeenCalled();
   });
 
-  it("redirects focus to the network $server window when the dismissed pseudo-row IS the focused one", async () => {
+  // #445 — the hardest case for the deleted redirect: the dismissed row IS
+  // the focused one, which is precisely when INC-3 steered to `$server`.
+  // The verb must now steer nowhere and let the drop speak for itself.
+  //
+  // Stated plainly: on green this asserts a mock that is never reached,
+  // because the module under test no longer imports selection. That is
+  // what makes it a tripwire rather than coverage — it kills exactly one
+  // mutant (put the redirect back) and measures no behaviour of its own.
+  // The behaviour — where focus goes instead — is selection.test.ts's
+  // "#445: dismissing the FOCUSED pseudo-row lands on MRU, not $server".
+  //
+  // The former "does NOT redirect when a DIFFERENT window is focused"
+  // sibling was DELETED with the redirect it guarded: with no focus
+  // branch left in the verb, it differed from this arm only in a mock
+  // return value neither test's subject reads. Its real content — a ×
+  // on an unfocused row must not steal focus — now lives in
+  // selection.test.ts's "#445: ... NON-focused ..." arm, against the
+  // watcher that genuinely branches on the selection.
+  it("steers NO focus, even when the dismissed pseudo-row is the focused window (#445)", async () => {
     selectedChannelMock.mockReturnValue({
       networkSlug: "freenode",
       channelName: "#inv",
@@ -273,30 +295,11 @@ describe("dismissPseudoWindow — drops a pseudo-row, redirects if it was focuse
     });
     const auth = await import("../lib/auth");
     auth.setToken("utok");
-    const { SERVER_WINDOW_NAME } = await import("../lib/windowKinds");
     const windowState = await import("../lib/windowState");
     const { channelKey } = await import("../lib/channelKey");
     const { dismissPseudoWindow } = await import("../lib/windowClose");
     dismissPseudoWindow("freenode", "#inv");
-    // Redirect fires BEFORE the drop (pre-empts the bucket-E MRU pick).
-    expect(setSelectedChannelMock).toHaveBeenCalledWith({
-      networkSlug: "freenode",
-      channelName: SERVER_WINDOW_NAME,
-      kind: "server",
-    });
-    expect(windowState.forceParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
-  });
-
-  it("does NOT redirect when a DIFFERENT window is focused (no focus steal)", async () => {
-    selectedChannelMock.mockReturnValue({
-      networkSlug: "freenode",
-      channelName: "#other",
-      kind: "channel",
-    });
-    const auth = await import("../lib/auth");
-    auth.setToken("utok");
-    const { dismissPseudoWindow } = await import("../lib/windowClose");
-    dismissPseudoWindow("freenode", "#inv");
     expect(setSelectedChannelMock).not.toHaveBeenCalled();
+    expect(windowState.forceParted).toHaveBeenCalledWith(channelKey("freenode", "#inv"));
   });
 });

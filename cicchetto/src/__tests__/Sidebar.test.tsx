@@ -721,8 +721,9 @@ describe("Sidebar", () => {
   // in archive (one window, two surfaces — vjt dogfood bug).
   // Post-BK: × fires forceParted (drops windowStateByChannel key) →
   // row vanishes; visibleArchiveForNetwork's pseudo-name filter releases
-  // and the archive section shows the row. If the closed pseudo-row WAS
-  // the selected window, selection redirects to $server.
+  // and the archive section shows the row. #445 — the × no longer steers
+  // focus at all; the close-watcher in selection.ts picks the next window
+  // (MRU), the same way it does for every other window close.
   describe("UX-5 bucket BK — pseudo-row × button", () => {
     it("renders an aria-labeled × button on a failed pseudo-row", () => {
       mockWindowState = { "freenode #it-opers": "failed" };
@@ -753,31 +754,24 @@ describe("Sidebar", () => {
       expect(forcePartedMock).toHaveBeenCalledWith("freenode #it-opers");
     });
 
-    it("clicking × on the selected pseudo-row redirects selection to $server", () => {
+    // #445 — the × steers no focus, not even when it closes the window
+    // the operator is looking at. That is the hard case: it is exactly
+    // when INC-3 redirected to `$server`. Where focus goes INSTEAD is not
+    // this component's business and is deliberately not asserted here —
+    // selection.ts's bucket-E close-watcher owns it, and selection.test.ts's
+    // two "#445" arms hold the landing (MRU when focused, unmoved when not).
+    //
+    // The former "clicking × on a non-selected pseudo-row does NOT
+    // redirect selection" sibling was deleted along with the redirect it
+    // guarded: with no focus branch left anywhere on this path, it
+    // differed from this arm only in a `selectedChannel` mock value that
+    // nothing downstream reads. Keeping both would have counted one
+    // behaviour twice.
+    it("clicking × on the SELECTED pseudo-row steers no focus (#445)", () => {
       mockWindowState = { "freenode #it-opers": "failed" };
       vi.spyOn(selMod, "selectedChannel").mockReturnValue({
         networkSlug: "freenode",
         channelName: "#it-opers",
-        kind: "channel",
-      });
-      render(() => <Sidebar />);
-      const closeBtn = screen.getByLabelText("Close #it-opers");
-      fireEvent.click(closeBtn);
-      expect(selMod.setSelectedChannel).toHaveBeenCalledWith({
-        networkSlug: "freenode",
-        channelName: "$server",
-        kind: "server",
-      });
-      expect(forcePartedMock).toHaveBeenCalledWith("freenode #it-opers");
-    });
-
-    it("clicking × on a non-selected pseudo-row does NOT redirect selection", () => {
-      mockWindowState = { "freenode #it-opers": "failed" };
-      // Default selectedChannel mock returns null. Re-mock to a DIFFERENT
-      // selection so we can assert setSelectedChannel is NOT called.
-      vi.spyOn(selMod, "selectedChannel").mockReturnValue({
-        networkSlug: "freenode",
-        channelName: "#italia",
         kind: "channel",
       });
       render(() => <Sidebar />);
