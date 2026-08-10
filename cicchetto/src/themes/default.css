@@ -5239,6 +5239,95 @@ html.resize-dragging * {
   font-size: 0.85rem;
 }
 
+/* #1157 — the unified Sessions view's identity cell, dictated by vjt
+   (2026-08-09) as "column 1, two lines": a `visitor` / `user` badge and the
+   nick, with the network underneath.
+   MISSING RULES, not a restyle. `AdminSessionsTab` shipped this markup with
+   none of the classes below defined anywhere in this file, which is the same
+   way the pre-#1157 Visitors tab shipped its glued per-network cell — markup
+   whose layout lived only in CSS that was never written. `.adm-row-expand`
+   is a row-direction flex container, so without these the caret, the
+   badge+nick pair and the network all landed on ONE line, and the badges
+   were as wide as their words. Locked by
+   `admin-sessions-identity-layout.spec.ts`, in a real browser: jsdom has no
+   layout and cannot see any of it. */
+
+/* The caret sits beside a two-line BLOCK. `align-items: baseline` puts it on
+   the first line's baseline rather than centred against both lines.
+   Deliberately NOT `flex-wrap: wrap` on this row with the two lines as
+   siblings: that produces the second line only as a side effect of running
+   out of width, so a nick too long to sit beside the caret drops the whole
+   identity onto its own line and loses the caret's indent — 16px of drift,
+   on exactly the long nicks the fixed-width badge exists to keep aligned.
+   The wrapper makes the two lines structural instead of emergent. */
+.admin-session-who .adm-row-expand,
+.admin-session-who .adm-row-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--adm-space-2);
+}
+
+.admin-session-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.admin-session-identity {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--adm-space-2);
+  min-width: 0;
+}
+
+/* Equal-width badges are the whole point: "visitor" and "user" are
+   different lengths, and an unpadded pair starts every nick at a different
+   x, which is what makes a column of them unreadable. 5rem clears the
+   longer word (dot + gap + text + padding ≈ 4.5rem at 0.72rem); a third,
+   longer subject kind would overflow it and fail the equal-width assertion
+   rather than silently misalign. */
+.adm-badge--kind {
+  flex: 0 0 auto;
+  min-width: 5rem;
+}
+
+/* The nick is the value the eye scans, so it keeps the mono face the rest
+   of the table's data cells use. */
+.admin-session-nick {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* Second line — dimmed and a size down because it qualifies the nick above
+   rather than competing with it. `font-weight: 400` undoes
+   `.adm-row-expand`'s 600: the disclosure is bold because it is the row's
+   name, and the network is not. */
+.admin-session-network {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--adm-text-dim);
+}
+
+/* Drill-down danger zone: the note names what Delete destroys, so it must
+   read as one unit with the button rather than as loose text beside it. */
+.admin-session-danger {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--adm-space-3);
+  margin-top: var(--adm-space-3);
+  padding-top: var(--adm-space-3);
+  border-top: 1px solid var(--adm-line);
+}
+
+.admin-session-danger-note {
+  font-family: var(--adm-font);
+  font-size: 0.75rem;
+  color: var(--adm-text-dim);
+}
+
 /* Label/value list in a detail panel. Two columns so the labels form a
    readable left edge; the value column takes the slack and wraps. */
 .adm-facts {

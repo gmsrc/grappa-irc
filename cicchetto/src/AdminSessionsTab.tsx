@@ -283,22 +283,34 @@ const AdminSessionsTab: Component = () => {
                             label={`details for ${renderWho(row)}`}
                             testId={`admin-session-details-${row.key}`}
                           >
-                            <span class="admin-session-identity">
-                              {/* Fixed-width kind badge: "visitor" and
-                                  "user" are different lengths, and an
-                                  unpadded pair makes every nick start at
-                                  a different x. */}
-                              <AdminBadge
-                                tone={row.subject_kind === "user" ? "info" : "neutral"}
-                                class="adm-badge--kind"
-                                ariaLabel={row.subject_kind}
-                              >
-                                {row.subject_kind}
-                              </AdminBadge>
-                              <span class="admin-session-nick">{renderLabel(row)}</span>
-                            </span>
-                            <span class="admin-session-network">
-                              {row.network_slug ?? `network ${row.network_id}`}
+                            {/* The two dictated lines are ONE block beside the
+                                caret, not two siblings of it. Left as siblings
+                                they are flex items of `.adm-row-expand`, and
+                                the second line can only be produced by letting
+                                that row wrap — which makes the layout depend on
+                                nick length: a nick too long to sit beside the
+                                caret pushes the whole identity onto its own
+                                line, losing the caret's indent and breaking the
+                                alignment the fixed-width badge exists to
+                                create. Measured at 16px of drift. */}
+                            <span class="admin-session-lines">
+                              <span class="admin-session-identity">
+                                {/* Fixed-width kind badge: "visitor" and
+                                    "user" are different lengths, and an
+                                    unpadded pair makes every nick start at
+                                    a different x. */}
+                                <AdminBadge
+                                  tone={row.subject_kind === "user" ? "info" : "neutral"}
+                                  class="adm-badge--kind"
+                                  ariaLabel={row.subject_kind}
+                                >
+                                  {row.subject_kind}
+                                </AdminBadge>
+                                <span class="admin-session-nick">{renderLabel(row)}</span>
+                              </span>
+                              <span class="admin-session-network">
+                                {row.network_slug ?? `network ${row.network_id}`}
+                              </span>
                             </span>
                           </AdminRowName>
                         </td>
