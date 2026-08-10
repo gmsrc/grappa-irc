@@ -1189,6 +1189,38 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  // #1192 — a deliberate behaviour change, pinned so it cannot regress by
+  // accident in either direction.
+  //
+  // `/ctcp bob PING` was always a ping; only `/ping` knew to correlate one. Its
+  // reply therefore fell out in `$server` as an uncorrelated "← CTCP PING reply
+  // from bob" row. Routing both verbs through the one seam means the VERB
+  // decides, not which command spelled it, so the RTT now lands in the source
+  // window either way.
+  //
+  // The WIRE is untouched, and that is the half worth guarding: the seam mints
+  // no token, so a bare `/ctcp bob PING` still frames `\x01PING\x01` — the raw
+  // escape hatch keeps sending exactly the operator's bytes, and the empty
+  // token rides the #637 token-less fallback home.
+  it("/ctcp <target> PING correlates without inventing a token (#1192)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    vi.spyOn(Date, "now").mockReturnValue(1706743200000);
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const pc = await import("../lib/pingCorrelation");
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/ctcp bob ping");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01PING\x01", "bob");
+    expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "", k, "#a", 1706743200000);
+    expect(result).toEqual({ ok: true });
+
+    vi.mocked(Date.now).mockRestore();
+  });
+
   // #640 — ACTION is the exception: it IS conversation (/me to an explicit
   // target), so it rides the normal send path INTO the target window (3 args,
   // no ctcpTarget), exactly as before #640. The parser upper-cases the verb.

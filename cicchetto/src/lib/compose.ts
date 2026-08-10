@@ -17,6 +17,7 @@ import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
 import { requestConfirm } from "./confirmDialog";
 import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
+import { sendCtcpQuery } from "./ctcpQuery";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
 import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
@@ -29,7 +30,6 @@ import { splitMessageLines } from "./messageLines";
 import { openModeModal } from "./modeModal";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
 import { asciiFold, nickEquals } from "./nickEquals";
-import { registerPing } from "./pingCorrelation";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 import { quitAll } from "./quit";
@@ -983,64 +983,66 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         // #591 — /ctcp <target> <VERB> [args]: a single CTCP frame to an
-        // EXPLICIT target (not the current window), built via the shared
-        // `ctcpFrame` seam. Non-ACTION CTCP is single-line by convention
-        // (Grappa.IRC.LineSplit) so there is no multiline fan-out. AWAIT the
-        // send: a CTCP verb MUST NOT silently no-op when the WS is down.
+        // EXPLICIT target (not the current window). Non-ACTION CTCP is
+        // single-line by convention (Grappa.IRC.LineSplit) so there is no
+        // multiline fan-out. AWAIT the send: a CTCP verb MUST NOT silently
+        // no-op when the WS is down.
         case "ctcp": {
-          // #640 — a CTCP QUERY (VERSION/PING/TIME/…) is a control-surface
-          // probe, not a conversation: its self-echo renders in the SOURCE
-          // window (`channelName`, where the operator typed it), NEVER a query
-          // window for the recipient. Send to the source window with the wire
-          // recipient in `ctcpTarget`; the server keys the echo to the source,
-          // carries the recipient in `meta.ctcp_target`, and never auto-opens a
-          // window for it.
-          //
-          // ACTION is the exception — it IS conversation (`/me` to an explicit
-          // target), so it belongs in the TARGET window and rides the normal
-          // send path unchanged (the server also rejects an ACTION via the CTCP
-          // route — `Session.send_ctcp`'s non-ACTION gate). The parser
-          // upper-cases the verb; guard case-insensitively regardless.
-          const frame = ctcpFrame(cmd.verb, cmd.args);
+          // ACTION is the exception this door keeps for itself: it IS
+          // conversation (`/me` to an explicit target), so it belongs in the
+          // TARGET window and rides the normal send path (the server also
+          // rejects an ACTION through the CTCP route — `Session.send_ctcp`'s
+          // non-ACTION gate). The parser upper-cases the verb; guard
+          // case-insensitively regardless.
           if (cmd.verb.toUpperCase() === "ACTION") {
-            await sendPrivmsg(networkSlug, cmd.target, frame);
-          } else {
-            await sendPrivmsg(networkSlug, channelName, frame, cmd.target);
+            await sendPrivmsg(networkSlug, cmd.target, ctcpFrame(cmd.verb, cmd.args));
+            result = { ok: true };
+            break;
           }
+          const ctcpNetworkId = networkIdBySlug(networkSlug);
+          if (ctcpNetworkId === undefined) return { error: "/ctcp: network not found" };
+          // Everything else is a control-surface probe and goes through the
+          // #1192 seam, which owns the #640 source-window echo and the #600
+          // register-before-send ordering.
+          //
+          // Consequence worth naming: `/ctcp <t> PING` now CORRELATES, where it
+          // used to drop its reply into `$server` as an uncorrelated
+          // "← CTCP PING reply from …" row. The verb was always a ping; only
+          // the sugar knew to correlate it. Nothing changes on the WIRE — the
+          // seam mints no token, so a bare `/ctcp bob PING` still frames
+          // `\x01PING\x01` and rides the #637 token-less fallback home.
+          await sendCtcpQuery({
+            networkSlug,
+            networkId: ctcpNetworkId,
+            sourceChannel: channelName,
+            targetNick: cmd.target,
+            verb: cmd.verb,
+            args: cmd.args,
+            sentAtMs: Date.now(),
+          });
           result = { ok: true };
           break;
         }
-        // #591 — /ping <target>: CTCP PING sugar. The token is a client
-        // timestamp; it travels in the frame, comes back verbatim in the
-        // reply's server-typed meta.ctcp_args, and the RTT is `now - sentAt`.
-        // Keyed on the SOURCE window so the RTT line lands where /ping was typed
-        // (irssi behavior; synthesized in subscribe.ts).
-        //
-        // #600 — register the pending entry BEFORE the send, NOT after. The
-        // earlier "register after a successful send — the reply cannot precede
-        // the send" ordering held only for the WIRE: `sendPrivmsg` is a REST
-        // POST, and on a slow/loaded runner its ack resolves AFTER the peer's
-        // CTCP PING reply has already been processed on the (separate,
-        // already-open) WS. With registration behind the `await`,
-        // `maybeConsumePingReply → resolvePing` found no pending entry and
-        // dropped the reply — the RTT line never rendered → the 15s CI timeout
-        // (deterministic on the CI runner, invisible on a fast local box).
-        // Registering first makes the pending present for any reply; if the send
-        // below throws, the orphaned entry is inert (one-shot, identity-scoped
-        // clear, never resolves without a matching reply).
+        // #591 — /ping <target>: CTCP PING sugar over the same seam. The token
+        // is a client timestamp; it travels in the frame, comes back verbatim in
+        // the reply's server-typed meta.ctcp_args, and the RTT is `now - sentAt`
+        // (synthesized in subscribe.ts, irssi behavior). Minting the token is
+        // ALL this sugar adds — the correlation bookkeeping and its ordering
+        // belong to the seam, and did not survive being held by hand once a
+        // third caller appeared.
         case "ping": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/ping: network not found" };
+          const pingNetworkId = networkIdBySlug(networkSlug);
+          if (pingNetworkId === undefined) return { error: "/ping: network not found" };
           const sentAtMs = Date.now();
-          const token = String(sentAtMs);
-          // registerPing keys the RTT correlation on the SOURCE window
-          // (`key`/`channelName`) so the reply's RTT line lands where /ping was
-          // typed — the SAME window the #640 echo now renders in (the two halves
-          // finally converge).
-          registerPing(networkId, cmd.target, token, key, channelName, sentAtMs);
-          // #640 — echo to the SOURCE window (`channelName`) with the wire
-          // recipient in `ctcpTarget`; never opens a query window for the peer.
-          await sendPrivmsg(networkSlug, channelName, ctcpFrame("PING", token), cmd.target);
+          await sendCtcpQuery({
+            networkSlug,
+            networkId: pingNetworkId,
+            sourceChannel: channelName,
+            targetNick: cmd.target,
+            verb: "PING",
+            args: String(sentAtMs),
+            sentAtMs,
+          });
           result = { ok: true };
           break;
         }
