@@ -36968,10 +36968,36 @@ nothing and returned rc=1 every time. A run with no unmutated baseline cannot
 tell a kill from a broken runner. The baseline came second and should have come
 first.
 
-**The e2e spec is written and has NOT been run** — this branch had no e2e lane.
-It covers the two things jsdom is structurally blind to: that a real engine
-scrolls the overflowing compose box down to the caret (the #1105/#1113
-dependency the issue names — `!addquote ` plus a body overflows the rows=1
-textarea nearly every time), and that nothing goes out on the wire. The static
-half of the gate did run: `bun run check` is biome plus tsc over
-`e2e/tsconfig.json`, rc=0.
+**The e2e spec covers the two things jsdom is structurally blind to**: that a
+real engine scrolls the overflowing compose box down to the caret (the
+#1105/#1113 dependency the issue names), and that nothing goes out on the wire.
+It was read RED by displacement and then green, 3 passed.
+
+**Its first red was the spec's own setup, and the oracle is what caught it.**
+`expectEndCaretVisible` refuses to run unless the draft really overflows —
+`scrollHeight > clientHeight + minOverflowPx` — and at a 1280px viewport it
+refused: 73 against a required 82. A wide compose wraps the fixture twice, and
+the guard exists precisely so "the caret is in view" cannot pass on a draft that
+never left line one. Lowering the threshold would have bought a green by
+disarming the guard.
+
+The cure was the VIEWPORT, not the body, and the arithmetic is why. Clearing the
+margin at 1280px needs four wrapped lines, roughly 330 characters; the line
+budget is 512 bytes less `LineSplit`'s source-prefix reserve (1 + 30 + 1 + 10 +
+1 + 63 + 1 = 107) less the `PRIVMSG #channel :` envelope and CRLF, so about 380
+for the body. A 330-byte fixture inside a 380-byte budget overflows on this host
+and splits into two scrollback rows on one with a longer nick. Moving the arm to
+390px instead measures 109px of overflow against the 40 required — and 390px is
+where the defect lives anyway, which is why #1105 measured it there. `hasTouch`
+comes along out of necessity: `selectChannel` takes the mobile branch at that
+width and reaches the window with `tap()`, which throws on a context without it.
+
+**Displacement, not deduction.** With `placeCaretAtEndInView` removed from
+`appendToCompose`, the overflow guard PASSES and `selStart == valueLen` PASSES —
+the fixture does overflow, the caret is at the end — and only `scrollTop > 0`
+fails, receiving 0. The other two arms stay green under the same displacement,
+so exactly one arm measures the reveal. A first attempt at that displacement
+never reached the oracle: deleting the call left the import unused, `tsc
+--noEmit` failed inside the `cicchetto-build-test` oneshot, and the stack died
+before a single test ran. An e2e mutant has to keep the BUNDLE buildable, or the
+harness dies upstream of the thing being measured.
