@@ -60,6 +60,15 @@ describe("frameBudget — frameBudgetForTarget", () => {
     // would over-promise by exactly the bytes the wire actually spends.
     expect(frameBudgetForTarget(400, "#café")).toBe(394);
   });
+
+  it("has no budget to report when the frame cannot hold a body at all", () => {
+    // A LINELEN small enough to be eaten whole by the relay reserve makes
+    // the base negative, and the server's own fast path then sends the body
+    // UNSPLIT. There is nothing to warn about and nothing to count down —
+    // and a negative "remaining" would render as `--118`.
+    expect(frameBudgetForTarget(-118, "#a")).toBeNull();
+    expect(frameBudgetForTarget(2, "#ab")).toBeNull();
+  });
 });
 
 describe("frameBudget — frameCount", () => {
@@ -77,6 +86,23 @@ describe("frameBudget — frameCount", () => {
 
   it("treats a tab as a word boundary, like the server", () => {
     expect(frameCount("aaaaa\tbbbbbbbb cc", 10)).toBe(3);
+  });
+
+  it("does not break on a boundary that would emit an empty fragment", () => {
+    // The chunk's only whitespace is its FIRST grapheme, so breaking there
+    // would emit nothing and carry everything — the server falls back to the
+    // byte cut instead. Without this case a `k >= 0` off-by-one in the
+    // boundary scan passes the whole suite.
+    expect(frameCount(` ${"a".repeat(12)}`, 10)).toBe(2);
+  });
+
+  it("keeps a multi-codepoint grapheme cluster whole", () => {
+    // The server splits on `String.graphemes/1` — EXTENDED grapheme
+    // clusters. A ZWJ family is 25 bytes and ONE of those; counting code
+    // points instead would report seven frames for a single indivisible
+    // one. This is the one place the two runtimes' segmentation tables
+    // have to agree, and 🍕 (a lone codepoint) does not exercise it.
+    expect(frameCount("👩‍👩‍👧‍👦", 4)).toBe(1);
   });
 
   it("falls back to the byte cut for a token with no boundary in it", () => {

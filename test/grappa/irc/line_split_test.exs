@@ -358,6 +358,12 @@ defmodule Grappa.IRC.LineSplitTest do
   # `linelen` is derived from the budget through the production function, so
   # the table states budgets (what cic is handed) and not wire lengths.
   #
+  # Two of the cases exist for the MIRROR rather than for this module: the
+  # leading-space one is where an off-by-one in the boundary scan would break
+  # at index 0 and emit an empty fragment, and the ZWJ family is the only
+  # place `String.graphemes/1` and cic's `Intl.Segmenter` have to agree on
+  # what one grapheme IS (a lone-codepoint emoji does not exercise that).
+  #
   # Not covered by count alone, and deliberately not faked: the NO-BREAK
   # SPACE policy. Treating U+00A0 as a boundary changes WHERE the cut lands
   # but not how many fragments come out, so a count table cannot witness it —
@@ -369,6 +375,8 @@ defmodule Grappa.IRC.LineSplitTest do
           {10, "aaaaa bbbbbbbb cc", 3},
           {10, "aaaaa\tbbbbbbbb cc", 3},
           {10, String.duplicate("a", 20), 2},
+          {10, " " <> String.duplicate("a", 12), 2},
+          {4, "👩‍👩‍👧‍👦", 1},
           {2, "🍕🍕", 2},
           {10, String.duplicate("é", 5), 1},
           {10, String.duplicate("é", 6), 2},

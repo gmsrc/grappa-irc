@@ -71,10 +71,17 @@ export function utf8ByteLength(s: string): number {
  * server published. `null` when there is no base (no live session has
  * reported one yet) — the caller must then show no warning at all rather
  * than guess a budget.
+ *
+ * Also `null` when the frame cannot hold a body at all: a LINELEN small
+ * enough to be eaten whole by the relay reserve (an ircd may advertise any
+ * positive one) makes this non-positive, and the server's own fast path then
+ * sends the body UNSPLIT. Nothing to warn about, nothing to count down — and
+ * a negative remainder would render as `--118`.
  */
 export function frameBudgetForTarget(base: number | null, target: string): number | null {
   if (base === null) return null;
-  return base - utf8ByteLength(target);
+  const budget = base - utf8ByteLength(target);
+  return budget <= 0 ? null : budget;
 }
 
 /**
