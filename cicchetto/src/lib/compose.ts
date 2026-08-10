@@ -16,7 +16,7 @@ import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
 import { requestConfirm } from "./confirmDialog";
-import { scrubCtcpDelimiters } from "./ctcpAction";
+import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
 import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
@@ -205,14 +205,6 @@ const persistDrafts = (states: Record<ChannelKey, ComposeState>): void => {
   if (keys.length === 0) sessionStorage.removeItem(DRAFTS_KEY);
   else sessionStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
 };
-
-// #591 — the single CTCP frame builder: `\x01VERB\x01` (no args) or
-// `\x01VERB args\x01`. This is the ONE place that wraps a body in CTCP `\x01`
-// framing — shared by /me (verb ACTION, one frame per line) and /ctcp
-// (arbitrary verb, single frame). Empty args yield NO trailing space, so a
-// bare `/ctcp bob version` frames as `\x01VERSION\x01`, not `\x01VERSION \x01`.
-export const ctcpFrame = (verb: string, args: string): string =>
-  args === "" ? `\x01${verb}\x01` : `\x01${verb} ${args}\x01`;
 
 // The lines a free-text body fans out to — one PRIVMSG each, after the exit
 // scrub. Shared by the send path and #1108's pre-send preview so the count
