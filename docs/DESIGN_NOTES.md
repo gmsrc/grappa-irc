@@ -38160,3 +38160,86 @@ behavioural: no test pins a USER-SUPPLIED reason on the QUIT wire —
 `connection_state_test.exs` asserts the frame from the context function with a
 hardcoded string, and no controller test sends `reason` at all. Left as-is
 rather than widened on a worker's own initiative.
+
+---
+
+## 2026-08-10 — #944: the away banner was LATE, not lost — and a pending WHOIS is not a claim on the next 301
+
+`p0b-peer-away` and `issue270-peer-away-overlap` had been flaking for a
+night. The issue body said the spec addressed the peer by the requested
+nick instead of the granted one; that was already fixed (`6e811706`) and
+was not the cause. Two DIFFERENT defects were, and only one of them is
+the flake.
+
+**The flake is a latency bill, and the rail's speculative WHOIS pays it
+first.** Measured on the live testnet with a temporary probe on
+`Session.Server`'s route path (20 iterations of `p0b`, 2 red): the server
+emitted `peer_away` **20 times out of 20** — including both reds. The
+event is never dropped; it arrives too late for the spec's 5 s budget.
+The numbers, per iteration:
+
+    21:28:37.515  command=WHOIS    headroom_s=-1.61   (cic rail, auto)
+    21:28:37.524  command=PRIVMSG  headroom_s=-3.60   (the operator's /msg)
+    21:28:39.578  311 / 301 / 318                     (+2.05 s, the WHOIS)
+    21:28:42.569  301 → peer_away                     (+5.05 s)  RED
+
+The operator's own message is sent 9-65 ms AFTER the rail's WHOIS — cic's
+WS push beats its own REST POST — so the WHOIS takes the cheaper slot and
+the operator's reply pays for both. The delay of the standalone 301 then
+tracks `|headroom_s|`: ~3.0 s in the greens, 5.05 s in the red, against a
+5 s assert. `#270` carries a 10 s budget and cedes far more rarely, which
+is the same fact seen from the other end.
+
+**Displaced, with the prediction written first.** Suppressing the rail's
+auto-WHOIS (cic-side, experiment only) was predicted to move the PRIVMSG
+headroom from ~-3.5 s to ~-1.5 s, the reply from ~3 s to ~1.5 s, and the
+red to zero. Measured: `command=WHOIS` count 0 (the instrument checks
+itself), headroom **-1.5 s**, reply **2.0 s** (twice: 1 ms, bank fully
+drained), and **0 red in 60 iterations** against **6 red in 40** with it.
+The suite also ran 30% faster. So the rail's one extra command is not the
+whole 2 s base delay — the session's own login/join/reset traffic is —
+but it is what pushes the operator's reply across the budget.
+
+This is the first MEASUREMENT of the mechanism `lib/railWhois.ts` has
+been describing as inferred-from-source since #800 ("the ircd-side
+mechanism is still unconfirmed"): bahamut's `since - now < 10` recvQ gate
+(`s_bsd.c`) stops PARSING a socket that is over its bank, so the cost of
+a speculative command lands on the NEXT thing the operator does. The
+remedy is a design question and is deliberately NOT decided here: only
+the server can see the bank (`Grappa.IRC.FakeLag` already computes
+`headroom_s`), so deferring non-user-initiated upstream commands while
+headroom is negative is the shape to consider. Filed, not built.
+
+**The second defect is real and is what this change fixes.** The 301 arm
+was dual-purpose, gated on the mere PRESENCE of a `whois_pending` entry:
+pending → fold into the bundle, absent → emit `:peer_away`. A pending
+entry only says we ASKED. Between the ask and the reply, a standalone 301
+— bahamut's answer to our own PRIVMSG — was folded into a bundle it does
+not belong to and the banner was lost for good, not merely delayed.
+Observed in the wild once in 20 iterations (`21:28:31.102`, a standalone
+301 with a primed-but-unopened bundle).
+
+The discriminator is the bundle's OWN 311, and it was verified on the
+wire rather than read off the source. Two clients on the testnet leaf:
+
+    WHOIS   → 311 → 312 → 301 → 317 → 318
+    PRIVMSG → 301                       (bare, no 311)
+
+311 RPL_WHOISUSER opens every WHOIS reply and is the only numeric that
+folds `:user`, so its presence in the accumulator IS the "bundle open"
+fact — derived, not tracked in a parallel flag. Before it, a 301 can only
+be the standalone reply. `whois_bundle_open?/2` is that predicate.
+
+**Deliberately left alone: the `:delegated` numeric catch-all** shares the
+shape (it folds ANY unmatched numeric into a pending bundle) but the
+311-first order is only MEASURED for 301 on bahamut. Widening an
+unmeasured gate to every numeric and every ircd is the error this entry
+is about, in the other direction.
+
+**Not proven.** That the four nightly reds all had the lateness signature:
+their artifacts are gone and only w1's `#270` red and the two reproduced
+here were examined. Also unproven, and explicitly a claim about the
+testnet only: that the WHOIS/301 collision the gate now closes ever bit a
+real operator — the reasoning that a 20-100 ms RTT would lose the race
+every time is inference, and the delay measured here is the ircd
+deferring the parse, not the network.
