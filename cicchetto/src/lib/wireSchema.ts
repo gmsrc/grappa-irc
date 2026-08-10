@@ -1160,6 +1160,16 @@ export const S_SessionWireServerReplyPayload = {
   },
 } as const;
 
+// Grappa.Session.Wire.session_identity_changed_payload/0
+export const S_SessionWireSessionIdentityChangedPayload = {
+  o: {
+    kind: { l: "session_identity_changed" },
+    network_id: "i",
+    identified: "b",
+    account: { u: ["s", "z"] },
+  },
+} as const;
+
 // Grappa.Session.Wire.supported_umodes_changed_payload/0
 export const S_SessionWireSupportedUmodesChangedPayload = {
   o: { kind: { l: "supported_umodes_changed" }, network_id: "i", modes: { a: "s" } },
