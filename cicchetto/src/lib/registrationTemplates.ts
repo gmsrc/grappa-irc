@@ -18,24 +18,27 @@ import { networkBySlug } from "./networks";
 //
 // ## Why Azzurra ONLY (for now)
 //
-// grappa's ENTIRE registration-success signal is the lowercase `+r`
-// umode echo (`event_router.ex` self-MODE → `:umode_changed` →
-// `umodesForNetwork(id).includes("r")`), which drives step-6
-// auto-complete, the button auto-hide, and the commit-on-+r credential
-// save. Only **bahamut (Azzurra IRC Services)** emits lowercase `+r`:
-//   * **atheme (Libera / solanum)** has NO registered umode at all —
-//     identity is account-only (WHOIS 330 / `account-notify`), so `+r`
-//     never fires and none of the wizard's success logic would work.
-//   * **oftc (oftc-ircservices / oftc-hybrid)** uses UPPERCASE `+R`
-//     (different meaning on bahamut) AND its confirmation is an
-//     out-of-band web link with no shipped verifier — impraticabile.
-// So #349 ships the Azzurra flavor only. Making the wizard flavor-
-// agnostic needs a new server signal (negotiate IRCv3 `account-notify`,
-// handle self `ACCOUNT`, broadcast an identity event) — tracked as a
-// follow-up issue; when it lands, this table gains the `atheme` entry
-// (verified verb: `VERIFY REGISTER <nick> <key>`) + `registerableFlavor`
-// widens. OFTC is a further follow-up (needs that signal + a bespoke
-// local verifier).
+// #349 shipped here because grappa's ENTIRE registration-success signal
+// was then the lowercase `+r` umode echo, which only bahamut (Azzurra IRC
+// Services) emits: atheme (Libera / solanum) assigns no registered umode
+// at all, and on OFTC lowercase `r` is an unrelated oper notice mode. The
+// success logic could not have worked anywhere else.
+//
+// **That blocker is gone.** #388 built the signal this comment asked for:
+// the server negotiates `account-notify`, handles self `ACCOUNT` and
+// numeric 330, folds them with the per-flavour umode in
+// `Grappa.Session.IdentityState`, and broadcasts ONE normalized
+// `session_identity_changed` verdict. All three consumers named here —
+// step-6 auto-complete, the launcher auto-hide, and the commit-on-identity
+// credential save — read that verdict now; none of them knows what a umode
+// is. Do not re-derive identity from a mode letter to widen this table.
+//
+// What still gates each flavour is therefore only its VERBS:
+//   * **atheme** needs its table entry (verb verified:
+//     `VERIFY REGISTER <nick> <key>`), after which `registerableFlavor`
+//     can widen.
+//   * **oftc** needs more than a verb: confirmation is an out-of-band web
+//     link with no shipped verifier.
 //
 // Verbs are SOURCE-VERIFIED (azzurra/services GPLv2 source: REGISTER
 // takes the password FIRST then the email; confirmation is `AUTH <code>`
