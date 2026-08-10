@@ -38316,3 +38316,82 @@ with the type and both accessors derived from it.
 has not been run — the integration stack belonged to another worker for the
 duration of this work. Everything else is measured: the full Elixir gate and
 both cic gates are green.
+
+---
+
+## 2026-08-11 — #1192: a CTCP submenu, and where the answer is not
+
+The verbs already worked. `/ctcp bob version` has framed, sent, echoed and
+rendered since #591; what #1192 added is the way in — the same shape as the
+WHOWAS request, machinery shipped with no entry point.
+
+vjt ruled four questions at once, all as proposed.
+
+**The submenu drills down in place rather than flying out beside the parent.**
+A flyout is a mouse affordance, and this shell also backs the long-press
+message menu on a phone; a second floating box would need its own copy of the
+#487 viewport clamp and the #949 safe-area math — the hardest code in
+`ContextMenu.tsx` — duplicated to serve the input device cic is least used on.
+Two details in the implementation are load-bearing and were not obvious. The
+drill level is an INDEX into `props.items`, not the submenu object: a JSX prop
+is a getter and `UserContextMenu` calls `items()` inline, so a captured object
+goes stale as soon as anything upstream re-renders. And it resets when the
+press coordinates move, because both call sites gate on a `<Show>` whose signal
+goes value→value when the operator right-clicks a second nick while the menu is
+up — nothing unmounts, so without the reset the second nick opens into the
+first one's submenu with the first one's actions bound to it. The placement
+effect also had to start reading the level: swapping the list changes the box
+HEIGHT, which is an input to the #487 math, so a submenu opened near the bottom
+edge would hang off the fold — #487's own defect, re-entered through a door
+#487 could not have known about.
+
+**Six verbs: VERSION, TIME, PING, CLIENTINFO, USERINFO, SOURCE.** Small and
+closed; `/ctcp` remains for anything else. Neither VERSION nor CLIENTINFO is
+verifiable — both are strings the remote client picks for itself, and
+CLIENTINFO is capability discovery, not identity. Worth asking, not worth
+believing.
+
+**PING is in, and the register-before-send ordering moved into a seam.** #600
+established that the pending correlation entry must be registered BEFORE the
+send is awaited: `sendMessage` is a REST POST whose ack can resolve after the
+peer's reply has already crossed the separate, already-open WS, and registering
+behind the await drops the RTT deterministically on a loaded runner and never
+locally. `compose.ts` held that by hand while `/ping` and `/ctcp` were the only
+callers. A menu item is a third caller, and a hand-held invariant with three
+callers has a drift date rather than a guarantee — so `lib/ctcpQuery.ts` now
+owns both halves (the ordering, and #640's source-window echo with the
+recipient in `ctcpTarget`), and the callers lost the ability to get it wrong.
+
+Three things stayed out of that seam deliberately. ACTION, because `/me` to an
+explicit target is conversation and belongs in the target's window. The clock,
+which the caller passes in, keeping the correlation chain wall-clock-free the
+way `pingCorrelation` already is. And token minting: `args` is framed verbatim,
+so a bare PING stays `\x01PING\x01` on the wire and correlates through the
+#637 token-less fallback. That last one is what let the seam absorb `/ctcp`
+without moving a single byte on the wire.
+
+One behaviour did change on purpose. `/ctcp <t> PING` now correlates and
+renders an RTT, where before its reply fell out in `$server` as an
+uncorrelated "← CTCP PING reply from …" row. It was always a ping; only the
+sugar knew to correlate one. With the VERB deciding instead of the spelling of
+the command, both spellings behave the same.
+
+**The reply stays in `$server`, and that is the interesting half.** CTCP
+replies come back as asynchronous NOTICEs, outside the WHOIS numeric burst,
+and `route_non_channel_notice/3` sends every CTCP-framed NOTICE to `$server` —
+protocol is not conversation, whether or not a query window is open. So the
+operator clicks VERSION on bob in `#chan`, reads `→ CTCP VERSION to bob` in
+`#chan`, and the answer appears in `$server`. That split predates this issue
+(typed `/ctcp` has always had it) but the menu makes it discoverable, so the
+surprise gets louder. It was left alone on purpose: moving it means reopening
+#546's NOTICE-routing ruling server-side, which is a separate decision, not a
+side effect of adding a menu row. PING is the one verb whose answer lands where
+it was asked, and only because the correlation table already existed to earn
+it.
+
+Consequently there is no spinner and no pending state anywhere in this menu.
+Clients that suppress CTCP never answer at all, so any affordance built on the
+promise of a reply would have to degrade to empty rather than spin — the
+cheapest way to satisfy that is to promise nothing. Escape also still closes
+the whole menu rather than stepping up one level; the back row is the way up.
+That is a judgement call, not a ruling, and it is one line if it should change.
