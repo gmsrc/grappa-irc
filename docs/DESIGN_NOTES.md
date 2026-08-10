@@ -36626,6 +36626,9 @@ adjusting a selection, stay out of the way"), so the two cannot drift, and
 selection elsewhere in the pane suppressing our menu until it is dismissed —
 accepted, because the browser's copy/search menu is the reasonable answer while
 any selection is live.
+
+---
+
 ## 2026-08-10 — #1160: a compose for the published image, and the three things measuring it changed
 
 The gap was narrow and real: the fastest path that does not compile from
