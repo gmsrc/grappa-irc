@@ -27,7 +27,7 @@
 // text-selection-restored.spec.ts's @webkit half. Real-device dogfood remains
 // the final iOS verification (vjt post-ship).
 
-import { openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminSessionRowKey, openAdminSessionsTab } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -38,9 +38,17 @@ test("@webkit iOS — admin pane content re-enables user-select under the is-ios
   page,
 }) => {
   const admin = getSeededAdmin();
-  // A minted visitor guarantees a populated Visitors table: a real `<td>` cell
-  // (the IP — exactly the copyable content #589 is about) plus a per-row Delete
-  // button that lives INSIDE `.admin-tab-panel` (the re-exclude target).
+  // A minted visitor guarantees a populated table: a real `<td>` cell plus a
+  // control that lives INSIDE `.admin-tab-panel` (the re-exclude target).
+  //
+  // #1157 moved which table that is. The Visitors tab is gone, so this reads
+  // the unified Sessions view, and below 900px — which is where this spec
+  // runs, iPhone 15 — its rows are CARDS: the `<td>` is `display: block`, not
+  // a table cell. That does not weaken the probe, it sharpens it. The element
+  // whose inherited `user-select` #589 was about is the same `<td>`, and the
+  // card layout is precisely the arrangement an operator reads on the device
+  // they are trying to copy an id off.
+  //
   // Short prefix: `${Date.now()}` is 13 digits, so the nick must stay under
   // the upstream NICKLEN (bahamut 30) — a longer prefix trips 400 malformed_nick.
   const visitorNick = `ios589-${Date.now()}`;
@@ -59,19 +67,23 @@ test("@webkit iOS — admin pane content re-enables user-select under the is-ios
 
     // Viewport-aware single door to AdminPane — on the iPhone-15 (mobile)
     // project this routes rail-drawer → cog → settings drawer → admin entry.
-    await openAdminConsole(page);
-    await page.getByTestId("admin-tab-visitors").click();
-    await expect(page.getByTestId("admin-visitors-table")).toBeVisible({ timeout: 10_000 });
+    await openAdminSessionsTab(page);
 
-    const row = page.getByTestId(`admin-visitor-row-${visitor.id}`);
+    const key = await adminSessionRowKey(page, "visitor", visitor.id);
+    const row = page.getByTestId(`admin-session-row-${key}`);
     await expect(row).toBeVisible();
 
-    const styles = await page.evaluate((visitorId) => {
+    const styles = await page.evaluate((rowKey) => {
       const panel = document.querySelector(".admin-tab-panel");
-      // First body cell of the visitors table — a real `<td>` (the copyable
+      // First body cell of the sessions table — a real `<td>` (the copyable
       // surface the bug killed), not a header.
-      const cell = document.querySelector(".admin-visitors-table tbody td");
-      const button = document.querySelector(`[data-testid="admin-visitor-delete-${visitorId}"]`);
+      const cell = document.querySelector(".admin-sessions-table tbody td");
+      // The row's own action control. Which verb it is depends on live truth
+      // (`rowActions`), so the probe asks for whichever one is rendered
+      // rather than naming one and racing the visitor's pid.
+      const button =
+        document.querySelector(`[data-testid="admin-session-disconnect-${rowKey}"]`) ??
+        document.querySelector(`[data-testid="admin-session-reconnect-${rowKey}"]`);
       if (panel === null || cell === null || button === null) {
         return { missing: true } as const;
       }
@@ -83,7 +95,7 @@ test("@webkit iOS — admin pane content re-enables user-select under the is-ios
         cellUserSelect: getComputedStyle(cell).webkitUserSelect,
         buttonUserSelect: getComputedStyle(button).webkitUserSelect,
       } as const;
-    }, visitor.id);
+    }, key);
 
     // Live-surface precondition — no hollow green if a selector drifted.
     expect(styles.missing).toBe(false);
