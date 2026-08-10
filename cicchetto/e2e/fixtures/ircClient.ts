@@ -65,6 +65,9 @@ const PRIVMSG_TIMEOUT_MS = 15_000;
 const OPER_TIMEOUT_MS = 5_000;
 const NICKSERV_TIMEOUT_MS = 5_000;
 const AWAY_TIMEOUT_MS = 5_000;
+// #348 — see `whoisAway` for why this sits at the TOPIC/PRIVMSG fake-lag
+// ceiling rather than at `waitForLine`'s 8s default.
+const WHOIS_TIMEOUT_MS = 15_000;
 
 export class IrcPeer {
   private readonly client: Client;
@@ -348,6 +351,77 @@ export class IrcPeer {
     this.client.raw(["WHOIS", nick]);
   }
 
+  // #348 — "is `nick` away RIGHT NOW", as one correlated round-trip.
+  //
+  // WHOIS is request/response and always ends in 318 RPL_ENDOFWHOIS, so a
+  // reply that arrives WITHOUT a 301 is a POSITIVE statement of "present".
+  // Watching the line stream for a 301 instead (the `whois` + `waitForLine`
+  // shape above) cannot say that: it only ever reports "I heard nothing",
+  // which is equally what a throttled, dead or never-registered peer
+  // produces. A spec asserting "still not away" over a window is satisfied
+  // by silence, so silence must not be a verdict — hence this returns a
+  // boolean ONLY when the server actually answered.
+  //
+  // Both failure modes REJECT rather than resolving false, because "not
+  // away" is exactly the wrong thing to tell a caller here:
+  //   * no 318 inside the budget — the peer asked and nobody answered;
+  //   * 401 ERR_NOSUCHNICK — the nick is not on the network at all (e.g.
+  //     the bouncer registered a suffixed nick after a collision), so the
+  //     question was never about the session under test.
+  //
+  // Budget matches TOPIC/PRIVMSG above rather than `waitForLine`'s 8s
+  // default: a WHOIS is a reply to our OWN command and so sits behind the
+  // same bahamut fake-lag bank, whose overshoot is bounded by the ~10s cap.
+  // It is a condition-wait — it resolves the instant 318 lands.
+  async whoisAway(nick: string, timeoutMs = WHOIS_TIMEOUT_MS): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      let sawAway = false;
+
+      const settle = (finish: () => void) => {
+        clearTimeout(timer);
+        this.client.removeListener("raw", handler);
+        finish();
+      };
+
+      const timer = setTimeout(() => {
+        settle(() =>
+          reject(
+            new Error(
+              `IrcPeer: no 318 RPL_ENDOFWHOIS for ${nick} within ${timeoutMs}ms — ` +
+                `the WHOIS went unanswered, so "away" is unknown, not false`,
+            ),
+          ),
+        );
+      }, timeoutMs);
+
+      const handler = (event: { line: string; from_server: boolean }) => {
+        if (!event.from_server) return;
+        switch (whoisNumericFor(event.line, nick)) {
+          case "301":
+            sawAway = true;
+            return;
+          case "401":
+            settle(() =>
+              reject(
+                new Error(
+                  `IrcPeer: 401 ERR_NOSUCHNICK for ${nick} — nobody by that nick is on ` +
+                    `the network, so this WHOIS says nothing about the session under test`,
+                ),
+              ),
+            );
+            return;
+          case "318":
+            settle(() => resolve(sawAway));
+            return;
+          default:
+        }
+      };
+
+      this.client.on("raw", handler);
+      this.client.raw(["WHOIS", nick]);
+    });
+  }
+
   async part(channel: string, reason: string): Promise<void> {
     const parted = onceMatching(
       this.client,
@@ -543,6 +617,22 @@ export class IrcPeer {
       this.client.quit(reason);
     });
   }
+}
+
+// #348 — the numeric of a WHOIS reply line that is ABOUT `nick`, or null.
+//
+// Server numerics are `:<prefix> <numeric> <requester> <subject> …`, so the
+// subject is read off field 3 rather than regex-matched anywhere in the line:
+// a 301's away message is free text and can contain a nick, a numeric, or
+// both. Nick comparison is exact `===`, the convention every other predicate
+// in this file already uses (`event.nick === this.nick`) — bahamut is
+// CASEMAPPING=ascii and echoes the nick as it holds it, and a spelling that
+// somehow differed would surface as a LOUD unanswered-WHOIS rather than as a
+// quiet wrong answer.
+function whoisNumericFor(line: string, nick: string): string | null {
+  const parts = line.split(" ");
+  if (parts.length < 4) return null;
+  return parts[3] === nick ? parts[1] : null;
 }
 
 // #806 — every wait below detaches its handler on the TIMEOUT branch too,

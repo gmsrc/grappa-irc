@@ -16,12 +16,20 @@
 // user is away. The knob is driven through the settings control, not
 // through the REST endpoint — the control is half of what #348 shipped.
 //
+// Three of the four assertions here are NEGATIVE ("not away yet", "away
+// cleared", "off means never"), and a negative read off a line stream is
+// worthless: no-301-heard is also what a dead peer, a throttled reply and
+// a nick that never registered all look like. So every question is a
+// complete WHOIS round-trip ending in `318 RPL_ENDOFWHOIS`
+// (`IrcPeer.whoisAway`) — the peer asked, the network answered, and the
+// answer did or did not carry a 301. Silence is an error, never a verdict.
+//
 // The integration env sets the deployment default SHORT
 // (`config/dev.exs`, `auto_away_debounce_ms: 2_000`) so the #671 spec
 // need not wait ten minutes. That number is what makes this spec's
 // oracle sharp: a CUSTOM value well above it can be told apart from the
-// default, because "still not away" long after 2s can only mean the
-// preference is in force.
+// default, because an answered "still present" long after 2s can only
+// mean the preference is in force.
 //
 // Per `feedback_ux_e2e_mandatory`: server behaviour a client observes,
 // so it ships with a Playwright e2e via scripts/integration.sh.
@@ -45,29 +53,45 @@ const CUSTOM_DEBOUNCE_SECONDS = 12;
 // that it cannot be the preference firing early.
 const PAST_DEFAULT_MS = 6_000;
 
-// The budget for the preference itself to fire, measured from the hide.
+// The budget for the preference itself to fire, clocked from the END of
+// the window above rather than from the hide — the two run back to back,
+// so the preference has already spent PAST_DEFAULT_MS of its 12s by the
+// time this one opens. Sized as a generous ceiling on a condition-wait,
+// not as a second measurement of the delay: the claim "longer than the
+// deployment default" is made by the window above, and pinning an upper
+// bound on the delay too would only add a way to go red on a slow host.
 const PREFERENCE_BUDGET_MS = 20_000;
 
 // How long "never" gets to prove itself. Four times the deployment
 // default, on a run that has already shown this harness CAN see an AWAY.
 const OFF_WINDOW_MS = 8_000;
 
-const rplAway = (nick: string) => new RegExp(` 301 .* ${nick} `);
+// Cadence of the round-trips inside a window. Unchanged from the WHOIS
+// poll this replaced, so the command load on bahamut's per-connection
+// fake-lag bank is the same as before.
+const WHOIS_POLL_MS = 2_000;
 
-// A peer's read of "is this nick away right now". Polls WHOIS because
-// the away flag is state, not an event: asking once races the bouncer's
-// round-trip.
+// "Was the bouncer away at any point inside this window?"
+//
+// Every answer is a COMPLETED WHOIS round-trip (`IrcPeer.whoisAway`), so a
+// `false` here means the network was asked and answered "present" — not
+// that nothing was heard. That distinction is what makes the three
+// negative assertions below worth anything: watching the line stream for
+// a 301 reports the same silence whether auto-away correctly held off,
+// or the peer died, or bahamut throttled the reply. Three of this spec's
+// four assertions want `false`, so silence must never be able to produce
+// it — a peer that stops answering now throws.
+//
+// The final probe is taken AT the end of the window, so a `false` verdict
+// speaks about the window's closing instant and not some earlier moment
+// inside it.
 async function awayWithin(peer: IrcPeer, nick: string, budgetMs: number): Promise<boolean> {
-  const seen = peer.waitForLine(rplAway(nick), `RPL_AWAY for ${nick}`, budgetMs);
-  peer.whois(nick);
-  const poll = setInterval(() => peer.whois(nick), 2_000);
-  try {
-    await seen;
-    return true;
-  } catch {
-    return false;
-  } finally {
-    clearInterval(poll);
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    if (await peer.whoisAway(nick)) return true;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(WHOIS_POLL_MS, remaining)));
   }
 }
 
@@ -128,10 +152,11 @@ test("#348 — the bouncer waits the delay the user picked, and honours a change
     expect(await awayWithin(peer, nick, PREFERENCE_BUDGET_MS)).toBe(true);
 
     // ---- coming back clears it ------------------------------------------
+    // Not decoration: "present again, upstream" is the durable pre-state
+    // the OFF phase needs, and it is established by a round-trip the
+    // network answered rather than assumed from the visibility flip.
     await setPageVisibility(page, true);
-    await expect
-      .poll(async () => await awayWithin(peer, nick, 3_000), { timeout: 20_000 })
-      .toBe(false);
+    await expect.poll(() => peer.whoisAway(nick), { timeout: 20_000 }).toBe(false);
 
     // ---- switching OFF reaches the RUNNING session ----------------------
     // No reload, no reconnect: the same page, the same upstream session
