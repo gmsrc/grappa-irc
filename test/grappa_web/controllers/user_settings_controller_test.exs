@@ -697,4 +697,172 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # auto_away_debounce_seconds — #348
+  # ---------------------------------------------------------------------------
+  #
+  # The wire carries the three states as ONE scalar: `null` = no
+  # preference, `0` = OFF, N = seconds. The atom lives on the context side
+  # of the boundary only, so these tests are also the pin that the
+  # `0 <-> :disabled` translation happens HERE and nowhere else.
+
+  describe "GET /me/settings/auto-away-debounce-seconds" do
+    test "401 without bearer", %{conn: conn} do
+      conn = get(conn, "/me/settings/auto-away-debounce-seconds")
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "returns null when never persisted", %{conn: conn} do
+      {_user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> get("/me/settings/auto-away-debounce-seconds")
+
+      assert json_response(conn, 200) == %{"auto_away_debounce_seconds" => nil}
+    end
+
+    test "renders a stored delay", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> get("/me/settings/auto-away-debounce-seconds")
+
+      assert json_response(conn, 200) == %{"auto_away_debounce_seconds" => 120}
+    end
+
+    test "renders the OFF state as 0, not as null", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> get("/me/settings/auto-away-debounce-seconds")
+
+      assert json_response(conn, 200) == %{"auto_away_debounce_seconds" => 0}
+    end
+  end
+
+  describe "PUT /me/settings/auto-away-debounce-seconds" do
+    test "401 without bearer", %{conn: conn} do
+      conn =
+        put(conn, "/me/settings/auto-away-debounce-seconds", %{
+          "auto_away_debounce_seconds" => 120
+        })
+
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "200 + persisted for an in-range delay", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{
+          "auto_away_debounce_seconds" => 300
+        })
+
+      assert json_response(conn, 200) == %{"auto_away_debounce_seconds" => 300}
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == 300
+    end
+
+    test "0 disables — stored as :disabled, echoed as 0", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{"auto_away_debounce_seconds" => 0})
+
+      assert json_response(conn, 200) == %{"auto_away_debounce_seconds" => 0}
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == :disabled
+    end
+
+    test "null clears back to the server default", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300)
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{"auto_away_debounce_seconds" => nil})
+
+      assert json_response(conn, 200) == %{"auto_away_debounce_seconds" => nil}
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
+    end
+
+    test "422 + field_errors above the accepted range", %{conn: conn} do
+      {user, session} = user_and_session()
+      over = UserSettings.auto_away_debounce_seconds_max() + 1
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{
+          "auto_away_debounce_seconds" => over
+        })
+
+      assert %{"error" => "validation_failed", "field_errors" => fe} = json_response(conn, 422)
+      assert Map.has_key?(fe, "auto_away_debounce_seconds")
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
+    end
+
+    test "422 below the accepted range (negative is not the OFF sentinel)", %{conn: conn} do
+      {_user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{"auto_away_debounce_seconds" => -1})
+
+      assert %{"error" => "validation_failed"} = json_response(conn, 422)
+    end
+
+    test "400 when the body carries a non-integer", %{conn: conn} do
+      {_user, session} = user_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{
+          "auto_away_debounce_seconds" => "120"
+        })
+
+      assert json_response(conn, 400)
+    end
+
+    test "200 + persisted for a visitor (visitor-parity at the API)", %{conn: conn} do
+      {visitor, session} = visitor_and_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{"auto_away_debounce_seconds" => 60})
+
+      assert json_response(conn, 200) == %{"auto_away_debounce_seconds" => 60}
+      assert UserSettings.get_auto_away_debounce_seconds({:visitor, visitor.id}) == 60
+    end
+
+    test "highlight_patterns survives an auto-away PUT", %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo", "bar"])
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/me/settings/auto-away-debounce-seconds", %{
+          "auto_away_debounce_seconds" => 120
+        })
+
+      assert json_response(conn, 200)
+      assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
+    end
+  end
 end
