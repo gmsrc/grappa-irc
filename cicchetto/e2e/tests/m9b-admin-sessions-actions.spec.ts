@@ -30,7 +30,18 @@
 import { expect, test } from "@playwright/test";
 import { expectShellReady, openAdminSessionsTab } from "../fixtures/cicchettoPage";
 import { patchNetworkConnectionState } from "../fixtures/grappaApi";
-import { getSeededAdmin, getSeededM9bVictim, NETWORK_SLUG } from "../fixtures/seedData";
+import {
+  getSeededAdmin,
+  getSeededM9bSessionId,
+  getSeededM9bVictim,
+  getSeededVjt,
+  getSeededWizUser,
+  M9B_USER,
+  M9B_VICTIM_USER,
+  NETWORK_SLUG,
+  VJT_USER,
+  WIZ_USER,
+} from "../fixtures/seedData";
 
 // E2E-ROBUSTNESS bucket D — cascade root fix. The Disconnect spec
 // parks m9b-victim's credential and the Terminate spec stops its pid;
@@ -66,43 +77,64 @@ async function adminFriendlyLogin(
   await expectShellReady(page);
 }
 
-test("M-9b admin Sessions view lists every seeded subject including m9b-test", async ({ page }) => {
+// A subject's id, however the fixture happens to carry it: the two m9b
+// users expose a composite `user:<id>:<network>` session id, vjt and
+// wiz-test expose the persisted subject JSON. Both reduce to the id, which
+// is what a row's testid is keyed on.
+function idFromSessionId(sessionId: string): string {
+  const parts = sessionId.split(":");
+  if (parts.length !== 3) throw new Error(`unexpected session id shape: ${sessionId}`);
+  return parts[1];
+}
+
+function idFromSubjectJson(subjectJson: string): string {
+  const subject = JSON.parse(subjectJson) as { id?: string };
+  if (typeof subject.id !== "string") {
+    throw new Error(`seeded subject carries no id: ${subjectJson}`);
+  }
+  return subject.id;
+}
+
+test("M-9b admin Sessions view lists every seeded user bind", async ({ page }) => {
+  // The four users the seeder binds. wiz-test is on azzurra-reg rather than
+  // bahamut-test, so its row's network id is not 1 — which is why each is
+  // matched on the `user:<id>:` prefix instead of a full composite key.
+  const seeded = [
+    { name: VJT_USER, id: idFromSubjectJson(getSeededVjt().subjectJson) },
+    { name: M9B_USER, id: idFromSessionId(getSeededM9bSessionId()) },
+    { name: M9B_VICTIM_USER, id: idFromSessionId(getSeededM9bVictim().sessionId) },
+    { name: WIZ_USER, id: idFromSubjectJson(getSeededWizUser().subjectJson) },
+  ];
+
   await adminFriendlyLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
-  // vjt + m9b-test + m9b-victim (all bahamut-test) + wiz-test (azzurra-reg,
-  // GH #349's registration-wizard seed) rows seeded → 4 rows. m9b-victim
-  // was added in GREEN-CI batch-1 as the sacrificial target for destructive
-  // specs (see Disconnect / Terminate specs below); wiz-test joined in #349
-  // as the register-wizard user, live at boot (--auth none, not yet +r).
-  // admin-vjt has no bind, so it has no credential and no row.
+  // This asserted an EXACT total, and #1157 took that away twice over.
   //
-  // #1157 changed what this number MEANS, twice over.
+  // Registry-driven, the list held live pids, so a total of 4 meant "the
+  // four seeded binds are up" and a drop caught one that failed to connect.
+  // Row-backed, a parked or failed subject keeps its row, so the total stops
+  // watching connectivity — that half moved to the destructive specs below,
+  // which read it off the channels cell.
   //
-  // First: the list used to be registry-driven, so 4 meant "4 pids are
-  // alive" and a drop caught a seeded session that failed to connect. The
-  // list is row-backed now, so 4 means "4 credentials exist" and a parked or
-  // failed subject keeps its row. The connectivity half moved to the specs
-  // below, which read it per-row off the channels cell.
+  // Then the full suite showed the total is not this spec's to own at all.
+  // It read 6 where a scoped run read 4, and narrowing to `user:` rows did
+  // NOT fix it: the extra two are users, not stray visitors — other specs
+  // create accounts with binds and this one runs in the middle of them. Any
+  // exact total here reports on the rest of the suite's lifecycle and calls
+  // it a regression in the admin console.
   //
-  // Second, and this one was found by the full suite rather than reasoned
-  // about: counting EVERY row couples this canary to the whole suite's
-  // execution order. Registry-driven, a visitor another spec minted and left
-  // behind dropped off the list the moment its pid died. Row-backed, its row
-  // survives until the reaper takes it — so the total became 6 in a full run
-  // and 4 when this file runs alone. Moving the number to 6 would just be
-  // chasing whichever specs happened to run first.
-  //
-  // So it counts the population it was always about: the seeded USER binds.
-  // vjt + m9b-test + m9b-victim (bahamut-test) + wiz-test (azzurra-reg, GH
-  // #349's registration-wizard seed). admin-vjt has no bind, so it has no
-  // credential and no row. Visitors are transient and belong to the specs
-  // that mint them; they are keyed `visitor:` and are not this canary's
-  // business. A rise still means an unexpected credential, a drop still
-  // means a seeded bind vanished — and neither reading depends any more on
-  // what ran before.
-  const rows = page.locator("[data-testid^='admin-session-row-user:']");
-  await expect(rows).toHaveCount(4, { timeout: 15_000 });
+  // So it asserts what it was named for: every seeded bind is LISTED, each
+  // one addressed and failing under its own name. The half deliberately
+  // given up is "no unexpected credential exists" — that population belongs
+  // to whichever spec created it, and pretending otherwise is what made this
+  // assertion order-dependent.
+  for (const subject of seeded) {
+    await expect(
+      page.locator(`[data-testid^='admin-session-row-user:${subject.id}:']`),
+      `${subject.name} must have a row in the unified Sessions view`,
+    ).toHaveCount(1, { timeout: 15_000 });
+  }
 });
 
 test("#242 admin Sessions tab shows the network slug (not the raw network_id FK)", async ({
