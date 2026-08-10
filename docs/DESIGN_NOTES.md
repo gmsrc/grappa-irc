@@ -36704,6 +36704,9 @@ the amd64 leg of the multi-arch manifest is untested here; `PHX_HOST=localhost`
 exercises the boot, not a real TLS front door or a link minted for a public
 host; no upstream IRC network was connected; and the file has never been used
 on a host without a checkout, which is the population it exists for.
+
+---
+
 ## 2026-08-10 — #1157: the pan comes out, it does not move
 
 vjt, dogfooding `0.15.0` on an iPhone: the admin console still scrolls
