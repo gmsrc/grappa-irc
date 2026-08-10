@@ -92,6 +92,26 @@ defmodule Grappa.IRC.LineSplit do
   own upstream PRIVMSG, matching what every other IRC client
   renders + what the operator's own past view will reconstruct.
 
+  ## cic PREVIEWS this, and that is a mirror you must maintain (#1108)
+
+  The compose box warns before a send that the draft will split, and
+  states how many messages it becomes. That number cannot be asked for —
+  it has to be on screen before any POST — and it is not derivable from
+  the budget by arithmetic once breaks land on words. So
+  `cicchetto/src/lib/frameBudget.ts` reimplements the chunker below.
+
+  The wire split is still ONLY this module's; a drift costs an advisory
+  count off by a frame, never a byte. But the two are pinned to each
+  other by one shared table of `(budget, body) → fragment count` cases,
+  duplicated verbatim in `line_split_test.exs` ("#1108: the fragment
+  counts cic's preview mirrors") and `frameBudget.test.ts`. **Changing
+  `chunk_by_bytes/5` or `break_at_word/1` turns that table red here, and
+  the fix is not complete until the cic side moves with it.**
+
+  What cic does NOT own is the BUDGET: the worst-case ceilings above stay
+  here, published as `frame_budget_base/1` on the `isupport_changed`
+  payload. A second copy of THOSE is the #246 data loss again.
+
   ## CTCP awareness
 
   A body beginning with `\\x01ACTION ` is a CTCP ACTION (classified
