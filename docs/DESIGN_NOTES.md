@@ -37285,3 +37285,77 @@ recorder, plus `Grappa.Release.seed_themes/0` being the same entry point four
 other substrates already call in production. The end-to-end "install the
 package, open the gallery, count the themes" check is the packaging suites'
 job (`infra/packaging/README.md` § Caveat) and remains a manual step.
+
+---
+
+## 2026-08-10 — #1162: the deploy tests all stubbed docker, so one of them stopped
+
+Twenty-odd bats suites cover `infra/docker/`, and every one of them stubs
+`docker` on `PATH` — the header of `deploy_docker_release_image_test.bats`
+says so in as many words. They are good at what they are: assertions about
+which file a verb writes and which flags it would pass. They are
+structurally incapable of seeing a deployment where every script did its job
+and the result is broken anyway, which is the whole of #1161. So
+`scripts/smoke-release-image.sh` brings a box up through the real `get.sh` →
+`deploy.sh` release path and asks it questions over HTTP.
+
+**The subject is the PUBLISHED image, and the pre-tag door already existed.**
+On a tag the `smoke` job pulls `ghcr.io/<owner>/grappa:v<version>` — the ref
+`deploy.sh` resolves for an operator; a locally-built image proves less. But
+post-publication is a late place to learn the image is broken, and this
+workflow already had the right door: the `docker_validation` dispatch, which
+the header of `release.yml` has been calling "the mandatory
+workflow_dispatch smoke before a real tag" while it only ever ran a build.
+It now re-exports the amd64 image from the cache the `docker` job wrote
+moments earlier and probes that. No new mode, no new trigger — an existing
+promise made true. amd64 only, because a multi-arch manifest cannot be
+loaded into a daemon and the arm64 leg is what the build proves.
+
+**`GRAPPA_RAW_BASE=file://<checkout>` puts get.sh itself under test.** The
+one substitution the smoke makes is where get.sh fetches from; the mirror
+step still runs, so a file get.sh forgets to mirror — the shape that made
+`gen-secrets.sh` an eager fetch in #862 — fails the smoke rather than an
+operator's first install.
+
+**Two reads of one file are not a cross-check.** The first cut asked the
+running node for `Cic.Bundle.current_hash()` and grepped the response body
+for it. That reads like an independent oracle and is not one: both sides
+resolve `Bundle.root()` and open the same `index.html`, so they cannot
+disagree and the assertion can never fail — a vacuity wearing a comparison's
+clothes. What survived is three claims with three oracles: `GET /` is 2xx,
+the RECEIVED BYTES parse to a bundle hash (shipped back into the container
+and fed to `Cic.Bundle.parse_hash/1`, which exists for exactly this —
+borrowing the parser is fine, borrowing the FILE was the bug), and the chunk
+the shell names comes back as JavaScript.
+
+**A missing hashed chunk answers 200 with the SPA shell.** Measured on a
+mutant image with `cicchetto-dist/assets` deleted: `Plug.Static` misses, the
+history fallback answers, and `GET /assets/index-<hash>.js` returns
+`content-type: text/html`. A browser loads the page, fetches the module, is
+handed HTML and white-screens. A status-only assertion passed that mutant
+clean, which is why the probe reads the content type. Worth knowing outside
+this test: the failure is silent by construction.
+
+**The never-rotate rule needs a second container shape.** Under `deploy.sh`
+every secret rides in from the host env file, so the entrypoint's first-boot
+bootstrap (#862) never fires and a rotation regression would be invisible on
+that path. Only a bare `docker run` with nothing but `PHX_HOST` generates
+them onto `/data`, so the third probe boots one. A rotation there is silent
+data loss — every Cloak-encrypted credential stops decrypting — not a failed
+boot, so nothing louder would notice.
+
+**Every assertion has a mutant that killed it**, each mutation applied at
+the layer the real bug would live in (image `ENV`, image contents, the
+entrypoint script, the deployed tag) rather than in the test: a
+one-directory-off `CIC_DIST_ROOT` for #1161 verbatim (404), a mangled
+`<script type="module">` tag (200, no tag), a deleted `assets/` (200
+`text/html`), an older published tag against the current expected version
+(and probe 1 stays green there, so the version arm is what discriminates),
+and the entrypoint with its `[ ! -f "$secrets_file" ]` guard removed (the
+hash moves). The matrix is in `docs/TESTING.md`; reproducing a row is a
+two-line `FROM ghcr.io/vjt/grappa:latest`.
+
+**What it refuses to claim.** One architecture, no IRC at all, no TLS front
+door or real `PHX_HOST`, and no `update` verb — only `install` plus a
+bare-run restart. A missing image fails the job and never skips it: a smoke
+test that quietly passes having tested nothing is worse than not having one.
