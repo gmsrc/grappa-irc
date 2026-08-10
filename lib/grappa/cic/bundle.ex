@@ -45,9 +45,32 @@ defmodule Grappa.Cic.Bundle do
   unset so dev/test and the pre-#399 deploy shape keep working. A
   packaged install (deb/rpm/Arch) relocates the dist by setting
   `CIC_DIST_ROOT`.
+
+  ## The root is diagnosed at boot, not at the first request (#1161)
+
+  Getting that path wrong is not a rare typo — it is the recurring
+  failure of this design. #526: the FreeBSD jail sets no working
+  directory, so the relative default resolved off the repo root.
+  #1161: `compose.yaml` sets `CIC_DIST_ROOT` for the *development*
+  stack, and compose's `environment:` overrides the image's `ENV`, so
+  pointing that file at the published release image redirects the root
+  away from the SPA the image bakes at `/app/cicchetto-dist`. Both
+  times the server came up healthy and only the frontend 404'd, with a
+  message that reads like a missing build step — sending the operator
+  to look for a build that this path does not have.
+
+  So `boot/1` warns, naming the RESOLVED path, what was missing there,
+  the variable that moves it, and what the operator will see if they
+  ignore it. **A root that does not resolve is never silently replaced
+  by a fallback** (the release image's baked path, the compile-time
+  anchor): that would make `CIC_DIST_ROOT` advisory, and a deliberate
+  relocation with a typo would then serve a *different* bundle than the
+  one asked for — a plausible wrong answer, which is worse than a 404.
   """
 
   use Boundary, top_level?: true, deps: [], exports: []
+
+  require Logger
 
   # Compile-time default anchor — `lib/grappa/cic/` → repo root →
   # `runtime/cicchetto-dist`. Overridable at boot via `boot/1`
@@ -71,17 +94,46 @@ defmodule Grappa.Cic.Bundle do
   # content up to the closing quote.
   @version_re ~r{<meta[^>]+name="cicchetto-version"[^>]+content="([^"]+)"}
 
+  # #1161 boot diagnosis. Split from the two messages that share them so the
+  # symptom and the remedy read identically whichever way the root is wrong.
+  @symptom "the SPA will 404 on every document request."
+  @knob "Set CIC_DIST_ROOT to the directory holding the built SPA (the one with index.html)."
+
   @doc """
   Stash the built-dist root into `:persistent_term`. Called once from
   `Grappa.Application.start/2` with the boot-resolved path
   (`Application.get_env(:grappa, :cic_dist_root)`, which
   `config/runtime.exs` derives from `CIC_DIST_ROOT`). Idempotent;
   later calls overwrite.
+
+  Warns when the resolved root holds no bundle — see the "#1161" section
+  of the moduledoc. Never raises: a bundle-less boot is legitimate (dev
+  before a cic build, prod before the first `cicchetto-build` oneshot),
+  and the API half of the server is still worth serving.
   """
   @spec boot(Path.t()) :: :ok
   def boot(root) when is_binary(root) do
     :persistent_term.put(@root_key, root)
+    warn_unless_bundled(Path.expand(root))
     :ok
+  end
+
+  # #1161: the root is resolved here and nowhere else asks about it until a
+  # browser does, so this is the only chance to say WHERE we will look before
+  # the first 404 says only that we did not find anything. `Path.expand/1`
+  # first: a relative root is correct only where the CWD is what the operator
+  # assumed, and the resolved path is the part they cannot infer (#526).
+  defp warn_unless_bundled(root) do
+    cond do
+      not File.dir?(root) ->
+        Logger.warning("cic bundle root does not exist: #{root} — #{@symptom} #{@knob}")
+
+      not File.regular?(Path.join(root, "index.html")) ->
+        Logger.warning("cic bundle root has no index.html: #{root} — #{@symptom} #{@knob}")
+
+      true ->
+        :ok
+    end
   end
 
   @doc """
