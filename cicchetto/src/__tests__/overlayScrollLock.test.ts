@@ -21,6 +21,7 @@ import { createMemo, createRoot, createSignal } from "solid-js";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   __resetForTest,
+  createOverlayEscape,
   createOverlayLock,
   handleTouchmove,
   isListenerAttached,
@@ -235,6 +236,81 @@ describe("overlay escape stack (#232)", () => {
       expect(overlayEscapeDepth()).toBe(0);
       expect(onEscape).not.toHaveBeenCalled(); // store-close never invokes onEscape
       expect(runTopmostOverlayEscape()).toBe(false);
+      dispose();
+    });
+  });
+});
+
+// #1199 — `createOverlayEscape` is the ESC half of `createOverlayLock` on its
+// own: the SAME LIFO stack and the same lifecycle edges, minus the scroll-lock
+// refcount. It exists because the scrollback cards (whois/whowas/lusers) are
+// inline content, not covering overlays — enrolling them through
+// createOverlayLock would hold a refcount for the life of the card, freezing
+// the scrollback snapshot behind it and adding the iOS `overlay-open` touch
+// lock (`RailActions.tsx:74-77` records the same hazard for the rail column).
+describe("overlay escape-only registration (#1199)", () => {
+  test("joins the Esc stack without touching the scroll-lock refcount", async () => {
+    await createRoot(async (dispose) => {
+      const [open, setOpen] = createSignal(false);
+      createOverlayEscape(open, () => setOpen(false));
+
+      setOpen(true);
+      await flush();
+      expect(overlayEscapeDepth()).toBe(1);
+      expect(overlayCount()).toBe(0);
+      expect(document.documentElement.classList.contains(CLASS)).toBe(false);
+      expect(isListenerAttached()).toBe(false);
+
+      expect(runTopmostOverlayEscape()).toBe(true);
+      await flush();
+      expect(open()).toBe(false);
+      expect(overlayEscapeDepth()).toBe(0);
+      dispose();
+    });
+  });
+
+  test("closing via its own store unregisters it, and unmount drains it", async () => {
+    await createRoot(async (dispose) => {
+      const [open, setOpen] = createSignal(true);
+      const onEscape = vi.fn();
+      createOverlayEscape(open, onEscape);
+      await flush();
+      expect(overlayEscapeDepth()).toBe(1);
+
+      setOpen(false); // closed by the × path
+      await flush();
+      expect(overlayEscapeDepth()).toBe(0);
+      expect(onEscape).not.toHaveBeenCalled();
+
+      setOpen(true); // re-opened, then torn down while still open
+      await flush();
+      expect(overlayEscapeDepth()).toBe(1);
+      dispose();
+      expect(overlayEscapeDepth()).toBe(0);
+    });
+  });
+
+  test("a lock registered after an escape-only entry is the one Esc closes first", async () => {
+    await createRoot(async (dispose) => {
+      const [cardOpen, setCardOpen] = createSignal(false);
+      const [modalOpen, setModalOpen] = createSignal(false);
+      createOverlayEscape(cardOpen, () => setCardOpen(false));
+      createOverlayLock(modalOpen, ".x-over-card", () => setModalOpen(false));
+
+      setCardOpen(true);
+      await flush();
+      setModalOpen(true); // the modal opens OVER the card
+      await flush();
+      expect(overlayEscapeDepth()).toBe(2);
+
+      expect(runTopmostOverlayEscape()).toBe(true);
+      await flush();
+      expect(modalOpen()).toBe(false); // modal first
+      expect(cardOpen()).toBe(true); // card untouched
+
+      expect(runTopmostOverlayEscape()).toBe(true);
+      await flush();
+      expect(cardOpen()).toBe(false); // card second
       dispose();
     });
   });
