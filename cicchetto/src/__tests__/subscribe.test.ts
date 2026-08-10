@@ -3977,3 +3977,45 @@ describe("subscribe — #868 the beep obeys the notification prefs", () => {
     expect(beep.playBeep).not.toHaveBeenCalled();
   });
 });
+
+// #1108 — the COLD door. A client joining long after the 005 burst gets the
+// frame budget only through the per-channel after-join snapshot, and on an
+// always-on bouncer that is every client. Asserted against the REAL isupport
+// store rather than a `seedIsupport` spy: the second killer for a wire→store
+// fold that drops the field, which is otherwise caught by exactly one test on
+// the OTHER door (userTopic) while the compose box goes dark for good.
+describe("subscribe — #1108 the cold snapshot seeds the frame budget", () => {
+  it("lands the published budget in the isupport store", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    await loadStores();
+    const isupport = await import("../lib/isupport");
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+
+    // Pre-state: no 005 has been seen on this network, so cic must have no
+    // budget to warn from — the state the whole `null` path exists for.
+    expect(isupport.frameBudgetBaseForNetwork(1)).toBeNull();
+
+    const handler = mockChannel.on.mock.calls.find((c) => c[0] === "event")?.[1] as (
+      p: unknown,
+    ) => void;
+    handler({
+      kind: "isupport_changed",
+      network_id: 1,
+      chanmodes_a: ["b", "e", "I"],
+      chanmodes_b: ["k"],
+      chanmodes_c: ["l"],
+      chanmodes_d: ["n", "t", "s"],
+      prefix: { o: "@", v: "+" },
+      frame_budget_base: 481,
+    });
+
+    expect(isupport.frameBudgetBaseForNetwork(1)).toBe(481);
+  });
+});
