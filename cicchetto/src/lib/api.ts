@@ -2363,13 +2363,23 @@ export async function postJoin(
 // Mirror of `GrappaWeb.ChannelsController.delete/2`. DELETE the channel
 // to forward a PART upstream. Server emits a `:part` scrollback row +
 // the EventRouter Map.deletes the channel key from state.members.
+//
+// #1208 — the optional PART reason rides as a `?reason=` query param, not a
+// DELETE body: the reason is public by construction (it is broadcast to every
+// member of the channel), so there is nothing to keep out of a URL, and a
+// query param assumes nothing about intermediaries forwarding a body on
+// DELETE. An absent or empty reason omits the param entirely, so the request
+// line is byte-identical to the pre-#1208 one — that is what keeps the three
+// non-/part doors (sidebar ×, window close, autojoin drop) unchanged.
 export async function postPart(
   token: string,
   networkSlug: string,
   channelName: string,
+  reason: string | null,
 ): Promise<void> {
+  const query = reason === null || reason === "" ? "" : `?reason=${encodeURIComponent(reason)}`;
   const res = await fetch(
-    `/networks/${encodeURIComponent(networkSlug)}/channels/${encodeURIComponent(channelName)}`,
+    `/networks/${encodeURIComponent(networkSlug)}/channels/${encodeURIComponent(channelName)}${query}`,
     {
       method: "DELETE",
       headers: buildHeaders(token),

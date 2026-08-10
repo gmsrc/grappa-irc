@@ -74,7 +74,7 @@ defmodule Grappa.Session.Server do
   per-channel PubSub topic, AND sends the PRIVMSG upstream — atomic
   from the caller's view, single source for the row + wire event.
   `{:send_join, [ch, …], key}` (a canonical-folded channel LIST — #382)
-  / `{:send_part, ch}` are upstream-only (channel-membership tracking
+  / `{:send_part, ch, reason}` are upstream-only (channel-membership tracking
   lands in Phase 5 alongside JOIN/PART persistence).
   """
   use GenServer, restart: :transient
@@ -2678,7 +2678,8 @@ defmodule Grappa.Session.Server do
   end
 
   @impl GenServer
-  def handle_cast({:send_part, channel}, state) when is_binary(channel) do
+  def handle_cast({:send_part, channel, reason}, state)
+      when is_binary(channel) and (is_nil(reason) or is_binary(reason)) do
     # UX-4 bucket H — eager local-state cleanup regardless of upstream
     # PART outcome. Pre-fix the operator's window stayed in the sidebar
     # forever if upstream rejected PART (442 ERR_NOTONCHANNEL on PART
@@ -2747,7 +2748,7 @@ defmodule Grappa.Session.Server do
     # rejoined the parted channel on the next reconnect.
     maybe_persist_last_joined(prev, state)
 
-    case Client.send_part(state.client, channel) do
+    case Client.send_part(state.client, channel, reason) do
       :ok ->
         {:noreply, state}
 

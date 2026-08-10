@@ -112,7 +112,7 @@ describe("closeChannelWindow — channel close clears local windowState", () => 
 
     // Server side: PART (no-op upstream for a never-joined channel) +
     // de-autojoin via the DELETE.
-    expect(api.postPart).toHaveBeenCalledWith("utok", "bahamut-test", "#k38");
+    expect(api.postPart).toHaveBeenCalledWith("utok", "bahamut-test", "#k38", null);
     // Local side: clear the windowState pseudo-projection so the row
     // can't re-emerge as an orphaned greyed pseudo-row once
     // channelsBySlug drops the name.
@@ -255,7 +255,7 @@ describe("dismissPseudoWindow — drops a pseudo-row; the landing is bucket E's"
     auth.setToken("utok");
     const { dismissPseudoWindow } = await import("../lib/windowClose");
     dismissPseudoWindow("freenode", "#inv");
-    expect(api.postPart).toHaveBeenCalledWith("utok", "freenode", "#inv");
+    expect(api.postPart).toHaveBeenCalledWith("utok", "freenode", "#inv", null);
   });
 
   it("clears the windowState entry via forceParted (token-gated user close)", async () => {

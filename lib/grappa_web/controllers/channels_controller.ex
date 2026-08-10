@@ -177,6 +177,39 @@ defmodule GrappaWeb.ChannelsController do
        else: {:error, :bad_request}
   end
 
+  # #1208 — the optional `?reason=` query param for DELETE (PART). Validated
+  # UP FRONT, like `validate_channel_name/1` and `validate_optional_key/1` are
+  # for their fields: `delete/2` removes the channel from autojoin BEFORE it
+  # casts the PART, so a reason refused any later would leave a rejected
+  # request with the leave already half-applied.
+  #
+  # Non-binary is `:bad_request` — a repeated key (`?reason[]=a&reason[]=b`)
+  # reaches Plug as a list, and a list must not fall through to a binary
+  # guard. CR/LF/NUL is `:invalid_line`, not `:bad_request`: the reason is
+  # otherwise free text, so smuggling a second IRC command behind the trailing
+  # `:` is the ONLY thing wrong with it, which is exactly the distinction
+  # `FallbackController` keeps that tag for. `BodyLimit` owns the byte cap,
+  # like it does for every other user-text field bound for the wire.
+  #
+  # `Session.send_part/4` re-checks CR/LF/NUL at the domain boundary, as
+  # `send_join/4` does for its key: this controller is one door into PART,
+  # not the only one.
+  #
+  # An absent param is `{:ok, nil}`, which frames the bare PART — the
+  # pre-#1208 behaviour for every caller that never learns this param exists.
+  @spec part_reason(map()) ::
+          {:ok, String.t() | nil} | {:error, :bad_request | :invalid_line | :body_too_large}
+  defp part_reason(%{"reason" => reason}) when is_binary(reason) do
+    with :ok <- BodyLimit.check(reason) do
+      if Grappa.IRC.Identifier.safe_line_token?(reason),
+        do: {:ok, reason},
+        else: {:error, :invalid_line}
+    end
+  end
+
+  defp part_reason(%{"reason" => _}), do: {:error, :bad_request}
+  defp part_reason(_), do: {:ok, nil}
+
   @doc """
   `DELETE /networks/:network_id/channels/:channel_id` — casts
   `PART <channel_id>` upstream AND removes the channel from the
@@ -186,10 +219,15 @@ defmodule GrappaWeb.ChannelsController do
   not in autojoin (e.g. a manually-joined `source: :joined` channel),
   and the autojoin removal is a no-op when the channel is not in the
   list. Returns 202 + `{"ok": true}`.
+
+  Optional `?reason=<text>` (#1208) becomes the PART message
+  (`PART <channel> :<reason>`). Absent or empty leaves the wire frame
+  byte-identical to the pre-#1208 bare form.
   """
   @spec delete(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :bad_request | :no_session | :invalid_line}
-  def delete(conn, %{"channel_id" => channel}) do
+          Plug.Conn.t()
+          | {:error, :bad_request | :no_session | :invalid_line | :body_too_large}
+  def delete(conn, %{"channel_id" => channel} = params) do
     subject = Subject.to_session(conn.assigns.current_subject)
     network = conn.assigns.network
 
@@ -203,9 +241,13 @@ defmodule GrappaWeb.ChannelsController do
     # Pre-fix race window was ~5ms (DB write latency); under load it
     # widened. e2e suite saw it as the cp15-b6/r6/bughunt-1-b/m9
     # rotating-victim cascade. (E2E-ROBUSTNESS bucket D follow-up.)
-    with :ok <- validate_channel_name(channel),
+    # #1208 — `part_reason/1` is FIRST in the chain on purpose: a refused
+    # reason must not leave the autojoin UPDATE below already applied, or a
+    # 400 would still have half-performed the leave.
+    with {:ok, reason} <- part_reason(params),
+         :ok <- validate_channel_name(channel),
          :ok <- remove_from_autojoin(conn.assigns.current_subject, network, channel),
-         :ok <- Session.send_part(subject, network.id, channel) do
+         :ok <- Session.send_part(subject, network.id, channel, reason) do
       # #459 — archive_changed is broadcast by the SESSION when `send_part`
       # applies the PART (drops the channel from the active set), NOT here.
       # This action used to fire it optimistically right after the async cast,

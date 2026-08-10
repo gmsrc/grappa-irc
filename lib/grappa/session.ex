@@ -805,17 +805,28 @@ defmodule Grappa.Session do
   @doc """
   Queues a PART upstream through the session. Cast (see `send_join/4`
   for the rationale). `{:error, :no_session}` if not registered.
+
+  `reason` (#1208) is the optional PART message. `nil` — and the empty
+  string, which is the same thing — frames the bare `PART <channel>` this
+  call has always sent. Rejected with `{:error, :invalid_line}` when it
+  carries CR/LF/NUL: the reason is the trailing param, so an embedded CRLF
+  would end the PART line early and let the tail parse as its own command.
   """
-  @spec send_part(subject(), integer(), String.t()) ::
+  @spec send_part(subject(), integer(), String.t(), String.t() | nil) ::
           :ok | {:error, :no_session | :invalid_line | send_transport_error()}
-  def send_part(subject, network_id, channel)
-      when is_subject(subject) and is_integer(network_id) and is_binary(channel) do
-    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel) do
-      cast_session(subject, network_id, {:send_part, channel})
+  def send_part(subject, network_id, channel, reason)
+      when is_subject(subject) and is_integer(network_id) and is_binary(channel) and
+             (is_nil(reason) or is_binary(reason)) do
+    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel) and
+         safe_part_reason?(reason) do
+      cast_session(subject, network_id, {:send_part, channel, reason})
     else
       {:error, :invalid_line}
     end
   end
+
+  defp safe_part_reason?(nil), do: true
+  defp safe_part_reason?(reason), do: Identifier.safe_line_token?(reason)
 
   @doc """
   Declines the inbound invite held on `channel` (#976) — drops the `:invited`

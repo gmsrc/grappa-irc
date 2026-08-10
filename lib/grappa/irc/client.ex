@@ -449,17 +449,32 @@ defmodule Grappa.IRC.Client do
   end
 
   @doc """
-  Sends `PART <channel>\\r\\n`. Rejects CR/LF/NUL AND a malformed
-  channel name (missing `#`/`&`/`+`/`!` prefix, embedded whitespace
-  /comma/BELL, or length > 50) with `{:error, :invalid_line}`. Same
-  irc/S2 rationale as `send_join/3`.
+  Sends `PART <channel>\\r\\n`, or `PART <channel> :<reason>\\r\\n` when
+  `reason` is a non-empty binary (#1208). Rejects CR/LF/NUL in EITHER field
+  AND a malformed channel name (missing `#`/`&`/`+`/`!` prefix, embedded
+  whitespace/comma/BELL, or length > 50) with `{:error, :invalid_line}`.
+  Same irc/S2 rationale as `send_join/3`.
+
+  `nil` and `""` are both "no reason" and frame the bare form — mirroring
+  `send_join/3`'s empty-key clause, and keeping every non-`/part` door
+  (sidebar ×, window close, autojoin drop) byte-identical to pre-#1208.
   """
-  @spec send_part(pid(), String.t()) :: send_result()
-  def send_part(client, channel) do
-    if Identifier.safe_line_token?(channel) and Identifier.valid_channel?(channel),
-      do: send_line(client, "PART #{channel}\r\n"),
+  @spec send_part(pid(), String.t(), String.t() | nil) :: send_result()
+  def send_part(client, channel, reason) do
+    if joinable_channel?(channel) and safe_part_reason?(reason),
+      do: send_line(client, part_frame(channel, reason)),
       else: reject_invalid_line(:part)
   end
+
+  # The reason is the TRAILING param, so it may hold spaces — only CR/LF/NUL
+  # would break the frame. Absent reason is trivially safe.
+  defp safe_part_reason?(nil), do: true
+  defp safe_part_reason?(reason) when is_binary(reason), do: Identifier.safe_line_token?(reason)
+  defp safe_part_reason?(_), do: false
+
+  defp part_frame(channel, nil), do: "PART #{channel}\r\n"
+  defp part_frame(channel, ""), do: "PART #{channel}\r\n"
+  defp part_frame(channel, reason), do: "PART #{channel} :#{reason}\r\n"
 
   @doc """
   Sends `TOPIC <channel> :<body>\\r\\n`. The colon prefix marks the body

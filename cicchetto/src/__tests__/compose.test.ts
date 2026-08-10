@@ -2003,7 +2003,43 @@ describe("compose submit — slash command dispatch", () => {
     compose.setDraft(k, "/part");
     const result = await compose.submit(k, "freenode", "#a");
 
-    expect(api.postPart).toHaveBeenCalledWith("tok", "freenode", "#a");
+    expect(api.postPart).toHaveBeenCalledWith("tok", "freenode", "#a", null);
+    expect(result).toEqual({ ok: true });
+  });
+
+  // #1208 — a sigil-less /part keeps the current-window fallback for the
+  // TARGET and forwards the whole rest as the REASON. Both halves matter:
+  // asserting only the reason would pass with the target regressed to "non".
+  it("/part with a sigil-less reason parts the current channel with that reason", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postPart).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/part non trovo utili le bestemmie");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(api.postPart).toHaveBeenCalledWith(
+      "tok",
+      "freenode",
+      "#a",
+      "non trovo utili le bestemmie",
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("/part with an explicit channel forwards both the target and the reason", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.postPart).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/part #altro ci vediamo");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(api.postPart).toHaveBeenCalledWith("tok", "freenode", "#altro", "ci vediamo");
     expect(result).toEqual({ ok: true });
   });
 

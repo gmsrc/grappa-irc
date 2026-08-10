@@ -286,6 +286,55 @@ defmodule Grappa.IRC.ClientTest do
                IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
     end
 
+    # #1208 — the PART reason. `nil` MUST frame byte-for-byte the pre-#1208
+    # bare form: every non-/part door into PART (the sidebar ×, the window
+    # close, an autojoin drop) passes `nil`, so a stray `PART #chan :` there
+    # would be a visible regression on the wire for every one of them.
+    test "send_part/3 with a nil reason emits the bare PART form" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_part(client, "#sniffo", nil)
+
+      assert {:ok, "PART #sniffo\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+    end
+
+    test "send_part/3 emits PART #chan :reason when a reason is given" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_part(client, "#sniffo", "non trovo utili le bestemmie")
+
+      assert {:ok, "PART #sniffo :non trovo utili le bestemmie\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+    end
+
+    # Mirrors `send_join/3`'s empty-key clause: an empty reason is the
+    # ABSENCE of a reason, not `PART #chan :`.
+    test "send_part/3 with an empty reason emits the bare PART form" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_part(client, "#sniffo", "")
+
+      assert {:ok, "PART #sniffo\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+    end
+
+    # The reason is trailing, so spaces survive verbatim behind the `:` —
+    # this is the whole point of the colon and the exact case (#1208) that
+    # the sigil-less parser used to shred into a phantom channel.
+    test "send_part/3 keeps spaces in the reason verbatim behind the colon" do
+      {server, port} = start_server()
+      client = start_client(port)
+
+      :ok = Client.send_part(client, "#sniffo", "a  b   c")
+
+      assert {:ok, "PART #sniffo :a  b   c\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+    end
+
     test "send_topic/3 emits TOPIC #chan :body framing" do
       {server, port} = start_server()
       client = start_client(port)
@@ -1432,8 +1481,19 @@ defmodule Grappa.IRC.ClientTest do
       assert {:error, :invalid_line} = Client.send_join(client, "#chan\r\nQUIT", nil)
     end
 
-    test "send_part/2 rejects \\r\\n in channel", %{client: client} do
-      assert {:error, :invalid_line} = Client.send_part(client, "#chan\r\nQUIT")
+    test "send_part/3 rejects \\r\\n in channel", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_part(client, "#chan\r\nQUIT", nil)
+    end
+
+    # #1208 — the reason rides behind `:` as the trailing param, so CRLF in
+    # it would terminate the PART line early and let the tail parse as its
+    # own command. Same boundary as the channel, same verdict.
+    test "send_part/3 rejects \\r\\n in reason", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_part(client, "#chan", "bye\r\nQUIT :pwn")
+    end
+
+    test "send_part/3 rejects NUL byte in reason", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_part(client, "#chan", "bye\x00pwn")
     end
 
     # UX-4 bucket F: key field also runs through safe_line_token? — CRLF
@@ -1496,12 +1556,12 @@ defmodule Grappa.IRC.ClientTest do
       assert {:error, :invalid_line} = Client.send_join(client, channels, nil)
     end
 
-    test "send_part/2 rejects malformed channel (missing #/&/+/!) (irc/S2)", %{client: client} do
-      assert {:error, :invalid_line} = Client.send_part(client, "no-hash")
+    test "send_part/3 rejects malformed channel (missing #/&/+/!) (irc/S2)", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_part(client, "no-hash", nil)
     end
 
-    test "send_part/2 rejects empty channel (irc/S2)", %{client: client} do
-      assert {:error, :invalid_line} = Client.send_part(client, "")
+    test "send_part/3 rejects empty channel (irc/S2)", %{client: client} do
+      assert {:error, :invalid_line} = Client.send_part(client, "", nil)
     end
 
     # Codebase review 2026-05-12 irc/S3: an empty target makes the wire

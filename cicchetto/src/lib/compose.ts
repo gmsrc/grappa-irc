@@ -1102,7 +1102,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         case "part": {
           const target = cmd.channel ?? channelName;
-          await postPart(t, networkSlug, target);
+          await postPart(t, networkSlug, target, cmd.reason);
           result = { ok: true };
           break;
         }

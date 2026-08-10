@@ -4,7 +4,7 @@ defmodule Grappa.SessionTest do
   cover guards that fire BEFORE the registry lookup / GenServer
   call/cast — so they need no live `Session.Server` and no DB.
 
-  The CRLF guard for `send_privmsg/4 | send_join/4 | send_part/3` is
+  The CRLF guard for `send_privmsg/4 | send_join/4 | send_part/4` is
   the canonical case (S29 C1): CRLF in the body or target would
   smuggle a second IRC command onto the wire if it ever reached the
   Client. The Session facade rejects with `{:error, :invalid_line}`
@@ -117,25 +117,43 @@ defmodule Grappa.SessionTest do
     end
   end
 
-  describe "send_part/3 CRLF guard" do
+  describe "send_part/4 CRLF guard" do
     test "rejects \\r\\n in channel before whereis lookup" do
       assert {:error, :invalid_line} =
-               Session.send_part({:user, @user_id}, @network_id, "#chan\r\nQUIT")
+               Session.send_part({:user, @user_id}, @network_id, "#chan\r\nQUIT", nil)
     end
 
     test "rejects malformed channel (missing prefix) before whereis lookup (CRIT-1)" do
       assert {:error, :invalid_line} =
-               Session.send_part({:user, @user_id}, @network_id, "no-hash")
+               Session.send_part({:user, @user_id}, @network_id, "no-hash", nil)
     end
 
     test "rejects empty channel before whereis lookup (CRIT-1)" do
       assert {:error, :invalid_line} =
-               Session.send_part({:user, @user_id}, @network_id, "")
+               Session.send_part({:user, @user_id}, @network_id, "", nil)
     end
 
     test "valid input falls through to :no_session for unknown session" do
       assert {:error, :no_session} =
-               Session.send_part({:user, @user_id}, @network_id, "#chan")
+               Session.send_part({:user, @user_id}, @network_id, "#chan", nil)
+    end
+
+    # #1208 — the PART reason is user text from the compose box, so it runs
+    # through the same pre-dispatch CRLF gate the channel does. Without it a
+    # reason could smuggle a second command onto the wire behind the `:`.
+    test "rejects \\r\\n in reason before whereis lookup" do
+      assert {:error, :invalid_line} =
+               Session.send_part({:user, @user_id}, @network_id, "#chan", "bye\r\nQUIT :pwn")
+    end
+
+    test "rejects a NUL byte in reason before whereis lookup" do
+      assert {:error, :invalid_line} =
+               Session.send_part({:user, @user_id}, @network_id, "#chan", "bye\x00pwn")
+    end
+
+    test "a valid reason falls through to :no_session for unknown session" do
+      assert {:error, :no_session} =
+               Session.send_part({:user, @user_id}, @network_id, "#chan", "ciao raga")
     end
   end
 

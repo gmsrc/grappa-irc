@@ -672,6 +672,56 @@ describe("tagNetwork (bucket F H4)", () => {
   });
 });
 
+// #1208 — the PART reason travels as a `?reason=` query param rather than a
+// DELETE body: the reason is public by construction (it ships to a channel
+// full of people), and a query param needs no assumption about intermediaries
+// forwarding a body on DELETE. These pin the URL the server contract reads.
+describe("postPart reason (#1208)", () => {
+  function urlOf(fetchMock: ReturnType<typeof vi.fn>): string {
+    const call = fetchMock.mock.calls[0];
+    if (!call) throw new Error("fetch not called");
+    return (call as [string, RequestInit])[0];
+  }
+
+  it("omits the query param entirely when the reason is null", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.postPart("tok", "freenode", "#sniffo", null);
+
+    expect(urlOf(fetchMock)).toBe("/networks/freenode/channels/%23sniffo");
+  });
+
+  it("omits the query param when the reason is an empty string", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.postPart("tok", "freenode", "#sniffo", "");
+
+    expect(urlOf(fetchMock)).toBe("/networks/freenode/channels/%23sniffo");
+  });
+
+  it("appends a percent-encoded reason when one is given", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.postPart("tok", "freenode", "#sniffo", "non trovo utili le bestemmie");
+
+    expect(urlOf(fetchMock)).toBe(
+      "/networks/freenode/channels/%23sniffo?reason=non%20trovo%20utili%20le%20bestemmie",
+    );
+  });
+
+  it("encodes a reason carrying & and = so it cannot forge a second param", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.postPart("tok", "freenode", "#sniffo", "a&b=c");
+
+    expect(urlOf(fetchMock)).toBe("/networks/freenode/channels/%23sniffo?reason=a%26b%3Dc");
+  });
+});
+
 describe("deleteArchiveEntry (UX-1)", () => {
   it("DELETE /networks/:slug/archive/:target with bearer + percent-encoded target", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));

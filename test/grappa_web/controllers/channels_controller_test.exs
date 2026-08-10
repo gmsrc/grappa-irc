@@ -376,6 +376,106 @@ defmodule GrappaWeb.ChannelsControllerTest do
       assert json_response(conn, 400)["error"] == "bad_request"
     end
 
+    # #1208 — end to end: the `?reason=` query param has to survive the whole
+    # chain (controller → `Session.send_part/4` → the `:send_part` cast →
+    # `Client.send_part/3`) and land as the PART trailing param. Asserting the
+    # literal wire line is the only oracle that proves it: a test stopping at
+    # the 202 would pass with the reason silently dropped, which is exactly
+    # the defect this closes.
+    test "reason query param lands on the wire as the PART trailing param",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      conn =
+        delete(
+          conn,
+          "/networks/#{network.slug}/channels/%23sniffo?reason=non+trovo+utili+le+bestemmie"
+        )
+
+      assert json_response(conn, 202) == %{"ok" => true}
+
+      assert {:ok, "PART #sniffo :non trovo utili le bestemmie\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # An empty `?reason=` is the ABSENCE of a reason — byte-identical to the
+    # no-param call above, not `PART #sniffo :`.
+    test "empty reason query param emits the bare PART form", %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      conn = delete(conn, "/networks/#{network.slug}/channels/%23sniffo?reason=")
+
+      assert json_response(conn, 202) == %{"ok" => true}
+
+      assert {:ok, "PART #sniffo\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # S29 C1 for the new field: CRLF in the reason would smuggle a second
+    # command behind the trailing `:`. Rejected AHEAD of the autojoin UPDATE,
+    # so a refused request leaves no half-applied leave behind.
+    test "reason with URL-encoded CRLF returns 400 and does not touch autojoin",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      {network, _} = network_with_server(port: port, slug: "az-1208-crlf-#{u()}")
+      _ = credential_fixture(vjt, network, %{autojoin_channels: ["#sniffo", "#other"]})
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      conn =
+        delete(conn, "/networks/#{network.slug}/channels/%23sniffo?reason=bye%0AQUIT+%3Apwn")
+
+      assert json_response(conn, 400)["error"] == "invalid_line"
+
+      reloaded = Credentials.get_credential!(vjt, network)
+      assert reloaded.autojoin_channels == ["#sniffo", "#other"]
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # The reason is user text headed for the IRC wire, so it goes through the
+    # SAME `BodyLimit` byte cap every other such field does — bytes, not
+    # graphemes. Above the cap it is refused at the door rather than handed to
+    # a framing layer that would silently truncate it.
+    test "over-cap reason returns 413 and sends nothing upstream", %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      oversize = String.duplicate("a", GrappaWeb.BodyLimit.max_body_bytes() + 1)
+
+      conn = delete(conn, "/networks/#{network.slug}/channels/%23sniffo?reason=#{oversize}")
+
+      assert json_response(conn, 413)["error"] == "body_too_large"
+
+      assert {:error, :timeout} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "PART"), 200)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # A repeated key (`?reason=a&reason[]=b`) reaches Plug as a non-binary.
+    # Reject the SHAPE at the door rather than let it reach a guard that
+    # would `function_clause` inside the request.
+    test "non-string reason param returns 400 bad_request", %{conn: conn, vjt: vjt} do
+      _ = ensure_azzurra_credential(vjt)
+
+      conn = delete(conn, "/networks/azzurra/channels/%23sniffo?reason[]=a&reason[]=b")
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+    end
+
     # BUG5a: DELETE also removes the channel from autojoin_channels so that
     # GET /channels returns it as absent (not as joined: false). Without this
     # fix, cicchetto's channels_changed refetch would return the channel with

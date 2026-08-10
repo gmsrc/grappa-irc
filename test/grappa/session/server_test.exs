@@ -6279,7 +6279,7 @@ defmodule Grappa.Session.ServerTest do
                      1_000
 
       slug = network.slug
-      :ok = Grappa.Session.send_part({:user, user.id}, network.id, "#existing")
+      :ok = Grappa.Session.send_part({:user, user.id}, network.id, "#existing", nil)
 
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "event",

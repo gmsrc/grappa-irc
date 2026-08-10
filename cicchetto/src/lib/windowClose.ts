@@ -62,7 +62,10 @@ import { forceParted } from "./windowState";
 function partAndForget(networkSlug: string, name: string): void {
   const t = token();
   if (!t) return;
-  void postPart(t, networkSlug, name);
+  // #1208 — a window close carries no reason: closing a tab is not a
+  // statement to the channel. Explicit `null` keeps the wire frame the bare
+  // `PART #chan` it has always been.
+  void postPart(t, networkSlug, name, null);
   forceParted(channelKey(networkSlug, name));
 }
 

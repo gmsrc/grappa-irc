@@ -440,7 +440,9 @@ describe("Sidebar", () => {
     expect(apiMod.postPart).not.toHaveBeenCalled();
     // Confirming fires the PART.
     acceptConfirm();
-    expect(apiMod.postPart).toHaveBeenCalledWith("tok", "freenode", "#italia");
+    // #1208 — the × carries no reason: the trailing `null` pins the bare
+    // `PART #italia` frame this door has always produced.
+    expect(apiMod.postPart).toHaveBeenCalledWith("tok", "freenode", "#italia", null);
   });
 
   // #473 — the per-network Archive `<details>` section was REMOVED from the
