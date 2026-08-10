@@ -38029,3 +38029,59 @@ claim, per-row) and are declared as such rather than counted.
 events drive no pixel scroll, chromium is not iOS Safari, and whether a
 presence row that no longer moves reads as deliberate or as broken is a device
 call — vjt's dogfood, like the rest of #1067.
+
+---
+
+## 2026-08-10 — #1205: a live selection is the OS's drag, not the composer's
+
+Android reported selection handles in the compose textarea that would not
+drag: long-press selects a word, the Cut/Copy/Paste bar opens, and then
+neither handle moves. Keyboard open or closed, which is what tells it apart
+from the closed #79 (there the selection never *starts*).
+
+The mechanism is the #123 gesture claim. `ComposeBox` binds a non-passive
+element-level `touchmove` and, once `claimAxis` claims an axis,
+`preventDefault`s the rest of the touch. The horizontal arm claimed
+unconditionally, and the source said why: `touch-action: pan-y` already
+blocks native pan-x, so a horizontal drag could only stray-select text, and
+we own it for tab-complete. Dragging a selection HANDLE is also a horizontal
+drag on that textarea, so the suppression written for accidental selection
+also killed the deliberate one. The comment on the handlers had already named
+the coupling — "suppress native scroll + drag-to-select once we own the
+gesture" — without allowing for drag-to-select being the point.
+
+**The gate is on the claim, not the binder.** `claimAxis` gains a
+`selectionActive` argument and returns `null` for a horizontal drag while the
+selection is non-collapsed; the listener and its `preventDefault` are
+untouched. That keeps ONE authority for "do we own this touch" — the same
+posture #1156 took on the presence rows — instead of a second, listener-level
+veto that would have to be kept in agreement with the first.
+
+**The flag is an argument; the DOM read is the call site's.** `boundary` is
+already shaped that way, so `swipe.ts` stays pure and DOM-free and the whole
+decision remains unit-testable without touch physics. It is read LIVE on each
+move, like the boundary, rather than snapshotted at touchstart: the claim is
+only ever asked while unclaimed, and an engine that collapses the selection
+on the very touch that begins the next gesture would make a snapshot cost a
+real swipe.
+
+**The vertical arm is deliberately untouched.** Handle drags are horizontal.
+Standing the whole claim down on a live selection would break history recall
+for anyone who left a word selected in their draft — a different affordance,
+broken for no reason. A mutant that gates the whole claim is what pins this.
+
+**Measured.** Red first, at both levels: the pure claim (`selection on →
+null`) and the call site, where the touchmove's `defaultPrevented` and
+`tabComplete` measure what the DOM read actually decided. Four mutants, each
+compiled before its result was read: dropping the gate kills one assertion
+per level; gating the whole claim kills exactly the vertical guard; pinning
+the call site's read to `false` kills only the selected-word case; pinning it
+to `true` kills only the collapsed-caret case. The pure "still claims with a
+collapsed caret" case has no unique killer — it is a tripwire, not coverage.
+
+**Not proven: that a handle now moves.** jsdom has no selection handles and
+no native drag-to-select, and Playwright's webkit is not iOS touch — the
+module's own header already says the gesture is dogfood-only. What is proven
+is that we stop calling `preventDefault` on that drag, which is the mechanism
+the report points at; that this is sufficient on a real Android is vjt's
+observation to make, not ours.
