@@ -599,7 +599,7 @@ jobs:
         # Only on the tag-push (publishing) path — a docker_validation dry-run
         # never authenticates to the registry, so it CANNOT publish.
         if: ${{ github.event_name == 'push' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
