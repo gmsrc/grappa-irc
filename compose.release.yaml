@@ -31,6 +31,16 @@
 # Put your own TLS reverse proxy in front of it, exactly as the from-source
 # path does.
 
+# Pinned on purpose, and NOT redundant. Without it compose names the project
+# after whatever directory this file sits in, and the volume is named after
+# the project — so moving or renaming the folder points the same file at a
+# DIFFERENT volume: empty database, freshly generated secrets, and every
+# reason to believe the data is gone. It is `grappa-release` rather than
+# `grappa` because the from-source stack in compose.yaml takes its project
+# name from the checkout directory, and two stacks sharing one project name
+# treat each other's containers as orphans.
+name: grappa-release
+
 services:
   grappa:
     # `latest` follows every release. Pin the tag you actually reviewed
