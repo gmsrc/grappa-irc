@@ -65,6 +65,9 @@ defmodule Grappa.UserSettings do
   | `"last_client_prefix64"`| `String.t() \\| nil`  | `get_last_client_prefix64/1`,   |
   |                        | (opaque base16)        | `put_last_client_prefix64/2`    |
   |                        |                        | (#543)                          |
+  | `"auto_away_debounce_seconds"` | `auto_away_debounce()` | `get_auto_away_debounce_seconds/1`, |
+  |                        | (`0` on the JSON side  | `put_auto_away_debounce_seconds/2`  |
+  |                        | = `:disabled`)         | (#348)                          |
 
   ## Boundary
 
@@ -167,6 +170,22 @@ defmodule Grappa.UserSettings do
           presence_filter: %{String.t() => String.t()}
         }
 
+  @typedoc """
+  #348 — the stored auto-away debounce preference for one subject.
+
+  Three states, deliberately one value:
+
+    * `nil` — nothing stored; the session keeps the server-wide default.
+    * `:disabled` — auto-away is OFF: no debounce timer is ever armed.
+    * `pos_integer()` — seconds to wait after the last visible device hides.
+
+  `:disabled` is an atom here and the integer `0` in `data` / on the wire
+  (CLAUDE.md: atoms for closed sets, JSON scalars at the boundary). The
+  distinction is not cosmetic — a zero-second debounce and "no debounce
+  at all" share a wire number but mean opposite things.
+  """
+  @type auto_away_debounce :: pos_integer() | :disabled | nil
+
   @notification_prefs_key "notification_prefs"
   @upload_ttl_seconds_key "upload_ttl_seconds"
   @vhost_selection_key "vhost_selection"
@@ -222,6 +241,24 @@ defmodule Grappa.UserSettings do
   # for a transient screenshot. A bound this loose accepts whatever ladder
   # cic surfaces today while making "100-year TTL DOS body" return 422.
   @upload_ttl_seconds_max 31_536_000
+
+  # #348 — the grace period between "every device of this subject went
+  # hidden" and the upstream `AWAY`. ONE key, THREE states, because the
+  # delay and the off switch are ONE control: absent = the server-wide
+  # default (`Grappa.Session.Server.auto_away_debounce_ms/0`), the `0`
+  # sentinel = OFF (no timer is armed at all — never a very large one),
+  # any other in-range integer = seconds.
+  @auto_away_debounce_seconds_key "auto_away_debounce_seconds"
+
+  # The accepted window, as ONE constant: which ladder cic offers and how
+  # wide the API opens are still vjt's call on #348, so both bounds move
+  # in a single line. 1s is a floor an e2e can drive without a
+  # minute-long wait rather than a recommendation; 24h is a ceiling for
+  # the same reason `@upload_ttl_seconds_max` has one — a user-writable
+  # number needs a bound — and sits far past any real delay.
+  @auto_away_debounce_seconds_range 1..86_400
+  @auto_away_debounce_seconds_min @auto_away_debounce_seconds_range.first
+  @auto_away_debounce_seconds_max @auto_away_debounce_seconds_range.last
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -547,6 +584,110 @@ defmodule Grappa.UserSettings do
       |> Ecto.Changeset.add_error(
         :upload_ttl_seconds,
         "must be a positive integer up to #{@upload_ttl_seconds_max} seconds, or null"
+      )
+
+    {:error, cs}
+  end
+
+  # ---------------------------------------------------------------------------
+  # auto_away_debounce_seconds accessors (#348)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Smallest debounce, in seconds, this boundary accepts.
+
+  Exposed so callers and tests read the bound from the one constant that
+  defines it instead of restating the number.
+  """
+  @spec auto_away_debounce_seconds_min() :: pos_integer()
+  def auto_away_debounce_seconds_min, do: @auto_away_debounce_seconds_min
+
+  @doc """
+  Largest debounce, in seconds, this boundary accepts. See
+  `auto_away_debounce_seconds_min/0`.
+  """
+  @spec auto_away_debounce_seconds_max() :: pos_integer()
+  def auto_away_debounce_seconds_max, do: @auto_away_debounce_seconds_max
+
+  @doc """
+  Returns the stored auto-away debounce preference for `subject`.
+
+  `nil` means "no preference" — the caller keeps the server-wide default.
+  A stored value that is malformed or out of the accepted range reads
+  back as `nil` too: a corrupted row degrades to the default rather than
+  to an arbitrary delay, mirroring `get_upload_ttl_seconds/1`.
+  """
+  @spec get_auto_away_debounce_seconds(Subject.t()) :: auto_away_debounce()
+  def get_auto_away_debounce_seconds({_, _} = subject) do
+    case fetch_existing_or_nil(subject) do
+      nil ->
+        nil
+
+      %Settings{data: data} ->
+        decode_auto_away_debounce(data[@auto_away_debounce_seconds_key])
+    end
+  end
+
+  @doc """
+  Sets the auto-away debounce preference for `subject`.
+
+  Accepts `nil` (clear — back to the server default), `:disabled` (OFF —
+  stored as the `0` sentinel) or an integer in
+  `#{@auto_away_debounce_seconds_min}..#{@auto_away_debounce_seconds_max}`
+  seconds. Anything else, the integer `0` included, is a changeset error
+  on `:auto_away_debounce_seconds`: `0` is the OFF *sentinel*, not a
+  zero-second delay a caller may ask for.
+
+  Preserves other keys in `data` (merge semantics, mirror of
+  `put_upload_ttl_seconds/2`).
+  """
+  @spec put_auto_away_debounce_seconds(Subject.t(), auto_away_debounce()) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  def put_auto_away_debounce_seconds({_, _} = subject, value) do
+    with :ok <- validate_auto_away_debounce_seconds(value, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data =
+        case value do
+          nil -> Map.delete(settings.data, @auto_away_debounce_seconds_key)
+          :disabled -> Map.put(settings.data, @auto_away_debounce_seconds_key, 0)
+          n -> Map.put(settings.data, @auto_away_debounce_seconds_key, n)
+        end
+
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
+    end
+  end
+
+  @spec decode_auto_away_debounce(term()) :: auto_away_debounce()
+  defp decode_auto_away_debounce(0), do: :disabled
+
+  defp decode_auto_away_debounce(n)
+       when is_integer(n) and n >= @auto_away_debounce_seconds_min and
+              n <= @auto_away_debounce_seconds_max,
+       do: n
+
+  defp decode_auto_away_debounce(_), do: nil
+
+  @spec validate_auto_away_debounce_seconds(term(), Subject.t()) ::
+          :ok | {:error, Ecto.Changeset.t()}
+  defp validate_auto_away_debounce_seconds(nil, _), do: :ok
+  defp validate_auto_away_debounce_seconds(:disabled, _), do: :ok
+
+  defp validate_auto_away_debounce_seconds(n, _)
+       when is_integer(n) and n >= @auto_away_debounce_seconds_min and
+              n <= @auto_away_debounce_seconds_max,
+       do: :ok
+
+  defp validate_auto_away_debounce_seconds(_, subject) do
+    attrs = Subject.put_subject_id(%{data: %{}}, subject)
+
+    cs =
+      %Settings{}
+      |> Settings.changeset(attrs)
+      |> Ecto.Changeset.add_error(
+        :auto_away_debounce_seconds,
+        "must be an integer between #{@auto_away_debounce_seconds_min} and " <>
+          "#{@auto_away_debounce_seconds_max} seconds, 0 to disable, or null"
       )
 
     {:error, cs}

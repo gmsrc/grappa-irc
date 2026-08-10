@@ -38,6 +38,7 @@ defmodule Grappa.UserSettings.Settings do
   | `"upload_ttl_seconds"` | `pos_integer() \\| nil`           | `Grappa.UserSettings` (UX-4 M) |
   | `"vhost_selection"`    | `list(String.t())`                  | `Grappa.Vhosts` (#228)       |
   | `"display_prefs"`      | `Grappa.UserSettings.display_prefs()` | `Grappa.UserSettings` (#449) |
+  | `"auto_away_debounce_seconds"` | `pos_integer() \\| 0` (`0` = OFF) | `Grappa.UserSettings` (#348) |
 
   ## String-key invariant (IMPORTANT)
 
