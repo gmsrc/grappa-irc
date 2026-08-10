@@ -91,7 +91,11 @@ test.describe("#487 context menu viewport clamp", () => {
 
     // Precondition (anti-hollow-green): at the raw click the menu WOULD have
     // overflowed BOTH edges, so the flip math was genuinely exercised.
-    expect(g.itemCount).toBe(8);
+    // #1192 added the CTCP group between WHOIS and Query, so the nick menu is
+    // nine rows. Kept as an exact count, not a `>=`: this number is the
+    // precondition that the menu really is tall enough to overflow, and a
+    // loosened assertion would stop noticing if the menu ever shrank.
+    expect(g.itemCount).toBe(9);
     expect(g.height).toBeGreaterThan(0);
     expect(vp.height - 4 + g.height).toBeGreaterThan(g.innerHeight);
     expect(vp.width - 4 + g.width).toBeGreaterThan(g.innerWidth);
@@ -101,7 +105,10 @@ test.describe("#487 context menu viewport clamp", () => {
     expect(g.left).toBeGreaterThanOrEqual(0);
     expect(g.bottom).toBeLessThanOrEqual(g.innerHeight);
     expect(g.right).toBeLessThanOrEqual(g.innerWidth);
-    // The last item (Query) sits inside the fold → clickable.
+    // The last item (Query) sits inside the fold → clickable. Still Query after
+    // #1192: the CTCP group went in ABOVE it, deliberately, so this proof stays
+    // a proof — a drill-down row would swap the list instead of closing, and
+    // the click below would assert nothing.
     expect(g.lastItemBottom).toBeLessThanOrEqual(g.innerHeight);
 
     // Actionability proof: the last item is hit-testable (not covered / off

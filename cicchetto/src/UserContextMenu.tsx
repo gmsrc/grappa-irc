@@ -1,5 +1,6 @@
 import type { Component } from "solid-js";
-import ContextMenu, { type ContextMenuItem } from "./ContextMenu";
+import ContextMenu, { type ContextMenuAction, type ContextMenuItem } from "./ContextMenu";
+import { sendCtcpQuery } from "./lib/ctcpQuery";
 import { canonicalQueryNick, openQueryWindowState } from "./lib/queryWindows";
 import { setSelectedChannel } from "./lib/selection";
 import {
@@ -25,6 +26,19 @@ import {
 // The chrome (portal, backdrop, Escape, the #487 measured viewport clamp) lives
 // in `ContextMenu`, shared since #1067 added the long-press message menu. This
 // module is now only the item list.
+//
+// #1192 added a ninth entry: a CTCP group that drills down rather than six more
+// rows on a menu that already has eight.
+
+// #1192 — the verbs worth a menu row. Small and closed on purpose: `/ctcp` is
+// still there for anything else, and every entry here costs a row on a menu
+// that a thumb has to hit.
+//
+// Neither VERSION nor CLIENTINFO is verifiable — both are strings the remote
+// client picks for itself (CLIENTINFO is the verbs it claims to answer, which
+// is capability discovery, not identity). They are worth asking; they are not
+// worth believing.
+const CTCP_VERBS = ["VERSION", "TIME", "PING", "CLIENTINFO", "USERINFO", "SOURCE"] as const;
 
 export type Props = {
   networkSlug: string;
@@ -38,6 +52,36 @@ export type Props = {
 
 const UserContextMenu: Component<Props> = (props) => {
   const isOp = (): boolean => props.ownModes.includes("@");
+
+  // Every verb dispatches identically — the seam owns the #640 source-window
+  // echo and the #600 register-before-send ordering, so there is nothing here
+  // for PING to special-case. Args are empty: a menu row has no place to type
+  // one, and a BARE ping is what correlates through the #637 token-less
+  // fallback without the seam inventing wire bytes.
+  //
+  // Detached, because a menu item's action is synchronous and this menu has no
+  // inline error channel the way the composer does. Never bare, though: an
+  // unhandled rejection is how a throttled or WS-down probe becomes a row that
+  // simply never appears. Same shape as compose.ts's detached fan-out — a
+  // grep key and the reason it stopped.
+  const ctcpItems = (): ContextMenuAction[] =>
+    CTCP_VERBS.map((verb) => ({
+      label: verb,
+      enabled: true,
+      action: (): void => {
+        void sendCtcpQuery({
+          networkSlug: props.networkSlug,
+          networkId: props.networkId,
+          sourceChannel: props.channelName,
+          targetNick: props.targetNick,
+          verb,
+          args: "",
+          sentAtMs: Date.now(),
+        }).catch((err: unknown) => {
+          console.warn(`[ctcp-menu] ${verb} to ${props.targetNick} never left:`, err);
+        });
+      },
+    }));
 
   const items = (): ContextMenuItem[] => [
     {
@@ -77,6 +121,15 @@ const UserContextMenu: Component<Props> = (props) => {
       // Always enabled — no perm required.
       enabled: true,
       action: () => pushWhois(props.networkId, props.targetNick, null),
+    },
+    {
+      // #1192 — sits between WHOIS and Query because it belongs with WHOIS:
+      // both interrogate the person, while Query talks to them. Always enabled,
+      // like its neighbours — asking a peer for its VERSION needs no channel
+      // privilege.
+      label: "CTCP",
+      enabled: true,
+      submenu: ctcpItems(),
     },
     {
       label: "Query",
