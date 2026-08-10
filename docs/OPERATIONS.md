@@ -1221,13 +1221,18 @@ tagged on that commit, and only THEN deployed — the version bump is the
 is the post-deploy half. WHY version-first still holds after #652: the shipped
 range must self-report the version it IS, and the tag must equal `CTCP VERSION`
 exactly. `Version.base/0` now returns a compile-time constant baked from
-`VERSION` (an `@external_resource`), so a HOT deploy of a `VERSION`-only bump
-DOES refresh the reported string as the recompiled `Grappa.Version` beam
-reloads — a `VERSION`-only bump is HOT (it no longer touches `mix.exs`, so
-`Preflight.mix_deps?` no longer forces COLD; that reversed the pre-#652 rule).
-The one lag: the running node's `.app` vsn stays at its boot value until the
-next cold restart, but `Grappa.Version` is the only thing that ever read it, so
-nothing observes the divergence. Corollary: an **unplanned** prod move (a
+`VERSION` (an `@external_resource`). **Plan a restart for any release bump: a
+`VERSION`-only bump is a COLD deploy** — measured on m42 2026-08-10,
+correcting what #652 claimed here. `mix.exs` reads the same file to stamp the
+OTP application vsn, so the bump moves the release's lib directory to
+`lib/grappa-<new>/ebin`, while the running node keeps resolving
+`:code.lib_dir(:grappa)` — the directory `Grappa.HotReload.reload_modified/0`
+walks — to its BOOT directory `lib/grappa-<old>/ebin`. Nothing in there
+changed, so `/admin/reload` answers `{"failed":[],"reloaded":[]}` and the node
+serves the OLD number with the new code already on disk. `Preflight.mix_deps?`
+no longer forces COLD on such a bump, so preflight will offer you a hot deploy
+anyway — that misclassification is a behaviour defect tracked on its own, not
+a licence to ship the bump hot. Corollary: an **unplanned** prod move (a
 migration, a jail cutover) is still something you version BEFORE, not after —
 bump `VERSION` in the range so the artifact self-reports honestly rather than
 patching a string afterward. Do NOT re-hardcode `@version` in `mix.exs`: it
@@ -3628,7 +3633,10 @@ several other sections point at:
 
 - `mix.exs` and `lib/grappa/version.ex` read the SAME file at **compile**
   time (`@external_resource`, #652), so the number is baked into the beam
-  and a `VERSION`-only bump hot-reloads instead of forcing a COLD deploy.
+  and cannot drift from the package metadata. It does NOT make the bump
+  hot-reloadable: `mix.exs` stamps the OTP application vsn from that same
+  read, which moves the release's lib directory out from under the running
+  node — a `VERSION`-only bump is COLD, see § "Release-cutting".
 - `build.sh` sources `version.sh` to export `GRAPPA_VERSION`, which
   `nfpm.yaml` interpolates into `version:` for BOTH the `.deb` and the
   `.rpm`.

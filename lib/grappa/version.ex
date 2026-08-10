@@ -18,23 +18,42 @@ defmodule Grappa.Version do
   whose on-disk md5 changed — it never re-reads `.app`. So after a
   **hot-deployed** version bump, `Application.spec/2` would keep reporting
   the boot-time value while the operator expects the new one. Sourcing
-  `base/0` from a compiled constant instead means the number travels with
-  the recompiled `Grappa.Version` beam and updates on the same reload
-  (#652). This is also NOT the #391 defect: that was a **runtime** read of
+  `base/0` from a compiled constant instead keeps the number inside the
+  artifact, with no runtime filesystem access and no way to drift from the
+  string `mix.exs` stamps (#652). What it does NOT buy is the payoff #652
+  claimed — the new number arriving on a hot reload — because a `VERSION`
+  bump is itself a cold deploy; see "The declared price" below.
+  This is also NOT the #391 defect: that was a **runtime** read of
   a **build** file (`mix.exs`), which a package lacks — it *raised* and
   crashed the `CTCP VERSION` reply. Here the read is at compile time,
   inside the build tree where `VERSION` always exists (source checkout OR
   release tarball), and the artifact carries a plain string — no runtime
   filesystem access, so no fallback to design and no packaging failure.
 
-  ## The declared price (#652)
+  ## The declared price (#652), and what it turned out to be
 
-  After a **hot** bump the running node's `.app` vsn stays at its boot
-  value while `base/0` reports the new number; they reconverge at the next
-  cold restart. `Grappa.Version` is the ONLY `Application.spec(:grappa, …)`
-  consumer in the tree, so nothing else observes the divergence — and a
-  bump that changes only `VERSION` (never `mix.exs` / `mix.lock`) is
-  classified HOT by `Grappa.Deploy.Preflight`, which is the whole point.
+  #652 declared the price as a divergence: after a **hot** bump the running
+  node's `.app` vsn would stay at its boot value while `base/0` reported the
+  new number, reconverging at the next cold restart. `Grappa.Version` is the
+  ONLY `Application.spec(:grappa, …)` consumer in the tree, so nothing else
+  would observe it.
+
+  Measured on m42 on 2026-08-10, the real price is a different one: that
+  divergence never opens, because **a bump that changes only `VERSION` is a
+  COLD deploy**, not the HOT one #652 expected. `mix.exs` reads the same file
+  to stamp the OTP application vsn, so under `mix release` the bump moves the
+  artifact to `lib/grappa-<new>/ebin` while the running node still resolves
+  `:code.lib_dir(:grappa)` — the directory `Grappa.HotReload.reload_modified/0`
+  walks — to its boot directory `lib/grappa-<old>/ebin`. Nothing in there
+  changed, so `/admin/reload` answers `{"failed":[],"reloaded":[]}`: neither
+  the `.app` vsn NOR `base/0` moves, and the node serves the old number with
+  the new code already on disk until it is restarted. (In a source checkout
+  `:code.lib_dir/1` is the unversioned `_build/<env>/lib/grappa`, which is why
+  development never showed this.)
+
+  `Grappa.Deploy.Preflight` still classifies such a bump HOT. That
+  misclassification is a behaviour defect with an issue of its own; what is
+  corrected here is only the claim this moduledoc made about it.
 
   ## Suffix — git tag ≡ CTCP VERSION (#391)
 
@@ -86,10 +105,12 @@ defmodule Grappa.Version do
 
   # #652 — the base version is the repo-root `VERSION` file, read at COMPILE
   # time and baked into a module attribute. Registered as an
-  # `@external_resource` so a bump dirties this module → `mix compile` on the
-  # hot path recompiles it → `reload_modified/0` picks up the new beam by md5,
-  # and the reported version updates WITHOUT a cold restart (the `.app` vsn
-  # would not — the node never re-reads the app resource). The read is
+  # `@external_resource` so a bump dirties this module and `mix compile` on the
+  # deploy path recompiles it. That much still holds; what #652 claimed next —
+  # that `reload_modified/0` then picks the new beam up by md5 and the reported
+  # version updates WITHOUT a cold restart — does not, because in a release the
+  # recompiled beam lands under `lib/grappa-<new>/ebin` and the running node
+  # never looks there (moduledoc, "The declared price"). The read is
   # compile-time, inside the build tree where `VERSION` always exists, so —
   # unlike the #391 runtime `mix.exs` read — a package build cannot raise.
   @version_path Path.join(@repo_root, "VERSION")
@@ -121,9 +142,10 @@ defmodule Grappa.Version do
   @doc """
   The canonical base version — the repo-root `VERSION` file, read at compile
   time and baked into `@base_version` (#652). NOT `Application.spec(:grappa,
-  :vsn)`: the `.app` resource is read once at boot and never re-read, so it
-  goes stale across a hot-deployed bump; a compiled constant travels with the
-  reloaded beam. No runtime filesystem access.
+  :vsn)`: the `.app` resource is read once at boot and never re-read, and the
+  constant needs no runtime filesystem access while being the same string
+  `mix.exs` stamps. It does not, however, make a bump land on a hot deploy —
+  a `VERSION`-only bump is COLD (moduledoc, "The declared price").
   """
   @spec base() :: String.t()
   def base, do: @base_version

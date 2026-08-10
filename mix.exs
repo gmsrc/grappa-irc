@@ -4,11 +4,24 @@ defmodule Grappa.MixProject do
   @app :grappa
   # #652 — the version is DECLARED ONCE in the repo-root `VERSION` file and read
   # here at BUILD time (compile-time `File.read!`, never a runtime read — the
-  # #391 defect was a runtime read of this build file). Bumping `VERSION` no
-  # longer touches `mix.exs`, so `Grappa.Deploy.Preflight` classifies a bump as
-  # HOT instead of COLD (its `mix_deps?` clause) — a version bump keeps every
-  # IRC session alive. `Grappa.Version` bakes the SAME file into a module
-  # attribute so the reloaded beam carries the new number across a hot deploy.
+  # #391 defect was a runtime read of this build file). `Grappa.Version` bakes
+  # the SAME file into a module attribute, so the number an operator reads can
+  # never drift from the one stamped into the package metadata.
+  #
+  # A `VERSION`-only bump is nonetheless a COLD deploy — measured on m42
+  # 2026-08-10, correcting what #652 claimed here. Its reasoning was sound in
+  # the abstract (a bump no longer edits `mix.exs`, so `Grappa.Deploy.Preflight`
+  # stops classifying it COLD through `mix_deps?`), but it is defeated by the
+  # coupling the line below introduces: that read stamps the OTP application
+  # vsn, so under `mix release` — how production ships — the bump moves the
+  # artifact to `lib/grappa-<new>/ebin`, while the RUNNING node keeps resolving
+  # `:code.lib_dir(:grappa)` to its boot directory `lib/grappa-<old>/ebin`.
+  # That is the directory `Grappa.HotReload.reload_modified/0` walks; nothing in
+  # it changed, so `/admin/reload` answers `{"failed":[],"reloaded":[]}` and the
+  # node serves the old number with the new code already on disk. Plan a restart
+  # for any release bump. Preflight still calls such a bump HOT — that
+  # misclassification is a behaviour defect and belongs to an issue of its own,
+  # not to a comment.
   @version File.read!(Path.join(__DIR__, "VERSION")) |> String.trim()
 
   def project do
