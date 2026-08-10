@@ -44,7 +44,10 @@ export const HOLD_MOVE_TOLERANCE_PX = 10;
 // so the slide tracks the finger instead of easing behind it.
 export const SWIPING_CLASS = "scrollback-line-swiping";
 
-const MESSAGE_ROW_SELECTOR = ".scrollback-line";
+// Exported since #1115: the desktop `contextmenu` door resolves the row the
+// same way this binder does, and two copies of the selector would let the two
+// doors open over different elements.
+export const MESSAGE_ROW_SELECTOR = ".scrollback-line";
 
 export type MessageGestureParams = {
   // Injected (not read off the element) so the zone geometry is testable in

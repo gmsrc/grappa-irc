@@ -26,6 +26,7 @@ import {
   mentionsBelowViewport,
   type ScrollbackLineGeom,
 } from "./lib/mentionScroll";
+import { bindMessageContextMenu } from "./lib/messageContextMenu";
 import { bindMessageGestures } from "./lib/messageGestures";
 import { closeMessageMenu, openMessageMenu } from "./lib/messageMenu";
 import { networks, user } from "./lib/networks";
@@ -58,6 +59,7 @@ import {
 } from "./lib/scrollback";
 import { scrollToBottomRequest } from "./lib/scrollToBottomCommand";
 import { setCursorIfAdvances, setSelectedChannel } from "./lib/selection";
+import type { Point } from "./lib/swipe";
 import { isMobile } from "./lib/theme";
 import { formatTimestamp } from "./lib/timeFormat";
 import { dismissWhoisCard, whoisCardBySlug } from "./lib/whoisCard";
@@ -1834,6 +1836,24 @@ const ScrollbackPane: Component<Props> = (props) => {
     // each claims a disjoint drag: #230 owns a VERTICAL drag on an underfilled
     // pane, `bindMessageGestures` only ever claims a rightward HORIZONTAL one
     // (and never in the edge zones #1041/#308 reserve).
+    //
+    // #1115 — and the desktop door to the SAME menu, bound on the SAME
+    // container. One menu for both modalities, opened by whichever door the
+    // operator's hardware reaches: the items are all row verbs (Copy, Reply,
+    // Select…) and none of them means something different under a mouse, so
+    // trimming per modality would only buy a "which input am I" signal that
+    // lies on a touchscreen laptop.
+    const openMenuForRow = (row: HTMLElement, at: Point): void => {
+      const msg = messageForRow(row);
+      if (msg === null) return;
+      openMessageMenu({
+        msg,
+        row,
+        networkSlug: props.networkSlug,
+        channelName: props.channelName,
+        at,
+      });
+    };
     if (listRef) {
       const disposeGestures = bindMessageGestures(listRef, {
         viewportWidth: () => window.innerWidth,
@@ -1842,19 +1862,10 @@ const ScrollbackPane: Component<Props> = (props) => {
           if (msg === null) return;
           replyToMessage(msg, props.networkSlug, props.channelName);
         },
-        onLongPress: (row, at) => {
-          const msg = messageForRow(row);
-          if (msg === null) return;
-          openMessageMenu({
-            msg,
-            row,
-            networkSlug: props.networkSlug,
-            channelName: props.channelName,
-            at,
-          });
-        },
+        onLongPress: openMenuForRow,
       });
       onCleanup(disposeGestures);
+      onCleanup(bindMessageContextMenu(listRef, { onContextMenu: openMenuForRow }));
     }
     // A menu left open over a row this pane is about to destroy would float
     // above the next channel, still holding a detached element.
