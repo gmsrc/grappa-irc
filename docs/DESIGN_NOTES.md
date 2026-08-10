@@ -37535,6 +37535,9 @@ container, `actionlint` was clean, and ten mutants in the workflow each killed
 exactly one bats case. The tag logic, the label set and the push gate are held
 by derivation-and-compare against the bouncer's, never by a re-typed copy — so
 they follow the bouncer when it moves. Nothing here proves a byte reached ghcr.
+
+---
+
 ## 2026-08-10 — #1108: the frame budget is published; the split PREVIEW is a declared mirror
 
 The compose box now tells the operator, before a send, that the draft no
@@ -37591,8 +37594,10 @@ cases live verbatim in BOTH suites — `frameBudget.test.ts` and
 `line_split_test.exs`'s "#1108: the fragment counts cic's preview mirrors" —
 so each side pins its own splitter and neither can move quietly. Verified in
 both directions: dropping the word-boundary rule from the TS chunker fails
-exactly the two boundary cases there, and dropping it from `break_space?/1`
-fails exactly the same two here. Add a case to one table, add it to the other.
+exactly the two boundary cases of the table there, and dropping it from
+`break_space?/1` fails exactly the same two cases of the table here (plus
+three of #1109's own arms, which is the point of those arms). Add a case to
+one table, add it to the other.
 This was written only because #1109 landed first: against the byte-cut
 splitter the shared table could only have been written red. What a count
 table still cannot witness is the NO-BREAK SPACE policy — treating U+00A0 as
@@ -37622,3 +37627,32 @@ keystroke is noise; the event worth announcing is "this will split", and the
 seam line carries it politely. Zero is rendered rather than skipped — at
 exactly the budget the draft is still one message, so hiding it would blink
 the counter off for one byte before the warning appears.
+
+**A published number must be checked against the wire, not against the
+arithmetic that produced it.** An audit of this branch's own guards found two
+that could not fail: they asserted
+`base - byte_size(target) == LineSplit.frame_budget(target, linelen)` where
+`base` was itself `frame_budget_base/1`, so a `+ 1` inside `frame_budget/2`
+moved BOTH sides and left them green (measured: 22 reds in
+`line_split_test.exs`, 0 in `server_test.exs` and `grappa_channel_test.exs`).
+The replacement oracle is `Grappa.RelayFrameHelpers` — the #246 worst-case
+relayed frame, built from the identity ceilings and forbidden to call
+`LineSplit` — asserting EQUALITY between the framed body and LINELEN. Equality
+is what makes it two-sided in one line: `<=` would accept every under-count,
+which is the half of the space a budget drifts into. Hand-deriving the
+constant instead (the `512 - 119` this replaced) does discriminate, but only
+by writing the same sum twice — it re-checks the arithmetic rather than the
+behaviour, and it invites "fix the test" when a ceiling legitimately moves.
+The session-level arms are kept, relabelled for what they actually witness:
+that the LIVE linelen reaches the payload (a narrowed broadcast trigger and a
+hardcoded snapshot linelen each kill exactly one of them). **General rule: if
+both sides of an assertion come from the same function, the arm is about
+plumbing, and the number needs an oracle from somewhere else.**
+
+**Both isupport doors are gated, deliberately one test each.** A wire→store
+fold that dropped `frame_budget_base` used to die in exactly one test, on the
+live-005 door, while the cold snapshot — the only door a client joining an
+always-on bouncer long after the 005 burst ever uses — had no isupport arm at
+all. `subscribe.test.ts` now asserts the budget lands in the REAL store
+(`frameBudgetBaseForNetwork`), not on a `seedIsupport` spy, so the shared fold
+has one killer per door and the door itself has its first guard.
