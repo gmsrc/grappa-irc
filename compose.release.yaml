@@ -1,0 +1,56 @@
+# grappa — minimal compose for the PUBLISHED release image (#1160).
+#
+# For operators who want to pull rather than build, and who will not pipe a
+# remote script into a shell. Copy this file, set PHX_HOST, `up -d`. That is
+# the whole procedure.
+#
+#   docker compose -f compose.release.yaml up -d
+#
+# This is NOT the development stack. `compose.yaml` is: it builds from the
+# checkout, bind-mounts the tree and hot-reloads. This file only ever pulls.
+#
+# Nothing else is needed because the image bootstraps itself: on first boot
+# `infra/docker/release-entrypoint.sh` generates SECRET_KEY_BASE,
+# SECRET_SIGNING_SALT, RELEASE_COOKIE, GRAPPA_ENCRYPTION_KEY and the VAPID
+# pair into /data/grappa.env, creates the database directory and the uploads
+# root, and runs pending migrations. It never rotates a secret it already
+# wrote. Back /data up — GRAPPA_ENCRYPTION_KEY decrypts every stored upstream
+# credential, and losing it loses them.
+#
+# UPDATES ON THIS PATH ARE COLD. The release image ships no
+# Phoenix.CodeReloader, so there is nothing to hot-swap and editing this file
+# under a running container changes nothing until you recreate it:
+#
+#   docker compose -f compose.release.yaml pull
+#   docker compose -f compose.release.yaml up -d
+#
+# Sessions drop for the seconds of the recreate; the database and uploads on
+# the volume are untouched.
+#
+# The container serves plain HTTP and owns its own CSP and security headers.
+# Put your own TLS reverse proxy in front of it, exactly as the from-source
+# path does.
+
+services:
+  grappa:
+    # `latest` follows every release. Pin the tag you actually reviewed
+    # (ghcr.io/vjt/grappa:vX.Y.Z) if you would rather choose when to move.
+    image: ghcr.io/vjt/grappa:latest
+    restart: unless-stopped
+    environment:
+      # THE ONE VALUE NOTHING CAN INVENT: the public hostname clients reach.
+      # Leave it blank and the container refuses to boot, on purpose — a wrong
+      # PHX_HOST mints dead upload links into permanent IRC scrollback and
+      # rejects every WebSocket handshake.
+      PHX_HOST: ""
+    ports:
+      # Loopback only. Publish on a LAN address instead if your reverse proxy
+      # runs on another host.
+      - "127.0.0.1:4000:4000"
+    volumes:
+      # Database, uploads and the generated secrets. Do not point this at a
+      # host directory unless you are ready to own its permissions.
+      - grappa-data:/data
+
+volumes:
+  grappa-data:

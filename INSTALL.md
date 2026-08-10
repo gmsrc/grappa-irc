@@ -163,6 +163,18 @@ and hands off to `infra/docker/deploy.sh` in release mode. That `install`:
 Front it with your own TLS front door exactly as the from-source path does
 (the container serves plain HTTP + owns its own CSP; #485).
 
+**Won't pipe a script into a shell?** `compose.release.yaml` in this repo is
+the same thing as a compose file — copy it, set `PHX_HOST`, bring it up:
+
+```sh
+docker compose -f compose.release.yaml up -d
+```
+
+It is deliberately short (image, a `/data` volume, a published port,
+`PHX_HOST`) because the entrypoint generates its own secrets, creates its
+directories and migrates on first boot. It is **not** `compose.yaml`, which is
+the from-source development stack above and builds from the checkout.
+
 #### Updating an image box is always COLD
 
 The release image ships no `CodeReloader`, so there is nothing to hot-swap: an
