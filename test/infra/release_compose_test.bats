@@ -37,6 +37,18 @@ RUNTIME_EXS="$REPO_ROOT/config/runtime.exs"
 RELEASE_DOCKERFILE="$REPO_ROOT/Dockerfile.release"
 ENTRYPOINT="$REPO_ROOT/infra/docker/release-entrypoint.sh"
 
+# Every absence check below is a `grep` that must match NOTHING, and a grep
+# over a file that does not exist also matches nothing — so "no build
+# context", "no profiles" and "no bind mounts" all passed VACUOUSLY while the
+# file was missing, measured on the red run this suite was written for. The
+# file's existence is the precondition of the whole suite, not one test in it.
+setup() {
+    [ -f "$RELEASE_COMPOSE" ] || {
+        echo "compose.release.yaml is missing — every check here is about it" >&2
+        return 1
+    }
+}
+
 # Every env var config/runtime.exs REFUSES TO BOOT without under MIX_ENV=prod.
 # Two shapes reach the raise: a literal `raise "environment variable X is
 # missing"`, and the two shared raisers `missing_secret.("X", …)` /
