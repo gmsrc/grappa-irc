@@ -1087,4 +1087,140 @@ defmodule Grappa.UserSettingsTest do
       assert UserSettings.get_last_client_prefix64({:visitor, visitor.id}) == hex
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # auto_away_debounce_seconds accessors (#348)
+  # ---------------------------------------------------------------------------
+  #
+  # THREE states, one scalar — the setting is one control per vjt's ruling
+  # (a delay AND an off switch), so it is one key and never a value plus a
+  # sibling boolean:
+  #
+  #   nil         no preference — the session keeps the server-wide default
+  #   :disabled   auto-away OFF for this subject: no timer is ever armed
+  #   n           seconds to wait after the last visible device hides
+  #
+  # `:disabled` is an ATOM in the context API (CLAUDE.md: atoms for closed
+  # sets) and the integer `0` on the JSON side of the boundary. The integer
+  # `0` is therefore NOT a valid seconds value here — passing it in is a
+  # 422, exactly like -1.
+
+  describe "get_auto_away_debounce_seconds/1" do
+    test "returns nil when no settings row exists" do
+      fake_id = Ecto.UUID.generate()
+      assert UserSettings.get_auto_away_debounce_seconds({:user, fake_id}) == nil
+    end
+
+    test "returns nil when the row exists but has no auto_away_debounce_seconds key" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.get_or_init({:user, user.id})
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
+    end
+
+    test "decodes the stored 0 sentinel as :disabled" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+      Repo.update!(Settings.changeset(settings, %{data: %{"auto_away_debounce_seconds" => 0}}))
+
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == :disabled
+    end
+
+    test "returns nil for malformed stored values (never crashes, falls back to default)" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      for bogus <- ["600", -1, 1.5, %{"seconds" => 600}] do
+        Repo.update!(
+          Settings.changeset(settings, %{data: %{"auto_away_debounce_seconds" => bogus}})
+        )
+
+        assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
+      end
+    end
+
+    test "returns nil for a stored value above the accepted range" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      Repo.update!(
+        Settings.changeset(settings, %{
+          data: %{"auto_away_debounce_seconds" => UserSettings.auto_away_debounce_seconds_max() + 1}
+        })
+      )
+
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
+    end
+  end
+
+  describe "put_auto_away_debounce_seconds/2" do
+    test "persists a positive integer and reads back identically" do
+      user = user_fixture()
+
+      assert {:ok, %Settings{}} =
+               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120)
+
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == 120
+    end
+
+    test "persists :disabled and reads it back as :disabled" do
+      user = user_fixture()
+
+      assert {:ok, %Settings{}} =
+               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, :disabled)
+
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == :disabled
+    end
+
+    test "nil clears the preference (back to the server default)" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 120)
+
+      assert {:ok, %Settings{}} =
+               UserSettings.put_auto_away_debounce_seconds({:user, user.id}, nil)
+
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == nil
+    end
+
+    test "accepts both ends of the range exactly" do
+      user = user_fixture()
+      min = UserSettings.auto_away_debounce_seconds_min()
+      max = UserSettings.auto_away_debounce_seconds_max()
+
+      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, min)
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == min
+
+      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, max)
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == max
+    end
+
+    test "rejects out-of-range, zero and non-integer values at the boundary" do
+      user = user_fixture()
+      min = UserSettings.auto_away_debounce_seconds_min()
+      max = UserSettings.auto_away_debounce_seconds_max()
+
+      for bogus <- [0, -1, min - 1, max + 1, "120", 1.5, :off] do
+        assert {:error, %Ecto.Changeset{} = cs} =
+                 UserSettings.put_auto_away_debounce_seconds({:user, user.id}, bogus)
+
+        assert Keyword.has_key?(cs.errors, :auto_away_debounce_seconds)
+      end
+    end
+
+    test "preserves other data keys (merge semantics, not replace)" do
+      user = user_fixture()
+      {:ok, _} = UserSettings.set_highlight_patterns({:user, user.id}, ["foo", "bar"])
+
+      {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:user, user.id}, 300)
+
+      assert UserSettings.get_highlight_patterns({:user, user.id}) == ["foo", "bar"]
+      assert UserSettings.get_auto_away_debounce_seconds({:user, user.id}) == 300
+    end
+
+    test "works for visitor subjects (visitor-parity at the store layer)" do
+      visitor = visitor_fixture()
+
+      assert {:ok, _} = UserSettings.put_auto_away_debounce_seconds({:visitor, visitor.id}, 60)
+      assert UserSettings.get_auto_away_debounce_seconds({:visitor, visitor.id}) == 60
+    end
+  end
 end
