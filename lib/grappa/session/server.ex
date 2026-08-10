@@ -1333,30 +1333,34 @@ defmodule Grappa.Session.Server do
       managed_source_alias: Map.get(opts, :managed_source_alias)
     }
 
-    # S3.1 / S3.2 / #182: subscribe to the WSPresence PubSub topic for this
-    # user so auto-away debounce and cancel fire on `:ws_visible` /
-    # `:ws_all_hidden` (device-foreground) transitions. Only user sessions
-    # (not visitor sessions) participate in auto-away; visitor disconnect =
-    # bouncer disconnect (ephemeral credential). Visitors still report
-    # visibility to WSPresence for the push-suppression gate, but their
-    # Session.Server doesn't subscribe here.
-    if match?({:user, _}, opts.subject) do
-      :ok =
-        Phoenix.PubSub.subscribe(
-          Grappa.PubSub,
-          Topic.ws_presence(opts.subject_label)
-        )
+    # S3.1 / S3.2 / #182: subscribe to the WSPresence PubSub topic for
+    # this subject so the auto-away debounce arms and cancels on the
+    # `:ws_visible` / `:ws_all_hidden` (device-foreground) transitions.
+    #
+    # #348 — BOTH subject kinds subscribe. This used to be gated to
+    # `{:user, _}` on the reasoning that a visitor's disconnect is a
+    # bouncer disconnect (ephemeral credential), so auto-away was moot;
+    # what that missed is the case auto-away exists for — a device that
+    # BACKGROUNDS without disconnecting. A visitor who locked their
+    # phone therefore stayed visibly present upstream for as long as the
+    # socket held. Their preference has a home already (`user_settings`
+    # is subject-scoped, XOR user_id/visitor_id) and they resolve the
+    # same server-wide default as users, so nothing here is
+    # visitor-specific any more.
+    :ok =
+      Phoenix.PubSub.subscribe(
+        Grappa.PubSub,
+        Topic.ws_presence(opts.subject_label)
+      )
 
-      # #348 — and to the settings bridge, so retuning (or switching off)
-      # the auto-away debounce takes effect on a live session instead of
-      # waiting for its next restart. Same subject gate as above: only
-      # user sessions run auto-away, so only they care.
-      :ok =
-        Phoenix.PubSub.subscribe(
-          Grappa.PubSub,
-          Topic.user_settings(opts.subject_label)
-        )
-    end
+    # #348 — and to the settings bridge, so retuning (or switching off)
+    # the auto-away debounce takes effect on a live session instead of
+    # waiting for its next restart.
+    :ok =
+      Phoenix.PubSub.subscribe(
+        Grappa.PubSub,
+        Topic.user_settings(opts.subject_label)
+      )
 
     emit_lifecycle(:spawned, state)
 
@@ -6412,24 +6416,30 @@ defmodule Grappa.Session.Server do
 
   # #348 — adopt a new debounce window on a LIVE session.
   #
-  # Switching off also cancels whatever is in flight: a switch that let
-  # one last timer fire, up to a full window later, would produce
-  # exactly the surprise AWAY it exists to prevent.
+  # Switching off cancels whatever is in flight and arms nothing: a
+  # switch that let one last timer fire, up to a full window later,
+  # would produce exactly the surprise AWAY it exists to prevent.
   #
-  # Any other change deliberately leaves an armed timer alone, so a
-  # retune applies from the NEXT hide. Whether it should instead restart
-  # the window the session is currently inside of is #348's open
-  # question (we do not record when the hide happened, so "restart" is
-  # the only alternative we could implement honestly) — it is confined
-  # to this function so the ruling is a one-clause change.
+  # A retune while a timer is in flight RE-ARMS at the new window (vjt's
+  # ruling). We do not record when the hide happened, so the honest
+  # alternatives were "restart the window" or "ignore the change until
+  # the next hide", and a knob that visibly does nothing until you hide
+  # again is the worse surprise. The window therefore restarts from the
+  # moment of the change.
   @spec apply_auto_away_debounce(t(), non_neg_integer() | :disabled) :: t()
   defp apply_auto_away_debounce(state, :disabled) do
     :ok = cancel_and_drain(state.auto_away_timer, :auto_away_debounce_fire)
     %{state | auto_away_debounce_ms: :disabled, auto_away_timer: nil}
   end
 
-  defp apply_auto_away_debounce(state, debounce_ms) when is_integer(debounce_ms),
-    do: %{state | auto_away_debounce_ms: debounce_ms}
+  defp apply_auto_away_debounce(%{auto_away_timer: nil} = state, debounce_ms)
+       when is_integer(debounce_ms),
+       do: %{state | auto_away_debounce_ms: debounce_ms}
+
+  defp apply_auto_away_debounce(state, debounce_ms) when is_integer(debounce_ms) do
+    :ok = cancel_and_drain(state.auto_away_timer, :auto_away_debounce_fire)
+    arm_auto_away_debounce(%{state | auto_away_debounce_ms: debounce_ms, auto_away_timer: nil})
+  end
 
   @spec cancel_and_drain(reference() | nil, atom()) :: :ok
   def cancel_and_drain(nil, _), do: :ok
