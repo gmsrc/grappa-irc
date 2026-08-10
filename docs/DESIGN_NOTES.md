@@ -37868,3 +37868,71 @@ surface. `/ame` is a builtin in the only sense #427 leaves available: it is in
 that comment exists to prevent. The alias engine still cannot express iteration,
 so none of this is user-scriptable today, and nothing here is pre-built for a
 future iteration primitive.
+
+---
+
+## 2026-08-10 — #445: the pseudo-row dismiss target is MRU, which means one redirect fewer
+
+vjt ruled MRU on the question #71 INC-3 deferred: where focus lands when the ×
+on a greyed pseudo-row (`:failed` / `:kicked` / `:parked`) closes the window
+the operator is looking at. INC-3 had unified the two surfaces on the
+Sidebar's explicit redirect to the network `$server` window — deliberately the
+zero-behaviour-change spelling — and recorded the destination itself as an
+open product question, because every OTHER close in the app lands on the
+most-recently-viewed window.
+
+**The ruling deletes code; it does not replace it.** selection.ts's bucket-E
+close-watcher already resolves MRU → `$server` → home for /part, a
+server-side kick, the /disconnect cascade and a query close, and it already
+fires on this path: a pseudo-row is live to that watcher precisely because
+`windowIsPresent` says so (UX-7-E), so `forceParted` dropping the key IS the
+vanish transition it arms on. The redirect's only effect was to pre-empt it,
+which is what made a dismissal the one close that ignored MRU. Removing it
+leaves one owner of the close target, and `windowClose` stops importing
+`selection` altogether.
+
+**An explicit MRU redirect from the verb was rejected**, not merely unneeded.
+It would duplicate the derivation — the failure mode CLAUDE.md's
+"derive, don't duplicate" names — and it would fire for an UNFOCUSED row,
+stealing focus from a window the operator is looking at. The watcher is
+focus-gated by construction; the verb must not be gated at all. That is
+written into the verb as a "do not re-add this" note, because the wrong fix
+here looks like the right one.
+
+**The brief's cross-reference was falsified, and the falsification is the
+result.** It said to update "the INC-3 e2e assert pinning the landing on
+`$server`". No such assert exists: #902 deleted
+`issue71-inc3-bottombar-invite.spec.ts` outright — its subject, the
+`:invited` slice in the mobile BottomBar, no longer exists in any form — and
+that commit says so in as many words, recording the pseudo-row dismiss path
+as left with no e2e at all, "a real coverage loss". #445 takes the coverage
+back rather than editing an assert that was already gone, at the `:failed`
+shape, which unlike `:invited` is still a pseudo-row.
+
+A THIRD site pinned `$server` that no one had listed: `Sidebar.test.tsx`'s
+"clicking × on the selected pseudo-row redirects selection to $server". It
+surfaced by running the suite, not by grepping the brief's file list. Both it
+and its windowClose sibling are now negatives — the verb steers no focus even
+in the case INC-3 sent to `$server` — and both are labelled IN PLACE as
+tripwires for re-adding a redirect rather than as coverage of where focus
+lands, since on green neither reaches the mock it asserts against. Their two
+"non-selected row does not redirect" siblings were deleted with the branch
+they guarded: with no focus branch left, each differed from its partner only
+in a mock value nothing downstream reads.
+
+**Measured.** The e2e read red before the fix with the seed row's class as
+`""` while focus sat on `$server`; the unit landing arm read
+`expected '$server' to be '#bofh'`. Two mutants in the verb: restoring the
+gated redirect kills the focused-landing arm plus both tripwires and leaves
+the unfocused arm passing (so deleting the redirect is load-bearing);
+INVERTING the gate kills exactly one assertion, the unfocused arm (so that
+arm is coverage, not a regression guard).
+
+**Not proven: that the rule holds across surfaces.** The brief asked for a
+mutant where a Sidebar/BottomBar divergence breaks an arm. There is no second
+surface to diverge: since #902 `navPseudoChannelsForNetwork` returns `[]` on
+mobile and the BottomBar renders no pseudo-row at all, leaving
+`dismissPseudoWindow` exactly one caller. The claim is true by construction
+and untestable by mutation; it would become testable again only if a mobile
+pseudo-row came back, and inventing one to test it would have been inventing
+product.
