@@ -4,11 +4,15 @@
 // only fills the box.
 //
 // Harness + limits:
-//   * chromium, DESKTOP viewport, no `hasTouch` — the item is reached through
-//     #1115's right-click door, which is the cheapest real opener. The touch
-//     long-press reaches the SAME item list from the SAME store
-//     (`openMessageMenu`), and duplicating it here would drift against
+//   * chromium, no `hasTouch` throughout — the item is reached through #1115's
+//     right-click door, which is the cheapest real opener. The touch long-press
+//     reaches the SAME item list from the SAME store (`openMessageMenu`), and
+//     duplicating it here would drift against
 //     issue1067-swipe-reply-message-menu.spec.ts rather than add coverage.
+//   * TWO viewports, for a measured reason. The payload arms run at 1280px;
+//     the caret arm runs at 390px because a wide compose box does not overflow
+//     enough for the oracle's own non-vacuity guard to let it run. See the
+//     comment on that describe block.
 //   * The caret arm reuses `expectEndCaretVisible`, the oracle #173 and #1105
 //     already share. #1107's blocker was exactly that geometry: `!addquote `
 //     plus a body overflows the rows=1 textarea nearly every time, and before
@@ -94,10 +98,6 @@ test("issue1107 — !addquote fills the compose box with the command and the mes
   // The payload ruling, at the only place it is observable end to end: the
   // command, one space, the body — and no `<nick>` head.
   await expect(ta).toHaveValue(`!addquote ${body}`, { timeout: 5_000 });
-
-  // The #1105/#1113 dependency the issue names, on the real engine that jsdom
-  // cannot stand in for.
-  expectEndCaretVisible(await composeCaretGeometry(page), 40);
 });
 
 test("issue1107 — picking !addquote sends nothing", async ({ page }) => {
@@ -118,6 +118,49 @@ test("issue1107 — picking !addquote sends nothing", async ({ page }) => {
   await expect(
     page.locator('[data-testid="scrollback-line"]', { hasText: "!addquote" }),
   ).toHaveCount(0);
+});
+
+// The caret arm needs a NARROW viewport, and that is a statement about the
+// defect rather than a convenience. `expectEndCaretVisible` refuses to run
+// unless the draft actually overflows the compose box, and at 1280px it
+// refused: the fixture body reached `scrollHeight` 73 against a required
+// `clientHeight + 40` = 82, because a wide compose wraps this text only twice.
+// The honest fix is the viewport, not the threshold — the overflow #1107 waited
+// on is a PHONE phenomenon, which is why #1105 measured it at 390px and why the
+// issue says the item is "unusable-feeling" until #1105/#1113 land. Lowering
+// `minOverflowPx` would have bought a green by disarming the one guard that
+// stops "the caret is in view" from passing on a draft that never left line one.
+//
+// `hasTouch: true` here, unlike the arms above, and NOT as a stylistic choice:
+// at this width `selectChannel` takes the mobile branch and reaches the window
+// with `tap()`, which throws outright on a context without touch support. The
+// menu is still opened by the #1115 right-click door — chromium serves both
+// input types in one touch-enabled context — so what changes between the two
+// describes is how much the text wraps, not how the item is reached.
+test.describe("the caret, where the overflow is real", () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test("issue1107 — !addquote scrolls the overflowing compose box down to the caret", async ({
+    page,
+  }) => {
+    const body = uniqueBody("caret");
+    await postMessage(page, body);
+
+    // Pre-state: an already-scrolled compose would make the outcome true for
+    // the wrong reason.
+    await expect(composeTextarea(page)).toHaveValue("");
+    expect((await composeCaretGeometry(page)).scrollTop).toBe(0);
+
+    await openMenuOnRow(page, body);
+    await menuItem(page, "!addquote").click();
+    await expect(composeTextarea(page)).toHaveValue(`!addquote ${body}`, { timeout: 5_000 });
+
+    // The #1105/#1113 dependency the issue names, on the real engine jsdom
+    // cannot stand in for. The oracle's own overflow guard is what makes this
+    // non-vacuous, so the margin stays at the value the desktop viewport could
+    // not meet.
+    expectEndCaretVisible(await composeCaretGeometry(page), 40);
+  });
 });
 
 // NOT covered here, deliberately: the disabled-but-visible posture on a
