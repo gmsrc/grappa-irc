@@ -36572,6 +36572,9 @@ added to the Logger metadata allowlist in `config/config.exs`, and any
 edit there forces a COLD deploy. The fix above is HOT, and holding it
 behind a restart window would keep a live defect in production for no
 gain. The breadcrumb ships separately, batched with other COLD work.
+
+---
+
 ## 2026-08-10 — #1115: the message menu got a second door, and the exclude list decided who wins
 
 #1067 built the scrollback's message menu (Copy / Reply / Select…) and hung it
