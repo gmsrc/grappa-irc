@@ -295,7 +295,18 @@ const ComposeBox: Component<Props> = (props) => {
       // hand off the instant it does. A vertical drag WITH room returns null →
       // we stay hands-off so pan-y scrolls the draft.
       const boundary = textareaEl ? scrollBoundary(textareaEl) : { atTop: true, atBottom: true };
-      claimedAxis = claimAxis(swipeStart, { x: t.clientX, y: t.clientY }, boundary);
+      // #1205 — the DOM half of the selection gate: a non-collapsed selection
+      // means this horizontal drag is a handle drag, and claiming it would
+      // preventDefault the very thing the user is doing. Live like the
+      // boundary, and unreadable counts as collapsed (the pre-#1205 claim).
+      const selectionActive =
+        textareaEl !== undefined && textareaEl.selectionStart !== textareaEl.selectionEnd;
+      claimedAxis = claimAxis(
+        swipeStart,
+        { x: t.clientX, y: t.clientY },
+        boundary,
+        selectionActive,
+      );
       if (claimedAxis === null) return;
       if (diagOn) {
         const st = textareaEl ? textareaEl.scrollTop : -1;

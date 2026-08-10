@@ -138,47 +138,76 @@ describe("claimAxis (#123 nested-scroll handoff — boundary claim, NOT velocity
   it("claims a horizontal drag regardless of boundary (native pan-x is blocked)", () => {
     // Rightward past slop, mid-scroll: still claimed — a horizontal drag can
     // only select text otherwise, so we own it for tab-complete.
-    expect(claimAxis({ x: 0, y: 0 }, { x: 20, y: 2 }, MID)).toBe("horizontal");
-    expect(claimAxis({ x: 50, y: 0 }, { x: 30, y: 2 }, AT_TOP)).toBe("horizontal");
+    expect(claimAxis({ x: 0, y: 0 }, { x: 20, y: 2 }, MID, false)).toBe("horizontal");
+    expect(claimAxis({ x: 50, y: 0 }, { x: 30, y: 2 }, AT_TOP, false)).toBe("horizontal");
   });
 
   it("claims an up-drag only when the textarea is AT the bottom edge", () => {
     // Finger-up scrolls the content up (scrollTop → max). At the bottom edge
     // there is no room left → the up-drag hands off to the history-recall
     // gesture. AT_TOP has room to scroll (does NOT claim; see below).
-    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, AT_BOTTOM)).toBe("vertical");
-    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, AT_BOTH)).toBe("vertical");
+    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, AT_BOTTOM, false)).toBe("vertical");
+    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, AT_BOTH, false)).toBe("vertical");
   });
 
   it("does NOT claim an up-drag with scroll room below — native scroll owns it", () => {
     // Mid-scroll, or at the TOP with the whole draft still below: a finger-up
     // drag scrolls the draft. Returning null leaves it to native pan-y (the
     // #123 handoff — the gesture arms only once scrollTop hits the bottom).
-    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, MID)).toBeNull();
-    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, AT_TOP)).toBeNull();
+    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, MID, false)).toBeNull();
+    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, AT_TOP, false)).toBeNull();
   });
 
   it("claims a down-drag only when the textarea is AT the top edge", () => {
     // Finger-down scrolls the content down (scrollTop → 0). At the top edge
     // there is no room left → the down-drag hands off to recall-next.
-    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, AT_TOP)).toBe("vertical");
-    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, AT_BOTH)).toBe("vertical");
+    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, AT_TOP, false)).toBe("vertical");
+    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, AT_BOTH, false)).toBe("vertical");
   });
 
   it("does NOT claim a down-drag with scroll room above", () => {
-    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, MID)).toBeNull();
-    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, AT_BOTTOM)).toBeNull();
+    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, MID, false)).toBeNull();
+    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, AT_BOTTOM, false)).toBeNull();
   });
 
   it("is null before the drag clears the slop (still undecided)", () => {
     // Under 8px on both axes → no axis committed yet, even at a boundary.
-    expect(claimAxis({ x: 0, y: 0 }, { x: 5, y: 3 }, AT_BOTH)).toBeNull();
+    expect(claimAxis({ x: 0, y: 0 }, { x: 5, y: 3 }, AT_BOTH, false)).toBeNull();
   });
 
   it("is velocity-BLIND: a slow-starting flick at the bottom still claims", () => {
     // No elapsed/velocity input at all — the signature proves the claim can't
     // abandon a genuine flick just because its first slop-crossing is slow.
-    expect(claimAxis({ x: 0, y: 100 }, { x: 0, y: 50 }, AT_BOTTOM)).toBe("vertical");
+    expect(claimAxis({ x: 0, y: 100 }, { x: 0, y: 50 }, AT_BOTTOM, false)).toBe("vertical");
+  });
+});
+
+describe("claimAxis (#1205 — a live selection is the OS's drag, not ours)", () => {
+  // Dragging a native selection handle IS a horizontal drag on the textarea,
+  // so the blanket horizontal claim suppressed it along with the stray
+  // drag-to-select it was written for. With a NON-collapsed selection the user
+  // is adjusting that selection; the claim stands down so the OS handles move.
+  // The flag is an ARGUMENT — the call site does the DOM read (selectionStart
+  // vs selectionEnd), this function stays pure.
+
+  it("does NOT claim a horizontal drag while a selection is live", () => {
+    // Same two drags the blanket-claim case above asserts, with a selection on:
+    // both hand back to the OS, whatever the scroll boundary says.
+    expect(claimAxis({ x: 0, y: 0 }, { x: 20, y: 2 }, MID, true)).toBeNull();
+    expect(claimAxis({ x: 50, y: 0 }, { x: 30, y: 2 }, AT_TOP, true)).toBeNull();
+  });
+
+  it("still claims a horizontal drag with a collapsed caret (tab-complete intact)", () => {
+    // The affordance the claim exists for. A caret is not a selection, so the
+    // gate must not fire on the ordinary compose case.
+    expect(claimAxis({ x: 0, y: 0 }, { x: 20, y: 2 }, MID, false)).toBe("horizontal");
+  });
+
+  it("leaves the VERTICAL claim alone — a selection does not block history recall", () => {
+    // Handle drags are horizontal; gating the whole claim would kill the
+    // recall gesture for anyone who left a word selected in the draft.
+    expect(claimAxis({ x: 0, y: 60 }, { x: 0, y: 40 }, AT_BOTTOM, true)).toBe("vertical");
+    expect(claimAxis({ x: 0, y: 0 }, { x: 0, y: 20 }, AT_TOP, true)).toBe("vertical");
   });
 });
 

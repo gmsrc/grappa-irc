@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireTouch } from "./helpers/touchEvents";
 
 // #904 — the send queue lives in the store, keyed on the window, and
 // ComposeBox is a VIEW over it: the spinner, the readOnly refusal and the
@@ -664,6 +665,57 @@ describe("ComposeBox", () => {
       } finally {
         vi.mocked(compose.getDraft).mockReturnValue("");
       }
+    });
+  });
+
+  // #1205 — the call site of the #1205 gate: the DOM read that tells the pure
+  // `claimAxis` whether a selection is live. The reported symptom is Android
+  // selection handles that will not drag, and the mechanism is this listener's
+  // unconditional `preventDefault` once the horizontal claim lands. What is
+  // measured here is the CLAIM SIGNAL — `defaultPrevented` on the touchmove —
+  // plus its product consequence (tab-complete). jsdom has no selection
+  // handles and no native drag-to-select, so this proves the wiring and the
+  // decision, NOT that a real handle moves; that half is device-only.
+  describe("#1205 — a live selection hands the horizontal drag to the OS", () => {
+    const dragRight = (ta: HTMLTextAreaElement): Event => {
+      fireTouch(ta, "touchstart", { clientX: 100, clientY: 300 });
+      const move = fireTouch(ta, "touchmove", { clientX: 160, clientY: 302 });
+      fireTouch(ta, "touchend", { clientX: 160, clientY: 302 });
+      return move;
+    };
+
+    const composerWith = async (draft: string): Promise<HTMLTextAreaElement> => {
+      const compose = await import("../lib/compose");
+      vi.mocked(compose.getDraft).mockReturnValue(draft);
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      return screen.getByPlaceholderText(/message #a/i) as HTMLTextAreaElement;
+    };
+
+    afterEach(async () => {
+      const compose = await import("../lib/compose");
+      vi.mocked(compose.getDraft).mockReturnValue("");
+    });
+
+    it("a horizontal drag over a SELECTED word is not claimed", async () => {
+      const compose = await import("../lib/compose");
+      const ta = await composerWith("hello world");
+      ta.setSelectionRange(0, 5);
+      // The pre-state the whole case rests on: an EMPTY textarea clamps any
+      // range to 0,0 and the assertion below would pass for the wrong reason.
+      expect(ta.selectionStart).not.toBe(ta.selectionEnd);
+      const move = dragRight(ta);
+      expect(move.defaultPrevented).toBe(false);
+      expect(compose.tabComplete).not.toHaveBeenCalled();
+    });
+
+    it("the same drag with a COLLAPSED caret is still claimed for tab-complete", async () => {
+      const compose = await import("../lib/compose");
+      const ta = await composerWith("hello world");
+      ta.setSelectionRange(5, 5);
+      expect(ta.selectionStart).toBe(ta.selectionEnd);
+      const move = dragRight(ta);
+      expect(move.defaultPrevented).toBe(true);
+      expect(compose.tabComplete).toHaveBeenCalled();
     });
   });
 

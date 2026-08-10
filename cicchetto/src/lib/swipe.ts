@@ -99,7 +99,8 @@ export const dragAxis = (
 // native scroll + drag-to-select) or leave it to the textarea's native `pan-y`
 // scroll? Claim ONLY a drag native scroll can no longer consume:
 //   * horizontal — `touch-action: pan-y` already blocks native pan-x, so a
-//     horizontal drag would otherwise select text; we own it (→ tab-complete);
+//     horizontal drag would otherwise select text; we own it (→ tab-complete)
+//     UNLESS a selection is already live (#1205, see below);
 //   * vertical once the textarea has NO scroll room LEFT in the drag direction.
 //     Screen y grows downward, so a finger-UP drag (dy < 0) scrolls the content
 //     up — scrollTop INCREASES — until the BOTTOM edge; a finger-DOWN drag
@@ -114,15 +115,29 @@ export const dragAxis = (
 // touchstart-snapshot design was the "double-swipe" #123 bug). Velocity plays
 // NO part here — see `isFastSwipe`; the flick test is deferred to touchend over
 // the whole gesture.
+//
+// #1205 — `selectionActive` (the textarea's selection is NOT collapsed) stands
+// the HORIZONTAL claim down. Dragging a native selection handle is a horizontal
+// drag on the textarea, so the blanket claim's `preventDefault` suppressed the
+// deliberate handle drag along with the stray drag-to-select it was written
+// for: the reported symptom is Android handles that will not move. A live
+// selection means the user is adjusting THAT, not asking for nick completion,
+// so the whole touch goes back to the OS. Read LIVE like `boundary`, not
+// snapshotted at touchstart: an engine that collapses the selection on the
+// touch that starts the next gesture would otherwise cost a real swipe. The
+// VERTICAL arm is untouched — handle drags are horizontal, and gating recall
+// on a stale selection would break the affordance for a different reason. The
+// flag is an ARGUMENT: the DOM read belongs to the call site, this stays pure.
 export const claimAxis = (
   start: Point,
   current: Point,
   boundary: ScrollBoundary,
+  selectionActive: boolean,
   slopPx: number = DRAG_SLOP_PX,
 ): DragAxis | null => {
   const axis = dragAxis(start, current, slopPx);
   if (axis === null) return null; // under the slop — still undecided
-  if (axis === "horizontal") return "horizontal";
+  if (axis === "horizontal") return selectionActive ? null : "horizontal";
   // Vertical: claim only when native scroll has hit its wall in this direction.
   const movingUp = current.y - start.y < 0;
   if (movingUp) return boundary.atBottom ? "vertical" : null;
