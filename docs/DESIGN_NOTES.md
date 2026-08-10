@@ -36511,3 +36511,61 @@ from an application version the node did not boot raises questions about the
 here. What is proven is the observation set above: empty `reloaded`, live
 controller read, new beam on disk, new versioned lib directory, and the served
 string unchanged until the restart.
+## 2026-08-10 — #1169: the SASL PLAIN payload had a field too many, and the comment above it described a shape that was never emitted
+
+`Grappa.IRC.AuthFSM`'s encoder built `<<0, u, 0, u, 0, pw>>`. RFC 4616 §2
+fixes the PLAIN message at `[authzid] NUL authcid NUL passwd` — three
+fields, two separators. That payload has three separators and four fields.
+An upstream splits on the first two NULs and treats the entire remainder
+as the password, so atheme received `authcid=u` and a password of
+`u\0pw`, and answered `904 ERR_SASLFAIL` — the same numeric it sends for
+a wrong password, with nothing to distinguish the two. SASL was therefore
+unusable on Libera.Chat and on every atheme-fronted network, and users
+fell back to `nickserv_identify`, which is the path that makes the sidebar
+report `identified: no` on non-bahamut servers (#388).
+
+**The reported cause and the actual cause differ, and the fix is the same
+either way.** The issue is titled "SASL PLAIN sends a non-empty authzid",
+and the comment that stood above the encoder said the same thing: that
+`sasl_user` filled both the authzid and the authcid slot. Neither was
+true at the byte level. A payload that really carried `authzid=authcid=u`
+would be `<<u, 0, u, 0, pw>>`, with no leading NUL; the field this code
+sent empty was already the authzid. What it got wrong was arity, not
+content. The repair — delete the duplicated `0, u` — is exactly what the
+issue proposed, so the mis-attribution cost nothing here; it is recorded
+because the next reader of that encoder would otherwise inherit a wrong
+model of what the bytes meant.
+
+**What the reproduction could not isolate.** The measurement in the issue
+compares `\0acct\0acct\0pass` against `\0acct\0pass` against a live
+Libera account. Those differ in field count AND in the authzid slot at
+once, so the run cannot say whether atheme also rejects an explicitly
+equal authzid. The third variant, `acct\0acct\0pass`, was not sent. That
+question is left open deliberately: an empty authzid is what the RFC
+prescribes for "authorize as the authenticated identity", it is the only
+case the credential schema can express (there is no authzid column
+distinct from `sasl_user`), and it is what mainstream clients send — so
+the answer would not change the code.
+
+**Azzurra's immunity is structural, not measured.** The encoder is
+reachable only from the `phase: :sasl_pending` clause of `step/2`, and
+that phase is entered only where a CAP ACK carrying `sasl` is handled.
+Azzurra advertises no `sasl` cap, so the phase never opens. This is a
+reading of the call graph; nothing was probed against the network to
+confirm it.
+
+**The regression guard asserts structure, not bytes.** Three test sites
+pinned the buggy payload as an exact binary and were corrected. The guard
+added alongside them splits the decoded payload on NUL and compares
+against `["", sasl_user, password]`, which fails on a wrong field count
+or a populated authzid and on nothing else — where a byte-string
+assertion would also fail on a fixture rename, reporting a fold that is
+not the one it is there to catch. It was read failing against the pre-fix
+encoder, printing the four-field payload.
+
+The `authzid=empty` / mechanism log breadcrumb the issue also asks for is
+deliberately NOT in this change: it needs `:mechanism` and `:authzid`
+added to the Logger metadata allowlist in `config/config.exs`, and any
+edit there forces a COLD deploy. The fix above is HOT, and holding it
+behind a restart window would keep a live defect in production for no
+gain. The breadcrumb ships separately, batched with other COLD work.
