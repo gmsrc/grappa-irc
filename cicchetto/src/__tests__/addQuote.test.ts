@@ -66,10 +66,17 @@ describe("addQuoteCommand", () => {
     expect(addQuoteCommand(msg({ body: "\x02bold\x02 plain" }))).toBe("!addquote bold plain");
   });
 
-  // A presence row has no author speaking, and a PART carries its reason in
-  // `body` — a bare body check would happily quote `!addquote Leaving`.
   it("refuses a presence row", () => {
     expect(addQuoteCommand(msg({ kind: "join", body: null }))).toBeNull();
+  });
+
+  // The arm above is VACUOUS with respect to the content-kind gate, measured:
+  // deleting `isContentKind` from `quotableBody` leaves it green, because a
+  // JOIN's null body is refused one line later by the empty-body check. A PART
+  // is the row that separates them — it carries its reason in `body`, so only
+  // the kind gate stands between `!addquote Leaving` and the quote database.
+  it("refuses a PART even though it carries a reason in its body", () => {
+    expect(addQuoteCommand(msg({ kind: "part", body: "Leaving" }))).toBeNull();
   });
 
   it("refuses a row whose body is empty or whitespace", () => {
@@ -155,16 +162,24 @@ describe("addQuoteToCompose", () => {
     expect(getDraft(KEY)).toBe("");
   });
 
-  // The caret must land at the END and be VISIBLE: `!addquote ` plus a body
+  // The caret must land at the END and be REVEALED: `!addquote ` plus a body
   // overflows the rows=1 textarea essentially every time, which is why #1107
-  // was blocked on #1105/#1113. Shared through `appendToCompose`, so this pins
-  // that the item uses that verb rather than writing the draft by hand.
-  it("leaves the caret at the end of the filled draft", async () => {
+  // waited on #1105/#1113.
+  //
+  // A `selectionStart` assertion alone is VACUOUS here, measured: jsdom already
+  // parks the caret at the end of a freshly assigned `value`, so it stays green
+  // with the reveal deleted from `appendToCompose`. jsdom does no layout either
+  // — `scrollHeight` is 0 on every element — so the overflow is stubbed, which
+  // is what makes the scroll ASSIGNMENT observable. That a real engine then
+  // shows the caret is the e2e's job, not this one's.
+  it("reveals the caret by scrolling the overflowing textarea", async () => {
     const ta = mountCompose();
+    Object.defineProperty(ta, "scrollHeight", { value: 75, configurable: true });
+    setDraft(KEY, "x".repeat(110));
     addQuoteToCompose(msg({}), NET, CHAN);
     ta.value = getDraft(KEY);
     await Promise.resolve();
-    expect(ta.selectionStart).toBe("!addquote ciao mondo".length);
+    expect(ta.scrollTop).toBe(75);
     expect(document.activeElement).toBe(ta);
   });
 });
