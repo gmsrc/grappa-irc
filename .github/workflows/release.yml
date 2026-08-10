@@ -30,6 +30,14 @@ name: release
 #              standalone leg — it publishes to the container registry itself,
 #              NOT a GitHub Release asset, so it is NOT in `publish`'s needs and
 #              runs in parallel with the package jobs.
+#   * smoke  — DEPLOYS the image the docker job just produced and probes it
+#              (#1162). Every other gate in this repo tests the deploy SCRIPTS
+#              with `docker` stubbed; this one boots the artifact and asks it
+#              questions over HTTP. On a tag it pulls the PUBLISHED
+#              ghcr.io/<owner>/grappa:v<version> — the thing operators run; on
+#              a docker_validation dry-run it re-exports the amd64 image from
+#              the build cache, so the pre-tag smoke finally smokes something.
+#              amd64 only: the arm64 leg is proven by the build.
 #   * publish — attaches deb + rpm + pkg.tar.zst + the regenerated
 #              PKGBUILD/.SRCINFO to the GitHub Release. Runs even if a package
 #              job FAILED and attaches ONLY what built (#504): a broken distro
@@ -634,6 +642,80 @@ jobs:
           # so `docker pull ghcr.io/<owner>/grappa` resolves cleanly on both
           # arches without the extra unknown/unknown provenance entry.
           provenance: false
+
+  smoke:
+    name: deploy + probe the release image (amd64)
+    needs: [docker]
+    # Exactly the docker job's trigger set: a real tag (probe what was just
+    # published) or a docker_validation dry-run (probe what was just built).
+    # There is no third mode and no skip — if the image cannot be obtained,
+    # this job FAILS. A smoke test that quietly passes having tested nothing
+    # is worse than not having one.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout (the TRIGGERING ref — it carries the smoke driver)
+        uses: actions/checkout@v7
+        with:
+          # Same reasoning as the docker job: the pushed TAG on a release, the
+          # DISPATCHED BRANCH on a dry-run. submodules:false + fetch-depth 1 —
+          # the driver is shell over infra/ and reads no git history.
+          submodules: false
+
+      - name: Resolve version (repo-root VERSION file = SSOT)
+        id: ver
+        run: echo "version=$(infra/packaging/version.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        # Only the tag path pulls from the registry; the dry-run builds locally.
+        if: ${{ github.event_name == 'push' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull the PUBLISHED image (tag path)
+        id: pull
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          image="ghcr.io/${owner}/grappa:v${{ steps.ver.outputs.version }}"
+          # The honest subject: the exact ref an operator's deploy.sh resolves.
+          docker pull "$image"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx (dry-run path)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: docker/setup-buildx-action@v4
+
+      - name: Re-export the amd64 image from the build cache (dry-run path)
+        id: build
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.release
+          # amd64 ONLY and load:true — a multi-arch manifest cannot be loaded
+          # into the local docker daemon, and this job has to RUN the thing.
+          # The docker job wrote the full cache moments ago (needs:), so this
+          # re-exports cached layers rather than rebuilding.
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: grappa-release:smoke
+          cache-from: type=gha
+          provenance: false
+
+      - name: Deploy the image for real and probe it
+        env:
+          # Whichever path ran; the other's output is empty.
+          GRAPPA_IMAGE: ${{ steps.pull.outputs.image || 'grappa-release:smoke' }}
+          GRAPPA_SMOKE_VERSION: ${{ steps.ver.outputs.version }}
+        run: scripts/smoke-release-image.sh
 
   publish:
     name: publish GitHub Release assets

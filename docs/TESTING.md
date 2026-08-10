@@ -52,6 +52,11 @@ scripts/mix.sh --env=dev doctor
 scripts/bats.sh                          # all bats specs: test/bin/ test/infra/ test/scripts/
 scripts/bats.sh test/bin/grappa_test.bats
 
+# Release image — deploy it for real and probe it (#1162)
+docker pull ghcr.io/vjt/grappa:v0.16.0
+GRAPPA_IMAGE=ghcr.io/vjt/grappa:v0.16.0 GRAPPA_SMOKE_VERSION=0.16.0 \
+  scripts/smoke-release-image.sh
+
 # E2E (Playwright + real testnet)
 scripts/integration.sh                   # full suite, cold bring-up + tear-down
 scripts/integration.sh --grep "UX-6 K"   # one spec or pattern
@@ -188,6 +193,7 @@ The authoritative source is the comment block at the top of each
 * **`scripts/bun.sh`** → oneshot `oven/bun:1` against `cicchetto/`. `run test` = vitest. `run check` = biome + tsc over `src` AND `e2e`. `install`, `add`, etc. forward to bun.
 * **`scripts/bats.sh`** → host-side bats v1.9.0 (submodule at `vendor/bats-core`) against `test/bin/`, `test/infra/` and `test/scripts/`. NOT containerised — bats tests host-side bash (`bin/grappa`, the deploy scripts, the cloud installer). There is no compose involvement in the runner: the container is reached only transitively, when a test exercises a verb that shells out to docker, and those tests stub `docker` on `PATH` rather than touching a real one. So this gate needs no stack up.
 * **`scripts/release-image.sh`** → the RELEASE image (`Dockerfile.release`), not the compose dev stack. `build` buildx-loads it locally; `fresh-boot` wipes the scratch volume and bare-runs it with nothing but `PHX_HOST` (the documented one-liner — the point is that everything else must come from the image and the volume); `warm-boot` does the same on the EXISTING volume; `oneshot <args…>` runs a throwaway container against that volume; `logs` / `down [--volume]` clean up. This is the reproduction for #862 and #867, both of which were found by hand-typing docker commands because no wrapper reached this artifact.
+* **`scripts/smoke-release-image.sh`** → brings a box up from `$GRAPPA_IMAGE` through the real `infra/docker/get.sh` → `deploy.sh` release path (`GRAPPA_RAW_BASE=file://<checkout>`, so get.sh's mirror list is under test too), then probes it over HTTP and tears everything down. Dedicated container/volume names (`grappa-smoke*`), so it cannot eat an operator box. Requires the image to be present locally — **an unavailable image fails the run, it never skips it**. See "The release-image smoke" below.
 * **`scripts/integration.sh`** → `scripts/testnet.sh up` → `docker compose run --rm playwright-runner npx playwright test "$@"` → trap-on-exit `scripts/testnet.sh down`. `KEEP_STACK=1` opts out of tear-down.
 * **`scripts/testnet.sh`** → manages the stack standalone. `up` boots hub + leaves + services + grappa-test + nginx-test + seeder. `down` tears down + wipes `runtime/e2e/`. `probe` connects an oper-up client to leaf4 for `/links` + `/stats l`.
 
@@ -206,6 +212,51 @@ undocumented. Making the alias's run the `:test` one collapses them into
 a single honest run identical to the workflow's single `mix doctor` step
 — local equals CI by construction rather than by hand. Re-adding the
 second run re-opens both defects.
+
+## The release-image smoke (#1162)
+
+`test/infra/`'s 20+ bats suites cover the deploy **scripts** with `docker`
+stubbed on `PATH`: every assertion is about which file a verb writes and
+which flags it would pass. That leaves one class completely uncovered —
+the deployment that succeeds at every script step and is still broken,
+which is exactly #1161 (container up, API answering, env well-formed,
+frontend 404 because a variable pointed one directory to the left).
+
+`scripts/smoke-release-image.sh` is the gate for that class. It runs in
+`release.yml`'s `smoke` job — on a tag against the **published**
+`ghcr.io/<owner>/grappa:v<version>`, and on a `docker_validation` dry-run
+against the amd64 image re-exported from that run's build cache (which is
+what finally makes the documented "mandatory workflow_dispatch smoke
+before a real tag" smoke something). It is also runnable by hand, see the
+quick reference.
+
+Three probes, and every assertion has a mutant that kills it — measured,
+not asserted. Reproduce any row by deriving a one-line mutant image
+`FROM ghcr.io/vjt/grappa:latest` and pointing `GRAPPA_IMAGE` at it:
+
+| Assertion | Mutation that kills it | Observed |
+|---|---|---|
+| `GET /` is 2xx | `ENV CIC_DIST_ROOT=/app/cicchetto-dist/assets` (#1161 verbatim) | 404 |
+| the body parses to a bundle hash | mangle the `<script type="module">` tag in `index.html` | 200, no tag |
+| the named chunk arrives as JavaScript | `RUN rm -rf /app/cicchetto-dist/assets` | 200 `text/html` |
+| `/api/config` reports the expected version | deploy an older published tag | reports the older version |
+| a restart keeps `/data/grappa.env` | drop the `[ ! -f "$secrets_file" ]` guard from the entrypoint | hash changes |
+
+Two of those are worth knowing on their own. **A missing hashed chunk is
+served as the SPA shell with 200 and `content-type: text/html`** —
+`Plug.Static` misses and the history fallback answers, so a browser gets
+HTML where it expects a module and white-screens; status-only assertions
+are blind to it. And **the never-rotate probe needs a second container
+shape**: under `deploy.sh` every secret rides in from the host env file,
+so the entrypoint's first-boot bootstrap (#862) never fires there. Only a
+bare `docker run` with just `PHX_HOST` generates them onto `/data`.
+
+What it deliberately does NOT cover: one architecture (whatever the host
+runs — the arm64 leg of the manifest is proven by the build, not here);
+no IRC at all (no upstream connect, SASL or scrollback — that is
+`scripts/integration.sh`'s job, against the SOURCE image); no TLS front
+door or real `PHX_HOST`; and the `update` verb (only `install` plus a
+bare-run restart).
 
 ## The e2e stack
 

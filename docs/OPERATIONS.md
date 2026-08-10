@@ -1389,7 +1389,10 @@ D** — see **Running the published image** below.
   which is why it works pre-merge, when only the branch carries the file) with
   `push:false` and no registry login: it proves the build (arm64 QEMU + the
   ABI-lockstep assertion + cic + `mix release`) and pushes nothing, moves no
-  `:latest`. deb/arch/rpm/publish are skipped for this run. The default
+  `:latest`. Since #1162 it then DEPLOYS that image and probes it (the `smoke`
+  job, below) instead of only proving it compiles — so the dry-run is a smoke
+  test in fact and not just in name. deb/arch/rpm/publish are skipped for this
+  run. The default
   (`docker_validation=false`) tag-push path is unchanged — it publishes. The
   arm64 leg is QEMU-emulated on the amd64 runner; a stale QEMU crashes the
   emulated BEAM JIT at the first `mix` call, so the job pins a recent
@@ -1397,6 +1400,18 @@ D** — see **Running the published image** below.
   unreliable on CI, the fallback (needs vjt's sign-off — it deviates from the
   buildx+QEMU decision) is native arm64 runners (`ubuntu-24.04-arm`) +
   `docker manifest`.
+- **The image is DEPLOYED and PROBED, not just built (#1162).** A fifth job,
+  `smoke`, `needs: [docker]` and brings a real box up from the image through the
+  same `infra/docker/get.sh` → `deploy.sh` path an operator runs, then asks it
+  questions over HTTP: `GET /` serves a shell whose chunk actually loads as
+  JavaScript, `GET /api/config` reports this version, and a restart does not
+  rotate the generated `/data/grappa.env`. On a tag it pulls the PUBLISHED
+  `:v<version>` — the ref operators resolve; on a dry-run it probes the amd64
+  image re-exported from the build cache. amd64 only (the arm64 leg is proven by
+  the build). **An unobtainable image fails the job; it never skips.** The driver
+  is `scripts/smoke-release-image.sh`, runnable by hand — probes, mutation
+  evidence and the explicit non-coverage list are in
+  `docs/TESTING.md` § "The release-image smoke".
 - **Local build** (validate the Dockerfile without CI):
   `docker buildx build -f Dockerfile.release --load -t grappa-release:test .`
   builds the native arch; add `--platform linux/amd64,linux/arm64` for the
