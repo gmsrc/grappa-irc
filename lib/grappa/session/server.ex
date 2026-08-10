@@ -91,7 +91,7 @@ defmodule Grappa.Session.Server do
     UserSettings
   }
 
-  alias Grappa.IRC.{AuthFSM, Client, CTCP, Identifier, Message}
+  alias Grappa.IRC.{AuthFSM, Client, CTCP, Identifier, LineSplit, Message}
   alias Grappa.Net.SourceAliasManager
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback.Wire
@@ -2475,6 +2475,13 @@ defmodule Grappa.Session.Server do
     {:reply, {:ok, Map.get(state, :isupport, ISupport.default())}, state}
   end
 
+  # #1108: the live LINELEN, for the cold WS after-join snapshot — whose
+  # sibling `:get_isupport` covers the rest of the same payload. Raw, not a
+  # budget: the wire builder owns that projection, so there is exactly one.
+  def handle_call(:get_linelen, _, state) do
+    {:reply, {:ok, state.linelen}, state}
+  end
+
   # #229: returns the per-session umode set. Always succeeds ([] before the
   # 221 arrives). `Map.get` default (not `state.umodes`) so a live proc
   # whose state predates the :umodes field — a plain hot module reload does
@@ -3361,10 +3368,14 @@ defmodule Grappa.Session.Server do
     prev_isupport = Map.get(state, :isupport, ISupport.default())
     isupport = ISupport.merge_isupport(msg.params, prev_isupport)
 
-    if isupport != prev_isupport do
+    # #1108 — LINELEN is in the same broadcast, so a 005 line that advertises
+    # ONLY LINELEN (no CHANMODES/PREFIX) must still reach the client: gating
+    # on the capability table alone would leave every connected cic sizing
+    # its "this will split" warning against the previous frame all session.
+    if isupport != prev_isupport or linelen != state.linelen do
       broadcast_window_state(
         state,
-        SessionWire.isupport_changed(state.network_id, isupport)
+        SessionWire.isupport_changed(state.network_id, isupport, linelen)
       )
     end
 
@@ -3645,7 +3656,7 @@ defmodule Grappa.Session.Server do
     # HERE (the facade now passes `target` RAW); the wire + `dm_with`
     # display keep the raw casing. Fold once and thread both forms.
     key = fold_key(state, target)
-    fragments = Grappa.IRC.LineSplit.split_privmsg_body(body, target, state.linelen)
+    fragments = LineSplit.split_privmsg_body(body, target, state.linelen)
 
     case persist_and_send_fragments(target, key, fragments, state, nil) do
       {:ok, last_message} ->

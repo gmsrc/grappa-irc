@@ -361,6 +361,34 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert prefix["q"] == "~"
     end
 
+    # #1108 — the cold snapshot is the ONLY door for a client that connects
+    # long after the 005 burst, which on an always-on bouncer is every
+    # client. Without the budget here the compose-box warning stays dark
+    # until the network happens to re-advertise.
+    test "after-join snapshot: carries the per-frame budget base (#1108)" do
+      {irc_server, port} = start_irc_server()
+      {user, network} = setup_user_and_network_with_session(port)
+
+      welcome_session_on_channel(irc_server, "#snap")
+
+      # A non-default LINELEN so the pushed number can only have come from
+      # the live session's 005, not from a hardcoded RFC default.
+      IRCServer.feed(irc_server, ":irc.test.org 005 grappa-snap LINELEN=600 :are supported\r\n")
+
+      flush_server(irc_server)
+
+      topic = Topic.channel(user.name, network.slug, "#snap")
+
+      {:ok, _, _} =
+        user.name
+        |> build_socket()
+        |> subscribe_and_join(topic, %{})
+
+      assert_push("event", %{kind: :isupport_changed, frame_budget_base: base})
+
+      assert base - byte_size("#snap") == Grappa.IRC.LineSplit.frame_budget("#snap", 600)
+    end
+
     test "after-join snapshot: no push when no session is running for channel" do
       user_name = "ch-nosession-#{System.unique_integer([:positive])}"
       net_slug = "nosession-net-#{System.unique_integer([:positive])}"

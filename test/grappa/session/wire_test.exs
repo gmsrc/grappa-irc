@@ -69,7 +69,7 @@ defmodule Grappa.Session.WireTest do
     end
   end
 
-  describe "isupport_changed/2" do
+  describe "isupport_changed/3" do
     test "projects ISupport.t() to a JSON-encodable payload (MapSets → sorted lists)" do
       isupport =
         ISupport.merge_isupport(
@@ -77,7 +77,7 @@ defmodule Grappa.Session.WireTest do
           ISupport.default()
         )
 
-      payload = Wire.isupport_changed(7, isupport)
+      payload = Wire.isupport_changed(7, isupport, 512)
 
       assert payload.kind == :isupport_changed
       assert payload.network_id == 7
@@ -88,8 +88,18 @@ defmodule Grappa.Session.WireTest do
       assert payload.prefix == %{"o" => "@", "h" => "%", "v" => "+"}
     end
 
+    # #1108 — the builder takes LINELEN and publishes the BUDGET, so the
+    # projection is stated here independently of `LineSplit`: 512 minus the
+    # worst-case relayed framing for an empty target, which is the 107-byte
+    # source prefix `:nick!user@host ` (1+30+1+10+1+63+1) plus `PRIVMSG  :`
+    # (10) plus CRLF (2) = 119.
+    test "publishes the per-frame budget base derived from LINELEN" do
+      assert Wire.isupport_changed(7, ISupport.default(), 512).frame_budget_base == 512 - 119
+      assert Wire.isupport_changed(7, ISupport.default(), 1024).frame_budget_base == 1024 - 119
+    end
+
     test "the payload is JSON-encodable (no MapSet leaks)" do
-      payload = Wire.isupport_changed(1, ISupport.default())
+      payload = Wire.isupport_changed(1, ISupport.default(), 512)
       assert {:ok, _} = Jason.encode(payload)
     end
   end

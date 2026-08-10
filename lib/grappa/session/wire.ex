@@ -57,6 +57,7 @@ defmodule Grappa.Session.Wire do
   both shapes use one field name.
   """
 
+  alias Grappa.IRC.LineSplit
   alias Grappa.Scrollback.Message
   alias Grappa.Session.{EventRouter, ISupport}
 
@@ -120,6 +121,15 @@ defmodule Grappa.Session.Wire do
   reflows; keeping it flat sidesteps that formatter tug-of-war. PREFIX
   stays a letter→sigil map. Rides `Topic.user/1` (ISUPPORT is
   per (subject, network), not per-channel).
+
+  `frame_budget_base` (#1108) is the second 005 fact on this payload: the
+  target-INDEPENDENT part of the per-frame body budget, which a client
+  turns into a per-target budget with
+  `frame_budget_base - <target's UTF-8 byte length>`. It is published
+  rather than derivable because the budget reserves the #246 worst-case
+  relayed source prefix, and a client-side copy of those ceilings drifts
+  silently in the direction that LOSES bytes. See
+  `Grappa.IRC.LineSplit.frame_budget_base/1`.
   """
   @type isupport_changed_payload :: %{
           kind: :isupport_changed,
@@ -128,7 +138,8 @@ defmodule Grappa.Session.Wire do
           chanmodes_b: [String.t()],
           chanmodes_c: [String.t()],
           chanmodes_d: [String.t()],
-          prefix: %{String.t() => String.t()}
+          prefix: %{String.t() => String.t()},
+          frame_budget_base: integer()
         }
 
   @typedoc """
@@ -829,16 +840,20 @@ defmodule Grappa.Session.Wire do
   end
 
   @doc """
-  Per-network ISUPPORT channel-mode capability set (#216). Projects
+  Per-network ISUPPORT facts (#216). Projects
   `Grappa.Session.ISupport.t/0` to a JSON-encodable payload: the four
   CHANMODES MapSet classes become sorted lists, PREFIX stays a
   letter→sigil map. Carries `:network_id` (not slug) and rides
   `Topic.user/1` — the same rationale as `own_nick_changed/2` (per
   (subject, network) state on a non-network-scoped user topic).
+
+  `linelen` is the session's live LINELEN (005, or the RFC 2812 default);
+  it is published as the derived per-frame budget, never raw, so cic never
+  holds a second copy of the #246 framing reserve (#1108).
   """
-  @spec isupport_changed(integer(), ISupport.t()) :: isupport_changed_payload()
-  def isupport_changed(network_id, %{chanmodes: cm, prefix: prefix})
-      when is_integer(network_id) do
+  @spec isupport_changed(integer(), ISupport.t(), pos_integer()) :: isupport_changed_payload()
+  def isupport_changed(network_id, %{chanmodes: cm, prefix: prefix}, linelen)
+      when is_integer(network_id) and is_integer(linelen) do
     %{
       kind: :isupport_changed,
       network_id: network_id,
@@ -846,7 +861,8 @@ defmodule Grappa.Session.Wire do
       chanmodes_b: Enum.sort(cm.b),
       chanmodes_c: Enum.sort(cm.c),
       chanmodes_d: Enum.sort(cm.d),
-      prefix: prefix
+      prefix: prefix,
+      frame_budget_base: LineSplit.frame_budget_base(linelen)
     }
   end
 

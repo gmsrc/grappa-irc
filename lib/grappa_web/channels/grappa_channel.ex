@@ -1560,12 +1560,11 @@ defmodule GrappaWeb.GrappaChannel do
   # back to its own bahamut default until a session is live.
   @spec push_isupport_if_live(Session.subject(), Network.t(), Phoenix.Socket.t()) :: :ok
   defp push_isupport_if_live(subject, %Network{} = network, socket) do
-    case Session.get_isupport(subject, network.id) do
-      {:ok, isupport} ->
-        push(socket, "event", SessionWire.isupport_changed(network.id, isupport))
-
-      {:error, _} ->
-        :ok
+    with {:ok, isupport} <- Session.get_isupport(subject, network.id),
+         {:ok, linelen} <- Session.get_linelen(subject, network.id) do
+      push(socket, "event", SessionWire.isupport_changed(network.id, isupport, linelen))
+    else
+      {:error, _} -> :ok
     end
   end
 

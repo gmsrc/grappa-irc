@@ -4426,6 +4426,46 @@ defmodule Grappa.Session.ServerTest do
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
+
+    # #1108 — the budget cic warns from is a projection of LINELEN, and a
+    # network may advertise LINELEN in a 005 line that carries no CHANMODES
+    # or PREFIX at all. Gating the broadcast on the capability table alone
+    # would leave every connected client sizing its warning against the
+    # previous (usually RFC-default) frame for the rest of the session.
+    test "005 that changes ONLY LINELEN still republishes the frame budget" do
+      handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":irc 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(handler)
+      {user, network, _} = setup_user_and_network(port)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      # No CHANMODES / PREFIX / STATUSMSG / CASEMAPPING token: the isupport
+      # capability table is byte-for-byte what it was.
+      IRCServer.feed(server, ":irc.test.org 005 grappa-test LINELEN=600 :are supported\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{kind: :isupport_changed, frame_budget_base: base}
+                     },
+                     1_000
+
+      # The published budget follows the advertised LINELEN, and it is the
+      # budget the splitter will actually use for a target of that name.
+      assert base - byte_size("#sniffo") ==
+               Grappa.IRC.LineSplit.frame_budget("#sniffo", 600)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
   end
 
   describe "#229 — umode viewer (own user modes visible from connect)" do

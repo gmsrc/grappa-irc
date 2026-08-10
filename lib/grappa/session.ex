@@ -1377,6 +1377,21 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  Returns the session's live wire line length (#1108).
+
+  The `LINELEN=` the network advertised in 005, or the RFC 2812 default of
+  512 before/without one. Bounds the WHOLE relayed frame, so it is a raw
+  IRC fact, not a body budget — `Grappa.IRC.LineSplit` owns that projection.
+  Returns `{:error, :no_session}` when no session is registered for
+  `(subject, network_id)`.
+  """
+  @spec get_linelen(subject(), integer()) :: {:ok, pos_integer()} | {:error, :no_session}
+  def get_linelen(subject, network_id)
+      when is_subject(subject) and is_integer(network_id) do
+    call_session(subject, network_id, :get_linelen)
+  end
+
+  @doc """
   Returns the per-session USER-mode set (#229).
 
   Serves the in-memory `umodes` list — the operator's own umodes on this
