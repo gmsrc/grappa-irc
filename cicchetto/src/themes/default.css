@@ -3470,25 +3470,48 @@ html.resize-dragging * {
   animation: login-spin 0.9s linear infinite;
 }
 
-.compose-box-error {
-  color: var(--mode-op);
+/* The compose feedback seam: ONE line, three severities, and they must be
+   geometrically identical or the line reflows when one swaps for another
+   (#356 error↔notice on submit, #1108 warning↔error as a draft grows). The
+   geometry is therefore stated ONCE, here, and each severity contributes
+   nothing but its colour token — a third hand-copied block is exactly how
+   that invariant would have started to drift. */
+.compose-box-error,
+.compose-box-notice,
+.compose-box-warning {
   margin: 0;
   padding: 0.25rem 1rem;
   font-size: 0.85rem;
   border-top: 1px solid var(--border);
 }
 
-/* #356 — success/notice seam: the green sibling of .compose-box-error.
-   Same geometry (so the line never reflows when a submit swaps error↔notice);
-   the ONLY difference is the color token — var(--mode-voiced) is the theme's
-   green (the +voiced-nick hue), read as "success / affirmative" here. Carries
-   role=status (polite) at the markup layer; this rule is colour-only. */
+.compose-box-error {
+  color: var(--mode-op);
+}
+
+/* #356 — success/notice: var(--mode-voiced) is the theme's green (the
+   +voiced-nick hue), read as "success / affirmative" here. */
 .compose-box-notice {
   color: var(--mode-voiced);
+}
+
+/* #1108 — "this will split": var(--mode-halfop) is the theme's amber (the
+   %halfop hue), between the notice's green and the error's red exactly as
+   the severity is. Carries role=status (polite) at the markup layer. */
+.compose-box-warning {
+  color: var(--mode-halfop);
+}
+
+/* #1108 — bytes left in the frame, sitting above the box. Right-aligned and
+   quiet: it is a glanceable number during normal typing, not an alert, and
+   the amber it turns is the same token the seam warning it precedes uses. */
+.compose-box-frame-countdown {
   margin: 0;
-  padding: 0.25rem 1rem;
-  font-size: 0.85rem;
-  border-top: 1px solid var(--border);
+  padding: 0 1rem;
+  text-align: right;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--mode-halfop);
 }
 
 /* Image upload — picker button + TTL select + progress + modal.

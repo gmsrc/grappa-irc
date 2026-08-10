@@ -222,6 +222,28 @@ describe("narrowChannelEvent (bucket G H4+U3)", () => {
     it("rejects a prefix map with a non-string sigil", () => {
       expect(narrowChannelEvent({ ...valid, prefix: { o: 1 } })).toBeNull();
     });
+
+    // #1108 — the frame budget rides this payload. It must narrow through…
+    it("carries the frame budget base through", () => {
+      const out = narrowChannelEvent({ ...valid, frame_budget_base: 393 });
+      expect(out).toMatchObject({ frame_budget_base: 393 });
+    });
+
+    // …and its ABSENCE must not reject the envelope. The wire is
+    // additive-only in BOTH directions: a client talking to a server from
+    // before the field exists still needs its `/mode` toggles seeded, so a
+    // missing budget is a missing budget, never a dropped event.
+    it("narrows fine when the server sent no budget at all", () => {
+      const out = narrowChannelEvent(valid);
+      expect(out?.kind).toBe("isupport_changed");
+      expect(out).toMatchObject({ frame_budget_base: null });
+    });
+
+    it("treats a non-number budget as absent rather than dropping the event", () => {
+      const out = narrowChannelEvent({ ...valid, frame_budget_base: "393" });
+      expect(out?.kind).toBe("isupport_changed");
+      expect(out).toMatchObject({ frame_budget_base: null });
+    });
   });
 
   // UX-5 BJ (2026-05-19) — JoinBanner was killed but the narrower keeps

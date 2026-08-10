@@ -711,6 +711,10 @@ export type WireChannelEvent =
       chanmodes_c: string[];
       chanmodes_d: string[];
       prefix: Record<string, string>;
+      // #1108 — `null` when the server published no budget. Narrowed
+      // permissively on purpose: the wire is additive-only, so a server
+      // predating the field must still seed the capability table.
+      frame_budget_base: number | null;
     }
   // UX-5 BJ (2026-05-19) — recognized-but-ignored. Pre-BJ the JoinBanner
   // consumed this via `seedChannelCreated` for the "Channel was created
@@ -1002,6 +1006,10 @@ export type WireUserEvent =
       chanmodes_c: string[];
       chanmodes_d: string[];
       prefix: Record<string, string>;
+      // #1108 — `null` when the server published no budget. Narrowed
+      // permissively on purpose: the wire is additive-only, so a server
+      // predating the field must still seed the capability table.
+      frame_budget_base: number | null;
     }
   | {
       // CP17 — server-driven `:pending` window-state origination.

@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_ISUPPORT,
+  frameBudgetBaseForNetwork,
   type IsupportEntry,
   isupportByNetwork,
   isupportForNetwork,
@@ -27,10 +28,30 @@ describe("isupport store", () => {
     expect(isupportForNetwork(9999)).toEqual(DEFAULT_ISUPPORT);
   });
 
+  // #1108 — the capability table has an honest default (bahamut's, which is
+  // what every prod network advertises anyway); the frame BUDGET has none.
+  // It is a projection of LINELEN plus the #246 worst-case relay reserve, so
+  // a guess is a wrong number the compose box would warn from. Absent means
+  // absent, and the affordances stay dark.
+  it("DEFAULT_ISUPPORT carries NO frame budget — there is no honest default", () => {
+    expect(DEFAULT_ISUPPORT.frameBudgetBase).toBeNull();
+    expect(frameBudgetBaseForNetwork(9999)).toBeNull();
+  });
+
+  it("frameBudgetBaseForNetwork serves the seeded budget", () => {
+    seedIsupport(11, { ...DEFAULT_ISUPPORT, frameBudgetBase: 393 });
+    expect(frameBudgetBaseForNetwork(11)).toBe(393);
+  });
+
+  it("frameBudgetBaseForNetwork is null for an unknown network id", () => {
+    expect(frameBudgetBaseForNetwork(null)).toBeNull();
+  });
+
   it("seedIsupport stores the entry keyed by network id", () => {
     const entry: IsupportEntry = {
       chanmodes: { a: ["b", "e", "I"], b: ["k"], c: ["l"], d: ["i", "m", "n", "s", "t"] },
       prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
+      frameBudgetBase: 393,
     };
     seedIsupport(7, entry);
     expect(isupportByNetwork()[7]).toEqual(entry);

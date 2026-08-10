@@ -90,6 +90,7 @@ describe("availableModes", () => {
     const isupport: IsupportEntry = {
       chanmodes: { a: [], b: [], c: [], d: ["n", "t", "Z"] },
       prefix: {},
+      frameBudgetBase: null,
     };
     const modes = availableModes(isupport);
     const z = modes.find((m) => m.letter === "Z");
@@ -130,6 +131,7 @@ describe("editorSigils", () => {
     const isupport: IsupportEntry = {
       chanmodes: { a: [], b: [], c: [], d: ["n", "t"] },
       prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
+      frameBudgetBase: null,
     };
     const e = editorSigils(isupport);
     expect(e.has("~")).toBe(true); // founder
@@ -143,6 +145,7 @@ describe("editorSigils", () => {
     const isupport: IsupportEntry = {
       chanmodes: { a: [], b: [], c: [], d: [] },
       prefix: { v: "+" },
+      frameBudgetBase: null,
     };
     const e = editorSigils(isupport);
     expect(e.has("@")).toBe(true);

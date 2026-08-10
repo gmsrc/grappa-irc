@@ -30,6 +30,12 @@ export type IsupportEntry = {
     d: string[];
   };
   prefix: Record<string, string>;
+  // #1108 — the target-independent per-frame body budget, from the same 005
+  // (see `frameBudget.ts` for what cic may and may not derive from it).
+  // `null` when the server published none: unlike the capability table, this
+  // has no honest default, because it is LINELEN minus the #246 worst-case
+  // relay reserve and a guess is just a wrong number to warn from.
+  frameBudgetBase: number | null;
 };
 
 // Keep in lockstep with `Grappa.Session.ISupport.default/0` (server).
@@ -41,6 +47,7 @@ export const DEFAULT_ISUPPORT: IsupportEntry = {
     d: ["C", "D", "R", "c", "d", "i", "m", "n", "p", "r", "s", "t"],
   },
   prefix: { o: "@", h: "%", v: "+" },
+  frameBudgetBase: null,
 };
 
 const exports_ = moduleRoot(() => {
@@ -63,4 +70,44 @@ export const seedIsupport = exports_.seedIsupport;
  */
 export function isupportForNetwork(networkId: number): IsupportEntry {
   return isupportByNetwork()[networkId] ?? DEFAULT_ISUPPORT;
+}
+
+/**
+ * Folds the flat `isupport_changed` wire shape into the nested store entry.
+ *
+ * Both doors go through here — the live 005 edge on the user topic and the
+ * per-channel cold-snapshot — so a new 005 fact cannot reach one of them and
+ * not the other, which is exactly how the two hand-copied literals this
+ * replaced would have taken the #1108 budget.
+ */
+export function isupportEntryFromWire(payload: {
+  chanmodes_a: string[];
+  chanmodes_b: string[];
+  chanmodes_c: string[];
+  chanmodes_d: string[];
+  prefix: Record<string, string>;
+  frame_budget_base: number | null;
+}): IsupportEntry {
+  return {
+    chanmodes: {
+      a: payload.chanmodes_a,
+      b: payload.chanmodes_b,
+      c: payload.chanmodes_c,
+      d: payload.chanmodes_d,
+    },
+    prefix: payload.prefix,
+    frameBudgetBase: payload.frame_budget_base,
+  };
+}
+
+/**
+ * The per-frame body budget base this network published (#1108), or `null`
+ * when none has arrived — an unseeded network, a parked session, or a server
+ * older than the field. Callers must treat `null` as "say nothing": the
+ * budget reserves the #246 worst-case relayed prefix and is not cic's to
+ * invent.
+ */
+export function frameBudgetBaseForNetwork(networkId: number | null): number | null {
+  if (networkId === null) return null;
+  return isupportForNetwork(networkId).frameBudgetBase;
 }

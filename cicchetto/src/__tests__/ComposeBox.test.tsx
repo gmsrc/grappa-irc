@@ -22,6 +22,18 @@ vi.mock("../lib/compose", () => ({
   // #904 — per-window in-flight state + the one-deep queue's full signal.
   isSending: () => mockSending(),
   isQueueFull: () => mockQueueFull(),
+  // #1108 — what the draft becomes on the wire. Resolved in the store (it
+  // needs the same verb dispatch the send path runs) and pinned there; here
+  // it is a boundary, so the view's two affordances can be driven from a
+  // known preview.
+  draftFramePreview: vi.fn(() => mockFramePreview),
+}));
+
+let mockFramePreview: { messages: number; remainingBytes: number | null } | null = null;
+let mockFrameBudgetBase: number | null = 393;
+
+vi.mock("../lib/isupport", () => ({
+  frameBudgetBaseForNetwork: () => mockFrameBudgetBase,
 }));
 
 vi.mock("../lib/channelKey", () => ({
@@ -109,6 +121,8 @@ beforeEach(() => {
   dismissConfirm();
   setMockSending(false);
   setMockQueueFull(false);
+  mockFramePreview = null;
+  mockFrameBudgetBase = 393;
 });
 
 describe("ComposeBox", () => {
@@ -1612,6 +1626,91 @@ describe("ComposeBox", () => {
 
       expect(paste.defaultPrevented).toBe(false);
       expect(confirmRequest()).toBeNull();
+    });
+  });
+  // ----------------------------------------------------------------
+  // #1108 — tell the operator, BEFORE sending, that the draft no longer
+  // fits one IRC frame. Two surfaces: an amber third state on the #356
+  // feedback seam, and a byte countdown above the box for the last ten
+  // bytes of the frame.
+  // ----------------------------------------------------------------
+  describe("#1108 — frame budget warning + byte countdown", () => {
+    it("renders the amber seam line, polite, when the draft will split", async () => {
+      mockFramePreview = { messages: 2, remainingBytes: null };
+      const compose = await import("../lib/compose");
+      vi.mocked(compose.getDraft).mockReturnValue("a very long draft");
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+
+      const warning = screen.getByText(/will send as 2 separate messages/i);
+      expect(warning).toHaveClass("compose-box-warning");
+      expect(warning.getAttribute("role")).toBe("status");
+      // An error is the assertive severity; a split is not one.
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("states the message count and NOTHING about characters", () => {
+      // vjt, on the copy: "magari no senza (xx) chars nel seam, distrae
+      // troppo". The seam says what will happen, the countdown does the
+      // arithmetic.
+      mockFramePreview = { messages: 4, remainingBytes: null };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+
+      const warning = screen.getByText(/separate messages/i);
+      expect(warning.textContent).toBe("your message will send as 4 separate messages");
+    });
+
+    it("shows no seam line while the draft still fits one frame", () => {
+      mockFramePreview = { messages: 1, remainingBytes: 200 };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      expect(screen.queryByText(/separate messages/i)).toBeNull();
+    });
+
+    it("an ERROR outranks the split warning on the shared seam line", async () => {
+      // Declared precedence: the seam is ONE line and an error is the more
+      // urgent thing to read. This is not hypothetical — a paced send that
+      // fails puts its residue BACK in the draft (#666), so a long residue
+      // and a sticky error are live together by construction.
+      mockFramePreview = { messages: 3, remainingBytes: null };
+      const compose = await import("../lib/compose");
+      vi.mocked(compose.submit).mockResolvedValue({ error: "send failed" });
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      fireEvent.keyDown(screen.getByPlaceholderText(/message #a/i), { key: "Enter" });
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(/send failed/i);
+      expect(screen.queryByText(/separate messages/i)).toBeNull();
+    });
+
+    it("counts down the last ten bytes of the frame", () => {
+      mockFramePreview = { messages: 1, remainingBytes: 3 };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      expect(screen.getByTestId("compose-frame-countdown")).toHaveTextContent("-3");
+    });
+
+    it("shows a 0 at the exact edge — the last byte that still fits", () => {
+      // Not a gap: at zero the draft is still ONE message, so the seam
+      // warning is not up yet and this is the only thing on screen.
+      mockFramePreview = { messages: 1, remainingBytes: 0 };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      expect(screen.getByTestId("compose-frame-countdown")).toHaveTextContent("0");
+      expect(screen.queryByText(/separate messages/i)).toBeNull();
+    });
+
+    it("stays hidden while there is more than ten bytes of room", () => {
+      mockFramePreview = { messages: 1, remainingBytes: 11 };
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      expect(screen.queryByTestId("compose-frame-countdown")).toBeNull();
+    });
+
+    it("is silent about a decision it cannot make — no budget, no affordance", () => {
+      // No live session has published a budget for this network. cic does
+      // NOT guess one (the #246 reserve is not the client's to compute), so
+      // both surfaces stay dark rather than warn from an invented number.
+      mockFrameBudgetBase = null;
+      mockFramePreview = null;
+      render(() => <ComposeBox networkSlug="freenode" channelName="#a" />);
+      expect(screen.queryByTestId("compose-frame-countdown")).toBeNull();
+      expect(screen.queryByText(/separate messages/i)).toBeNull();
     });
   });
 });

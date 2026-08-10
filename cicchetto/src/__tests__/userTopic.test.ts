@@ -137,7 +137,11 @@ vi.mock("../lib/channelDirectory", () => ({
   onDirectoryFailed: vi.fn(),
 }));
 
-vi.mock("../lib/isupport", () => ({
+// Only the SEED is stubbed. `isupportEntryFromWire` is the pure wire→store
+// fold both doors share (#1108), and stubbing it would make the assertion
+// below about the mock instead of about what lands in the store.
+vi.mock("../lib/isupport", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/isupport")>()),
   seedIsupport: vi.fn(),
 }));
 
@@ -413,7 +417,29 @@ describe("userTopic", () => {
       expect(isupport.seedIsupport).toHaveBeenCalledWith(7, {
         chanmodes: { a: ["b", "e", "I"], b: ["k"], c: ["l"], d: ["n", "t", "s"] },
         prefix: { q: "~", o: "@", v: "+" },
+        // #1108 — this envelope carried no budget, so none is seeded.
+        frameBudgetBase: null,
       });
+    });
+
+    // #1108 — the LIVE 005 door. The frame budget rides the same event, and
+    // the compose box's warning is dark until it lands here.
+    it("seeds the frame budget the 005 published", async () => {
+      const isupport = await import("../lib/isupport");
+      channelMock.fireEvent({
+        kind: "isupport_changed",
+        network_id: 7,
+        chanmodes_a: ["b", "e", "I"],
+        chanmodes_b: ["k"],
+        chanmodes_c: ["l"],
+        chanmodes_d: ["n", "t", "s"],
+        prefix: { q: "~", o: "@", v: "+" },
+        frame_budget_base: 393,
+      });
+      expect(isupport.seedIsupport).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({ frameBudgetBase: 393 }),
+      );
     });
 
     it("drops isupport_changed with a non-number network_id (narrower rejects)", async () => {

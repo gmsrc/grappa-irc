@@ -2,6 +2,7 @@ import { type Component, createSignal, onCleanup, Show } from "solid-js";
 import { isDiagEnabled } from "./DiagFloat";
 import { channelKey } from "./lib/channelKey";
 import {
+  draftFramePreview,
   getDraft,
   isDraining,
   isQueueFull,
@@ -15,6 +16,8 @@ import {
 import { placeCaretAtEndInView, placeCaretInView } from "./lib/composeCaret";
 import { composePlaceholder } from "./lib/composePlaceholder";
 import { diagPush } from "./lib/diagLog";
+import { frameBudgetForTarget } from "./lib/frameBudget";
+import { frameBudgetBaseForNetwork } from "./lib/isupport";
 import { networkBySlug } from "./lib/networks";
 import { routeClipboardPaste } from "./lib/pasteRoute";
 import {
@@ -91,6 +94,11 @@ export type Props = {
   channelName: string;
 };
 
+// #1108 — how close to the frame's edge the byte countdown appears. Ten
+// bytes, per the request: enough warning to finish a word, short enough that
+// it is not on screen while composing normally.
+const COUNTDOWN_FROM = 10;
+
 const NOT_JOINED_STATES = new Set(["failed", "kicked", "parked"]);
 const NETWORK_GREYED_STATES = new Set(["parked", "failed"]);
 
@@ -117,6 +125,19 @@ type Feedback = { text: string; severity: "error" | "notice" };
 function releasedInside(rect: DOMRect, x: number, y: number): boolean {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
+
+// The amber seam line. Its own component only so the feedback `Show`'s
+// fallback stays a single expression; the copy and the precedence live at
+// the call site.
+const SplitWarningLine: Component<{ text: string | null }> = (props) => (
+  <Show when={props.text}>
+    {(text) => (
+      <p class="compose-box-warning" role="status">
+        {text()}
+      </p>
+    )}
+  </Show>
+);
 
 const ComposeBox: Component<Props> = (props) => {
   const key = () => channelKey(props.networkSlug, props.channelName);
@@ -360,6 +381,44 @@ const ComposeBox: Component<Props> = (props) => {
     return s !== undefined && NOT_JOINED_STATES.has(s);
   };
 
+  // #1108 — what this draft will do to the wire, from the budget the SERVER
+  // published for this network (`frame_budget_base`; cic never computes the
+  // #246 relay reserve itself) minus this target's own byte length. `null`
+  // all the way through when no budget has arrived: an unseeded network, a
+  // parked session, or a server older than the field. Both affordances below
+  // then stay dark — a warning computed from an invented budget would be a
+  // number the operator cannot act on.
+  const framePreviewNow = () => {
+    const base = frameBudgetBaseForNetwork(networkBySlug(props.networkSlug)?.id ?? null);
+    const budget = frameBudgetForTarget(base, props.channelName);
+    return budget === null ? null : draftFramePreview(getDraft(key()), budget);
+  };
+
+  // The seam's third state: the draft no longer fits one frame. Copy states
+  // the message COUNT and nothing else — a character tally in the seam was
+  // ruled out as a distraction (#1108), and the countdown below is where the
+  // arithmetic belongs.
+  const splitWarning = (): string | null => {
+    const preview = framePreviewNow();
+    if (preview === null || preview.messages < 2) return null;
+    return `your message will send as ${preview.messages} separate messages`;
+  };
+
+  // The last ten bytes of the frame, counted down. Hidden until then, and
+  // hidden again the moment the draft splits — past the edge the seam line is
+  // the honest surface. Zero is shown: at exactly the budget the draft is
+  // still ONE message, so leaving it out would blink the counter off for one
+  // byte before the warning appears.
+  // Formatted here, not in the markup: zero is a legal value and a bare
+  // number would be swallowed by the `Show` below as falsy — the one byte of
+  // room where the counter must be MOST visible.
+  const frameCountdown = (): string | null => {
+    const preview = framePreviewNow();
+    const remaining = preview?.remainingBytes ?? null;
+    if (remaining === null || remaining > COUNTDOWN_FROM) return null;
+    return remaining === 0 ? "0" : `-${remaining}`;
+  };
+
   const onInput = (e: Event) => {
     const value = (e.currentTarget as HTMLTextAreaElement).value;
     setDraft(key(), value);
@@ -493,6 +552,21 @@ const ComposeBox: Component<Props> = (props) => {
 
   return (
     <>
+      {/* #1108 — bytes left in the frame, for the last ten of them. Purely
+          visual: aria-hidden, because a live region that changes on every
+          keystroke is noise, and the thing worth ANNOUNCING (the draft will
+          split) is the polite seam line below. */}
+      <Show when={frameCountdown()} keyed>
+        {(label) => (
+          <p
+            class="compose-box-frame-countdown"
+            data-testid="compose-frame-countdown"
+            aria-hidden="true"
+          >
+            {label}
+          </p>
+        )}
+      </Show>
       <form
         class={`compose-box${greyed() ? " compose-box-greyed" : ""}`}
         onSubmit={(e) => {
@@ -763,7 +837,15 @@ const ComposeBox: Component<Props> = (props) => {
           green notice) and the ARIA live role: role=alert (assertive) for
           errors the operator must read, role=status (polite) for the
           auto-dismissing success notice. */}
-      <Show when={feedback()}>
+      {/* #1108 — the seam's THIRD state, amber, and the one that loses the
+          line: submit feedback (error OR notice) outranks it. An error is
+          the more urgent read and the geometry is shared, so both cannot be
+          up at once; the collision is real rather than theoretical, because
+          a paced send that fails puts its residue back in the draft (#666)
+          while its error is still sticky. A notice cannot collide in
+          practice — the submit that produced one just emptied the draft, and
+          any keystroke clears feedback. */}
+      <Show when={feedback()} fallback={<SplitWarningLine text={splitWarning()} />}>
         {(fb) => (
           <p
             class={fb().severity === "error" ? "compose-box-error" : "compose-box-notice"}

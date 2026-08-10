@@ -187,6 +187,11 @@ export function narrowIsupportChanged(
     chanmodes_c: c,
     chanmodes_d: d,
     prefix,
+    // #1108 — absent or malformed means ABSENT, never a rejected envelope:
+    // the /mode toggles this payload seeds must survive a server that
+    // predates the budget, and cic's own rule for an unknown budget is to
+    // show no warning at all.
+    frame_budget_base: typeof r.frame_budget_base === "number" ? r.frame_budget_base : null,
   };
 }
 

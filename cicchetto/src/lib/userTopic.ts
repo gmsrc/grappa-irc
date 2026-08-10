@@ -24,7 +24,7 @@ import { setSeveredForFlood } from "./floodSever";
 import { refreshHighlights } from "./highlightList";
 import { patchHomeNetwork } from "./home";
 import { appendInviteAck } from "./inviteAck";
-import { seedIsupport } from "./isupport";
+import { isupportEntryFromWire, seedIsupport } from "./isupport";
 import { setLinksReply } from "./linksModal";
 import { applyLusersBundle, clearLusersRequested } from "./lusersBundle";
 import { setMentionsBundle } from "./mentionsWindow";
@@ -1173,15 +1173,7 @@ moduleRoot(() => {
           // reads. Live edge (005 mid-session) + cold snapshot (per-channel
           // after-join) both flow here; last-write-wins idempotent. Fold
           // the flat wire fields into the nested store shape.
-          seedIsupport(payload.network_id, {
-            chanmodes: {
-              a: payload.chanmodes_a,
-              b: payload.chanmodes_b,
-              c: payload.chanmodes_c,
-              d: payload.chanmodes_d,
-            },
-            prefix: payload.prefix,
-          });
+          seedIsupport(payload.network_id, isupportEntryFromWire(payload));
           return;
 
         case "umode_changed":

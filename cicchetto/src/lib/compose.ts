@@ -17,6 +17,7 @@ import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
 import { scrubCtcpDelimiters } from "./ctcpAction";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
+import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
 import { addHighlight, delHighlight } from "./highlightList";
 import { identityScopedStore } from "./identityScopedStore";
@@ -212,6 +213,17 @@ const persistDrafts = (states: Record<ChannelKey, ComposeState>): void => {
 export const ctcpFrame = (verb: string, args: string): string =>
   args === "" ? `\x01${verb}\x01` : `\x01${verb} ${args}\x01`;
 
+// The lines a free-text body fans out to — one PRIVMSG each, after the exit
+// scrub. Shared by the send path and #1108's pre-send preview so the count
+// the operator reads is produced by the code that does the sending.
+export const draftLines = (body: string): string[] => splitMessageLines(scrubCtcpDelimiters(body));
+
+// The exact bytes ONE of those lines becomes on the wire: `/me` wraps every
+// line in its own CTCP ACTION envelope, and that envelope is charged against
+// the frame budget on every fragment the server splits it into.
+export const wireBody = (line: string, action: boolean): string =>
+  action ? ctcpFrame("ACTION", line) : line;
+
 // #666 — resumable, self-pacing multiline fan-out.
 //
 // A paste sends one PRIVMSG per line, but the server's send door (the
@@ -291,7 +303,7 @@ export const sendBodyLines = async (
   // compose box by another verb is text, never framing. Scrubbing here rather
   // than at each writer means the next path that learns to fill the compose box
   // inherits the guarantee instead of having to remember it.
-  const lines = splitMessageLines(scrubCtcpDelimiters(body));
+  const lines = draftLines(body);
   const total = lines.length;
   let sent = 0;
   // Consecutive paced retries of the CURRENT line; reset when `sent` advances.
@@ -300,7 +312,7 @@ export const sendBodyLines = async (
     // `?? ""` satisfies noUncheckedIndexedAccess; `sent < total` guarantees a value.
     const line = lines[sent] ?? "";
     try {
-      await sendPrivmsg(slug, target, action ? ctcpFrame("ACTION", line) : line);
+      await sendPrivmsg(slug, target, wireBody(line, action));
       sent += 1;
       retries = 0;
       onProgress?.(sent, total, lines.slice(sent).join("\n"));
@@ -324,6 +336,28 @@ export const sendBodyLines = async (
       }
     }
   }
+};
+
+/**
+ * #1108 — what the current draft will do to the wire, or `null` when there is
+ * nothing honest to say: the server has published no budget for this network
+ * (`budget === null`), or the draft is a command that sends no PRIVMSG to
+ * THIS window. `/msg peer …` is excluded on purpose — it addresses a
+ * different target, whose budget is a different number.
+ *
+ * Resolved through the same `parseSlash` dispatch, line split and CTCP
+ * framing the submit path runs, so the preview is a statement about the bytes
+ * that will actually be POSTed rather than about the raw draft.
+ */
+export const draftFramePreview = (draft: string, budget: number | null): FramePreview | null => {
+  if (budget === null) return null;
+  const cmd = parseSlash(draft, aliases());
+  if (cmd.kind !== "privmsg" && cmd.kind !== "me") return null;
+  const action = cmd.kind === "me";
+  return framePreview(
+    draftLines(cmd.body).map((line) => wireBody(line, action)),
+    budget,
+  );
 };
 
 const exports_ = identityScopedStore((onIdentityChange) => {

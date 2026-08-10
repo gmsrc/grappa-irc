@@ -150,6 +150,7 @@ describe("ModeModal", () => {
     seedIsupport(1, {
       chanmodes: DEFAULT_ISUPPORT.chanmodes,
       prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
+      frameBudgetBase: null,
     });
     mockModes[KEY] = { modes: [], params: {} };
     mockMembers[KEY] = [{ nick: "vjt-grappa", modes: ["~"] }];

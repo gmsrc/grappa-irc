@@ -8,7 +8,7 @@ import { type ChannelKey, channelKey, decodeChannelKey } from "./channelKey";
 import { dropChannelTopicState, seedModes, seedTopic } from "./channelTopic";
 import { isDocumentVisible } from "./documentVisibility";
 import { highlightPatterns } from "./highlightList";
-import { seedIsupport } from "./isupport";
+import { isupportEntryFromWire, seedIsupport } from "./isupport";
 import { applyPresenceEvent, seedMembers } from "./members";
 import { setServerMention } from "./mentions";
 import { moduleRoot } from "./moduleRoot";
@@ -420,15 +420,7 @@ moduleRoot(() => {
           // path: the live 005 fired long before this client subscribed).
           // Seed the same store userTopic.ts's live arm feeds — keyed by
           // network id, last-write-wins idempotent.
-          seedIsupport(payload.network_id, {
-            chanmodes: {
-              a: payload.chanmodes_a,
-              b: payload.chanmodes_b,
-              c: payload.chanmodes_c,
-              d: payload.chanmodes_d,
-            },
-            prefix: payload.prefix,
-          });
+          seedIsupport(payload.network_id, isupportEntryFromWire(payload));
           return;
         // UX-5 BJ (2026-05-19) — recognized-but-ignored. JoinBanner was
         // the only consumer; killed in BJ. Server still emits per-channel
