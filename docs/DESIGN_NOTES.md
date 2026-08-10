@@ -38632,3 +38632,55 @@ promise of a reply would have to degrade to empty rather than spin — the
 cheapest way to satisfy that is to promise nothing. Escape also still closes
 the whole menu rather than stepping up one level; the back row is the way up.
 That is a judgement call, not a ruling, and it is one line if it should change.
+
+---
+
+## 2026-08-10 — #1169 part two: the breadcrumb, and why the guard asserts formatted output
+
+The fix for the SASL PLAIN payload ships separately and is HOT. This is
+the other half the issue asked for: the failure line now names the
+mechanism driven and the shape of the authzid sent, so the next opaque
+`904` is one grep from a verdict instead of a packet capture.
+
+**Why a 904 needed help at all.** The numeric is the same for a wrong
+password and for a payload the server could not parse. The line read
+`numeric=904 sasl_user=vjt` and stopped there, which describes the
+credential and says nothing about the message — so the failure mode that
+actually occurred (a malformed payload) was indistinguishable from the
+one everybody assumes.
+
+**A metadata key that is not in the allowlist is dropped at FORMAT
+time.** This is the trap that decides the shape of the guard.
+`config :logger, :console` carries an explicit `:metadata` list; a key
+absent from it is discarded by the formatter, not by the call. So the
+`Logger.error/2` call reads correctly, a test asserting the call
+arguments reads correctly, and the operator gets a line with the field
+missing. The guard therefore captures the log and asserts the FORMATTED
+string. It was run with the emit in place and the allowlist untouched,
+and failed — the captured line was
+`pid=<…> numeric=904 sasl_user=vjt [error] sasl auth failed`, both new
+fields absent. Declaring the two keys was the only change that turned it
+green. That red is what makes it a guard rather than a mirror:
+`ExUnit.CaptureLog` was verified to honour the production allowlist
+rather than formatting every key it is handed.
+
+**`mechanism` is derived; `authzid` is a label, and the difference is
+tied down.** The mechanism reads from the same module attribute that
+writes the `AUTHENTICATE <mech>` line, so it cannot name a mechanism the
+FSM does not drive. The authzid cannot be derived the same way: the
+encoder hard-codes it empty and keeps no state to read it back from.
+Rather than leave a constant that can drift, a second test decodes a
+payload the client actually put on the wire and asserts the first
+NUL-delimited field is empty **exactly when** the breadcrumb says
+`empty` — a correspondence, not a second copy of the constant, so it
+fails in both directions: populating the encoder's authzid without
+relabelling, and relabelling without touching the encoder. Given that
+this whole issue began as a comment describing an encoder shape that was
+never emitted, a breadcrumb held to the encoder only by convention would
+have been the same mistake with a new spelling.
+
+**This change is COLD by construction.** `config/*.exs` is compile-time
+configuration: a reload does not pick it up, the node has to restart.
+That is why it is not bundled with the payload fix, which is HOT and
+repairs a live defect — batching them would have held the repair behind
+a restart window for no gain.
