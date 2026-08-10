@@ -37110,8 +37110,11 @@ them to correct a path that is already right.
 a cic build, a release between deploy and the first `cicchetto-build` oneshot —
 and the API half of the server is worth serving meanwhile.
 
-**The issue's open question, answered no: an unresolvable `CIC_DIST_ROOT` is
-never replaced by a fallback.** Falling back to the image's baked path would
+**Ruled, not left to taste: an unresolvable `CIC_DIST_ROOT` is never replaced
+by a fallback.** The issue asked for this to be called explicitly rather than
+allowed to happen, so it is a decision and not a preference — the variable is
+load-bearing, and a root that misses stays missed on every substrate. Falling
+back to the image's baked path would
 rescue exactly the reported case, and it would make the variable advisory: a
 deliberate relocation with a typo would then serve a *different* bundle than
 the one configured, silently and plausibly, which is a worse failure than a
@@ -37140,10 +37143,53 @@ kills only that assertion; dropping the symptom clause kills only the `404`
 one; accepting any existing directory as a bundle kills only the empty-root
 arm. Six mutants, six single kills.
 
-**What this does not do, stated rather than implied.** It was not reproduced
-against `ghcr.io/vjt/grappa` — no image was pulled and no container booted
-here; the reported chain is read off `Dockerfile.release`, `compose.yaml` and
-compose's documented precedence, and the guard is measured in unit tests
-only. And no path check can catch the failure one step past this one: a root
-that exists and holds a bundle that is simply the wrong one — stale, or from
-another deploy — still boots silently and serves it.
+**What was tried against the real image, link by link.**
+`ghcr.io/vjt/grappa:latest` (`sha256:84c15776…`, `linux/arm64`, reporting
+`0.16.0`) was pulled and booted four ways on a loopback port with
+`PHX_HOST=localhost`.
+
+  * Untouched, it serves the SPA: `GET /` → 200, 2468 bytes, the Vite shell
+    with `src="/assets/index-fE-FhJ24.js"`. The image does ship a bundle.
+  * With `CIC_DIST_ROOT=/app/runtime/cicchetto-dist` — the value
+    `compose.yaml` injects, supplied both as `docker run -e` and through a
+    compose file carrying that line verbatim — `GET /` and `GET /a/deep/link`
+    both answer **404 `cicchetto frontend bundle not built`**, while
+    `/healthz` and `/api/config` answer 200. From inside that container:
+    `printenv CIC_DIST_ROOT` reports the compose value (so the
+    `environment:` key does override the image `ENV`, measured rather than
+    cited), `/app/cicchetto-dist/index.html` exists, and
+    `/app/runtime/cicchetto-dist` does not. Every link of the reported chain,
+    observed.
+  * **The silence is measured, not inferred.** That container's boot produced
+    476 log lines, and `grep -i 'cic_dist\|cicchetto-dist\|bundle'` over all
+    of them matches nothing. The only trace is `Sent 404`, which names no
+    path.
+
+Then the same sequence against an image built from this branch
+(`scripts/release-image.sh build`; the guard's message string does not exist
+anywhere else, which is what proves the running container carried the fix).
+Wrong root: `[warning] cic bundle root does not exist:
+/app/runtime/cicchetto-dist — the SPA will 404 on every document request…`,
+emitted 24ms and one line BEFORE `Running GrappaWeb.Endpoint`, i.e. before
+the port could accept the first request; and the 404 body now carries the
+variable. Root pointed at an empty directory: the other arm fires, `cic
+bundle root has no index.html: /emptydist`. Correct root: `GET /` 200 with
+the Vite shell, deep link 200, and the guard silent. Containers and volumes
+torn down; nothing left behind.
+
+**The limits of that, stated rather than implied.** One architecture only
+(`linux/arm64` on an arm64 host) — the amd64 variant of the published image
+was never run. `PHX_HOST=localhost` over plain HTTP on loopback exercises the
+BEAM's own SPA serving, NOT a TLS front door, and therefore not the service
+worker or push, which browsers gate on a secure context. Every request was
+curl; no browser loaded the app and no WebSocket was opened, so "the SPA is
+served" means the shell and its script tag, not a working client. The
+reproduction used a compose file derived from `compose.release.yaml` plus
+`compose.yaml`'s verbatim `CIC_DIST_ROOT` line, not the repo's `compose.yaml`
+itself — that file carries a build context and a bind-mounted tree, and the
+mechanism under test is compose's `environment:` precedence, which the
+derived file isolates. The fix was exercised from a locally built,
+single-arch image, not a published artifact. And no path check can catch the
+failure one step past this one: a root that exists and holds a bundle that is
+simply the wrong one — stale, or from another deploy — still boots silently
+and serves it.
