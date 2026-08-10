@@ -72,7 +72,7 @@ teardown() {
         for c in "$BOX" "$BARE"; do
             if docker inspect "$c" >/dev/null 2>&1; then
                 printf '\n----- docker logs %s (tail 200) -----\n' "$c" >&2
-                docker logs --tail 200 "$c" >&2 2>&1 || true
+                docker logs --tail 200 "$c" >&2 || true
             fi
         done
     fi
@@ -99,7 +99,7 @@ wait_healthz() {
     printf '\n'
 }
 
-say "ARM A — install via infra/docker/get.sh (release mode) from $GRAPPA_IMAGE"
+say "installing via infra/docker/get.sh (release mode) from $GRAPPA_IMAGE"
 # get.sh mirrors deploy_common.sh + gen-secrets.sh + deploy.sh into
 # GRAPPA_HOME and execs deploy.sh, exactly as `curl … | bash` does; the
 # file:// base is the only substitution, so the mirror list is under test.
@@ -139,23 +139,23 @@ curl -fsS --max-time 20 -o "$body" "http://$PUBLISH/" \
     || die "GET / did not return 2xx"
 
 docker cp "$body" "$BOX:/tmp/smoke-index.html" >/dev/null
-hash="$(docker exec "$BOX" bin/grappa rpc \
+bundle_hash="$(docker exec "$BOX" bin/grappa rpc \
     'IO.puts("cic-hash=" <> to_string(Grappa.Cic.Bundle.parse_hash(File.read!("/tmp/smoke-index.html"))))' \
     | sed -n 's/^cic-hash=//p' | tail -n1 | tr -d '\r')"
-[ -n "$hash" ] || {
+[ -n "$bundle_hash" ] || {
     printf '\n----- GET / returned (first 300 bytes) -----\n' >&2
     head -c 300 "$body" >&2; printf '\n' >&2
     die "GET / returned 200 but carries no SPA bundle tag"
 }
 
 chunk_type="$(curl -fsS --max-time 20 -o /dev/null \
-    -w '%{content_type}' "http://$PUBLISH/assets/index-${hash}.js")" \
-    || die "the shell names /assets/index-${hash}.js and the box does not serve it"
+    -w '%{content_type}' "http://$PUBLISH/assets/index-${bundle_hash}.js")" \
+    || die "the shell names /assets/index-${bundle_hash}.js and the box does not serve it"
 case "$chunk_type" in
     *javascript*) ;;
-    *) die "/assets/index-${hash}.js came back as '${chunk_type}', not JavaScript — the shell boots nothing" ;;
+    *) die "/assets/index-${bundle_hash}.js came back as '${chunk_type}', not JavaScript — the shell boots nothing" ;;
 esac
-pass "GET / serves a shell that boots index-${hash}.js (${chunk_type})"
+pass "GET / serves a shell that boots index-${bundle_hash}.js (${chunk_type})"
 
 # ---- probe 2: /api/config answers, and the node is the image under test ----
 #
