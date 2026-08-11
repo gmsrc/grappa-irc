@@ -25,8 +25,7 @@ defmodule Grappa.Release.CLITest do
 
   import ExUnit.CaptureIO
 
-  alias Grappa.Accounts
-  alias Grappa.Networks
+  alias Grappa.{Accounts, Networks}
   alias Grappa.Networks.{Credentials, SessionPlan}
   alias Grappa.Release.CLI
 

@@ -449,7 +449,7 @@ defmodule Grappa.NetworksTest do
                Networks.add_network(user, %{slug: "azzurra"}, @settings)
 
       assert cred.network_id == net.id
-      assert {:ok, _plan} = SessionPlan.resolve(cred)
+      assert {:ok, _} = SessionPlan.resolve(cred)
       assert length(Servers.list_servers(net)) == 1
     end
 

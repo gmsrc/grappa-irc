@@ -133,9 +133,9 @@ defmodule Grappa.Release do
     load_app()
     start_vault!()
 
-    case Ecto.Migrator.with_repo(Grappa.Repo, fn _repo -> CLI.run(argv) end) do
-      {:ok, {:ok, message}, _apps} -> IO.puts(message)
-      {:ok, {:error, message}, _apps} -> abort(message)
+    case Ecto.Migrator.with_repo(Grappa.Repo, fn _ -> CLI.run(argv) end) do
+      {:ok, {:ok, message}, _} -> IO.puts(message)
+      {:ok, {:error, message}, _} -> abort(message)
       {:error, reason} -> abort("could not open the database: #{inspect(reason)}")
     end
   end

@@ -38,12 +38,12 @@ defmodule Grappa.Release.CLIFlagParityTest do
   @create_positional [:name]
 
   defp attribute(file, name) do
-    {_ast, switches} =
+    {_, switches} =
       file
       |> File.read!()
       |> Code.string_to_quoted!()
       |> Macro.prewalk([], fn
-        {:@, _, [{^name, _, [list]}]} = node, _acc when is_list(list) -> {node, list}
+        {:@, _, [{^name, _, [list]}]} = node, _ when is_list(list) -> {node, list}
         node, acc -> {node, acc}
       end)
 
@@ -79,12 +79,12 @@ defmodule Grappa.Release.CLIFlagParityTest do
   test "every flag the release CLI accepts is named in the usage it prints" do
     # The usage text is the operator's only documentation on a box with no
     # checkout and no man page. A switch missing from it is invisible.
-    {_ast, usage_block} =
+    {_, usage_block} =
       @cli
       |> File.read!()
       |> Code.string_to_quoted!()
       |> Macro.prewalk("", fn
-        {:@, _, [{:usage, _, [text]}]} = node, _acc when is_binary(text) -> {node, text}
+        {:@, _, [{:usage, _, [text]}]} = node, _ when is_binary(text) -> {node, text}
         node, acc -> {node, acc}
       end)
 

@@ -229,7 +229,7 @@ defmodule Grappa.Networks do
 
   defp ensure_server(%Network{} = network, %{} = server_spec) do
     case Servers.add_server(network, server_spec) do
-      {:ok, _server} -> :ok
+      {:ok, _} -> :ok
       # Same `(network, host, port)` already registered — the row keeps its
       # prior attributes, as `add_server/2` documents.
       {:error, :already_exists} -> :ok
@@ -239,7 +239,7 @@ defmodule Grappa.Networks do
 
   defp ensure_dialable(%Network{} = network) do
     network = Repo.preload(network, :servers, force: true)
-    _server = Servers.pick_server!(network)
+    _ = Servers.pick_server!(network)
     {:ok, network}
   rescue
     NoServerError -> {:error, :no_enabled_server}

@@ -48,9 +48,8 @@ defmodule Grappa.Release.CLI do
   reports; it decides nothing about the domain.
   """
 
-  alias Grappa.Accounts
+  alias Grappa.{Accounts, Networks}
   alias Grappa.Accounts.User
-  alias Grappa.Networks
   alias Grappa.Networks.Network
 
   @create_user_switches [password: :string, admin: :boolean]
@@ -246,7 +245,7 @@ defmodule Grappa.Release.CLI do
          {:ok, user} <- fetch_user(user_name),
          {:ok, {host, port}} <- parse_endpoint(Keyword.fetch!(opts, :server)),
          {:ok, auth_method} <- parse_auth(Keyword.fetch!(opts, :auth)),
-         {:ok, _credential} <- grant_access(user, slug, opts, {host, port}, auth_method) do
+         {:ok, _} <- grant_access(user, slug, opts, {host, port}, auth_method) do
       {:ok, "#{user.name} can now use #{slug} (server #{host}:#{port})"}
     end
   end
@@ -326,7 +325,7 @@ defmodule Grappa.Release.CLI do
   @spec parse([String.t()], keyword(), [atom()]) :: {:ok, keyword()} | {:error, String.t()}
   def parse(argv, switches, required)
       when is_list(argv) and is_list(switches) and is_list(required) do
-    {opts, _positional, invalid} = OptionParser.parse(argv, strict: switches)
+    {opts, _, invalid} = OptionParser.parse(argv, strict: switches)
 
     with :ok <- reject_invalid(invalid, switches),
          :ok <- reject_missing(opts, required) do
@@ -394,10 +393,10 @@ defmodule Grappa.Release.CLI do
   @spec flag(atom()) :: String.t()
   def flag(name) when is_atom(name), do: "--" <> String.replace(Atom.to_string(name), "_", "-")
 
-  defp reject_invalid([], _switches), do: :ok
+  defp reject_invalid([], _), do: :ok
 
   defp reject_invalid(invalid, switches) do
-    known = Enum.map(switches, fn {name, _type} -> flag(name) end)
+    known = Enum.map(switches, fn {name, _} -> flag(name) end)
 
     {:error, Enum.map_join(invalid, "; ", &invalid_message(&1, known))}
   end
