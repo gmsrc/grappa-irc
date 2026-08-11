@@ -101,6 +101,10 @@ if [ "$SRC_ROOT" != "$REPO_ROOT" ]; then
         -v "$SRC_ROOT/.env.example:/app/.env.example:ro"
         #   bin/         → operator_help_drift_test.exs (#1086)
         -v "$SRC_ROOT/bin:/app/bin:ro"
+        #   cicchetto/e2e/ → keepalive_idle_ordering_test.exs (#1030). The
+        #   only cic path a server-side test reads; cicchetto/src above is
+        #   mounted for a different reason and does not cover it.
+        -v "$SRC_ROOT/cicchetto/e2e:/app/cicchetto/e2e:ro"
     )
 fi
 
