@@ -93,6 +93,14 @@ describe("AdminPane", () => {
     expect(screen.queryByTestId("admin-tab-visitors")).toBeNull();
   });
 
+  // #1158 — same rule for Credentials. A user's networks are managed on
+  // that user's page now, and leaving the handle behind would offer the
+  // operator a second, database-wide door to the same rows.
+  it("has no Credentials tab handle at all", () => {
+    render(() => <AdminPane onOpenRail={vi.fn()} />);
+    expect(screen.queryByTestId("admin-tab-credentials")).toBeNull();
+  });
+
   it("clicking the Networks tab swaps the active panel + flips aria-selected", () => {
     render(() => <AdminPane onOpenRail={vi.fn()} />);
     fireEvent.click(screen.getByTestId("admin-tab-networks"));

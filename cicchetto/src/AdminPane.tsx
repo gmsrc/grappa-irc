@@ -1,5 +1,4 @@
 import { type Component, createSignal, onCleanup, onMount, Show } from "solid-js";
-import AdminCredentialsTab from "./AdminCredentialsTab";
 import AdminDebugTab from "./AdminDebugTab";
 import AdminEventsTab from "./AdminEventsTab";
 import AdminNetworksTab from "./AdminNetworksTab";
@@ -82,7 +81,6 @@ type TabKey =
   | "networks"
   | "vhosts"
   | "users"
-  | "credentials"
   | "events"
   | "session_log"
   | "settings"
@@ -104,7 +102,6 @@ const TABS: (AdminNavTab & { key: TabKey })[] = [
   { key: "session_log", label: "Session Log", group: "live" },
   { key: "networks", label: "Networks", group: "config" },
   { key: "vhosts", label: "Vhosts", group: "config" },
-  { key: "credentials", label: "Credentials", group: "config" },
   { key: "users", label: "Users", group: "config" },
   { key: "settings", label: "Settings", group: "config" },
   { key: "debug", label: "Debug", group: "diag" },
@@ -205,17 +202,6 @@ const AdminPane: Component<Props> = (props) => {
           data-adm-group={currentGroup()}
         >
           <AdminUsersTab />
-        </div>
-      </Show>
-      <Show when={isActive("credentials")}>
-        <div
-          role="tabpanel"
-          id="admin-tab-credentials"
-          aria-labelledby="admin-tab-credentials-handle"
-          class="admin-tab-panel"
-          data-adm-group={currentGroup()}
-        >
-          <AdminCredentialsTab />
         </div>
       </Show>
       <Show when={isActive("events")}>
