@@ -166,7 +166,7 @@ describe("#888 far-behind badge treatment", () => {
 describe("#1077 muted badge treatment", () => {
   it("dims all three badges of a muted channel", () => {
     mockMentions.value = { [BEHIND]: 4 };
-    setMutedTargets({ [conversationMuteKey("#italia")]: { until: null } });
+    setMutedTargets({ [conversationMuteKey("freenode", "#italia")]: { until: null } });
     const { container } = render(() => <WindowBadges channelKey={BEHIND} variant="sidebar" />);
 
     // All three, not just the two counters: #866 Q2 already ruled that a
@@ -184,7 +184,7 @@ describe("#1077 muted badge treatment", () => {
     // The window is `Vjt`; the mute was stored for `vjt`. The badge must fold
     // to match, exactly as the notify path and the cycle-skip do — a raw
     // compare here would leave a mixed-case query window shouting.
-    setMutedTargets({ [conversationMuteKey("vjt")]: { until: null } });
+    setMutedTargets({ [conversationMuteKey("freenode", "vjt")]: { until: null } });
     const { container } = render(() => <WindowBadges channelKey={DM} variant="sidebar" />);
     expect(container.querySelector(".sidebar-msg-unread")?.classList.contains(MUTED_CLASS)).toBe(
       true,
@@ -192,7 +192,7 @@ describe("#1077 muted badge treatment", () => {
   });
 
   it("leaves an unmuted window at full strength", () => {
-    setMutedTargets({ [conversationMuteKey("#italia")]: { until: null } });
+    setMutedTargets({ [conversationMuteKey("freenode", "#italia")]: { until: null } });
     const { container } = render(() => <WindowBadges channelKey={NORMAL} variant="sidebar" />);
     // The mute belongs to a DIFFERENT conversation; nothing about it may reach
     // this one.
@@ -201,8 +201,20 @@ describe("#1077 muted badge treatment", () => {
     );
   });
 
+  it("leaves the SAME channel on another network at full strength (#1038)", () => {
+    // The sibling of the test above, varying the other half of the key. Both
+    // windows are `#italia`; only the network differs. A badge that dropped
+    // the network half — the pre-#1038 key — would dim this one too, and every
+    // other test here would stay green.
+    setMutedTargets({ [conversationMuteKey("othernet", "#italia")]: { until: null } });
+    const { container } = render(() => <WindowBadges channelKey={BEHIND} variant="sidebar" />);
+    expect(container.querySelector(".sidebar-msg-unread")?.classList.contains(MUTED_CLASS)).toBe(
+      false,
+    );
+  });
+
   it("restores full brightness the moment the mute is lifted, with no re-render", () => {
-    setMutedTargets({ [conversationMuteKey("#italia")]: { until: null } });
+    setMutedTargets({ [conversationMuteKey("freenode", "#italia")]: { until: null } });
     const { container } = render(() => <WindowBadges channelKey={BEHIND} variant="sidebar" />);
     const msg = container.querySelector(".sidebar-msg-unread");
     expect(msg?.classList.contains(MUTED_CLASS)).toBe(true);
@@ -216,7 +228,7 @@ describe("#1077 muted badge treatment", () => {
 
   it("composes with the far-behind treatment rather than replacing it", () => {
     mockFarBehind.value = { [BEHIND]: { missed: 1832, resumeFrom: 10 } };
-    setMutedTargets({ [conversationMuteKey("#italia")]: { until: null } });
+    setMutedTargets({ [conversationMuteKey("freenode", "#italia")]: { until: null } });
     const { container } = render(() => <WindowBadges channelKey={BEHIND} variant="sidebar" />);
     const msg = container.querySelector(".sidebar-msg-unread");
     expect(msg?.classList.contains(FAR_BEHIND_CLASS)).toBe(true);
@@ -225,7 +237,7 @@ describe("#1077 muted badge treatment", () => {
 
   it("applies the same modifier on the mobile bottom-bar variant", () => {
     mockMentions.value = { [BEHIND]: 4 };
-    setMutedTargets({ [conversationMuteKey("#italia")]: { until: null } });
+    setMutedTargets({ [conversationMuteKey("freenode", "#italia")]: { until: null } });
     const { container } = render(() => <WindowBadges channelKey={BEHIND} variant="bottom-bar" />);
     for (const sel of [
       ".bottom-bar-msg-unread",

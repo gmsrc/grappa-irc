@@ -1,6 +1,6 @@
 import { type Component, Show } from "solid-js";
-import { type ChannelKey, decodeChannelKey } from "./lib/channelKey";
-import { conversationMuteKey, isConversationMuted } from "./lib/conversationMute";
+import type { ChannelKey } from "./lib/channelKey";
+import { isConversationMuted } from "./lib/conversationMute";
 import { mentionCounts } from "./lib/mentions";
 import { notificationPrefs } from "./lib/notificationPrefs";
 import { farBehindByChannel } from "./lib/scrollback";
@@ -83,20 +83,13 @@ const WindowBadges: Component<Props> = (props) => {
   // is reporting. `notificationPrefs()` is read as a signal, not snapshotted:
   // lifting a mute must restore full brightness without a reload.
   //
-  // The mute key is network-AGNOSTIC (#866 Q5) while a ChannelKey is
-  // network-scoped, so only the name half feeds it — taken through the paired
-  // `decodeChannelKey` rather than a hand-rolled `indexOf(" ")`, because the
-  // key shape has exactly one decoder by contract. A query window's
-  // `channelName` IS the peer nick, so this covers DMs with no second branch.
-  // The fold is idempotent, so folding an already-folded name is free and the
-  // call site stays honest about what kind of string it needs.
-  const muted = () => {
-    const decoded = decodeChannelKey(props.channelKey);
-    return (
-      decoded !== null &&
-      isConversationMuted(notificationPrefs().muted_targets, conversationMuteKey(decoded.name))
-    );
-  };
+  // #1038 retracted #866 Q5's network-AGNOSTIC mute key: the key IS the
+  // composite (network, target) ChannelKey now, which is exactly what
+  // `props.channelKey` already holds — so the decode-and-refold this used to
+  // do is not merely redundant, it would rebuild the same string. A query
+  // window's `channelName` IS the peer nick, so this covers DMs with no
+  // second branch.
+  const muted = () => isConversationMuted(notificationPrefs().muted_targets, props.channelKey);
 
   // BOTH unread badges take the treatment, not just the message one: the
   // far-behind branch of `perChannelUnread` skips local counting wholesale
