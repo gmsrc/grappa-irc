@@ -38684,3 +38684,46 @@ configuration: a reload does not pick it up, the node has to restart.
 That is why it is not bundled with the payload fix, which is HOT and
 repairs a live defect — batching them would have held the repair behind
 a restart window for no gain.
+
+**A lamp that lights the same in both worlds is not a lamp.** The first
+draft of this breadcrumb carried `mechanism` and `authzid` and stopped
+there. Both are compile-time constants: `PLAIN` is the only mechanism
+this FSM drives, and `empty` is a hard-coded label. So the line reads
+IDENTICALLY on a healthy handshake and on the malformed payload that
+motivated the issue — which means it could not have diagnosed the very
+incident it was written for. Measured, not reasoned: with the pre-fix
+encoder in place the captured line was
+`numeric=904 sasl_user=vjt mechanism=PLAIN authzid=empty`, and the
+payload on the wire at that moment carried FOUR fields. The breadcrumb
+had nothing to say about the only thing that was wrong.
+
+So the line now also carries `sasl_fields`, the number of NUL-delimited
+fields the payload actually had — the one fact that differed between the
+broken and the healthy encoder (four against three). It is **derived**,
+not declared: `record_sasl_fields/2` decodes the payload the FSM just
+emitted and counts. A restated `3` would have been the same defect with
+a new spelling, and this issue is precisely a story about prose
+restating the encoder and drifting from it. `:none` is a distinct
+answer, not a zero: an upstream that refuses the mechanism answers the
+`AUTHENTICATE PLAIN` line itself, so no payload is ever encoded, and
+that is a materially different failure from a rejected credential. The
+key is emitted rather than omitted because an absent key is
+indistinguishable from one the formatter dropped — the trap described
+above.
+
+**Only the count crosses into the log.** The decoded payload is a local
+that dies with the call; it holds the authcid and the password, and
+neither is stored on the struct, returned, or logged. A field count
+reveals nothing about the fields.
+
+**The premise the issue was filed on was wrong, and the record should
+say so.** #1169 is titled "SASL PLAIN sends a non-empty authzid". It
+never did: the shape was `\0 u \0 u \0 pw`, whose first field is empty.
+The defect was an extra FIELD, not a populated one — established by the
+payload fix (part one) and visible again here, since the authzid
+correspondence guard passes unchanged against both encoders. That is
+also why that guard, which reads only the first field, survived the fix
+untouched: it measures the one thing the bug never touched. It still
+earns its place — it is the only thing that catches the label being
+changed without the encoder — but the count is what catches the encoder
+being changed without anyone noticing.
