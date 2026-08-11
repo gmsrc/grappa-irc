@@ -15,6 +15,11 @@ vi.mock("../lib/api", async () => {
     adminUpdateUserAdmin: vi.fn(),
     adminUpdateUserPassword: vi.fn(),
     adminDeleteUser: vi.fn(),
+    // #1158 — the tab now hosts the per-user page, which fetches these on
+    // mount. Real `AdminUserPage`, not a stub: the drill-in is only proven
+    // if what appears is the page the operator actually gets.
+    adminListCredentials: vi.fn(),
+    adminListNetworks: vi.fn(),
   };
 });
 
@@ -22,6 +27,8 @@ import AdminUsersTab from "../AdminUsersTab";
 import {
   adminCreateUser,
   adminDeleteUser,
+  adminListCredentials,
+  adminListNetworks,
   adminListUsers,
   adminUpdateUserAdmin,
   adminUpdateUserPassword,
@@ -61,6 +68,8 @@ const BOB_ADMIN: AdminUser = {
 beforeEach(() => {
   vi.resetAllMocks();
   (adminListUsers as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([ALICE, BOB_ADMIN]);
+  vi.mocked(adminListCredentials).mockResolvedValue([]);
+  vi.mocked(adminListNetworks).mockResolvedValue([]);
 });
 
 describe("AdminUsersTab — list render", () => {
@@ -327,5 +336,67 @@ describe("AdminUsersTab — 422 field_errors detail (#943)", () => {
     const banner = screen.getByTestId("admin-users-error").textContent ?? "";
     expect(banner).toContain("rotate password (alice): validation_failed");
     expect(banner).toContain("password: should be at least 8 character(s)");
+  });
+});
+
+// #1158 — the tab is now a list that drills into ONE user's page, and the
+// page is where a user's network access lives. Creating a user lands on it:
+// that is what makes "create a user and give it a network" one flow instead
+// of two surfaces, which is the whole point of deleting the Credentials tab.
+describe("AdminUsersTab — the per-user page", () => {
+  it("swaps the list for the page of the row the operator opened", async () => {
+    render(() => <AdminUsersTab />);
+    await waitFor(() => expect(screen.queryByTestId("admin-users-table")).not.toBeNull());
+
+    fireEvent.click(screen.getByTestId(`admin-user-networks-${BOB_ADMIN.id}`));
+
+    await waitFor(() => expect(screen.queryByTestId("admin-user-page")).not.toBeNull());
+    expect(screen.getByTestId("admin-user-page-name").textContent).toBe(BOB_ADMIN.name);
+    // One surface at a time: the list underneath would be a second place to
+    // act on the same user.
+    expect(screen.queryByTestId("admin-users-table")).toBeNull();
+  });
+
+  it("returns to the list from the page", async () => {
+    render(() => <AdminUsersTab />);
+    await waitFor(() => expect(screen.queryByTestId("admin-users-table")).not.toBeNull());
+
+    fireEvent.click(screen.getByTestId(`admin-user-networks-${ALICE.id}`));
+    await waitFor(() => expect(screen.queryByTestId("admin-user-page")).not.toBeNull());
+
+    fireEvent.click(screen.getByTestId("admin-user-page-back"));
+    await waitFor(() => expect(screen.queryByTestId("admin-users-table")).not.toBeNull());
+    expect(screen.queryByTestId("admin-user-page")).toBeNull();
+  });
+
+  it("lands on the new user's page as soon as it is created", async () => {
+    const CAROL = { ...ALICE, id: "00000000-0000-0000-0000-000000000003", name: "carol" };
+    vi.mocked(adminCreateUser).mockResolvedValue(CAROL);
+    render(() => <AdminUsersTab />);
+    await waitFor(() => expect(screen.queryByTestId("admin-users-table")).not.toBeNull());
+
+    fireEvent.input(screen.getByTestId("admin-users-create-name"), { target: { value: "carol" } });
+    fireEvent.input(screen.getByTestId("admin-users-create-password"), {
+      target: { value: "secret-pass-1234" },
+    });
+    fireEvent.click(screen.getByTestId("admin-users-create-submit"));
+
+    await waitFor(() => expect(screen.queryByTestId("admin-user-page")).not.toBeNull());
+    expect(screen.getByTestId("admin-user-page-name").textContent).toBe("carol");
+  });
+
+  it("stays on the list when the create fails", async () => {
+    vi.mocked(adminCreateUser).mockRejectedValue(new Error("nope"));
+    render(() => <AdminUsersTab />);
+    await waitFor(() => expect(screen.queryByTestId("admin-users-table")).not.toBeNull());
+
+    fireEvent.input(screen.getByTestId("admin-users-create-name"), { target: { value: "carol" } });
+    fireEvent.input(screen.getByTestId("admin-users-create-password"), {
+      target: { value: "secret-pass-1234" },
+    });
+    fireEvent.click(screen.getByTestId("admin-users-create-submit"));
+
+    await waitFor(() => expect(screen.queryByTestId("admin-users-error")).not.toBeNull());
+    expect(screen.queryByTestId("admin-user-page")).toBeNull();
   });
 });

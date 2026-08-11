@@ -1,4 +1,5 @@
 import { type Component, createSignal, For, onMount, Show } from "solid-js";
+import AdminUserPage from "./AdminUserPage";
 import AdminBadge from "./admin/AdminBadge";
 import AdminCard from "./admin/AdminCard";
 import AdminDetailPanel from "./admin/AdminDetailPanel";
@@ -99,6 +100,12 @@ const AdminUsersTab: Component = () => {
   // takes its own panel with it.
   const [detailId, setDetailId] = createSignal<string | null>(null);
 
+  // #1158 — the user whose page is open, or null for the list. The tab is a
+  // list that drills into ONE user; the page owns that user's network access,
+  // which is what the deleted Credentials tab used to own for everybody at
+  // once. Not a route: see the note in `AdminUserPage`.
+  const [openUser, setOpenUser] = createSignal<AdminUser | null>(null);
+
   const refresh = async (): Promise<void> => {
     const t = token();
     if (t === null) return;
@@ -125,13 +132,17 @@ const AdminUsersTab: Component = () => {
     setCreating(true);
     setError(null);
     try {
-      await adminCreateUser(t, {
+      const created = await adminCreateUser(t, {
         name: form.name,
         password: form.password,
         is_admin: form.is_admin,
       });
       setCreateForm({ ...EMPTY_CREATE });
       await refresh();
+      // ONE flow: a new account is useless until it has a network, and the
+      // page is where networks are added. Landing there is what replaces
+      // "now go to the Credentials tab and pick this user out of a select".
+      setOpenUser(created);
     } catch (err) {
       setError(`create: ${operatorApiError(err, "create_failed")}`);
     } finally {
@@ -213,240 +224,265 @@ const AdminUsersTab: Component = () => {
 
   return (
     <div class="admin-users-tab">
-      <div class="adm-scroll">
-        <Show when={error() !== null}>
-          <AdminError message={error() ?? ""} testId="admin-users-error" />
-        </Show>
-
-        <AdminCard title="Create user" subtitle="POST /admin/users">
-          <form
-            class="admin-users-create-form adm-form-row"
-            onSubmit={(e) => {
-              void onCreate(e);
+      <Show when={openUser()}>
+        {(u) => (
+          <AdminUserPage
+            user={u()}
+            onBack={() => {
+              setOpenUser(null);
+              // The page can have changed what the list shows (a user's live
+              // session count moves the moment a network is added), so the
+              // list the operator comes back to is re-read, not remembered.
+              void refresh();
             }}
-            data-testid="admin-users-create-form"
-          >
-            <input
-              placeholder="name"
-              aria-label="name"
-              type="text"
-              value={createForm().name}
-              onInput={(e) =>
-                setCreateForm({
-                  ...createForm(),
-                  name: (e.currentTarget as HTMLInputElement).value,
-                })
-              }
-              data-testid="admin-users-create-name"
-              required
-            />
-            <input
-              placeholder="password"
-              aria-label="password"
-              type="password"
-              value={createForm().password}
-              onInput={(e) =>
-                setCreateForm({
-                  ...createForm(),
-                  password: (e.currentTarget as HTMLInputElement).value,
-                })
-              }
-              data-testid="admin-users-create-password"
-              required
-            />
-            {/* A checkbox carries its label beside it, not inside it as a
-                placeholder the way the text fields above do. */}
-            <label class="admin-users-create-admin adm-check">
+          />
+        )}
+      </Show>
+
+      <Show when={openUser() === null}>
+        <div class="adm-scroll">
+          <Show when={error() !== null}>
+            <AdminError message={error() ?? ""} testId="admin-users-error" />
+          </Show>
+
+          <AdminCard title="Create user" subtitle="POST /admin/users">
+            <form
+              class="admin-users-create-form adm-form-row"
+              onSubmit={(e) => {
+                void onCreate(e);
+              }}
+              data-testid="admin-users-create-form"
+            >
               <input
-                type="checkbox"
-                checked={createForm().is_admin}
-                onChange={(e) =>
+                placeholder="name"
+                aria-label="name"
+                type="text"
+                value={createForm().name}
+                onInput={(e) =>
                   setCreateForm({
                     ...createForm(),
-                    is_admin: (e.currentTarget as HTMLInputElement).checked,
+                    name: (e.currentTarget as HTMLInputElement).value,
                   })
                 }
-                data-testid="admin-users-create-is-admin"
+                data-testid="admin-users-create-name"
+                required
               />
-              admin
-            </label>
-            <button
-              type="submit"
-              class="adm-btn"
-              disabled={creating() || createForm().name === "" || createForm().password === ""}
-              data-testid="admin-users-create-submit"
+              <input
+                placeholder="password"
+                aria-label="password"
+                type="password"
+                value={createForm().password}
+                onInput={(e) =>
+                  setCreateForm({
+                    ...createForm(),
+                    password: (e.currentTarget as HTMLInputElement).value,
+                  })
+                }
+                data-testid="admin-users-create-password"
+                required
+              />
+              {/* A checkbox carries its label beside it, not inside it as a
+                placeholder the way the text fields above do. */}
+              <label class="admin-users-create-admin adm-check">
+                <input
+                  type="checkbox"
+                  checked={createForm().is_admin}
+                  onChange={(e) =>
+                    setCreateForm({
+                      ...createForm(),
+                      is_admin: (e.currentTarget as HTMLInputElement).checked,
+                    })
+                  }
+                  data-testid="admin-users-create-is-admin"
+                />
+                admin
+              </label>
+              <button
+                type="submit"
+                class="adm-btn"
+                disabled={creating() || createForm().name === "" || createForm().password === ""}
+                data-testid="admin-users-create-submit"
+              >
+                Create
+              </button>
+            </form>
+          </AdminCard>
+
+          <Show when={users() === null && error() === null}>
+            <AdminLoading />
+          </Show>
+
+          <Show when={users() !== null && (users() ?? []).length === 0}>
+            <AdminEmpty message="no users" testId="admin-users-empty" />
+          </Show>
+
+          <Show when={users() !== null && (users() ?? []).length > 0}>
+            <AdminCard
+              hostsRefresh
+              title="Accounts"
+              subtitle="live sessions is the Registry count, not a DB column"
             >
-              Create
-            </button>
-          </form>
-        </AdminCard>
-
-        <Show when={users() === null && error() === null}>
-          <AdminLoading />
-        </Show>
-
-        <Show when={users() !== null && (users() ?? []).length === 0}>
-          <AdminEmpty message="no users" testId="admin-users-empty" />
-        </Show>
-
-        <Show when={users() !== null && (users() ?? []).length > 0}>
-          <AdminCard
-            hostsRefresh
-            title="Accounts"
-            subtitle="live sessions is the Registry count, not a DB column"
-          >
-            <AdminTable data-testid="admin-users-table">
-              <thead>
-                <tr>
-                  <th class="adm-table-grow">name</th>
-                  <th>admin</th>
-                  {/* Secondary below 900px — they move into the row's
+              <AdminTable data-testid="admin-users-table">
+                <thead>
+                  <tr>
+                    <th class="adm-table-grow">name</th>
+                    <th>admin</th>
+                    {/* Secondary below 900px — they move into the row's
                       detail panel. See `AdminFacts`. */}
-                  <th class="adm-col-detail">live sessions</th>
-                  <th class="adm-col-detail">inserted</th>
-                  {/* Visible, like the other migrated tabs: an unlabelled
+                    <th class="adm-col-detail">live sessions</th>
+                    <th class="adm-col-detail">inserted</th>
+                    {/* Visible, like the other migrated tabs: an unlabelled
                       column reads as a rendering bug, and the actions here
                       are destructive enough to deserve naming. */}
-                  <th class="adm-table-sticky-actions">actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                <For each={users() ?? []}>
-                  {(u) => (
-                    <>
-                      <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
-                        <td class="adm-cell-title">
-                          <AdminRowName
-                            open={detailId() === u.id}
-                            onToggle={() => setDetailId(detailId() === u.id ? null : u.id)}
-                            label={`details for ${u.name}`}
-                            testId={`admin-user-details-${u.id}`}
-                          >
-                            {u.name}
-                          </AdminRowName>
-                        </td>
-                        <td data-label="admin">
-                          {/* The WORD stays: admin-users.spec.ts reads this
+                    <th class="adm-table-sticky-actions">actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <For each={users() ?? []}>
+                    {(u) => (
+                      <>
+                        <tr class="admin-users-row" data-testid={`admin-user-row-${u.id}`}>
+                          <td class="adm-cell-title">
+                            <AdminRowName
+                              open={detailId() === u.id}
+                              onToggle={() => setDetailId(detailId() === u.id ? null : u.id)}
+                              label={`details for ${u.name}`}
+                              testId={`admin-user-details-${u.id}`}
+                            >
+                              {u.name}
+                            </AdminRowName>
+                          </td>
+                          <td data-label="admin">
+                            {/* The WORD stays: admin-users.spec.ts reads this
                               cell as text (`td.nth(1)` matching /yes|no/), and
                               it is a yes/no question a colour alone cannot
                               answer. Neutral rather than danger for "no" — a
                               non-admin account is the normal case. */}
-                          <AdminBadge tone={u.is_admin ? "ok" : "neutral"}>
-                            {u.is_admin ? "yes" : "no"}
-                          </AdminBadge>
-                        </td>
-                        <td class="adm-col-detail" data-label="live">
-                          {u.live_session_count}
-                        </td>
-                        <td class="adm-col-detail" data-label="inserted">
-                          {formatInstant(u.inserted_at)}
-                        </td>
-                        <td
-                          class="admin-users-actions adm-table-sticky-actions"
-                          data-label="actions"
-                        >
-                          <button
-                            type="button"
-                            class={`adm-btn ${u.is_admin ? "adm-btn--danger" : "adm-btn--ok"}`}
-                            onClick={() => {
-                              void onToggleAdmin(u);
-                            }}
-                            data-testid={`admin-user-toggle-admin-${u.id}`}
+                            <AdminBadge tone={u.is_admin ? "ok" : "neutral"}>
+                              {u.is_admin ? "yes" : "no"}
+                            </AdminBadge>
+                          </td>
+                          <td class="adm-col-detail" data-label="live">
+                            {u.live_session_count}
+                          </td>
+                          <td class="adm-col-detail" data-label="inserted">
+                            {formatInstant(u.inserted_at)}
+                          </td>
+                          <td
+                            class="admin-users-actions adm-table-sticky-actions"
+                            data-label="actions"
                           >
-                            {u.is_admin ? "Demote" : "Promote"}
-                          </button>
-                          <button
-                            type="button"
-                            class="adm-btn"
-                            onClick={() => onArmRotate(u.id)}
-                            data-testid={`admin-user-rotate-password-${u.id}`}
-                          >
-                            Rotate password
-                          </button>
-                          <InlineConfirmButton
-                            idleLabel="Delete"
-                            confirmLabel="Confirm delete"
-                            armed={confirmingId() === u.id}
-                            onArm={() => setConfirmingId(u.id)}
-                            onConfirm={() => onDelete(u)}
-                            testId={`admin-user-delete-${u.id}`}
-                            extraClass="delete-btn"
-                          />
-                        </td>
-                      </tr>
-                      <Show when={detailId() === u.id}>
-                        <AdminDetailPanel
-                          title={u.name}
-                          subtitle="the columns the table drops on a phone"
-                          onClose={() => setDetailId(null)}
-                          closeLabel="close user details"
-                          columns={USER_COLUMNS}
-                          data-testid={`admin-user-detail-${u.id}`}
-                        >
-                          <AdminFacts
-                            facts={[
-                              { label: "live sessions", value: String(u.live_session_count) },
-                              { label: "inserted", value: formatInstant(u.inserted_at) },
-                            ]}
-                          />
-                        </AdminDetailPanel>
-                      </Show>
-                      <Show when={rotatingId() === u.id}>
-                        <AdminDetailPanel
-                          title={`Rotate password for ${u.name}`}
-                          subtitle="PUT /admin/users/:id/password"
-                          onClose={onCancelRotate}
-                          closeLabel="cancel password rotation"
-                          columns={USER_COLUMNS}
-                          data-testid={`admin-user-rotate-form-${u.id}`}
-                        >
-                          <form
-                            class="adm-form-grid"
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void onSubmitRotate(u);
-                            }}
-                          >
-                            <input
-                              placeholder="new password"
-                              aria-label={`new password for ${u.name}`}
-                              type="password"
-                              value={passwordInput()}
-                              onInput={(e) =>
-                                setPasswordInput((e.currentTarget as HTMLInputElement).value)
-                              }
-                              data-testid={`admin-user-rotate-input-${u.id}`}
-                              required
+                            <button
+                              type="button"
+                              class="adm-btn"
+                              onClick={() => setOpenUser(u)}
+                              data-testid={`admin-user-networks-${u.id}`}
+                            >
+                              Networks
+                            </button>
+                            <button
+                              type="button"
+                              class={`adm-btn ${u.is_admin ? "adm-btn--danger" : "adm-btn--ok"}`}
+                              onClick={() => {
+                                void onToggleAdmin(u);
+                              }}
+                              data-testid={`admin-user-toggle-admin-${u.id}`}
+                            >
+                              {u.is_admin ? "Demote" : "Promote"}
+                            </button>
+                            <button
+                              type="button"
+                              class="adm-btn"
+                              onClick={() => onArmRotate(u.id)}
+                              data-testid={`admin-user-rotate-password-${u.id}`}
+                            >
+                              Rotate password
+                            </button>
+                            <InlineConfirmButton
+                              idleLabel="Delete"
+                              confirmLabel="Confirm delete"
+                              armed={confirmingId() === u.id}
+                              onArm={() => setConfirmingId(u.id)}
+                              onConfirm={() => onDelete(u)}
+                              testId={`admin-user-delete-${u.id}`}
+                              extraClass="delete-btn"
                             />
-                            <div class="adm-form-grid-actions">
-                              <button
-                                type="submit"
-                                class="adm-btn adm-btn--ok"
-                                disabled={passwordInput() === ""}
-                                data-testid={`admin-user-rotate-submit-${u.id}`}
-                              >
-                                Rotate
-                              </button>
-                              <button
-                                type="button"
-                                class="adm-btn adm-btn--danger"
-                                onClick={onCancelRotate}
-                                data-testid={`admin-user-rotate-cancel-${u.id}`}
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </form>
-                        </AdminDetailPanel>
-                      </Show>
-                    </>
-                  )}
-                </For>
-              </tbody>
-            </AdminTable>
-          </AdminCard>
-        </Show>
-      </div>
+                          </td>
+                        </tr>
+                        <Show when={detailId() === u.id}>
+                          <AdminDetailPanel
+                            title={u.name}
+                            subtitle="the columns the table drops on a phone"
+                            onClose={() => setDetailId(null)}
+                            closeLabel="close user details"
+                            columns={USER_COLUMNS}
+                            data-testid={`admin-user-detail-${u.id}`}
+                          >
+                            <AdminFacts
+                              facts={[
+                                { label: "live sessions", value: String(u.live_session_count) },
+                                { label: "inserted", value: formatInstant(u.inserted_at) },
+                              ]}
+                            />
+                          </AdminDetailPanel>
+                        </Show>
+                        <Show when={rotatingId() === u.id}>
+                          <AdminDetailPanel
+                            title={`Rotate password for ${u.name}`}
+                            subtitle="PUT /admin/users/:id/password"
+                            onClose={onCancelRotate}
+                            closeLabel="cancel password rotation"
+                            columns={USER_COLUMNS}
+                            data-testid={`admin-user-rotate-form-${u.id}`}
+                          >
+                            <form
+                              class="adm-form-grid"
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                void onSubmitRotate(u);
+                              }}
+                            >
+                              <input
+                                placeholder="new password"
+                                aria-label={`new password for ${u.name}`}
+                                type="password"
+                                value={passwordInput()}
+                                onInput={(e) =>
+                                  setPasswordInput((e.currentTarget as HTMLInputElement).value)
+                                }
+                                data-testid={`admin-user-rotate-input-${u.id}`}
+                                required
+                              />
+                              <div class="adm-form-grid-actions">
+                                <button
+                                  type="submit"
+                                  class="adm-btn adm-btn--ok"
+                                  disabled={passwordInput() === ""}
+                                  data-testid={`admin-user-rotate-submit-${u.id}`}
+                                >
+                                  Rotate
+                                </button>
+                                <button
+                                  type="button"
+                                  class="adm-btn adm-btn--danger"
+                                  onClick={onCancelRotate}
+                                  data-testid={`admin-user-rotate-cancel-${u.id}`}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          </AdminDetailPanel>
+                        </Show>
+                      </>
+                    )}
+                  </For>
+                </tbody>
+              </AdminTable>
+            </AdminCard>
+          </Show>
+        </div>
+      </Show>
     </div>
   );
 };
