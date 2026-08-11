@@ -255,7 +255,7 @@ describe("scrollback verbs", () => {
     );
   });
 
-  it("sendMessage forwards ctcpTarget to api.sendMessage for a CTCP query — #640", async () => {
+  it("sendMessage forwards the relay descriptor to api.sendMessage for a CTCP query — #640", async () => {
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     vi.mocked(api.sendMessage).mockResolvedValue({
@@ -271,14 +271,43 @@ describe("scrollback verbs", () => {
     const scrollback = await import("../lib/scrollback");
     // #640 — /ping typed in #grappa (source) targeting bob (wire recipient):
     // the source window rides the `channel` arg, the recipient the 5th.
-    await scrollback.sendMessage("freenode", "#grappa", "\x01PING 123\x01", "bob");
-    expect(api.sendMessage).toHaveBeenCalledWith(
-      "tok",
-      "freenode",
-      "#grappa",
-      "\x01PING 123\x01",
-      "bob",
-    );
+    await scrollback.sendMessage("freenode", "#grappa", "\x01PING 123\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
+    expect(api.sendMessage).toHaveBeenCalledWith("tok", "freenode", "#grappa", "\x01PING 123\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
+  });
+
+  // #1225 — the notice relay travels the same pass-through, so the own-send
+  // bookkeeping (submit-snap, cursor advance, divider re-latch) applies to a
+  // /notice echo exactly as it does to a plain send. That cursor advance is
+  // what stops the operator's own notice — an unread-COUNTING kind — from
+  // badging the window they are already looking at.
+  it("sendMessage forwards the relay descriptor for a /notice — #1225", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    vi.mocked(api.sendMessage).mockResolvedValue({
+      id: 3,
+      network: "freenode",
+      channel: "#grappa",
+      server_time: 0,
+      kind: "notice",
+      sender: "alice",
+      body: "heads up",
+      meta: { notice_target: "carol" },
+    });
+    const scrollback = await import("../lib/scrollback");
+    await scrollback.sendMessage("freenode", "#grappa", "heads up", {
+      kind: "notice",
+      target: "carol",
+    });
+    expect(api.sendMessage).toHaveBeenCalledWith("tok", "freenode", "#grappa", "heads up", {
+      kind: "notice",
+      target: "carol",
+    });
   });
 
   // Bucket D — post-success cursor advance. The id from the 201 body

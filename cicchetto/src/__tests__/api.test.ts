@@ -435,13 +435,56 @@ describe("sendMessage ctcp_target wire field (#640)", () => {
     // /ping bob typed in #italia: the URL channel is the SOURCE window, and the
     // wire recipient rides the snake_case `ctcp_target` field (the additive wire
     // token #640 introduces).
-    await api.sendMessage("tok", "azzurra", "#italia", "\x01PING 1\x01", "bob");
+    await api.sendMessage("tok", "azzurra", "#italia", "\x01PING 1\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/networks/azzurra/channels/%23italia/messages",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ body: "\x01PING 1\x01", ctcp_target: "bob" }),
+      }),
+    );
+  });
+
+  // #1225 — the notice relay rides the SAME door with its own snake_case
+  // token. Two fields, never both: the server refuses a POST carrying both.
+  it("a /notice POSTs { body, notice_target } to the SOURCE window URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(okRow, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.sendMessage("tok", "azzurra", "#italia", "heads up", {
+      kind: "notice",
+      target: "carol",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/networks/azzurra/channels/%23italia/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ body: "heads up", notice_target: "carol" }),
+      }),
+    );
+  });
+
+  it("a /notice to a CHANNEL is a normal relay target, not a URL change", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(okRow, { status: 201 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // `/notice #ops text` typed in #italia: the URL stays the SOURCE window
+    // (#italia — where the echo lands), the channel recipient rides the field.
+    await api.sendMessage("tok", "azzurra", "#italia", "rehash in 5", {
+      kind: "notice",
+      target: "#ops",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/networks/azzurra/channels/%23italia/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ body: "rehash in 5", notice_target: "#ops" }),
       }),
     );
   });

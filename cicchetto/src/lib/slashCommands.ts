@@ -113,6 +113,13 @@ export type SlashCommand =
   | { kind: "topic-clear"; channel: string | null }
   | { kind: "nick"; nick: string }
   | { kind: "msg"; target: string; body: string }
+  // #1225 — /notice <target> <text>. Same grammar as /msg; the target may be a
+  // nick OR a channel (`/notice #chan` is legal IRC and is the oper's actual
+  // reach). It is NOT a conversation verb: compose.ts sends it through the
+  // #640 source-window seam, so the echo lands in the window it was typed in
+  // and no query window is opened — which is also why the channel target /msg
+  // refuses is harmless here.
+  | { kind: "notice"; target: string; body: string }
   // #290 — a BARE services command (`/ns`, `/cs`, `/ms`, …) opens the
   // dedicated services console modal, titled by `service`. compose.ts
   // fires `help` on open so the service help wall lands in the modal, not
@@ -507,6 +514,24 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
       );
     }
     return { kind: "msg", target, body };
+  },
+
+  // #1225 — /notice <target> <text>. Deliberately NOT sharing /msg's handler:
+  // they differ on the one rule that matters, the channel-target refusal (#12/
+  // #343). That refusal exists because a PRIVMSG addressed to a channel by
+  // name opens a phantom query window whose own-send never renders; a notice
+  // opens no window at all, so the same guard here would refuse the form opers
+  // use most. Shared grammar, opposite target policy — one handler with a flag
+  // would hide exactly the distinction worth seeing.
+  notice: (verb, rest) => {
+    const sp = rest.search(/\s/);
+    if (rest === "" || sp === -1 || sp === 0) {
+      return err(verb, "/notice requires <target> <text>");
+    }
+    const target = rest.slice(0, sp);
+    const body = rest.slice(sp + 1).trim();
+    if (body === "") return err(verb, "/notice requires message text after the target");
+    return { kind: "notice", target, body };
   },
 
   query: (_verb, rest) => {

@@ -33,7 +33,10 @@ import { asciiFold, nickEquals } from "./nickEquals";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 import { quitAll } from "./quit";
-import { sendMessage as sendPrivmsg } from "./scrollback";
+// #1225 — the seam sends a PRIVMSG to the window OR relays a NOTICE/CTCP to a
+// different recipient while echoing here, so it is named for the window, not
+// for one of the verbs it can carry.
+import { sendMessage as sendWindowMessage } from "./scrollback";
 import { selectedChannel, setSelectedChannel } from "./selection";
 import { openServiceModal } from "./serviceModal";
 import { isServicesSender } from "./servicesSender";
@@ -334,7 +337,7 @@ const drainPaced = async (
     // `??` satisfies noUncheckedIndexedAccess; `sent < total` guarantees a value.
     const { target, line } = plan[sent] ?? { target: "", line: "" };
     try {
-      await sendPrivmsg(slug, target, wireBody(line, action));
+      await sendWindowMessage(slug, target, wireBody(line, action));
       sent += 1;
       retries = 0;
       onProgress(sent);
@@ -995,7 +998,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // non-ACTION gate). The parser upper-cases the verb; guard
           // case-insensitively regardless.
           if (cmd.verb.toUpperCase() === "ACTION") {
-            await sendPrivmsg(networkSlug, cmd.target, ctcpFrame(cmd.verb, cmd.args));
+            await sendWindowMessage(networkSlug, cmd.target, ctcpFrame(cmd.verb, cmd.args));
             result = { ok: true };
             break;
           }
@@ -1042,6 +1045,26 @@ const exports_ = identityScopedStore((onIdentityChange) => {
             verb: "PING",
             args: String(sentAtMs),
             sentAtMs,
+          });
+          result = { ok: true };
+          break;
+        }
+        // #1225 — /notice <target> <text>. Routed like a CTCP query, not like
+        // /msg: the echo persists in the window it was TYPED in (`channelName`)
+        // and no window is opened for the recipient, because a NOTICE opens
+        // none by convention (RFC 2812 §3.3.2 — it is the verb you must not
+        // reply to) and every client the operators come from echoes it where
+        // they are looking. That is also why a CHANNEL recipient is fine here
+        // while /msg refuses one: /msg's refusal exists to stop a phantom query
+        // window, and this path opens no window at all.
+        //
+        // Single await, no #666 pacing plan: a slash command is one line, so
+        // there is no multi-send to pace. A throttled send surfaces its 429 the
+        // same way a lone /msg does.
+        case "notice": {
+          await sendWindowMessage(networkSlug, channelName, cmd.body, {
+            kind: "notice",
+            target: cmd.target,
           });
           result = { ok: true };
           break;

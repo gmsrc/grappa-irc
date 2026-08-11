@@ -4,6 +4,7 @@ import {
   countMessagesAfter,
   listMessages,
   listMessagesAfter,
+  type MessageRelay,
   type ScrollbackMessage,
 } from "./api";
 import { token } from "./auth";
@@ -901,17 +902,21 @@ const exports = identityScopedStore((onIdentityChange) => {
     }
   };
 
-  // #640 — `ctcpTarget` (optional) makes this a CTCP QUERY send: `name` is the
-  // SOURCE window the echo renders in (where the operator typed /ctcp or /ping),
-  // and `ctcpTarget` is the wire recipient. All the own-send bookkeeping
-  // (submit-snap, cursor advance, divider re-latch) is keyed on `name` = the
-  // source window — exactly where the echo + RTT land — so it is byte-identical
-  // to a plain send once `name` is the source. Absent, it is a normal PRIVMSG.
+  // #640/#1225 — `relay` (optional) makes this a send whose WIRE recipient is
+  // someone other than the window: a CTCP QUERY (/ctcp, /ping) or a NOTICE
+  // (/notice). `name` is the SOURCE window the echo renders in (where the
+  // operator typed the command), `relay.target` is the wire recipient. All the
+  // own-send bookkeeping (submit-snap, cursor advance, divider re-latch) is
+  // keyed on `name` = the source window — exactly where the echo lands — so it
+  // is byte-identical to a plain send once `name` is the source. That cursor
+  // advance is also what keeps the operator's OWN notice from badging them:
+  // `notice` is an unread-counting content kind, and the echo is a real row.
+  // Absent, it is a normal PRIVMSG to the window itself.
   const sendMessage = async (
     slug: string,
     name: string,
     body: string,
-    ctcpTarget?: string,
+    relay?: MessageRelay,
   ): Promise<void> => {
     const t = token();
     if (!t) return;
@@ -952,7 +957,7 @@ const exports = identityScopedStore((onIdentityChange) => {
     // (networks ↔ selection). Three-line inline body + the doc here
     // is cheaper than hoisting `setCursorIfAdvances` to a leaf module
     // for a single second caller.
-    const row = await apiSendMessage(t, slug, name, body, ctcpTarget);
+    const row = await apiSendMessage(t, slug, name, body, relay);
     // #788 — the cursor POST below was already unreachable past a rotation, but
     // only by accident: the store purge empties the pane, `hasRenderedRow`
     // goes false, and the anti-poison gate declines. That is a guarantee owed

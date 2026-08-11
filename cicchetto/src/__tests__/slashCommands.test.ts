@@ -336,6 +336,68 @@ describe("parseSlash — /nick", () => {
   });
 });
 
+// #1225 — /notice <target> <text>. Same grammar as /msg, one deliberate
+// divergence: the target may be a CHANNEL. `/notice #chan text` is legal IRC
+// and is the form an operator actually reaches for, whereas /msg refuses a
+// channel because a PRIVMSG addressed by name opened a phantom query window.
+// A notice opens no window at all, so the reason for /msg's refusal does not
+// exist here.
+describe("parseSlash — /notice (#1225)", () => {
+  it("/notice <nick> <body>", () => {
+    expect(parseSlash("/notice alice heads up")).toEqual({
+      kind: "notice",
+      target: "alice",
+      body: "heads up",
+    });
+  });
+
+  it.each(["#foo", "&local", "!12345chan", "+modeless"])(
+    "/notice to a channel (%s) is ACCEPTED, unlike /msg",
+    (chan) => {
+      expect(parseSlash(`/notice ${chan} rehash in 5`)).toEqual({
+        kind: "notice",
+        target: chan,
+        body: "rehash in 5",
+      });
+    },
+  );
+
+  it("/notice preserves interior spacing of the body", () => {
+    expect(parseSlash("/notice bob ciao  a   tutti")).toEqual({
+      kind: "notice",
+      target: "bob",
+      body: "ciao  a   tutti",
+    });
+  });
+
+  // Pin the MESSAGE, not just the error shape: an unregistered verb also
+  // yields {kind:"error", verb:"notice"} ("unknown command: /notice"), so a
+  // shape-only assertion passes with the feature absent.
+  it("/notice missing target → usage error, not unknown-command", () => {
+    const r = parseSlash("/notice");
+    expect(r).toMatchObject({ kind: "error", verb: "notice" });
+    const { message } = r as { message: string };
+    expect(message).not.toMatch(/unknown command/i);
+    expect(message).toMatch(/\/notice requires/i);
+  });
+
+  it("/notice missing body → usage error, not unknown-command", () => {
+    const r = parseSlash("/notice alice");
+    expect(r).toMatchObject({ kind: "error", verb: "notice" });
+    const { message } = r as { message: string };
+    expect(message).not.toMatch(/unknown command/i);
+    expect(message).toMatch(/text|body|message/i);
+  });
+
+  // Alias parity (issue point 3): `/n` is ALREADY /names (#122). A notice
+  // alias would silently steal a verb that has shipped for a year, so /notice
+  // ships without a short form. Pin it — the collision is invisible until
+  // someone's /n stops listing members.
+  it("/n stays /names — no alias collision with /notice", () => {
+    expect(parseSlash("/n #grappa")).toEqual({ kind: "names", target: "#grappa" });
+  });
+});
+
 describe("parseSlash — /msg", () => {
   it("/msg <target> <body>", () => {
     expect(parseSlash("/msg alice ciao!")).toEqual({

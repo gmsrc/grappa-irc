@@ -70,10 +70,8 @@ export const sendCtcpQuery = async (query: CtcpQuery): Promise<void> => {
     );
   }
 
-  await sendMessage(
-    query.networkSlug,
-    query.sourceChannel,
-    ctcpFrame(query.verb, query.args),
-    query.targetNick,
-  );
+  await sendMessage(query.networkSlug, query.sourceChannel, ctcpFrame(query.verb, query.args), {
+    kind: "ctcp",
+    target: query.targetNick,
+  });
 };

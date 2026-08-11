@@ -41,7 +41,10 @@ describe("sendCtcpQuery — #1192", () => {
 
     await sendCtcpQuery({ ...QUERY, verb: "VERSION", args: "" });
 
-    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01VERSION\x01", "bob");
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01VERSION\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
   });
 
   // Verb-agnostic means verb-agnostic: PING is the ONLY verb the seam correlates,
@@ -67,12 +70,10 @@ describe("sendCtcpQuery — #1192", () => {
 
     await sendCtcpQuery({ ...QUERY, verb: "CLIENTINFO", args: "PING TIME" });
 
-    expect(sb.sendMessage).toHaveBeenCalledWith(
-      "freenode",
-      "#a",
-      "\x01CLIENTINFO PING TIME\x01",
-      "bob",
-    );
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01CLIENTINFO PING TIME\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
   });
 
   // PING correlates. The token is the caller's `args` — opaque to this seam and
@@ -113,7 +114,10 @@ describe("sendCtcpQuery — #1192", () => {
 
     await sendCtcpQuery({ ...QUERY, verb: "PING", args: "" });
 
-    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01PING\x01", "bob");
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01PING\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
     expect(pc.registerPing).toHaveBeenCalledWith(
       1,
       "bob",

@@ -480,6 +480,77 @@ describe("ScrollbackPane", () => {
     expect(lines[1]?.textContent ?? "").not.toContain("\x01");
   });
 
+  it("renders an own /notice self-echo in the SOURCE window, recipient read from meta — #1225", () => {
+    // #1225 — the operator's own /notice self-echoes as a :notice row keyed to
+    // the SOURCE window (msg.channel = "#grappa"), with the wire recipient in
+    // meta.notice_target. The render must name the RECIPIENT and mark the row
+    // outbound; reading the routing key instead would print the window the
+    // operator is already looking at. Fixture keeps channel DISTINCT from
+    // target so that conflation cannot pass.
+    //
+    // The second row is the inbound twin with the SAME sender and window: it
+    // pins that the two directions render differently. Without it, a render
+    // that ignored notice_target entirely would still satisfy the first
+    // assertion's "-carol-"-free text.
+    const notices: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa", // SOURCE window (where /notice was typed)
+        server_time: 1,
+        kind: "notice",
+        sender: "alice", // us
+        body: "rehash in 5",
+        meta: { notice_target: "carol" }, // wire recipient
+      },
+      {
+        id: 2,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 2,
+        kind: "notice",
+        sender: "carol", // a peer's notice TO us — no notice_target
+        body: "ack",
+        meta: {},
+      },
+    ];
+    setScrollback({ "freenode #grappa": notices });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    const lines = screen.getAllByTestId("scrollback-line");
+    expect(lines).toHaveLength(2);
+
+    expect(lines[0]?.dataset.kind).toBe("notice");
+    // Outbound: arrow + the RECIPIENT, never the source window.
+    expect(lines[0]).toHaveTextContent("→ -carol- rehash in 5");
+    expect(lines[0]?.textContent ?? "").not.toContain("#grappa");
+    expect(lines[0]?.textContent ?? "").not.toContain("alice");
+
+    // Inbound stays the untouched `-sender- body` shape — no arrow.
+    expect(lines[1]).toHaveTextContent("-carol- ack");
+    expect(lines[1]?.textContent ?? "").not.toContain("→");
+  });
+
+  it("renders a /notice echo to a CHANNEL recipient — #1225", () => {
+    // `/notice #ops text` is legal IRC and the form an operator reaches for;
+    // the recipient being channel-shaped changes nothing about the render.
+    const notices: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "dave", // source window: a query
+        server_time: 1,
+        kind: "notice",
+        sender: "alice",
+        body: "rehash in 5",
+        meta: { notice_target: "#ops" },
+      },
+    ];
+    setScrollback({ "freenode dave": notices });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="dave" kind="query" />);
+    const lines = screen.getAllByTestId("scrollback-line");
+    expect(lines[0]).toHaveTextContent("→ -#ops- rehash in 5");
+  });
+
   it("falls back to the routing key for a pre-#640 echo with no ctcp_target", () => {
     // Backward-compat: rows persisted before #640 were keyed to the TARGET
     // (msg.channel) and carry no meta.ctcp_target. The render falls back to

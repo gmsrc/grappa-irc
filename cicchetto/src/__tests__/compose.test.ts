@@ -1168,10 +1168,52 @@ describe("compose submit — slash command dispatch", () => {
     expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01ACTION wavesPING x\x01");
   });
 
+  // #1225 — /notice routes like a CTCP query, NOT like /msg: the send is keyed
+  // to the SOURCE window (the submit's channelName, "#a") with the recipient in
+  // the relay arg, so no query window is opened and the echo lands where the
+  // operator typed. Asserting the exact call is what separates the two: routing
+  // it like /msg would put "carol" in the channel slot.
+  it("/notice <nick> <text> sends to the SOURCE window with a notice relay (#1225)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+    const qw = await import("../lib/queryWindows");
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/notice carol heads up");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "heads up", {
+      kind: "notice",
+      target: "carol",
+    });
+    // A notice opens no window for the recipient — the /msg door's job, not this one.
+    expect(qw.openQueryWindowState).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("/notice #chan <text> keeps the CHANNEL recipient in the relay, not the URL (#1225)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/notice #ops rehash in 5");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "rehash in 5", {
+      kind: "notice",
+      target: "#ops",
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
   // #591/#640 — /ctcp <target> <verb> builds a single \x01VERB\x01 frame. #640:
   // a CTCP QUERY is a control-surface probe, so the echo is keyed to the SOURCE
   // window (the submit's channelName, "#a") and the wire recipient ("bob")
-  // rides the 4th `ctcpTarget` arg — NOT sent to the target as a DM (which
+  // rides the 4th `relay` arg ({kind:"ctcp"}) — NOT sent to the target as a DM (which
   // spawned the phantom window). No args → no trailing space inside the frame.
   it("/ctcp <target> <verb> echoes in the SOURCE window with ctcpTarget (#591/#640)", async () => {
     localStorage.setItem("grappa-token", "tok");
@@ -1185,7 +1227,10 @@ describe("compose submit — slash command dispatch", () => {
 
     // source window "#a", frame, ctcpTarget "bob" — the recipient is NOT the
     // send channel anymore (that is the whole #640 fix).
-    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01VERSION\x01", "bob");
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01VERSION\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
     expect(result).toEqual({ ok: true });
   });
 
@@ -1214,7 +1259,10 @@ describe("compose submit — slash command dispatch", () => {
     compose.setDraft(k, "/ctcp bob ping");
     const result = await compose.submit(k, "freenode", "#a");
 
-    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01PING\x01", "bob");
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01PING\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
     expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "", k, "#a", 1706743200000);
     expect(result).toEqual({ ok: true });
 
@@ -1260,14 +1308,12 @@ describe("compose submit — slash command dispatch", () => {
     const result = await compose.submit(k, "freenode", "#a");
 
     // #640 — CTCP PING frame with the timestamp token, echoed in the SOURCE
-    // window ("#a") with the wire recipient ("bob") in the 4th ctcpTarget arg —
+    // window ("#a") with the wire recipient ("bob") in the 4th relay arg —
     // never a DM to the target (no phantom window).
-    expect(sb.sendMessage).toHaveBeenCalledWith(
-      "freenode",
-      "#a",
-      "\x01PING 1706743200000\x01",
-      "bob",
-    );
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01PING 1706743200000\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
     // Pending registered: (networkId, nick, token, sourceKey, sourceChannel, sentAtMs).
     expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "1706743200000", k, "#a", 1706743200000);
     expect(result).toEqual({ ok: true });
@@ -1309,13 +1355,11 @@ describe("compose submit — slash command dispatch", () => {
 
     // THE RACE: with the send still unresolved, a reply arriving now MUST find a
     // registered pending entry. Pre-fix (register AFTER the await) this is 0 calls.
-    // #640 — the send targets the SOURCE window ("#a") with ctcpTarget "bob".
-    expect(sb.sendMessage).toHaveBeenCalledWith(
-      "freenode",
-      "#a",
-      "\x01PING 1706743200000\x01",
-      "bob",
-    );
+    // #640 — the send targets the SOURCE window ("#a"), relaying to "bob".
+    expect(sb.sendMessage).toHaveBeenCalledWith("freenode", "#a", "\x01PING 1706743200000\x01", {
+      kind: "ctcp",
+      target: "bob",
+    });
     expect(pc.registerPing).toHaveBeenCalledWith(1, "bob", "1706743200000", k, "#a", 1706743200000);
 
     releaseSend();

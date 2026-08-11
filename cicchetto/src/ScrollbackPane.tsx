@@ -748,6 +748,27 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       // the sender (a query's outbound args mean something different — see the
       // privmsg arm — so the two are deliberately NOT a shared helper). Plain
       // control-surface text (no mIRC emphasis), like the numeric/raw surfaces.
+      // #1225 — the operator's OWN outbound /notice. The server keys the echo
+      // to the SOURCE window it was typed in (a NOTICE opens no window) and
+      // puts the wire recipient in meta.notice_target, so the recipient is read
+      // OFF the message: the routing key here is the window the operator is
+      // already looking at. Its ABSENCE is what marks a :notice row inbound —
+      // the discriminator is direction, not sender, so this stays correct for a
+      // notice the operator sent from ANOTHER device (same nick, still ours).
+      // Rendered `→ -recipient- body`: the arrow is the outbound mark the CTCP
+      // echo above already uses, the `-nick-` brackets keep a notice looking
+      // like a notice. Body goes through MircBody like the inbound arm — a
+      // notice is content, not a control surface, so colours and emphasis are
+      // the sender's to choose.
+      const noticeTarget = msg.meta.notice_target;
+      if (typeof noticeTarget === "string") {
+        return (
+          <span class="scrollback-body">
+            → -{noticeTarget}-{" "}
+            <MircBody body={msg.body ?? ""} emphasis onChannelClick={onChannelClick} />
+          </span>
+        );
+      }
       const noticeCtcpVerb = msg.meta.ctcp_verb;
       if (typeof noticeCtcpVerb === "string") {
         const verb = stripCtcpDelim(noticeCtcpVerb);

@@ -2345,14 +2345,30 @@ export async function countMessagesAfter(
 // (NOT a query window for the recipient) and relays the frame to `ctcpTarget`.
 // Absent (a plain PRIVMSG) the POST body is unchanged, so every non-CTCP
 // caller is byte-identical to the pre-#640 request.
+// #640/#1225 — a send whose WIRE recipient differs from the window it renders
+// in. `channelName` (the URL) is always the SOURCE window the echo lands in;
+// this names who the frame actually goes to, and with which verb. Absent = a
+// plain PRIVMSG to the window itself.
+//
+// A union rather than two optional target params: `ctcp_target` and
+// `notice_target` are mutually exclusive on the wire (the server answers 400 to
+// a POST carrying both), and a union is how that gets said in the type system
+// instead of in a comment nobody reads.
+export type MessageRelay = { kind: "ctcp" | "notice"; target: string };
+
 export async function sendMessage(
   token: string,
   networkSlug: string,
   channelName: string,
   body: string,
-  ctcpTarget?: string,
+  relay?: MessageRelay,
 ): Promise<ScrollbackMessage> {
-  const payload = ctcpTarget === undefined ? { body } : { body, ctcp_target: ctcpTarget };
+  const payload =
+    relay === undefined
+      ? { body }
+      : relay.kind === "ctcp"
+        ? { body, ctcp_target: relay.target }
+        : { body, notice_target: relay.target };
   const res = await fetch(
     `/networks/${encodeURIComponent(networkSlug)}/channels/${encodeURIComponent(channelName)}/messages`,
     {
