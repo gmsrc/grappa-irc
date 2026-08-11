@@ -39001,3 +39001,81 @@ above a dead wire and nothing would have said so.
 at all. The narrowing is safe under either answer — that is part of why it
 is the right call — but it means the display-only path on bahamut is
 reasoned, not witnessed.
+
+---
+
+## 2026-08-11 — #1158 slice A: the account door of a packaged release, and why it lives on `bin/grappa` itself
+
+An operator on `ghcr.io/vjt/grappa:latest` ran the obvious thing and got
+`ERROR: Unknown command create-user`. That is not a typo on their side:
+a release ships no Mix, so every `grappa.*` operator task that seeds a
+source install is simply absent, `Grappa.Release` exposed only
+`migrate/0`, `rollback/2` and `seed_themes/0`, and the one documented
+way to a first account was an IEx remote shell with `Grappa.Accounts`
+module names typed out of the source tree. vjt's bar for 1.0 is that
+creating users be flawless, and his acceptance criterion is literal:
+**on the published image, create a first admin and log in.**
+
+**The verbs live in the release, not in a substrate wrapper.** The
+tempting fix is to teach the Docker entrypoint (and the `.deb`'s
+`/usr/bin/grappa`) to translate `create-user` into an `eval`. It was
+rejected for coverage, not for taste: `docker exec <ctr> bin/grappa
+create-user` never touches the entrypoint, and neither does the bastille
+jail's `.../rel/grappa/bin/grappa`, which is what m42 actually runs — so
+that shape fixes two doors of four and leaves the exact command in the
+field report still broken. `bin/grappa` is the one file all four
+execute. So `infra/release/grappa.sh` is installed OVER the generated
+boot script by a `mix release` step, which moves the generated one to
+`bin/grappa-release`. The step refuses, loudly, if the launcher is
+already the dispatcher — that would rename the dispatcher onto itself
+and make it exec itself: a boot loop on every substrate at once, on the
+next `daemon`.
+
+**Nothing the operator types is ever interpolated into Elixir source.**
+The dispatcher rewrites a known verb into a FIXED expression,
+`eval 'Grappa.Release.cli(System.argv())'`, and the operator's words
+travel as argv — the generated script ends with `--eval "$script" --
+"$@"`, so `System.argv/0` reads them back. A password with a quote in it
+is then just an argument. Building the expression by string
+interpolation would have been an eval-injection door running as root,
+and the quoting bug is the likelier of the two to be hit first.
+
+**A password is not a flag by default.** Without `--password` the door
+prompts and reads stdin with echo suppressed, so the secret misses both
+shell history and the process table. `--password` stays for scripted
+installs — parity with the mix task, whose surface this deliberately
+mirrors.
+
+**`add_network/3` is a context verb, not a CLI helper.** vjt's ruling
+names the domain verbs `add_network` / `remove_network`, on the USER;
+the per-user admin page (slice B) consumes the same function. It also
+closes a hole the issue did not name: a user plus a credential still
+cannot connect, because `SessionPlan.resolve/1` picks a server with
+`pick_server!/1`, which raises when the network owns no ENABLED one. So
+`add_network/3` finds-or-creates the network, ensures the given server,
+and REFUSES with `{:error, :no_enabled_server}` rather than write a
+credential that reads as access in every listing and fails only at spawn
+time. The dialability test is `pick_server!/1` itself, not a re-derived
+predicate, so the two cannot drift. It is deliberately NOT atomic across
+the three writes: a network and a server are shared per-deployment infra
+that outlive any one binding (#105), so a failed credential leaves them
+for the retry instead of rolling back rows another user may hold.
+
+**One grammar, two flavors.** The release verbs take the mix tasks'
+flags, spelled identically, because an operator moving between a dev
+checkout and a release box should not learn two CLIs. That is gated, not
+hoped for: the switch tables are compared across the two sources, and
+the `--auth` table, the `host:port` split and the autojoin split now
+exist ONCE — in `Grappa.Release.CLI`, with
+`Mix.Tasks.Grappa.OptionParsing` as the thin `Mix.raise` face over them.
+A release cannot call anything under `Mix`, so the shared half had to
+move to the release side, not the other way round. The entities are
+positional (`add-network vjt azzurra`) rather than `--user`/`--network`:
+that is the spelling vjt asked for, and it is the one divergence from
+the mix surface, named rather than smoothed over.
+
+**What this slice does not do.** It does not seed a user from
+`infra/docker/deploy.sh`'s release install path — the door now exists,
+wiring `--seed-user` into that installer is a separate change with its
+own test. It does not touch the admin console: the per-user page and the
+removal of the Credentials tab are slice B, on a disjoint substrate.

@@ -112,6 +112,45 @@ The Elixir entry points for live-state verbs live in
 dispatcher is thin, the logic + text formatting is testable Elixir
 that survives a schema field rename.
 
+### The account door on a PACKAGED release (#1158)
+
+Everything above is the SOURCE flavor: `bin/grappa` in a checkout is a
+host-side dispatcher whose boot verbs shell out to mix tasks. A packaged
+release ships no mix and no checkout, so on the published Docker image,
+the bastille jail, the systemd host and the `.deb`/AUR install those
+verbs do not exist — the file called `bin/grappa` there is a different
+program.
+
+That program now carries the account verbs itself
+(`infra/release/grappa.sh`, installed over the generated boot script by
+the `install_operator_cli/1` release step, which moves the generated one
+to `bin/grappa-release`):
+
+```
+grappa create-user NAME [--admin] [--password PW]
+grappa add-network USER NETWORK --server HOST:PORT --nick NICK --auth METHOD [...]
+grappa remove-network USER NETWORK
+grappa help                          # the account verbs' flags
+```
+
+Reached identically from every door — `docker run <image> create-user
+vjt --admin`, `docker exec <ctr> bin/grappa create-user vjt`, `sudo
+grappa create-user vjt` on a packaged host, and the release path
+directly in the jail. No running node is required: the verb loads the
+app, starts the vault and opens the database itself, which is what makes
+it the FIRST-run door. Without `--password` the password is read from
+the terminal rather than argv, so it stays out of shell history and the
+process table.
+
+The flags are the mix tasks' flags, spelled the same and gated against
+them by `test/grappa/release/cli_flag_parity_test.exs`; the entities are
+positional (`add-network vjt azzurra`) rather than `--user`/`--network`.
+Underneath, all three call the same context functions the mix tasks and
+the `/admin` REST surface call — `Grappa.Networks.add_network/3` is the
+composition that creates the network + server when needed and REFUSES to
+write access to a network with no enabled server, because a credential
+alone is not a connectable account.
+
 ### Per-server outbound source address (`--source`)
 
 `bind-network` and `add-server` accept `--source <ip>` to pin the

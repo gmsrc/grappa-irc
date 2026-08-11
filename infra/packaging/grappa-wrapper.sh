@@ -11,6 +11,9 @@
 #   sudo grappa migrate          run pending Ecto migrations (no mix needed)
 #   sudo grappa seed-themes      materialise the built-in theme gallery
 #   sudo grappa gen-secrets      (re)generate missing secrets in the env file
+#   sudo grappa create-user      create an account (--admin for the first one)
+#   sudo grappa add-network      give an account access to a network
+#   sudo grappa remove-network   take it away again
 #   sudo grappa remote           attach an IEx remote shell to the running node
 #   sudo grappa version          print the release version
 #   sudo grappa eval '<expr>'    evaluate an Elixir expression in release ctx
@@ -18,6 +21,11 @@
 # `migrate` is sugar for `eval 'Grappa.Release.migrate()'` — the same
 # Ecto.Migrator the other deploy paths call, reachable WITHOUT mix.
 # `seed-themes` is its twin over `Grappa.Release.seed_themes()`.
+#
+# The account verbs are NOT translated here (#1158): they are handled by
+# the release's own `bin/grappa` (infra/release/grappa.sh), which this
+# wrapper execs. One verb table, so `docker exec`, the jail and the
+# systemd host get the same door as this one — see docs/OPERATIONS.md.
 
 set -euo pipefail
 

@@ -152,20 +152,28 @@ the service (it cannot start until you set a real `PHX_HOST`).
 
 ## First user
 
-Once the service is running, attach to the live node and create it there
-(the Repo is up on the running node):
-
 ```sh
-sudo grappa remote
-# in the IEx prompt:
-Grappa.Accounts.create_user(%{name: "you", password: "change-me"})
+sudo grappa create-user you --admin
+# password for you: (typed, not echoed)
 ```
 
-> A dedicated `grappa create-user` subcommand is a planned follow-up; it
-> needs a release-callable entry point (the existing `grappa.create_user`
-> is a mix task, unavailable on a packaged host). Until then, use the
-> `remote` path above. It shares the release remote-shell code path with
-> `grappa migrate`, so it is covered by the same proof (see Caveat).
+No running node needed — this is the first-run door, so it opens the
+database itself (#1158). `--admin` grants the operator bit in the same
+command; without a password flag the password is read from the terminal,
+so it stays out of shell history and out of the process table.
+
+Give that account a network the same way:
+
+```sh
+sudo grappa add-network you azzurra \
+  --server irc.azzurra.chat:6697 --nick you --auth sasl --autojoin '#grappa'
+sudo grappa remove-network you azzurra   # the undo
+```
+
+An account alone cannot connect: a network needs at least one enabled
+server, which is why `add-network` creates the network and the server
+when they do not exist yet, and refuses rather than write access that
+would fail at spawn time.
 
 ## Managing
 
@@ -209,6 +217,12 @@ ERTS the release `eval`/`remote`/`rpc` boot variant crashes at kernel
 start (a `persistent_term`/`code_server` badarg — even `eval '1 + 1'`),
 and sidesteps it with `mix ecto.migrate`. A packaged host has no mix, so
 `grappa migrate` **must** work through `eval` on the **packaged** ERTS.
+
+Since #1158 the account verbs (`create-user`, `add-network`,
+`remove-network`) ride the same `eval`, so they inherit this caveat
+whole: they are the FIRST thing a fresh install runs, and on a substrate
+where `eval` is broken they fail the same way `migrate` does, for the
+same reason.
 
 R1's job is to prove exactly that on a package built by `build.sh`
 (bundled ERTS, not asdf): install the `.deb` in a clean container, run
