@@ -40,6 +40,28 @@ async function openUsersTab(page: import("@playwright/test").Page): Promise<void
   await expect(page.getByTestId("admin-users-table")).toBeVisible({ timeout: 10_000 });
 }
 
+// #1158 — creating a user LANDS on that user's page, deliberately: a fresh
+// account is useless until it has a network, and the page is where networks
+// are added. That is what replaced "now go to the Credentials tab and pick
+// this user out of a select". So every scenario that wants the LIST has to
+// walk back through the door the operator walks back through.
+async function createUserAndReturnToList(
+  page: import("@playwright/test").Page,
+  name: string,
+): Promise<void> {
+  await page.getByTestId("admin-users-create-name").fill(name);
+  await page.getByTestId("admin-users-create-password").fill("test-password-not-secret");
+  await page.getByTestId("admin-users-create-submit").click();
+
+  // The landing is part of the contract, so it is asserted rather than
+  // waited out: a create that silently stayed on the list would otherwise
+  // pass here and only fail later, in a step that is about something else.
+  await expect(page.getByTestId("admin-user-page-name")).toHaveText(name, { timeout: 10_000 });
+
+  await page.getByTestId("admin-user-page-back").click();
+  await expect(page.getByTestId("admin-users-table")).toBeVisible({ timeout: 10_000 });
+}
+
 async function deleteUserBestEffort(token: string, id: string): Promise<void> {
   try {
     await fetch(`${GRAPPA_BASE_URL}/admin/users/${id}`, {
@@ -60,9 +82,7 @@ test("admin lists users, creates a new user, sees the row land", async ({ page }
     await adminLogin(page, admin);
     await openUsersTab(page);
 
-    await page.getByTestId("admin-users-create-name").fill(name);
-    await page.getByTestId("admin-users-create-password").fill("test-password-not-secret");
-    await page.getByTestId("admin-users-create-submit").click();
+    await createUserAndReturnToList(page, name);
 
     // The new user appears in the table on refetch.
     const row = page.locator(`tr[data-testid^='admin-user-row-']`).filter({ hasText: name });
@@ -87,9 +107,7 @@ test("admin promotes a created user, badge flips to yes", async ({ page }) => {
     await adminLogin(page, admin);
     await openUsersTab(page);
 
-    await page.getByTestId("admin-users-create-name").fill(name);
-    await page.getByTestId("admin-users-create-password").fill("test-password-not-secret");
-    await page.getByTestId("admin-users-create-submit").click();
+    await createUserAndReturnToList(page, name);
 
     const row = page.locator(`tr[data-testid^='admin-user-row-']`).filter({ hasText: name });
     await expect(row).toBeVisible({ timeout: 10_000 });
@@ -143,9 +161,7 @@ test("admin rotates a created user's password via inline form", async ({ page })
     await adminLogin(page, admin);
     await openUsersTab(page);
 
-    await page.getByTestId("admin-users-create-name").fill(name);
-    await page.getByTestId("admin-users-create-password").fill("test-password-not-secret");
-    await page.getByTestId("admin-users-create-submit").click();
+    await createUserAndReturnToList(page, name);
 
     const row = page.locator(`tr[data-testid^='admin-user-row-']`).filter({ hasText: name });
     await expect(row).toBeVisible({ timeout: 10_000 });
@@ -178,9 +194,7 @@ test("admin deletes a created user via inline-confirm — row spliced", async ({
   await adminLogin(page, admin);
   await openUsersTab(page);
 
-  await page.getByTestId("admin-users-create-name").fill(name);
-  await page.getByTestId("admin-users-create-password").fill("test-password-not-secret");
-  await page.getByTestId("admin-users-create-submit").click();
+  await createUserAndReturnToList(page, name);
 
   const row = page.locator(`tr[data-testid^='admin-user-row-']`).filter({ hasText: name });
   await expect(row).toBeVisible({ timeout: 10_000 });

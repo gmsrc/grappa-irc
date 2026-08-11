@@ -68,7 +68,11 @@ const ADMIN_TABS = [
   "session_log",
   "networks",
   "vhosts",
-  "credentials",
+  // #1158 — no `credentials` entry: the Credentials tab is gone as an
+  // operator surface, its job moved onto the per-user page behind Users.
+  // The claim below is "no admin tab pans sideways", so this list has to be
+  // the tabs that EXIST — a stale name here reads as a 3-minute tap timeout,
+  // not as a missing tab.
   "users",
   "settings",
   "debug",
