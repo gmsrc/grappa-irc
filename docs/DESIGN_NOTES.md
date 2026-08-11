@@ -39079,3 +39079,68 @@ the mix surface, named rather than smoothed over.
 wiring `--seed-user` into that installer is a separate change with its
 own test. It does not touch the admin console: the per-user page and the
 removal of the Credentials tab are slice B, on a disjoint substrate.
+
+---
+
+## 2026-08-11 — #1158 slice B: the user is the page, and the Credentials tab is gone
+
+The admin console managed a user's network access from a tab that listed
+every `(user, network)` binding in the database behind a form whose first
+two questions were "which user" and "which network". vjt's ruling
+(`#1158`, 2026-08-11): the operator's object is the USER. Adding a network
+is a `+`, removing one is a button, never a checkbox list — a checkbox
+cannot carry the nick, SASL and autojoin that adding a network requires.
+So the tab retires and a per-user page takes the work.
+
+**No server change, and no new endpoint.** Two writes, client-driven; the
+composite create-user-and-bind POST was explicitly declined. `POST
+/admin/users` then `POST /admin/credentials`, both already there.
+
+**The page is not a route, on purpose.** The admin console has no routing
+at all and cic has no per-entity page anywhere. Whether one user deserves
+a shareable URL is still open with vjt; adding a route later is additive,
+whereas guessing now would have invented the console's first deep link as
+a side effect of a credentials cleanup. The Users tab owns a signal and
+swaps its list for the page — never both at once, because two surfaces
+onto the same rows is exactly the state being removed.
+
+**Creating an account lands on its page.** That is what makes "create a
+user and give it a network" one flow. Before, the operator created the
+account in Users and then went to Credentials to find their own new user
+in a select.
+
+**`session_action` is per-ROW state, not a toast** (vjt: a toast throws
+four values away). Two things were measured while wiring it:
+
+* the retired tab surfaced only `left_alone` / `stopped`, and only for the
+  PATCH. Its bind handler discarded the POST reply, so `spawned` /
+  `not_spawned` — the #1163 outcome, the whole reason a bind is
+  interesting — had no operator surface at all;
+* `session_error`, which names the refusal behind `not_spawned`, was on
+  the wire and absent from cic's `AdminCredential` type, so it could not
+  be read even deliberately. Rendering `not_spawned` without it would be
+  a worse lie than rendering nothing, so the type declares it now, off the
+  codegen-emitted closed set.
+
+**The owner filter lives at the call site, and the one that pretended to
+exist is gone.** `adminListCredentials` accepted `{user_id, network_id}`
+and encoded them into the query string; `CredentialsController.index/2`
+matches `_` on params and answers the whole table. A caller asking for one
+user's rows got everybody's with nothing in the response to say so — and
+the per-user page is precisely the caller that would have reached for it
+first. The argument was removed rather than kept as a trap; a real
+server-side filter is a server change and not this slice.
+
+**Nothing was lost by deleting the tab, and that was measured, not
+assumed.** `GET /admin/credentials` has been scoped `user_id IS NOT NULL`
+since #211, so the tab never rendered a visitor-owned row; visitor
+sessions have been rows in the unified Sessions tab since #1157. The
+ruling's fourth point — surface visitor networks on a visitors page —
+rests on a premise about credential SETTINGS (nick, SASL, autojoin), which
+are indeed surfaced nowhere, and there is no visitors page to put them on.
+That half is parked pending vjt rather than guessed at.
+
+The #410 auth-method LOCK moved to the new page's suite instead of dying
+with the file it happened to live in: it pins the dropdown to the
+codegen-emitted closed set in array order, which is not a property of
+where the dropdown sits.
