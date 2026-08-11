@@ -3939,9 +3939,9 @@ defmodule Grappa.Session.ServerTest do
       # A NOTICE is plain text, so it fragments exactly like a PRIVMSG — the
       # alternative is the ircd truncating the tail and the operator never
       # learning which words were lost.
-      body = String.duplicate("parola ", 120) |> String.trim()
+      body = String.trim(String.duplicate("parola ", 120))
 
-      assert {:ok, _last} =
+      assert {:ok, _} =
                Session.send_notice({:user, user.id}, network.id, "#sniffo", "carol", body)
 
       assert {:ok, _} =
