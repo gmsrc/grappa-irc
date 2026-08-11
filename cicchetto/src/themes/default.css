@@ -5439,6 +5439,32 @@ html.resize-dragging * {
   overflow-wrap: anywhere;
 }
 
+/* #1223 — two columns stop paying when the panel is narrow. The label
+   track is `auto`, so the LONGEST label sizes it (`CONNECTION`, `LAST
+   EVENT`, uppercase with 0.1em tracking); add the 16px column gap and
+   the panel's own chrome and the value track is left with well under
+   half a phone screen, which wrapped an `addr:port` upstream over three
+   lines and an ISO-8601 timestamp over five on a 393px-class viewport.
+
+   Container, not viewport: `.adm-detail-body` already declares
+   `container-type: inline-size`, and it is the box that actually
+   constrains this list — nested in a card, in a tab body, beside a
+   220px rail on desktop. A viewport breakpoint would be measuring the
+   wrong box, the same mistake `@container (max-width: 56rem)` above
+   exists to avoid (a 1180x820 tablet got it wrong).
+
+   30rem, i.e. the width below which the value track can no longer hold
+   one line of what this list actually renders: 6rem of label track plus
+   the 1rem gap is chrome, and the panel's values are timestamps and
+   `host:port` pairs of ~20 mono characters. Below that the pair reads
+   better stacked — the label is a caption for the value, and a caption
+   above costs one line and buys the value the whole width. */
+@container (max-width: 30rem) {
+  .adm-facts {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Networks used to freeze its slug column at the left edge while the
    rest panned — the mitigation for being the one tab `ux-6-g` pinned as
    deliberately wider than a phone. #1074 removed the reason: its six
@@ -5741,6 +5767,30 @@ html.resize-dragging * {
 
   .adm-table td.adm-cell-title::before {
     content: none;
+  }
+
+  /* #1223 — the disclosure is the CARD's door, so the card's heading is
+     the door, not the glyph run inside it. `.adm-row-expand` puts the
+     44px `--tap-min` floor on HEIGHT only, and `inline-flex` sizes the
+     box to caret + badge + nick: on a phone that leaves most of the
+     heading's width as dead space that looks tappable and is not (vjt,
+     iPhone dogfood: "tap target solo sul testo ... dovrebbe esser tutta
+     l'area"). Filling the cell turns the 44px floor into a 44px-by-full-
+     width target.
+
+     Specificity, not preference: `.admin-session-who .adm-row-expand`
+     (0,2,0) re-declares `inline-flex` for the Sessions identity cell, so
+     a bare `.adm-row-expand` here would lose on exactly the tab vjt
+     named. `.adm-table td .adm-row-expand` is (0,2,1) and covers every
+     tab, which is the point — all of them route identity through
+     `AdminRowName`.
+
+     Scoped to the stacked regime deliberately: above 899px the cell is a
+     table cell in a row of its own siblings rather than a card heading,
+     and the complaint is a touch one. */
+  .adm-table td .adm-row-expand {
+    display: flex;
+    width: 100%;
   }
 
   /* Nothing is wide, so nothing may claim it is: the desktop slack
