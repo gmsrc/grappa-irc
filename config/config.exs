@@ -360,6 +360,11 @@ config :logger, :console,
     # (never a query window for the target). In the allowlist to satisfy the
     # known_keys↔metadata sync test even though no Logger call carries it today.
     :ctcp_target,
+    # #1225 — the wire recipient of the operator's own outbound /notice
+    # self-echo, carried in meta so the echo can be keyed to the SOURCE window
+    # (a NOTICE opens no window). In the allowlist to satisfy the
+    # known_keys↔metadata sync test even though no Logger call carries it today.
+    :notice_target,
     :nick_fallback,
     # Auth context (Phase 2): bearer-token session lifecycle. `session_ref`
     # is a non-reversible SHA-256 handle of the session-id (S9: the raw id

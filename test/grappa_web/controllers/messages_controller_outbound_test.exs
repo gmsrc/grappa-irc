@@ -236,6 +236,83 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#1225: notice_target ships a NOTICE, echoes to the SOURCE window, opens no window",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      # `/notice carol heads up` typed in #sniffo: cic POSTs to the SOURCE window
+      # (the URL channel_id) with notice_target=carol. Mirror of the #640
+      # ctcp_target door — same source-keyed echo, different wire verb.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "heads up",
+          "notice_target" => "carol"
+        })
+
+      body = json_response(conn, 201)
+      assert body["channel"] == "#sniffo"
+      assert body["kind"] == "notice"
+      assert body["meta"]["notice_target"] == "carol"
+
+      assert {:ok, "NOTICE carol :heads up\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "NOTICE carol"), 1_000)
+
+      rows = Scrollback.fetch({:user, vjt.id}, network.id, "#sniffo", nil, 10, nil, false)
+      assert Enum.any?(rows, &(&1.body == "heads up" and &1.kind == :notice))
+
+      refute Grappa.QueryWindows.open?({:user, vjt.id}, network.id, "carol")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#1225: notice_target = $server is rejected (read-only) as bad_request",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "heads up",
+          "notice_target" => "$server"
+        })
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "#1225: a POST carrying BOTH ctcp_target and notice_target is bad_request",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      # Two relay verbs in one POST is not a shape the client can mean. Refusing
+      # it out loud beats letting clause ORDER silently pick a winner.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "heads up",
+          "ctcp_target" => "carol",
+          "notice_target" => "carol"
+        })
+
+      assert json_response(conn, 400)["error"] == "bad_request"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "#357: the send-path span [:grappa, :session, :send_privmsg] closes with outcome: :ok",
          %{conn: conn, vjt: vjt} do
       {server, port} = start_server()

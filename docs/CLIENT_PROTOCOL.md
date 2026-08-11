@@ -219,6 +219,26 @@ of `GET /networks`' `connection` object.
 - **REST for resources, Channels for events.** State changes are pushed
   over Channels, not polled over REST.
 
+### 5a. Sending to someone other than the window (#640, #1225)
+
+`POST /networks/{slug}/channels/{channel}/messages` normally sends a PRIVMSG
+to `{channel}` and echoes it there. Two optional, mutually exclusive fields
+relay the frame elsewhere while keeping `{channel}` as the **source window**
+the echo renders in:
+
+| field | wire verb | echo row |
+|---|---|---|
+| `ctcp_target` | `PRIVMSG <target> :\x01VERB args\x01` | `kind: "privmsg"`, `meta.ctcp_target` |
+| `notice_target` | `NOTICE <target> :<body>` | `kind: "notice"`, `meta.notice_target` |
+
+Both may name a nick; `notice_target` may also name a **channel**. Neither
+opens a query window for the recipient — a CTCP query is a probe and a NOTICE
+is the verb you must not reply to, so the echo belongs where the operator is
+looking. A POST carrying **both** fields is `400 bad_request`.
+
+Read the recipient off `meta`, never off the row's `channel`: `channel` is the
+source window. A `:notice` row **without** `meta.notice_target` is inbound.
+
 ---
 
 ## 6. Rate limiting & flood protection (#630)

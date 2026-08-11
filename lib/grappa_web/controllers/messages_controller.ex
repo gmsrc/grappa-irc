@@ -17,7 +17,10 @@ defmodule GrappaWeb.MessagesController do
   `Grappa.Session.send_ctcp/5`, where the URL `channel_id` is the SOURCE
   window the echo renders in and `ctcp_target` is the wire recipient; no
   query window is ever opened for the recipient (a control-surface probe
-  is not a conversation). The lookup is keyed by the
+  is not a conversation). #1225: a POST carrying `"notice_target"` is an
+  outbound NOTICE (`/notice`) on the same source-window shape, via
+  `Grappa.Session.send_notice/5` — a NOTICE opens no window either, and
+  the recipient may be a nick OR a channel. The lookup is keyed by the
   `t:Grappa.Session.subject/0` ID-tuple resolved from
   `conn.assigns.current_subject` via `GrappaWeb.Subject.to_session/1`
   + `network.id` end-to-end (sub-task 2g) so two subjects on the same
@@ -229,6 +232,12 @@ defmodule GrappaWeb.MessagesController do
           Plug.Conn.t()
           | {:error, :bad_request | :no_session | :invalid_line | {:rate_limited, pos_integer()}}
           | {:error, Ecto.Changeset.t()}
+  # #1225 — two relay verbs in one POST is not a shape any client can mean.
+  # Refuse it explicitly: leaving it to clause ORDER would make the winner an
+  # accident of where the arms sit in this file.
+  def create(_, %{"channel_id" => _, "ctcp_target" => _, "notice_target" => _}),
+    do: {:error, :bad_request}
+
   def create(conn, %{"channel_id" => channel, "body" => body, "ctcp_target" => ctcp_target})
       when is_binary(body) and body != "" and is_binary(ctcp_target) and ctcp_target != "" do
     subject = Subject.to_session(conn.assigns.current_subject)
@@ -247,6 +256,27 @@ defmodule GrappaWeb.MessagesController do
          :ok <- validate_post_target_name(ctcp_target),
          :ok <- take_send_token(subject, network.id),
          {:ok, result} <- Session.send_ctcp(subject, network.id, channel, ctcp_target, body) do
+      render_send_result(conn, result)
+    end
+  end
+
+  def create(conn, %{"channel_id" => channel, "body" => body, "notice_target" => notice_target})
+      when is_binary(body) and body != "" and is_binary(notice_target) and notice_target != "" do
+    subject = Subject.to_session(conn.assigns.current_subject)
+    network = conn.assigns.network
+
+    # #1225 — `/notice <target> <text>`. Same door shape as the #640 CTCP arm
+    # above: `channel` (the URL) is the SOURCE window the echo renders in, so it
+    # takes `validate_target_name` (a `/notice` typed in `$server` is legit);
+    # `notice_target` is the wire recipient, so it takes the POST variant (a
+    # real nick or channel, never the read-only `$server`). One send-token, as
+    # for a plain PRIVMSG. A *serv recipient answers `{:ok, :no_persist}` (W12),
+    # which `render_send_result/2` already renders as 202.
+    with :ok <- BodyLimit.check(body),
+         :ok <- validate_target_name(channel),
+         :ok <- validate_post_target_name(notice_target),
+         :ok <- take_send_token(subject, network.id),
+         {:ok, result} <- Session.send_notice(subject, network.id, channel, notice_target, body) do
       render_send_result(conn, result)
     end
   end

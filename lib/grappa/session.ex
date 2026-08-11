@@ -735,6 +735,49 @@ defmodule Grappa.Session do
   end
 
   @doc """
+  #1225 — sends the operator's own outbound NOTICE (`/notice`) and self-echoes
+  it into the SOURCE window, NEVER a query window for the recipient.
+
+  `source` is the display/persist window the command was typed in (cic's URL
+  `channel_id`); `target` is the wire recipient — a nick OR a channel, both
+  legal (`NOTICE #chan` is what an operator reaches for). The Session.Server
+  relays `NOTICE <target> :<body>` upstream, persists the echo keyed to
+  `source` as a `:notice` row with `dm_with: nil` + `meta.notice_target`, and
+  does NOT auto-open a query window — a NOTICE by convention opens no window
+  (RFC 2812 §3.3.2: it is the verb that must not be replied to), so echoing it
+  where the operator is looking is the least surprising landing.
+
+  Routing shape is #640's (`send_ctcp/5`); what differs is the wire verb and
+  the row kind. Unlike a CTCP query the body is plain text, so it is
+  line-split like a PRIVMSG — an over-long NOTICE otherwise loses its tail to
+  the ircd's 512-byte truncation with no word to the operator.
+
+  Returns `{:ok, %Scrollback.Message{}}` (the LAST persisted fragment),
+  `{:ok, :no_persist}` for a *serv recipient (wire-only, mirroring
+  `send_privmsg/4`'s W12 carve-out: a mistyped `/notice nickserv identify
+  <pass>` must not land in scrollback), `{:error, :invalid_line}` when
+  `source`/`target`/`body` carry CRLF/NUL, or `{:error, :no_session}`.
+  """
+  @spec send_notice(subject(), integer(), String.t(), String.t(), String.t()) ::
+          {:ok, Grappa.Scrollback.Message.t()}
+          | {:ok, :no_persist}
+          | {:error, :no_session | :invalid_line | send_transport_error()}
+          | {:error, Ecto.Changeset.t()}
+  def send_notice(subject, network_id, source, target, body)
+      when is_subject(subject) and is_integer(network_id) and is_binary(source) and
+             is_binary(target) and is_binary(body) do
+    # Injection gates fire BEFORE the registry lookup (mirror send_privmsg/4 +
+    # send_ctcp/5): a malformed line against a non-existent session still
+    # surfaces as :invalid_line, and no row is persisted on rejection.
+    if Identifier.safe_line_token?(source) and Identifier.safe_line_token?(target) and
+         Identifier.safe_line_token?(body) do
+      call_session(subject, network_id, {:send_notice, source, target, body})
+    else
+      {:error, :invalid_line}
+    end
+  end
+
+  @doc """
   Queues a JOIN upstream through the session. **Synchronous call** — the
   Session.Server processes the message inline: writes
   `window_states[ch] = :pending` AND broadcasts `window_pending` on the

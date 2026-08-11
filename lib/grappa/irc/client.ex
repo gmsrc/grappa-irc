@@ -351,6 +351,26 @@ defmodule Grappa.IRC.Client do
   end
 
   @doc """
+  Sends `NOTICE <target> :<body>\\r\\n` (#1225). Same guards as
+  `send_privmsg/3` — CR/LF/NUL in either field, or an empty `target`, yield
+  `{:error, :invalid_line}` rather than a malformed frame the server drops in
+  silence.
+
+  Kept as its own verb rather than a `send_privmsg/4` with a command argument:
+  the two differ in what the RECIPIENT is allowed to do about them (RFC 2812
+  §3.3.2 forbids an automatic reply to a NOTICE), so a caller choosing between
+  them is choosing semantics, not a string.
+  """
+  @spec send_notice(pid(), String.t(), String.t()) :: send_result()
+  def send_notice(client, target, body) do
+    if target != "" and Identifier.safe_line_token?(target) and Identifier.safe_line_token?(body) do
+      send_line(client, "NOTICE #{target} :#{body}\r\n")
+    else
+      reject_invalid_line(:notice)
+    end
+  end
+
+  @doc """
   Sends `JOIN <channel>\\r\\n` (when `key` is `nil`) or
   `JOIN <channel> <key>\\r\\n` (when `key` is a binary, RFC 2812 +k
   channel-key support — bucket F). Rejects CR/LF/NUL AND a malformed

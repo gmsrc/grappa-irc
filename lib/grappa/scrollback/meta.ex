@@ -129,6 +129,16 @@ defmodule Grappa.Scrollback.Meta do
                                                                   off the message, not off the routing key
                                                                   (`channel`). Present alongside
                                                                   ctcp_verb/ctcp_args on such echoes.)
+      :notice (own outbound echo)   →  + %{notice_target: String.t()}
+                                                                 (#1225: the operator's OWN outbound
+                                                                  /notice self-echo is keyed to the SOURCE
+                                                                  window it was typed in — a NOTICE opens
+                                                                  no window by convention. The wire
+                                                                  recipient (nick OR channel) rides here so
+                                                                  the render shows "→ notice to <target>"
+                                                                  off the message, not off the routing key.
+                                                                  Its ABSENCE on a :notice row is what
+                                                                  marks the row INBOUND.)
 
   Phase 1 only writes `:privmsg` rows where `meta = %{}` so Phase 1
   exercises only the empty-map path. The allowlist + atomization is
@@ -168,11 +178,12 @@ defmodule Grappa.Scrollback.Meta do
             | :ctcp_verb
             | :ctcp_args
             | :ctcp_target
+            | :notice_target
             | :nick_fallback
           ) => term()
         }
 
-  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix sender_kind ctcp_verb ctcp_args ctcp_target nick_fallback]a
+  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix sender_kind ctcp_verb ctcp_args ctcp_target notice_target nick_fallback]a
 
   @doc """
   The atom-key allowlist. Exposed so the test suite can assert that
@@ -202,6 +213,7 @@ defmodule Grappa.Scrollback.Meta do
           | :ctcp_verb
           | :ctcp_args
           | :ctcp_target
+          | :notice_target
           | :nick_fallback,
           ...
         ]

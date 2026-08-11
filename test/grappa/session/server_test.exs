@@ -3824,6 +3824,161 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  describe "#1225 outbound NOTICE (send_notice)" do
+    # #1225 — `/notice <target> <text>` ships a NOTICE, and by IRC convention a
+    # NOTICE opens no window: its self-echo belongs in the SOURCE window the
+    # operator typed it in. Same routing shape as #640's CTCP query (source-keyed
+    # echo, `dm_with: nil`, no `maybe_open_query_window`), different wire verb and
+    # a `:notice` row kind. The recipient rides `meta.notice_target` so the render
+    # reads it OFF the message rather than the routing key.
+    setup do
+      rfc_handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":server 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(rfc_handler)
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+      %{server: server, user: user, network: network, pid: pid}
+    end
+
+    test "keys the echo to the SOURCE window as :notice, tags meta.notice_target, dm_with nil",
+         %{server: server, user: user, network: network, pid: pid} do
+      assert {:ok, msg} =
+               Session.send_notice({:user, user.id}, network.id, "#sniffo", "carol", "heads up")
+
+      # Persist KEY is the SOURCE window, NOT the wire recipient.
+      assert msg.channel == "#sniffo"
+      # A NOTICE persists as a NOTICE — the row kind must match the wire verb,
+      # or cic renders the operator's own notice as a privmsg.
+      assert msg.kind == :notice
+      assert msg.body == "heads up"
+      assert msg.sender == "vjt"
+      # The recipient travels in meta so the render names it without reading the
+      # routing key (which is the source window).
+      assert msg.meta.notice_target == "carol"
+      # A notice is not a DM: no thread.
+      assert msg.dm_with == nil
+
+      # NOTICE on the wire — not PRIVMSG.
+      assert {:ok, _} =
+               IRCServer.wait_for_line(
+                 server,
+                 &(&1 == "NOTICE carol :heads up"),
+                 1_000
+               )
+
+      source_rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
+      assert Enum.any?(source_rows, &(&1.body == "heads up" and &1.kind == :notice))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "NEVER opens a query window for the recipient",
+         %{user: user, network: network, pid: pid} do
+      net_id = network.id
+
+      # The call is synchronous, so maybe_open_query_window would have run inside
+      # it if it were going to — the refute is deterministic, no timing.
+      assert {:ok, _} =
+               Session.send_notice({:user, user.id}, net_id, "#sniffo", "carol", "heads up")
+
+      refute QueryWindows.open?({:user, user.id}, net_id, "carol")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a CHANNEL recipient is legal and still echoes to the source window",
+         %{server: server, user: user, network: network, pid: pid} do
+      # `/notice #chan text` is what an operator actually reaches for. The
+      # recipient is a channel, the echo still lands in the source window it was
+      # typed in — here a query window, to prove the two are independent.
+      assert {:ok, msg} =
+               Session.send_notice({:user, user.id}, network.id, "dave", "#sniffo", "rehash in 5")
+
+      assert msg.channel == "dave"
+      assert msg.kind == :notice
+      assert msg.meta.notice_target == "#sniffo"
+      assert msg.dm_with == nil
+
+      assert {:ok, _} =
+               IRCServer.wait_for_line(server, &(&1 == "NOTICE #sniffo :rehash in 5"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "a services recipient is wire-only — no row, no leak of a mistyped secret",
+         %{server: server, user: user, network: network, pid: pid} do
+      # W12: a *serv target never persists (a fat-fingered `/notice nickserv
+      # identify <pass>` must not land in scrollback). Same carve-out the
+      # PRIVMSG door applies, reached through the same `Identifier.services_sender?`
+      # allowlist.
+      assert {:ok, :no_persist} =
+               Session.send_notice(
+                 {:user, user.id},
+                 network.id,
+                 "#sniffo",
+                 "NickServ",
+                 "identify hunter2"
+               )
+
+      assert {:ok, _} =
+               IRCServer.wait_for_line(
+                 server,
+                 &(&1 == "NOTICE NickServ :identify hunter2"),
+                 1_000
+               )
+
+      source_rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
+      refute Enum.any?(source_rows, &(&1.body =~ "hunter2"))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "an over-long body is split into fragments, every one a NOTICE frame",
+         %{server: server, user: user, network: network, pid: pid} do
+      # A NOTICE is plain text, so it fragments exactly like a PRIVMSG — the
+      # alternative is the ircd truncating the tail and the operator never
+      # learning which words were lost.
+      body = String.duplicate("parola ", 120) |> String.trim()
+
+      assert {:ok, _last} =
+               Session.send_notice({:user, user.id}, network.id, "#sniffo", "carol", body)
+
+      assert {:ok, _} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "NOTICE carol :"), 1_000)
+
+      rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 50, nil, false)
+      fragments = Enum.filter(rows, &(&1.kind == :notice))
+      assert length(fragments) > 1
+      assert Enum.all?(fragments, &(&1.meta.notice_target == "carol"))
+      assert Enum.all?(fragments, &(&1.channel == "#sniffo"))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "rejects CRLF/NUL in source, recipient or body as :invalid_line",
+         %{user: user, network: network, pid: pid} do
+      net_id = network.id
+
+      assert {:error, :invalid_line} =
+               Session.send_notice({:user, user.id}, net_id, "#sniffo\r\nQUIT", "carol", "hi")
+
+      assert {:error, :invalid_line} =
+               Session.send_notice({:user, user.id}, net_id, "#sniffo", "carol\r\nQUIT", "hi")
+
+      assert {:error, :invalid_line} =
+               Session.send_notice({:user, user.id}, net_id, "#sniffo", "carol", "hi\r\nQUIT :bye")
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "#640 inbound 401 ERR_NOSUCHNICK from a CTCP probe" do
     # #640 — pinging (or /ctcp'ing) a NONEXISTENT nick makes bahamut answer
     # 401 ERR_NOSUCHNICK for the relayed frame. NumericRouter (a pure

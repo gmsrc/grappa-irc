@@ -1814,6 +1814,35 @@ defmodule Grappa.Session.Server do
     handle_ctcp_send(source, ctcp_target, body, state)
   end
 
+  # #1225 — /notice outbound. Routing is #640's (echo keyed to the SOURCE
+  # window, `dm_with: nil`, no `maybe_open_query_window`): a NOTICE opens no
+  # window by convention, so the echo belongs where the operator typed it.
+  # `source` is the display/persist window; `target` is the wire recipient
+  # (nick OR channel). The service-target carve-out is `{:send_privmsg, …}`'s,
+  # for the same W12 reason — a mistyped `/notice nickserv identify <pass>`
+  # must reach the wire without leaving the secret in scrollback.
+  #
+  # The line still passes the `capture_outbound_ns_secret/2` choke point even
+  # though `NSInterceptor`'s patterns are anchored on `PRIVMSG NickServ …` and
+  # cannot match a NOTICE. That is the correct outcome, not an oversight:
+  # services ignore notices, so an identify sent this way authenticates nothing
+  # and staging a `pending_auth` for it would arm a rendezvous that can never
+  # fire. Routing through the choke point anyway is what keeps this door
+  # participating automatically if the interceptor ever learns a new shape.
+  # (No @impl here — a continuation clause of handle_call/3, whose @impl rides
+  # the {:send_privmsg, …} clause above.)
+  def handle_call({:send_notice, source, target, body}, _, state)
+      when is_binary(source) and is_binary(target) and is_binary(body) do
+    line = "NOTICE #{target} :#{body}"
+    state = capture_outbound_ns_secret(state, line)
+
+    if service_target?(target) do
+      handle_service_target_notice(target, body, state)
+    else
+      handle_notice_send(source, target, body, state)
+    end
+  end
+
   # Sends `TOPIC <channel> :<body>` upstream. NO optimistic persist +
   # broadcast here — issue #22: the upstream IRC server echoes the TOPIC
   # back, EventRouter's unsolicited-TOPIC handler builds the canonical
@@ -3825,6 +3854,77 @@ defmodule Grappa.Session.Server do
     end
   end
 
+  # #1225 — persist the NOTICE self-echo to the SOURCE window + relay the wire
+  # frame to the recipient, WITHOUT opening a query window. Borrows #640's
+  # routing (source-keyed echo, `dm_with: nil`, no auto-open) and the PRIVMSG
+  # door's FRAGMENTING (a notice body is plain text, so an over-long one must
+  # split rather than lose its tail to the ircd's truncation).
+  #
+  # Deliberately a sibling of `persist_and_send_fragments/5` rather than a
+  # parameterisation of it: the two agree only on the recurse-persist-send
+  # skeleton and differ on every attribute that matters — row kind, meta, the
+  # `dm_with` rule (a notice threads nothing), the persist key's provenance
+  # (source window vs wire target) and the wire verb. A flag threading four
+  # forks through one function would read worse than the twenty lines below.
+  @spec handle_notice_send(String.t(), String.t(), String.t(), t()) ::
+          {:reply, {:ok, Scrollback.Message.t()} | {:error, term()}, t()}
+  defp handle_notice_send(source, target, body, state) do
+    key = fold_key(state, source)
+
+    # `NOTICE` is one byte SHORTER on the wire than `PRIVMSG`, so the privmsg
+    # budget is conservative by exactly that byte for a notice: fragments can
+    # come out one byte smaller than strictly necessary, never one byte too
+    # long. Reusing the sized-for-PRIVMSG splitter keeps ONE copy of the #246
+    # worst-case relay ceilings (and of the fragment-count table `cic`'s
+    # preview is pinned to) rather than forking it for a byte.
+    fragments = LineSplit.split_privmsg_body(body, target, state.linelen)
+
+    case persist_and_send_notice_fragments(key, target, fragments, state, nil) do
+      {:ok, last_message} -> {:reply, {:ok, last_message}, state}
+      {:error, _} = err -> {:reply, err, state}
+    end
+  end
+
+  @spec persist_and_send_notice_fragments(
+          String.t(),
+          String.t(),
+          [String.t()],
+          t(),
+          Scrollback.Message.t() | nil
+        ) :: {:ok, Scrollback.Message.t()} | {:error, term()}
+  defp persist_and_send_notice_fragments(_, _, [], _, last_message), do: {:ok, last_message}
+
+  defp persist_and_send_notice_fragments(key, target, [fragment | rest], state, _) do
+    attrs =
+      Session.put_subject_id(
+        %{
+          network_id: state.network_id,
+          # The persist/broadcast KEY is the SOURCE window, network-folded (NOT
+          # the wire recipient) — the recipient rides `meta.notice_target`.
+          channel: key,
+          server_time: System.system_time(:millisecond),
+          kind: :notice,
+          sender: state.nick,
+          body: fragment,
+          # No `sender_prefix` snapshot: the echo renders as "→ notice to
+          # <recipient>", which never shows the operator's channel grade, so
+          # storing it would be state nobody reads.
+          meta: %{notice_target: target},
+          # A notice threads no conversation — no DM, and (upstream in the
+          # caller) no query window for the recipient.
+          dm_with: nil
+        },
+        state.subject
+      )
+
+    with {:ok, message} <- Persistor.persist_and_broadcast(attrs, state, push: false),
+         :ok <- send_notice_or_log(state.client, target, fragment) do
+      persist_and_send_notice_fragments(key, target, rest, state, message)
+    else
+      {:error, _} = err -> err
+    end
+  end
+
   @spec persist_and_send_fragments(
           String.t(),
           String.t(),
@@ -3949,6 +4049,42 @@ defmodule Grappa.Session.Server do
         )
 
         err
+    end
+  end
+
+  # #1225 — the NOTICE twin of `send_privmsg_or_log/3`. A reject AFTER the
+  # persist means the facade's guard was bypassed; say so rather than losing
+  # the frame in silence.
+  @spec send_notice_or_log(pid(), String.t(), String.t()) :: :ok | {:error, :invalid_line}
+  defp send_notice_or_log(client, target, body) do
+    case Client.send_notice(client, target, body) do
+      :ok ->
+        :ok
+
+      {:error, :invalid_line} = err ->
+        Logger.error("client rejected notice AFTER persist — facade bypass?",
+          channel: target
+        )
+
+        err
+    end
+  end
+
+  # #1225 — the NOTICE twin of `handle_service_target_send/3`: wire-only, no
+  # row, no broadcast. Same W12 reason as the PRIVMSG door — a `/notice
+  # nickserv identify <pass>` is a fat-fingered credential, and persisting it
+  # would archive the secret the PRIVMSG carve-out exists to keep out.
+  @spec handle_service_target_notice(String.t(), String.t(), t()) ::
+          {:reply, {:ok, :no_persist} | {:error, :invalid_line}, t()}
+  defp handle_service_target_notice(target, body, state) do
+    case Client.send_notice(state.client, target, body) do
+      :ok ->
+        {:reply, {:ok, :no_persist}, state}
+
+      {:error, :invalid_line} = err ->
+        Logger.error("client rejected service-target notice", target: target)
+
+        {:reply, err, state}
     end
   end
 
