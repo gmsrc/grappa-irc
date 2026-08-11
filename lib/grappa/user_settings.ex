@@ -129,7 +129,7 @@ defmodule Grappa.UserSettings do
 
   A key with NO separator is the pre-#1038 bare shape. It is dropped at the
   write boundary (`cast_muted_key/2`) and rewritten once, at migration time,
-  by `20260808120000_prefix_muted_targets_with_network`.
+  by `20260811120000_prefix_muted_targets_with_network`.
 
   The value is the closed shape `%{"until" => unix_seconds | nil}`, string
   keys because that is what survives the `:map` JSON round-trip. `nil` is a

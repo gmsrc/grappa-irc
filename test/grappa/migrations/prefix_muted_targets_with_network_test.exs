@@ -1,6 +1,6 @@
 defmodule Grappa.Migrations.PrefixMutedTargetsWithNetworkTest do
   @moduledoc """
-  #1038 — the one-shot mute-key rewrite migration (`20260808120000`).
+  #1038 — the one-shot mute-key rewrite migration (`20260811120000`).
 
   Runs the migration's exact UPDATE SQL against hand-written
   `user_settings.data` blobs and asserts vjt's ruling: every stored BARE key
@@ -24,7 +24,7 @@ defmodule Grappa.Migrations.PrefixMutedTargetsWithNetworkTest do
   alias Grappa.UserSettings
   alias Grappa.UserSettings.Settings
 
-  # Keep byte-aligned with priv/repo/migrations/20260808120000_prefix_muted_targets_with_network.exs
+  # Keep byte-aligned with priv/repo/migrations/20260811120000_prefix_muted_targets_with_network.exs
   @rewrite_sql """
   UPDATE user_settings
   SET data = json_replace(
