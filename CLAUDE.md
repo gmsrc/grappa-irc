@@ -430,7 +430,12 @@ not the surrounding code.**
   state; `Grappa.Session.whereis/2` is the live-pid truth. They can
   disagree: a `:connected` credential whose `Session.Server` crashed
   mid-restart; a `:parked` credential whose pid is in respawn backoff;
-  a row marked `:disconnected` whose process is in `terminate/2`.
+  a row STILL reading `:connected` whose process is already in
+  `terminate/2`, because `Networks.disconnect/2` and `mark_failed/2`
+  both stop the session BEFORE writing the transition. The closed set
+  is `[:connected, :parked, :failed]` — there is no `:disconnected`
+  state (the `:disconnected` in `session_log_events` is a lifecycle
+  EVENT, a different axis).
   `AdminSessionsTab` surfaces BOTH columns and shows an explicit
   `null` when the live pid is gone — diagnostic value beats false
   uniformity. When adding a new admin listing, return both
