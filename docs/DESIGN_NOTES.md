@@ -39554,3 +39554,56 @@ bounded, pruned on write, fed by an async cast from a path that includes
 `terminate/2`, and a last event that is not a disconnect means the log
 never saw the end — the subtitle says both, and the `lasted`/`how` cells
 render an em-dash rather than inventing an ending.
+
+---
+
+## 2026-08-11 — #1030: two idle timers of the same length, and which side has to blink first
+
+A pooled nginx→BEAM connection carries two idle timers. nginx's upstream
+idle (`keepalive_timeout` inside `upstream { }`) defaults to 60s; Bandit's
+`read_timeout` — thousand_island's between-requests idle, the timer that
+actually closes a keepalive socket server-side — defaults to 60_000 ms, and
+grappa overrode it nowhere. Equal timers arm a race: nginx dispatches onto a
+socket the BEAM is closing in the same instant, the request dies at the
+connection layer, and the only thing nginx can report is a 502.
+
+**This is read, not measured, and it ships ahead of its own evidence.** No
+502 log line has been inspected; the causal link between the two defaults
+and #1030's 35 events is inferred from the code alone. A re-read of the m42
+edge on 2026-08-11 found **zero** 502s across all retained logs (6372 lines,
+2026-08-10 18:00 → 2026-08-11 20:17) — which proves nothing either way: the
+original sample was 45,135 requests at a 0.078% rate, this window carries
+roughly a seventh of that volume, so about five events were expected and
+zero is inside the noise. #1029's `$request_time` + `$request_id` remain the
+discriminator that would settle it.
+
+**vjt's ruling (#grappa, 2026-08-11): raise the read timeout above nginx**,
+rather than lowering nginx. The rule for a keepalive pool is that its CLIENT
+gives up first, and nginx is the client.
+
+**Both sides are pinned, not just the one that moves.** Bandit goes to
+75_000 ms and every in-repo upstream block gets an explicit
+`keepalive_timeout 60s` — the value nginx defaults to today. Leaving one
+side on a default would make the inequality depend on a number upstream can
+change without telling us, and it would vanish in silence rather than in
+red. The Elixir value is declared ONCE, on the env-agnostic endpoint config
+in `config/config.exs`, and reaches the per-env `http:` lists through
+Config's keyword deep-merge — the same merge that already carries
+`url: [host: "localhost"]` into runtime.exs's prod `url:`.
+
+**The guard reads the real values, and says what it cannot see.**
+`test/grappa/infra/keepalive_idle_ordering_test.exs` globs the repo for
+`upstream` blocks that actually pool (`keepalive <n>;`), parses each block's
+pinned idle out of the file, and compares it against the MERGED application
+env rather than a grep of `config.exs` — only the merged read witnesses that
+the deep-merge happened at all. A third assertion pins the four known
+substrates so a glob that stops matching cannot turn the other two green
+over an empty list. The m42 production edge terminates TLS in a HOST nginx
+vhost that belongs to the operator, not this repo; its idle is unreachable
+from any test here and the moduledoc says so instead of implying coverage.
+The census is five in-repo pools, not the three the issue names —
+`infra/cloud/first-boot.sh` writes an upstream inline and
+`infra/nginx-tls-frontend.example.conf` ships one for operators to copy.
+`infra/freebsd/nginx.conf`, which the ruling text cites, does not exist.
+
+Touching `config/*.exs` makes this a COLD deploy.
