@@ -39359,3 +39359,55 @@ device, and it carries three anti-hollow-green preconditions: the long
 option is in the select, both device rows rendered, and all five named
 controls laid out. Red before the CSS change (`scrollWidth` 393 vs
 `clientWidth` 263), green after.
+
+---
+
+## 2026-08-11 — #1226: the away seam is driven by the ircd's echo, not our ack
+
+`/away` and its un-away twin were silent in cicchetto. The `"away"` case
+in `compose.ts` returns `{ok: true}`, which `ComposeBox` documents as
+*silent success — no seam*, so the only cue was the 💤 badge on the
+sidebar network-header row. That badge is a STATE indicator, not an
+acknowledgement, and on a phone with the sidebar collapsed there was no
+cue at all.
+
+**The trigger is the server echo.** vjt's ruling (#grappa, 2026-08-11)
+picked `away_confirmed` over the local push resolving. grappa emits that
+event only on the upstream **305 RPL_UNAWAY / 306 RPL_NOWAWAY**
+numerics, so the line the operator reads is the ircd's truth rather than
+our optimism; the cost is the fake-lag latency between typing and
+seeing, accepted deliberately. A local ack would render a confirmation
+for a command the upstream may never have confirmed — the one thing an
+acknowledgement must not do.
+
+**One path, so the un-typed transitions come for free.** Auto-away on a
+WS drop (#348) and a toggle from another device produce the same
+`away_confirmed` with no compose action behind them. Because the seam
+reads the store rather than a command result, all three transitions
+arrive by the identical route: no branch tells them apart, and the
+ruling's "fire on those too if it is simpler" is satisfied by not
+writing the branch at all. The seam fires on the FLIP only — the
+remembered value is per network slug, so mounting into an already-away
+network and switching windows between an away network and a present one
+stay silent. State is not news; a change to it is.
+
+**A sticky red error is not displaced.** An error is up because the
+operator must read it and it arrived from something they did; an away
+echo can arrive on its own. Overwriting would make a must-read error
+vanish while the user is doing nothing, so the notice yields. The
+consequence is stated rather than left implicit: an away change landing
+while an error is showing is seen by nobody in the seam, and the 💤
+badge remains the state surface for it.
+
+**Copy is state only** — no reason echoed back, no tally, per the #1108
+precedent that detail in the seam distracts from the one thing the line
+exists to say. Severity is the green notice register of #356, which
+already auto-dismisses; nothing new was added to the seam's vocabulary.
+
+**Architecturally**, this is the first thing to write `feedback()` from
+outside `doSubmit()`. The seam had rendered only synchronous command
+results, though the SURFACE was already fed by reactive state (the amber
+`SplitWarningLine` derives from the draft). Driving it from a store
+subscription is therefore an extension of what the line already does —
+notably NOT a synthesised command result, which would have put a lie
+about provenance into the one place built to be honest about it.

@@ -102,6 +102,9 @@ vi.mock("../lib/networks", () => ({
 }));
 
 import ComposeBox from "../ComposeBox";
+// #1226 — the REAL away store, not a mock: it is the production feed for the
+// seam (userTopic's `away_confirmed` arm calls exactly this setter).
+import { setAwayState } from "../lib/awayStatus";
 // Static handle on the mocked module (vi.mock is hoisted, so this IS the
 // mock). The older cases reach for it via `await import` case-by-case; the
 // #925 block asserts on `submit` in every one of its tests.
@@ -824,6 +827,74 @@ describe("ComposeBox", () => {
       await new Promise((r) => setTimeout(r, 0));
       expect(screen.queryByRole("status")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  // #1226 — the away seam. `/away` and its un-away twin were silent: the
+  // "away" case in compose.ts returns `{ok: true}`, a SILENT success, so the
+  // 💤 sidebar badge was the only cue — and it is off-screen on a phone.
+  //
+  // These tests drive the REAL `awayStatus` store and never go through
+  // `submit()`, because that IS the production path: the seam is fed by the
+  // server echo (`away_confirmed` → `setAwayState`, emitted only on the
+  // upstream 305/306 numerics), so an auto-away on WS drop and a toggle from
+  // another device arrive by exactly this route, with no compose action
+  // behind them. Distinct network slugs per test: the store is a module
+  // singleton and this file does not reset modules between cases.
+  describe("#1226 — away / un-away feedback seam", () => {
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+
+    it("a flip to AWAY renders a green notice, with no submit involved", async () => {
+      render(() => <ComposeBox networkSlug="net1226a" channelName="#a" />);
+      await flush();
+      expect(screen.queryByRole("status")).toBeNull();
+      setAwayState("net1226a", true);
+      const notice = await screen.findByText(/you are marked as away/i);
+      expect(notice).toHaveClass("compose-box-notice");
+      expect(notice.getAttribute("role")).toBe("status");
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(vi.mocked(compose_.submit)).not.toHaveBeenCalled();
+    });
+
+    it("a flip back to PRESENT renders the un-away notice", async () => {
+      setAwayState("net1226b", true);
+      render(() => <ComposeBox networkSlug="net1226b" channelName="#a" />);
+      await flush();
+      setAwayState("net1226b", false);
+      const notice = await screen.findByText(/you are no longer away/i);
+      expect(notice).toHaveClass("compose-box-notice");
+      expect(notice.getAttribute("role")).toBe("status");
+    });
+
+    it("mounting into an ALREADY-away network is silent — state is not news", async () => {
+      setAwayState("net1226c", true);
+      render(() => <ComposeBox networkSlug="net1226c" channelName="#a" />);
+      await flush();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("switching the window to an away network is silent — no flip on it", async () => {
+      setAwayState("net1226e", true);
+      const [slug, setSlug] = createSignal("net1226d");
+      render(() => <ComposeBox networkSlug={slug()} channelName="#a" />);
+      await flush();
+      setSlug("net1226e");
+      await flush();
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("a sticky error is NOT displaced by an away flip", async () => {
+      vi.mocked(compose_.submit).mockResolvedValue({ error: "/notify: network not found" });
+      render(() => <ComposeBox networkSlug="net1226f" channelName="#a" />);
+      const ta = screen.getByPlaceholderText(/message #a/i);
+      fireEvent.keyDown(ta, { key: "Enter" });
+      await screen.findByRole("alert");
+      setAwayState("net1226f", true);
+      await flush();
+      // The error the operator must read survives; the away change is lost
+      // here on purpose (the 💤 badge stays the state surface).
+      expect(screen.getByRole("alert")).toHaveTextContent(/network not found/i);
+      expect(screen.queryByText(/you are marked as away/i)).toBeNull();
     });
   });
 

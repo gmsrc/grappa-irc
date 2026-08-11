@@ -1,5 +1,14 @@
-import { type Component, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import {
+  type Component,
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  Show,
+  untrack,
+} from "solid-js";
 import { isDiagEnabled } from "./DiagFloat";
+import { awayByNetwork } from "./lib/awayStatus";
 import { channelKey } from "./lib/channelKey";
 import {
   draftFramePreview,
@@ -117,6 +126,13 @@ const NOTICE_DISMISS_MS = 3_000;
 //                strings built in compose.ts, previously computed + discarded).
 type Feedback = { text: string; severity: "error" | "notice" };
 
+// #1226 — the away seam copy. State ONLY: no reason echoed back, no tally
+// (the #1108 precedent — extra detail in the seam distracts from the one
+// thing the line is there to say). Same lowercase-topic register as the
+// other notices ("notify: watching gigi").
+const AWAY_SET_NOTICE = "away: you are marked as away";
+const AWAY_UNSET_NOTICE = "away: you are no longer away";
+
 // #925 — did the pointer come up inside the box it went down on? The one
 // piece of geometry in the send button's pointer-driven activation, kept
 // pure so the abort-by-sliding-off case is decidable without touch physics.
@@ -177,6 +193,41 @@ const ComposeBox: Component<Props> = (props) => {
     }, NOTICE_DISMISS_MS);
   };
   onCleanup(clearNoticeTimer);
+
+  // #1226 — /away and its un-away twin were silent here: compose.ts's "away"
+  // case returns `{ok: true}`, a silent success, so the 💤 sidebar badge was
+  // the only cue — and on a phone, sidebar collapsed, there was none at all.
+  //
+  // The trigger is the SERVER echo, not the local push resolving: the store
+  // below is fed by `away_confirmed`, which grappa emits only on the upstream
+  // 305 RPL_UNAWAY / 306 RPL_NOWAWAY numerics. That is the ircd's truth rather
+  // than our optimism, at the cost of the fake-lag latency (vjt's ruling,
+  // 2026-08-11). It also makes this ONE path for every transition — typed
+  // /away, auto-away on a WS drop, a toggle from another device — because all
+  // three reach the client as the same event. No second branch to tell them
+  // apart, which is exactly why the automatic ones are in scope too.
+  //
+  // Fires on the FLIP only. `prevAway` remembers the slug alongside the value,
+  // so mounting into an already-away network and switching the window between
+  // an away network and a present one are both silent: the state is not news,
+  // only a change to it is.
+  let prevAway: { slug: string; away: boolean } | null = null;
+  createEffect(() => {
+    const slug = props.networkSlug;
+    const away = awayByNetwork()[slug] === true;
+    const prev = prevAway;
+    prevAway = { slug, away };
+    if (prev === null || prev.slug !== slug || prev.away === away) return;
+    // A sticky red error is NOT displaced. It is up because the operator must
+    // read it, and it got there from something THEY did; an away echo can
+    // arrive on its own, so overwriting would make a must-read error vanish
+    // while the user is doing nothing. Deliberate loss, not an oversight: an
+    // away change that lands while an error is showing is seen by nobody here
+    // — the 💤 sidebar badge remains the state surface.
+    if (untrack(feedback)?.severity === "error") return;
+    showNotice(away ? AWAY_SET_NOTICE : AWAY_UNSET_NOTICE);
+  });
+
   let pickerInput: HTMLInputElement | undefined;
   let textareaEl: HTMLTextAreaElement | undefined;
   let swipeStart: Point | null = null;
