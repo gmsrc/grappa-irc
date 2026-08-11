@@ -727,29 +727,82 @@ defmodule Grappa.NetworksTest do
       assert {u2.id, net_a.id} in pairs
     end
 
-    test "orders by inserted_at ascending so Bootstrap output is deterministic" do
-      u1 = user_fixture("alice-#{System.unique_integer([:positive])}")
-      u2 = user_fixture("bob-#{System.unique_integer([:positive])}")
+    test "orders by (inserted_at, user_id, network_id) so Bootstrap is deterministic" do
+      # The tie-break is `user_id` ASC, so the test has to know which UUID
+      # sorts first — they are random per run. The rows are then inserted in
+      # the OPPOSITE order, so insertion order alone cannot produce the
+      # expected list and a query that dropped the tie-break would show it.
+      [lo_user, hi_user] =
+        Enum.sort_by(
+          [
+            user_fixture("alice-#{System.unique_integer([:positive])}"),
+            user_fixture("bob-#{System.unique_integer([:positive])}")
+          ],
+          & &1.id
+        )
+
       net_a = network_fixture("net-a-#{System.unique_integer([:positive])}")
       net_b = network_fixture("net-b-#{System.unique_integer([:positive])}")
 
-      {:ok, c1} =
-        Credentials.bind_credential(u1, net_a, %{nick: "a", auth_method: :none, autojoin_channels: []})
+      {:ok, straddler} =
+        Credentials.bind_credential(hi_user, net_a, %{
+          nick: "a",
+          auth_method: :none,
+          autojoin_channels: []
+        })
 
-      {:ok, c2} =
-        Credentials.bind_credential(u2, net_a, %{nick: "b", auth_method: :none, autojoin_channels: []})
+      {:ok, tied_hi} =
+        Credentials.bind_credential(hi_user, net_b, %{
+          nick: "a",
+          auth_method: :none,
+          autojoin_channels: []
+        })
 
-      {:ok, c3} =
-        Credentials.bind_credential(u1, net_b, %{nick: "a", auth_method: :none, autojoin_channels: []})
+      {:ok, tied_lo} =
+        Credentials.bind_credential(lo_user, net_a, %{
+          nick: "b",
+          auth_method: :none,
+          autojoin_channels: []
+        })
+
+      # #1098 — the shape of the recorded red, forced rather than waited for:
+      # one row at the very end of a second, two in the next one, tied with
+      # each other. In a real run the clock decides whether this ever occurs,
+      # which is why the flake surfaced once and vanished on rerun.
+      straddler = stamp(straddler, ~U[2026-08-09 02:29:41.999969Z])
+      tied_hi = stamp(tied_hi, ~U[2026-08-09 02:29:42.000012Z])
+      tied_lo = stamp(tied_lo, ~U[2026-08-09 02:29:42.000012Z])
 
       ts =
         Enum.map(Credentials.list_credentials_for_all_users(), &{&1.user_id, &1.network_id, &1.inserted_at})
 
-      # Strictly non-decreasing inserted_at — ties broken by composite key.
-      assert ts == Enum.sort_by(ts, fn {u, n, t} -> {t, u, n} end)
-      assert {c1.user_id, c1.network_id, c1.inserted_at} in ts
-      assert {c2.user_id, c2.network_id, c2.inserted_at} in ts
-      assert {c3.user_id, c3.network_id, c3.inserted_at} in ts
+      # Stated outright, never re-derived with `Enum.sort_by/2`: that sorts by
+      # Erlang TERM order, and term order on a `%DateTime{}` compares the
+      # struct's map values in alphabetical KEY order — weighing `:microsecond`
+      # BEFORE `:minute` and `:second`. It ranks `…41.999969Z` AFTER
+      # `…42.000012Z`, so it disagrees with SQL exactly when two rows straddle
+      # a second boundary. The query is chronological and right; the oracle
+      # that re-sorted the query's own output was the wrong one (#1098).
+      assert ts == [
+               {straddler.user_id, straddler.network_id, straddler.inserted_at},
+               {tied_lo.user_id, tied_lo.network_id, tied_lo.inserted_at},
+               {tied_hi.user_id, tied_hi.network_id, tied_hi.inserted_at}
+             ]
+    end
+
+    # #1098 — pins a credential's `inserted_at` and hands the row back as it
+    # now reads, so the assertions above compare stored values rather than
+    # the pre-update struct.
+    defp stamp(%Credential{} = cred, %DateTime{} = at) do
+      {1, _} =
+        Repo.update_all(
+          from(c in Credential,
+            where: c.user_id == ^cred.user_id and c.network_id == ^cred.network_id
+          ),
+          set: [inserted_at: at]
+        )
+
+      %{cred | inserted_at: at}
     end
   end
 
