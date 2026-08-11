@@ -4242,10 +4242,29 @@ html.resize-dragging * {
   margin: 0;
 }
 
+/* #1228 — `min-inline-size: 0` is the load-bearing line, not decoration. A
+   <fieldset> defaults to `min-inline-size: min-content` and, unlike every
+   other box here, will NOT shrink below it. So one wide child sets a floor
+   the whole fieldset is laid out against, and every control inside — not
+   just the wide one — is rendered past the drawer's right border and cut by
+   the screen.
+   Measured on the notifications sub-page at phone width: the `mute:` <select>
+   takes its intrinsic width from its longest OPTION ("<conversation> —
+   <network>"), so one long conversation name moved it from 173px to 367px
+   against 239px of available drawer width; the fieldset's floor became 381px
+   and the sub-page spilled 142px. Proven by displacement — dropping this
+   constraint removes the overflow, restoring it brings it back, while
+   `min-width: 0` on the labels' flex children changes nothing.
+   Deliberately on the SHARED selector, not on `.notifications-fieldset`: all
+   seven drawer fieldsets carry the identical default, and none of them has a
+   reason to grow past the drawer. The other two selects are fed by constants
+   (auto-away presets) and host config (upload TTL labels) — the same bomb
+   with a longer fuse. */
 .settings-drawer fieldset {
   border: 1px solid var(--border);
   padding: 0.5rem;
   margin: 0;
+  min-inline-size: 0;
 }
 
 .settings-drawer legend {

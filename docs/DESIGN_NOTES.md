@@ -39291,3 +39291,71 @@ drill-in (the `session_id` index exists and is still unused by any
 query), and any retention change whatsoever. If a future surface needs
 the identity rather than the event, that reopens vjt's fork; it is not
 a mechanical extension of this.
+
+---
+
+## 2026-08-11 — #1228: a drawer fieldset that will not shrink, and the control whose width is the user's data
+
+The notifications sub-page rendered past the settings drawer's right
+border on a phone — every control cut by the screen edge, not one. The
+issue was written from a screenshot and listed four candidate causes.
+Three of them are wrong, and the measurement says so: the two text
+inputs need 156px and 155px of intrinsic width (their `size` attribute
+is not the driver), the devices rows need 163px, the master toggle
+116px — against 239px of available drawer width. All of them fit.
+
+**The one box in the sub-page whose width is the USER'S DATA is the
+`mute:` `<select>`.** A `<select>` takes its intrinsic width from its
+longest OPTION, and the options are `"<conversation> — <network>"`. With
+short names it needs 173px. With one long conversation name it needs
+367px. That is the whole difference between a seeded test account and a
+real one, and it is why the defect did not reproduce until the data was
+reproduced: at default text size in a 393px viewport the sub-page has
+zero overflow and 12px of headroom, and it stays that way across every
+text size on the ladder.
+
+**The mechanism that turns one wide control into a wholly cut page is
+the `<fieldset>`.** A fieldset defaults to `min-inline-size: min-content`
+and, unlike every other box in the drawer, will not shrink below it. So
+the select's 367px became the fieldset's 381px floor, and EVERY child —
+including the ones that fit comfortably — was laid out against a box
+142px wider than the drawer. It also explains the shape of the
+screenshot: the drawer HEADER, which lives outside the fieldset, is not
+cut.
+
+Proven by displacement rather than by plausibility: dropping
+`min-inline-size` removes the overflow (`scrollWidth` 393 → 263, 25
+offending boxes → 0), restoring it brings the overflow back, and
+`min-width: 0` on the labels' flex children — the other candidate that
+survived reading the stylesheet — changes nothing in either direction.
+
+**The cure goes on the shared `.settings-drawer fieldset` rule, not on
+`.notifications-fieldset`.** A census of the drawer found seven
+fieldsets carrying the identical default; three contain a `<select>`.
+Only the mute picker is fed by user data today, but the upload-TTL
+picker is fed by host config and the auto-away picker by compile-time
+presets — the same bomb with a longer fuse, one long label away. No
+drawer fieldset has a reason to grow past the drawer, so the constraint
+is wrong for all seven, not just the one that bit. The identity
+`Network` select is the pre-existing counter-example that proves the
+shape: it is also fed by user data, and it is safe precisely because
+`.settings-identity :where(input, select)` pins it to `width: 100%`.
+
+**Known, measured, NOT fixed here.** The muted-conversations list in the
+same fieldset is a second data-driven width: `.watchlists-keyword` is
+`flex: 1` with no `min-width: 0`, so its automatic minimum size shoves
+the network badge and the unmute `×` past the drawer edge (60.8px and
+78.8px with a 32-character conversation muted). The fieldset fix cannot
+reach it — a flex item's automatic minimum is a different mechanism —
+and the reported screenshot does not show it, since that mute list was
+empty. Recorded rather than folded in: it is a different box, a
+different constraint, and not the defect that was reported.
+
+Guard: `issue1228-settings-drawer-phone-overflow.spec.ts`, on the
+@webkit iPhone project because jsdom has no layout engine and vitest is
+structurally blind to rendered geometry. It reproduces the DATA (joins a
+32-character channel so the option exists) rather than the reporter's
+device, and it carries three anti-hollow-green preconditions: the long
+option is in the select, both device rows rendered, and all five named
+controls laid out. Red before the CSS change (`scrollWidth` 393 vs
+`clientWidth` 263), green after.
