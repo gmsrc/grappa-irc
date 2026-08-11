@@ -98,4 +98,76 @@ defmodule GrappaWeb.Admin.SessionLogControllerTest do
       assert body == %{"session_log" => []}
     end
   end
+
+  describe "GET /admin/session_log/sessions (#1158 item 4)" do
+    test "no bearer returns 401", %{conn: conn} do
+      assert conn |> get("/admin/session_log/sessions") |> json_response(401) ==
+               %{"error" => "unauthorized"}
+    end
+
+    test "non-admin user returns 403", %{conn: conn} do
+      {_, session} = user_and_session()
+
+      assert conn
+             |> put_bearer(session.id)
+             |> get("/admin/session_log/sessions")
+             |> json_response(403) == %{"error" => "forbidden"}
+    end
+
+    test "200 returns the newest event of each session, one row per session", %{conn: conn} do
+      insert_event(%{session_id: "visitor:v1:7", subject_kind: :visitor, event: :connected})
+      insert_event(%{session_id: "user:a:7", event: :connected})
+
+      insert_event(%{
+        session_id: "visitor:v1:7",
+        subject_kind: :visitor,
+        event: :disconnected,
+        reason: ":quit",
+        clean: true,
+        duration_ms: 900
+      })
+
+      session = admin_session()
+
+      body =
+        conn
+        |> put_bearer(session.id)
+        |> get("/admin/session_log/sessions")
+        |> json_response(200)
+
+      assert %{"session_log_sessions" => [first, second]} = body
+      assert first["session_id"] == "visitor:v1:7"
+      assert first["event"] == "disconnected"
+      assert first["reason"] == ":quit"
+      assert first["duration_ms"] == 900
+      assert second["session_id"] == "user:a:7"
+      assert second["event"] == "connected"
+    end
+
+    test "?limit caps the number of sessions", %{conn: conn} do
+      for n <- 1..5, do: insert_event(%{session_id: "user:u#{n}:7"})
+
+      session = admin_session()
+
+      body =
+        conn
+        |> put_bearer(session.id)
+        |> get("/admin/session_log/sessions?limit=2")
+        |> json_response(200)
+
+      assert length(body["session_log_sessions"]) == 2
+    end
+
+    test "empty log returns an empty list", %{conn: conn} do
+      session = admin_session()
+
+      body =
+        conn
+        |> put_bearer(session.id)
+        |> get("/admin/session_log/sessions")
+        |> json_response(200)
+
+      assert body == %{"session_log_sessions" => []}
+    end
+  end
 end

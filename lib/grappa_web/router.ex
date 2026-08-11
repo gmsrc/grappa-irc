@@ -202,6 +202,11 @@ defmodule GrappaWeb.Router do
 
     # #215 — persisted IRC session-lifecycle log (read-only tail).
     get "/session_log", SessionLogController, :index
+    # #1158 item 4 — the same log collapsed to one entry per session_id.
+    # Backs the admin Sessions view's inactive rows: the log has no FK to
+    # the subject, so it is the only trace of a session whose visitor was
+    # purged. Literal segment, so it cannot shadow the tail route above.
+    get "/session_log/sessions", SessionLogController, :sessions
 
     # #318 — live WS presence + per-pid visibility freshness snapshot.
     # Read-only diagnostic for the iOS stale-`:visible` push bug.

@@ -87,6 +87,52 @@ defmodule Grappa.SessionLogPersistenceTest do
     assert Enum.map(SessionLog.list(10), & &1.session_id) == ["user:u6:7", "user:u5:7", "user:u4:7"]
   end
 
+  describe "list_latest_per_session/1 (#1158 item 4)" do
+    test "collapses a session's history to its newest event" do
+      SessionLog.emit(:connected, state({:visitor, "v1"}), [])
+
+      SessionLog.emit(:disconnected, state({:visitor, "v1"}),
+        reason: ":quit",
+        clean: true,
+        duration_ms: 900
+      )
+
+      drain()
+
+      assert [%Event{} = row] = SessionLog.list_latest_per_session(10)
+      assert row.session_id == "visitor:v1:7"
+      assert row.event == :disconnected
+      assert row.reason == ":quit"
+      assert row.duration_ms == 900
+    end
+
+    test "returns one row per session, newest-first" do
+      for n <- 1..3, do: SessionLog.emit(:connected, state({:user, "u#{n}"}), [])
+      SessionLog.emit(:disconnected, state({:user, "u1"}), reason: ":tcp_closed", clean: false)
+      drain()
+
+      rows = SessionLog.list_latest_per_session(10)
+
+      assert Enum.map(rows, & &1.session_id) == ["user:u1:7", "user:u3:7", "user:u2:7"]
+      assert Enum.map(rows, & &1.event) == [:disconnected, :connected, :connected]
+    end
+
+    test "the limit bounds SESSIONS, not the raw rows behind them" do
+      for n <- 1..3 do
+        SessionLog.emit(:connected, state({:user, "u#{n}"}), [])
+        SessionLog.emit(:identified, state({:user, "u#{n}"}), [])
+      end
+
+      drain()
+
+      # Six rows on disk, three sessions. A row-bounded query would answer
+      # ONE session here — the newest two rows both belong to u3.
+      assert Repo.aggregate(Event, :count) == 6
+      assert Enum.map(SessionLog.list_latest_per_session(2), & &1.session_id) ==
+               ["user:u3:7", "user:u2:7"]
+    end
+  end
+
   test "persist broadcasts the wire event on Topic.session_log/0" do
     :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.session_log())
 

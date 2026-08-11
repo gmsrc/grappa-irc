@@ -186,6 +186,38 @@ defmodule Grappa.SessionLog do
     |> Repo.all()
   end
 
+  @doc """
+  Returns the NEWEST event of each distinct `session_id`, newest-first,
+  bounded to `limit` **sessions** (not rows — a session with a long
+  history still costs one).
+
+  `session_id` is `(subject, network)`-grained, so this collapses the
+  event stream to the same grain the admin session rows already use, and
+  the row it yields is the last thing that session did: a `:disconnected`
+  carries `reason` / `clean` / `duration_ms`, a still-live one carries
+  whatever it last transitioned through.
+
+  This is the ONLY record of a session whose subject row is gone (#1158
+  item 4): `session_log_events` has no FK to `users` / `visitors`, so it
+  survives the visitor purge + reap CASCADE. Best-effort by construction
+  — the ring is global and bounded, and the disconnect write is an async
+  cast — so a MISSING session is not an error, and no caller may treat
+  the absence of a row as evidence a session never existed.
+  """
+  @spec list_latest_per_session(pos_integer()) :: [Event.t()]
+  def list_latest_per_session(limit) when is_integer(limit) and limit > 0 do
+    newest_per_session =
+      Event
+      |> group_by([e], e.session_id)
+      |> select([e], max(e.id))
+
+    Event
+    |> where([e], e.id in subquery(newest_per_session))
+    |> order_by([e], desc: e.id)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
   @impl GenServer
   def init(opts) do
     if Keyword.get(opts, :attach_telemetry, true) do

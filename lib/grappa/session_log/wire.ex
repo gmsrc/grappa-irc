@@ -37,6 +37,13 @@ defmodule Grappa.SessionLog.Wire do
   @typedoc "REST list envelope — `GET /admin/session_log`."
   @type list_result :: %{session_log: [t()]}
 
+  @typedoc """
+  REST envelope for the per-session collapse — `GET
+  /admin/session_log/sessions` (#1158 item 4). Same entry shape as the
+  tail; one entry per `session_id`, carrying that session's newest event.
+  """
+  @type sessions_result :: %{session_log_sessions: [t()]}
+
   @doc "Renders one persisted `Event` to its public wire shape."
   @spec to_json(Event.t()) :: t()
   def to_json(%Event{} = e) do
@@ -66,4 +73,9 @@ defmodule Grappa.SessionLog.Wire do
   @spec list_payload([Event.t()]) :: list_result()
   def list_payload(events) when is_list(events),
     do: %{session_log: Enum.map(events, &to_json/1)}
+
+  @doc "Wraps the per-session collapse as the `%{session_log_sessions: [...]}` envelope."
+  @spec sessions_payload([Event.t()]) :: sessions_result()
+  def sessions_payload(events) when is_list(events),
+    do: %{session_log_sessions: Enum.map(events, &to_json/1)}
 end
