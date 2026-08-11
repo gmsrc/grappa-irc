@@ -34615,6 +34615,20 @@ side and `c.network_slug` on the cic side and **never with a default** —
 a default would make two cases that differ ONLY by slug indistinguishable,
 which is precisely what the new cases exist to pin.
 
+**The required positional earned its keep at the rebase, measurably.** The
+paragraph above was a prediction when it was written; rebasing onto a main
+that had moved tested it. Two consumers authored while this PR was open read
+the mute network-blind — `WindowBadges.tsx` (#1077's dimmed badge, which
+decoded the composite key and threw the network half away, comment and all)
+and `scrollback_test.exs`'s #532 C pin — and NEITHER was found by review or
+by a conflict marker. Both announced themselves as hard failures: a
+TypeScript arity error and an `UndefinedFunctionError`. A defaulted or
+optional slug would have compiled both and shipped a badge that dims the
+same channel name on every network the operator is on. Widening the arity is
+what converted "a consumer we forgot" from a silent wrong answer into a
+build failure, and that is the reason not to soften it later for the
+convenience of one call site.
+
 ## A BARE key at the write boundary is DROPPED, and the rest of the PUT lands
 
 An old cic bundle (installed PWA, cached for weeks — the documented
