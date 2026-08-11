@@ -2956,16 +2956,14 @@ export type AdminCredential = NetworksCredentialsAdminWireT & {
 
 export type AdminCredentialsResponse = { credentials: AdminCredential[] };
 
-export async function adminListCredentials(
-  token: string,
-  filters?: { user_id?: string; network_id?: number },
-): Promise<AdminCredential[]> {
-  const params = new URLSearchParams();
-  if (filters?.user_id !== undefined) params.set("user_id", filters.user_id);
-  if (filters?.network_id !== undefined) params.set("network_id", String(filters.network_id));
-  const qs = params.toString();
-  const url = qs === "" ? "/admin/credentials" : `/admin/credentials?${qs}`;
-  const res = await fetch(url, { headers: buildHeaders(token) });
+// #1158 — no `filters` argument. It used to accept `user_id` / `network_id`
+// and put them in the query string, but the controller's `index/2` takes
+// `_params` and answers the whole table regardless. A caller asking for one
+// user's rows would have been handed everyone's and had no way to tell, which
+// is exactly the mistake the per-user page had to avoid. Filter at the call
+// site until the server grows a real one.
+export async function adminListCredentials(token: string): Promise<AdminCredential[]> {
+  const res = await fetch("/admin/credentials", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
   const body = (await res.json()) as AdminCredentialsResponse;
   return body.credentials;
