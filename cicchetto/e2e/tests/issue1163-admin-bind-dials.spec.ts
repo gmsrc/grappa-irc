@@ -6,7 +6,7 @@
 // nothing to press, and got "That network or resource doesn't exist." from
 // every send until the node was restarted.
 //
-// ## Why admin-credentials.spec.ts could not have caught it
+// ## Why admin-user-networks.spec.ts could not have caught it
 //
 // That spec binds against networks it creates with `POST /admin/networks` and
 // no server row. A server-less network fails plan resolution, so even the
@@ -39,7 +39,7 @@
 //
 // ## The oracle
 //
-// The Credentials tab renders two independent readings per row, and #1163 is
+// The per-user page renders two independent readings per row, and #1163 is
 // precisely the case where they disagreed:
 //
 //   * CONNECTION — the DB intent (`connection_state`).
@@ -74,10 +74,15 @@ async function adminLogin(page: import("@playwright/test").Page, seed: Admin): P
   await expectShellReady(page);
 }
 
-async function openCredentialsTab(page: import("@playwright/test").Page): Promise<void> {
+// #1158 — the console door moved. Binding is no longer a database-wide form
+// that asks which user; it is the `+` on that one user's page, reached by
+// drilling in from the Users list the way an operator does.
+async function openUserPage(page: import("@playwright/test").Page, userId: string): Promise<void> {
   await openAdminConsole(page);
-  await page.getByTestId("admin-tab-credentials").click();
-  await expect(page.getByTestId("admin-credentials-table")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId("admin-tab-users").click();
+  await expect(page.getByTestId("admin-users-table")).toBeVisible({ timeout: 10_000 });
+  await page.getByTestId(`admin-user-networks-${userId}`).click();
+  await expect(page.getByTestId("admin-user-page")).toBeVisible({ timeout: 10_000 });
 }
 
 async function api(token: string, method: string, path: string, body?: unknown): Promise<Response> {
@@ -180,23 +185,23 @@ test("admin binds a credential from the console and the session dials out", asyn
     userId = await createUser(admin.token, userName);
 
     await adminLogin(page, admin);
-    await openCredentialsTab(page);
+    await openUserPage(page, userId);
 
-    // Pre-state: the binding does not exist yet, so the row this test is about
+    // Pre-state: the user is on no networks yet, so the row this test is about
     // to assert on cannot be a leftover from an earlier run.
-    const credKey = `${userId}:${networkId}`;
-    await expect(page.getByTestId(`admin-credential-row-${credKey}`)).toHaveCount(0);
+    await expect(page.getByTestId(`admin-user-network-row-${networkId}`)).toHaveCount(0);
 
     // The bind goes through the CONSOLE, not the API — the door the operator
     // in the issue actually used, and the one that had no other door on a
     // release image (#1158).
-    await page.getByTestId("admin-credentials-bind-user").selectOption({ label: userName });
-    await page.getByTestId("admin-credentials-bind-network").selectOption({ label: NETWORK_SLUG });
-    await page.getByTestId("admin-credentials-bind-nick").fill(nick);
-    await page.getByTestId("admin-credentials-bind-auth-method").selectOption("none");
-    await page.getByTestId("admin-credentials-bind-submit").click();
+    await page.getByTestId("admin-user-network-add").click();
+    await expect(page.getByTestId("admin-user-network-add-form")).toBeVisible();
+    await page.getByTestId("admin-user-network-add-network").selectOption({ label: NETWORK_SLUG });
+    await page.getByTestId("admin-user-network-add-nick").fill(nick);
+    await page.getByTestId("admin-user-network-add-auth-method").selectOption("none");
+    await page.getByTestId("admin-user-network-add-submit").click();
 
-    const row = page.getByTestId(`admin-credential-row-${credKey}`);
+    const row = page.getByTestId(`admin-user-network-row-${networkId}`);
     await expect(row).toHaveCount(1, { timeout: 10_000 });
 
     // The witness. `alive` is the BEAM reading: a Session.Server exists for
@@ -213,8 +218,8 @@ test("admin binds a credential from the console and the session dials out", asyn
     // GET /admin/credentials rather than on the bind response the tab just
     // rendered.
     await page.reload();
-    await openCredentialsTab(page);
-    const reloadedRow = page.getByTestId(`admin-credential-row-${credKey}`);
+    await openUserPage(page, userId);
+    const reloadedRow = page.getByTestId(`admin-user-network-row-${networkId}`);
     await expect(reloadedRow).toContainText("alive", { timeout: 10_000 });
     await expect(reloadedRow).toContainText("connected");
   } finally {
