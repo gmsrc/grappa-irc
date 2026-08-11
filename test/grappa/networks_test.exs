@@ -748,21 +748,21 @@ defmodule Grappa.NetworksTest do
       net_a = network_fixture("net-a-#{System.unique_integer([:positive])}")
       net_b = network_fixture("net-b-#{System.unique_integer([:positive])}")
 
-      {:ok, straddler} =
+      {:ok, _} =
         Credentials.bind_credential(hi_user, net_b, %{
           nick: "a",
           auth_method: :none,
           autojoin_channels: []
         })
 
-      {:ok, tied_hi} =
+      {:ok, _} =
         Credentials.bind_credential(hi_user, net_a, %{
           nick: "a",
           auth_method: :none,
           autojoin_channels: []
         })
 
-      {:ok, tied_lo} =
+      {:ok, _} =
         Credentials.bind_credential(lo_user, net_b, %{
           nick: "b",
           auth_method: :none,
@@ -773,9 +773,12 @@ defmodule Grappa.NetworksTest do
       # one row at the very end of a second, two in the next one, tied with
       # each other. In a real run the clock decides whether this ever occurs,
       # which is why the flake surfaced once and vanished on rerun.
-      straddler = stamp(straddler, ~U[2026-08-09 02:29:41.999969Z])
-      tied_hi = stamp(tied_hi, ~U[2026-08-09 02:29:42.000012Z])
-      tied_lo = stamp(tied_lo, ~U[2026-08-09 02:29:42.000012Z])
+      boundary = ~U[2026-08-09 02:29:41.999969Z]
+      next_second = ~U[2026-08-09 02:29:42.000012Z]
+
+      stamp(hi_user, net_b, boundary)
+      stamp(hi_user, net_a, next_second)
+      stamp(lo_user, net_b, next_second)
 
       ts =
         Enum.map(Credentials.list_credentials_for_all_users(), &{&1.user_id, &1.network_id, &1.inserted_at})
@@ -788,25 +791,21 @@ defmodule Grappa.NetworksTest do
       # a second boundary. The query is chronological and right; the oracle
       # that re-sorted the query's own output was the wrong one (#1098).
       assert ts == [
-               {straddler.user_id, straddler.network_id, straddler.inserted_at},
-               {tied_lo.user_id, tied_lo.network_id, tied_lo.inserted_at},
-               {tied_hi.user_id, tied_hi.network_id, tied_hi.inserted_at}
+               {hi_user.id, net_b.id, boundary},
+               {lo_user.id, net_b.id, next_second},
+               {hi_user.id, net_a.id, next_second}
              ]
     end
 
-    # #1098 — pins a credential's `inserted_at` and hands the row back as it
-    # now reads, so the assertions above compare stored values rather than
-    # the pre-update struct.
-    defp stamp(%Credential{} = cred, %DateTime{} = at) do
+    # #1098 — pins one credential's `inserted_at`, so the ordering case under
+    # test is produced on purpose instead of waited for from the clock.
+    defp stamp(%Accounts.User{} = user, %Network{} = network, %DateTime{} = at) do
       {1, _} =
-        Repo.update_all(
-          from(c in Credential,
-            where: c.user_id == ^cred.user_id and c.network_id == ^cred.network_id
-          ),
-          set: [inserted_at: at]
-        )
+        Credential
+        |> where([c], c.user_id == ^user.id and c.network_id == ^network.id)
+        |> Repo.update_all(set: [inserted_at: at])
 
-      %{cred | inserted_at: at}
+      :ok
     end
   end
 
