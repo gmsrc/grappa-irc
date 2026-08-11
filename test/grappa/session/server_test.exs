@@ -2147,6 +2147,52 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # #388 — the CAP ACK seam is what grants the account axis, and until now
+  # nothing exercised it: every identity test seeds `caps_active` by hand,
+  # so the path from the wire to the gate was unproven in both directions.
+  # vjt's ruling of 2026-08-11 made that path load-bearing — without the ACK
+  # a services ACCOUNT is display only — so it gets a test that drives real
+  # bytes rather than a hand-built state.
+  describe "CAP ACK grants the account axis (#388)" do
+    test "an ACKed account-notify turns a self ACCOUNT into an identity acquisition" do
+      handler = fn state, line ->
+        if String.starts_with?(line, "USER ") do
+          {:reply, ":irc 001 grappa-test :Welcome\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(handler)
+      {user, network, _} = setup_user_and_network(port)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      own_nick = SessionStateHelpers.nick(SessionStateHelpers.fetch(pid))
+
+      # The blob carries a second cap because a real ACK does; the tracked
+      # one must survive the company. Then the ACCOUNT arrives — the same
+      # line that, without the ACK, moves nothing but the WHOIS card.
+      IRCServer.feed(server, ":irc CAP #{own_nick} ACK :account-notify labeled-response\r\n")
+      IRCServer.feed(server, ":#{own_nick}!u@h ACCOUNT vjtaccount\r\n")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "event",
+                       payload: %{
+                         kind: :session_identity_changed,
+                         identified: true,
+                         account: "vjtaccount"
+                       }
+                     },
+                     1_000
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "PING/PONG" do
     test "responds to server PING with matching PONG" do
       {server, port} = start_server()
