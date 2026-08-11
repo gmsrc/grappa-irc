@@ -3,8 +3,9 @@ defmodule Grappa.ReleaseTest do
   The deploy scripts — and, since #1158, the operator CLI that ships AS
   `bin/grappa` — invoke `Grappa.Release` entry points as STRINGS
   inside `bin/grappa eval '...'`. Nothing links the two at compile time:
-  rename or drop a function here and every substrate that runs a packaged
-  release keeps calling the old name, failing only at deploy time, on the
+  rename, drop, or change the arity of a function here and every substrate
+  that runs a packaged release keeps calling the old shape, failing only at
+  deploy time, on the
   jail and the published image, where a shell hook's non-zero exit may be
   deliberately non-fatal (#440's seed warns and continues) — so the call
   can rot in silence.
@@ -26,19 +27,32 @@ defmodule Grappa.ReleaseTest do
     "infra/release/grappa.sh"
   ]
 
-  # `Grappa.Release.foo()` / `Grappa.Release.foo(args)` as written inside
-  # an eval string.
-  @call_re ~r/Grappa\.Release\.([a-z_][a-z0-9_]*)\s*\(/
+  # A whole `Grappa.Release.foo(...)` call as written inside an eval
+  # string, arguments included — one level of nesting is enough for
+  # `cli(System.argv())` and for anything a shell one-liner will hold.
+  @call_re ~r/Grappa\.Release\.[a-z_][a-z0-9_]*\((?:[^()]|\([^()]*\))*\)/
 
+  # The ARITY is read from the parsed call, never counted off commas: a
+  # name-only pin is blind to `cli(System.argv())` becoming
+  # `migrate(System.argv())`, because `migrate` is exported too — measured,
+  # #1158. `UndefinedFunctionError` at deploy time does not care which
+  # half of `{name, arity}` drifted.
   defp referenced_functions do
     @deploy_scripts
     |> Enum.flat_map(fn rel ->
       rel
       |> File.read!()
       |> then(&Regex.scan(@call_re, &1))
-      |> Enum.map(fn [_, fun] -> {rel, String.to_atom(fun)} end)
+      |> Enum.map(fn [call] -> {rel, call, parse_call!(call)} end)
     end)
     |> Enum.uniq()
+  end
+
+  defp parse_call!(call) do
+    {{:., _, [{:__aliases__, _, [:Grappa, :Release]}, fun]}, _, args} =
+      Code.string_to_quoted!(call)
+
+    {fun, length(args)}
   end
 
   test "every deploy script listed here exists" do
@@ -57,14 +71,14 @@ defmodule Grappa.ReleaseTest do
              "release path stopped using them (delete this test) or the regex rotted"
   end
 
-  test "every Grappa.Release function a deploy script invokes is exported" do
+  test "every Grappa.Release function a deploy script invokes is exported at that arity" do
     exported = Grappa.Release.__info__(:functions)
 
-    for {script, fun} <- referenced_functions() do
-      assert Keyword.has_key?(exported, fun),
-             "#{script} invokes Grappa.Release.#{fun}() but Grappa.Release exports " <>
-               "no such function — that deploy step would crash on the substrate " <>
-               "that runs a packaged release. Exported: #{inspect(Keyword.keys(exported))}"
+    for {script, call, {fun, arity}} <- referenced_functions() do
+      assert {fun, arity} in exported,
+             "#{script} evaluates `#{call}` but Grappa.Release exports no " <>
+               "#{fun}/#{arity} — that step would crash on the substrate that runs " <>
+               "a packaged release. Exported: #{inspect(exported)}"
     end
   end
 end
