@@ -27,8 +27,15 @@ import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
+// A network slug is `^[a-z0-9_-]{1,32}$` (`Identifier.@network_slug_regex`),
+// and going over it answers 422 at setup — a failure that reads as a broken
+// test rather than as the length rule it is. So the clock is truncated and the
+// budget is asserted here, where a future edit trips over it while it is being
+// written instead of thirty seconds into a container run.
 function unique(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const id = `${prefix}-${Date.now() % 1_000_000}-${Math.random().toString(36).slice(2, 6)}`;
+  if (id.length > 32) throw new Error(`unique: "${id}" is ${id.length} chars, slug limit is 32`);
+  return id;
 }
 
 async function adminLogin(
@@ -155,8 +162,8 @@ async function deleteNetworkBestEffort(token: string, networkId: number): Promis
 
 test("an operator creates a user and gives it a network in one flow", async ({ page }) => {
   const admin = getSeededAdmin();
-  const userName = unique("e2eusernet-flow-u");
-  const netSlug = unique("e2eusernet-flow-n");
+  const userName = unique("e2eun-flow-u");
+  const netSlug = unique("e2eun-flow-n");
   let userId: string | null = null;
   let networkId: number | null = null;
 
@@ -210,8 +217,8 @@ test("an operator creates a user and gives it a network in one flow", async ({ p
 
 test("admin adds a network to an existing user — the row appears", async ({ page }) => {
   const admin = getSeededAdmin();
-  const userName = unique("e2eusernet-add-u");
-  const netSlug = unique("e2eusernet-add-n");
+  const userName = unique("e2eun-add-u");
+  const netSlug = unique("e2eun-add-n");
   let userId: string | null = null;
   let networkId: number | null = null;
 
@@ -242,8 +249,8 @@ test("admin adds a network to an existing user — the row appears", async ({ pa
 
 test("admin edits a network (realname change) — the row reports left_alone", async ({ page }) => {
   const admin = getSeededAdmin();
-  const userName = unique("e2eusernet-edit-u");
-  const netSlug = unique("e2eusernet-edit-n");
+  const userName = unique("e2eun-edit-u");
+  const netSlug = unique("e2eun-edit-n");
   let userId: string | null = null;
   let networkId: number | null = null;
 
@@ -278,8 +285,8 @@ test("admin edits a network (realname change) — the row reports left_alone", a
 
 test("admin removes a network via inline-confirm — the row goes", async ({ page }) => {
   const admin = getSeededAdmin();
-  const userName = unique("e2eusernet-rm-u");
-  const netSlug = unique("e2eusernet-rm-n");
+  const userName = unique("e2eun-rm-u");
+  const netSlug = unique("e2eun-rm-n");
   let userId: string | null = null;
   let networkId: number | null = null;
 
