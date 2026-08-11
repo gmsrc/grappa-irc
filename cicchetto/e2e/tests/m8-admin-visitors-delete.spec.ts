@@ -32,7 +32,6 @@
 
 import {
   adminSessionRowKey,
-  adminSessionRows,
   openAdminSessionDetail,
   openAdminSessionsTab,
 } from "../fixtures/cicchettoPage";
@@ -89,9 +88,26 @@ test("M-8 admin deletes a minted visitor from the unified Sessions view (inline 
 
     // Identity-wide: the assertion is on EVERY row of this visitor, not
     // the one the panel hung off. A delete that reaped only the clicked
-    // (visitor, network) pair would leave the siblings on screen, and
-    // `toHaveCount(0)` over the prefix is what catches that.
-    await expect(adminSessionRows(page, "visitor", visitor.id)).toHaveCount(0, { timeout: 10_000 });
+    // (visitor, network) pair would leave the siblings behind.
+    //
+    // #1158 item 4 changed what that looks like on screen, not what the
+    // verb does. The identity is still destroyed — but `session_log_events`
+    // has no FK to the subject, so a row can SURVIVE the CASCADE as the
+    // log-only class: badged "deleted", no DB state, no verbs. Counting
+    // rows would now assert the pre-item-4 world.
+    //
+    // So the identity-wide property moves onto the verbs. `rowActions`
+    // gives a credential-backed visitor row exactly one of Disconnect /
+    // Reconnect, on every network it is bound to; zero of either across
+    // the whole `visitor:<id>:` prefix is "no credential of this visitor
+    // survives anywhere" — the same claim, and it holds whether or not
+    // the log happened to remember the session (bounded ring, best-effort
+    // write: this spec must not depend on it).
+    const survivingVerbs = page.locator(
+      `[data-testid^="admin-session-disconnect-visitor:${visitor.id}:"],` +
+        `[data-testid^="admin-session-reconnect-visitor:${visitor.id}:"]`,
+    );
+    await expect(survivingVerbs).toHaveCount(0, { timeout: 10_000 });
     await expect(page.getByTestId("admin-sessions-error")).toHaveCount(0);
   } finally {
     // Idempotent — 404 if test already deleted it; safety net for

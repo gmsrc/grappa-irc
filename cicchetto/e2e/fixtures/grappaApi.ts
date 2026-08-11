@@ -453,6 +453,26 @@ export async function terminateSession(adminToken: string, sessionId: string): P
   }
 }
 
+// #1158 item 4 — the lifecycle log collapsed to one entry per session.
+// A spec uses this as a PRECONDITION barrier, never as the property under
+// test: the log is a bounded global ring written from an async cast, so a
+// spec that wants to drive the "subject deleted, event survives" surface
+// must first establish that the event actually landed.
+export async function listSessionLogSessions(
+  adminToken: string,
+): Promise<Array<{ session_id: string; event: string; nick: string | null }>> {
+  const res = await fetch(`${GRAPPA_BASE_URL}/admin/session_log/sessions`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`grappaApi.listSessionLogSessions: ${res.status} ${await res.text()}`);
+  }
+  const body = (await res.json()) as {
+    session_log_sessions: Array<{ session_id: string; event: string; nick: string | null }>;
+  };
+  return body.session_log_sessions;
+}
+
 // M-cluster M-8 — operator-side delete via admin bearer. Mirrors
 // `Grappa.Operator.delete_visitor/1`. Used by e2e tests that mint
 // a visitor and need teardown cleanup on early-assertion-failure
