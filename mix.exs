@@ -92,7 +92,7 @@ defmodule Grappa.MixProject do
           # belt-and-suspenders that refuses to ship if a future gap reopens it,
           # because a version string that can be stale is worse than none — it
           # is trusted. See `assert_version_sha/1`.
-          steps: [:assemble, &assert_version_sha/1],
+          steps: [:assemble, &__MODULE__.install_operator_cli/1, &assert_version_sha/1],
           # `assemble` — Docker deploys never used `mix release`
           # (the container IS the runtime, see CLAUDE.md). The release
           # target is the FreeBSD bastille jail on m42 which has no
@@ -141,6 +141,48 @@ defmodule Grappa.MixProject do
       # chatty about thresholds nothing here acts on.
       extra_applications: [:logger, :os_mon, :runtime_tools, :ssl, :crypto, :inets]
     ]
+  end
+
+  # The shipped operator CLI and the marker that proves a file IS it.
+  @operator_cli "infra/release/grappa.sh"
+  @operator_cli_marker "grappa-operator-cli (#1158)"
+
+  @doc """
+  `mix release` step (#1158): puts the operator CLI in front of the boot
+  script `:assemble` generated, moving that script to `bin/<name>-release`.
+
+  The account verbs (`grappa create-user vjt`) have to live on
+  `bin/grappa` itself, because that is the file every substrate ends up
+  executing — the Docker entrypoint, a `docker exec`, the packaged
+  `/usr/bin/grappa`, the jail's rc.d. Putting them in one substrate's
+  wrapper would leave the others, and `docker exec` in particular, still
+  answering `ERROR: Unknown command create-user`.
+
+  Public only so `Grappa.ReleaseCLIInstallTest` can drive it against a
+  temp tree; a released `mix release` is otherwise the only caller.
+  """
+  def install_operator_cli(%Mix.Release{name: name, path: path} = release) do
+    launcher = Path.join([path, "bin", Atom.to_string(name)])
+    delegate = launcher <> "-release"
+
+    # If the launcher is ALREADY the CLI, `:assemble` did not regenerate
+    # it and renaming would make the dispatcher exec itself — a boot loop
+    # on every substrate at once. Refuse loudly instead.
+    if File.read!(launcher) =~ @operator_cli_marker do
+      Mix.raise(
+        "operator CLI (#1158): #{launcher} is already the dispatcher, so :assemble did not " <>
+          "regenerate the boot script. Refusing to rename it onto itself — clean the release " <>
+          "directory and re-assemble."
+      )
+    end
+
+    File.rename!(launcher, delegate)
+    File.cp!(@operator_cli, launcher)
+    File.chmod!(launcher, 0o755)
+
+    Mix.shell().info("operator CLI (#1158): bin/#{name} dispatches account verbs")
+
+    release
   end
 
   # #542 — `mix release` step (runs after `:assemble`). Compares the git

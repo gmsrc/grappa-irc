@@ -1,0 +1,75 @@
+#!/bin/sh
+# grappa-operator-cli (#1158) — installed as `bin/grappa` in an assembled
+# release, in front of the boot script `mix release` generates (which is
+# moved aside to `bin/grappa-release`). See `install_operator_cli/1` in
+# mix.exs.
+#
+# WHY IT SITS HERE AND NOT IN A SUBSTRATE WRAPPER
+#
+# A release ships no Mix, so every `grappa.*` operator task that seeds a
+# source install is absent from a packaged one. The generated boot script
+# knows start/daemon/eval/rpc/remote/stop/pid/version and answers
+# `ERROR: Unknown command create-user` to anything else — which is what a
+# real operator hit on ghcr.io/vjt/grappa:latest, with no supported way
+# to a first account.
+#
+# The fix belongs to the RELEASE, not to any one substrate's wrapper,
+# because `bin/grappa` is what every door ends up executing:
+#
+#   docker run <image> create-user vjt      (entrypoint execs bin/grappa)
+#   docker exec <ctr> bin/grappa create-user vjt
+#   sudo grappa create-user vjt             (.deb/AUR /usr/bin/grappa)
+#   .../rel/grappa/bin/grappa create-user vjt   (bastille jail, systemd)
+#
+# One dispatcher covers all four. Teaching each wrapper separately would
+# be four verb tables to keep in step, and `docker exec` would still be
+# left out.
+#
+# WHAT IT DOES
+#
+# Recognised account verbs are rewritten into the `eval` that reaches
+# `Grappa.Release.cli/1`; everything else is handed to the release
+# unchanged. The rewrite is a FIXED expression and the operator's words
+# travel as argv (`--eval EXPR -- "$@"` in the generated script, read
+# back by `System.argv/0`), so nothing the operator types is ever
+# interpolated into Elixir source. A password with a quote in it is just
+# an argument.
+
+set -e
+
+# `$0` may be a symlink (a distro dropping /usr/local/bin/grappa next to
+# the real tree), and the delegate is resolved relative to the REAL file,
+# never to the name it was invoked by. Same resolution the generated
+# script performs on itself, for the same reason.
+readlink_f() {
+	cd "$(dirname "$1")" >/dev/null || exit 1
+	filename="$(basename "$1")"
+	if [ -h "$filename" ]; then
+		readlink_f "$(readlink "$filename")"
+	else
+		echo "$(pwd -P)/$filename"
+	fi
+}
+
+SELF="$(readlink_f "$0")"
+RELEASE_BOOT_SCRIPT_PATH="$(dirname "$SELF")/grappa-release"
+
+if [ ! -x "$RELEASE_BOOT_SCRIPT_PATH" ]; then
+	echo "grappa: $RELEASE_BOOT_SCRIPT_PATH is missing — this release was assembled wrong" >&2
+	exit 1
+fi
+
+case "${1:-}" in
+create-user | add-network | remove-network | help)
+	set -- eval 'Grappa.Release.cli(System.argv())' "$@"
+	;;
+'')
+	# The release prints its own usage below; the account verbs are not
+	# in it, and an operator who runs the bare command is exactly the one
+	# who has not found them yet.
+	echo "grappa: account commands: create-user, add-network, remove-network" >&2
+	echo "grappa: run 'grappa help' for their arguments" >&2
+	;;
+esac
+
+exec "$RELEASE_BOOT_SCRIPT_PATH" "$@"
