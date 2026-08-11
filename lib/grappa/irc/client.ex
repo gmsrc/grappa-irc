@@ -1676,7 +1676,7 @@ defmodule Grappa.IRC.Client do
   defp log_stop_reason({:sasl_failed, code}, fsm) do
     Logger.error(
       "sasl auth failed",
-      [numeric: code, sasl_user: fsm.sasl_user] ++ AuthFSM.sasl_breadcrumb()
+      [numeric: code, sasl_user: fsm.sasl_user] ++ AuthFSM.sasl_breadcrumb(fsm)
     )
   end
 

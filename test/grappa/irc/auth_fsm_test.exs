@@ -441,15 +441,24 @@ defmodule Grappa.IRC.AuthFSMTest do
       %{state: %{state | phase: :sasl_pending}}
     end
 
-    test "AUTHENTICATE + -> AUTHENTICATE <base64 PLAIN payload>; state unchanged",
+    test "AUTHENTICATE + -> AUTHENTICATE <base64 PLAIN payload>; records only the field count",
          %{state: state} do
       msg = %Message{command: :authenticate, params: ["+"]}
 
-      assert {:cont, ^state, sends} = AuthFSM.step(state, msg)
+      assert {:cont, next, sends} = AuthFSM.step(state, msg)
       [line] = send_lines(sends)
       "AUTHENTICATE " <> b64 = line
       # PLAIN: \0authzid\0authcid\0password — authzid empty (GH #1169)
       assert Base.decode64!(b64) == <<0, "vjt", 0, "swordfish">>
+
+      # GH #1169 — emitting the payload is no longer state-free: it records
+      # how many fields actually went out, for the failure breadcrumb. This
+      # pins that the count is the ONLY thing it records, which is what the
+      # `^state` pin used to say. The count is asserted against the payload
+      # decoded above rather than as a literal, so it states a
+      # correspondence instead of a second copy of the byte assertion.
+      assert %{next | sasl_fields: :none} == state
+      assert next.sasl_fields == length(:binary.split(Base.decode64!(b64), <<0>>, [:global]))
     end
 
     # GH #1169. RFC 4616 §2 fixes the payload at `[authzid] NUL authcid
@@ -931,10 +940,16 @@ defmodule Grappa.IRC.AuthFSMTest do
 
       msg = %Message{command: :authenticate, params: ["+"]}
 
-      assert {:cont, ^pending, sends} = AuthFSM.step(pending, msg)
+      assert {:cont, next, sends} = AuthFSM.step(pending, msg)
       [line] = send_lines(sends)
       "AUTHENTICATE " <> b64 = line
       assert Base.decode64!(b64) == <<0, "vjt", 0, "swordfish">>
+
+      # GH #1169 — the legitimate transition now records the emitted field
+      # count. Everything else stays put, which is the invariant the
+      # `^pending` match used to carry: the phase guard must not disturb
+      # anything beyond what the emit is entitled to record.
+      assert %{next | sasl_fields: :none} == pending
     end
   end
 end

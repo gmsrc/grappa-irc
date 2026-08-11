@@ -1190,7 +1190,20 @@ defmodule Grappa.IRC.ClientTest do
         |> String.trim_trailing("\r\n")
 
       [authzid | _] = :binary.split(Base.decode64!(b64), <<0>>, [:global])
-      breadcrumb = Keyword.fetch!(AuthFSM.sasl_breadcrumb(), :authzid)
+
+      # Any valid FSM will do: the authzid label is a constant, unlike the
+      # sibling `sasl_fields` that made this function take a state at all.
+      {:ok, fsm} =
+        AuthFSM.new(%{
+          nick: "grappa-test",
+          ident: "grappa-test",
+          realname: "grappa-test",
+          sasl_user: "vjt",
+          password: "swordfish",
+          auth_method: :sasl
+        })
+
+      breadcrumb = Keyword.fetch!(AuthFSM.sasl_breadcrumb(fsm), :authzid)
 
       # Correspondence, not a second copy of the constant: the field is
       # empty exactly when the breadcrumb says "empty". Populating the
@@ -1201,6 +1214,110 @@ defmodule Grappa.IRC.ClientTest do
 
       assert sent_empty? == claims_empty?,
              "breadcrumb says authzid=#{breadcrumb} but the payload sent #{inspect(authzid)}"
+    end
+
+    # GH #1169. `mechanism` and `authzid` are both compile-time constants:
+    # they read the same on a healthy handshake and on the malformed
+    # payload this breadcrumb was written for, so neither can separate two
+    # 904s. The field COUNT is what actually differed — the defect was a
+    # payload with one field too many — so the line has to carry it,
+    # DERIVED from the bytes the client really emitted rather than restated
+    # as a third constant.
+    #
+    # A correspondence, not a literal: this pins that the operator reads
+    # the count of the payload the server really received. WHAT that count
+    # ought to be (three, RFC 4616 §2) is pinned by the encoder's own guard
+    # in `auth_fsm_test.exs`; asserting the number here too would be a
+    # second copy of someone else's assertion, failing for their reason.
+    test "the 904 line reports the field count of the payload really sent (#1169)" do
+      {server, port} = start_server(sasl_handler("904 grappa-test :SASL auth failed"))
+
+      Process.flag(:trap_exit, true)
+
+      log =
+        capture_log(fn ->
+          {:ok, client} =
+            Client.start_link(%{
+              host: "127.0.0.1",
+              port: port,
+              tls: false,
+              dispatch_to: self(),
+              logger_metadata: [],
+              nick: "grappa-test",
+              ident: "grappa-test",
+              realname: "grappa-test",
+              sasl_user: "vjt",
+              password: "wrong",
+              auth_method: :sasl
+            })
+
+          # The 904 is the server's answer TO the payload, so this exit is
+          # a durable barrier: the line is already in `sent_lines`.
+          assert_receive {:EXIT, ^client, {:sasl_failed, 904}}, 1_000
+        end)
+
+      "AUTHENTICATE " <> b64 =
+        server
+        |> IRCServer.sent_lines()
+        |> Enum.find(fn line ->
+          String.starts_with?(line, "AUTHENTICATE ") and line != "AUTHENTICATE PLAIN\r\n"
+        end)
+        |> String.trim_trailing("\r\n")
+
+      sent_fields = length(:binary.split(Base.decode64!(b64), <<0>>, [:global]))
+
+      assert log =~ "sasl_fields=#{sent_fields}"
+    end
+
+    # A 904 can also arrive BEFORE any payload: an upstream that refuses
+    # the mechanism answers the `AUTHENTICATE PLAIN` line itself. The count
+    # is then neither three nor zero — nothing was encoded — and the line
+    # has to SAY that rather than omit the key. An absent key is
+    # indistinguishable from the formatter dropping one, which is the exact
+    # trap the allowlist above guards against.
+    test "a 904 before any payload reports the count as none (#1169)" do
+      refuse_mechanism = fn state, line ->
+        cond do
+          String.starts_with?(line, "CAP LS") ->
+            {:reply, ":server CAP * LS :sasl=PLAIN\r\n", state}
+
+          String.starts_with?(line, "CAP REQ") ->
+            {:reply, ":server CAP * ACK :sasl\r\n", state}
+
+          line == "AUTHENTICATE PLAIN\r\n" ->
+            {:reply, ":server 904 grappa-test :SASL mechanism unavailable\r\n", state}
+
+          true ->
+            {:reply, nil, state}
+        end
+      end
+
+      {_, port} = start_server(refuse_mechanism)
+
+      Process.flag(:trap_exit, true)
+
+      log =
+        capture_log(fn ->
+          {:ok, client} =
+            Client.start_link(%{
+              host: "127.0.0.1",
+              port: port,
+              tls: false,
+              dispatch_to: self(),
+              logger_metadata: [],
+              nick: "grappa-test",
+              ident: "grappa-test",
+              realname: "grappa-test",
+              sasl_user: "vjt",
+              password: "swordfish",
+              auth_method: :sasl
+            })
+
+          assert_receive {:EXIT, ^client, {:sasl_failed, 904}}, 1_000
+        end)
+
+      assert log =~ "numeric=904"
+      assert log =~ "sasl_fields=none"
     end
   end
 

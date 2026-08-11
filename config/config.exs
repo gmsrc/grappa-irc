@@ -408,10 +408,14 @@ config :logger, :console,
     # GH #1169: a 904 is the same numeric for a wrong password and for a
     # payload the server could not parse, so the failure line names the
     # mechanism driven and the shape of the authzid field sent
-    # (`Grappa.IRC.AuthFSM.sasl_breadcrumb/0`). Both are constants today,
-    # not secrets — the password never reaches a metadata key.
+    # (`Grappa.IRC.AuthFSM.sasl_breadcrumb/1`), plus how many fields that
+    # payload really carried — the only one of the three that can differ
+    # between a healthy handshake and the malformed payload #1169 was
+    # about. A count, never the contents: the password and the authcid do
+    # not reach a metadata key.
     :mechanism,
     :authzid,
+    :sasl_fields,
     # UX-6-B1 (2026-05-20): embedded image uploader reaper failure
     # log lines carry the upload row id + slug so operator can grep
     # per-upload across the reaper + GET surface.

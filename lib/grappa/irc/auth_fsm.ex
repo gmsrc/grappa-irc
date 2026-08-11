@@ -139,8 +139,19 @@ defmodule Grappa.IRC.AuthFSM do
           password: String.t() | nil,
           auth_method: auth_method(),
           phase: phase(),
-          caps_buffer: [String.t()]
+          caps_buffer: [String.t()],
+          sasl_fields: sasl_fields()
         }
+
+  @typedoc """
+  How many NUL-delimited fields the SASL PLAIN payload this FSM emitted
+  actually carried, or `:none` when it never got to emit one (GH #1169).
+
+  Counted from the bytes that went on the wire, NOT from the encoder's
+  declared shape: a restatement of the shape is what the operator already
+  had, and it read the same whether the payload was well-formed or not.
+  """
+  @type sasl_fields :: pos_integer() | :none
 
   @enforce_keys [
     :nick,
@@ -168,7 +179,9 @@ defmodule Grappa.IRC.AuthFSM do
     :phase,
     :nick_cap,
     nick_suffixes: [],
-    caps_buffer: []
+    caps_buffer: [],
+    # GH #1169: unset until the AUTHENTICATE payload is actually emitted.
+    sasl_fields: :none
   ]
 
   @doc """
@@ -322,9 +335,33 @@ defmodule Grappa.IRC.AuthFSM do
   its first field really is empty. Change the encoder's authzid and that
   test fails — which is the point, since the defect this breadcrumb was
   written for was prose about the encoder drifting from the encoder.
+
+  `sasl_fields` is the one field that is neither a label nor a constant,
+  and it is why this function takes a state at all. Both of the others
+  read IDENTICALLY on a healthy handshake and on the malformed payload
+  that motivated #1169, so neither could ever separate two 904s: the
+  defect was a payload carrying one field too many, and the field COUNT
+  is the only thing that differed. It is counted off the payload the FSM
+  really emitted (`record_sasl_fields/2`), so it reports what went out
+  rather than what the encoder is supposed to send. `:none` means no
+  payload was ever encoded — an upstream that refuses the mechanism
+  answers the `AUTHENTICATE PLAIN` line itself, and that is a materially
+  different failure from a rejected credential.
+
+  The count is a number and reveals nothing: the field CONTENTS never
+  reach a metadata key, here or anywhere on this line.
   """
-  @spec sasl_breadcrumb() :: [{:mechanism, String.t()} | {:authzid, String.t()}]
-  def sasl_breadcrumb, do: [mechanism: @sasl_mechanism, authzid: "empty"]
+  @spec sasl_breadcrumb(t()) ::
+          [{:mechanism, String.t()} | {:authzid, String.t()} | {:sasl_fields, sasl_fields()}]
+  def sasl_breadcrumb(%__MODULE__{} = state) do
+    [
+      mechanism: @sasl_mechanism,
+      authzid: "empty",
+      # `Map.get` rather than dot-access for the #216 hot-reload contract:
+      # a struct built before this field existed answers `:none`.
+      sasl_fields: Map.get(state, :sasl_fields) || :none
+    ]
+  end
 
   defp maybe_send_pass({%__MODULE__{auth_method: m, password: pw} = state, sends})
        when m in [:auto, :server_pass] and is_binary(pw) and pw != "" do
@@ -414,7 +451,8 @@ defmodule Grappa.IRC.AuthFSM do
   # stray pre-handshake `AUTHENTICATE` lines silently, mirroring the
   # post-`:registered` absorption above (line 227).
   def step(%__MODULE__{phase: :sasl_pending} = state, %Message{command: :authenticate, params: ["+"]}) do
-    {:cont, state, ["AUTHENTICATE #{sasl_plain_payload(state)}\r\n"]}
+    payload = sasl_plain_payload(state)
+    {:cont, record_sasl_fields(state, payload), ["AUTHENTICATE #{payload}\r\n"]}
   end
 
   def step(state, %Message{command: :authenticate}), do: {:cont, state, []}
@@ -760,6 +798,31 @@ defmodule Grappa.IRC.AuthFSM do
       true ->
         Base.encode64(<<0, u::binary, 0, pw::binary>>)
     end
+  end
+
+  # GH #1169 — how many NUL-delimited fields the payload we just emitted
+  # carried, for the failure breadcrumb.
+  #
+  # Derived by decoding the EMITTED base64 rather than by reading the
+  # encoder's shape, and that indirection is the whole point: the defect
+  # this breadcrumb exists for was a comment restating the encoder's shape
+  # and drifting from it, so a count restated the same way would report
+  # the intended payload while the wire carried another. Counting the
+  # bytes that actually went out cannot drift, because there is nothing
+  # left to drift from.
+  #
+  # Only the COUNT is kept. The decoded payload is a local that dies with
+  # the call; its fields hold `sasl_user` and the password and neither is
+  # stored, returned or logged.
+  @spec record_sasl_fields(t(), String.t()) :: t()
+  defp record_sasl_fields(state, payload) do
+    fields =
+      payload
+      |> Base.decode64!()
+      |> :binary.split(<<0>>, [:global])
+      |> length()
+
+    %{state | sasl_fields: fields}
   end
 
   # Parse a CAP LS / CAP ACK cap-list blob: space-separated cap tokens,
