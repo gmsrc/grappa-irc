@@ -38841,7 +38841,8 @@ takes whole STATES, not the axis that changed, and asks `identified?/1`
 twice. Passing only your own axis is precisely how the old readers drifted,
 and it also gets the cross-axis cases right for free: an account-identified
 session survives the #581 rename umode strip, because a nick change does
-not clear a services account.
+not clear a services account. (Narrowed the next day — that survival now
+holds only where `account-notify` is ACKed. See the 2026-08-11 entry.)
 
 **A gap fell out of the collapse.** 221 RPL_UMODEIS replaces the umode set
 wholesale and emitted no transition at all pre-#388, so a session that
@@ -38924,3 +38925,79 @@ not observed on the wire — grappa has never connected to OFTC. The gate
 limits the blast radius to networks an operator explicitly classified
 `:oftc`. Peer identities are also out of scope: inbound `ACCOUNT` for
 another user is dropped rather than folded into the members map.
+
+---
+
+## 2026-08-11 — #388: the account axis is proof only where account-notify is ACKed
+
+vjt's ruling, narrowing the entry above the day after it was written. The
+services account still feeds the WHOIS card everywhere; it counts toward
+the identity VERDICT only on a network that ACKed `account-notify`.
+
+**The reason is retractability, not flavour.** An account name is a live
+identity only where the ircd promises to tell us when it ends, and
+`account-notify` IS that promise — it is the cap that delivers
+`ACCOUNT *` on logout. Learn an account without it and we will never hear
+that it stopped being true, so the verdict can go up and never come down.
+A verdict that only rises is not a verdict.
+
+That is not a thought experiment. bahamut (Azzurra, all of prod) offers no
+such cap, and strips `+r` on a genuine rename (#581). Ungated, a single
+330 naming us pinned the session "identified" for the rest of its life:
+the `+r` strip stopped moving the verdict, and #581's re-identify
+affordance — the button whose entire job is to tell the operator they need
+to identify again — never came back. Gated, prod behaves exactly as it did
+before #388: `+r` decides, nothing else. The narrowing costs Azzurra
+nothing because Azzurra never had the axis to begin with.
+
+On solanum/OFTC the cap IS ACKed, so the axis is live there and behaves as
+designed: it survives a rename, and `ACCOUNT *` retracts it. A 330 with
+neither cap nor umode degrades to "not identified" — the safe direction,
+and the tolerance `identity.ts` already declares.
+
+**Where the gate lives, and why not at the call sites.** In
+`IdentityState`, the module that exists so a caller cannot forget an axis.
+A per-caller cap check would be exactly the drift it was written to end.
+The `caps_active` default is an empty set, so a hot-reloaded process whose
+state predates the key falls back to the umode axis (#216) rather than
+crashing — again the safe direction.
+
+**The seam was already there, and was throwing the answer away.**
+`Session.Server`'s CAP ACK handler parsed the whole ACK list and kept only
+`labeled-response`; every other grant went on the floor. `account-notify`
+was requested by `AuthFSM`, granted by the upstream, and then forgotten.
+It now records the ACKed subset of a declared `@tracked_caps` — the set of
+caps that change how this process behaves — so adding one is a list edit
+rather than another `if` waiting to drift.
+
+**This contradicts the checklist on purpose.** Box 2 said "parse WHOIS-330
+for account", full stop. The checklist predates the measurement; where the
+two disagree, the measured design wins.
+
+**A green test was holding the defect in place.** The pre-ruling
+`event_router_test.exs` asserted that an account-identified `:azzurra`
+session survives the rename strip — the un-narrowed behaviour, stated as
+an invariant. That is why this blocked a merge instead of becoming a
+follow-up: a test must never encode a bug, because it converts the bug
+into a promise. It was rewritten to assert the ruled behaviour, not
+deleted and not weakened, and the fixtures that describe solanum now seed
+the cap those ircds actually ACK.
+
+**What the mutation run proved, and what it refused to.** Five mutants
+were attempted; two — replacing the membership test with a bare `true` or
+`false` — do not COMPILE under `--warnings-as-errors` (an unused module
+attribute in one case, the type checker proving the branch constant in the
+other), so they are not measurements and were not counted. The three valid
+ones kill disjoint sets: dropping `account-notify` from `@tracked_caps`
+kills exactly one test, the new one that drives a real `CAP ACK` line
+through the fake ircd; defaulting the absent `caps_active` to a populated
+set kills the three "absent cap is not proof" claims; pointing the gate at
+a cap name nobody ACKs kills all nine "present cap is proof" claims. The
+first of those is the one worth having: every other identity test seeds
+`caps_active` by hand, so without it the gate could have been correct
+above a dead wire and nothing would have said so.
+
+**Still unobserved.** Whether Azzurra emits a 330 for a logged-in target
+at all. The narrowing is safe under either answer — that is part of why it
+is the right call — but it means the display-only path on bahamut is
+reasoned, not witnessed.
