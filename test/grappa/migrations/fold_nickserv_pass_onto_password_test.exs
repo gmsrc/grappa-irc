@@ -65,6 +65,28 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
       assert embeds?(source, @fold_sql)
     end
 
+    # GH #1028 — the ORDER, which the two assertions above cannot see. They are
+    # independent substring tests, so swapping the two `execute` blocks leaves
+    # both green: measured, by swapping them in the migration for real. Order is
+    # the one property #1028 exists to protect — promote-first flips the row to
+    # `:nickserv_identify` and the fold's own `WHERE` then matches nothing, so
+    # the copy reaches NOTHING and the migration is a silent no-op for exactly
+    # the rows it serves. Its only witness was the behaviour suite this file
+    # deleted, so the pin has to carry the claim now.
+    test "the fold statement comes BEFORE the promotion" do
+      source = squash(File.read!(Path.join(File.cwd!(), @migration_path)))
+
+      # Positions are destructured as integers before they are compared. A bare
+      # `<` over a possible `:nomatch` would be worse than useless: in Elixir's
+      # term order every number sorts below every atom, so an ABSENT promotion
+      # would read as "the fold comes first" and the pin would pass on a
+      # migration that lost half of itself.
+      assert {fold_at, _} = :binary.match(source, anchored(@fold_sql))
+      assert {promote_at, _} = :binary.match(source, anchored(@promote_sql))
+
+      assert fold_at < promote_at
+    end
+
     defp squash(text), do: text |> String.replace(~r/\s+/, " ") |> String.trim()
 
     # GH #1028 — anchored on the heredoc TERMINATOR, not a bare substring.
@@ -74,6 +96,11 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
     # `@fold_sql` alone, the old pin passed while the three behaviour tests
     # failed. That is the exact drift the pin exists to catch, so it has to see
     # the end of the statement, not just its beginning.
-    defp embeds?(source, sql), do: String.contains?(source, squash(sql) <> ~S[ """)])
+    defp embeds?(source, sql), do: String.contains?(source, anchored(sql))
+
+    # One definition of the anchor, shared by the presence test and the order
+    # test: an anchoring the two could hold differently is an anchoring only one
+    # of them has.
+    defp anchored(sql), do: squash(sql) <> ~S[ """)]
   end
 end
