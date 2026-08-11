@@ -117,7 +117,7 @@ defmodule Grappa.Infra.KeepaliveIdleOrderingTest do
   defp upstream_blocks(source) do
     ~r/upstream\s+(\S+)\s*\{([^}]*)\}/
     |> Regex.scan(source)
-    |> Enum.map(fn [_all, name, body] -> {name, body} end)
+    |> Enum.map(fn [_, name, body] -> {name, body} end)
   end
 
   # `keepalive <n>;` (the pool-size directive) is what makes the connection
@@ -128,8 +128,8 @@ defmodule Grappa.Infra.KeepaliveIdleOrderingTest do
   defp idle_ms(body) do
     case Regex.run(~r/^\s*keepalive_timeout\s+(\d+)(ms|s|m|h)?\s*;/m, body) do
       nil -> nil
-      [_all, value] -> String.to_integer(value) * 1000
-      [_all, value, unit] -> String.to_integer(value) * unit_ms(unit)
+      [_, value] -> String.to_integer(value) * 1000
+      [_, value, unit] -> String.to_integer(value) * unit_ms(unit)
     end
   end
 
