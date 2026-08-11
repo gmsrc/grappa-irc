@@ -39,9 +39,10 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
   @spec parse!([String.t()], keyword(), [atom()]) :: keyword()
   def parse!(args, switches, required)
       when is_list(args) and is_list(switches) and is_list(required) do
-    args
-    |> CLI.parse(switches, required)
-    |> or_raise()
+    case CLI.parse(args, switches, required) do
+      {:ok, opts} -> opts
+      {:error, message} -> Mix.raise(message)
+    end
   end
 
   @doc """
@@ -50,9 +51,10 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
   """
   @spec parse_server(String.t()) :: {String.t(), :inet.port_number()}
   def parse_server(spec) when is_binary(spec) do
-    spec
-    |> CLI.parse_endpoint()
-    |> or_raise()
+    case CLI.parse_endpoint(spec) do
+      {:ok, endpoint} -> endpoint
+      {:error, message} -> Mix.raise(message)
+    end
   end
 
   @doc """
@@ -61,9 +63,10 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
   @spec parse_auth(String.t()) ::
           :auto | :sasl | :server_pass | :nickserv_identify | :none
   def parse_auth(string) when is_binary(string) do
-    string
-    |> CLI.parse_auth()
-    |> or_raise()
+    case CLI.parse_auth(string) do
+      {:ok, auth_method} -> auth_method
+      {:error, message} -> Mix.raise(message)
+    end
   end
 
   @doc """
@@ -72,7 +75,4 @@ defmodule Mix.Tasks.Grappa.OptionParsing do
   """
   @spec parse_autojoin(String.t() | nil) :: [String.t()]
   defdelegate parse_autojoin(string), to: CLI
-
-  defp or_raise({:ok, value}), do: value
-  defp or_raise({:error, message}), do: Mix.raise(message)
 end
