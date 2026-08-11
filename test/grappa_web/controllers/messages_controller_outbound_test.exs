@@ -290,6 +290,38 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "#1225: a /notice to NickServ does not archive a mistyped identify password",
+         %{conn: conn, vjt: vjt} do
+      {server, port} = start_server()
+      network = setup_network(vjt, port)
+      pid = start_session_for(vjt, network)
+      :ok = await_handshake(server)
+
+      # The W12 carve-out at the DOOR, not just in the session: a fat-fingered
+      # `/notice nickserv identify <pass>` must reach the wire and leave nothing
+      # on disk. Asserted here as well as in server_test because a refactor that
+      # merely mirrors the PRIVMSG path is one clause away from losing it, and
+      # the cost of losing it is a password written to the scrollback DB.
+      conn =
+        conn
+        |> put_req_header("content-type", "application/json")
+        |> post("/networks/#{network.slug}/channels/%23sniffo/messages", %{
+          "body" => "identify hunter2",
+          "notice_target" => "NickServ"
+        })
+
+      # 202 + {ok: true}: wire-only, no persisted row to render.
+      assert json_response(conn, 202) == %{"ok" => true}
+
+      assert {:ok, _} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "NOTICE NickServ"), 1_000)
+
+      rows = Scrollback.fetch({:user, vjt.id}, network.id, "#sniffo", nil, 10, nil, false)
+      refute Enum.any?(rows, &(&1.body =~ "hunter2"))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "#1225: a POST carrying BOTH ctcp_target and notice_target is bad_request",
          %{conn: conn, vjt: vjt} do
       {server, port} = start_server()

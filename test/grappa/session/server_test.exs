@@ -3865,13 +3865,11 @@ defmodule Grappa.Session.ServerTest do
       # A notice is not a DM: no thread.
       assert msg.dm_with == nil
 
-      # NOTICE on the wire — not PRIVMSG.
-      assert {:ok, _} =
-               IRCServer.wait_for_line(
-                 server,
-                 &(&1 == "NOTICE carol :heads up"),
-                 1_000
-               )
+      # NOTICE on the wire — not PRIVMSG. Pin the WHOLE frame (the returned
+      # line, CRLF included), so verb, recipient and body are all asserted:
+      # `starts_with?` alone would pass on a truncated or re-targeted body.
+      assert {:ok, "NOTICE carol :heads up\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "NOTICE carol"), 1_000)
 
       source_rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       assert Enum.any?(source_rows, &(&1.body == "heads up" and &1.kind == :notice))
@@ -3906,13 +3904,13 @@ defmodule Grappa.Session.ServerTest do
       assert msg.meta.notice_target == "#sniffo"
       assert msg.dm_with == nil
 
-      assert {:ok, _} =
-               IRCServer.wait_for_line(server, &(&1 == "NOTICE #sniffo :rehash in 5"), 1_000)
+      assert {:ok, "NOTICE #sniffo :rehash in 5\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "NOTICE #sniffo"), 1_000)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "a services recipient is wire-only — no row, no leak of a mistyped secret",
+    test "does not archive a mistyped nickserv identify — a *serv recipient is wire-only",
          %{server: server, user: user, network: network, pid: pid} do
       # W12: a *serv target never persists (a fat-fingered `/notice nickserv
       # identify <pass>` must not land in scrollback). Same carve-out the
@@ -3927,12 +3925,8 @@ defmodule Grappa.Session.ServerTest do
                  "identify hunter2"
                )
 
-      assert {:ok, _} =
-               IRCServer.wait_for_line(
-                 server,
-                 &(&1 == "NOTICE NickServ :identify hunter2"),
-                 1_000
-               )
+      assert {:ok, "NOTICE NickServ :identify hunter2\r\n"} =
+               IRCServer.wait_for_line(server, &String.starts_with?(&1, "NOTICE NickServ"), 1_000)
 
       source_rows = Scrollback.fetch({:user, user.id}, network.id, "#sniffo", nil, 10, nil, false)
       refute Enum.any?(source_rows, &(&1.body =~ "hunter2"))
