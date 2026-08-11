@@ -39199,3 +39199,95 @@ clauses, so SQL does the comparing. The class is wider than `sort_by` — a bare
 **Not claimed.** The `network_id` tie-break is NOT pinned: no fixture ties two
 rows belonging to the same user. And nothing here was measured against
 production or against a real CI runner — the numbers are all the local suite.
+
+---
+
+## 2026-08-11 — #1158 item 4: an inactive session is an EVENT, not a preserved identity
+
+vjt's ruling on the retention fork raised by the item-4 measurement:
+*"tutto giusto conserviamo solo l'evento"*. Two products were on the
+table — preserve the anon/incognito visitor identity past logout, or
+preserve only the fact that the session existed — and the second won.
+So visitor retention is **unchanged**: the anon visitor is still purged
+at logout and reaped by the TTL, and the co-terminal identity contract
+stands exactly as designed. Nothing here extends a TTL, defers a purge,
+or adds an FK-bearing row that outlives its subject.
+
+**The measurement that made this cheap: the log is already at the right
+grain.** `session_log_events.session_id` is
+`"<kind>:<uuid>:<network_id>"` — byte-identical in shape to the admin
+row key `adminSubjectRows.rowKey/3` builds, and to the string the
+`/admin/sessions/:id/*` verbs parse. That single fact is why item 4 is
+a JOIN rather than a new data model: no new identifier, no new
+vocabulary, no "session vs credential" split to adjudicate. The
+conflation the measurement flagged dissolves once you notice the log
+was keyed on `(subject, network)` all along.
+
+**The asymmetry between the two halves is the whole design.** For a
+user, nothing new was needed: the credential is durable, nothing GCs
+it, and it already renders regardless of `connection_state` — listing
+an inactive user session is a join, not a retention change. For an
+anon visitor the row is deliberately destroyed on two clocks, so there
+is nothing to list; but `session_log_events` carries **no FK to the
+subject** (plain `:string` / `:integer` columns,
+`20260715120000_create_session_log_events.exs`), so it survives the
+CASCADE. The event is the only survivor, and the ruling says the event
+is enough.
+
+**What shipped.** `SessionLog.list_latest_per_session/1` collapses the
+ring to each session's newest event, bounded in SESSIONS rather than
+rows (a chatty session must not crowd out three quiet ones), behind
+`GET /admin/session_log/sessions`. `buildSubjectRows` takes it as a
+fifth source: it joins onto every existing row (so a parked credential
+can finally say *when* it dropped and *why*), and appends a row for
+every session no other source claims. Those rows carry an explicit
+`origin: "session_log"`, a "deleted" badge, and **no verbs at all** —
+there is no credential to park and no pid to stop, so every button
+would resolve to a subject that is gone.
+
+**`origin` replaced an inference.** The row type previously
+distinguished credential-backed from orphan-pid rows only by
+`connection_state === null`. The log-only class shares that null while
+meaning the opposite thing — nothing but a pid, versus no pid at all —
+so the discriminator had to become explicit rather than a pattern of
+nulls three call sites re-derived.
+
+**A latent bug fell out, and the test caught it before the code did.**
+The orphan-pid loop checked `claimed` but never ADDED to it. Harmless
+while it was the last pass; the moment a fourth pass keyed on the same
+composite ran after it, an orphan pid the log also remembered rendered
+TWICE — once with live truth, once as a historical ghost. The test that
+found it was written first and failed for exactly that reason.
+
+**Best-effort is a property of the record, so it is a property of every
+claim about it.** The ring is global (5000 rows), pruned on write, and
+fed by an async telemetry cast from a path that includes `terminate/2`.
+Therefore: a missing entry is forgetfulness, never evidence a session
+never ran, and the detail panel says so in those terms instead of
+rendering a blank. The e2e spec asserts ONE direction — *given* the log
+remembers a session and no subject row does, the view lists it, marks
+it, and offers no verb — and establishes the log entry as a polled
+PRECONDITION before the delete, so a sink that failed to write reports
+itself as a failed precondition rather than as a broken surface.
+
+**A green spec was asserting the pre-ruling world.**
+`m8-admin-visitors-delete` ended on `toHaveCount(0)` over every row of
+the deleted visitor. Under the ruling a row MAY survive — badged,
+verbless — so that count now encodes the old product. It was rewritten,
+not weakened: the identity-wide property moved onto the verbs
+(`rowActions` gives a credential-backed visitor row exactly one of
+Disconnect / Reconnect on every network it is bound to, so zero of
+either across the `visitor:<id>:` prefix is "no credential survives
+anywhere"). The rewrite is also *stronger* against the ring: it holds
+whether or not the log happened to remember.
+
+**The bound is stated, not hidden.** At most ~200 sessions come back
+from the endpoint, so the deleted rows are recent history and not an
+archive. The card subtitle says that on screen — a table that silently
+truncates reads as complete.
+
+**Deliberately not built.** A per-session event timeline in the
+drill-in (the `session_id` index exists and is still unused by any
+query), and any retention change whatsoever. If a future surface needs
+the identity rather than the event, that reopens vjt's fork; it is not
+a mechanical extension of this.
