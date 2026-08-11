@@ -1384,9 +1384,16 @@ const SettingsDrawer: Component<Props> = (props) => {
             <Show when={activeHost().ttlOptions.length > 0}>
               <fieldset class="upload-ttl-fieldset">
                 <legend>upload retention</legend>
+                {/* #1227 — the visible "upload duration:" text was a second
+                    name for the control the legend already names, and on a
+                    phone it ate the width the select needed (the option text
+                    was cut off mid-word). The <label> stays as the row's flex
+                    box; the accessible name moves onto the select itself,
+                    because a <legend> names the GROUP and would leave the
+                    control nameless for a screen reader. */}
                 <label>
-                  upload duration:
                   <select
+                    aria-label="upload duration"
                     data-testid="upload-ttl-select"
                     value={uploadTtlSelectValue()}
                     onChange={(e) => {

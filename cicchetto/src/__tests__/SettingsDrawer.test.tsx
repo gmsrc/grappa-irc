@@ -898,6 +898,21 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
     expect(legend.closest("fieldset")).toHaveClass("upload-ttl-fieldset");
   });
 
+  // #1227 — the visible "upload duration:" text was a second name for a
+  // control the legend already names, and on a phone it squeezed the select
+  // off the drawer's right edge. It is the accessible name that has to
+  // survive the visual cleanup: a <legend> names the GROUP, not the control,
+  // so dropping the text without a replacement would leave the select
+  // nameless for a screen reader. Both halves are asserted here because
+  // nothing guarded either before.
+  it("drops the visible 'upload duration:' text but keeps the select's accessible name", () => {
+    wrap(true);
+    openSub("general-settings-entry");
+    const select = screen.getByTestId("upload-ttl-select");
+    expect(select).toHaveAccessibleName("upload duration");
+    expect(screen.queryByText(/upload duration:/)).toBeNull();
+  });
+
   it("loads the server preference on mount", async () => {
     const orch = await import("../lib/uploadOrchestrator");
     wrap(true);
