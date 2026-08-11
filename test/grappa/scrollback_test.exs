@@ -3051,10 +3051,15 @@ defmodule Grappa.ScrollbackTest do
     # The OTHER consumer that made `sender` move, pinned against the real
     # predicate rather than argued. `Push.Triggers.own_row?/2` (#532 C) reads
     # `sender` as a LIVE identity test and is the first arm of
-    # `should_notify?/4`, which `Push.BadgeCount` folds back over the unread
+    # `should_notify?/5`, which `Push.BadgeCount` folds back over the unread
     # tail. Migrate `channel` without `sender` and the row leaves own-row
     # suppression while ENTERING the DM branch — notes we wrote to ourselves
     # would count as unread DMs.
+    #
+    # The slug is the row's OWN network (#1038 widened the predicate to key
+    # the mute per network). It is not what this test is about: default prefs
+    # carry no mute, so the refusal below still comes from the own-row arm and
+    # from nothing else.
     test "a migrated self row still suppresses as our OWN row (#532 C)",
          %{user: user, network: net} do
       {:ok, row} =
@@ -3066,6 +3071,7 @@ defmodule Grappa.ScrollbackTest do
 
       refute Grappa.Push.Triggers.should_notify?(
                migrated,
+               net.slug,
                "newme",
                Grappa.UserSettings.default_notification_prefs(),
                []

@@ -1458,7 +1458,7 @@ defmodule Grappa.Scrollback do
       conversation, because you cannot DM a peer bearing your own nick.
     * **`Push.Triggers.own_row?/2` reads `sender` as a LIVE identity test**
       (#532 C), not as a historical record — it is the first arm of
-      `should_notify?/4`, and `Push.BadgeCount` folds that same predicate
+      `should_notify?/5`, and `Push.BadgeCount` folds that same predicate
       back over the unread tail. A stale `sender` drops the row out of
       own-row suppression while the migrated `channel` puts it INTO the DM
       branch, so notes we wrote to ourselves start counting as unread DMs.

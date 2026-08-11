@@ -21,7 +21,7 @@
 // regression in `channel_in_whitelist?/2` would let traffic in
 // channels the operator deliberately silenced through. That's a
 // privacy + UX bug at the same time. Vitest covers
-// `should_notify?/4` predicate-level (test/grappa/push/triggers_test.exs);
+// `should_notify?/5` predicate-level (test/grappa/push/triggers_test.exs);
 // this spec covers the UI → REST → server eval roundtrip.
 
 import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
