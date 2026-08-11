@@ -35,7 +35,16 @@
 // automatic subject reset re-spawns every credential a subject holds without
 // ever removing an accreted one — doing this to the shared vjt would leave two
 // permanent sessions behind and redden the admin-sessions leak canary.
+//
+// Bare `@playwright/test` (NOT `../fixtures/test`), for the same reason and
+// same as `issue1103-manifest-share-target.spec.ts`: the fixture's auto
+// `_specSubject` provisions a spec-scoped subject on every test, and that
+// subject opens a REAL bahamut connection this spec never touches — pure cost
+// on the shared stack, and bahamut's per-IP autokill is a known flake vector.
+// What that costs is the `_cspGuard` assertion, which no bare-import spec
+// gets; `_unrouteGuard` is moot, this spec installs no `page.route`.
 
+import { expect, test } from "@playwright/test";
 import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
 import {
   accreteNetwork,
@@ -64,7 +73,6 @@ import {
   MUTE1038_NETWORK_B,
   MUTE1038_USER,
 } from "../fixtures/seedData";
-import { expect, test } from "../fixtures/test";
 
 // The SAME name on both networks — that is the whole point. A different name
 // per network would prove nothing the #866 spec does not already prove.
@@ -101,11 +109,7 @@ async function waitForConnected(token: string, slug: string): Promise<void> {
 // JOIN via REST, retrying on 404: the credential row reaches `:connected`
 // before the upstream reaches 001, so a bare join races the register. Same
 // poll-until-ready discipline as the #211 phase-7 multinet spec.
-async function joinChannelWhenReady(
-  token: string,
-  slug: string,
-  channel: string,
-): Promise<void> {
+async function joinChannelWhenReady(token: string, slug: string, channel: string): Promise<void> {
   let last = "";
   for (let i = 0; i < 60; i++) {
     const res = await fetch(`${GRAPPA_BASE_URL}/networks/${slug}/channels`, {
