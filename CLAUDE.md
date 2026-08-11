@@ -397,6 +397,21 @@ not the surrounding code.**
   rule. The image-upload pattern ships a 📸-prefixed URL that is
   text on the wire and a clickable link in cic — that is the model.
 - **Bite-sized commits**: one logical change. Messages explain WHY.
+- **🔴 NEVER give the `DESIGN_NOTES.md` entry separator its own commit.**
+  The `\n---\n\n` that opens an entry goes IN the same commit as the entry
+  it belongs to — always, including when you are repairing a lost one.
+  **Why: a separator-only commit is three lines identical to three lines
+  already on main, so `git rebase` computes the same patch-id and DROPS it
+  as already-upstream — no conflict, no warning, no `dropping` line.** Three
+  confirmed occurrences across two workers, each losing exactly three lines
+  (73→70, 79→76, 95→92), and a lone restoration commit is eaten the same
+  way, which is why folding is the cure and not a preference.
+  **Verify, never eyeball: keep the branch's contribution `--numstat` in a
+  FILE before every rebase and diff it against the post-rebase one** — the
+  test is two-sided (additions unchanged AND deletions zero) — **then read
+  the BOUNDARY SHAPE on the real file** (full stop / blank / `---` / blank /
+  heading), because an identical numstat proves nothing when the pre-rebase
+  state was already broken.
 - **Log honesty**: when a fast path skips work, the log message must
   describe the state it OBSERVED, not the absence of work. Example:
   `bootstrap: no credentials bound — running web-only` lies when N
@@ -503,6 +518,29 @@ not the surrounding code.**
 - **Migrations are idempotent.** Use `create_if_not_exists` only when
   rebuilding from scratch is meaningful; otherwise plain `create` so a
   drift between migrations and schema is a loud error.
+- **🔴 GENERATE migrations with `mix ecto.gen.migration <name>` — NEVER
+  hand-write the timestamp.** Every migration on main carries a round
+  hand-typed stamp (`…120000`, `…130000`, `…100000`), some dated in the
+  future, and that is how #1044 and #1038 came to claim the SAME version
+  `20260810120000` with different basenames. **Git fuses two such files
+  without a word** — different names, no conflict marker, nothing to
+  review. A generated stamp is UTC-to-the-second and effectively cannot
+  collide. **On a rebase, re-check the version against `origin/main`'s
+  latest**: the correct number is past whatever landed while you were out,
+  not past the main you branched from.
+  **Why it matters more than tidiness — measured in Ecto's own source:**
+  the pending filter (`migrator.ex:647`) keys on the integer VERSION, never
+  the filename, and `ensure_no_duplication!` (`:708`) only ever sees the
+  PENDING set (`:456`). So a duplicate version has three regimes: on a fresh
+  DB it raises `Ecto.MigrationError` (loud, fine); **on a DB that has ALREADY
+  APPLIED that version, BOTH files drop out of pending, `ensure_no_duplication!([])`
+  answers `:ok`, the run reports SUCCESS and neither migration ever runs —
+  permanently, since the version is already in `schema_migrations`**; and the
+  hot preflight (`hot_reload.ex:164`) dies on `[path] = Path.wildcard(…)`.
+  The silent regime is the dangerous one, and it is the one production hits.
+  ⚠️ **A deploy preflight must therefore compare migration VERSIONS against
+  `schema_migrations`, never count pending files** — a pending count of zero
+  is exactly what the silent regime produces.
 - **Sandbox per test (`async: true`).** Never share sandbox across
   tests. `use Grappa.DataCase, async: true`.
 - **PubSub topic naming: `grappa:` prefix mandatory.** Topics are
@@ -705,6 +743,21 @@ is due. Don't just look at todo.md.
   production substrate without discussing it first.
 - **NEVER run raw `docker compose`** — use `scripts/*.sh`. Always.
 - **NEVER `mix` on the host** — the container is the runtime.
+- **🔴 `_build`, `deps` and `priv/plts` are SHARED BY EVERY WORKTREE on a
+  host, BY DESIGN — so a gate result is not automatically attributable to
+  your branch.** `scripts/_lib.sh` resolves `REPO_ROOT` to the MAIN repo
+  precisely so the caches are shared (`:37-39`), and a worktree run
+  bind-mounts its own source on top: *"the container sees worktree code with
+  main's cached `_build`, `deps`, `priv/plts`"* (`:54-56`). **Consequence
+  measured on #1170: a red `version_test` that belonged to NO branch** — the
+  `Grappa.Version` sitting in the shared `_build` had been compiled from
+  another worktree's `VERSION`, and three worktrees carry `0.16.0`. Cure
+  applied there: `touch VERSION` to force a recompile.
+  **So: a red naming a module, constant or version you did not touch is a
+  CONTAMINATION suspect before it is a defect.** Confirm it reproduces from
+  a forced rebuild (`scripts/mix.sh --env=dev compile --force`) before you
+  believe it, and say in the report which of the two you established. The
+  COMPILE lane serialises access; it does NOT make the artefacts yours.
 - **NEVER install hex packages on the host.** Add them to `mix.exs`,
   rebuild the image (`scripts/mix.sh deps.get`).
 - **Don't touch the IRC parser without re-running parser tests.**
