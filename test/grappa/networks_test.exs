@@ -729,9 +729,13 @@ defmodule Grappa.NetworksTest do
 
     test "orders by (inserted_at, user_id, network_id) so Bootstrap is deterministic" do
       # The tie-break is `user_id` ASC, so the test has to know which UUID
-      # sorts first — they are random per run. The rows are then inserted in
-      # the OPPOSITE order, so insertion order alone cannot produce the
-      # expected list and a query that dropped the tie-break would show it.
+      # sorts first — they are random per run. The two tied rows below then
+      # cross the two keys deliberately: the lower `user_id` sits on the
+      # HIGHER `network_id`, so `network_id` alone would order them the other
+      # way round, and they are inserted in the opposite order again, so
+      # insertion order cannot produce the expected list either. Measured:
+      # without the crossing, dropping `asc: c.user_id` from the query still
+      # passes, because `network_id` happens to agree.
       [lo_user, hi_user] =
         Enum.sort_by(
           [
@@ -745,21 +749,21 @@ defmodule Grappa.NetworksTest do
       net_b = network_fixture("net-b-#{System.unique_integer([:positive])}")
 
       {:ok, straddler} =
-        Credentials.bind_credential(hi_user, net_a, %{
-          nick: "a",
-          auth_method: :none,
-          autojoin_channels: []
-        })
-
-      {:ok, tied_hi} =
         Credentials.bind_credential(hi_user, net_b, %{
           nick: "a",
           auth_method: :none,
           autojoin_channels: []
         })
 
+      {:ok, tied_hi} =
+        Credentials.bind_credential(hi_user, net_a, %{
+          nick: "a",
+          auth_method: :none,
+          autojoin_channels: []
+        })
+
       {:ok, tied_lo} =
-        Credentials.bind_credential(lo_user, net_a, %{
+        Credentials.bind_credential(lo_user, net_b, %{
           nick: "b",
           auth_method: :none,
           autojoin_channels: []
