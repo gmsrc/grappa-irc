@@ -3831,19 +3831,51 @@ defmodule Grappa.Session.ServerTest do
     # echo, `dm_with: nil`, no `maybe_open_query_window`), different wire verb and
     # a `:notice` row kind. The recipient rides `meta.notice_target` so the render
     # reads it OFF the message rather than the routing key.
+
+    # The registered nick, spelled ONCE, because the fixture used to spell it
+    # twice and differently: the credential seeded `vjt` while the fake server
+    # welcomed `grappa-test` (the `credential_fixture` default, left behind when
+    # this describe overrode the nick). The welcome wins — `EventRouter`'s
+    # numeric-1 arm assigns `state.nick = welcomed_nick`, and `send_notice`
+    # stamps `sender: state.nick` — so the fixture was contradicting itself and
+    # the assertion below was reading whichever side got there first. Same
+    # shape, and the same reason, as #581's `@recover_nick`.
+    @notice_nick "vjt"
+
     setup do
       rfc_handler = fn state, line ->
         if String.starts_with?(line, "USER ") do
-          {:reply, ":server 001 grappa-test :Welcome\r\n", state}
+          {:reply, ":server 001 #{@notice_nick} :Welcome\r\n", state}
         else
           {:reply, nil, state}
         end
       end
 
       {server, port} = start_server(rfc_handler)
-      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+      {user, network, _} = setup_user_and_network(port, %{nick: @notice_nick})
       pid = start_session_for(user, network)
-      :ok = await_handshake(server)
+
+      # Barrier: PAST the welcome, not merely past `USER`. `await_handshake`
+      # returns when the client SENDS `USER` — the very line the 001 answers —
+      # so it can return before the session has processed the welcome, leaving
+      # that welcome and this test's `GenServer.call` to race in one mailbox.
+      #
+      # `MODE <nick>` is the #229 umode query, emitted from inside the numeric-1
+      # `handle_info`. Note it is emitted BEFORE the reconciliation, which
+      # happens at the END of that same callback (`delegate/2` → `EventRouter`).
+      # What makes it a sound barrier is not its position but the GenServer
+      # contract: callbacks are serialised, so seeing this line proves the 001
+      # callback has STARTED, and the `GenServer.call` below cannot be served
+      # until it RETURNS — reconciliation included. A barrier on state the
+      # session actually reached, not a sleep and not a wider timeout.
+      #
+      # The two deliberate-mismatch tests above (`grappa-actual`, proving the
+      # welcomed nick wins) use the autojoin `JOIN` for the same purpose. The
+      # umode query is preferred here because it is unconditional in the 001
+      # arm, where autojoin is contingent on the credential's channel list and
+      # on the #347 `+r` deferral.
+      {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "MODE #{@notice_nick}\r\n"), 1_000)
+
       %{server: server, user: user, network: network, pid: pid}
     end
 
