@@ -31,6 +31,7 @@ import type {
   NetworksAdminWireT,
   NetworksCredentialConnectionState,
   NetworksCredentialsAdminWireSessionAction,
+  NetworksCredentialsAdminWireSpawnError,
   NetworksCredentialsAdminWireT,
   NetworksFeaturedChannelsAdminWireT,
   NetworksFeaturedChannelsWireIndexPayload,
@@ -2946,6 +2947,11 @@ export type AdminCredentialLiveState = AdminLiveState;
 export type AdminCredential = NetworksCredentialsAdminWireT & {
   // Present on PUT responses only; index/GET shape excludes it.
   session_action?: NetworksCredentialsAdminWireSessionAction;
+  // #1158 — the POST reply's sibling key: `null` on `spawned`, the refusal
+  // tag on `not_spawned` (`AdminWire.with_spawn_outcome/2`). The server has
+  // always sent it; nothing declared it here, so the one field that says WHY
+  // a bind did not dial could not be read at all.
+  session_error?: NetworksCredentialsAdminWireSpawnError | null;
 };
 
 export type AdminCredentialsResponse = { credentials: AdminCredential[] };
