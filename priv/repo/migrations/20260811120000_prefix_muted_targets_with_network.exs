@@ -15,14 +15,23 @@ defmodule Grappa.Repo.Migrations.PrefixMutedTargetsWithNetwork do
 
   ## vjt's ruling (2026-08-08, #grappa): one-shot and optimistic
 
-  Each bare key is prefixed with the FIRST network found in the DB for that
-  subject — `ORDER BY network_credentials.id LIMIT 1`, i.e. the network they
-  bound first. There is deliberately NO attempt to reconstruct which network
-  the mute was really meant for; the information was never stored, so any
-  reconstruction would be a guess dressed as a fact. A single-network
-  subject (the common case) lands exactly right. A multi-network subject
-  gets ONE plausible mute it can move by hand — visible in the settings
-  list, which now names the network.
+  Each bare key is prefixed with the network the DB returns first for that
+  subject — `ORDER BY network_credentials.id LIMIT 1`. That choice is
+  deterministic but ARBITRARY, and deliberately NOT described as "the one
+  they bound first": `network_credentials.id` does not carry bind order. The
+  column did not exist before `20260711123000_xor_fk_network_credentials`
+  (the table had a composite `PRIMARY KEY (user_id, network_id)`), and that
+  migration minted every id by copying the rows through an `INSERT ... SELECT`
+  that lists neither an `id` column nor an `ORDER BY`. So for any credential
+  older than 2026-07-11 the id reflects whatever order sqlite handed the rows
+  back in, not when the operator bound the network.
+
+  There is deliberately NO attempt to reconstruct which network the mute was
+  really meant for; the information was never stored, so any reconstruction
+  would be a guess dressed as a fact. A single-network subject (the common
+  case) lands exactly right — there is only one candidate, so "arbitrary"
+  costs nothing there. A multi-network subject gets ONE plausible mute it can
+  move by hand — visible in the settings list, which now names the network.
 
   It runs ONCE, here, at migration time. Expanding a bare key lazily on read
   (or on the next write) was considered and ruled out: a lazy path would

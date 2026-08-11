@@ -34653,8 +34653,13 @@ rather than silencing every network the way the pre-#1038 key did.
 Mutes are already in production under the bare key, so changing the shape
 without a data pass is worse than a reset: every entry stops matching
 while the settings list still shows the room as muted. vjt's call —
-one-shot and optimistic: each bare key takes the prefix of the FIRST
-network in the DB for that subject (`ORDER BY nc.id LIMIT 1`). No attempt
+one-shot and optimistic: each bare key takes the prefix of the network the
+DB returns first for that subject (`ORDER BY nc.id LIMIT 1`). That is
+deterministic but ARBITRARY, and not "the one they bound first" — `nc.id`
+carries no bind order, because the column was minted by #211's table copy
+(`20260711123000_xor_fk_network_credentials`, an `INSERT ... SELECT` with
+neither an `id` list nor an `ORDER BY`) for every credential that predates
+2026-07-11. No attempt
 to reconstruct which network the mute meant, because that information was
 never stored and a reconstruction would be a guess dressed as a fact. A
 single-network subject (the common case) lands exactly right; a
