@@ -190,6 +190,10 @@ write_nginx_site() {
 upstream grappa_upstream {
     server 127.0.0.1:4000;
     keepalive 32;
+    # #1030 — pinned, not defaulted: this idle MUST expire before the
+    # BEAM's (Bandit read_timeout, config/config.exs). Same value as
+    # nginx's default today; pinned so the default cannot move under us.
+    keepalive_timeout 60s;
 }
 server {
     listen 80 default_server;

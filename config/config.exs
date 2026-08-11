@@ -260,6 +260,21 @@ config :grappa, Grappa.Repo,
 config :grappa, GrappaWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
+  # #1030 — the nginx→BEAM keepalive pool must be closed by its CLIENT.
+  # thousand_island's `read_timeout` is the server-side idle between two
+  # requests on a pooled connection, and it defaults to 60_000 ms — the
+  # SAME value as nginx's upstream idle default. Equal timers arm a race:
+  # nginx dispatches onto a socket Bandit is closing in that instant and
+  # can only answer 502. Every in-repo upstream now pins `keepalive_timeout
+  # 60s` explicitly; this sits strictly above it, with enough headroom that
+  # scheduler and clock jitter cannot close the gap.
+  #
+  # Declared ONCE here, on the env-agnostic endpoint config, and deep-merged
+  # into the per-env `http:` lists by Config — the same merge that already
+  # carries `url: [host: "localhost"]` into runtime.exs's `url: [host: …,
+  # port: 443]` in prod. Phoenix hands `:http` verbatim to Bandit, which
+  # accepts `read_timeout` only under `:thousand_island_options`.
+  http: [thousand_island_options: [read_timeout: 75_000]],
   render_errors: [
     formats: [json: GrappaWeb.ErrorJSON],
     layout: false
