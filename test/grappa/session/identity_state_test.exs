@@ -51,17 +51,72 @@ defmodule Grappa.Session.IdentityStateTest do
   describe "identified?/1 — account axis (flavour-agnostic)" do
     test "a services account identifies with no registered umode in sight" do
       # solanum/atheme (Libera) has no registered umode at all: the account
-      # IS the only signal, which is the whole point of #388.
-      assert IdentityState.identified?(%{umodes: [], account: "vjt", services_flavor: :atheme})
+      # IS the only signal, which is the whole point of #388. That ircd ACKs
+      # `account-notify`, and per vjt's ruling of 2026-08-11 the ACK is what
+      # makes the account count — so the cap is part of the fixture, not
+      # decoration.
+      assert IdentityState.identified?(%{
+               umodes: [],
+               account: "vjt",
+               services_flavor: :atheme,
+               caps_active: MapSet.new(["account-notify"])
+             })
     end
 
     test "a nil account alone does not identify" do
-      refute IdentityState.identified?(%{umodes: [], account: nil, services_flavor: :atheme})
+      refute IdentityState.identified?(%{
+               umodes: [],
+               account: nil,
+               services_flavor: :atheme,
+               caps_active: MapSet.new(["account-notify"])
+             })
+    end
+
+    test "an account without the cap is display only, never proof" do
+      # The ruling's narrowing, at the unit. bahamut hands us a 330 but no
+      # `account-notify`, so it never promises to retract the account — and
+      # a verdict that can go up and never come down is not a verdict.
+      refute IdentityState.identified?(%{
+               umodes: [],
+               account: "vjt",
+               services_flavor: :azzurra,
+               caps_active: MapSet.new()
+             })
+    end
+
+    test "the umode axis is untouched by the cap gate" do
+      # The gate is on the account axis ALONE: bahamut identifies off `+r`
+      # with no cap in sight, exactly as it did before #388.
+      assert IdentityState.identified?(%{
+               umodes: ["r"],
+               account: nil,
+               services_flavor: :azzurra,
+               caps_active: MapSet.new()
+             })
     end
 
     test "either axis alone suffices — they are OR'd, not AND'd" do
+      assert IdentityState.identified?(%{
+               umodes: ["r"],
+               account: nil,
+               services_flavor: :azzurra,
+               caps_active: MapSet.new(["account-notify"])
+             })
+
+      assert IdentityState.identified?(%{
+               umodes: [],
+               account: "vjt",
+               services_flavor: :azzurra,
+               caps_active: MapSet.new(["account-notify"])
+             })
+    end
+
+    test "a state predating caps_active falls back to the umode axis (#216)" do
+      # The hot-reload contract: a process whose state has no `caps_active`
+      # key answers "not identified" off the account rather than crashing,
+      # and its umode axis still works.
+      refute IdentityState.identified?(%{umodes: [], account: "vjt", services_flavor: :atheme})
       assert IdentityState.identified?(%{umodes: ["r"], account: nil, services_flavor: :azzurra})
-      assert IdentityState.identified?(%{umodes: [], account: "vjt", services_flavor: :azzurra})
     end
   end
 

@@ -43,6 +43,15 @@ defmodule Grappa.Session.EventRouterTest do
     %Message{command: command, params: params, prefix: prefix, tags: %{}}
   end
 
+  # #388 — the solanum/OFTC shape. Those ircds ACK `account-notify`, and
+  # since vjt's ruling of 2026-08-11 that ACK is what makes the services
+  # ACCOUNT count as proof of identity rather than mere display. Every
+  # account-axis fixture needs it; the bahamut fixtures deliberately do
+  # NOT have it, which is the whole contrast the ruling draws.
+  defp account_notify_state(overrides) do
+    base_state(Map.put(overrides, :caps_active, MapSet.new(["account-notify"])))
+  end
+
   # CP15 B2: helper for in_flight_joins fixture state. Records `channel`
   # case-preserved with key `String.downcase(channel)` to match the
   # production insert path in `record_in_flight_join/2`.
@@ -4290,7 +4299,7 @@ defmodule Grappa.Session.EventRouterTest do
     test "inbound self ACCOUNT emits :acquired with no umode in sight" do
       # The solanum/atheme case: no registered umode exists on that ircd, so
       # this event IS the identify confirmation.
-      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      state = account_notify_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
       m = msg(:account, ["vjt"], {:nick, "vjt", "u", "h"})
       {:cont, next, effects} = EventRouter.route(m, state)
       assert {:session_identity_changed, :acquired} in effects
@@ -4298,7 +4307,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "ACCOUNT * is a logout — emits :lost and clears the account" do
-      state = base_state(%{nick: "vjt", account: "vjt", services_flavor: :atheme})
+      state = account_notify_state(%{nick: "vjt", account: "vjt", services_flavor: :atheme})
       m = msg(:account, ["*"], {:nick, "vjt", "u", "h"})
       {:cont, next, effects} = EventRouter.route(m, state)
       assert {:session_identity_changed, :lost} in effects
@@ -4315,7 +4324,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a differently-cased echo of our own nick still routes to self" do
-      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      state = account_notify_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
       m = msg(:account, ["VJT"], {:nick, "VJT", "u", "h"})
       {:cont, _, effects} = EventRouter.route(m, state)
       assert {:session_identity_changed, :acquired} in effects
@@ -4332,7 +4341,7 @@ defmodule Grappa.Session.EventRouterTest do
       # The #349 wizard commit, now reachable on a network that never emits
       # a registered umode — the whole point of #388.
       state =
-        base_state(%{
+        account_notify_state(%{
           nick: "vjt",
           umodes: [],
           services_flavor: :atheme,
@@ -4347,7 +4356,7 @@ defmodule Grappa.Session.EventRouterTest do
 
   describe "#388 — self 330 RPL_WHOISLOGGEDIN as an identity confirmation" do
     test "a 330 about US emits :acquired and records the account" do
-      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
+      state = account_notify_state(%{nick: "vjt", umodes: [], services_flavor: :atheme})
       m = msg({:numeric, 330}, ["vjt", "vjt", "acct", "is logged in as"])
       {:cont, next, effects} = EventRouter.route(m, state)
       assert {:session_identity_changed, :acquired} in effects
@@ -4393,17 +4402,52 @@ defmodule Grappa.Session.EventRouterTest do
     end
   end
 
-  describe "#388 — the two axes are OR'd across a self-rename" do
-    test "an account-identified session survives the rename umode strip" do
-      # bahamut strips the registered umode on a genuine rename (#581), but
-      # an account is not cleared by a nick change — so a session identified
-      # via the account axis must NOT report :lost.
+  describe "#388 — the account axis counts only where account-notify is ACKed" do
+    test "on bahamut the rename umode strip returns the verdict to :lost, account or not" do
+      # vjt's ruling, 2026-08-11. bahamut never ACKs `account-notify`, so a
+      # 330 naming us is display only and `+r` alone decides. bahamut strips
+      # that letter on a genuine rename (#581), so the verdict has to come
+      # back to :lost — and #581's re-identify affordance with it. Before
+      # the narrowing the account kept this session "identified" and the
+      # button never came back.
       state =
         base_state(%{nick: "vjt", umodes: ["r"], account: "vjt", services_flavor: :azzurra})
 
       m = msg(:nick, ["vjt2"], {:nick, "vjt", "u", "h"})
       {:cont, _, effects} = EventRouter.route(m, state)
+      assert {:session_identity_changed, :lost} in effects
+    end
+
+    test "with account-notify ACKed the account survives the same rename" do
+      # The one-variable contrast with the test above: same flavour, same
+      # message, same umode strip, and the ONLY difference is the cap. The
+      # fixture is deliberately counterfactual for bahamut — it isolates the
+      # gate rather than changing two things at once. Where the cap IS real
+      # (solanum, OFTC) this is the behaviour: a nick change does not clear
+      # an account, only `ACCOUNT *` retracts it.
+      state =
+        base_state(%{
+          nick: "vjt",
+          umodes: ["r"],
+          account: "vjt",
+          services_flavor: :azzurra,
+          caps_active: MapSet.new(["account-notify"])
+        })
+
+      m = msg(:nick, ["vjt2"], {:nick, "vjt", "u", "h"})
+      {:cont, _, effects} = EventRouter.route(m, state)
       refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+    end
+
+    test "a self 330 with neither the cap nor the umode records the account but does not identify" do
+      # The ruling's safe direction, and the distinction that matters: the
+      # account is still FOLDED onto the state (the WHOIS card reads it),
+      # it just stops being proof. "Display only" is not "discarded".
+      state = base_state(%{nick: "vjt", umodes: [], services_flavor: :azzurra})
+      m = msg({:numeric, 330}, ["vjt", "vjt", "acct", "is logged in as"])
+      {:cont, next, effects} = EventRouter.route(m, state)
+      refute Enum.any?(effects, &match?({:session_identity_changed, _}, &1))
+      assert next.account == "acct"
     end
 
     test "a umode-only identity IS lost on a genuine rename" do
