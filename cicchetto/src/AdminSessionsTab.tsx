@@ -18,12 +18,14 @@ import {
   type AdminCredential,
   type AdminNetwork,
   type AdminSession,
+  type AdminSessionLogEntry,
   type AdminVisitor,
   ApiError,
   adminDeleteVisitor,
   adminDisconnectSession,
   adminListCredentials,
   adminListNetworks,
+  adminListSessionLogSessions,
   adminListSessions,
   adminListVisitors,
   adminReconnectSession,
@@ -54,6 +56,18 @@ import { token } from "./lib/auth";
 // (subject, network) pair, so a visitor on two networks yields two rows
 // whose Delete buttons would each nuke both. Behind the disclosure, and
 // labelled with what it actually destroys, it stops being a footgun.
+//
+// #1158 item 4 — a fifth source, `/admin/session_log/sessions`. vjt ruled
+// the retention fork "keep only the event" (2026-08-11): an anon visitor
+// is still purged at logout and reaped at TTL, so for a session that is
+// over the lifecycle log is the ONLY record left — it carries no FK to
+// the subject and outlives the CASCADE. It joins on `session_id`, which
+// is the row key, so it both fills in "what did this session last do"
+// and supplies rows for subjects that no longer exist.
+//
+// The log is a bounded ring, so those rows are RECENT history, not an
+// archive, and the card subtitle says so rather than letting the table
+// imply completeness.
 //
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated EXEMPT.
 
@@ -90,12 +104,14 @@ const AdminSessionsTab: Component = () => {
   const [credentials, setCredentials] = createSignal<AdminCredential[] | null>(null);
   const [sessions, setSessions] = createSignal<AdminSession[] | null>(null);
   const [networks, setNetworks] = createSignal<AdminNetwork[] | null>(null);
+  const [logSessions, setLogSessions] = createSignal<AdminSessionLogEntry[] | null>(null);
   const [confirmingKey, setConfirmingKey] = createSignal<string | null>(null);
   const [detailKey, setDetailKey] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
 
-  const loaded = (): boolean => visitors() !== null && credentials() !== null;
+  const loaded = (): boolean =>
+    visitors() !== null && credentials() !== null && logSessions() !== null;
 
   const rows = createMemo<AdminSubjectRow[]>(() =>
     loaded()
@@ -104,6 +120,7 @@ const AdminSessionsTab: Component = () => {
           credentials: credentials() ?? [],
           sessions: sessions() ?? [],
           networks: networks() ?? [],
+          logSessions: logSessions() ?? [],
         })
       : [],
   );
@@ -115,27 +132,35 @@ const AdminSessionsTab: Component = () => {
     setError(null);
     setConfirmingKey(null);
     try {
-      // Four endpoints, one table. The two row-backed ones supply the
+      // Five endpoints, one table. The two row-backed ones supply the
       // rows, /admin/sessions supplies the live join, /admin/networks
-      // supplies the capacity summary + the slug for an orphan row.
+      // supplies the capacity summary + the slug for an orphan row, and
+      // /admin/session_log/sessions supplies the history join plus the
+      // rows of subjects that no longer exist (#1158 item 4).
       // Failure of ANY collapses the whole render to the banner: a
       // half-built merge is worse than no table, because the operator
-      // cannot tell which half is missing.
-      const [nextVisitors, nextCredentials, nextSessions, nextNetworks] = await Promise.all([
-        adminListVisitors(t),
-        adminListCredentials(t),
-        adminListSessions(t),
-        adminListNetworks(t),
-      ]);
+      // cannot tell which half is missing. That holds hardest for the
+      // log: a silently dropped fetch would remove exactly the rows the
+      // operator came for, and leave a table that looks complete.
+      const [nextVisitors, nextCredentials, nextSessions, nextNetworks, nextLogSessions] =
+        await Promise.all([
+          adminListVisitors(t),
+          adminListCredentials(t),
+          adminListSessions(t),
+          adminListNetworks(t),
+          adminListSessionLogSessions(t),
+        ]);
       setVisitors(nextVisitors);
       setCredentials(nextCredentials);
       setSessions(nextSessions);
       setNetworks(nextNetworks);
+      setLogSessions(nextLogSessions);
     } catch (e) {
       setVisitors(null);
       setCredentials(null);
       setSessions(null);
       setNetworks(null);
+      setLogSessions(null);
       const code = e instanceof ApiError ? e.code : "fetch_failed";
       setError(code);
     } finally {
@@ -267,7 +292,7 @@ const AdminSessionsTab: Component = () => {
           <AdminCard
             hostsRefresh
             title="Sessions"
-            subtitle="row-backed — parked and failed subjects are listed too, with live state joined on"
+            subtitle="row-backed — parked and failed subjects are listed too, with live state joined on; rows marked deleted come from the lifecycle log, which keeps recent history only"
             data-testid="admin-sessions-table-card"
           >
             <AdminTable class="admin-sessions-table" data-testid="admin-sessions-table">
@@ -316,6 +341,21 @@ const AdminSessionsTab: Component = () => {
                                   {row.subject_kind}
                                 </AdminBadge>
                                 <span class="admin-session-nick">{renderLabel(row)}</span>
+                                {/* #1158 item 4 — this row exists only
+                                    because the lifecycle log outlived the
+                                    subject. Say so on the row itself: it
+                                    has no state to read and no verb to
+                                    press, and without the marker it reads
+                                    as a session that merely looks broken. */}
+                                <Show when={row.origin === "session_log"}>
+                                  <AdminBadge
+                                    tone="warn"
+                                    ariaLabel="subject deleted, session log only"
+                                    testId={`admin-session-gone-${row.key}`}
+                                  >
+                                    deleted
+                                  </AdminBadge>
+                                </Show>
                               </span>
                               <span class="admin-session-network">
                                 {row.network_slug ?? `network ${row.network_id}`}
@@ -351,6 +391,9 @@ const AdminSessionsTab: Component = () => {
                               />
                             )}
                           </For>
+                          {/* An empty cell reads as a rendering bug. The
+                              dash says the absence is the answer. */}
+                          <Show when={rowActions(row).length === 0}>—</Show>
                         </td>
                       </tr>
                       <Show when={detailKey() === row.key}>
@@ -398,9 +441,12 @@ const AdminSessionsTab: Component = () => {
 };
 
 function renderLabel(row: AdminSubjectRow): string {
-  // `null` only on an orphan pid whose DB row is gone. Say so rather
-  // than rendering a blank — it is the divergence, not a missing value.
-  return row.label ?? `${row.subject_id.slice(0, 8)} (no DB row)`;
+  if (row.label !== null) return row.label;
+  // `null` on an orphan pid whose DB row is gone, or on a log entry the
+  // server wrote before the session had a nick. Say which rather than
+  // rendering a blank — it is the divergence, not a missing value.
+  const why = row.origin === "session_log" ? "no nick logged" : "no DB row";
+  return `${row.subject_id.slice(0, 8)} (${why})`;
 }
 
 function renderWho(row: AdminSubjectRow): string {
@@ -451,6 +497,34 @@ function renderExpires(row: AdminSubjectRow): string {
   return days <= 0 ? "expired" : `in ${days}d`;
 }
 
+// Human duration for a session that has ended. Raw milliseconds are
+// unreadable at the scale a bouncer session actually runs for.
+function renderDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h${m % 60}m` : `${Math.floor(h / 24)}d${h % 24}h`;
+}
+
+// The last thing the lifecycle log saw this session do. `null` is NOT
+// "this session never ran": the log is a bounded global ring written
+// from an async cast, so it forgets, and saying so is the honest render.
+function renderLastEvent(row: AdminSubjectRow): string {
+  const e = row.last_event;
+  if (e === null) return "nothing logged (bounded ring — not proof it never ran)";
+  return `${e.event} · ${e.at}`;
+}
+
+// Only meaningful on a disconnect: reason / cleanliness / how long it
+// had been up. Each part is dropped when the row does not carry it.
+function renderEnded(e: AdminSessionLogEntry): string {
+  const clean = e.clean === null ? "" : e.clean ? " (clean)" : " (unclean)";
+  const lasted = e.duration_ms === null ? "" : `, lasted ${renderDuration(e.duration_ms)}`;
+  return `${e.reason ?? "no reason recorded"}${clean}${lasted}`;
+}
+
 function detailFacts(row: AdminSubjectRow): { label: string; value: string }[] {
   const facts: { label: string; value: string }[] = [
     // DB intent and live pid are separate sources of truth and both
@@ -461,7 +535,21 @@ function detailFacts(row: AdminSubjectRow): { label: string; value: string }[] {
     { label: "live", value: renderLive(row) },
     { label: "network", value: row.network_slug ?? `id ${row.network_id}` },
     { label: "upstream", value: renderUpstream(row) },
+    // #1158 item 4 — the third source, and the only one that says
+    // anything at all about a session that is over.
+    { label: "last event", value: renderLastEvent(row) },
   ];
+
+  if (row.last_event?.event === "disconnected") {
+    facts.push({ label: "ended", value: renderEnded(row.last_event) });
+  }
+
+  if (row.origin === "session_log") {
+    facts.push({
+      label: "record",
+      value: "session log only — the subject was deleted, the event outlived it",
+    });
+  }
 
   if (row.live !== null) {
     facts.push(

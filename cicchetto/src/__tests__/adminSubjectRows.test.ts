@@ -6,7 +6,13 @@ import {
   rowActions,
   rowKey,
 } from "../lib/adminSubjectRows";
-import type { AdminCredential, AdminNetwork, AdminSession, AdminVisitor } from "../lib/api";
+import type {
+  AdminCredential,
+  AdminNetwork,
+  AdminSession,
+  AdminSessionLogEntry,
+  AdminVisitor,
+} from "../lib/api";
 
 // #1157 — the merge behind the unified admin sessions view.
 //
@@ -92,12 +98,32 @@ const session = (over: Partial<AdminSession> = {}): AdminSession =>
 const network = (over: Partial<AdminNetwork> = {}): AdminNetwork =>
   ({ id: 42, slug: "azzurra", ...over }) as AdminNetwork;
 
+const logEntry = (over: Partial<AdminSessionLogEntry> = {}): AdminSessionLogEntry =>
+  ({
+    id: 1,
+    session_id: `visitor:${VISITOR_ID}:42`,
+    event: "disconnected",
+    subject_kind: "visitor",
+    network_id: 42,
+    network_slug: "azzurra",
+    nick: "guest1",
+    old_nick: null,
+    reason: ":quit",
+    clean: true,
+    duration_ms: 900,
+    delay_ms: null,
+    attempt: null,
+    at: "2026-08-10T12:00:00Z",
+    ...over,
+  }) as AdminSessionLogEntry;
+
 const build = (over: Partial<Parameters<typeof buildSubjectRows>[0]> = {}): AdminSubjectRow[] =>
   buildSubjectRows({
     visitors: [],
     credentials: [],
     sessions: [],
     networks: [network()],
+    logSessions: [],
     ...over,
   });
 
@@ -236,6 +262,88 @@ describe("buildSubjectRows — the /admin/sessions left join", () => {
   });
 });
 
+// #1158 item 4 — a session whose subject row was destroyed. vjt's ruling
+// (2026-08-11) is "keep only the event": visitor retention is unchanged,
+// so an anon visitor is still purged at logout and reaped at TTL, and the
+// ONLY trace left is `session_log_events` — which has no FK to the
+// subject and therefore survives the CASCADE. The log is keyed on the
+// same `<kind>:<id>:<network>` composite the rows are, so it both joins
+// onto live rows and supplies rows nothing else can.
+describe("buildSubjectRows — the session-log join", () => {
+  it("joins the newest logged event onto a row that still exists", () => {
+    const rows = build({ visitors: [visitor()], logSessions: [logEntry()] });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.last_event?.event).toBe("disconnected");
+    expect(rows[0]?.last_event?.duration_ms).toBe(900);
+    // The row is still credential-backed: the log adds history, it does
+    // not reclassify a subject that is very much on record.
+    expect(rows[0]?.origin).toBe("credential");
+  });
+
+  it("leaves last_event null when the log remembers nothing — absence is not an error", () => {
+    const rows = build({ credentials: [credential()], logSessions: [] });
+
+    expect(rows[0]?.last_event).toBeNull();
+  });
+
+  // THE test for item 4. Without this row the operator has no way to see
+  // that a purged visitor ever held a session.
+  it("appends a session the log remembers but no subject row does", () => {
+    const rows = build({ credentials: [credential()], logSessions: [logEntry()] });
+
+    expect(rows).toHaveLength(2);
+    const ghost = rows[rows.length - 1];
+    expect(ghost?.origin).toBe("session_log");
+    expect(ghost?.key).toBe(`visitor:${VISITOR_ID}:42`);
+    expect(ghost?.subject_kind).toBe("visitor");
+    expect(ghost?.label).toBe("guest1");
+    expect(ghost?.network_slug).toBe("azzurra");
+    // Neither source of truth has anything to say: no credential to hold
+    // an intent, no pid to be alive. Both null, neither defaulted.
+    expect(ghost?.connection_state).toBeNull();
+    expect(ghost?.live).toBeNull();
+  });
+
+  it("does not duplicate a row the log matched", () => {
+    const rows = build({ visitors: [visitor()], logSessions: [logEntry()] });
+
+    expect(rows).toHaveLength(1);
+  });
+
+  it("does not swallow an orphan pid that the log also remembers", () => {
+    const orphan = session({ subject_id: "deadbeef-0000-0000-0000-000000000000" });
+    const rows = build({
+      sessions: [orphan],
+      logSessions: [logEntry({ session_id: "visitor:deadbeef-0000-0000-0000-000000000000:42" })],
+    });
+
+    // One row, and it keeps the live pid — the log enriches it rather
+    // than shadowing it with a historical duplicate.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.origin).toBe("orphan_pid");
+    expect(rows[0]?.live).not.toBeNull();
+    expect(rows[0]?.last_event?.event).toBe("disconnected");
+  });
+
+  it("ignores a log entry whose session_id is not the row composite", () => {
+    const rows = build({ logSessions: [logEntry({ session_id: "nonsense" })] });
+
+    expect(rows).toHaveLength(0);
+  });
+
+  it("carries a log-only row for a deleted USER too, not just visitors", () => {
+    const rows = build({
+      logSessions: [
+        logEntry({ session_id: `user:${USER_ID}:42`, subject_kind: "user", nick: "vjt" }),
+      ],
+    });
+
+    expect(rows[0]?.subject_kind).toBe("user");
+    expect(rows[0]?.origin).toBe("session_log");
+  });
+});
+
 describe("channelCount — an unknown count is not zero", () => {
   const rowWith = (l: AdminSubjectRow["live"]): AdminSubjectRow =>
     ({ ...build({ credentials: [credential()] })[0], live: l }) as AdminSubjectRow;
@@ -283,6 +391,14 @@ describe("rowActions — reconnect is visitor-only, and chosen on LIVE truth", (
 
     expect(rowActions(row)).not.toContain("reconnect");
     expect(rowActions(row)).toEqual(["disconnect", "terminate"]);
+  });
+
+  // A log-only row has no credential and no pid, so every verb would
+  // resolve to nothing. Offering one would guarantee a failed request.
+  it("offers no verb at all on a log-only row", () => {
+    const ghost = build({ logSessions: [logEntry()] })[0] as AdminSubjectRow;
+
+    expect(rowActions(ghost)).toEqual([]);
   });
 
   it("offers the same user verbs whether or not the pid is live", () => {

@@ -54,6 +54,7 @@ import type {
   ScrollbackWireT,
   ServerSettingsWireUploadView,
   SessionLogWireListResult,
+  SessionLogWireSessionsResult,
   SessionLogWireT,
   SessionWireBanlistBundlePayload,
   SessionWireBanlistEntry,
@@ -1850,6 +1851,27 @@ export async function adminListSessionLog(
   if (!res.ok) throw await readError(res);
   const body = (await res.json()) as SessionLogWireListResult;
   return body.session_log;
+}
+
+// #1158 item 4 — the same log collapsed to one entry per session_id (that
+// session's newest event), mirror of
+// `Grappa.SessionLog.Wire.sessions_result/0`. Feeds the admin Sessions
+// view: `session_id` is `(subject, network)`-grained, i.e. the same key
+// the rows are built on, so this joins straight onto them AND supplies a
+// row for a session whose subject was deleted. Best-effort by
+// construction — an absent entry is not evidence the session never ran.
+export async function adminListSessionLogSessions(
+  token: string,
+  limit?: number,
+): Promise<SessionLogWireT[]> {
+  const url =
+    limit === undefined
+      ? "/admin/session_log/sessions"
+      : `/admin/session_log/sessions?limit=${limit}`;
+  const res = await fetch(url, { headers: buildHeaders(token) });
+  if (!res.ok) throw await readError(res);
+  const body = (await res.json()) as SessionLogWireSessionsResult;
+  return body.session_log_sessions;
 }
 
 // M-cluster M-10 — admin Networks tab wire types + fetch wrappers.

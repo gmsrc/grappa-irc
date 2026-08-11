@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AdminCredential, AdminNetwork, AdminSession, AdminVisitor } from "../lib/api";
+import type {
+  AdminCredential,
+  AdminNetwork,
+  AdminSession,
+  AdminSessionLogEntry,
+  AdminVisitor,
+} from "../lib/api";
 
 vi.mock("../lib/auth", () => ({
   token: () => "test-bearer",
@@ -14,6 +20,7 @@ vi.mock("../lib/api", async () => {
     adminListCredentials: vi.fn(),
     adminListSessions: vi.fn(),
     adminListNetworks: vi.fn(),
+    adminListSessionLogSessions: vi.fn(),
     adminDisconnectSession: vi.fn(),
     adminReconnectSession: vi.fn(),
     adminTerminateSession: vi.fn(),
@@ -114,16 +121,40 @@ const userSession = (): AdminSession =>
 const VISITOR_KEY = `visitor:${VISITOR_ID}:1`;
 const USER_KEY = `user:${USER_ID}:1`;
 
+const GONE_VISITOR_ID = "33333333-3333-3333-3333-333333333333";
+const GONE_KEY = `visitor:${GONE_VISITOR_ID}:1`;
+
+const logEntry = (over: Partial<AdminSessionLogEntry> = {}): AdminSessionLogEntry =>
+  ({
+    id: 7,
+    session_id: GONE_KEY,
+    event: "disconnected",
+    subject_kind: "visitor",
+    network_id: 1,
+    network_slug: "azzurra",
+    nick: "guest9",
+    old_nick: null,
+    reason: ":tcp_closed",
+    clean: false,
+    duration_ms: 3_600_000,
+    delay_ms: null,
+    attempt: null,
+    at: "2026-08-10T10:00:00Z",
+    ...over,
+  }) as AdminSessionLogEntry;
+
 async function mountWith(over: {
   visitors?: AdminVisitor[];
   credentials?: AdminCredential[];
   sessions?: AdminSession[];
+  logSessions?: AdminSessionLogEntry[];
 }) {
   const api = await import("../lib/api");
   vi.mocked(api.adminListVisitors).mockResolvedValue(over.visitors ?? []);
   vi.mocked(api.adminListCredentials).mockResolvedValue(over.credentials ?? []);
   vi.mocked(api.adminListSessions).mockResolvedValue(over.sessions ?? []);
   vi.mocked(api.adminListNetworks).mockResolvedValue([NETWORK]);
+  vi.mocked(api.adminListSessionLogSessions).mockResolvedValue(over.logSessions ?? []);
   render(() => <AdminSessionsTab />);
   return api;
 }
@@ -381,6 +412,76 @@ describe("AdminSessionsTab — the drill-down keeps both sources of truth", () =
   });
 });
 
+// #1158 item 4 — vjt ruled "keep only the event" (2026-08-11): visitor
+// retention is unchanged, so an anon visitor is still purged at logout,
+// and the lifecycle log — which carries no FK to the subject — is the
+// only thing left. These tests assert the operator can still SEE that
+// session, and that the surface never pretends the subject is still there.
+describe("AdminSessionsTab — a session whose subject was deleted", () => {
+  it("lists a session that only the log remembers", async () => {
+    await mountWith({ logSessions: [logEntry()] });
+
+    const row = await screen.findByTestId(`admin-session-row-${GONE_KEY}`);
+    expect(row.textContent).toContain("guest9");
+  });
+
+  it("marks the row as deleted rather than letting it read as merely broken", async () => {
+    await mountWith({ logSessions: [logEntry()] });
+
+    expect(await screen.findByTestId(`admin-session-gone-${GONE_KEY}`)).toBeTruthy();
+  });
+
+  // No credential to park, no pid to stop: every verb would resolve to a
+  // subject that is gone, so the cell offers none.
+  it("offers no verb on the row", async () => {
+    await mountWith({ logSessions: [logEntry()] });
+
+    await screen.findByTestId(`admin-session-row-${GONE_KEY}`);
+    expect(screen.queryByTestId(`admin-session-disconnect-${GONE_KEY}`)).toBeNull();
+    expect(screen.queryByTestId(`admin-session-reconnect-${GONE_KEY}`)).toBeNull();
+    expect(screen.queryByTestId(`admin-session-terminate-${GONE_KEY}`)).toBeNull();
+  });
+
+  it("puts why it ended in the drill-down, not in the table", async () => {
+    await mountWith({ logSessions: [logEntry()] });
+
+    const row = await screen.findByTestId(`admin-session-row-${GONE_KEY}`);
+    expect(row.textContent).not.toContain(":tcp_closed");
+
+    fireEvent.click(screen.getByTestId(`admin-session-details-${GONE_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${GONE_KEY}`);
+    expect(panel).toHaveTextContent(":tcp_closed");
+    expect(panel).toHaveTextContent("unclean");
+    expect(panel).toHaveTextContent("1h0m");
+  });
+
+  it("joins the last event onto a subject that still exists", async () => {
+    await mountWith({
+      credentials: [userCredential()],
+      logSessions: [logEntry({ session_id: USER_KEY, subject_kind: "user", event: "connected" })],
+    });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${USER_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${USER_KEY}`);
+    expect(panel).toHaveTextContent("connected");
+    expect(panel).toHaveTextContent("2026-08-10T10:00:00Z");
+  });
+
+  // The ring is global, bounded and written from an async cast. An empty
+  // log is forgetfulness, not proof — and the panel must not imply it is.
+  it("does not claim a session never ran when the log has nothing", async () => {
+    await mountWith({ credentials: [userCredential()], logSessions: [] });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${USER_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${USER_KEY}`);
+    expect(panel).toHaveTextContent("nothing logged");
+    expect(panel).toHaveTextContent("not proof it never ran");
+  });
+});
+
 describe("AdminSessionsTab — load and failure", () => {
   it("renders the empty state when every source is empty", async () => {
     await mountWith({});
@@ -394,12 +495,31 @@ describe("AdminSessionsTab — load and failure", () => {
     vi.mocked(api.adminListCredentials).mockRejectedValue(new Error("boom"));
     vi.mocked(api.adminListSessions).mockResolvedValue([]);
     vi.mocked(api.adminListNetworks).mockResolvedValue([NETWORK]);
+    vi.mocked(api.adminListSessionLogSessions).mockResolvedValue([]);
 
     render(() => <AdminSessionsTab />);
 
     await screen.findByTestId("admin-sessions-error");
     // A half-built merge is worse than no table: the operator cannot
     // tell which half is missing.
+    expect(screen.queryByTestId("admin-sessions-table")).toBeNull();
+  });
+
+  // Deliberate, and the rule's hardest case: a dropped session-log fetch
+  // would remove exactly the deleted-subject rows and leave a table that
+  // looks complete. A missing ENTRY is forgetfulness; a missing FETCH is
+  // a failure, and the two must not render the same.
+  it("collapses the table when the session-log fetch fails, rather than hiding rows", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminListVisitors).mockResolvedValue([parkedVisitor()]);
+    vi.mocked(api.adminListCredentials).mockResolvedValue([]);
+    vi.mocked(api.adminListSessions).mockResolvedValue([]);
+    vi.mocked(api.adminListNetworks).mockResolvedValue([NETWORK]);
+    vi.mocked(api.adminListSessionLogSessions).mockRejectedValue(new Error("boom"));
+
+    render(() => <AdminSessionsTab />);
+
+    await screen.findByTestId("admin-sessions-error");
     expect(screen.queryByTestId("admin-sessions-table")).toBeNull();
   });
 });

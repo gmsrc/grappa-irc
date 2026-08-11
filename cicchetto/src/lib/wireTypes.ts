@@ -1345,6 +1345,10 @@ export type SessionLogWireListResult = {
   session_log: SessionLogWireT[];
 };
 
+export type SessionLogWireSessionsResult = {
+  session_log_sessions: SessionLogWireT[];
+};
+
 // === Grappa.SubjectSearch.AdminWire ===
 
 export type SubjectSearchAdminWireResultJson = {

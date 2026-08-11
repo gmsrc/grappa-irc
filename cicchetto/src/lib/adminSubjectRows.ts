@@ -2,6 +2,7 @@ import type {
   AdminCredential,
   AdminNetwork,
   AdminSession,
+  AdminSessionLogEntry,
   AdminVisitor,
   AdminVisitorNetwork,
 } from "./api";
@@ -34,6 +35,24 @@ import type {
 // The join key is the composite `<kind>:<subject_id>:<network_id>` the
 // `/admin/sessions/:id/*` verbs already parse, so the row that renders a
 // button is keyed by the very string that button will POST.
+//
+// #1158 item 4 — a fourth source: `/admin/session_log/sessions`, the
+// lifecycle log collapsed to each session's newest event. Its
+// `session_id` is that same composite, which is what makes this a join
+// and not a new data model.
+//
+// It earns its place because of a retention asymmetry vjt ruled on
+// (2026-08-11, "keep only the event"): an anon/incognito visitor is
+// destroyed at logout and again by the TTL reap, and that stays true —
+// but `session_log_events` carries NO FK to the subject, so it outlives
+// the CASCADE. So the log both enriches rows that exist (what did this
+// session last do, and why did it stop) and supplies the ONLY row a
+// destroyed subject can ever have.
+//
+// It is best-effort BY CONSTRUCTION — a bounded global ring, written
+// from an async cast on a path that includes `terminate/2`. A session
+// missing from it is not evidence it never ran, and nothing here may
+// treat absence as a fact.
 
 /** The live-state core the three endpoints agree on. `/admin/sessions`
  * carries a superset (the peer triple); the row-backed pair do not. */
@@ -49,6 +68,15 @@ export type VisitorIdentity = {
   ip: string | null;
   identified: boolean;
 };
+
+/**
+ * Which source put this row on the table. Explicit rather than inferred
+ * from a pattern of nulls: `credential` and `orphan_pid` were already
+ * distinguishable only by `connection_state === null`, and the log-only
+ * class shares that null with the orphans while meaning the opposite
+ * thing (no pid at all, versus nothing BUT a pid).
+ */
+export type RowOrigin = "credential" | "orphan_pid" | "session_log";
 
 export type AdminSubjectRow = {
   /** `<kind>:<subject_id>:<network_id>` — the id the admin verbs parse. */
@@ -73,6 +101,11 @@ export type AdminSubjectRow = {
   last_seen_at: string | null;
   /** Present iff `subject_kind === "visitor"`. */
   visitor: VisitorIdentity | null;
+  origin: RowOrigin;
+  /** The newest lifecycle event the session log remembers for this
+   * session. `null` means the log has nothing — which is NOT a claim
+   * that the session never ran (bounded ring, best-effort write). */
+  last_event: AdminSessionLogEntry | null;
 };
 
 export function rowKey(kind: "user" | "visitor", subjectId: string, networkId: number): string {
@@ -98,8 +131,12 @@ export function channelCount(row: AdminSubjectRow): number | null {
  * truth, never on `connection_state`: a credential still marked
  * `:connected` whose pid died must offer Reconnect, and that divergence
  * is the whole reason both columns exist.
+ *
+ * A log-only row offers nothing: there is no credential to park and no
+ * pid to stop, so every verb would resolve to a subject that is gone.
  */
 export function rowActions(row: AdminSubjectRow): ("disconnect" | "reconnect" | "terminate")[] {
+  if (row.origin === "session_log") return [];
   if (row.subject_kind === "visitor") {
     return row.live === null ? ["reconnect"] : ["disconnect"];
   }
@@ -111,24 +148,50 @@ function slugOf(networks: AdminNetwork[], networkId: number): string | null {
 }
 
 /**
+ * Split a log entry's `session_id` back into the triple the row key is
+ * built from. Returns `null` for anything that is not that composite —
+ * the log is a free-text-ish store the server writes, and a row keyed on
+ * a string we cannot parse would be a row no admin verb could ever act
+ * on. Dropping it is honest; guessing is not.
+ */
+function parseSessionId(
+  sessionId: string,
+): { kind: "user" | "visitor"; subjectId: string; networkId: number } | null {
+  const parts = sessionId.split(":");
+  if (parts.length !== 3) return null;
+  const [kind, subjectId, rawNetwork] = parts;
+  if (kind !== "user" && kind !== "visitor") return null;
+  if (subjectId === undefined || subjectId === "") return null;
+  if (rawNetwork === undefined || !/^\d+$/.test(rawNetwork)) return null;
+  return { kind, subjectId, networkId: Number(rawNetwork) };
+}
+
+/**
  * Build the unified row set.
  *
  * Ordering is stable and meaningful rather than incidental: visitors,
- * then users, then the orphan-pid rows last — the operator scans the
- * populations they came for, and anything that should not exist sits at
- * the bottom where it stands out.
+ * then users, then the two rows-without-a-credential classes at the
+ * bottom — orphan pids (a pid with no DB row), then log-only rows
+ * (neither, just an event). The operator scans the populations they came
+ * for first, and the divergences sit where they stand out.
  */
 export function buildSubjectRows(input: {
   visitors: AdminVisitor[];
   credentials: AdminCredential[];
   sessions: AdminSession[];
   networks: AdminNetwork[];
+  logSessions: AdminSessionLogEntry[];
 }): AdminSubjectRow[] {
-  const { visitors, credentials, sessions, networks } = input;
+  const { visitors, credentials, sessions, networks, logSessions } = input;
 
   const sessionByKey = new Map<string, AdminSession>();
   for (const s of sessions) {
     sessionByKey.set(rowKey(s.subject_kind, s.subject_id, s.network_id), s);
+  }
+
+  const logByKey = new Map<string, AdminSessionLogEntry>();
+  for (const e of logSessions) {
+    logByKey.set(e.session_id, e);
   }
 
   const rows: AdminSubjectRow[] = [];
@@ -158,6 +221,8 @@ export function buildSubjectRows(input: {
         upstream: sessionByKey.get(key)?.live_state ?? null,
         last_seen_at: v.last_seen_at,
         visitor: identity,
+        origin: "credential",
+        last_event: logByKey.get(key) ?? null,
       });
     }
   }
@@ -177,6 +242,8 @@ export function buildSubjectRows(input: {
       upstream: sessionByKey.get(key)?.live_state ?? null,
       last_seen_at: c.last_seen_at,
       visitor: null,
+      origin: "credential",
+      last_event: logByKey.get(key) ?? null,
     });
   }
 
@@ -186,6 +253,10 @@ export function buildSubjectRows(input: {
   for (const s of sessions) {
     const key = rowKey(s.subject_kind, s.subject_id, s.network_id);
     if (claimed.has(key)) continue;
+    // Claim it: the log pass below is keyed on the same composite, and
+    // an orphan pid the log also remembers must stay ONE row that keeps
+    // the live truth, not two.
+    claimed.add(key);
     rows.push({
       key,
       subject_kind: s.subject_kind,
@@ -198,6 +269,39 @@ export function buildSubjectRows(input: {
       upstream: s.live_state,
       last_seen_at: s.last_seen_at,
       visitor: null,
+      origin: "orphan_pid",
+      last_event: logByKey.get(key) ?? null,
+    });
+  }
+
+  // The log-only class: the subject row is gone (a purged visitor, an
+  // unbound credential) and no pid is left either, so the lifecycle log
+  // is the only place this session still exists. It runs LAST so it can
+  // never shadow a row that has live truth behind it — an orphan pid the
+  // log also remembers stays an orphan-pid row, enriched, not duplicated.
+  for (const e of logSessions) {
+    if (claimed.has(e.session_id)) continue;
+    const parsed = parseSessionId(e.session_id);
+    if (parsed === null) continue;
+    claimed.add(e.session_id);
+    rows.push({
+      key: e.session_id,
+      subject_kind: parsed.kind,
+      subject_id: parsed.subjectId,
+      label: e.nick,
+      network_id: parsed.networkId,
+      // The log stores the slug it saw at emit time; fall back to the
+      // live network list, then to null (the caller renders the raw id).
+      network_slug: e.network_slug ?? slugOf(networks, parsed.networkId),
+      connection_state: null,
+      live: null,
+      upstream: null,
+      // NOT `e.at`: this column is when a BROWSER last touched the
+      // bouncer, and there is no browser session left to have touched it.
+      last_seen_at: null,
+      visitor: null,
+      origin: "session_log",
+      last_event: e,
     });
   }
 
