@@ -212,8 +212,19 @@ defmodule Grappa.Release.CLI do
 
   defp prompt_password(name) do
     _ = :io.setopts(echo: false)
-    input = IO.gets("password for #{name}: ")
-    _ = :io.setopts(echo: true)
+
+    # `after`, not two straight-line calls: anything that escapes from the
+    # read would otherwise leave the OPERATOR'S terminal with echo off, and
+    # they would be typing invisibly into their own shell afterwards. This
+    # is state restoration, not an error being swallowed — nothing is
+    # rescued here.
+    input =
+      try do
+        IO.gets("password for #{name}: ")
+      after
+        _ = :io.setopts(echo: true)
+      end
+
     IO.puts("")
 
     case input do
