@@ -39411,3 +39411,27 @@ results, though the SURFACE was already fed by reactive state (the amber
 subscription is therefore an extension of what the line already does —
 notably NOT a synthesised command result, which would have put a lie
 about provenance into the one place built to be honest about it.
+
+---
+
+## 2026-08-11 — #1225: `/notice` ships, and the echo is a persisted row rather than a local one
+
+**The issue asked where the self-echo should land, and the answer was that under its own constraint there could be no echo at all.** #1225 scoped itself to cicchetto: add `notice` to the `DISPATCH` table, done. Measured on `b0d5342d`, the only NOTICE-capable path reachable from the client is `pushRaw` (what `/quote` uses); `Session.send_raw/3` persists nothing; and cic has no way to fabricate a scrollback row, by invariant — it never originates state. So a cic-only `/notice` would have shipped a content verb that leaves no trace of what you said, on any device. vjt took the fork and chose the full path.
+
+**A notice is a CONTENT verb, and that is the whole argument for the server half.** `/kill`, `/stats`, `/rehash` legitimately ship raw frames and persist nothing: their feedback is the server's numeric. `/notice` sends words to a person. A client-local echo could only ever exist on the device that typed it — the operator's phone would never learn what their laptop said — so the echo has to be a real row, written where every other row is written.
+
+**Where it lands: the SOURCE window, which is #640's routing one verb over.** A NOTICE opens no window by convention (RFC 2812 §3.3.2 makes it the verb you must not reply to), and every client these operators come from echoes it where they are looking. `handle_ctcp_send/4` already had exactly that shape — echo keyed to the source window, `dm_with: nil`, no `maybe_open_query_window` — so `handle_notice_send/4` is its sibling with `kind: :notice` and `NOTICE` on the wire. It is a sibling and not a parameterisation: the two share only the recurse-persist-send skeleton and disagree on row kind, meta, the `dm_with` rule, the persist key's provenance and the wire verb. Four forks threaded through one function would have hidden the one distinction worth seeing.
+
+**The recipient rides `meta.notice_target`, and its ABSENCE is what marks a `:notice` row inbound.** The routing key is the source window, so reading the target off `channel` would print the window the operator is already in. Direction — not sender — is the discriminator, which keeps the render correct for a notice the operator sent from another device. cic renders `→ -recipient- body`: the arrow is the outbound mark the CTCP echo already uses, the `-nick-` brackets keep a notice looking like a notice, and the body goes through `MircBody` because a notice is content, not a control surface.
+
+**A CHANNEL recipient is accepted here while `/msg` refuses one, and that is not an inconsistency.** `/msg`'s refusal (#12/#343) exists because a PRIVMSG addressed to a channel by name opened a phantom query window whose own-send never rendered. This path opens no window at all, so the reason does not transfer — and `/notice #chan` is the form an operator actually reaches for.
+
+**`/notice` ships with no short alias: `/n` has been `/names` since #122.** Taking it would have silently stolen a verb that has worked for a year, and the theft is invisible until someone's `/n` stops listing members.
+
+**A `*serv` recipient is wire-only, mirroring the PRIVMSG door's W12 carve-out.** A fat-fingered `/notice nickserv identify <pass>` must reach the wire without archiving the secret; the same `Identifier.services_sender?/1` allowlist decides, and the reply is `{:ok, :no_persist}` → 202.
+
+**The body fragments on the PRIVMSG budget, deliberately one byte conservative.** A notice body is plain text, so an over-long one must split rather than lose its tail to the ircd's truncation. `NOTICE` framing is one byte shorter than `PRIVMSG`'s, so reusing `LineSplit.split_privmsg_body/3` can only ever produce a fragment one byte smaller than necessary — never one too long. Forking the splitter for that byte would have meant a second copy of the #246 worst-case relay ceilings and of the fragment-count table cic's preview is pinned to.
+
+**Two relay fields on one POST is `400`, by an explicit clause.** `ctcp_target` and `notice_target` are mutually exclusive; leaving the winner to clause order would make it an accident of where the arms sit in the file. cic says the same thing in the type system with a `MessageRelay` union rather than two optional target arguments.
+
+**Deliberately NOT touched: `isOperatorActionEcho`.** It classifies server-originated replies to operator actions (numeric-derived notices), and an own outbound notice is not one — it is own CONTENT, handled the way an own PRIVMSG is: the send path advances the read cursor, and the `read_cursor_set` fan-out drops the row from every other device's derived count. Widening the predicate to cover own content would have made two mechanisms responsible for the same suppression.
