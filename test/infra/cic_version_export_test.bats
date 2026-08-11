@@ -44,8 +44,16 @@ ROSTER=(
 # Comments are prose, not behaviour: version.sh's own header NAMES every
 # carrier, and _lib.sh mentions cicchetto-build in a note. Matching them would
 # make the guard lie in both directions, so strip trailing comments first.
+#
+# A `-v host:container` argument is data, not an invocation, for the same
+# reason: it hands a path to a container, it does not launch anything. #1030
+# added a `-v "$SRC_ROOT/cicchetto/e2e:…:ro"` overlay to scripts/_lib.sh, which
+# made the `cicchetto/e2e` signal read a bind-mount as an e2e bring-up. The
+# real drivers name the dir by ASSIGNMENT (`E2E_DIR="$SRC_ROOT/cicchetto/e2e"`
+# in scripts/integration.sh + scripts/testnet.sh), so stripping mount specs
+# leaves them caught — pinned by the two cases at the bottom of this file.
 code_of() {
-    sed -e 's/[[:space:]]*#.*$//' "$1"
+    sed -e 's/[[:space:]]*#.*$//' -e 's/-v "[^"]*"//g' -e 's/--volume "[^"]*"//g' "$1"
 }
 
 # Every predicate below feeds grep a HERE-STRING, never a pipe. A pipe into
@@ -253,4 +261,49 @@ EOF
     run --separate-stderr unexported_launchers "$fake"
     [ "$status" -eq 0 ]
     [ -z "$output" ]
+}
+
+@test "scan: a bind-mount of the e2e dir is data, not a launcher" {
+    local fake="$BATS_TEST_TMPDIR/repo"
+    mkdir -p "$fake/scripts"
+    cat > "$fake/scripts/_lib.sh" <<'EOF'
+#!/usr/bin/env bash
+WORKTREE_VOLUMES=(
+    -v "$SRC_ROOT/cicchetto/e2e:/app/cicchetto/e2e:ro"
+)
+EOF
+
+    run --separate-stderr discovered_launchers "$fake"
+    [ "$status" -eq 0 ]
+    [ -z "$output" ]
+}
+
+@test "scan: RED — mounting the e2e dir does not hide a build in the same file" {
+    local fake="$BATS_TEST_TMPDIR/repo"
+    mkdir -p "$fake/scripts"
+    cat > "$fake/scripts/_lib.sh" <<'EOF'
+#!/usr/bin/env bash
+WORKTREE_VOLUMES=(
+    -v "$SRC_ROOT/cicchetto/e2e:/app/cicchetto/e2e:ro"
+)
+docker compose --profile prod run --rm cicchetto-build
+EOF
+
+    run --separate-stderr unexported_launchers "$fake"
+    [ "$status" -eq 0 ]
+    [ "$output" = "scripts/_lib.sh" ]
+}
+
+@test "scan: naming the e2e dir by assignment is still a launcher" {
+    local fake="$BATS_TEST_TMPDIR/repo"
+    mkdir -p "$fake/scripts"
+    cat > "$fake/scripts/integration.sh" <<'EOF'
+#!/usr/bin/env bash
+E2E_DIR="$SRC_ROOT/cicchetto/e2e"
+cd "$E2E_DIR" && docker compose up -d
+EOF
+
+    run --separate-stderr unexported_launchers "$fake"
+    [ "$status" -eq 0 ]
+    [ "$output" = "scripts/integration.sh" ]
 }
