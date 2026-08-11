@@ -24,6 +24,10 @@ defmodule Grappa.Release do
       _build/prod/rel/grappa/bin/grappa eval 'Grappa.Release.seed_themes()'
       _build/prod/rel/grappa/bin/grappa eval 'Grappa.Release.rollback(Grappa.Repo, 20260501000000)'
 
+  `cli/1` is the exception to that spelling: it backs the operator
+  subcommands (`grappa create-user vjt --admin`), which the shipped
+  `bin/grappa` translates into an `eval` the operator never types.
+
   Each entry point loads `@app` (the release boot script does NOT
   start the application — it only loads the .app file so config is
   available) and starts the Cloak vault the Repo needs at schema-load
@@ -36,8 +40,12 @@ defmodule Grappa.Release do
   `Grappa.Release.*` they invoke is actually exported here.
   """
 
-  use Boundary, top_level?: true, deps: [Grappa.Repo, Grappa.Themes, Grappa.Vault]
+  use Boundary,
+    top_level?: true,
+    deps: [Grappa.Accounts, Grappa.Networks, Grappa.Repo, Grappa.Themes, Grappa.Vault],
+    exports: [CLI]
 
+  alias Grappa.Release.CLI
   alias Grappa.Themes
 
   @app :grappa
@@ -100,6 +108,46 @@ defmodule Grappa.Release do
     end
 
     :ok
+  end
+
+  @doc """
+  The operator account door of a packaged release (#1158) — the entry
+  point behind `grappa create-user` and its siblings.
+
+  Takes the release script's argv, runs the verb through
+  `Grappa.Release.CLI`, prints the outcome and halts non-zero on failure
+  so a wrapping install script can tell. The verb table, the flags and
+  every domain call live in `CLI`; this function owns only the boot —
+  which is the part `eval` cannot do for itself.
+
+  Boots exactly as far as a DB write needs: the app is loaded (a release
+  `eval` starts nothing), the Cloak vault is started because a credential
+  carries encrypted columns, and the Repo is started by
+  `Ecto.Migrator.with_repo/2` — the same three steps `seed_themes/0`
+  takes, for the same reason. A live node is NOT required and never
+  contacted: this is the first-run door, when there may be nothing to
+  contact.
+  """
+  @spec cli([String.t()]) :: :ok
+  def cli(argv) when is_list(argv) do
+    load_app()
+    start_vault!()
+
+    case Ecto.Migrator.with_repo(Grappa.Repo, fn _repo -> CLI.run(argv) end) do
+      {:ok, {:ok, message}, _apps} -> IO.puts(message)
+      {:ok, {:error, message}, _apps} -> abort(message)
+      {:error, reason} -> abort("could not open the database: #{inspect(reason)}")
+    end
+  end
+
+  # Exit status is the whole contract with the calling shell: the packaged
+  # scriptlets and an operator's `&&` chain both read it, and a silent
+  # zero on a failed account creation is how a box ends up believing it
+  # has an admin it does not have.
+  @spec abort(String.t()) :: no_return()
+  defp abort(message) do
+    IO.puts(:stderr, "grappa: #{message}")
+    System.halt(1)
   end
 
   defp repos do

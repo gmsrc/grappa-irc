@@ -1,6 +1,7 @@
 defmodule Grappa.ReleaseTest do
   @moduledoc """
-  The deploy scripts invoke `Grappa.Release` entry points as STRINGS
+  The deploy scripts — and, since #1158, the operator CLI that ships AS
+  `bin/grappa` — invoke `Grappa.Release` entry points as STRINGS
   inside `bin/grappa eval '...'`. Nothing links the two at compile time:
   rename or drop a function here and every substrate that runs a packaged
   release keeps calling the old name, failing only at deploy time, on the
@@ -18,7 +19,11 @@ defmodule Grappa.ReleaseTest do
     "infra/freebsd/deploy.sh",
     "infra/linux/deploy.sh",
     "infra/docker/deploy.sh",
-    "scripts/deploy.sh"
+    "scripts/deploy.sh",
+    # Not a deploy script but the same hazard, and worse (#1158): this one
+    # SHIPS as `bin/grappa`, so a rename here rots on every substrate at
+    # once, and only when an operator reaches for the account door.
+    "infra/release/grappa.sh"
   ]
 
   # `Grappa.Release.foo()` / `Grappa.Release.foo(args)` as written inside
