@@ -128,6 +128,7 @@ defmodule Grappa.SessionLogPersistenceTest do
       # Six rows on disk, three sessions. A row-bounded query would answer
       # ONE session here — the newest two rows both belong to u3.
       assert Repo.aggregate(Event, :count) == 6
+
       assert Enum.map(SessionLog.list_latest_per_session(2), & &1.session_id) ==
                ["user:u3:7", "user:u2:7"]
     end

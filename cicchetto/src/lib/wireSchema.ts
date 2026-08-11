@@ -1324,6 +1324,11 @@ export const S_SessionLogWireEvent = {
 // Grappa.SessionLog.Wire.list_result/0
 export const S_SessionLogWireListResult = { o: { session_log: { a: S_SessionLogWireT } } } as const;
 
+// Grappa.SessionLog.Wire.sessions_result/0
+export const S_SessionLogWireSessionsResult = {
+  o: { session_log_sessions: { a: S_SessionLogWireT } },
+} as const;
+
 // Grappa.SubjectSearch.AdminWire.result_json/0
 export const S_SubjectSearchAdminWireResultJson = {
   o: { type: { e: ["user", "visitor"] }, id: "s", network: { u: ["s", "z"] }, nick: "s" },
