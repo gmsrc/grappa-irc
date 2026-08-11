@@ -10,7 +10,7 @@ defmodule Grappa.Migrations.FoldNickservPassOntoPasswordTest do
   replayed the fold's own SQL against the live test schema.
 
   #1044 DROPPED `nickserv_pass_encrypted`
-  (`20260810120000_swap_nickserv_pass_slot_for_server_pass`). The test schema
+  (`20260811130000_swap_nickserv_pass_slot_for_server_pass`). The test schema
   is built by running every migration in order, so by the time a test runs,
   the column the fold reads does not exist and the replay cannot be issued at
   all. The behaviour tests were deleted rather than adapted: there is no

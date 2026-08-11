@@ -194,7 +194,7 @@ defmodule Grappa.Networks.Credential do
     # slot with an `auth_method` selector could only ever spend it on one role.
     #
     # This is #509's retired column resurrected under the role it now carries
-    # (`20260810120000_swap_nickserv_pass_slot_for_server_pass`), NOT a new one.
+    # (`20260811130000_swap_nickserv_pass_slot_for_server_pass`), NOT a new one.
     # The direction is deliberate: `password_encrypted` KEEPS the NickServ
     # meaning, because on every VISITOR row that is what it holds — a visitor's
     # `auth_method` is derived from that secret's presence

@@ -1,6 +1,6 @@
 defmodule Grappa.Migrations.SwapNickservPassSlotForServerPassTest do
   @moduledoc """
-  GH #1044 — the CONTRACT step (`20260810120000_swap_nickserv_pass_slot_for_server_pass`).
+  GH #1044 — the CONTRACT step (`20260811130000_swap_nickserv_pass_slot_for_server_pass`).
 
   #124 retired `nickserv_pass_encrypted` expand-only: nothing read or wrote it,
   but the column stayed. This migration drops it and adds an EMPTY
