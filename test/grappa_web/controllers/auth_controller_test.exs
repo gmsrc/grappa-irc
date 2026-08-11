@@ -70,6 +70,16 @@ defmodule GrappaWeb.AuthControllerTest do
   defp stop_visitor_session(visitor_id, network_id),
     do: :ok = Grappa.Session.stop_session({:visitor, visitor_id}, network_id)
 
+  # The door charges TWO rows, so the teardown must release two. Clearing
+  # only `{ip, user_id}` leaves ten failures on the per-ADDRESS ceiling,
+  # which is a process-global ETS row every test in the run shares: three
+  # tests spending ten each reach `@totp_ip_max_failures` and the next
+  # request from 127.0.0.1 is refused 429 whatever it was asking for.
+  defp clear_totp_window(user_id) do
+    :ok = FailureWindow.clear(:totp_login, {"127.0.0.1", user_id})
+    :ok = FailureWindow.clear(:totp_login, "127.0.0.1")
+  end
+
   defp arm_totp(user) do
     enrollment = TOTP.new_enrollment(user, "Grappa test")
     previous_step = System.system_time(:second) - 30
@@ -350,6 +360,7 @@ defmodule GrappaWeb.AuthControllerTest do
   describe "POST /auth/totp/verify throttle (:totp_login)" do
     test "the 11th attempt is 429 too_many_attempts even with the correct code", %{conn: conn} do
       {user, password} = user_fixture_with_password()
+      on_exit(fn -> clear_totp_window(user.id) end)
       secret = arm_totp(user)
       wrong = wrong_totp_code(secret, System.system_time(:second))
 
@@ -381,6 +392,7 @@ defmodule GrappaWeb.AuthControllerTest do
 
     test "a fresh account is unaffected by another's exhausted window", %{conn: conn} do
       {spent, spent_password} = user_fixture_with_password()
+      on_exit(fn -> clear_totp_window(spent.id) end)
       spent_secret = arm_totp(spent)
       wrong = wrong_totp_code(spent_secret, System.system_time(:second))
 

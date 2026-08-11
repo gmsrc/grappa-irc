@@ -52,7 +52,12 @@ defmodule GrappaWeb.RecoveryCodeDoorsTest do
   # refused even when the code handed over is genuine.
   test "the second_factor-without-TOTP door is inside the same failure window", %{conn: conn} do
     %{user: user, password: password, code: code} = arm(:second_factor_without_totp)
-    on_exit(fn -> FailureWindow.clear(:totp_login, {"127.0.0.1", user.id}) end)
+    # The door charges TWO rows, so the teardown must release two. Clearing
+    # only `{ip, user_id}` leaves ten failures on the per-ADDRESS ceiling,
+    # which is a process-global ETS row every test in the run shares: three
+    # tests spending ten each reach `@totp_ip_max_failures` and the next
+    # request from 127.0.0.1 is refused 429 whatever it was asking for.
+    on_exit(fn -> clear_totp_window(user.id) end)
 
     live = session_count(user)
     challenge = challenge_token(conn, user, password)
@@ -198,6 +203,11 @@ defmodule GrappaWeb.RecoveryCodeDoorsTest do
         name: "phone"
       })
     )
+  end
+
+  defp clear_totp_window(user_id) do
+    :ok = FailureWindow.clear(:totp_login, {"127.0.0.1", user_id})
+    :ok = FailureWindow.clear(:totp_login, "127.0.0.1")
   end
 
   defp reload(user), do: Repo.get!(User, user.id)
