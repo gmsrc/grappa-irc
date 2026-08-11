@@ -3407,27 +3407,36 @@ defmodule Grappa.Session.Server do
     end
   end
 
-  # S4.2 — CAP ACK: detect labeled-response being granted by the upstream.
+  # The caps whose ACK changes how this process behaves, and therefore the
+  # ones worth remembering. Recording the ACKed subset of THIS set — rather
+  # than one `if` per cap — is deliberate: the pre-#388 shape kept only
+  # `labeled-response` and silently dropped every other ACK on the floor,
+  # so `account-notify` was negotiated, granted, and then forgotten.
+  #
+  #   * `labeled-response` (S4.2) — gates whether we tag outbound commands.
+  #   * `account-notify` (#388) — gates whether the services ACCOUNT counts
+  #     as proof of identity. See `Grappa.Session.IdentityState`.
+  @tracked_caps MapSet.new(["labeled-response", "account-notify"])
+
+  # S4.2 / #388 — CAP ACK: record which of the caps we act on were granted.
   # IRC.Client dispatches ALL parsed messages to Session.Server (including
-  # CAP messages that AuthFSM also processes). This handler fires for any
-  # CAP ACK that contains "labeled-response" in the ACK'd caps list. It
-  # is not phase-guarded — a stray post-registration CAP ACK from a CAP
-  # NEW or similar extension is benign here (we just add the cap name to
-  # caps_active, which is a no-op if it's already there or useless if
-  # the session never issues labeled commands).
+  # CAP messages that AuthFSM also processes). Not phase-guarded — a stray
+  # post-registration CAP ACK from a CAP NEW or similar extension is benign,
+  # because a cap can only be ADDED here and adding one we already hold is a
+  # no-op. Caps outside `@tracked_caps` are ignored rather than stored: this
+  # set is "what changes our behaviour", not an inventory of the session.
   def handle_info(
         {:irc, %Message{command: :cap, params: [_, "ACK", caps_blob | _]}},
         state
       )
       when is_binary(caps_blob) do
-    acked = caps_blob |> String.split(" ", trim: true) |> Enum.map(&String.trim/1)
-
     caps_active =
-      if "labeled-response" in acked do
-        MapSet.put(state.caps_active, "labeled-response")
-      else
-        state.caps_active
-      end
+      caps_blob
+      |> String.split(" ", trim: true)
+      |> Enum.map(&String.trim/1)
+      |> MapSet.new()
+      |> MapSet.intersection(@tracked_caps)
+      |> MapSet.union(state.caps_active)
 
     {:noreply, %{state | caps_active: caps_active}}
   end

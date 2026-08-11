@@ -18,12 +18,39 @@ defmodule Grappa.Session.IdentityState do
     * **account** — the services account name, from IRCv3 `account-notify`
       (`ACCOUNT <name>` / `ACCOUNT *`) or numeric 330 RPL_WHOISLOGGEDIN for
       self. Flavour-agnostic, and the ONLY axis solanum/atheme networks
-      offer (see below).
+      offer (see below). **Counts as proof only where `account-notify` is
+      ACKed** — see the next section.
     * **registered umode** — the per-flavour umode letter the ircd sets when
       services confirm an identify.
 
   They are OR'd: a bahamut network supplies only the umode, a solanum one
   only the account, and an ircd offering both may deliver either first.
+
+  ## Why the account axis is gated on the cap (vjt's ruling, 2026-08-11)
+
+  An account name is only a *live* identity where the ircd promises to
+  retract it, and `account-notify` IS that promise: it is the cap that
+  delivers `ACCOUNT *` on logout. Without it we can learn an account (a
+  330 naming us) but we will never be told it ended, so treating it as
+  proof means a verdict that can go up and never come down.
+
+  That is not hypothetical. bahamut (Azzurra, all of prod) offers no such
+  cap and strips `+r` on a genuine rename (#581). Ungated, a 330 would
+  pin the session "identified" forever: the `+r` strip would stop moving
+  the verdict, and #581's re-identify affordance — the button that tells
+  the operator they need to identify again — would never come back. So on
+  bahamut a 330 is **display only**: still folded onto the state for the
+  WHOIS card, no longer part of the verdict, and `+r` alone decides.
+  Behaviour on prod is therefore exactly the pre-#388 behaviour.
+
+  On solanum/OFTC the cap IS ACKed, so the account axis is live: it
+  survives a rename, as it should, and `ACCOUNT *` retracts it. A 330 with
+  neither cap nor umode degrades to "not identified" — the safe direction,
+  and the tolerance `identity.ts` already declares.
+
+  This reads box 2 of the #388 checklist ("parse WHOIS-330 for account")
+  more narrowly than written. The checklist predates the measurement;
+  where the two disagree, the measured design wins.
 
   ## Why the umode letter is per-flavour and EXCLUSIVE
 
@@ -83,6 +110,7 @@ defmodule Grappa.Session.IdentityState do
           optional(:umodes) => [String.t()],
           optional(:account) => String.t() | nil,
           optional(:services_flavor) => flavor(),
+          optional(:caps_active) => MapSet.t(String.t()),
           optional(any()) => any()
         }
 
@@ -94,6 +122,10 @@ defmodule Grappa.Session.IdentityState do
 
   # IRCv3 account-notify spells "logged out" as a literal asterisk.
   @logged_out_account "*"
+
+  # The cap that makes the account axis retractable, and therefore usable
+  # as proof. Same string the CAP ACK seam records into `caps_active`.
+  @account_notify_cap "account-notify"
 
   @doc """
   Whether the session is identified to services — the normalized signal
@@ -126,8 +158,15 @@ defmodule Grappa.Session.IdentityState do
   def normalize_account(account) when is_binary(account), do: account
   def normalize_account(nil), do: nil
 
+  # An account counts only where the ircd promised to retract it. The
+  # `Map.get` default is an empty set, so a hot-reloaded state predating
+  # the key falls back to the umode axis — the pre-#388 answer, and the
+  # safe direction (#216).
   @spec account_identified?(facts()) :: boolean()
-  defp account_identified?(facts), do: is_binary(Map.get(facts, :account))
+  defp account_identified?(facts) do
+    is_binary(Map.get(facts, :account)) and
+      MapSet.member?(Map.get(facts, :caps_active, MapSet.new()), @account_notify_cap)
+  end
 
   @spec umode_identified?(facts()) :: boolean()
   defp umode_identified?(facts) do

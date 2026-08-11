@@ -3023,9 +3023,13 @@ defmodule Grappa.Session.EventRouter do
   # `%{... | umodes:}`) for the #216 hot-reload contract.
   #
   # The stripped umode is the only fact this touches: a services ACCOUNT is
-  # NOT cleared by a rename (the account survives a nick change), so a
-  # session identified via the account axis correctly stays identified —
-  # which is also why the transition must be computed from whole states.
+  # NOT cleared by a rename. Whether that keeps the session identified is
+  # `IdentityState`'s call, not this function's — and since vjt's ruling of
+  # 2026-08-11 the answer differs per network: where `account-notify` is
+  # ACKed the account axis carries the session across the strip, and where
+  # it is not (bahamut, all of prod) the verdict correctly returns to
+  # `:lost` and #581's re-identify affordance comes back. Computing the
+  # transition from whole states is what lets one gate decide both.
   @spec strip_r_on_self_rename(state(), state(), String.t(), String.t()) ::
           {state(), [effect()]}
   defp strip_r_on_self_rename(state, new_state, old_nick, new_nick) do
