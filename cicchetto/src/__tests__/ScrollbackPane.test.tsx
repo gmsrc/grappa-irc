@@ -6069,7 +6069,7 @@ describe("ScrollbackPane", () => {
 
       swipeRight(speechRow);
 
-      expect(getDraft(KEY)).toBe("<alice> hello<< ");
+      expect(getDraft(KEY)).toBe("<alice> hello << ");
     });
   });
 });
