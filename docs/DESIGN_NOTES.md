@@ -39144,3 +39144,58 @@ The #410 auth-method LOCK moved to the new page's suite instead of dying
 with the file it happened to live in: it pins the dropdown to the
 codegen-emitted closed set in array order, which is not a property of
 where the dropdown sits.
+
+---
+
+## 2026-08-11 — #1098: the query was right, and Erlang term order sorted the ORACLE
+
+The flake read as a credential-ordering bug, and the issue body named two
+causes. Both are false, measured:
+
+- *"the sort runs across every credential in the DB"* — `DataCase` opens a
+  sandbox owner per test (`data_case.ex:24`), so no test sees another's rows.
+- *"the tie-break is missing"* — `credentials.ex:1254` already orders by
+  `[asc: c.inserted_at, asc: c.user_id, asc: c.network_id]`.
+
+The query was correct. The defect was in the test's ORACLE, which rebuilt the
+expected list out of the query result with `Enum.sort_by/2` — that is Erlang
+term order. `inserted_at` is `:utc_datetime_usec`, so the values are
+`%DateTime{}` structs, and term order on a map compares the values in KEY
+order, and atoms compare alphabetically: `:microsecond` before `:minute`,
+`:month`, `:second`, and `:year` dead last. Two timestamps straddling a second
+boundary therefore come out reversed. Deterministic repro, timestamps forced:
+
+- chronological, what the query returns: …41.999969 → …42.000012 → …42.000030
+- term order, what the oracle expected: …42.000012 → …42.000030 → …41.999969
+
+The cure changes no production code. The test forces its timestamps (one at
+the end of a second, two tied inside the next) and names the expected rows
+outright instead of re-deriving them. An oracle that never sorts cannot
+mis-sort.
+
+**The mutant that made the test honest, including the round it survived.**
+Deleting `asc: c.user_id` from the query SURVIVED the first layout: the two
+tied rows differed in `user_id` and `network_id` in the same direction, so
+`network_id` alone still ordered them — a defect in the test, not a property
+of the code. Crossing the keys (the low `user_id` on the high `network_id`)
+makes that same mutant kill exactly that one test. The pre-fix test from
+`origin/main` under the same mutant reports `98 tests, 0 failures`, which is
+the evidence that the new oracle is STRONGER and not merely different: the old
+one was blind to the tie-break it claimed to cover. The same `order_by` string
+also appears at `credentials.ex:1284`, so that mutant has to be injected by
+line, never by string.
+
+**Census, so the next reader does not repeat it.** Term order on `%DateTime{}`
+/ `Date` / `Time` has exactly one occurrence in this repo, and it was this
+test. All 32 `Enum.sort*` / `min*` / `max*` sites under `lib/` were read and
+none is temporal. `scrollback.ex:952` sorts on `last_activity`, which looks
+temporal and is not: it is `max(m.server_time)`, and `server_time` is an
+`:integer` of epoch milliseconds. The `<` / `>` comparisons on `expires_at`
+and `last_seen_at` (visitors, accounts, uploads) all sit inside Ecto `where:`
+clauses, so SQL does the comparing. The class is wider than `sort_by` — a bare
+`dt1 < dt2` between two structs falls in the same hole. The rule is
+`DateTime.compare/2`, or a scalar sort key, or let the database order it.
+
+**Not claimed.** The `network_id` tie-break is NOT pinned: no fixture ties two
+rows belonging to the same user. And nothing here was measured against
+production or against a real CI runner — the numbers are all the local suite.
