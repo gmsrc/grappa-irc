@@ -86,7 +86,7 @@ defmodule Grappa.Networks do
 
   alias Grappa.{Accounts, Repo, Scrollback, Session}
   alias Grappa.Accounts.User
-  alias Grappa.Networks.{Credential, Credentials, Network, Wire}
+  alias Grappa.Networks.{Credential, Credentials, Network, NoServerError, Servers, Wire}
   alias Grappa.PubSub.Topic
 
   require Logger
@@ -172,6 +172,90 @@ defmodule Grappa.Networks do
       {^field, {_, opts}} -> Keyword.get(opts, :constraint) == :unique
       _ -> false
     end)
+  end
+
+  @doc """
+  Grants `user` access to a network, and guarantees the access is
+  DIALABLE. The operator-facing verb (#1158): "credential" is the
+  internal noun for the row this writes, and stops being the word any
+  operator surface uses.
+
+  `network_spec` names the network by `:slug` (created on first use,
+  like `find_or_create_network/1`), optionally classifies it
+  (`:services_flavor`) and optionally ensures one server
+  (`:server` — `%{host:, port:, tls:, source_address:}`, idempotent
+  per `(network, host, port)`). `settings` is what that network means
+  for that user — nick, ident, realname, auth method, SASL user,
+  autojoin, secrets — and goes through `Credentials.bind_credential/3`
+  unchanged, so every validation and the at-rest encryption stay where
+  they are. There is one write path for a credential row, not two.
+
+  ## Why it refuses on `:no_enabled_server`
+
+  A user plus a credential still cannot connect: `SessionPlan.resolve/1`
+  picks a server with `Servers.pick_server!/1`, which raises
+  `NoServerError` when the network owns none that is enabled. Binding
+  anyway produces a row that READS as access in every listing and
+  fails only at spawn time — so the check happens here, at the
+  boundary, and no half-access is ever written. The dialability test is
+  `pick_server!/1` itself, not a re-derived predicate, so the two
+  cannot drift apart.
+
+  Not atomic across the three writes, and deliberately so: a network
+  and a server are shared per-deployment infra that outlive any one
+  binding (#105), so a failed credential leaves them in place for the
+  retry rather than rolling back rows another user may already hold.
+  """
+  @spec add_network(
+          User.t(),
+          %{
+            required(:slug) => String.t(),
+            optional(:services_flavor) => Network.services_flavor() | String.t() | nil,
+            optional(:server) => map()
+          },
+          map()
+        ) :: {:ok, Credential.t()} | {:error, :no_enabled_server | Ecto.Changeset.t()}
+  def add_network(%User{} = user, %{slug: slug} = network_spec, settings)
+      when is_binary(slug) and is_map(settings) do
+    with {:ok, network} <-
+           find_or_create_network(Map.take(network_spec, [:slug, :services_flavor])),
+         :ok <- ensure_server(network, Map.get(network_spec, :server)),
+         {:ok, network} <- ensure_dialable(network) do
+      Credentials.bind_credential(user, network, settings)
+    end
+  end
+
+  defp ensure_server(%Network{}, nil), do: :ok
+
+  defp ensure_server(%Network{} = network, %{} = server_spec) do
+    case Servers.add_server(network, server_spec) do
+      {:ok, _server} -> :ok
+      # Same `(network, host, port)` already registered — the row keeps its
+      # prior attributes, as `add_server/2` documents.
+      {:error, :already_exists} -> :ok
+      {:error, %Ecto.Changeset{}} = error -> error
+    end
+  end
+
+  defp ensure_dialable(%Network{} = network) do
+    network = Repo.preload(network, :servers, force: true)
+    _server = Servers.pick_server!(network)
+    {:ok, network}
+  rescue
+    NoServerError -> {:error, :no_enabled_server}
+  end
+
+  @doc """
+  Revokes `user`'s access to `network`, stopping any live session first.
+
+  The other half of `add_network/3`, and the operator-facing name for
+  `Credentials.unbind_credential/2` — which keeps the whole teardown
+  contract, including that the network itself survives its last
+  binding (#105).
+  """
+  @spec remove_network(User.t(), Network.t()) :: :ok
+  def remove_network(%User{} = user, %Network{} = network) do
+    Credentials.unbind_credential(user, network)
   end
 
   @doc """

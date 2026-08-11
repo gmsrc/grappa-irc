@@ -20,7 +20,6 @@ defmodule Mix.Tasks.Grappa.UnbindNetwork do
   use Mix.Task
 
   alias Grappa.{Accounts, Networks}
-  alias Grappa.Networks.Credentials
   alias Mix.Tasks.Grappa.{Boot, OptionParsing}
 
   @switches [user: :string, network: :string]
@@ -39,7 +38,7 @@ defmodule Mix.Tasks.Grappa.UnbindNetwork do
 
     case Networks.get_network_by_slug(slug) do
       {:ok, network} ->
-        :ok = Credentials.unbind_credential(user, network)
+        :ok = Networks.remove_network(user, network)
         IO.puts("unbound #{user.name} from #{slug}")
 
       {:error, :not_found} ->

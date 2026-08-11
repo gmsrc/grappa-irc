@@ -62,7 +62,6 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
   use Mix.Task
 
   alias Grappa.{Accounts, Networks}
-  alias Grappa.Networks.{Credentials, Servers}
   alias Mix.Tasks.Grappa.{Boot, OptionParsing, Output}
 
   @switches [
@@ -98,41 +97,29 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
     Boot.start_app_silent()
 
     user = Accounts.get_user_by_name!(user_name)
-
-    # `--services-flavor` (GH #349) applies only on the CREATE path;
-    # `find_or_create_network/1` returns a pre-existing row unchanged, so
-    # re-classifying an existing network is an admin PATCH, not a re-bind.
-    # An invalid flavor string trips Ecto.Enum casting → the hard match
-    # below surfaces the changeset to the operator.
-    net_attrs =
-      case Keyword.get(opts, :services_flavor) do
-        nil -> %{slug: slug}
-        flavor -> %{slug: slug, services_flavor: flavor}
-      end
-
-    {:ok, network} = Networks.find_or_create_network(net_attrs)
-
     {host, port} = OptionParsing.parse_server(server)
 
-    case Servers.add_server(network, %{
-           host: host,
-           port: port,
-           tls: Keyword.get(opts, :tls, port == @tls_port),
-           source_address: Keyword.get(opts, :source)
-         }) do
-      {:ok, _} ->
-        :ok
+    server_spec = %{
+      host: host,
+      port: port,
+      tls: Keyword.get(opts, :tls, port == @tls_port),
+      # A pre-existing `(network, host, port)` row keeps its prior
+      # source_address; the --source given here is NOT persisted then.
+      source_address: Keyword.get(opts, :source)
+    }
 
-      {:error, :already_exists} ->
-        # Pre-existing row keeps its prior source_address; the --source
-        # given here was NOT persisted. Matches add_server.
-        :ok
+    # `--services-flavor` (GH #349) applies only on the CREATE path;
+    # `add_network/3` returns a pre-existing network unchanged, so
+    # re-classifying an existing network is an admin PATCH, not a re-bind.
+    # An invalid flavor string trips Ecto.Enum casting and comes back as
+    # the changeset below.
+    network_spec =
+      case Keyword.get(opts, :services_flavor) do
+        nil -> %{slug: slug, server: server_spec}
+        flavor -> %{slug: slug, services_flavor: flavor, server: server_spec}
+      end
 
-      {:error, cs} ->
-        Output.halt_changeset("binding server", cs)
-    end
-
-    cred_attrs = %{
+    settings = %{
       nick: nick,
       password: Keyword.get(opts, :password),
       auth_method: OptionParsing.parse_auth(auth),
@@ -141,9 +128,19 @@ defmodule Mix.Tasks.Grappa.BindNetwork do
       sasl_user: Keyword.get(opts, :sasl_user)
     }
 
-    case Credentials.bind_credential(user, network, cred_attrs) do
-      {:ok, _} -> IO.puts("bound #{user.name} to #{network.slug} (server #{host}:#{port})")
-      {:error, cs} -> Output.halt_changeset("binding credential", cs)
+    # #1158: the network + server + credential composition lives in the
+    # context now, so this task and the release-image door
+    # (`grappa add-network`) provision an account the same way. The task is
+    # the source-flavor surface over it, nothing more.
+    case Networks.add_network(user, network_spec, settings) do
+      {:ok, _} ->
+        IO.puts("bound #{user.name} to #{slug} (server #{host}:#{port})")
+
+      {:error, :no_enabled_server} ->
+        Mix.raise("#{slug} has no ENABLED server — #{host}:#{port} exists but is disabled")
+
+      {:error, cs} ->
+        Output.halt_changeset("binding #{slug}", cs)
     end
   end
 end

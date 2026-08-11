@@ -397,6 +397,111 @@ defmodule Grappa.NetworksTest do
     end
   end
 
+  # #1158 — the operator-facing verb pair. `bind_credential/3` writes ONE row
+  # and is the internal primitive; a user holding only that row still cannot
+  # connect, because `SessionPlan.resolve/1` needs the network to own an
+  # ENABLED server (`pick_server!/1` raises otherwise). `add_network/3` is the
+  # composition that makes the access real, and every assertion here uses
+  # `SessionPlan.resolve/1` as the oracle rather than counting rows: "the
+  # credential exists" is exactly the half-truth the verb was introduced to
+  # stop telling.
+  describe "add_network/3 + remove_network/2 (#1158)" do
+    setup do
+      %{user: user_fixture()}
+    end
+
+    # `auth_method != :none` requires a password at the changeset boundary
+    # (`validate_password_for_auth_method`), so a realistic settings map
+    # carries one — an empty one would exercise the error path everywhere.
+    @settings %{
+      nick: "vjt-grappa",
+      auth_method: :auto,
+      password: "loadbearing",
+      autojoin_channels: ["#grappa"]
+    }
+
+    test "provisions network + server + credential, and the plan resolves", %{user: user} do
+      assert {:ok, %Credential{} = cred} =
+               Networks.add_network(
+                 user,
+                 %{slug: "azzurra", server: %{host: "irc.azzurra.chat", port: 6697, tls: true}},
+                 @settings
+               )
+
+      assert cred.user_id == user.id
+      assert cred.nick == "vjt-grappa"
+      assert cred.autojoin_channels == ["#grappa"]
+
+      # The parity claim, measured: a user seeded through this verb alone can
+      # be dialled. Nothing else had to be run first.
+      assert {:ok, plan} = SessionPlan.resolve(cred)
+      assert plan.host == "irc.azzurra.chat"
+      assert plan.port == 6697
+    end
+
+    test "reuses an existing network and its server when no server is given", %{user: user} do
+      # The shape the admin page needs: the operator picks a network that
+      # already exists, and supplies per-network settings only.
+      net = network_fixture("azzurra")
+      {:ok, _} = Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697, tls: true})
+
+      assert {:ok, %Credential{} = cred} =
+               Networks.add_network(user, %{slug: "azzurra"}, @settings)
+
+      assert cred.network_id == net.id
+      assert {:ok, _plan} = SessionPlan.resolve(cred)
+      assert length(Servers.list_servers(net)) == 1
+    end
+
+    test "refuses, and writes NO credential, when the network has no enabled server",
+         %{user: user} do
+      net = network_fixture("azzurra")
+      {:ok, _} = Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697, enabled: false})
+
+      assert {:error, :no_enabled_server} =
+               Networks.add_network(user, %{slug: "azzurra"}, @settings)
+
+      # A bound-but-undialable credential is the failure mode this verb
+      # exists to prevent: it reads as access in every listing and fails
+      # only at spawn time, on the operator's next login.
+      assert Credentials.list_credentials_for_user(user) == []
+    end
+
+    test "surfaces the credential changeset instead of swallowing it", %{user: user} do
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Networks.add_network(
+                 user,
+                 %{slug: "azzurra", server: %{host: "irc.azzurra.chat", port: 6697}},
+                 %{nick: "vjt", autojoin_channels: []}
+               )
+
+      assert errors_on(cs)[:auth_method] != nil
+    end
+
+    test "surfaces an invalid slug as a changeset, before touching servers", %{user: user} do
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Networks.add_network(user, %{slug: "Bad Slug!"}, @settings)
+
+      assert errors_on(cs)[:slug] != nil
+    end
+
+    test "remove_network detaches the access and keeps the network", %{user: user} do
+      {:ok, cred} =
+        Networks.add_network(
+          user,
+          %{slug: "azzurra", server: %{host: "irc.azzurra.chat", port: 6697, tls: true}},
+          @settings
+        )
+
+      assert :ok = Networks.remove_network(user, Repo.get!(Network, cred.network_id))
+
+      assert Credentials.list_credentials_for_user(user) == []
+      # #105: networks are shared per-deployment infra, never garbage-collected
+      # by the last unbind. The verb rename must not quietly change that.
+      assert %Network{} = Repo.get_by(Network, slug: "azzurra")
+    end
+  end
+
   describe "update_credential!/3" do
     setup do
       user = user_fixture()
