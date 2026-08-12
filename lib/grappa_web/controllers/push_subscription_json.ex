@@ -15,10 +15,15 @@ defmodule GrappaWeb.PushSubscriptionJSON do
     * `:show` (POST 201 response) — `%{id, created_at}`. Endpoint and
       keys are NOT echoed back; cic already has them locally (it just
       sent them).
-    * `:index` (GET 200) — `%{subscriptions: [%{id, user_agent,
-      created_at, last_used_at}, ...]}`. Powers cic settings drawer
-      device list (B3). `last_used_at` is `nil` until B2's
-      `Push.Sender` writes the first delivery.
+    * `:index` (GET 200) — `%{subscriptions: [%{id, provider,
+      user_agent, created_at, last_used_at}, ...]}`. Powers cic
+      settings drawer device list (B3). `last_used_at` is `nil`
+      until B2's `Push.Sender` writes the first delivery. `provider`
+      (2026-08-13, UnifiedPush) — `"webpush"` or `"unifiedpush"` —
+      lets a client's device list show what kind of endpoint each
+      row is (a browser tab vs. a UnifiedPush-registered device);
+      revocation (`DELETE /push/subscriptions/:id`) works identically
+      for either.
 
   ## Why no endpoint/keys in any list shape
 
@@ -34,6 +39,7 @@ defmodule GrappaWeb.PushSubscriptionJSON do
 
   @type subscription_summary :: %{
           id: Ecto.UUID.t(),
+          provider: Subscription.provider(),
           user_agent: String.t() | nil,
           created_at: DateTime.t(),
           last_used_at: DateTime.t() | nil
@@ -58,6 +64,7 @@ defmodule GrappaWeb.PushSubscriptionJSON do
   defp summary(%Subscription{} = sub) do
     %{
       id: sub.id,
+      provider: sub.provider,
       user_agent: sub.user_agent,
       created_at: sub.inserted_at,
       last_used_at: sub.last_used_at

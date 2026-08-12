@@ -6,18 +6,26 @@ defmodule GrappaWeb.PushSubscriptionController do
   Three endpoints, all behind `[:api, :authn]`:
 
     * `POST /push/subscriptions` — body
-      `{"endpoint": <url>, "keys": {"p256dh": <b64>, "auth": <b64>}}`,
-      plus an optional `"supersedes": <old-endpoint>` the client sends
-      on re-subscribe so the ghost row it is replacing is pruned
-      atomically (#181 churn dedup — see `Push.create/2`).
+      `{"endpoint": <url>, "keys": {"p256dh": <b64>, "auth": <b64>},
+      "provider": <"webpush" | "unifiedpush">}`. `"provider"` is
+      optional and defaults to `"webpush"` — a UnifiedPush client
+      generates a real P-256 keypair + auth secret client-side too
+      (the same way a browser's `PushManager.subscribe()` does
+      internally for Web Push) and sends it through this SAME shape,
+      just tagged `"provider": "unifiedpush"` so the device-list UX
+      can tell the two apart; see `Grappa.Push.Subscription`'s
+      moduledoc for why delivery itself never branches on it. Also
+      accepts an optional `"supersedes": <old-endpoint>` the client
+      sends on re-subscribe so the ghost row it is replacing is
+      pruned atomically (#181 churn dedup — see `Push.create/2`).
       201 with `%{id, created_at}` on success; 400 if the body shape
       is missing required fields; 422 with `{error:
       "validation_failed", field_errors: ...}` on validation
-      (length cap exceeded) OR on the duplicate-endpoint case (re-
-      subscription replay — `field_errors.endpoint` carries the
-      "has already been taken" token, surfaced via the
-      `error_key: :endpoint` override on `Subscription.changeset/2`'s
-      unique_constraint).
+      (length cap exceeded, unrecognized `provider`) OR on the
+      duplicate-endpoint case (re-subscription replay —
+      `field_errors.endpoint` carries the "has already been taken"
+      token, surfaced via the `error_key: :endpoint` override on
+      `Subscription.changeset/2`'s unique_constraint).
 
     * `DELETE /push/subscriptions/:id` — 204 on success;
       404 (uniform body) for cross-subject OR missing IDs (probing
@@ -25,8 +33,10 @@ defmodule GrappaWeb.PushSubscriptionController do
       subscription IDs).
 
     * `GET /push/subscriptions` — 200 with
-      `%{subscriptions: [%{id, user_agent, created_at, last_used_at},
-      ...]}`. Powers the cic settings drawer's per-device list (B3).
+      `%{subscriptions: [%{id, provider, user_agent, created_at,
+      last_used_at}, ...]}`. Powers the cic settings drawer's
+      per-device list (B3); `provider` lets a client tell a browser
+      subscription apart from a UnifiedPush-registered device.
 
   ## Subject-scoped — V3 (2026-05-15)
 
@@ -66,22 +76,28 @@ defmodule GrappaWeb.PushSubscriptionController do
   Wire shape mirrors the W3C `PushSubscription.toJSON()` output
   (`{endpoint, keys: {p256dh, auth}}`) so the cic SW can pass its
   subscription object straight through with one rename
-  (`expirationTime` is dropped at the boundary).
+  (`expirationTime` is dropped at the boundary) — a UnifiedPush
+  client sends the identical shape (it generates its own P-256
+  keypair + auth secret client-side), plus the optional `"provider"`
+  tag. `provider` is passed through as-is when present; when absent,
+  `Subscription.changeset/2`'s schema-field default (`"webpush"`)
+  applies, so every pre-2026-08-13 caller is unaffected.
   """
   @spec create(Plug.Conn.t(), map()) ::
           Plug.Conn.t() | {:error, :bad_request | Ecto.Changeset.t()}
   def create(conn, %{"endpoint" => endpoint, "keys" => %{"p256dh" => p256dh, "auth" => auth}} = params)
       when is_binary(endpoint) and is_binary(p256dh) and is_binary(auth) do
+    base_attrs = %{
+      endpoint: endpoint,
+      p256dh_key: p256dh,
+      auth_key: auth,
+      user_agent: get_user_agent(conn)
+    }
+
     attrs =
-      maybe_put_supersedes(
-        %{
-          endpoint: endpoint,
-          p256dh_key: p256dh,
-          auth_key: auth,
-          user_agent: get_user_agent(conn)
-        },
-        params
-      )
+      base_attrs
+      |> maybe_put_supersedes(params)
+      |> maybe_put_provider(params)
 
     with {:ok, sub} <- Push.create(Subject.from_assigns(conn.assigns), attrs) do
       conn
@@ -102,6 +118,16 @@ defmodule GrappaWeb.PushSubscriptionController do
     do: Map.put(attrs, :supersedes, sup)
 
   defp maybe_put_supersedes(attrs, _), do: attrs
+
+  # `"provider"` (2026-08-13, UnifiedPush) — passed through verbatim when the
+  # caller sends one; `Subscription.changeset/2`'s `validate_inclusion/3`
+  # rejects anything outside the closed set, so an invalid string surfaces as
+  # a 422, not silently coerced. Absent entirely -> the schema field default
+  # (`"webpush"`) applies, matching every pre-2026-08-13 caller unchanged.
+  defp maybe_put_provider(attrs, %{"provider" => provider}) when is_binary(provider),
+    do: Map.put(attrs, :provider, provider)
+
+  defp maybe_put_provider(attrs, _), do: attrs
 
   @doc """
   `DELETE /push/subscriptions/:id` — remove a subscription. Cross-
