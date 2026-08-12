@@ -474,10 +474,10 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
         const out: Record<string, number> = {};
         for (let n = el.parentElement, i = 0; n !== null; n = n.parentElement, i++) {
           if (n.scrollHeight <= n.clientHeight) continue;
-          const name = n.getAttribute("data-testid") ?? n.className || n.tagName.toLowerCase();
+          const name = n.getAttribute("data-testid") ?? (n.className || n.tagName.toLowerCase());
           out[`${i}:${String(name).slice(0, 40)}`] = n.scrollTop;
         }
-        out["window"] = window.scrollY;
+        out.window = window.scrollY;
         return out;
       });
 
