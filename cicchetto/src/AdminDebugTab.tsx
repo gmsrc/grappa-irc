@@ -191,33 +191,65 @@ const AdminDebugTab: Component = () => {
             <p class="adm-matrix-prompt" aria-hidden="true">
               grappa@cicchetto:~$ tail -f /dev/viewport
             </p>
+            {/* #1244 — `.adm-fact` per pair, like `AdminFacts` renders.
+                This list is hand-written because each value is its own
+                signal read, and it shares the class, so it shares the
+                markup contract: the narrow layout keys off the wrapper,
+                and a `.adm-facts` without one silently keeps the old
+                grid the day this panel gains a query container. */}
             <dl class="adm-facts adm-matrix-facts">
-              <dt>vv.height</dt>
-              <dd data-testid="diag-vv-h">{Math.round(diagVvH())}</dd>
-              <dt>vv.width</dt>
-              <dd data-testid="diag-vv-w">{Math.round(diagVvW())}</dd>
-              <dt>window.innerHeight</dt>
-              <dd data-testid="diag-win-h">{Math.round(diagWinH())}</dd>
-              <dt>window.innerWidth</dt>
-              <dd data-testid="diag-win-w">{Math.round(diagWinW())}</dd>
-              <dt>Δ (winH − vvH)</dt>
-              <dd data-testid="diag-delta">{Math.round(diagWinH() - diagVvH())}</dd>
-              <dt>vv.scale</dt>
-              <dd>{diagVvScale().toFixed(2)}</dd>
-              <dt>vv.offsetTop</dt>
-              <dd>{Math.round(diagVvOffsetTop())}</dd>
-              <dt>--viewport-height</dt>
-              <dd data-testid="diag-css-var">{diagCssVar()}</dd>
-              <dt>--vh</dt>
-              <dd data-testid="diag-vh-var">{diagVhVar()}</dd>
-              <dt>html.is-ios</dt>
-              <dd data-testid="diag-is-ios">{diagIsIos() ? "true" : "false"}</dd>
-              <dt>active element</dt>
-              <dd data-testid="diag-focus">{diagFocusedTag()}</dd>
-              <dt>event tick</dt>
-              <dd data-testid="diag-event-tick">{diagEventTick()}</dd>
-              <dt>last event</dt>
-              <dd data-testid="diag-last-event">{diagLastEvent()}</dd>
+              <div class="adm-fact">
+                <dt>vv.height</dt>
+                <dd data-testid="diag-vv-h">{Math.round(diagVvH())}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>vv.width</dt>
+                <dd data-testid="diag-vv-w">{Math.round(diagVvW())}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>window.innerHeight</dt>
+                <dd data-testid="diag-win-h">{Math.round(diagWinH())}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>window.innerWidth</dt>
+                <dd data-testid="diag-win-w">{Math.round(diagWinW())}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>Δ (winH − vvH)</dt>
+                <dd data-testid="diag-delta">{Math.round(diagWinH() - diagVvH())}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>vv.scale</dt>
+                <dd>{diagVvScale().toFixed(2)}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>vv.offsetTop</dt>
+                <dd>{Math.round(diagVvOffsetTop())}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>--viewport-height</dt>
+                <dd data-testid="diag-css-var">{diagCssVar()}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>--vh</dt>
+                <dd data-testid="diag-vh-var">{diagVhVar()}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>html.is-ios</dt>
+                <dd data-testid="diag-is-ios">{diagIsIos() ? "true" : "false"}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>active element</dt>
+                <dd data-testid="diag-focus">{diagFocusedTag()}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>event tick</dt>
+                <dd data-testid="diag-event-tick">{diagEventTick()}</dd>
+              </div>
+              <div class="adm-fact">
+                <dt>last event</dt>
+                <dd data-testid="diag-last-event">{diagLastEvent()}</dd>
+              </div>
             </dl>
           </div>
         </AdminCard>

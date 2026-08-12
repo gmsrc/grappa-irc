@@ -5477,6 +5477,21 @@ html.resize-dragging * {
   margin: 0;
 }
 
+/* #1244 — each `<dt>`/`<dd>` pair travels in a wrapper (`AdminFacts`), so
+   the narrow layout below can put ONE pair on one line and let a pair
+   that does not fit stack on its own. A `<div>` between `<dl>` and its
+   pairs is what HTML defines for grouping them, so the semantics are
+   unchanged.
+
+   `display: contents` dissolves the wrapper here: on a panel with room
+   the list is still one grid, which is what lines the labels up into a
+   column across pairs. The group box only becomes real in the container
+   query below — the same idiom, and for the same reason, as
+   `.adm-nav-group` on the desktop rail. */
+.adm-fact {
+  display: contents;
+}
+
 .adm-facts dt {
   font-family: var(--adm-font);
   font-size: 0.68rem;
@@ -5510,12 +5525,48 @@ html.resize-dragging * {
    30rem, i.e. the width below which the value track can no longer hold
    one line of what this list actually renders: 6rem of label track plus
    the 1rem gap is chrome, and the panel's values are timestamps and
-   `host:port` pairs of ~20 mono characters. Below that the pair reads
-   better stacked — the label is a caption for the value, and a caption
-   above costs one line and buys the value the whole width. */
+   `host:port` pairs of ~20 mono characters.
+
+   #1244 — below that the pair stops being a grid ROW and becomes a flex
+   LINE, which is the only way one rule can serve both of this list's
+   values. `grid-template-columns: 1fr` put every label on a line of its
+   own, and half of what the panel prints is `connected` or `2` — four
+   characters bought with a whole row. A two-column grid instead squeezes
+   the long half against a track sized by the longest label, and the
+   squeeze comes back as a `host:port` broken mid-token, which is the
+   defect `no panel value is broken mid-token` exists to catch.
+
+   As a flex line the pair chooses per value: the label takes its own
+   width, `dd` grows into the rest and prints right-aligned, and a value
+   whose max-content does not fit moves to the next line, where it is
+   alone and grows to the panel's full width. Same two branches as the
+   card's `td::before`, so the panel and the card still read as one
+   idiom (#1223's rule, kept).
+
+   `dd` GROWS rather than being pushed right by an auto margin on `dt` —
+   which is what the card does — because here there is a real element to
+   grow. The card's value is an anonymous flex item (a bare text node in
+   a `<td>`) with no way to set `flex` or `text-align` on it, so the two
+   surfaces reach the same layout by the only means each has. */
 @container (max-width: 30rem) {
   .adm-facts {
-    grid-template-columns: 1fr;
+    display: flex;
+    flex-direction: column;
+    gap: var(--adm-space-2);
+  }
+
+  .adm-fact {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--adm-space-3);
+    row-gap: var(--adm-space-1);
+  }
+
+  .adm-fact dd {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: right;
   }
 }
 
@@ -5788,12 +5839,16 @@ html.resize-dragging * {
      Users tab that measured 373px of content in a 331px wrapper, which is
      a 42px pan straight back. Wrapping lets the value fall under its own
      label instead of pushing the card wider. */
+  /* #1244 — `row-gap` is the space between a value and the label ABOVE
+     it, which is now the exception rather than every field: 8px was the
+     rhythm of a card where every pair stacked, and between a caption and
+     the thing it captions it reads as a break. 4px binds them. */
   .adm-table td {
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--adm-space-3);
-    row-gap: var(--adm-space-2);
+    row-gap: var(--adm-space-1);
     border-bottom: 0;
     padding: var(--adm-space-1) 0;
     white-space: normal;
@@ -5801,22 +5856,46 @@ html.resize-dragging * {
     min-width: 0;
   }
 
-  /* #1223 retest — the label is a CAPTION ABOVE its value, not a track
-     beside it. It was `flex: 0 0 5rem`, which neither grows nor shrinks:
-     80px plus the 12px column gap, reserved out of 341px of card, on every
-     field of every row. vjt read it off a portrait screenshot — *"the label
-     column (last seen, channels, actions) keeps a fixed wide gutter of its
-     own, pushing the values into the right half"*.
-     `100%` rather than a smaller fixed track because the alternatives both
-     lose: `auto` sizes each label to its own text, so the values stop
-     lining up and the card reads as scattered; a narrower track still
-     charges every value for a gutter and only argues about the price.
-     The card now spends one line on the label and gives the value all
-     341px, which is the same trade `.adm-facts` already makes in the panel
-     — one idiom for the same problem, at both ends of the card. */
+  /* #1244 — the label sits BESIDE its value while the value is short, and
+     the pair stacks only when it will not fit. Three sizings in three
+     rounds, so the reasoning for this one has to name what it beats:
+
+       - `flex: 0 0 5rem` (pre-#1223): 80px reserved on every field of
+         every row whether the label needs it or not, values pushed into
+         the right half. Rejected on width.
+       - `flex: 0 0 100%` (#1223): the label is a caption on its own line.
+         It cures the width and charges a line of height for it — three
+         facts, six rows. vjt measured that on a 440px phone and filed
+         #1244: `VISITORS` / `0/∞` is two full rows to print four
+         characters.
+       - `flex: 0 0 auto` + `margin-right: auto` (here): the label is as
+         wide as its own text and the auto margin pushes the value to the
+         far end of the line. Nothing is reserved, and a three-fact card
+         is three rows again.
+
+     `margin-right: auto` is doing the work that a fixed track used to,
+     and doing it without a track: an auto margin absorbs the line's free
+     space AFTER line breaking, so it exists only on a line that has one.
+     The consequences are the two branches this layout is:
+
+       - the value fits → one line, label left, value flush right.
+       - it does not → the value's max-content exceeds what is left, so it
+         goes to the next flex line. There it is the only item, there is
+         no auto margin on that line, and it starts at the card's left
+         edge with the full width to wrap into. That is #1223's stacked
+         layout, reached by measurement rather than by decree, and it is
+         what keeps `a card value starts at the card's edge` true for
+         every value that needs the width.
+
+     #1223 rejected `auto` because "per-label sizing stops the values
+     lining up and the card reads as scattered". True of a left-aligned
+     value; the values line up at the RIGHT edge here, which is a
+     stronger column than the old one — the labels are what go ragged,
+     and they are the part you read one of, not down. */
   .adm-table td::before {
     content: attr(data-label);
-    flex: 0 0 100%;
+    flex: 0 0 auto;
+    margin-right: auto;
     font-family: var(--adm-font);
     font-size: 0.68rem;
     letter-spacing: 0.1em;

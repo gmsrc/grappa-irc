@@ -26,14 +26,23 @@ export type Props = {
   facts: Fact[];
 };
 
+// #1244 — the pair travels in a `.adm-fact` wrapper, which HTML defines
+// for exactly this (a `<div>` between `<dl>` and its `<dt>`/`<dd>`) so
+// the semantics do not change. It exists because the narrow layout puts
+// ONE pair on one line and stacks a pair that does not fit, and a
+// flat `<dl>` gives CSS nothing to hang that decision on: a flex line
+// cannot be broken per pair, and a grid row cannot let one value take
+// both columns because its length is unknown to the stylesheet. On a
+// panel with room the wrapper is `display: contents` and the list is one
+// grid again, labels aligned across pairs.
 const AdminFacts: Component<Props> = (props) => (
   <dl class="adm-facts">
     <For each={props.facts}>
       {(fact) => (
-        <>
+        <div class="adm-fact">
           <dt>{fact.label}</dt>
           <dd>{fact.value}</dd>
-        </>
+        </div>
       )}
     </For>
   </dl>
