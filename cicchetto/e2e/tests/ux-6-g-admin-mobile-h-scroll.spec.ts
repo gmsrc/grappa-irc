@@ -318,23 +318,37 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
         const found = await page.getByTestId("admin-pane").evaluate((root) => {
           const out: Omit<Offender, "surface">[] = [];
           const consider = (el: Element): void => {
-            // The `.adm-nav` exemption that used to sit here is GONE, and
-            // it is the reason this oracle stayed green through the defect
-            // it exists to catch. It read: the tab strip is "a navigation
-            // affordance an operator swipes to CHOOSE a tab ... not a
-            // record whose columns you must pan to READ", with the caveat
-            // "if it is ever meant to be in scope, that is a separate
-            // product call". vjt made that call by retesting v0.16.0 on a
-            // phone and listing the strip fourth among the defects —
-            // *"Sessions … Vhosts fill the row and the next tab is cut at
-            // the right edge"*. The strip wraps now (default.css
-            // `.adm-nav`), so there is nothing to exempt.
+            // 🔴 NAMED EXEMPTION — restored on purpose, by whom and when:
+            // vjt, on the 2026-08-12 retest of `e0ef575c`, filing #1244.
+            // *"la top bar che faceva hor scroll andava bene — mo sto wrap
+            // leva spazio"*, and on the issue itself: *"that call was mine
+            // and it was wrong"*.
             //
-            // Worth keeping as a lesson rather than deleting silently: an
-            // exemption written as a product argument is indistinguishable
-            // from an exemption written to make a red go away, and neither
-            // can fail. This guard's whole claim is "nothing in the pane
-            // pans", and it was carrying a named counter-example.
+            // The history matters, because this exemption was deleted for
+            // a good reason and is coming back for a different one. #1223
+            // removed it as an oracle that could not fail: it was written
+            // as a product argument ("a navigation affordance an operator
+            // swipes to CHOOSE a tab ... not a record whose columns you
+            // must pan to READ"), it exempted the one box that was
+            // actually panning, and it carried its own escape hatch — "if
+            // it is ever meant to be in scope, that is a separate product
+            // call". An exemption phrased that way is indistinguishable
+            // from one written to make a red go away.
+            //
+            // What is different now is the cost, measured on the device
+            // rather than argued: wrapping the eight chips puts them on
+            // two rows, and the second row is 44px of a 440px screen
+            // spent on navigation, on every tab. #1244 is the issue about
+            // exactly that budget. vjt has now seen both layouts on the
+            // phone and chosen the pan.
+            //
+            // And it is no longer unfalsifiable. `the tab strip is one
+            // row, and it pans` below asserts the strip does the thing
+            // this line waves through — so removing the pan turns a test
+            // red instead of quietly widening the exemption into a hole.
+            // A documented exemption with a guard on the exempted
+            // behaviour is a decision; a silent one is a defect.
+            if (el.classList.contains("adm-nav")) return;
             const overflowX = window.getComputedStyle(el).overflowX;
             if (overflowX !== "auto" && overflowX !== "scroll") return;
             if (el.scrollWidth <= el.clientWidth + 1) return;
@@ -388,41 +402,66 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     }
   });
 
-  // #1223 retest, symptom 4. Strictly stronger than the width oracle above
-  // and deliberately not folded into it: that one only looks at boxes whose
-  // computed `overflow-x` can pan, so a strip switched to `hidden` would
-  // clip three tabs off the screen and go unseen. This asserts what vjt
-  // actually reported — a tab CUT AT THE RIGHT EDGE — which is true of a
-  // clipped strip and of a scrolling one alike.
-  test("@webkit admin on mobile — every tab chip is on screen, none cut off", async ({ page }) => {
+  // #1244 — the guard ON the exemption above, and the reason restoring it
+  // is a decision rather than a hole.
+  //
+  // It replaces `every tab chip is on screen, none cut off`, which was
+  // #1223's symptom 4 and asserted the opposite: that no chip is cut at
+  // the right edge, i.e. that the strip does not pan. vjt reverted that
+  // call on the 2026-08-12 retest — the wrap costs a full 44px row of a
+  // 440px screen, which is the budget #1244 exists to win back — so the
+  // old assertion is not weakened here, it is contradicted, and it goes.
+  //
+  // What takes its place is the shape he asked for, stated so that
+  // undoing it turns something red: ONE row, and pannable. The two halves
+  // fail to different mutations, which is why they are both here — a
+  // strip switched to `overflow-x: hidden` stays one row and stops
+  // panning (chips clipped, unreachable), and a strip given `flex-wrap:
+  // wrap` stops being one row. Neither is visible to the width oracle
+  // above: the first because a `hidden` box is not in its scope, the
+  // second because a wrapped strip does not overflow.
+  test("@webkit admin on mobile — the tab strip is one row, and it pans", async ({ page }) => {
     await openAdminPane(page);
 
-    const chips = await page.getByTestId("admin-pane").evaluate((pane) => {
+    const strip = await page.getByTestId("admin-pane").evaluate((pane) => {
       const nav = pane.querySelector(".adm-nav");
       if (nav === null) throw new Error(".adm-nav is gone — the tab strip's class drifted");
-      const navRect = nav.getBoundingClientRect();
-      // The CLIENT box: `clientWidth` excludes border and any scrollbar, so
-      // this is the region a chip can be painted in and still be readable.
-      const left = navRect.left + nav.clientLeft;
-      const right = left + nav.clientWidth;
-      return [...nav.querySelectorAll("[role='tab']")].map((el) => {
-        const r = el.getBoundingClientRect();
-        return {
-          label: (el.textContent ?? "").trim(),
-          overflowRight: Math.round(r.right - right),
-          overflowLeft: Math.round(left - r.left),
-        };
-      });
+      const chips = [...nav.querySelectorAll("[role='tab']")];
+      return {
+        count: chips.length,
+        // Distinct line positions. Rounded, because baseline alignment
+        // leaves sub-pixel differences between chips on the SAME row and
+        // a second row is 44px away — no threshold argument available.
+        rows: new Set(chips.map((el) => Math.round(el.getBoundingClientRect().top))).size,
+        overflowX: window.getComputedStyle(nav).overflowX,
+        scrollW: nav.scrollWidth,
+        clientW: nav.clientWidth,
+      };
     });
 
-    // Non-vacuity: an empty strip would make every filter below trivially
-    // empty. `ADMIN_TABS` is the same list the count assertion pins.
-    expect(chips.length, "the tab strip must have chips to measure").toBe(ADMIN_TABS.length);
+    // Non-vacuity: one chip is trivially one row, and an empty strip is
+    // trivially not overflowing. `ADMIN_TABS` is the list the count
+    // assertion in the width oracle pins.
+    expect(strip.count, "the tab strip must have chips to measure").toBe(ADMIN_TABS.length);
 
     expect(
-      chips.filter((c) => c.overflowRight > 1 || c.overflowLeft > 1),
-      `every admin tab must be inside the strip at 393px — cut chips: ${JSON.stringify(chips, null, 2)}`,
-    ).toEqual([]);
+      strip.rows,
+      `the tab strip must stay on one row at 393px — chips found on ${strip.rows} rows`,
+    ).toBe(1);
+
+    // And it must be REACHABLE by the gesture, not merely clipped: the
+    // exemption above waves through a box that pans, so if this strip
+    // stopped panning the exemption would be waving through nothing and
+    // three destinations would be unreachable.
+    expect(
+      strip.overflowX,
+      "the tab strip must be able to pan — that is what the h-scroll exemption is for",
+    ).toMatch(/auto|scroll/);
+    expect(
+      strip.scrollW,
+      `the tab strip must actually overflow, or the exemption guards nothing ` +
+        `(scrollWidth ${strip.scrollW} vs clientWidth ${strip.clientW})`,
+    ).toBeGreaterThan(strip.clientW + 1);
   });
 
   test("@webkit admin on mobile — vertical scroll inside the pane still works", async ({
