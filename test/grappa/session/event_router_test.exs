@@ -2456,7 +2456,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg(:mode, ["#italia", "-b+k", "*!*@spammer.net", "s3cret"], {:nick, "op", "u", "h"})
 
-      assert {:cont, new_state, _effects} = EventRouter.route(m, state)
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
 
       entry = new_state.channel_modes["#italia"]
       refute "b" in entry.modes
@@ -2479,7 +2479,7 @@ defmodule Grappa.Session.EventRouterTest do
 
       m = msg(:mode, ["#italia", "+zt", "*!*@lamer.net"], {:nick, "op", "u", "h"})
 
-      assert {:cont, new_state, _effects} = EventRouter.route(m, state)
+      assert {:cont, new_state, _} = EventRouter.route(m, state)
 
       entry = new_state.channel_modes["#italia"]
       refute "z" in entry.modes
