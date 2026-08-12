@@ -39802,3 +39802,75 @@ regime, and vjt measured the viewport one. The vertical rhythm is not
 asserted as a pixel budget either — any threshold would encode a font
 metric and the seed's row count. What is asserted is the row COUNT per
 fact, which is the thing that changed.
+
+---
+
+## 2026-08-12 — #1240: a cross-host media link, and the CSP half that makes the other half worth shipping
+
+`classifyMediaLink` now admits a **genuinely foreign host** — not the
+page origin, not one of the #324 server-advertised deployment aliases —
+for any https URL carrying a media extension, and returns that href
+**UNCHANGED**. #607 had already carved the shape out for audio
+(`externalAudioLink`, so a third-party `.mp3` reaches the docked
+mini-player); this generalises it to every kind and renames it
+`externalMediaLink`. The motivating case is an upload link minted by
+**another grappa instance**, tapped from this one: two hostnames of ONE
+deployment are exactly what #324's alias set covers, and two separate
+deployments are exactly what it cannot.
+
+**The ruling.** #389 asked for this outcome in July and was dropped, for
+two stated reasons. The first — server-side unfurl is SSRF-by-design and
+de-anonymises the bouncer's IP — **still stands and is untouched here**;
+nothing in this change reaches the server's network. The second was that
+the CSP would block the image anyway, which made the client change a
+no-op. That is a reason to widen the CSP, not a reason to refuse, and
+vjt ruled accordingly on 2026-08-11 (client-side URL match, `img-src`
+widened, `*` explicitly acceptable). He extended it to **video** on
+2026-08-12, on the same terms as images.
+
+**Both halves ship in one change, and that is the whole point.** The
+classifier alone trades "opens in a browser tab" for "opens an EMPTY
+modal" — strictly worse than the anchor it replaces. So `img-src 'self'
+data:` becomes `img-src 'self' data: https:`. `data:` stays (favicons,
+manifest icons, SolidJS inline SVGs would break without it).
+
+Two measured notes against the plan as written:
+
+- **`media-src` needed no edit.** The amendment asked for it to be
+  widened "alongside" `img-src` for video, but #607 already widened it to
+  `'self' blob: https:` for external audio, and that directive governs
+  `<video>` as well as `<audio>`. Cross-host video was one classifier
+  line away from working; the CSP was already there.
+- **`https:`, not `*`.** `*` was granted, and on an https page the two
+  are indistinguishable in practice — an `http:` image is refused as
+  mixed content under either. `https:` is chosen because it is the same
+  token `media-src` already carries: one directive shape to reason
+  about, and the narrower written grant costs nothing real.
+
+**What stays refused**, deliberately: `http` to a foreign host (mixed
+content — the same-host branch's scheme leniency exists for legacy
+http-minted upload links and does not extend outward); and a foreign
+extensionless `/uploads/<slug>` with a 📸 prefix, because the emoji is a
+pre-#418 same-host signal that never types a foreign link. IRC stays
+text-only — this changes what a CLICK does, never what scrollback
+renders.
+
+**Disclosure, named rather than discovered later.** Opening the modal on
+a foreign image tells that host the viewer's IP. It happens on an
+explicit click, not on arrival, so it is not the tracking-pixel problem
+#341 refused; and the plain-anchor path made the same disclosure, since
+tapping the link loaded the image either way.
+
+**The e2e had to see the real header.** `media-link-cross-host-modal`
+composes a link on a host that resolves nowhere and `page.route`s the
+bytes, which does NOT weaken the CSP claim: CSP is enforced *before* the
+request leaves the browser, so a blocked `<img>` never reaches the route
+handler — it fires `securitypolicyviolation` (the `_cspGuard` fixture
+turns that into a failure) and leaves `naturalWidth` at 0. The policy
+under test is the one the plug served through the proxy, asserted inline
+in the spec; only the remote deployment is stubbed. `videoWidth` is the
+same oracle for the video case. The `img-src 'self' data: https:` token
+also joins the `nginx-csp-range-parity` pin list, where — like
+`media-src` before it — the un-widened value is a PREFIX of the widened
+one, so pinning anything shorter would let a revert sail through
+`toContain`.
