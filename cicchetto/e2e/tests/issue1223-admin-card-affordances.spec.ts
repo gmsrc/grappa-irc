@@ -184,10 +184,22 @@ test("#1223 @webkit on a phone a detail fact gives its value the panel's full wi
     // And the point of moving it: the value gets the width the label track
     // and its gap were taking. Separate from the assertion above because a
     // collapse that left a fixed label column would satisfy that one.
+    //
+    // 🔴 The reference box is the TABLE, not the facts list, and that is the
+    // whole correction. This read `factsBox.width * 0.9` and passed for a
+    // day on a panel rendering at half the pane: the facts list is INSIDE
+    // the panel, so squeezing the panel shrinks numerator and denominator
+    // together and the ratio never moves. vjt's retest of v0.16.0 —
+    // *"the facts column renders at roughly half the available width"* —
+    // was invisible to an oracle normalised by the box being squeezed.
+    // The table is the outermost box the panel is entitled to fill, which
+    // is the claim actually being made.
+    const tableBox = await boxOf(page.getByTestId("admin-sessions-table"), "the sessions table");
     expect(
       ddBox.width,
-      "the value track must take essentially the whole panel width",
-    ).toBeGreaterThanOrEqual(factsBox.width * 0.9);
+      `the value must take the table's width, not the shrunken panel's ` +
+        `(value ${Math.round(ddBox.width)}px of table ${Math.round(tableBox.width)}px)`,
+    ).toBeGreaterThanOrEqual(tableBox.width * 0.85);
   } finally {
     await reapVisitors(admin.token, visitor.id);
   }
@@ -264,6 +276,185 @@ test("#1223 @webkit on a phone no field is on the card and in the panel at once"
     factValues.filter((value) => cardValues.includes(value)),
     `values printed twice — card ${JSON.stringify(cardValues)}, panel ${JSON.stringify(factValues)}`,
   ).toEqual([]);
+});
+
+// #1223 RETEST (vjt, v0.16.0-8412fb40, portrait phone). The card/detail
+// split landed and the horizontal budget did not: *"the layout still spends
+// width on gutters and label columns rather than on the values."*
+//
+// Symptom 1, as the two numbers that name it. The panel's host row was
+// being charged the card regime three times — an empty `td::before` label
+// track (80px + a 12px gap, `attr(data-label)` on a cell that has no
+// `data-label`), `.adm-table tr`'s own border and padding (18px), and a
+// `.adm-expand-row td` padding (32px) whose mobile override was dead on
+// specificity. That is the "inset container with a wide empty gutter on
+// both sides", measured rather than described.
+//
+// Asserted as GUTTERS rather than as a width ratio on purpose: a ratio
+// answers "is it big enough", which invites a threshold argument, while vjt
+// reported empty space at the edges and the honest claim is that there is
+// none of it.
+test("#1223 @webkit on a phone the detail panel spans its table, with no gutters", async ({
+  page,
+}) => {
+  const admin = getSeededAdmin();
+  const visitor = await mintVisitor(`gutter1223-${Date.now()}`);
+
+  try {
+    await adminLogin(page);
+    await openSessionsTab(page);
+
+    const key = await adminSessionRowKey(page, "visitor", visitor.id);
+    await page.getByTestId(`admin-session-details-${key}`).tap();
+    const panel = page.getByTestId(`admin-session-detail-${key}`);
+    await expect(panel).toBeVisible({ timeout: 5_000 });
+
+    const tableBox = await boxOf(page.getByTestId("admin-sessions-table"), "the sessions table");
+    const panelBox = await boxOf(panel, "the detail panel");
+
+    // Non-vacuity: a table collapsed to nothing would make both gutters
+    // zero and the assertion a mirror.
+    expect(tableBox.width, "the table must have a width to fill").toBeGreaterThan(200);
+
+    expect(
+      {
+        left: Math.round(panelBox.x - tableBox.x),
+        right: Math.round(tableBox.x + tableBox.width - (panelBox.x + panelBox.width)),
+      },
+      "the detail panel must start and end where its table does",
+    ).toEqual({ left: 0, right: 0 });
+  } finally {
+    await reapVisitors(admin.token, visitor.id);
+  }
+});
+
+// Symptom 2. vjt: *"a long value such as the `last event` timestamp wraps
+// mid-token instead of using the space the gutters are holding."*
+//
+// The oracle is the TOKEN, not the line count. A line count would encode a
+// font metric and fail on the day someone changes the mono stack; and
+// `last event` reads `<event> · <instant>`, so a break at the separator is
+// legitimate and only a break INSIDE a run is the defect. Generalised over
+// every value in the panel rather than the one vjt happened to name — the
+// rule is that no value is broken mid-token, and the timestamp is one
+// instance of it.
+//
+// `Range.getClientRects()` returns one rect per line box the range covers,
+// so a token on two lines reports two distinct `top`s. Pseudo-elements are
+// not in the DOM and cannot be ranged, which is exactly right here: the
+// label track is not part of the value.
+test("#1223 @webkit on a phone no panel value is broken mid-token", async ({ page }) => {
+  const admin = getSeededAdmin();
+  const visitor = await mintVisitor(`token1223-${Date.now()}`);
+
+  try {
+    await adminLogin(page);
+    await openSessionsTab(page);
+
+    const key = await adminSessionRowKey(page, "visitor", visitor.id);
+    await page.getByTestId(`admin-session-details-${key}`).tap();
+    const panel = page.getByTestId(`admin-session-detail-${key}`);
+    await expect(panel).toBeVisible({ timeout: 5_000 });
+
+    const measured = await panel.locator(".adm-facts").evaluate((facts) => {
+      const out: { token: string; lines: number }[] = [];
+      for (const dd of facts.querySelectorAll("dd")) {
+        for (const node of dd.childNodes) {
+          if (node.nodeType !== Node.TEXT_NODE) continue;
+          const text = node.textContent ?? "";
+          // Whitespace-delimited runs: every one of them is a place the
+          // renderer is entitled to break BETWEEN and not WITHIN.
+          for (const m of text.matchAll(/\S+/g)) {
+            const start = m.index;
+            const range = document.createRange();
+            range.setStart(node, start);
+            range.setEnd(node, start + m[0].length);
+            const tops = new Set(
+              [...range.getClientRects()].filter((r) => r.width > 0).map((r) => Math.round(r.top)),
+            );
+            out.push({ token: m[0], lines: tops.size });
+          }
+        }
+      }
+      return out;
+    });
+
+    // Non-vacuity, and the reason it is worth stating: if the seeded row
+    // renders only short words, nothing here CAN wrap and a green proves
+    // nothing. 16 characters is past what a broken panel could hold.
+    const longest = measured.reduce((best, t) => (t.token.length > best.token.length ? t : best), {
+      token: "",
+      lines: 0,
+    });
+    expect(
+      longest.token.length,
+      `no value long enough to test wrapping — measured ${JSON.stringify(measured.map((t) => t.token))}`,
+    ).toBeGreaterThanOrEqual(16);
+
+    expect(
+      measured.filter((t) => t.lines > 1),
+      "a value may wrap between its tokens, never inside one",
+    ).toEqual([]);
+  } finally {
+    await reapVisitors(admin.token, visitor.id);
+  }
+});
+
+// Symptom 3. vjt: *"in the card below, the label column (last seen,
+// channels, actions) keeps a fixed wide gutter of its own, pushing the
+// values into the right half."* `flex: 0 0 5rem` on `.adm-table td::before`
+// — 80px that neither grows nor shrinks, plus the 12px flex gap, out of
+// 341px of card, charged to every field of every row.
+//
+// The oracle is where the VALUE starts, which is the thing vjt could see.
+// A range over the cell's contents excludes the `::before` label by
+// construction, so this measures the painted value against the cell's own
+// left edge — no gutter means the two coincide.
+test("#1223 @webkit on a phone a card value starts at the card's edge, not past a label track", async ({
+  page,
+}) => {
+  const admin = getSeededAdmin();
+  const visitor = await mintVisitor(`label1223-${Date.now()}`);
+
+  try {
+    await adminLogin(page);
+    await openSessionsTab(page);
+
+    const key = await adminSessionRowKey(page, "visitor", visitor.id);
+    const row = page.getByTestId(`admin-session-row-${key}`);
+    await row.scrollIntoViewIfNeeded();
+    await expect(row).toBeVisible();
+
+    const cells = await row.evaluate((tr) => {
+      const out: { label: string; indent: number }[] = [];
+      // Labelled cells only: `.adm-cell-title` is the card's heading and
+      // deliberately has no label to be indented past.
+      for (const td of tr.querySelectorAll("td[data-label]")) {
+        if (td.getClientRects().length === 0) continue;
+        if (td.classList.contains("adm-cell-title")) continue;
+        const range = document.createRange();
+        range.selectNodeContents(td);
+        const content = range.getBoundingClientRect();
+        if (content.width === 0) continue;
+        out.push({
+          label: td.getAttribute("data-label") ?? "",
+          indent: Math.round(content.left - td.getBoundingClientRect().left),
+        });
+      }
+      return out;
+    });
+
+    // Non-vacuity: a row with no labelled cell painted would pass on
+    // nothing, which is how the `.adm-nav` exemption in `ux-6-g` survived.
+    expect(cells.length, "the card must have labelled cells to measure").toBeGreaterThan(0);
+
+    expect(
+      cells.filter((c) => c.indent > 2),
+      `no card value may be indented past a reserved label track — ${JSON.stringify(cells)}`,
+    ).toEqual([]);
+  } finally {
+    await reapVisitors(admin.token, visitor.id);
+  }
 });
 
 // The band the console's two breakpoints leave between them. 820px is a

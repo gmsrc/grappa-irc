@@ -318,16 +318,23 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
         const found = await page.getByTestId("admin-pane").evaluate((root) => {
           const out: Omit<Offender, "surface">[] = [];
           const consider = (el: Element): void => {
-            // NAMED EXEMPTION, not a filter that makes the red go away.
-            // `.adm-nav` is the tab strip: nine chips, `overflow-x: auto`
-            // by design (default.css), 717px in a 365px pane. It is a
-            // navigation affordance an operator swipes to CHOOSE a tab,
-            // which is the same gesture every phone tab bar uses — not a
-            // record whose columns you must pan to READ, which is the
-            // defect vjt reported and this bucket exists for. Stacking it
-            // would cost most of the screen before the first row. If it is
-            // ever meant to be in scope, that is a separate product call.
-            if (el.classList.contains("adm-nav")) return;
+            // The `.adm-nav` exemption that used to sit here is GONE, and
+            // it is the reason this oracle stayed green through the defect
+            // it exists to catch. It read: the tab strip is "a navigation
+            // affordance an operator swipes to CHOOSE a tab ... not a
+            // record whose columns you must pan to READ", with the caveat
+            // "if it is ever meant to be in scope, that is a separate
+            // product call". vjt made that call by retesting v0.16.0 on a
+            // phone and listing the strip fourth among the defects —
+            // *"Sessions … Vhosts fill the row and the next tab is cut at
+            // the right edge"*. The strip wraps now (default.css
+            // `.adm-nav`), so there is nothing to exempt.
+            //
+            // Worth keeping as a lesson rather than deleting silently: an
+            // exemption written as a product argument is indistinguishable
+            // from an exemption written to make a red go away, and neither
+            // can fail. This guard's whole claim is "nothing in the pane
+            // pans", and it was carrying a named counter-example.
             const overflowX = window.getComputedStyle(el).overflowX;
             if (overflowX !== "auto" && overflowX !== "scroll") return;
             if (el.scrollWidth <= el.clientWidth + 1) return;
@@ -379,6 +386,43 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
       const panelTouch = await panel.evaluate((el) => window.getComputedStyle(el).touchAction);
       expect(panelTouch, `admin-tab-panel(${tab}) touch-action must allow pan-x`).toMatch(/pan-x/);
     }
+  });
+
+  // #1223 retest, symptom 4. Strictly stronger than the width oracle above
+  // and deliberately not folded into it: that one only looks at boxes whose
+  // computed `overflow-x` can pan, so a strip switched to `hidden` would
+  // clip three tabs off the screen and go unseen. This asserts what vjt
+  // actually reported — a tab CUT AT THE RIGHT EDGE — which is true of a
+  // clipped strip and of a scrolling one alike.
+  test("@webkit admin on mobile — every tab chip is on screen, none cut off", async ({ page }) => {
+    await openAdminPane(page);
+
+    const chips = await page.getByTestId("admin-pane").evaluate((pane) => {
+      const nav = pane.querySelector(".adm-nav");
+      if (nav === null) throw new Error(".adm-nav is gone — the tab strip's class drifted");
+      const navRect = nav.getBoundingClientRect();
+      // The CLIENT box: `clientWidth` excludes border and any scrollbar, so
+      // this is the region a chip can be painted in and still be readable.
+      const left = navRect.left + nav.clientLeft;
+      const right = left + nav.clientWidth;
+      return [...nav.querySelectorAll("[role='tab']")].map((el) => {
+        const r = el.getBoundingClientRect();
+        return {
+          label: (el.textContent ?? "").trim(),
+          overflowRight: Math.round(r.right - right),
+          overflowLeft: Math.round(left - r.left),
+        };
+      });
+    });
+
+    // Non-vacuity: an empty strip would make every filter below trivially
+    // empty. `ADMIN_TABS` is the same list the count assertion pins.
+    expect(chips.length, "the tab strip must have chips to measure").toBe(ADMIN_TABS.length);
+
+    expect(
+      chips.filter((c) => c.overflowRight > 1 || c.overflowLeft > 1),
+      `every admin tab must be inside the strip at 393px — cut chips: ${JSON.stringify(chips, null, 2)}`,
+    ).toEqual([]);
   });
 
   test("@webkit admin on mobile — vertical scroll inside the pane still works", async ({
