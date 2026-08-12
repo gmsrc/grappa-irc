@@ -4592,15 +4592,41 @@ html.resize-dragging * {
 }
 
 /* Admin redesign Layer 2/3 — `AdminNav` (cicchetto/src/admin/AdminNav.tsx).
-   Mobile-first: a horizontal scrolling chip strip (`.adm-nav` row +
-   `.adm-nav-group` row), grouped by a non-interactive label. The
-   ≥900px media query below (next to `.admin-pane`'s own desktop
-   rule) turns the SAME markup into a vertical rail — no DOM
-   duplication, so the 10 `admin-tab-<key>` buttons stay singular and
-   clickable in one click regardless of viewport. */
+   Mobile-first: a WRAPPING chip strip (`.adm-nav`), grouped by a
+   non-interactive label. The ≥900px media query below (next to
+   `.admin-pane`'s own desktop rule) turns the SAME markup into a vertical
+   rail — no DOM duplication, so the 10 `admin-tab-<key>` buttons stay
+   singular and clickable in one click regardless of viewport.
+
+   #1223 retest — it used to be a horizontal SCROLLING strip, and vjt
+   listed that as a defect on a portrait phone: *"the section tab strip
+   still pans horizontally: Sessions … Vhosts fill the row and the next
+   tab is cut at the right edge"*. Eight chips measure ~680px against
+   361px of pane content, so three of them were off-screen behind a
+   gesture with nothing on screen to suggest it.
+
+   Wrapping, not stacking. `ux-6-g`'s exemption comment argued the strip
+   had to keep the pan because "stacking it would cost most of the screen
+   before the first row" — true of a one-per-line rail (8 × 44px), and not
+   true of wrapping, which packs the same chips into two rows. That costs
+   ~44px of height once, and buys back a tab bar where every destination
+   is visible.
+
+   `display: contents` on the group is what makes it two rows rather than
+   three: the chips pack greedily across the whole strip instead of
+   breaking at group boundaries, where `live` (264px) would leave 97px of
+   the first row empty. The group box carries no paint on a phone — its
+   heading is visually hidden here — so removing it costs nothing, and the
+   desktop rail below puts it back.
+
+   `overflow-x: auto` STAYS. Nothing overflows now, so it is inert; what it
+   buys is that a future chip which does overflow shows up in
+   `ux-6-g-admin-mobile-h-scroll`, whose oracle only considers boxes that
+   CAN pan. Switching it to `hidden` would silently clip instead. */
 .adm-nav {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--adm-space-3);
   overflow-x: auto;
@@ -4610,12 +4636,12 @@ html.resize-dragging * {
   margin: 0 0 var(--adm-space-2);
 }
 
+/* Boxless on the chip strip (see `.adm-nav`): the buttons become direct
+   flex children of the strip and wrap wherever the row ends, rather than
+   travelling in three indivisible blocks. The desktop rail restores the
+   box, which is where the grouping is actually drawn. */
 .adm-nav-group {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--adm-space-2);
-  flex-shrink: 0;
+  display: contents;
 }
 
 /* Hidden on the mobile chip strip — three headings cost a whole line of
@@ -4700,9 +4726,14 @@ html.resize-dragging * {
     gap: var(--adm-space-5);
   }
 
+  /* `display: flex` re-establishes the box the chip strip dissolves with
+     `display: contents` — on the rail the group is a real column with a
+     real heading, which is the layout the grouping exists for. */
   .adm-nav-group {
+    display: flex;
     flex-direction: column;
     align-items: stretch;
+    flex-shrink: 0;
     gap: 2px;
   }
 
