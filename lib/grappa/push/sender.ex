@@ -8,6 +8,24 @@ defmodule Grappa.Push.Sender do
   `WebPushElixir` library, owning the fan-out, dead-endpoint cleanup,
   and telemetry emission.
 
+  ## `:provider` (2026-08-13, UnifiedPush)
+
+  A subscription's `:provider` field (`"webpush"` | `"unifiedpush"`)
+  distinguishes how the ROW WAS REGISTERED — a browser's Push API vs.
+  an Android UnifiedPush distributor — for display purposes (the
+  device-list UX) and for the client-side registration flow. It does
+  NOT branch delivery here: a UnifiedPush registration carries a real
+  P-256 keypair + auth secret too, generated client-side the same way
+  a browser's `PushManager.subscribe()` does internally, so the
+  IDENTICAL VAPID-signed `aes128gcm` encrypted POST this module
+  already sends for Web Push works unchanged for a UnifiedPush
+  endpoint — distributors relay whatever bytes and headers they are
+  given; only a Web-Push-vendor's OWN push service (Google FCM,
+  Mozilla autopush) actually verifies the VAPID JWT against the
+  subscribed key, so an unverified-but-present VAPID header on a
+  UnifiedPush POST is simply inert, not wrong. `send_to_subscription/2`
+  reads no branch on `:provider` at all.
+
   ## Subject-scoped — V3 (2026-05-15)
 
   Both registered users and visitors own push subscriptions; the
@@ -212,6 +230,10 @@ defmodule Grappa.Push.Sender do
   subscription as a JSON STRING (not a map) — re-encoding here
   matches that contract while keeping the storage shape (struct) in
   the caller's hands.
+
+  Provider-agnostic on purpose — see moduledoc "`:provider`
+  (2026-08-13, UnifiedPush)" for why a UnifiedPush row goes through
+  this exact same encrypted path unchanged.
   """
   @spec send_to_subscription(Subscription.t(), payload()) :: sub_result()
   def send_to_subscription(%Subscription{} = sub, payload) when is_map(payload) do
