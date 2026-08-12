@@ -13,11 +13,11 @@ import { classifyMediaLink, sameHostHref } from "../lib/mediaLink";
 // value — a separate normalize step was a misuse footgun). A URL is
 // admitted when its host is the page origin's OR (#324) any of the
 // deployment's server-provided HTTP host aliases (`aliasHosts`). #607
-// adds ONE exception: a genuinely third-party host is admitted only for
-// an https AUDIO link, returned with its absolute href UNCHANGED (never
-// re-rooted onto the page origin — that would 404 the foreign host).
-// Every other third-party link (http → mixed content; image/video →
-// #341 non-goal, Safari-view already opens them) is still null.
+// added ONE exception and #1240 widened it to every kind: a genuinely
+// third-party host is admitted for an https AUDIO, IMAGE or VIDEO link,
+// returned with its absolute href UNCHANGED (never re-rooted onto the
+// page origin — that would 404 the foreign host). Third-party http is
+// still null (mixed content).
 
 const ORIGIN = "https://grappa.example";
 // 26 chars of lowercase base32 (a-z2-7) — mirrors Grappa.Uploads
@@ -119,41 +119,40 @@ describe("classifyMediaLink", () => {
     });
   });
 
-  describe("third-party (non-deployment) non-audio links are never modal-eligible (#607 admits audio only)", () => {
-    it("third-party uploads-shaped URL with emoji is null", () => {
+  describe("third-party links carrying no admitted extension are never modal-eligible", () => {
+    it("third-party uploads-shaped URL with emoji is null (no extension — the emoji is same-host-only)", () => {
       expect(
         classifyMediaLink(`https://other.example/uploads/${SLUG}`, "📸 ", ORIGIN, NO_ALIASES),
       ).toBeNull();
     });
 
-    it("third-party image-extension URL is null (litterbox path — Safari view already works)", () => {
-      expect(
-        classifyMediaLink("https://litter.catbox.moe/abc.png", "📸 ", ORIGIN, NO_ALIASES),
-      ).toBeNull();
+    it("same hostname but different port is NOT re-rooted (host comparison includes the port)", () => {
+      // Foreign by port, so it takes the external branch: an admitted
+      // extension classifies, but the href must stay on :4000 — re-rooting
+      // onto the page origin would serve the wrong file.
+      const href = "https://grappa.example:4000/files/shot.png";
+      expect(classifyMediaLink(href, "📸 ", ORIGIN, NO_ALIASES)).toEqual({ kind: "image", href });
     });
 
-    it("a third-party host stays null even when an alias set is advertised", () => {
-      expect(
-        classifyMediaLink("https://litter.catbox.moe/abc.png", "📸 ", ORIGIN, WITH_ALIAS_B),
-      ).toBeNull();
-    });
-
-    it("same hostname but different port is null (host comparison includes the port)", () => {
+    it("same hostname but different port with no extension is null", () => {
       expect(
         classifyMediaLink(`https://grappa.example:4000/uploads/${SLUG}`, "📸 ", ORIGIN, NO_ALIASES),
       ).toBeNull();
     });
   });
 
-  // #607 — a third-party host is admitted for an https AUDIO link only, so
-  // it opens in the docked mini-player (cross-channel playback) instead of
-  // navigating the tab. The href is returned UNCHANGED (never re-rooted onto
-  // the page origin — that would 404 the foreign host). http is rejected
-  // (mixed content on the https page); external image/video stay null (#341
-  // declared inline previews a non-goal, and the Safari view already opens
-  // them). The CSP `media-src` is widened to `https:` in the same change so
-  // the <audio> element is not blocked.
-  describe("external (cross-host) https audio is modal-eligible (#607)", () => {
+  // #607 — a third-party host is admitted for an https AUDIO link, so it
+  // opens in the docked mini-player (cross-channel playback) instead of
+  // navigating the tab. #1240 admits https IMAGE and VIDEO the same way (an
+  // upload link minted by ANOTHER grappa instance, tapped from this one).
+  // In every case the href is returned UNCHANGED (never re-rooted onto the
+  // page origin — that would 404 the foreign host) and http is rejected
+  // (mixed content on the https page). The CSP directive governing the
+  // element must admit `https:` in the SAME change or the modal opens
+  // empty: `media-src` already does (widened by #607 for the audio
+  // mini-player, and it governs <video> too), `img-src` is widened by
+  // #1240.
+  describe("external (cross-host) https media is modal-eligible (#607 audio, #1240 image + video)", () => {
     const EXT_AUDIO = "https://media.example.org/podcast/ep1.mp3";
 
     it("external https audio extension → audio with the absolute href UNCHANGED", () => {
@@ -181,16 +180,39 @@ describe("classifyMediaLink", () => {
       ).toBeNull();
     });
 
-    it("external https image extension stays null (audio-only scope)", () => {
+    it("external https image extension → image with the absolute href UNCHANGED (#1240)", () => {
+      const href = "https://media.example.org/shot.png";
+      expect(classifyMediaLink(href, "", ORIGIN, NO_ALIASES)).toEqual({ kind: "image", href });
+    });
+
+    it("external image href is NOT re-rooted — path, query and hash stay on the foreign host", () => {
+      const href = "https://other.grappa.example/uploads/abc.png?v=2#top";
+      expect(classifyMediaLink(href, "", ORIGIN, NO_ALIASES)).toEqual({ kind: "image", href });
+    });
+
+    it("external http image is null (mixed content on the https page)", () => {
       expect(
-        classifyMediaLink("https://media.example.org/shot.png", "", ORIGIN, NO_ALIASES),
+        classifyMediaLink("http://media.example.org/shot.png", "", ORIGIN, NO_ALIASES),
       ).toBeNull();
     });
 
-    it("external https video extension stays null (audio-only scope)", () => {
+    it("external https video extension → video with the absolute href UNCHANGED (#1240)", () => {
+      const href = "https://media.example.org/clip.mp4";
+      expect(classifyMediaLink(href, "", ORIGIN, NO_ALIASES)).toEqual({ kind: "video", href });
+    });
+
+    it("external http video is null (mixed content on the https page)", () => {
       expect(
-        classifyMediaLink("https://media.example.org/clip.mp4", "", ORIGIN, NO_ALIASES),
+        classifyMediaLink("http://media.example.org/clip.mp4", "", ORIGIN, NO_ALIASES),
       ).toBeNull();
+    });
+
+    it("external https image is admitted regardless of the advertised alias set", () => {
+      const href = "https://litter.catbox.moe/abc.png";
+      expect(classifyMediaLink(href, "📸 ", ORIGIN, WITH_ALIAS_B)).toEqual({
+        kind: "image",
+        href,
+      });
     });
 
     it("external https non-media extension is null", () => {

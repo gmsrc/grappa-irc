@@ -19,29 +19,22 @@
 //
 // ## Classification rules
 //
-// 1. Host NOT in the admitted set → null, always. The admitted set is
-//    the page-origin host ∪ the deployment's server-provided HTTP host
-//    aliases (`aliasHosts` param, #324 — from `serverSettings()`'s
-//    `httpHostAliases`, ultimately `Grappa.HttpHosts`; NEVER a client-
-//    baked list). A genuinely foreign host is excluded for image/video —
-//    two reasons: (a) the modal's `<img>`/`<video>` would need a CSP
-//    loosening this design refused for cross-origin images (#341 non-goal);
-//    (b) cross-host image/video links don't have the standalone bug and open
-//    fine in the iOS Safari view. #607 carves ONE exception: a foreign host
-//    IS admitted for an https AUDIO link (`externalAudioLink`), because audio
-//    wants the docked mini-player's cross-channel playback the Safari view
-//    can't give — the href is returned UNCHANGED (a foreign host is NEVER
-//    re-rooted; that would 404), http is rejected (mixed content), and the
-//    CSP `media-src` is widened to `https:` in the same change so the
-//    `<audio>` element is not blocked.
+// 1. Host NOT in the admitted set → re-rooting is off the table, and the
+//    link is modal-eligible only through the EXTERNAL branch below. The
+//    admitted set is the page-origin host ∪ the deployment's
+//    server-provided HTTP host aliases (`aliasHosts` param, #324 — from
+//    `serverSettings()`'s `httpHostAliases`, ultimately `Grappa.HttpHosts`;
+//    NEVER a client-baked list). A foreign host used to be excluded from
+//    the viewer outright; #607 carved out https audio and #1240 finished
+//    the job for image + video (`externalMediaLink`) — see that function
+//    for the per-kind admission and why the href is returned UNCHANGED.
 //    #324 — a deployment can answer on several hostname aliases
 //    (`irc.sindro.me`, `irc.sniffo.org`) that reverse-proxy to ONE
 //    instance + shared /uploads store; a link minted under one alias
 //    viewed from another must still open the viewer. Because the
 //    returned `href` is re-rooted on the PAGE origin (below), the modal's
-//    `<img src>` stays SAME-ORIGIN even for an alias link → CSP
-//    `img-src 'self'` is UNTOUCHED (no loosening). A foreign host is
-//    NEVER re-rooted onto the page origin (that would 404 / load the
+//    `<img src>` stays SAME-ORIGIN even for an alias link. A foreign host
+//    is NEVER re-rooted onto the page origin (that would 404 / load the
 //    wrong file) — only admitted hosts pass.
 //    Host-equality (hostname + port), NOT full-origin equality: pre-fix
 //    prod minted `http://host/uploads/<slug>` (Endpoint `url:` carried
@@ -202,9 +195,9 @@ export function sameHostHref(
 
 /**
  * Classify a scrollback link as modal-viewable media. Returns the kind
- * plus the viewer-safe href (re-rooted on the page origin — path,
- * query and hash preserved), or null when the default anchor behavior
- * should stand.
+ * plus the viewer-safe href — re-rooted on the page origin (path, query
+ * and hash preserved) for an admitted host, returned UNCHANGED for a
+ * foreign one — or null when the default anchor behavior should stand.
  *
  * @param href urlSegment.href (always scheme-qualified — linkify's
  *   toHref prepends https:// to bare-www matches).
@@ -216,8 +209,9 @@ export function sameHostHref(
  *   (#324, bare lowercased hostnames from `serverSettings()`'s
  *   `httpHostAliases`). A URL whose host is any of these — OR the page
  *   origin's own host — is admitted and re-rooted onto the page origin;
- *   a third-party host still returns null. Empty set = page origin only
- *   (pre-#324 behaviour). Injected so the classifier stays pure.
+ *   a third-party host takes the `externalMediaLink` branch instead
+ *   (https + media extension, href unchanged). Empty set = page origin
+ *   only (pre-#324 behaviour). Injected so the classifier stays pure.
  */
 export function classifyMediaLink(
   href: string,
@@ -226,9 +220,9 @@ export function classifyMediaLink(
   aliasHosts: readonly string[],
 ): MediaLink | null {
   const match = sameHostUrl(href, origin, aliasHosts);
-  // Foreign host (or non-http(s) / unparseable): the only cross-host link
-  // that reaches the in-app viewer is #607 external https audio.
-  if (match === null) return externalAudioLink(href);
+  // Foreign host (or non-http(s) / unparseable): an https link with a media
+  // extension still reaches the viewer, with its href UNCHANGED.
+  if (match === null) return externalMediaLink(href);
 
   const kind = kindOf(match.url, precedingText);
   if (kind === null) return null;
@@ -251,25 +245,34 @@ function kindOf(url: URL, precedingText: string): MediaKind | null {
 }
 
 /**
- * #607 external branch. A genuinely third-party host is modal-eligible ONLY
- * for an https AUDIO link, so it opens in the docked mini-player (#115) —
- * cross-channel playback the iOS Safari view can't give — instead of
- * navigating the tab. Returns the absolute href UNCHANGED: a foreign host is
- * NEVER re-rooted onto the page origin (that would 404 / load the wrong file).
+ * External branch (#607 audio, #1240 image + video). A genuinely third-party
+ * host is modal-eligible by URL EXTENSION alone, and the absolute href is
+ * returned UNCHANGED: a foreign host is NEVER re-rooted onto the page origin
+ * (that would 404 / load the wrong file).
  *
  * - https only — an http media element on the https page is mixed content and
  *   is blocked (the same-host branch stays scheme-agnostic for legacy uploads;
  *   that leniency deliberately does NOT extend to foreign hosts).
- * - audio only — external image/video stay null (#341 declared inline previews
- *   a non-goal, and the Safari view already opens them fine).
+ * - the emoji fallback (rule 2) does NOT apply: it keys off a same-host
+ *   extensionless `/uploads/<slug>` shape we only mint ourselves, so a foreign
+ *   link without an extension has no type signal and stays null.
  *
- * The CSP `media-src` is widened to `https:` in the same change (#607) so the
- * <audio> element is not blocked. No `crossorigin` attribute on the element —
- * it would require `Access-Control-Allow-Origin` from the foreign host and
- * break otherwise-working playback; scrub/seek is best-effort on the remote
- * server's Range support.
+ * #607 admitted audio first, for the docked mini-player (#115) — cross-channel
+ * playback the iOS Safari view can't give. #1240 admitted image and video: the
+ * motivating case is an upload link minted by ANOTHER grappa instance, tapped
+ * from this one, which #324's alias set cannot cover because the two instances
+ * are genuinely different deployments.
+ *
+ * CSP is the load-bearing half of that admission — an element the policy
+ * blocks yields an EMPTY modal, strictly worse than the anchor it replaced.
+ * `media-src 'self' blob: https:` already covers <audio> and <video> (#607
+ * widened it); `img-src` gets `https:` in the #1240 change for <img>. No
+ * `crossorigin` attribute on any of them — it would require
+ * `Access-Control-Allow-Origin` from the foreign host and break otherwise
+ * working loads; scrub/seek is best-effort on the remote server's Range
+ * support.
  */
-function externalAudioLink(href: string): MediaLink | null {
+function externalMediaLink(href: string): MediaLink | null {
   let url: URL;
   try {
     url = new URL(href);
@@ -278,7 +281,7 @@ function externalAudioLink(href: string): MediaLink | null {
   }
 
   if (url.protocol !== "https:") return null;
-  if (extensionKind(url) !== "audio") return null;
 
-  return { kind: "audio", href };
+  const kind = extensionKind(url);
+  return kind === null ? null : { kind, href };
 }

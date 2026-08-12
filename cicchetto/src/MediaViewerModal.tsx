@@ -36,10 +36,12 @@ import { maybeEscapePwaClick } from "./lib/platform";
 // shipped version navigating the PWA), so plain clicks delegate to the
 // shared maybeEscapePwaClick intercept, which hands the URL to real
 // Safari via the x-safari-https:// scheme (iOS 17+; inert tap on 16 —
-// acceptable degrade). The media element needs no CSP change:
-// `img-src 'self' data:` / `media-src 'self' blob:` already cover
-// same-origin sources, and the classifier never admits cross-origin
-// URLs.
+// acceptable degrade). The media element's sources ARE CSP-governed:
+// `'self'` covers the same-origin case, and the cross-host links the
+// classifier admits (#607 audio, #1240 image + video) need the `https:`
+// token in `media-src` / `img-src` — without it this modal opens EMPTY.
+// The widening rides in the same change as each admission; the plug
+// moduledoc (GrappaWeb.Plugs.SecurityHeaders) is the SSOT.
 //
 // #232 — Escape routes through the shared overlay ESC stack
 // (createOverlayLock's onEscape → the single keybindings keydown listener →

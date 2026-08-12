@@ -41,10 +41,10 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
       covers `ws://$host` / `wss://$host` per CSP3, so this is deployment-host
       agnostic — no edit when `PHX_HOST` changes); Cloudflare Turnstile +
       hCaptcha verification XHRs; `litterbox.catbox.moe` receives cic's
-      image-upload XHR. The response host `litter.catbox.moe` needs NO `img-src`
-      entry — cic never renders the image; the user clicks the link and the
-      browser opens it as its own document load outside our CSP. IRC stays
-      text only (CLAUDE.md).
+      image-upload XHR. The response host `litter.catbox.moe` needs no entry of
+      its OWN — since #1240 a click on that link renders the image in the media
+      viewer, but the widened `img-src https:` below already covers it. IRC
+      stays text only (CLAUDE.md): the modal is on-click, never on arrival.
     * `script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM='
       https://challenges.cloudflare.com https://*.hcaptcha.com` — Vite modules +
       the Turnstile / hCaptcha widget loaders. Each loader injects a small
@@ -59,7 +59,16 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
       dynamic style tags during interactive renders; rejecting `'unsafe-inline'`
       would break the irssi-shape theme system. hCaptcha loads its own sheet
       from `assets.hcaptcha.com`.
-    * `img-src 'self' data:` — favicons + manifest icons + SolidJS inline `data:` SVGs.
+    * `img-src 'self' data: https:` — `'self'` + `data:` for favicons, manifest
+      icons and SolidJS inline `data:` SVGs; `https:` (#1240) so the media
+      viewer's `<img>` can load a CROSS-HOST image link (an upload minted by
+      another grappa instance, or a litterbox URL) that `mediaLink.ts`
+      `externalMediaLink` admits client-side. Without it the classifier change
+      is worse than a no-op — the modal opens EMPTY. Scheme-scoped to https,
+      never http, so no mixed content; vjt granted `*` explicitly, and `https:`
+      is the narrower spelling of the same practical grant (an http image on an
+      https page is refused as mixed content either way) that keeps this
+      directive shaped like its `media-src` sibling.
     * `font-src 'self'` — system fonts only.
     * `manifest-src 'self'` — PWA install manifest.
     * `media-src 'self' blob: https:` — `blob:` for the video-upload duration
@@ -68,9 +77,11 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
       fallback and direct navigation to `/uploads/<slug>` videos (the 🎬 link
       — browsers render mp4 in a media document governed by this header) needs
       it; `https:` (#607) so the docked audio mini-player can play a
-      third-party `.mp3`/`.m4a` link's `<audio>` element (external audio only,
-      admitted client-side by `mediaLink.ts` `externalAudioLink` — the widening
-      is scheme-scoped to https, never http, so no mixed content). This is a
+      third-party `.mp3`/`.m4a` link's `<audio>` element (admitted client-side
+      by `mediaLink.ts` `externalMediaLink` — the widening is scheme-scoped to
+      https, never http, so no mixed content). #1240 admitted cross-host VIDEO
+      to the viewer as well and needed NO edit here: `media-src` governs
+      `<video>` too, so the #607 `https:` token already covers it. This is a
       deliberate, documented loosening of the "restate only `'self'`" rule
       above; the plug test + `nginx-csp-range-parity.spec.ts` pin it.
     * `worker-src 'self' blob:` — the SW shell-cache worker, plus mediabunny
@@ -94,7 +105,7 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
 
   import Plug.Conn
 
-  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   # HTTP header names are lower-cased (HTTP/2 + Plug convention); the VALUES
   # are byte-identical to the retired nginx snippet.

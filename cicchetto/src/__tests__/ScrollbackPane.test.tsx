@@ -4021,7 +4021,13 @@ describe("ScrollbackPane", () => {
       expect(mediaViewerState()).toBeNull();
     });
 
-    it("cross-origin 📸 URL (litterbox host) is NOT intercepted", () => {
+    // #1240 — a cross-origin image link IS intercepted now, and the
+    // viewer gets the href UNCHANGED (never re-rooted onto the page
+    // origin, which would 404 the foreign host). Pre-#1240 this asserted
+    // the opposite; the CSP `img-src https:` widening ships with it, so
+    // the modal renders instead of opening empty.
+    it("cross-origin image URL (litterbox host) opens the viewer with the href unchanged", () => {
+      const href = "https://litter.catbox.moe/abc.png";
       setScrollback({
         "freenode #grappa": [
           {
@@ -4031,7 +4037,30 @@ describe("ScrollbackPane", () => {
             server_time: 1,
             kind: "privmsg",
             sender: "alice",
-            body: "📸 https://litter.catbox.moe/abc.png",
+            body: `📸 ${href}`,
+            meta: {},
+          },
+        ],
+      });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const link = document.querySelector(".scrollback-link") as HTMLAnchorElement;
+      expect(link.classList.contains("scrollback-media-link")).toBe(true);
+
+      link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+      expect(mediaViewerState()).toEqual({ kind: "image", href });
+    });
+
+    it("cross-origin http image URL is NOT intercepted (mixed content on the https page)", () => {
+      setScrollback({
+        "freenode #grappa": [
+          {
+            id: 1,
+            network: "freenode",
+            channel: "#grappa",
+            server_time: 1,
+            kind: "privmsg",
+            sender: "alice",
+            body: "📸 http://litter.catbox.moe/abc.png",
             meta: {},
           },
         ],

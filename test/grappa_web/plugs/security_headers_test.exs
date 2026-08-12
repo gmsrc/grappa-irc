@@ -8,10 +8,11 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
 
   The golden literal below started as the CSP that shipped byte-for-byte
   in the retired `infra/snippets/security-headers.conf`; #607 widened
-  `media-src` to `https:` (external audio in the docked mini-player) — a
-  deliberate, pinned deviation. It is intentionally hardcoded here (not
-  read from the plug) so this test PINS the plug against drift — a
-  characterization contract, not a mirror.
+  `media-src` to `https:` (external audio in the docked mini-player) and
+  #1240 widened `img-src` the same way (cross-host images in the media
+  viewer) — deliberate, pinned deviations. It is intentionally hardcoded
+  here (not read from the plug) so this test PINS the plug against drift —
+  a characterization contract, not a mirror.
   """
   use ExUnit.Case, async: true
 
@@ -20,10 +21,10 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
   alias GrappaWeb.Plugs.SecurityHeaders
 
   # The plug's Content-Security-Policy SSOT (was byte-identical to the
-  # deleted nginx snippet; #607 widened media-src to https:). If the app
-  # must change the policy, change it in ONE place (the plug) and update
-  # this pin deliberately.
-  @golden_csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  # deleted nginx snippet; #607 widened media-src to https:, #1240 img-src).
+  # If the app must change the policy, change it in ONE place (the plug) and
+  # update this pin deliberately.
+  @golden_csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   defp sent(status) do
     :get
@@ -32,7 +33,7 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
     |> send_resp(status, "body")
   end
 
-  test "csp/0 matches the golden pin (SSOT, incl. the #607 media-src https: widening)" do
+  test "csp/0 matches the golden pin (SSOT, incl. the #607 media-src + #1240 img-src https: widenings)" do
     assert SecurityHeaders.csp() == @golden_csp
   end
 

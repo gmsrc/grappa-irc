@@ -9,8 +9,10 @@
 // navigates IN PLACE (raw media doc, no chrome). Fix: cic admits any
 // host in the server-provided alias set (Grappa.HttpHosts →
 // serverSettings().httpHostAliases) and re-roots the click onto the
-// PAGE origin, so the modal's <img> stays same-origin → CSP
-// `img-src 'self'` is UNTOUCHED.
+// PAGE origin, so the modal's <img> stays same-origin. What this spec
+// pins is the RE-ROOTING, which #1240 did not change: a foreign host is
+// now viewer-eligible too, but with its href UNCHANGED — only an
+// admitted host is rewritten onto the page origin.
 //
 // Simulation: the e2e server advertises a synthetic sibling host via
 // `EXTRA_CHECK_ORIGINS=https://alias-b.test` (compose.yaml), so the WS
@@ -76,10 +78,12 @@ async function aliasModalJourney(page: Page): Promise<void> {
   // No navigation — the modal opened in place.
   expect(page.url()).toBe(cicUrl);
 
-  // Re-rooted onto the PAGE origin, NOT alias-b.test → same-origin <img>
-  // → CSP img-src 'self' untouched. naturalWidth>0 proves the bytes
-  // loaded through nginx under the prod CSP (the _cspGuard fixture fails
-  // the spec on a securitypolicyviolation).
+  // Re-rooted onto the PAGE origin, NOT alias-b.test → the <img> is
+  // same-origin, admitted by `img-src 'self'` alone (the #1240 `https:`
+  // token is what the FOREIGN-host spec needs, not this one).
+  // naturalWidth>0 proves the bytes loaded through nginx under the prod
+  // CSP (the _cspGuard fixture fails the spec on a
+  // securitypolicyviolation).
   const img = viewer.locator("img.media-viewer-media");
   await expect(img).toHaveAttribute("src", url);
   await expect(img).toHaveJSProperty("complete", true, { timeout: 10_000 });
@@ -90,9 +94,11 @@ async function aliasModalJourney(page: Page): Promise<void> {
   await expect(viewer).toBeHidden({ timeout: 5_000 });
 
   // Negative: a genuinely third-party host (NOT in the alias set) with
-  // the same emoji + uploads shape must still be rejected — plain
-  // anchor, no media class (never re-root a foreign host onto the page
-  // origin).
+  // the same emoji + EXTENSIONLESS uploads shape must still be rejected —
+  // plain anchor, no media class. #1240 admits a foreign host by URL
+  // EXTENSION only; the emoji is a same-host-legacy signal and never
+  // types a foreign link, so this stays the boundary case that proves a
+  // foreign host is never re-rooted onto the page origin.
   const thirdPartyUrl = `https://litter.catbox.moe/uploads/${slug}`;
   await composeSend(page, `📸 ${thirdPartyUrl}`);
   const thirdRow = scrollbackLine(page, "privmsg", "litter.catbox.moe");

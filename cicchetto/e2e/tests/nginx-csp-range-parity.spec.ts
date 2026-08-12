@@ -39,6 +39,11 @@ const LOAD_BEARING_DIRECTIVES = [
   // docked mini-player); the old "media-src 'self' blob:" pin is a PREFIX
   // of this, so `toContain` would pass silently without the widened token.
   "media-src 'self' blob: https:",
+  // #1240 — same prefix trap: the old "img-src 'self' data:" pin is a
+  // PREFIX of the widened value, so it must be pinned WITH the `https:`
+  // token or a revert would sail through `toContain`. Losing it opens the
+  // cross-host image viewer as an EMPTY modal.
+  "img-src 'self' data: https:",
   "worker-src 'self' blob:",
   "frame-ancestors 'none'",
   "base-uri 'self'",
