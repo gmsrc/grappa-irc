@@ -2441,26 +2441,28 @@ defmodule Grappa.Session.EventRouterTest do
              end)
     end
 
-    test "MODE -bk mask key consumes the ban mask on the remove sign too" do
-      # #1249 both signs: type A takes a param on `-` as well, so `-b` must
-      # pop the mask or the `-k` clause would swallow it and leave the key
-      # standing.
+    test "MODE -b+k mask key consumes the ban mask on the remove sign too" do
+      # #1249 both signs: type A takes a param on `-` as well. The witness
+      # has to be a mode that KEEPS its param — `-b-k mask key` cannot fail
+      # visibly, because a removal discards the argument it popped, so a
+      # mask swallowed by the `-k` leaves no trace. Flipping the sign back
+      # makes the misalignment observable: if `-b` does not pop, the key
+      # this channel gets is the ban mask.
       state =
         base_state(%{
           members: %{"#italia" => %{"alice" => []}},
-          channel_modes: %{
-            "#italia" => %{modes: ["k", "n"], params: %{"k" => "s3cret"}}
-          }
+          channel_modes: %{"#italia" => %{modes: ["n"], params: %{}}}
         })
 
-      m = msg(:mode, ["#italia", "-bk", "*!*@spammer.net", "s3cret"], {:nick, "op", "u", "h"})
+      m = msg(:mode, ["#italia", "-b+k", "*!*@spammer.net", "s3cret"], {:nick, "op", "u", "h"})
 
       assert {:cont, new_state, _effects} = EventRouter.route(m, state)
 
       entry = new_state.channel_modes["#italia"]
-      refute "k" in entry.modes
+      refute "b" in entry.modes
+      assert "k" in entry.modes
       assert "n" in entry.modes
-      assert entry.params == %{}
+      assert entry.params == %{"k" => "s3cret"}
     end
 
     test "the type-A letter set comes from the advertised CHANMODES, not a constant" do
