@@ -5813,6 +5813,45 @@ html.resize-dragging * {
    name) would keep a stacked cell wider than the screen and put the pan
    straight back. */
 @media (max-width: 899px) {
+  /* #1244 item 2 — *"three nested containers (tab panel → section card →
+     per-network card) each contribute their own border and padding,
+     stacking ~3 frames around a value that is five characters long"*.
+
+     Counted from the value outwards at 393px, the insets were: the pane's
+     `padding: 1rem`, this scroll body's second `1rem`, the section card's
+     1px border, and the record card's 1px + 8px. 42px a side, 84px of a
+     393px screen, to say the same thing four times.
+
+     Two of the four go, and which two is the whole judgement. The pane's
+     gutter stays: it is the console's edge and every surface shares it,
+     cards or not. The record card's frame stays: it is the only line that
+     says where one record ends and the next begins, which is what a card
+     regime is FOR. What goes is the pair in the middle, whose entire job
+     was to inset a card inside a backdrop the card already covers — so
+     the section card runs edge to edge in the pane's gutter and keeps its
+     identity from the top stripe and the head it already has.
+
+     Vertical falls out of the same change: the block padding halves and
+     the inter-card gap comes down a step, both of which were sized when
+     each card was half again as tall. */
+  .adm-scroll {
+    padding: var(--adm-space-2) 0;
+    gap: var(--adm-space-3);
+  }
+
+  /* The side borders drew the frame that just went; the top stripe (the
+     section's group colour) and the bottom edge are what remain, and they
+     are the two that carry meaning. */
+  .adm-card {
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+  }
+
+  .adm-card-head {
+    padding: var(--adm-space-2) var(--adm-space-4);
+  }
+
   .adm-table,
   .adm-table tbody,
   .adm-table tr,
