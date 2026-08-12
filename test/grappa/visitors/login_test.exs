@@ -318,6 +318,31 @@ defmodule Grappa.Visitors.LoginTest do
       assert Visitors.resolve_identity_by_nick("vjt", network.id) == nil
     end
 
+    # #1130 — the ORDERING guard, and the reason the case above is not one.
+    # A refused connect only reaches `classify_down/1` if the Client's death
+    # beats the login's `after` clause, and the Client deliberately sits on a
+    # failed connect for `@connect_failure_sleep_ms` before dying (the
+    # restart throttle). The test config inverts production here: a 50ms
+    # sleep under a 100ms budget, so the `:DOWN` wins and the mapping looks
+    # guarded. Production ships 30s against 3s — the `after` always fires
+    # first and a refused upstream is dressed as a timeout.
+    #
+    # Reproduce the PRODUCTION ORDERING without production's clock: the
+    # sleep is `Application.compile_env` (baked, unreachable from a test),
+    # but the login budget is per-call, so putting it BELOW the sleep
+    # restores the prod order in ~10ms. What is asserted is that the
+    # diagnosis survives the ordering — no elapsed time is measured, so
+    # host load cannot flake it.
+    test "connect refused → :upstream_unreachable even when the login budget expires first (#1130)" do
+      port = pick_unused_port()
+      {network, _} = setup_visitor_network(port)
+
+      assert {:error, :upstream_unreachable} =
+               Login.login(login_input(), login_connect_timeout_ms: 10)
+
+      assert Visitors.resolve_identity_by_nick("vjt", network.id) == nil
+    end
+
     test "no 001 within budget → {:error, :welcome_timeout}, session torn down + anon row purged" do
       {_, port} = start_server()
       {network, _} = setup_visitor_network(port)

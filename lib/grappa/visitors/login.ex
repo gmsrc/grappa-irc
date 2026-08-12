@@ -726,7 +726,9 @@ defmodule Grappa.Visitors.Login do
   # RPL_WELCOME. Each phase carries an independent timeout budget +
   # surfaces a distinct typed error. `:DOWN` short-circuits both
   # phases as `:upstream_unreachable` (the spawned Session.Server
-  # crashed before it could complete the phase). On any timeout we
+  # crashed before it could complete the phase); #1130 adds a third
+  # phase-1 arm for the connect failure the Client reports BEFORE it
+  # dies, because its death is throttled well past this budget. On any timeout we
   # tear the session down explicitly so the `:transient` restart loop
   # stops (cluster-cascading bad otherwise — pre-fix would have
   # rapidly restarted against the same broken upstream).
@@ -746,6 +748,18 @@ defmodule Grappa.Visitors.Login do
     receive do
       {:session_phase, ^ref, :connected} ->
         :ok
+
+      # #1130 — the connect FAILED and the Client said so at the moment it
+      # happened. The `:DOWN` carrying the same reason is still coming, but
+      # only after the Client's restart throttle: 30s in production against
+      # this 3s budget, so waiting for the corpse meant `after` always won
+      # and a refused upstream was reported as `:connect_timeout` — a 504
+      # inviting the fast retry that cannot help, for what the session
+      # process had already named as `{:connect_failed, :econnrefused}`.
+      # Classified through the shape that late `:DOWN` will carry, so the
+      # prompt path and the corpse path cannot drift apart.
+      {:session_phase, ^ref, {:connect_failed, reason}} ->
+        {:error, {:down, classify_down({:client_exit, {:connect_failed, reason}})}}
 
       {:DOWN, ^monitor_ref, :process, ^pid, reason} ->
         {:error, {:down, classify_down(reason)}}

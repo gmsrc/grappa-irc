@@ -1148,6 +1148,17 @@ defmodule Grappa.IRC.Client do
         {:noreply, arm_idle(%{sent | fsm: fsm})}
 
       {:error, reason} ->
+        # #1130 — announce the failure upward NOW: the sibling of the
+        # `send(state.dispatch_to, :irc_connected)` on the success arm above.
+        # The throttle below delays this process's DEATH to pace the
+        # `:transient` restart cycle, and until #1130 that death was also the
+        # only carrier of the diagnosis — with a 30s sleep against a 3s login
+        # budget the waiting login always timed out first, so a refused
+        # upstream reached the operator as a slow network. Announcing the
+        # reason separately lets the sleep keep the single job it was added
+        # for; shortening it would have traded a wrong error for the
+        # reconnect storm it exists to prevent.
+        send(state.dispatch_to, {:irc_connect_failed, reason})
         Process.send_after(self(), {:connect_failed_giveup, reason}, @connect_failure_sleep_ms)
         {:noreply, state}
     end

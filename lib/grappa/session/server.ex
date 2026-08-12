@@ -2918,6 +2918,19 @@ defmodule Grappa.Session.Server do
     {:noreply, state}
   end
 
+  # #1130 — the sibling of `:irc_connected`: the Client could not reach the
+  # upstream at all. Re-fire it as a phase so `Visitors.Login`'s connect wait
+  # learns the REASON immediately, instead of inferring `:connect_timeout`
+  # from the silence while the Client sits out its restart throttle (30s in
+  # prod, ten times the login budget). Notify only: the Client still dies on
+  # its own schedule and every existing exit path — the `{:client_exit, _}`
+  # propagation, the lifecycle event, the `:transient` restart pacing — is
+  # untouched by this.
+  def handle_info({:irc_connect_failed, reason}, state) do
+    maybe_notify_session_phase(state, {:connect_failed, reason})
+    {:noreply, state}
+  end
+
   # #550 — the Client captured the upstream peer at connect. Cache it
   # (address as a string) so the admin Sessions inventory can read the
   # destination this session landed on without round-tripping the socket.
