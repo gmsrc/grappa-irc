@@ -5772,9 +5772,22 @@ html.resize-dragging * {
     min-width: 0;
   }
 
+  /* #1223 retest — the label is a CAPTION ABOVE its value, not a track
+     beside it. It was `flex: 0 0 5rem`, which neither grows nor shrinks:
+     80px plus the 12px column gap, reserved out of 341px of card, on every
+     field of every row. vjt read it off a portrait screenshot — *"the label
+     column (last seen, channels, actions) keeps a fixed wide gutter of its
+     own, pushing the values into the right half"*.
+     `100%` rather than a smaller fixed track because the alternatives both
+     lose: `auto` sizes each label to its own text, so the values stop
+     lining up and the card reads as scattered; a narrower track still
+     charges every value for a gutter and only argues about the price.
+     The card now spends one line on the label and gives the value all
+     341px, which is the same trade `.adm-facts` already makes in the panel
+     — one idiom for the same problem, at both ends of the card. */
   .adm-table td::before {
     content: attr(data-label);
-    flex: 0 0 5rem;
+    flex: 0 0 100%;
     font-family: var(--adm-font);
     font-size: 0.68rem;
     letter-spacing: 0.1em;
@@ -5850,10 +5863,47 @@ html.resize-dragging * {
     width: auto;
   }
 
-  /* An expanded detail row is a block inside the card, not a colspan cell
-     spanning columns that no longer exist. */
-  .adm-expand-row td {
-    padding: var(--adm-space-3) 0 0;
+  /* #1223 retest — the expand row HOSTS the detail panel, it is not a
+     record card, and it was being charged for being one three times over.
+     vjt on a portrait phone: *"the detail panel does not use the pane
+     width. It sits inside its own inset container with a wide empty gutter
+     on both sides, so the facts column renders at roughly half the
+     available width while the gutters carry nothing."*
+
+     Three separate rules above were billing it, ~130px of a 359px card:
+
+     - `.adm-table td::before` gave its `<td colspan>` a label track like
+       any other cell. There is no `data-label` on it, so `attr()` rendered
+       the empty string — into a box that still occupied 80px, plus the
+       12px flex gap. That is the "wide empty gutter", literally: a label
+       box with no label in it.
+     - `.adm-table tr` drew a bordered, padded, filled card around it, so
+       the panel — itself a card, with its own border and accent edge —
+       came out as a card inside a card (18px).
+     - `.adm-expand-row td { padding: 12px 16px }` (32px). A mobile override
+       for exactly this already existed here and did nothing: it read
+       `.adm-expand-row td`, (0,1,1), the same specificity as the base rule
+       further down the file, which therefore won on source order. Being
+       inside a media query buys no specificity. The rules below are
+       `.adm-table …`, (0,2,1), so they win on their own merits rather than
+       on where they happen to sit.
+
+     The panel keeps its own margin-bottom from `.adm-table tr`, which is
+     the gap to the next row card. */
+  .adm-table tr.adm-expand-row {
+    border: 0;
+    border-radius: 0;
+    padding: 0;
+    background: none;
+  }
+
+  .adm-table .adm-expand-row td {
+    display: block;
+    padding: 0;
+  }
+
+  .adm-table .adm-expand-row td::before {
+    content: none;
   }
 }
 
@@ -6128,10 +6178,14 @@ html.resize-dragging * {
 }
 
 /* Detail panel for the row a table has open (`admin/AdminDetailPanel`).
-   A sibling of the table, NOT a row inside it: a `<td colspan>` inherits
-   the table's width, and admin tables are deliberately wider than the
-   viewport, so a form in there could only be reached by swiping
-   sideways. Out here it is viewport-wide and its contents wrap.
+   A `<tr class="adm-expand-row">` INSIDE the table, in the row's own
+   position — this comment used to say the opposite ("a sibling of the
+   table, NOT a row inside it"), which described the arrangement #1074
+   reverted and is why the next reader looked for the panel's width in the
+   wrong box. The `<td colspan>` inherits the table's width, which was the
+   original objection and stopped applying once no table is wider than the
+   phone; on a phone the expand row is stripped of the card regime so the
+   panel gets that width whole (#1223, `@media (max-width: 899px)`).
 
    Styled as a card with an accent left edge instead of a top stripe, so
    it reads as attached to the table above rather than as a peer of it. */
