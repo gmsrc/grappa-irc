@@ -40360,3 +40360,55 @@ under a windows-1252 misread. Server-side, the red was measured before the fix
 existed: five of the six new controller assertions failed with
 `unsupported_media_type`, and the sixth — the mirror-image guard — passed, as
 it had to.
+## 2026-08-13 — #1249: a list is not a flag, and arity is not class
+
+A single `MODE #chan +b <mask>` made the channel header read `+blrnt`. The
+server-side `channel_modes` cache is what the header renders, and its walker
+(`EventRouter.walk_channel_modes/5`) had exactly two categories: a membership
+mode from `PREFIX` (skipped — it belongs to the roster) and *everything else*,
+recorded as a channel flag. CHANMODES type A — bans and the exception lists —
+fell in the second bucket.
+
+The classifier already knew better. `ISupport.takes_param?/3` reads the same
+005 table and says "type A takes a param on both signs", which is why the mask
+was consumed and the arg list stayed aligned; the walk just never asked what
+CLASS the letter was, only whether it had an argument. **Arity and class are
+two different questions about one table, and consulting only the first is what
+turned a list into a flag.**
+
+Four consequences, and the fourth is the one that makes it a correctness bug
+rather than a cosmetic one: the phantom letter; one `params` slot holding the
+*last* mask of an N-entry list; an unban of a different mask clearing the flag
+while two bans are still in force; and a disagreement with the ircd itself —
+324 RPL_CHANNELMODEIS never carries list modes, so a rejoin silently deletes
+the phantom, and two clients on the same channel show different mode strings
+depending on who watched the `+b` go by. The banlist is untouched by any of
+this: it is served by the 367/368 query path (#536), which never enters this
+cache.
+
+cic had already drawn the line the server had not: `availableModes/1` builds
+the modal's toggle list from `b ∪ c ∪ d`, so a type-A letter is excluded by
+construction and no `+b` row has ever existed there. The header renders the
+raw `modes` list instead, which is why the phantom surfaced there and only
+there — and why the client needed no change.
+
+The fix asks the class question after the arity one: consume the argument,
+then drop the letter on **both** signs. Order matters — a fix that skips the
+pop keys the channel to `*!*@…`, which is why the witness token is `+bk <mask>
+<key>` rather than a lone `+b`, at every level: the unit test, and the e2e
+where the `k` landing in the header is also the barrier proving the ircd
+accepted and echoed the whole token.
+
+**Two predicates over `chanmodes.a`, deliberately.** #1251, in flight
+alongside this, adds `ListModes.queryable/1` — the type-A letters grappa may
+*ask* for, i.e. those
+it also knows a terminating numeric pair for. This walk needs
+`ISupport.list_mode?/2` — pure class membership. They diverge on exactly one
+input: a letter the network advertises as type A that our numeric table does
+not know. `queryable/1` must exclude it (a `MODE #chan X` we cannot terminate
+is a request that hangs); `list_mode?/2` must include it (it is still a list,
+so it still must not be rendered as a flag). Reusing the query-side predicate
+here would have re-introduced the phantom flag for precisely the letters
+nobody has taught us about yet. One notion of "type A" — `chanmodes.a`, read
+per-network, never a hardcoded `["b","e","I"]`, because bahamut advertises
+`bz` and has no `+e`/`+I` at all — two questions asked of it.
