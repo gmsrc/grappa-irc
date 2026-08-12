@@ -5841,14 +5841,24 @@ html.resize-dragging * {
 
   /* The side borders drew the frame that just went; the top stripe (the
      section's group colour) and the bottom edge are what remain, and they
-     are the two that carry meaning. */
-  .adm-card {
+     are the two that carry meaning.
+
+     🔴 `.adm-scroll > .adm-card`, not `.adm-card`, and the reason is the
+     trap #1223 hit twice and wrote down: a media query buys NO
+     specificity, and `.adm-card`'s base rule sits ~330 lines FURTHER DOWN
+     this file, so a bare `.adm-card` here loses on source order and does
+     nothing at all. Measured, not deduced — the frame oracle reported the
+     card still contributing its 1px with the rule in place. (0,2,0) wins
+     on its own merits, and it also says something true: the frame being
+     removed is the one a card gets for sitting inside the scroll body's
+     backdrop, so a card nested anywhere else keeps its own. */
+  .adm-scroll > .adm-card {
     border-left: 0;
     border-right: 0;
     border-radius: 0;
   }
 
-  .adm-card-head {
+  .adm-scroll > .adm-card > .adm-card-head {
     padding: var(--adm-space-2) var(--adm-space-4);
   }
 

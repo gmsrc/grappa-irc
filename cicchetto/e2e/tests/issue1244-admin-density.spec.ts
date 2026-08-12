@@ -189,6 +189,12 @@ for (const width of [393, 440]) {
 
         const fields = await readCardFields(row);
 
+        // Non-vacuity first, and separately, so a card that stopped
+        // painting labelled cells reads as that rather than as a density
+        // regression: every assertion below filters this list, and an
+        // empty list would fail them with the wrong sentence.
+        expect(fields.length, "the card must have labelled fields to measure").toBeGreaterThan(0);
+
         // Non-vacuity, and the claim of this issue in one assertion: at
         // least one field prints its label and its value on the SAME
         // line. Under #1223's `flex: 0 0 100%` every field stacks and
