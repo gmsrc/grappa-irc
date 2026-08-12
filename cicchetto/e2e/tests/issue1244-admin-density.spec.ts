@@ -146,9 +146,14 @@ async function readPanelFacts(panel: Locator): Promise<PanelFact[]> {
       if (dt === null || dd === null) throw new Error("a fact pair lost its dt or its dd");
       const dtBox = dt.getBoundingClientRect();
       const ddBox = dd.getBoundingClientRect();
-      // The TEXT, not the box: `dd` grows into the line's free space, so
-      // its box reaches the right edge in both branches and only where
-      // the glyphs land says whether the value is right-aligned.
+      // The glyphs, measured against the PAIR's right edge — not against
+      // `dd`'s own box, which was this oracle's first form and proved
+      // nothing. A `dd` sized to its content holds its text flush against
+      // its own right edge wherever that box happens to sit, so the
+      // reading came out 0 for a value parked in the middle of the row.
+      // A mutation run is what said so: stopping `dd` from growing left
+      // this assertion green and was caught two assertions later, by
+      // accident, at one width out of two.
       const range = document.createRange();
       range.selectNodeContents(dd);
       const text = range.getBoundingClientRect();
@@ -158,7 +163,7 @@ async function readPanelFacts(panel: Locator): Promise<PanelFact[]> {
         // gives the two boxes different tops on the same line, and a
         // stacked pair shares no vertical extent at all.
         sameLine: ddBox.top < dtBox.bottom - 0.5,
-        valueRightGap: Math.round(ddBox.right - text.right),
+        valueRightGap: Math.round(pair.getBoundingClientRect().right - text.right),
         boxWidth: ddBox.width,
       };
     }),
