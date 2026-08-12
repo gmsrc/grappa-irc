@@ -41016,3 +41016,58 @@ another user, which an unprivileged test suite cannot construct. It uses mode
 per-class, so denying the owner class the search bit puts the process in the
 same state as denying it to `other`. Ownership was never the variable — the
 effective user's search bit was.
+## 2026-08-13 — UnifiedPush as a second Web Push provider, not a second push system
+
+Resentin (a third-party native Android client, `pm.antani.resentin`) wanted
+push notifications without an always-on WebSocket burning battery in the
+background. Android has no browser-style Push API to piggyback on the way
+cic's PWA does, so the natural fit is
+[UnifiedPush](https://unifiedpush.org/): the device's chosen distributor app
+hands the client an opaque HTTPS endpoint, the server POSTs to it, no
+FCM/Google Play Services tax.
+
+**The instinct to avoid was building a parallel push system.** UnifiedPush's
+endpoint-registration shape is structurally identical to the W3C Push API's
+`PushSubscription.toJSON()` — `{endpoint, keys: {p256dh, auth}}` — and an
+Android client CAN generate its own P-256 keypair + auth secret client-side
+the same way a browser's `PushManager.subscribe()` does internally. So a
+UnifiedPush subscription carries the exact same three fields a webpush one
+does, and `Grappa.Push.Sender`'s VAPID-signed `aes128gcm` encrypted POST
+(`WebPushElixir.send_notification/2`) works against a UnifiedPush endpoint
+completely unchanged — a distributor relay just forwards whatever bytes and
+headers it's given; only a Web-Push-vendor's OWN service (FCM, Mozilla
+autopush) actually verifies the VAPID JWT, so an unverified-but-present
+header on a UnifiedPush POST is inert, not wrong. `Push.Sender` needed
+**zero** code changes.
+
+What DOES differ is purely which endpoint a device registered and how — so
+that's the only thing that got a new field. `push_subscriptions` gained a
+`provider` column (`"webpush"` | `"unifiedpush"`, default `"webpush"` — a
+plain `ADD COLUMN`, classified `:hot` by `Grappa.Deploy.Preflight`, not the
+rename+recreate dance `20260515005116_xor_fk_push_subscriptions` needed for
+its `NOT NULL` relax). `POST /push/subscriptions` accepts an optional
+`"provider"` tag on the same wire body it already took; omitted, the schema
+default preserves every existing caller's behavior byte-for-byte.
+`GET /push/subscriptions` surfaces `provider` in the device-list summary so a
+client's "see + revoke my devices" UX (B3) can show what KIND of device each
+row is — a browser tab vs. an Android UnifiedPush registration — while
+`DELETE /push/subscriptions/:id` revokes either identically, no branch
+needed there either.
+
+An earlier pass reached for the opposite shape — a plaintext, unencrypted
+POST for UnifiedPush (no keys, no VAPID) on the reasoning that UnifiedPush's
+OWN spec does not require encryption. That was reversed: this codebase
+already has a working, audited encrypted-payload pipeline, an Android client
+can produce a real key pair as easily as a browser can, and a second
+delivery mechanism living in `Push.Sender` alongside the VAPID one would have
+been actual new surface (a second HTTP client path, a second failure
+taxonomy, a second thing to keep in parity) for a privacy property
+(payload-opaque-to-the-relay) the existing path already gives for free. The
+`provider` field earns its keep purely as a client-facing label; it was
+worth resisting the temptation to let it grow a second code path to match.
+
+**Apply:** when a new client transport turns out to be wire-compatible with
+an existing one, resist adding a parallel delivery path just because the
+*registration* handshake differs — a discriminator field for display, not a
+branch in the sender, keeps one audited path instead of two half-audited
+ones.

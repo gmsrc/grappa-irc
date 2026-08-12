@@ -186,6 +186,46 @@ defmodule Grappa.PushTest do
     end
   end
 
+  describe "create/2 — :provider (2026-08-13, UnifiedPush)" do
+    test "defaults to \"webpush\" when omitted — every pre-existing caller is unaffected" do
+      user = user_fixture()
+      assert {:ok, %Subscription{provider: "webpush"}} = Push.create({:user, user.id}, valid_attrs())
+    end
+
+    test "accepts \"unifiedpush\", still with a real keypair (same encrypted Push.Sender path)" do
+      user = user_fixture()
+
+      attrs = Map.put(valid_attrs(endpoint: "https://ntfy.example/up/abc"), :provider, "unifiedpush")
+
+      assert {:ok, %Subscription{} = sub} = Push.create({:user, user.id}, attrs)
+      assert sub.provider == "unifiedpush"
+      # A UnifiedPush registration still carries a real P-256 keypair —
+      # Push.Sender's VAPID+encrypt path is unbranched on :provider (see
+      # Grappa.Push.Sender moduledoc), so it needs one exactly like webpush.
+      assert is_binary(sub.p256dh_key)
+      assert is_binary(sub.auth_key)
+    end
+
+    test "rejects a provider outside the closed set" do
+      user = user_fixture()
+      attrs = Map.put(valid_attrs(), :provider, "apns")
+      assert {:error, %Ecto.Changeset{errors: errors}} = Push.create({:user, user.id}, attrs)
+      assert {"is invalid", _} = errors[:provider]
+    end
+
+    test "a unifiedpush row still requires p256dh_key + auth_key — :provider changes no requirement" do
+      user = user_fixture()
+
+      attrs =
+        valid_attrs()
+        |> Map.put(:provider, "unifiedpush")
+        |> Map.delete(:p256dh_key)
+
+      assert {:error, %Ecto.Changeset{errors: errors}} = Push.create({:user, user.id}, attrs)
+      assert {"can't be blank", _} = errors[:p256dh_key]
+    end
+  end
+
   describe "list_for_user/1" do
     test "returns empty list for a user with no subscriptions" do
       assert Push.list_for_subject({:user, user_fixture().id}) == []

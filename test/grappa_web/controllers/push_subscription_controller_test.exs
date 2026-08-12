@@ -44,10 +44,19 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
       }
     }
 
+    base
     # #181 — optional `supersedes` body field (a prior endpoint to prune).
-    case Keyword.get(opts, :supersedes) do
-      nil -> base
-      supersedes -> Map.put(base, "supersedes", supersedes)
+    |> maybe_put(opts, :supersedes, "supersedes")
+    # 2026-08-13 (UnifiedPush) — optional `provider` tag; omitted here by
+    # default so every pre-existing caller of this helper keeps exercising
+    # the "webpush" default path unchanged.
+    |> maybe_put(opts, :provider, "provider")
+  end
+
+  defp maybe_put(body, opts, opt_key, body_key) do
+    case Keyword.get(opts, opt_key) do
+      nil -> body
+      value -> Map.put(body, body_key, value)
     end
   end
 
@@ -140,6 +149,47 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
       # routes the changeset error to the field cic actually cares
       # about — surfaces as `field_errors.endpoint` in the wire body.
       assert ["has already been taken"] = fe["endpoint"]
+    end
+  end
+
+  describe "POST /push/subscriptions — :provider (2026-08-13, UnifiedPush)" do
+    setup %{conn: conn} do
+      {user, session} = user_and_session()
+      {:ok, conn: put_bearer(conn, session.id), user: user}
+    end
+
+    test "omitted provider defaults to webpush", %{conn: conn, user: user} do
+      conn = post(conn, "/push/subscriptions", valid_body(endpoint: "https://example.com/push/no-provider"))
+      assert json_response(conn, 201)
+      [stored] = Push.list_for_subject({:user, user.id})
+      assert stored.provider == "webpush"
+    end
+
+    test "accepts provider: unifiedpush — still requires keys, same as webpush", %{conn: conn, user: user} do
+      conn =
+        post(
+          conn,
+          "/push/subscriptions",
+          valid_body(endpoint: "https://ntfy.example/up/reg-1", provider: "unifiedpush")
+        )
+
+      assert json_response(conn, 201)
+      [stored] = Push.list_for_subject({:user, user.id})
+      assert stored.provider == "unifiedpush"
+      assert is_binary(stored.p256dh_key)
+      assert is_binary(stored.auth_key)
+    end
+
+    test "422 on an unrecognized provider value", %{conn: conn} do
+      conn =
+        post(
+          conn,
+          "/push/subscriptions",
+          valid_body(endpoint: "https://example.com/push/bad-provider", provider: "apns")
+        )
+
+      assert %{"error" => "validation_failed", "field_errors" => fe} = json_response(conn, 422)
+      assert ["is invalid"] = fe["provider"]
     end
   end
 
@@ -252,6 +302,7 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
       assert %{"subscriptions" => [a, b]} = json_response(conn, 200)
       assert a["id"] == second.id
       assert a["user_agent"] == "ua-2"
+      assert a["provider"] == "webpush"
       assert b["user_agent"] == "ua-1"
       # endpoints / keys NOT exposed in the list shape
       refute Map.has_key?(a, "endpoint")
