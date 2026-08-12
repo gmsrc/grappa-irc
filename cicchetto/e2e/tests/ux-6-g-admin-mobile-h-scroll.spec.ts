@@ -462,10 +462,26 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     // the layout's.
     await expander.scrollIntoViewIfNeeded();
 
-    const paneScroll = (): Promise<number> =>
-      page.getByTestId("admin-pane").evaluate((el) => el.scrollTop);
+    // EVERY scrollable ancestor, not `.admin-pane` alone. The first version
+    // of this diagnostic read the pane and reported `0 → 0`, which says
+    // nothing: `.admin-tab-panel` is `overflow-y: auto` too and is the box
+    // that actually scrolls the tab's content. Reading one named box and
+    // concluding from its silence is the same error as normalising a width
+    // by the box being squeezed — measure the ancestor CHAIN and let it say
+    // which link moved.
+    const scrollChain = (): Promise<Record<string, number>> =>
+      expander.evaluate((el) => {
+        const out: Record<string, number> = {};
+        for (let n = el.parentElement, i = 0; n !== null; n = n.parentElement, i++) {
+          if (n.scrollHeight <= n.clientHeight) continue;
+          const name = n.getAttribute("data-testid") ?? n.className || n.tagName.toLowerCase();
+          out[`${i}:${String(name).slice(0, 40)}`] = n.scrollTop;
+        }
+        out["window"] = window.scrollY;
+        return out;
+      });
 
-    const scrollBefore = await paneScroll();
+    const scrollBefore = await scrollChain();
     const before = await expander.boundingBox();
     expect(before, "expander must have a box before the tap").not.toBeNull();
 
@@ -479,13 +495,13 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     // viewport up to the card, leaving the operator somewhere they had
     // not asked to be. In the row's own position the row stays put.
     const after = await expander.boundingBox();
-    const scrollAfter = await paneScroll();
+    const scrollAfter = await scrollChain();
     expect(after, "expander must still have a box after the tap").not.toBeNull();
     expect(
       Math.abs((after?.y ?? 0) - (before?.y ?? 0)),
-      `the row an operator tapped must not move when its detail opens ` +
-        `(pane scrollTop ${scrollBefore} → ${scrollAfter}: unchanged means the LAYOUT moved, ` +
-        `a change means the tap scrolled and the barrier above did not hold)`,
+      `the row an operator tapped must not move when its detail opens — ` +
+        `scrollable ancestors ${JSON.stringify(scrollBefore)} → ${JSON.stringify(scrollAfter)}: ` +
+        `all unchanged means the LAYOUT moved, any change means the tap scrolled`,
     ).toBeLessThanOrEqual(1);
   });
 });
