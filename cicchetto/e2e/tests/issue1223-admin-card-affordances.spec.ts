@@ -155,55 +155,30 @@ test("#1223 @webkit on a phone the whole card heading opens the row, not just th
   }
 });
 
-test("#1223 @webkit on a phone a detail fact gives its value the panel's full width", async ({
-  page,
-}) => {
-  const admin = getSeededAdmin();
-  const visitor = await mintVisitor(`facts1223-${Date.now()}`);
-
-  try {
-    await adminLogin(page);
-    await openSessionsTab(page);
-
-    const key = await adminSessionRowKey(page, "visitor", visitor.id);
-    await page.getByTestId(`admin-session-details-${key}`).tap();
-    const panel = page.getByTestId(`admin-session-detail-${key}`);
-    await expect(panel).toBeVisible({ timeout: 5_000 });
-
-    const facts = panel.locator(".adm-facts");
-    const factsBox = await boxOf(facts, "the facts list");
-    const dtBox = await boxOf(facts.locator("dt").first(), "the first fact's label");
-    const ddBox = await boxOf(facts.locator("dd").first(), "the first fact's value");
-
-    // The label is a caption ABOVE its value, not a track beside it.
-    expect(
-      ddBox.y,
-      `the value must sit under its label on a narrow panel (facts list ${Math.round(factsBox.width)}px wide)`,
-    ).toBeGreaterThanOrEqual(dtBox.y + dtBox.height - 0.5);
-
-    // And the point of moving it: the value gets the width the label track
-    // and its gap were taking. Separate from the assertion above because a
-    // collapse that left a fixed label column would satisfy that one.
-    //
-    // 🔴 The reference box is the TABLE, not the facts list, and that is the
-    // whole correction. This read `factsBox.width * 0.9` and passed for a
-    // day on a panel rendering at half the pane: the facts list is INSIDE
-    // the panel, so squeezing the panel shrinks numerator and denominator
-    // together and the ratio never moves. vjt's retest of v0.16.0 —
-    // *"the facts column renders at roughly half the available width"* —
-    // was invisible to an oracle normalised by the box being squeezed.
-    // The table is the outermost box the panel is entitled to fill, which
-    // is the claim actually being made.
-    const tableBox = await boxOf(page.getByTestId("admin-sessions-table"), "the sessions table");
-    expect(
-      ddBox.width,
-      `the value must take the table's width, not the shrunken panel's ` +
-        `(value ${Math.round(ddBox.width)}px of table ${Math.round(tableBox.width)}px)`,
-    ).toBeGreaterThanOrEqual(tableBox.width * 0.85);
-  } finally {
-    await reapVisitors(admin.token, visitor.id);
-  }
-});
+// 🔴 `on a phone a detail fact gives its value the panel's full width`
+// LIVED HERE and is now the long branch of `#1244 a panel fact is one row
+// while its value is short` (`issue1244-admin-density.spec.ts`).
+//
+// It asserted TWO things of the FIRST fact: that its value sits under its
+// label, and that the value's box is at least 85% of the TABLE's width —
+// the reference box being the table rather than the facts list is the
+// correction this file made and it is carried over verbatim.
+//
+// What did not survive is "the first fact", and the reason is a ruling
+// rather than a convenience. vjt, on #1244 (2026-08-12): *"'the four
+// asserts from #1223 stay green' was shorthand for do not regress the
+// horizontal budget, not keep those literal thresholds"*, and *"do not
+// keep the label above the value as the default — that is exactly the
+// vertical waste this issue is about"*. The panel's first fact is
+// `connection`, whose value is `connected`: nine characters that now
+// print on their label's line, so an assertion pinned to `.first()`
+// demands the stacking the next issue removed.
+//
+// The successor keeps the claim and drops the pin — every fact that DOES
+// take its own line must take 85% of the table with it, and at least one
+// must, or the long branch goes unmeasured. Moved rather than weakened:
+// squeeze the panel and `last event` fails there exactly as it would have
+// failed here.
 
 test("#1223 on a wide panel the facts stay two columns", async ({ page }) => {
   const admin = getSeededAdmin();
@@ -415,62 +390,37 @@ test("#1223 @webkit on a phone no panel value is broken mid-token", async ({ pag
   }
 });
 
-// Symptom 3. vjt: *"in the card below, the label column (last seen,
-// channels, actions) keeps a fixed wide gutter of its own, pushing the
-// values into the right half."* `flex: 0 0 5rem` on `.adm-table td::before`
-// — 80px that neither grows nor shrinks, plus the 12px flex gap, out of
-// 341px of card, charged to every field of every row.
+// 🔴 Symptom 3's assertion — `on a phone a card value starts at the card's
+// edge, not past a label track` — LIVED HERE and is now the long branch of
+// `#1244 a card field is one row while its value is short`
+// (`issue1244-admin-density.spec.ts`).
 //
-// The oracle is where the VALUE starts, which is the thing vjt could see.
-// A range over the cell's contents excludes the `::before` label by
-// construction, so this measures the painted value against the cell's own
-// left edge — no gutter means the two coincide.
-test("#1223 @webkit on a phone a card value starts at the card's edge, not past a label track", async ({
-  page,
-}) => {
-  const admin = getSeededAdmin();
-  const visitor = await mintVisitor(`label1223-${Date.now()}`);
-
-  try {
-    await adminLogin(page);
-    await openSessionsTab(page);
-
-    const key = await adminSessionRowKey(page, "visitor", visitor.id);
-    const row = page.getByTestId(`admin-session-row-${key}`);
-    await row.scrollIntoViewIfNeeded();
-    await expect(row).toBeVisible();
-
-    const cells = await row.evaluate((tr) => {
-      const out: { label: string; indent: number }[] = [];
-      // Labelled cells only: `.adm-cell-title` is the card's heading and
-      // deliberately has no label to be indented past.
-      for (const td of tr.querySelectorAll("td[data-label]")) {
-        if (td.getClientRects().length === 0) continue;
-        if (td.classList.contains("adm-cell-title")) continue;
-        const range = document.createRange();
-        range.selectNodeContents(td);
-        const content = range.getBoundingClientRect();
-        if (content.width === 0) continue;
-        out.push({
-          label: td.getAttribute("data-label") ?? "",
-          indent: Math.round(content.left - td.getBoundingClientRect().left),
-        });
-      }
-      return out;
-    });
-
-    // Non-vacuity: a row with no labelled cell painted would pass on
-    // nothing, which is how the `.adm-nav` exemption in `ux-6-g` survived.
-    expect(cells.length, "the card must have labelled cells to measure").toBeGreaterThan(0);
-
-    expect(
-      cells.filter((c) => c.indent > 2),
-      `no card value may be indented past a reserved label track — ${JSON.stringify(cells)}`,
-    ).toEqual([]);
-  } finally {
-    await reapVisitors(admin.token, visitor.id);
-  }
-});
+// vjt: *"the label column (last seen, channels, actions) keeps a fixed
+// wide gutter of its own, pushing the values into the right half"*. The
+// fix was `flex: 0 0 100%` on `.adm-table td::before` — a caption above
+// its value — and the oracle was `indent <= 2` on every labelled cell,
+// measured by a range over the cell's contents (which excludes the
+// `::before` label by construction, the technique the successor keeps).
+//
+// `indent <= 2` on EVERY cell says the value always begins at the card's
+// left edge, which is only true of the stacked layout, which is what
+// #1244 reverses: the same three cells vjt named here are the three he
+// counted as six rows there. Ruled on 2026-08-12, on #1244.
+//
+// The successor asserts the same defect and one more. A value on its own
+// line still has to start at the card's edge — that is this assertion,
+// unchanged, applied to the branch where it is the right question. A
+// value beside its label has to end at the card's RIGHT edge, which the
+// fixed 5rem track never did: it left every short value stranded in the
+// middle with slack on both sides.
+//
+// One thing it deliberately does NOT convict, so nobody reads more into
+// it than it says: a fixed label track that is WIDER than its text is now
+// invisible to it. With the value right-aligned, the label's box no
+// longer decides where the value starts, so `flex: 0 0 5rem` would cost
+// nothing until a label outgrew it. The defect was never the track's
+// existence — it was the value being pushed by it, and that is the thing
+// under guard.
 
 // The band the console's two breakpoints leave between them. 820px is a
 // portrait iPad: the CSS has already turned the table into cards and taken
