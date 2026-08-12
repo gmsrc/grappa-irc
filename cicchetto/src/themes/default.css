@@ -5901,23 +5901,33 @@ html.resize-dragging * {
      on both sides, so the facts column renders at roughly half the
      available width while the gutters carry nothing."*
 
-     Three separate rules above were billing it, ~130px of a 359px card:
+     MEASURED at 393px on the pre-fix tree, because the arithmetic and the
+     device disagreed. The two gutters are 25px each, and they are exactly:
 
-     - `.adm-table td::before` gave its `<td colspan>` a label track like
-       any other cell. There is no `data-label` on it, so `attr()` rendered
-       the empty string — into a box that still occupied 80px, plus the
-       12px flex gap. That is the "wide empty gutter", literally: a label
-       box with no label in it.
-     - `.adm-table tr` drew a bordered, padded, filled card around it, so
-       the panel — itself a card, with its own border and accent edge —
-       came out as a card inside a card (18px).
-     - `.adm-expand-row td { padding: 12px 16px }` (32px). A mobile override
+     - `.adm-table tr`, which drew a bordered, padded, filled card around a
+       row whose only child is itself a card, so the panel came out nested
+       inside a second one — 1px border + 8px padding.
+     - `.adm-expand-row td { padding: 12px 16px }` — 16px. A mobile override
        for exactly this already existed here and did nothing: it read
        `.adm-expand-row td`, (0,1,1), the same specificity as the base rule
        further down the file, which therefore won on source order. Being
        inside a media query buys no specificity. The rules below are
        `.adm-table …`, (0,2,1), so they win on their own merits rather than
        on where they happen to sit.
+
+     🔴 NOT a third cause, though it reads like the obvious one:
+     `.adm-table td::before` does give this `<td colspan>` a label track,
+     and `attr(data-label)` on a cell with no such attribute does render the
+     empty string into a box declared `flex: 0 0 5rem`. It costs nothing.
+     `.adm-detail`'s flex basis is its content, which does not fit beside an
+     80px item, so the panel wrapped to the next flex line and started at
+     the cell's edge regardless — 25px of gutter, not 105px. `display:
+     block` below then removes the flex context entirely, at which point the
+     empty `::before` is an empty inline box contributing no height either.
+     A `content: none` rule sat here for one round and was deleted when a
+     mutation run showed it killed no assertion: the panel's left, right and
+     top are all pinned by `issue1223-admin-card-affordances`, and all three
+     stayed green with the rule removed.
 
      The panel keeps its own margin-bottom from `.adm-table tr`, which is
      the gap to the next row card. */
@@ -5931,10 +5941,6 @@ html.resize-dragging * {
   .adm-table .adm-expand-row td {
     display: block;
     padding: 0;
-  }
-
-  .adm-table .adm-expand-row td::before {
-    content: none;
   }
 }
 

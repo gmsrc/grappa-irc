@@ -316,13 +316,28 @@ test("#1223 @webkit on a phone the detail panel spans its table, with no gutters
     // zero and the assertion a mirror.
     expect(tableBox.width, "the table must have a width to fill").toBeGreaterThan(200);
 
+    // `top` is measured against the panel's own CELL, not the table: the
+    // row above is a legitimate thing to sit below, an empty strip inside
+    // the cell is not. It is here because a mutation run found the rule
+    // that suppresses that strip — `.adm-expand-row td::before { content:
+    // none }` — killed no assertion at all. The cell's `::before` still
+    // resolves `attr(data-label)` to the empty string on a cell that has
+    // no such attribute, and an empty inline box is still a box. Without
+    // this number the rule was unfalsifiable, which is the same defect as
+    // an exemption: code no guard can convict.
+    const cellBox = await boxOf(
+      panel.locator("xpath=ancestor::td[1]"),
+      "the cell hosting the detail panel",
+    );
+
     expect(
       {
         left: Math.round(panelBox.x - tableBox.x),
         right: Math.round(tableBox.x + tableBox.width - (panelBox.x + panelBox.width)),
+        top: Math.round(panelBox.y - cellBox.y),
       },
-      "the detail panel must start and end where its table does",
-    ).toEqual({ left: 0, right: 0 });
+      "the detail panel must fill the cell it is given, on all three sides",
+    ).toEqual({ left: 0, right: 0, top: 0 });
   } finally {
     await reapVisitors(admin.token, visitor.id);
   }
