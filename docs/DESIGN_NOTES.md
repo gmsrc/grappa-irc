@@ -39693,3 +39693,112 @@ empty page is how the exemption above survived.
 different query over a different width regime and vjt measured the
 viewport one; at 55rem of container a 5rem track is cheap, and stacking
 it there would cost scannability for a defect nobody has observed.
+
+---
+
+## 2026-08-12 — #1244: the console's vertical budget, and an exemption that comes back with a guard on it
+
+vjt retested `e0ef575c` on a 440px phone the same afternoon #1223's
+retest landed. The horizontal complaints were gone; the bill for them was
+on screen. **Every fact stacked its label above its value**, so
+`VISITORS` / `0/∞`, `USERS` / `1/3`, `PER-IP` / `5` took two rows each to
+print four characters, three nested containers put ~3 frames around them,
+and two networks plus one session filled the screen.
+
+**The layout is two branches, and the second is what makes the first
+safe.** `.adm-table td::before` goes from `flex: 0 0 100%` (a caption on
+its own line) to `flex: 0 0 auto` + `margin-right: auto`: the label is as
+wide as its own text and the auto margin pushes the value to the far end
+of the line. An auto margin resolves AFTER line breaking, so it only
+exists on a line that has free space — a value whose max-content does not
+fit in what is left moves to the next flex line, where it is alone, no
+margin pushes it, and it starts at the card's edge with the full width to
+wrap into. **That is #1223's stacked layout, reached by measurement
+rather than by decree**, which is why the horizontal budget survives: a
+`host:port` still gets the whole card, and still wraps between tokens
+rather than through one.
+
+**The panel needed a wrapper element to say the same thing.** A flex line
+cannot be broken per pair and a grid row cannot let one value take both
+columns on the strength of its length, so `AdminFacts` renders
+`.adm-fact` per `<dt>`/`<dd>` — the `<div>` HTML defines for grouping
+them — and `display: contents` dissolves it again above 30rem so the
+labels still line up in a column. `AdminDebugTab` hand-writes the same
+list and got the same wrapper: one class, one markup contract.
+
+**Where card and panel differ is forced.** In the panel `dd` grows and
+prints right-aligned; on the card the value is an ANONYMOUS flex item —
+a bare text node in a `<td>` — with no way to set `flex` or `text-align`
+on it, so the auto margin does the same job from the other side. Worth
+knowing before someone "unifies" them.
+
+**Two of four frames go, and which two is the judgement.** Counted
+outwards at 393px: the pane's `padding: 1rem`, the scroll body's second
+`1rem`, the section card's border, the record card's border + padding —
+42px a side. The pane's gutter stays (it is the console's edge, shared by
+every surface). The record card's frame stays (it is the only line saying
+where one record ends). The pair in the middle went: their job was to
+inset a card inside a backdrop the card already covers.
+
+### The `.adm-nav` exemption, deleted by #1223 and restored here
+
+vjt reverted his own call: *"la top bar che faceva hor scroll andava bene
+— mo sto wrap leva spazio"*, and on the issue, *"that call was mine and
+it was wrong"*. Wrapping eight chips into two rows costs a full 44px row
+of a 440px screen on every tab — most of what the density work buys back
+— to reveal destinations that were already reachable.
+
+**The lesson #1223 recorded still stands, and the fix for it is not
+"never exempt".** That exemption was deleted because it could not fail:
+argued as a product position, waving through the one box that was
+panning, carrying its own escape hatch. What comes back is the same line
+with three things it did not have — a date, an owner, and a test that
+asserts the exempted behaviour: `the tab strip is one row, and it pans`.
+Remove the pan and it goes red. **An exemption with a guard on the
+exempted behaviour is a decision; a silent one is a defect.**
+
+### The two #1223 asserts this contradicts, and vjt's ruling
+
+`a card value starts at the card's edge` (`indent <= 2` on every labelled
+cell) and `a detail fact gives its value the panel's full width` (`dd`
+under `dt`, `dd >= 0.85 * table`) **encode the stacked layout as the only
+correct answer**. A left-hand label on the same row breaks the first by
+construction (~75px of indent on the three cells vjt named); the panel's
+first fact is `connection: connected`, nine characters, which cannot
+satisfy the second inline.
+
+Ruled on the issue (2026-08-12): *"'the four asserts from #1223 stay
+green' was shorthand for do not regress the horizontal budget, not keep
+those literal thresholds"*, and *"do not keep the label above the value
+as the default — that is exactly the vertical waste this issue is
+about"*. **Both become the LONG branch**, keeping their technique: the
+range that excludes the `::before` label by construction, and the TABLE
+as the reference box rather than the facts list. What must not regress is
+narrower and clearer than "four asserts": nothing in the console
+overflows the viewport horizontally, `.adm-nav` alone excepted.
+
+**Measured at 393px AND 440px.** 393 is what every other admin guard runs
+at; 440 is the device the report came from, and a value can fit beside
+its label at one width and not the other.
+
+### Two things the new guard deliberately does not claim
+
+**A reserved label track wider than its text is now invisible to it.**
+With the value right-aligned, the label's box no longer decides where the
+value starts, so `flex: 0 0 5rem` would cost nothing until a label
+outgrew it. The defect was never the track's existence, it was the value
+being pushed by it.
+
+**The card's long branch is a rule, not an occurrence.** Every value on a
+session card is short at both widths — that IS the complaint — so the
+card test requires a one-row field and applies the long-branch rule to
+whatever lands there. The branch is exercised for real in the panel,
+where `last event` is long at both widths and a stacked fact is required.
+
+**Not changed, deliberately.** `.adm-table--stack` inside `@container
+(max-width: 56rem)` keeps its 5rem track and its non-wrapping cells, for
+the reason #1223 left it alone: a different query over a different width
+regime, and vjt measured the viewport one. The vertical rhythm is not
+asserted as a pixel budget either — any threshold would encode a font
+metric and the seed's row count. What is asserted is the row COUNT per
+fact, which is the thing that changed.
