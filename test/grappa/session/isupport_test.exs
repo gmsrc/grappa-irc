@@ -13,6 +13,9 @@ defmodule Grappa.Session.ISupportTest do
   - `takes_param?/3` — whether a channel mode consumes an argument when
     applied with the given sign (RFC 2811 type A/B always; type C on +
     only; type D never).
+  - `list_mode?/2` (#1249) — whether a channel mode is CHANMODES type A
+    (a per-channel list: bans, exceptions), which the mode-set walkers
+    must consume the param of but never record as a channel flag.
   - `user_prefix/2` — mode letter → sigil for per-user (membership)
     modes, or `:error` for channel-level modes.
   - `presence_mechanism/1` (#247) — MONITOR=/WATCH= token capture and
@@ -110,6 +113,49 @@ defmodule Grappa.Session.ISupportTest do
       d = ISupport.default()
       assert ISupport.takes_param?(d, "l", :add)
       refute ISupport.takes_param?(d, "l", :remove)
+    end
+  end
+
+  # #1249 — CHANMODES type A is a per-channel LIST (bans, exceptions), not a
+  # channel flag: the letter never belongs in the channel's mode set and an
+  # ircd never reports it in 324 RPL_CHANNELMODEIS. `takes_param?/3` already
+  # reads the same table for ARITY; this is the CLASS question, and the
+  # walkers need it to drop the letter while still consuming its argument.
+  describe "list_mode?/2 (#1249)" do
+    test "the default table classifies b/e/I as list modes and flags as not" do
+      d = ISupport.default()
+
+      for mode <- ["b", "e", "I"] do
+        assert ISupport.list_mode?(d, mode), "expected #{mode} to be a type-A list mode"
+      end
+
+      # Type B/C/D are channel state, not lists — including `k`, which takes
+      # a param on both signs exactly like a type A does.
+      for mode <- ["k", "l", "n", "t", "m", "s", "i"] do
+        refute ISupport.list_mode?(d, mode), "expected #{mode} NOT to be a type-A list mode"
+      end
+    end
+
+    test "the type-A letter set is per-network, read from the advertised CHANMODES" do
+      # bahamut/Azzurra has no +e/+I and does have a `z` restrict list;
+      # solanum advertises `q`. A hardcoded ["b","e","I"] would mis-class
+      # both networks — the answer must come from the 005 table.
+      bahamut =
+        ISupport.merge_isupport(["s", "CHANMODES=bz,k,l,imnpst"], ISupport.default())
+
+      assert ISupport.list_mode?(bahamut, "b")
+      assert ISupport.list_mode?(bahamut, "z")
+      refute ISupport.list_mode?(bahamut, "e")
+      refute ISupport.list_mode?(bahamut, "I")
+
+      solanum =
+        ISupport.merge_isupport(["s", "CHANMODES=eIbq,k,flj,CFLMPQScgimnprstz"], ISupport.default())
+
+      for mode <- ["e", "I", "b", "q"] do
+        assert ISupport.list_mode?(solanum, mode)
+      end
+
+      refute ISupport.list_mode?(solanum, "z")
     end
   end
 

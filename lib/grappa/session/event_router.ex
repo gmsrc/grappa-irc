@@ -165,6 +165,12 @@ defmodule Grappa.Session.EventRouter do
   modes that carry args (e.g. `%{"k" => "secret", "l" => "42"}`).
   Modes without args are absent from `params`. Stored case-preserved;
   lookup normalises to downcase.
+
+  CHANMODES **type-A** letters never appear here (#1249). They address a
+  per-channel LIST (bans, ban/invite exceptions), not the channel's mode
+  state — an ircd never reports them in 324 RPL_CHANNELMODEIS either, and
+  one `params` slot could hold only the last mask of an N-entry list. They
+  are served by the 367/368 query path (#536) instead.
   """
   @type channel_mode_entry :: %{
           modes: [String.t()],
@@ -3571,7 +3577,20 @@ defmodule Grappa.Session.EventRouter do
         # param modes like k or l.
         takes_param = ISupport.takes_param?(isupport, mode, direction)
         {arg, remaining} = if takes_param, do: pop_arg(args), else: {nil, args}
-        entry = toggle_channel_mode(entry, mode, arg, direction)
+
+        # #1249 — then branch on the CLASS, not just the arity. A type-A
+        # letter addresses a LIST (bans, exceptions): it consumes its
+        # argument, keeping the arg list aligned for a following `+k`/`+l`,
+        # and is dropped on BOTH signs. Recording it would publish a mode
+        # the channel does not have, keep only the LAST mask of an N-entry
+        # list in `params`, let an unban of a different mask clear the
+        # flag, and disagree with the next 324 snapshot (which never
+        # carries list modes). Types B/C/D are channel state and toggle.
+        entry =
+          if ISupport.list_mode?(isupport, mode),
+            do: entry,
+            else: toggle_channel_mode(entry, mode, arg, direction)
+
         walk_channel_modes(entry, rest, remaining, direction, isupport)
     end
   end

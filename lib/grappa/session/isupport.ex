@@ -192,6 +192,24 @@ defmodule Grappa.Session.ISupport do
   end
 
   @doc """
+  Whether channel mode `mode` is CHANMODES **type A** — a per-channel LIST
+  (bans, ban/invite exceptions, quiets) rather than a channel flag. Sign
+  independent: a list letter is a list letter on `+` and on `-`.
+
+  RFC 2811 §4.3 / the `CHANMODES=A,B,C,D` contract: a type-A letter
+  addresses a list the ircd keeps beside the channel's mode state, is never
+  part of that state, and never appears in 324 RPL_CHANNELMODEIS. It is the
+  CLASS twin of `takes_param?/3` (which reads the same table for ARITY):
+  the mode-set walkers need both — consume the argument, drop the letter
+  (#1249).
+
+  The letter set is per-network, never a constant: bahamut/Azzurra
+  advertises `bz` (no `+e`/`+I`, plus a restrict list), solanum `eIbq`.
+  """
+  @spec list_mode?(t(), String.t()) :: boolean()
+  def list_mode?(%{chanmodes: cm}, mode) when is_binary(mode), do: mode in cm.a
+
+  @doc """
   Resolves a membership mode letter to its rendered sigil, or `:error`
   when `mode` is not a membership (per-user) mode for this network.
   Mirrors the old `Map.fetch(@user_mode_prefixes, mode)` call the walkers

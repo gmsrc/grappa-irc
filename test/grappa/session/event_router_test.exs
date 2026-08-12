@@ -2389,27 +2389,101 @@ defmodule Grappa.Session.EventRouterTest do
       assert attrs.meta == %{modes: "+ovo", args: ["a", "b", "c"]}
     end
 
-    test "MODE +b (channel-level, not user mode) emits :persist + :channel_modes_changed, no member mutation" do
+    test "MODE +b emits :persist, mutates no member and does NOT enter the channel mode set" do
+      # #1249 — +b is a ban: CHANMODES type A, a per-channel LIST. It is not
+      # a channel flag, so it must leave `channel_modes` untouched — and with
+      # nothing changed there is no `:channel_modes_changed` delta to emit.
+      # (The ban itself is served by the 367/368 query path, #536.)
       state = base_state(%{members: %{"#italia" => %{"alice" => []}}})
 
-      # +b is a ban — not in our user-mode prefix table; channel-level only.
       m = msg(:mode, ["#italia", "+b", "*!*@spammer.net"], {:nick, "op", "u", "h"})
 
       assert {:cont, new_state, effects} = EventRouter.route(m, state)
 
       # alice mode list unchanged — +b doesn't apply to a member's modes
       assert new_state.members["#italia"] == %{"alice" => []}
-      # channel_modes cache updated with ban
-      assert "b" in new_state.channel_modes["#italia"].modes
+
+      entry = new_state.channel_modes["#italia"]
+      refute "b" in entry.modes
+      refute Map.has_key?(entry.params, "b")
 
       persist = Enum.find(effects, fn {tag, _, _} -> tag == :persist end)
       assert {:persist, :mode, attrs} = persist
       assert attrs.meta == %{modes: "+b", args: ["*!*@spammer.net"]}
 
-      assert Enum.any?(effects, fn
-               {:channel_modes_changed, "#italia", _} -> true
+      refute Enum.any?(effects, fn
+               {:channel_modes_changed, _, _} -> true
                _ -> false
              end)
+    end
+
+    test "MODE +bk mask key drops the ban but lands the key with its own param" do
+      # #1249 arg alignment: the dropped type-A letter still CONSUMES its
+      # mask, so the following type-B `k` must pair with "key", not "mask".
+      # A fix that skipped the pop would silently key the channel to the
+      # ban mask.
+      state = base_state(%{members: %{"#italia" => %{"alice" => []}}})
+
+      m = msg(:mode, ["#italia", "+bk", "*!*@spammer.net", "s3cret"], {:nick, "op", "u", "h"})
+
+      assert {:cont, new_state, effects} = EventRouter.route(m, state)
+
+      entry = new_state.channel_modes["#italia"]
+      refute "b" in entry.modes
+      assert "k" in entry.modes
+      assert entry.params == %{"k" => "s3cret"}
+
+      # The `k` IS a real change, so the delta is emitted — the entry it
+      # carries is the ban-free one.
+      assert Enum.any?(effects, fn
+               {:channel_modes_changed, "#italia", ^entry} -> true
+               _ -> false
+             end)
+    end
+
+    test "MODE -bk mask key consumes the ban mask on the remove sign too" do
+      # #1249 both signs: type A takes a param on `-` as well, so `-b` must
+      # pop the mask or the `-k` clause would swallow it and leave the key
+      # standing.
+      state =
+        base_state(%{
+          members: %{"#italia" => %{"alice" => []}},
+          channel_modes: %{
+            "#italia" => %{modes: ["k", "n"], params: %{"k" => "s3cret"}}
+          }
+        })
+
+      m = msg(:mode, ["#italia", "-bk", "*!*@spammer.net", "s3cret"], {:nick, "op", "u", "h"})
+
+      assert {:cont, new_state, _effects} = EventRouter.route(m, state)
+
+      entry = new_state.channel_modes["#italia"]
+      refute "k" in entry.modes
+      assert "n" in entry.modes
+      assert entry.params == %{}
+    end
+
+    test "the type-A letter set comes from the advertised CHANMODES, not a constant" do
+      # #1249 per-network: a network whose type-A class carries `z` (bahamut
+      # restrict list) must have `+z` dropped as well — a hardcoded
+      # ["b","e","I"] would render it as a channel flag.
+      isupport =
+        ISupport.merge_isupport(
+          ["s", "PREFIX=(ohv)@%+", "CHANMODES=bz,k,l,imnpst"],
+          ISupport.default()
+        )
+
+      state = base_state(%{members: %{"#italia" => %{"alice" => []}}, isupport: isupport})
+
+      m = msg(:mode, ["#italia", "+zt", "*!*@lamer.net"], {:nick, "op", "u", "h"})
+
+      assert {:cont, new_state, _effects} = EventRouter.route(m, state)
+
+      entry = new_state.channel_modes["#italia"]
+      refute "z" in entry.modes
+      refute Map.has_key?(entry.params, "z")
+      # `t` still lands: the token was walked, not rejected.
+      assert "t" in entry.modes
     end
 
     test "membership modes come from state.isupport PREFIX, not a hardcoded table" do
