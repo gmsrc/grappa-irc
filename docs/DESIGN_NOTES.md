@@ -39874,3 +39874,65 @@ also joins the `nginx-csp-range-parity` pin list, where — like
 `media-src` before it — the un-widened value is a PREFIX of the widened
 one, so pinning anything shorter would let a revert sail through
 `toContain`.
+
+---
+
+## 2026-08-12 — #1130: one event carrying two duties, and the budget that made them incompatible
+
+A refused upstream connect reached the client as `:connect_timeout`
+(504), never `:upstream_unreachable` (502). `classify_down/1` maps the
+refusal correctly; it simply never ran, because in production the
+mapping is downstream of a race it always loses.
+
+**The shape of the defect.** `IRC.Client` does not die when a connect
+fails. It arms `Process.send_after({:connect_failed_giveup, reason},
+@connect_failure_sleep_ms)` and only then stops, so the reason travels
+to `Visitors.Login` **on the corpse** — as the monitored `:DOWN`. That
+made the Client's death carry two unrelated duties: pacing the
+`:transient` restart cycle (the throttle's actual job, added after
+azzurra k-lined the bouncer's IP during cluster smoke) and delivering
+the diagnosis. Prod sets the sleep to 30s and the login connect budget
+to 3s, so the `after` clause fires ten times sooner, every time. The
+`:DOWN` lands ~27s later against a caller that has already answered.
+
+**Measured, not deduced.** Before any change, a test that puts the two
+budgets in the production ORDER returned `{:error, :connect_timeout}`
+where `:upstream_unreachable` was asserted — 33 tests, 1 failure. The
+issue's diagnosis was correct as written.
+
+**Two facts that shaped the test.** `@connect_failure_sleep_ms` is
+`Application.compile_env`, baked into the module: a test cannot move it
+without a recompile, which is why the issue's own reproduction had to
+edit `config/test.exs`. The login budget, by contrast, is per-call
+(`Keyword.get(opts, :login_connect_timeout_ms, …)`). Shrinking the
+budget BELOW the compiled sleep therefore reproduces the production
+ordering in about 10ms, with no clock to wait on and no config to
+perturb — the assertion is that the classification survives the
+ordering, so host load cannot flake it. This matters because the two
+pre-existing refused-connect tests passed only by accident of
+`config/test.exs` inverting the production ratio (a 50ms sleep under a
+100ms budget): they asserted a mapping the shipped configuration could
+not produce, so they were never guarding it.
+
+**The fix separates the duties rather than retuning them.** The Client
+already announces the connect SUCCESS upward — `send(state.dispatch_to,
+:irc_connected)`. The failure is that message's sibling and now travels
+the same way, `{:irc_connect_failed, reason}`, re-fired by
+`Session.Server` through the existing `maybe_notify_session_phase/2`
+relay and received by a third arm in the login's phase-1 `receive`. The
+throttle is untouched and keeps its one job: the Client still dies on
+its own schedule, so the restart pacing is exactly what it was. The
+login classifies through `classify_down/1` on the shape the late `:DOWN`
+will carry, so the prompt path and the corpse path cannot drift.
+
+**Rejected: shortening the sleep.** It is the tempting one-liner and it
+trades a wrong error message for the reconnect storm the throttle exists
+to prevent — ~2000 attempts/sec against a refused port, which is how the
+bouncer earned a k-line in the first place.
+
+**A related thing that turned out not to be true.** The throttle was
+never protecting the login path anyway: on any phase failure
+`tear_down/4` calls `Session.stop_session`, a deliberate stop that
+`:transient` does not restart. Its real constituency is the
+bootstrap/respawn path, which this change does not touch — worth knowing
+before someone reasons about the sleep from the login side again.
