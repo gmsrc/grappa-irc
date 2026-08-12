@@ -39607,3 +39607,89 @@ The census is five in-repo pools, not the three the issue names —
 `infra/freebsd/nginx.conf`, which the ruling text cites, does not exist.
 
 Touching `config/*.exs` makes this a COLD deploy.
+
+---
+
+## 2026-08-12 — #1223 retest: the admin console's horizontal budget, and two guards that could not fail
+
+vjt retested v0.16.0-8412fb40 on a portrait phone and put #1223 back in
+the queue. The card/detail split from #1230 had landed; the width had
+not. Four symptoms, of which three are one mechanism.
+
+**The mechanism: a cell regime charging a row that is not a record.**
+Below 900px the admin tables stack into cards, and three rules implement
+that — `.adm-table tr` draws the card, `.adm-table td` lays out a field,
+`.adm-table td::before` prints the field's label from `data-label`. The
+expand row that HOSTS a detail panel is a `tr` with a `td` in it, so it
+collected all three. It has no `data-label`, so `attr()` rendered the
+empty string — into a box that still occupied `flex: 0 0 5rem`, 80px,
+plus the 12px flex gap. That is vjt's "wide empty gutter" exactly: a
+label box with no label in it. Add `.adm-table tr`'s own border and
+padding (a card drawn around a row whose only child is a card) and a
+`.adm-expand-row td` padding, and the panel had ~229px of a 359px card.
+The facts column at "roughly half the available width" was that number.
+
+**A dead override, and why it was dead.** A mobile rule intended to strip
+exactly this padding already existed inside the media block and had never
+applied. `.adm-expand-row td` is (0,1,1) both inside the media query and
+in the base rule further down the file, and **a media query buys no
+specificity** — so the base rule won on source order. The replacements
+are `.adm-table …`, (0,2,1), and win on their own merits rather than on
+where they sit in the file. General rule for this stylesheet: an override
+that only differs from its target by being inside `@media` is a coin
+flip decided by line number.
+
+**Symptom 2 gets no fix of its own.** A `last event` timestamp wrapping
+mid-token is downstream of the gutters: with them returned the value has
+~323px instead of ~181px. `overflow-wrap: anywhere` stays as the backstop
+for a genuinely unbreakable value — treating it as the cure would have
+been treating the consequence.
+
+**The tab strip: the product call was made by retesting.**
+`.adm-nav` was a deliberate horizontal scroller and `ux-6-g` carried a
+NAMED EXEMPTION for it, arguing a tab bar is an affordance you swipe and
+that "stacking it would cost most of the screen before the first row".
+That is true of stacking (eight rows of 44px) and false of WRAPPING,
+which packs the same eight chips into two rows for ~44px of height once.
+`display: contents` on `.adm-nav-group` is what makes it two rows and not
+three: the three groups are otherwise indivisible flex items, and `live`
+(264px) would break the first row with 97px still free. The group box
+paints nothing on a phone, so dissolving it costs nothing; the desktop
+rail re-establishes it.
+
+**Two guards were watching this viewport and both stayed green.** Worth
+recording as a pair, because the failure modes are different and both
+are easy to write again.
+
+1. *An exemption written as a product argument.* `ux-6-g` claims nothing
+   in the admin pane may pan at 393px and skipped `.adm-nav` by class
+   name, with a note conceding "if it is ever meant to be in scope, that
+   is a separate product call". A guard carrying a named counter-example
+   to its own claim cannot fail on that counter-example, and the prose
+   quality of the exemption is not evidence: an exemption written to be
+   right and an exemption written to make a red go away are the same
+   artefact.
+2. *An oracle normalised by the box being squeezed.* `issue1223` asserted
+   `ddBox.width >= factsBox.width * 0.9`. The facts list is INSIDE the
+   panel, so squeezing the panel moves numerator and denominator
+   together and the ratio never budges — it would have passed at any
+   width down to zero. **A ratio oracle must take its denominator from
+   OUTSIDE the box under test**; here the table, the outermost box the
+   panel is entitled to fill.
+
+**The replacements assert what vjt could see.** The panel's gutters
+against its table (gutters, not a ratio: a ratio invites a threshold
+argument and he reported empty space at the edges); no value broken
+mid-token, measured per whitespace-delimited run via `Range` client rects
+deduped by line-box top, generalised over every value rather than the one
+he named; no card value indented past a reserved label track, ranged over
+the cell's contents so the `::before` label is excluded by construction.
+Each carries a non-vacuity assertion — the seeded row must actually
+render a token long enough that it COULD wrap — because passing on an
+empty page is how the exemption above survived.
+
+**Not changed, deliberately.** The `.adm-table--stack` twin inside
+`@container (max-width: 56rem)` keeps its 5rem label track. It is a
+different query over a different width regime and vjt measured the
+viewport one; at 55rem of container a 5rem track is cheap, and stacking
+it there would cost scannability for a defect nobody has observed.
