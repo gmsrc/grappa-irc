@@ -451,6 +451,21 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
 
     const expander = page.locator("[data-testid^='admin-network-expand-']").first();
     await expect(expander).toBeVisible({ timeout: 5_000 });
+
+    // A DURABLE pre-state, and the reason it is here. `tap()` scrolls its
+    // target into view first, so a row sitting near the fold makes the tap
+    // itself move the page and the delta below measures Playwright rather
+    // than the layout. This test passed for as long as the pane's chrome
+    // happened to leave row one comfortably on screen, and #1223 changed
+    // that chrome — the tab strip wraps to two rows now, and every card is
+    // taller by a label line. Scrolling first means any movement left is
+    // the layout's.
+    await expander.scrollIntoViewIfNeeded();
+
+    const paneScroll = (): Promise<number> =>
+      page.getByTestId("admin-pane").evaluate((el) => el.scrollTop);
+
+    const scrollBefore = await paneScroll();
     const before = await expander.boundingBox();
     expect(before, "expander must have a box before the tap").not.toBeNull();
 
@@ -464,10 +479,13 @@ test.describe("UX-6-G — admin pane horizontal scroll on mobile", () => {
     // viewport up to the card, leaving the operator somewhere they had
     // not asked to be. In the row's own position the row stays put.
     const after = await expander.boundingBox();
+    const scrollAfter = await paneScroll();
     expect(after, "expander must still have a box after the tap").not.toBeNull();
     expect(
       Math.abs((after?.y ?? 0) - (before?.y ?? 0)),
-      "the row an operator tapped must not move when its detail opens",
+      `the row an operator tapped must not move when its detail opens ` +
+        `(pane scrollTop ${scrollBefore} → ${scrollAfter}: unchanged means the LAYOUT moved, ` +
+        `a change means the tap scrolled and the barrier above did not hold)`,
     ).toBeLessThanOrEqual(1);
   });
 });
