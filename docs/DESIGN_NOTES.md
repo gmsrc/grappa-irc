@@ -40402,8 +40402,8 @@ pop keys the channel to `*!*@…`, which is why the witness token is `+bk <mask>
 where the `k` landing in the header is also the barrier proving the ircd
 accepted and echoed the whole token.
 
-**Two predicates over `chanmodes.a`, deliberately.** #1251, in flight
-alongside this, adds `ListModes.queryable/1` — the type-A letters grappa may
+**Two predicates over `chanmodes.a`, deliberately.** #1251, which landed just
+before this, adds `ListModes.queryable/1` — the type-A letters grappa may
 *ask* for, i.e. those
 it also knows a terminating numeric pair for. This walk needs
 `ISupport.list_mode?/2` — pure class membership. They diverge on exactly one
@@ -40428,3 +40428,9 @@ BEFORE any ban exists, and re-asserting the `t` after the gesture shows the
 absent `b` is the same live indicator rather than a re-rendered empty one.
 Anyone writing the next channel-mode witness should establish the pre-state
 the same way instead of waiting for flags the server never sets.
+
+The witness was then mutation-checked, because an e2e that would pass without
+the fix proves nothing: with the class branch reverted the spec dies on the
+claim, reporting the header as `+kbt` — the reported bug, reproduced in a
+browser. The barrier before it passed, so what the mutant killed is the fix,
+not the arrival of the MODE.
