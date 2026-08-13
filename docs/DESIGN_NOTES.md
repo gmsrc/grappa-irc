@@ -40434,6 +40434,9 @@ the fix proves nothing: with the class branch reverted the spec dies on the
 claim, reporting the header as `+kbt` — the reported bug, reproduced in a
 browser. The barrier before it passed, so what the mutant killed is the fix,
 not the arrival of the MODE.
+
+---
+
 ## 2026-08-13 — #1255: the 005 was parsed six ways and published two, and the merge rule was documented backwards
 
 `Grappa.Session.ISupport` read `CHANMODES`, `PREFIX`, `STATUSMSG`,
@@ -40551,6 +40554,14 @@ accident into something stated, and multiplicity is a property of the WIRE
 rather than of the store — the store is a last-write-wins seed and by
 construction cannot observe it — so it is pinned server-side, where the
 broadcast is directly countable, rather than through a browser.
+
+**That pin was mutation-checked, unlike the claim it replaces.** The channel
+test opens what a real client opens — the user topic, a topic per joined
+channel, and `$server` — and asserts exactly one `isupport_changed`. With the
+replay put back inside `push_channel_snapshot/4` it fails, and it fails
+NAMING the cause: a second copy arriving on the `#snap2` channel topic. Two
+channels rather than one for the same reason the count is the assertion — with
+a single channel the number cannot tell "per network" from "per channel".
 
 **No e2e ships with this change, deliberately and with the measurement to back
 it.** One was written, and it passed with the defect reinstated as well as
