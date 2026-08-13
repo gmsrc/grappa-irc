@@ -65,6 +65,21 @@ fi
 # that process's environment, then exec the release bin with our argv.
 run_payload='set -a; . '"$ENV_FILE"'; set +a; exec '"$RELEASE_BIN"' "$@"'
 
+# Hand the VM a working directory it can SEARCH (#1267). ERTS dies during boot
+# on a cwd without the x bit for the effective user — `{badarg, persistent_term
+# get code_server}`, measured on bare `erl -boot start_clean`, so it is upstream
+# behaviour and not ours to fix. Ours is that we hand it that cwd: `runuser -u`,
+# unlike `-l`, does not change directory, and Debian 13 ships HOME_MODE 0700
+# with /root at 0700 — so the operator's own login directory breaks every
+# eval-backed verb. The unprivileged branch below needs it just as much: `su -
+# grappa` inside another user's directory is the same state.
+#
+# Both branches, therefore, and `/` because it is the one directory every user
+# can search. Cost accepted: a RELATIVE path in "$@" now resolves against `/`
+# rather than the caller's cwd — in the case this fixes it resolved against a
+# directory the VM could not read either way.
+cd /
+
 if [ "$(id -u)" -eq 0 ]; then
 	# Drop to the grappa user. runuser ships in util-linux on both the
 	# Debian and RHEL families, so it is a safe common dependency.
