@@ -234,10 +234,11 @@ export function presenceRowVisible(
 
 // #239 — the read-cursor advance target that skips the TRAILING run of hidden
 // control messages on window display, WITHOUT marking any VISIBLE unread read.
-// The presence filter hides join/part/quit/nick_change; the DOM-geometry settle
-// paths (scroll / leave / blur) only ever reach the last RENDERED row, so a
-// trailing run of hidden control messages past the cursor never gets a settle
-// event and `last_read_message_id` stays stuck below them — the stuck badge.
+// The presence filter hides join/part/quit/nick_change/mode; the DOM-geometry
+// settle paths (scroll / leave / blur) only ever reach the last RENDERED row,
+// so a trailing run of hidden control messages past the cursor never gets a
+// settle event and `last_read_message_id` stays stuck below them — the stuck
+// badge.
 //
 // Order-INDEPENDENT: works on `msgs` in any order (the store sorts by
 // [server_time asc, id asc], NOT by id — a delayed/batched or clock-skewed row

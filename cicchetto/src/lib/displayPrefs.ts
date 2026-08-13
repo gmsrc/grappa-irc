@@ -199,7 +199,7 @@ export function syncedSetColoredNicklist(on: boolean): void {
 export function syncedSetChannelPresencePref(key: ChannelKey, pref: PresencePref): void {
   setChannelPresencePref(key, pref);
   const pushed = pushDisplayPrefs();
-  // #458 — Option 1 filters join/part/quit/nick_change out of the REST page
+  // #458 — Option 1 filters join/part/quit/nick_change/mode out of the REST page
   // SERVER-SIDE when this channel's pref hides them (so `limit` counts VISIBLE
   // rows, not raw ones). Its one accepted consequence: revealing presence needs
   // rows the server never sent. So on "show" we purge the (filtered) page and

@@ -40729,6 +40729,21 @@ prose:
   All six were rewritten in the same commit. A withdrawn rule left in a
   docstring is a rule that gets resurrected by the next reader who greps for
   it.
+* **A SECOND class of stale prose, found only by grepping for the old set
+  rather than for the rule:** seven more sites did not argue the rule at all,
+  they merely *enumerated the suppressed kinds* — `PresenceFilter`'s #239
+  comment and `ScrollbackPane`'s two (the `rows()` memo and the #239 cursor
+  advance), `displayPrefs`' #458 note, `Scrollback.fetch/7`'s `hide_presence`
+  narrative, `UserSettings`' `presence_filter` typedoc, and the denoise
+  button's own `title` / `aria-label`. An enumeration goes stale silently:
+  it never contradicts the code loudly enough to be noticed, it just quietly
+  omits the fifth member. The last of them is not a comment at all —
+  **it is text the operator reads.** Leaving it would have made the UI
+  understate what the toggle takes away, which is the exact failure the
+  "state the accepted cost plainly" paragraph above exists to prevent.
+  Changing rendered copy was safe to do here only because the specs select
+  that button by `data-testid="presence-toggle"` and never by its label —
+  measured before touching it, not assumed.
 
 **The mirror is now gated, which it was not before.** `#915` had already
 observed that the size threshold exists once per language with nothing but two

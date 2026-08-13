@@ -607,7 +607,7 @@ defmodule Grappa.Scrollback do
   Also a REQUIRED positional, same contract as `count_after/6`'s. It was
   absent here until #505 on the reasoning that filtering a SPLIT count
   would be self-defeating; the opposite turned out to be true. On a channel
-  that hides presence the pane never renders join/part/quit/nick_change, so
+  that hides presence the pane never renders join/part/quit/nick_change/mode, so
   an `events` count that includes them is a badge the operator cannot clear
   by reading — and because cic's hydrated count already excludes them
   (`presenceRowVisible`, `cicchetto/src/lib/selection.ts`), the seed

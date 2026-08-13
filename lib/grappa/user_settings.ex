@@ -177,7 +177,8 @@ defmodule Grappa.UserSettings do
 
     * `time_format` — `"hms"` (with seconds, the default) or `"hm"`.
     * `colored_nicklist` — per-nick colours in the members pane (default false).
-    * `presence_filter` — per-channel join/part/quit visibility pins,
+    * `presence_filter` — per-channel join/part/quit/nick_change/mode
+      visibility pins (`:mode` joined the suppressed set in #1262),
       `%{channel_key => "show" | "hide"}`. TRI-STATE: an unpinned channel is
       ABSENT (cic follows the live member-count default). The server never
       stores a third value and never coerces unset into a boolean. Font size

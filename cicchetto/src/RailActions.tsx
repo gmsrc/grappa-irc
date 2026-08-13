@@ -565,7 +565,9 @@ const RailActions: Component<Props> = (props) => {
           </Show>
 
           {/* #222 — per-channel join/part/quit/nick-change suppression toggle
-              (denoise). Channel-gated. One tap writes an EXPLICIT pref
+              (denoise), widened to channel MODE rows in #1262 — the label says
+              so, because the operator must know a `+b` set while denoised is
+              not in the transcript. Channel-gated. One tap writes an EXPLICIT pref
               ("show"/"hide") which by the precedence rule WINS over the
               member-count size default, so it pins the channel regardless of
               size. Reading channelPresenceVisible (tracks the pref signal) keeps
@@ -590,10 +592,10 @@ const RailActions: Component<Props> = (props) => {
                   aria-pressed={!presenceShown()}
                   title={
                     presenceShown()
-                      ? "Hide join/part/quit for this channel"
-                      : "Show join/part/quit for this channel"
+                      ? "Hide join/part/quit/mode for this channel"
+                      : "Show join/part/quit/mode for this channel"
                   }
-                  aria-label="denoise join/part/quit signalling"
+                  aria-label="denoise join/part/quit/mode signalling"
                   onClick={togglePresence}
                 >
                   <span class="rail-action-icon" aria-hidden="true">

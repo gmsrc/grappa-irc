@@ -1405,7 +1405,7 @@ const ScrollbackPane: Component<Props> = (props) => {
   const rows = createMemo((): Row[] => {
     const allMsgs = messages() ?? [];
     // #222 — render-layer presence filter. On a "large" channel the
-    // join/part/quit/nick_change rows are pure noise; suppress them by
+    // join/part/quit/nick_change/mode rows are pure noise; suppress them by
     // default, with a per-channel pref that WINS over the size default.
     // Reading BOTH the pref signal (via channelPresenceVisible) AND the
     // live member count inside this memo makes the filter reactive to the
@@ -2693,7 +2693,7 @@ const ScrollbackPane: Component<Props> = (props) => {
 
   // #239 — advance the server read-cursor over the TRAILING run of hidden
   // control messages while this window is DISPLAYED. The #222 presence filter
-  // hides join/part/quit/nick_change; those rows have NO DOM node, so the
+  // hides join/part/quit/nick_change/mode; those rows have NO DOM node, so the
   // DOM-geometry settle paths above (scroll-settle / leave / blur / unmount)
   // can only ever advance the cursor to the last RENDERED row. A trailing run
   // of hidden control messages past the cursor therefore never receives a
