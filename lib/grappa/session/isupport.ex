@@ -99,6 +99,28 @@ defmodule Grappa.Session.ISupport do
   """
   @type maxlist :: %{String.t() => pos_integer()}
 
+  @typedoc """
+  Every token the upstream advertised, verbatim (#1255): `"NETWORK" =>
+  "Azzurra"`, and `true` for a valueless flag like `SAFELIST`. The typed
+  fields above stay the contract for everything in-tree — they carry
+  parsing, validation and defaults — while this is the archive the Phase 6
+  IRCv3 listener facade translates from when it has to EMIT a 005
+  downstream. One 005, two readers, no second parse.
+
+  Two boundaries, both load-bearing:
+
+    * It NEVER goes on the cic wire. Design principle #1 is "no IRC
+      parsing in the web client"; a bag of verbatim tokens shipped to
+      cicchetto is IRC protocol re-entering through the window. The client
+      gets the TYPED widening instead.
+    * The facade must TRANSLATE, not passthrough. `NETWORK`, `MODES`,
+      `TARGMAX` and `LINELEN` describe the upstream ircd and the upstream
+      path; a downstream client is talking to grappa, whose framing budget
+      (#246/#1108), chunking and target limits are its own. This map is
+      the INPUT to that translation, never its output.
+  """
+  @type raw :: %{String.t() => String.t() | true}
+
   @type t :: %{
           chanmodes: chanmodes(),
           prefix: prefix(),
@@ -110,7 +132,8 @@ defmodule Grappa.Session.ISupport do
           maxlist: maxlist(),
           nicklen: pos_integer() | nil,
           channellen: pos_integer() | nil,
-          topiclen: pos_integer() | nil
+          topiclen: pos_integer() | nil,
+          raw: raw()
         }
 
   # Pre-005 seed = the exact values the old EventRouter constants held.
@@ -191,7 +214,8 @@ defmodule Grappa.Session.ISupport do
       maxlist: @default_maxlist,
       nicklen: nil,
       channellen: nil,
-      topiclen: nil
+      topiclen: nil,
+      raw: %{}
     }
   end
 
@@ -216,7 +240,9 @@ defmodule Grappa.Session.ISupport do
   """
   @spec merge_isupport([String.t()], t()) :: t()
   def merge_isupport(params, current) when is_list(params) do
-    Enum.reduce(params, current, &merge_token/2)
+    Enum.reduce(params, current, fn param, acc ->
+      merge_token(param, archive_token(param, acc))
+    end)
   end
 
   @doc """
@@ -381,6 +407,14 @@ defmodule Grappa.Session.ISupport do
   @spec topiclen(t()) :: pos_integer() | nil
   def topiclen(isupport) when is_map(isupport), do: Map.get(isupport, :topiclen)
 
+  @doc """
+  Every token the upstream advertised, verbatim — see `t:raw/0` for what
+  this is for and the two boundaries it must respect. Empty before the
+  first 005.
+  """
+  @spec raw(t()) :: raw()
+  def raw(isupport) when is_map(isupport), do: Map.get(isupport, :raw, %{})
+
   # ---------------------------------------------------------------------------
   # Token parsing
   # ---------------------------------------------------------------------------
@@ -454,6 +488,45 @@ defmodule Grappa.Session.ISupport do
   defp merge_token("TOPICLEN=" <> rest, acc), do: put_limit(acc, :topiclen, rest)
 
   defp merge_token(_, acc), do: acc
+
+  # #1255 — the verbatim archive, written for EVERY advertised token
+  # (including the typed ones and the ones the typed parser rejected as
+  # malformed: this records what the upstream SAID, not what we could use).
+  #
+  # A 005 param list is `<client> <token>... :<human-readable text>`, and
+  # only the middle is tokens, so the archive filters on the draft's
+  # parameter-name grammar: uppercase letters and digits. The trailing
+  # text carries spaces and lowercase, and so does a normal nick, so both
+  # fall out. The residual: a client whose nick is all-caps alphanumeric
+  # (`VJT`) is archived as a valueless flag. That is deliberate — the
+  # alternative, dropping the list head positionally, would silently eat
+  # the first token whenever a caller passes a bare token list, and a
+  # stray key in an archive nobody passes through is cheaper than a
+  # missing typed fact. The Phase 6 facade translates from this map
+  # against what it knows how to emit; it does not re-advertise it.
+  @spec archive_token(String.t(), t()) :: t()
+  defp archive_token("-" <> name, acc) do
+    # §2 negation reverts to "as if never specified", so the archive must
+    # forget the key — otherwise the facade would re-advertise downstream a
+    # capability the upstream just revoked.
+    if token_name?(name), do: Map.put(acc, :raw, Map.delete(raw(acc), name)), else: acc
+  end
+
+  defp archive_token(param, acc) do
+    case String.split(param, "=", parts: 2) do
+      [name] -> put_raw(acc, name, true)
+      [name, value] -> put_raw(acc, name, value)
+    end
+  end
+
+  @spec put_raw(t(), String.t(), String.t() | true) :: t()
+  defp put_raw(acc, name, value) do
+    if token_name?(name), do: Map.put(acc, :raw, Map.put(raw(acc), name, value)), else: acc
+  end
+
+  @token_name ~r/^[A-Z0-9]+$/
+  @spec token_name?(String.t()) :: boolean()
+  defp token_name?(name), do: Regex.match?(@token_name, name)
 
   @spec put_limit(t(), :nicklen | :channellen | :topiclen, String.t()) :: t()
   defp put_limit(acc, key, rest) do

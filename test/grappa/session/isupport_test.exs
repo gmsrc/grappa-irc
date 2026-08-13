@@ -25,6 +25,12 @@ defmodule Grappa.Session.ISupportTest do
 
   alias Grappa.Session.ISupport
 
+  # The capability table minus the #1255 verbatim archive — the projection
+  # every consumer in-tree actually reads. Used where a test means "the
+  # typed facts did not move", which is no longer the same as "the table
+  # did not move".
+  defp typed(isupport), do: Map.drop(isupport, [:raw])
+
   describe "default/0" do
     test "seeds the pre-005 Bahamut/Azzurra prefix + param tables" do
       d = ISupport.default()
@@ -81,11 +87,16 @@ defmodule Grappa.Session.ISupportTest do
       refute ISupport.takes_param?(isupport, "R", :add)
     end
 
+    # These three compare the TYPED projection, not the whole table: since
+    # #1255 the verbatim `:raw` archive records every advertised token,
+    # including ones with no typed consumer and ones the typed parser
+    # rejected, so a table that "did not change" still grows an archive
+    # entry. `raw` has its own describe below.
     test "preserves the current table when tokens are absent" do
       params = ["grappa-test", "NETWORK=Azzurra", "are supported by this server"]
       d = ISupport.default()
 
-      assert ISupport.merge_isupport(params, d) == d
+      assert typed(ISupport.merge_isupport(params, d)) == typed(d)
     end
 
     test "ignores a malformed CHANMODES token (wrong class count)" do
@@ -94,14 +105,14 @@ defmodule Grappa.Session.ISupportTest do
       params = ["grappa-test", "CHANMODES=beI,k"]
       d = ISupport.default()
 
-      assert ISupport.merge_isupport(params, d) == d
+      assert typed(ISupport.merge_isupport(params, d)) == typed(d)
     end
 
     test "ignores a malformed PREFIX token (unbalanced modes/sigils)" do
       params = ["grappa-test", "PREFIX=(ohv)@%"]
       d = ISupport.default()
 
-      assert ISupport.merge_isupport(params, d) == d
+      assert typed(ISupport.merge_isupport(params, d)) == typed(d)
     end
   end
 
@@ -445,6 +456,67 @@ defmodule Grappa.Session.ISupportTest do
       assert ISupport.nicklen(pre_1255) == nil
       assert ISupport.channellen(pre_1255) == nil
       assert ISupport.topiclen(pre_1255) == nil
+    end
+  end
+
+  # #1255 scope note — the Phase 6 IRCv3 listener facade has to EMIT a 005
+  # to a downstream client, and the typed six threw every other token away
+  # at ingress. `raw` is the verbatim archive it will translate from. It is
+  # server-side only: a bag of IRC tokens on the cic wire would be IRC
+  # protocol re-entering the web client through the window (design
+  # principle #1), and the facade must translate rather than passthrough —
+  # NETWORK/MODES/TARGMAX/LINELEN describe the UPSTREAM, not the connection
+  # the downstream client actually holds.
+  describe "raw token archive (#1255)" do
+    test "default/0 starts with an empty archive" do
+      assert ISupport.raw(ISupport.default()) == %{}
+    end
+
+    test "archives every advertised token verbatim, valueless ones as true" do
+      params = [
+        "grappa-test",
+        "NETWORK=Azzurra",
+        "CHANMODES=beI,k,l,imnpst",
+        "SAFELIST",
+        "TARGMAX=PRIVMSG:4,NOTICE:4",
+        "are supported by this server"
+      ]
+
+      raw = ISupport.raw(ISupport.merge_isupport(params, ISupport.default()))
+
+      # Tokens with no typed consumer are kept — that is the entire point.
+      assert raw["NETWORK"] == "Azzurra"
+      assert raw["TARGMAX"] == "PRIVMSG:4,NOTICE:4"
+      assert raw["SAFELIST"] == true
+      # Typed tokens are archived too: one 005, two readers, no second parse.
+      assert raw["CHANMODES"] == "beI,k,l,imnpst"
+    end
+
+    test "the trailing human-readable text is not a token" do
+      params = ["grappa-test", "NETWORK=Azzurra", "are supported by this server"]
+      raw = ISupport.raw(ISupport.merge_isupport(params, ISupport.default()))
+      assert Map.keys(raw) == ["NETWORK"]
+    end
+
+    test "archives a token the typed parser rejected as malformed" do
+      # `raw` is an ingress archive, not a validation result: the typed
+      # field defends itself (the capability table is untouched) while the
+      # facade still sees exactly what the upstream said.
+      params = ["grappa-test", "CHANMODES=beI,k"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.raw(isupport)["CHANMODES"] == "beI,k"
+      assert ISupport.takes_param?(isupport, "l", :add)
+    end
+
+    test "a re-advertisement overwrites the archived value" do
+      params = ["grappa-test", "NETWORK=Azzurra", "NETWORK=Freenode"]
+      raw = ISupport.raw(ISupport.merge_isupport(params, ISupport.default()))
+      assert raw["NETWORK"] == "Freenode"
+    end
+
+    test "raw/1 falls back to the empty archive on a table predating the field" do
+      pre_1255 = Map.drop(ISupport.default(), [:raw])
+      assert ISupport.raw(pre_1255) == %{}
     end
   end
 
