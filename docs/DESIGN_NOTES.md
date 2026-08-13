@@ -41758,3 +41758,57 @@ not only against its own kill switch — the `Accounts` moduledoc had
 asserted in prose that the sweeps deliberately did not special-case it,
 which is how a documented non-decision outlived the feature that
 contradicted it.
+<!-- entry #1308 -->
+
+---
+
+## 2026-08-14 — #1308: an unknown timestamp sorts last, in both directions
+
+The admin Sessions list had no sort at all — the order was the merge's
+assembly order (visitors, then credentials, then orphan pids, then
+log-only rows) and the operator could not change it. vjt asked for
+asc/desc on **last active**, **last joined**, **last seen**, defaulting
+to last joined desc. Two decisions in that are worth keeping.
+
+**Nulls sort last in BOTH directions, and that is a correctness rule
+rather than a taste.** Every one of the three keys can be absent, and
+absence never means "long ago". `last_event.at` is missing because the
+session-log ring is bounded and best-effort — a session missing from it
+is not evidence it never ran. `last_joined_at` is missing on the two
+classes that have no DB row at all. Coercing either to epoch 0, which is
+what a naive `?? 0` comparator does, would float exactly the rows we know
+least about to the top of an ascending sort and state a date we do not
+have. An unparseable string collapses into the same unknown for the same
+reason.
+
+**`last joined` had to be built before it could be sorted on.** It
+existed on a visitor row (`visitor.inserted_at`) and on no user row: the
+credential's `inserted_at` was on `/admin/credentials` all along and
+simply never reached `AdminSubjectRow`. Making it the DEFAULT key without
+that would have shipped an order that was null on half the table on day
+one. No wire change was needed — the field was already published by
+`Networks.Credentials.AdminWire`; only the row-builder had to copy it.
+
+**The row-origin grouping degrades to a tiebreak rather than being
+deleted.** It is meaningful (the divergence classes sit at the bottom
+where they stand out), so the sort is a STABLE sort over the assembled
+array and nothing more: rows the key cannot separate keep the order the
+merge gave them, in either direction. No secondary comparator, no
+parallel ordering structure.
+
+**The control is a strip above the table, not sortable `<th>`s.** Only
+one of the three keys has a column — `last active` and `last joined` are
+drill-down facts — and giving them columns is the very question (does an
+extra column fit at every width?) that the source-IP half of #1308 is
+still waiting on a ruling for. It also stays out of `.adm-card-head`,
+which is a no-wrap flex row shared by every admin card and would have
+overflowed on the narrow layout the mobile cards exist for.
+
+**Scope:** the sorting half only. The source-IP half of #1308 is
+untouched and still blocked on two rulings from vjt (per-session
+`accounts_sessions.ip` versus the identity-wide `visitors.ip`, and
+whether an IP column fits at every width).
+
+**Apply:** when a sort key can be absent, ask what the absence MEANS
+before picking its sort position. If absence is ignorance rather than a
+value, it belongs at the bottom whichever way the arrow points.

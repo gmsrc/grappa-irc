@@ -15,9 +15,15 @@ import {
   type AdminSubjectRow,
   buildSubjectRows,
   channelCount,
+  DEFAULT_SESSION_SORT,
   endedSessions,
   liveSessions,
   rowActions,
+  SESSION_SORT_KEYS,
+  SESSION_SORT_LABEL,
+  type SessionSort,
+  type SessionSortKey,
+  sortSubjectRows,
 } from "./lib/adminSubjectRows";
 import {
   type AdminCredential,
@@ -145,6 +151,7 @@ const AdminSessionsTab: Component = () => {
   // tab's drill-in to `AdminUserPage`, and deliberately not a route: the
   // admin console has none.
   const [endedOpen, setEndedOpen] = createSignal(false);
+  const [sort, setSort] = createSignal<SessionSort>(DEFAULT_SESSION_SORT);
   // #1157 — the open row's verb dropdown, anchored to the button that
   // opened it. Anchored to the BUTTON RECT rather than the pointer so a
   // keyboard activation (clientX/Y both 0) does not open it in the
@@ -172,8 +179,20 @@ const AdminSessionsTab: Component = () => {
       : [],
   );
 
-  const live = createMemo<AdminSubjectRow[]>(() => liveSessions(rows()));
+  const live = createMemo<AdminSubjectRow[]>(() => sortSubjectRows(liveSessions(rows()), sort()));
   const ended = createMemo(() => endedSessions(rows()));
+
+  // #1308 — picking the key already on is what reverses it, the way a
+  // sortable column header behaves; picking a different one starts at
+  // descending, because all three are timestamps and "newest first" is
+  // what an operator wants from every one of them.
+  const cycleSort = (key: SessionSortKey): void => {
+    setSort((current) =>
+      current.key === key
+        ? { key, direction: current.direction === "desc" ? "asc" : "desc" }
+        : { key, direction: "desc" },
+    );
+  };
 
   /** The verb this row is currently asking the operator to confirm. */
   const armedKind = (row: AdminSubjectRow): ActionKind | null =>
@@ -381,6 +400,49 @@ const AdminSessionsTab: Component = () => {
                   <AdminEmpty message="no live sessions" testId="admin-sessions-empty" />
                 }
               >
+                {/* #1308 — the sort control. It lives above the table
+                  rather than on the `<th>`s because only ONE of the three
+                  keys vjt named has a column: `last active` and
+                  `last joined` are facts of the drill-down, and giving
+                  them columns is the very question (does an extra column
+                  fit at every width?) the IP half of #1308 is still
+                  waiting on a ruling for.
+
+                  Inside the `live().length > 0` branch on purpose: an
+                  empty list has nothing to order, and a live control over
+                  no rows reads as broken. */}
+                <div class="admin-sessions-sort" role="toolbar" aria-label="sort sessions">
+                  <span class="admin-sessions-sort-label" aria-hidden="true">
+                    sort
+                  </span>
+                  <For each={SESSION_SORT_KEYS}>
+                    {(key) => (
+                      <button
+                        type="button"
+                        class="adm-btn admin-sessions-sort-btn"
+                        aria-pressed={sort().key === key}
+                        onClick={() => cycleSort(key)}
+                        data-testid={`admin-sessions-sort-${key}`}
+                      >
+                        {SESSION_SORT_LABEL[key]}
+                        {/* The arrow is on the ACTIVE key only: an arrow
+                          on every button would say three orders are in
+                          force at once. `aria-pressed` says WHICH key is
+                          on but not which way it points, so the direction
+                          is spelled out for a screen reader rather than
+                          left to a glyph it would read as punctuation. */}
+                        <Show when={sort().key === key}>
+                          <span class="admin-sessions-sort-arrow" aria-hidden="true">
+                            {sort().direction === "asc" ? "▲" : "▼"}
+                          </span>
+                          <span class="sr-only">
+                            {sort().direction === "asc" ? ", ascending" : ", descending"}
+                          </span>
+                        </Show>
+                      </button>
+                    )}
+                  </For>
+                </div>
                 <AdminTable class="admin-sessions-table" data-testid="admin-sessions-table">
                   <thead>
                     <tr>

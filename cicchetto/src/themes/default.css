@@ -5481,6 +5481,42 @@ html.resize-dragging * {
   color: var(--adm-text-dim);
 }
 
+/* #1308 — the Sessions sort control, a strip above the table inside the
+   card body rather than more chrome in `.adm-card-head`: that header is a
+   no-wrap flex row shared by every admin card, and three more buttons
+   beside `Ended sessions` and `↻ refresh` would have overflowed it on the
+   narrow layout the mobile cards exist for. Here it wraps freely and
+   touches no shared rule. */
+.admin-sessions-sort {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--adm-space-2);
+  padding: var(--adm-space-2) var(--adm-space-4);
+  border-bottom: 1px solid var(--adm-line);
+}
+
+.admin-sessions-sort-label {
+  font-family: var(--adm-font);
+  font-size: 0.75rem;
+  color: var(--adm-text-dim);
+}
+
+.admin-sessions-sort-btn {
+  gap: var(--adm-space-1);
+}
+
+/* The active key. Colour is a shortcut, never the only signal: the arrow
+   glyph and `aria-pressed` both say the same thing. */
+.admin-sessions-sort-btn[aria-pressed="true"] {
+  color: var(--adm-accent);
+  border-color: var(--adm-accent);
+}
+
+.admin-sessions-sort-arrow {
+  font-size: 0.7rem;
+}
+
 /* Drill-down danger zone: the note names what Delete destroys, so it must
    read as one unit with the button rather than as loose text beside it. */
 /* A destructive verb, its explanation, and a rule separating it from

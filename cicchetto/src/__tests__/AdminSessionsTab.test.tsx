@@ -593,3 +593,88 @@ describe("AdminSessionsTab — load and failure", () => {
     expect(screen.queryByTestId("admin-sessions-table")).toBeNull();
   });
 });
+
+// #1308 — asc/desc on last active / last joined / last seen, default last
+// joined desc (vjt, 2026-08-14). Before this the order was the assembly
+// order and nothing else: visitors, then users, then the two
+// rows-without-a-credential classes.
+//
+// Every assertion below reads the RENDERED row order, not the sort
+// function's return: what the operator asked for is the table changing,
+// and a correct comparator wired to nothing would satisfy the unit test.
+describe("AdminSessionsTab — sorting (#1308)", () => {
+  const renderedRowKeys = (): string[] =>
+    [...document.querySelectorAll("[data-testid^='admin-session-row-']")].map((el) =>
+      (el.getAttribute("data-testid") ?? "").replace("admin-session-row-", ""),
+    );
+
+  // The visitor is the OLDER subject but the FIRST one assembled, so the
+  // dictated default has to reverse the merge's own order to be right.
+  const oldVisitor = () =>
+    parkedVisitor({ inserted_at: "2026-01-01T00:00:00Z", last_seen_at: "2026-08-20T00:00:00Z" });
+  const newCredential = () =>
+    userCredential({ inserted_at: "2026-08-01T00:00:00Z", last_seen_at: "2026-08-10T00:00:00Z" });
+
+  it("orders by last joined descending without being asked", async () => {
+    await mountWith({ visitors: [oldVisitor()], credentials: [newCredential()] });
+    await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+
+    expect(renderedRowKeys()).toEqual([USER_KEY, VISITOR_KEY]);
+  });
+
+  it("flips to ascending when the active key is picked again", async () => {
+    await mountWith({ visitors: [oldVisitor()], credentials: [newCredential()] });
+    await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+    expect(renderedRowKeys(), "pre-state: the default is descending").toEqual([
+      USER_KEY,
+      VISITOR_KEY,
+    ]);
+
+    fireEvent.click(screen.getByTestId("admin-sessions-sort-last_joined"));
+
+    expect(renderedRowKeys()).toEqual([VISITOR_KEY, USER_KEY]);
+  });
+
+  it("reorders on a different key", async () => {
+    await mountWith({ visitors: [oldVisitor()], credentials: [newCredential()] });
+    await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+
+    // The visitor joined first but was SEEN last, so switching the key
+    // has to move it — and picking a new key starts descending.
+    fireEvent.click(screen.getByTestId("admin-sessions-sort-last_seen"));
+
+    expect(renderedRowKeys()).toEqual([VISITOR_KEY, USER_KEY]);
+  });
+
+  // The honesty rule, rendered. A row with no browser session on record
+  // must not lead an ascending sort as if it had been seen at the epoch.
+  it("keeps a row with an unknown timestamp at the bottom when ascending", async () => {
+    await mountWith({
+      visitors: [parkedVisitor({ last_seen_at: null })],
+      credentials: [userCredential()],
+    });
+    await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+
+    fireEvent.click(screen.getByTestId("admin-sessions-sort-last_seen"));
+    fireEvent.click(screen.getByTestId("admin-sessions-sort-last_seen"));
+
+    expect(screen.getByTestId("admin-sessions-sort-last_seen").getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(renderedRowKeys()).toEqual([USER_KEY, VISITOR_KEY]);
+  });
+
+  it("marks the active key and its direction", async () => {
+    await mountWith({ credentials: [userCredential()] });
+    await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+
+    const joined = screen.getByTestId("admin-sessions-sort-last_joined");
+    const seen = screen.getByTestId("admin-sessions-sort-last_seen");
+    expect(joined.getAttribute("aria-pressed")).toBe("true");
+    expect(seen.getAttribute("aria-pressed")).toBe("false");
+    expect(joined.textContent).toContain("▼");
+
+    fireEvent.click(joined);
+    expect(joined.textContent).toContain("▲");
+  });
+});
