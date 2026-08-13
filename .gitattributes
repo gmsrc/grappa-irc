@@ -1,7 +1,39 @@
 # DESIGN_NOTES.md is an append-mostly decision log: every PR appends to the
-# tail, so concurrent PRs conflict there constantly. The built-in `union`
-# merge driver keeps lines from BOTH sides of a conflicting hunk (no
-# markers), which auto-resolves the append-vs-append case. Caveat (#114):
-# only safe while the file stays append-mostly — a PR that edits or
-# reorders existing entries can interleave oddly and must be checked by hand.
+# tail, so concurrent PRs conflict there constantly. The built-in `union` merge
+# driver keeps lines from BOTH sides of a conflicting hunk (no markers).
+#
+# What union auto-resolves is the entry BODIES. It does NOT save the boundary
+# between them, and used to destroy it silently (#1271): every entry was
+# appended with the same three leading lines — blank / `---` / blank — so the
+# merge machinery aligned that identical prefix as a COMMON addition and handed
+# only the diverging tails to the driver. Union emitted the shared prefix ONCE
+# and concatenated both bodies after it: one entry kept its separator, the
+# other lost it, with no conflict, no markers, `rc=0` and ZERO deletions. Four
+# occurrences on 2026-08-13 alone, each caught only because a human pinned
+# `git diff --numstat` before the rebase and compared after.
+#
+# 🔴 So an entry MUST open with a UNIQUE marker line, as its FIRST appended
+# line, in exactly this shape:
+#
+#     <!-- entry #1271 -->
+#     <blank>
+#     ---
+#     <blank>
+#     ## 2026-08-13 — #1271: ...
+#
+# Because that line differs between two branches there is no identical prefix
+# left to collapse, the whole block reaches the driver, and both separators
+# survive — measured, with not one line lost. A marker on EITHER side is
+# enough, in both directions, so old entries need no retrofit. Uniqueness is
+# the mechanism and not decoration: two entries sharing a marker restore the
+# collapsible prefix and lose FOUR lines instead of three.
+#
+# `scripts/design-notes-gate.sh` asserts both properties over the entries a
+# branch ADDS, in CI and locally, because a convention nobody enforces depends
+# on somebody remembering it — which is precisely how this survived four times
+# in one day.
+#
+# Caveat (#114), unchanged: union is only safe while the file stays
+# append-mostly. A PR that edits or reorders existing entries can interleave
+# oddly and must be checked by hand.
 docs/DESIGN_NOTES.md merge=union

@@ -412,6 +412,21 @@ not the surrounding code.**
   the BOUNDARY SHAPE on the real file** (full stop / blank / `---` / blank /
   heading), because an identical numstat proves nothing when the pre-rebase
   state was already broken.
+- **🔴 Open every new DESIGN_NOTES entry with a UNIQUE `<!-- entry #NNNN -->`
+  line, as its FIRST appended line (#1271).** Exact shape: marker / blank /
+  `---` / blank / `## <date> — #NNNN: …`, with NO blank before the marker.
+  **Why: the separator loss above is not bad luck, it is `merge=union` doing
+  what it is told.** Every entry used to be appended with the same three
+  leading lines, so the merge machinery aligned that identical prefix as a
+  COMMON addition and only the diverging tails reached the driver, which
+  emitted the shared prefix once. A marker line differs between branches, so
+  there is no prefix left to collapse and both separators survive — measured,
+  losing not one line, whereas putting a blank ahead of the marker still costs
+  that blank and a duplicated marker costs FOUR lines instead of three. A
+  marker on EITHER side protects the pair, so old entries need no retrofit.
+  Enforced by `scripts/design-notes-gate.sh` over the entries a branch ADDS,
+  in CI and in `scripts/bats.sh`; the same gate treats an added `^## ` as an
+  ENTRY heading, so a subsection inside an entry must be `###` or deeper.
 - **Log honesty**: when a fast path skips work, the log message must
   describe the state it OBSERVED, not the absence of work. Example:
   `bootstrap: no credentials bound — running web-only` lies when N
