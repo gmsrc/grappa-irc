@@ -1007,11 +1007,18 @@ defmodule GrappaWeb.GrappaChannelTest do
     end
 
     test "after-join snapshot: a client in NO channel still gets ISUPPORT (#1255)" do
-      # The functional half. A session parked on the server window, a fresh
-      # account before its first JOIN, a user who only reads DMs: none of
-      # them subscribe to a channel topic, so before #1255 the cold replay
-      # never ran and cic drove its /mode modal off the compile-time
-      # bahamut defaults for the whole session.
+      # A session parked on the server window, a fresh account before its
+      # first JOIN, a user who only reads DMs: none of them subscribe to a
+      # topic for a real channel, and the per-network fact must reach them
+      # from the per-network topic.
+      #
+      # This deliberately does NOT claim the pre-#1255 code delivered them
+      # nothing — that was asserted from the shape of the code and MEASURED
+      # FALSE (see DESIGN_NOTES 2026-08-13). cic also joins the `$server`
+      # pseudo-window, which the server cannot distinguish from a channel
+      # and which cic wires to the ordinary channel handler, so the old
+      # replay did arrive — through a window unrelated to the fact it
+      # carried. What this pins is the door, not a rescue.
       {irc_server, port} = start_irc_server()
       {user, network} = setup_user_and_network_with_session(port)
 
@@ -1038,6 +1045,56 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert_push("event", %{kind: :isupport_changed, network_id: net_id, prefix: prefix})
       assert net_id == network.id
       assert prefix["q"] == "~"
+    end
+
+    test "after-join snapshot: ISUPPORT reaches a client exactly ONCE per network (#1255)" do
+      # The residual defect, and the one worth pinning. Multiplicity is a
+      # property of the WIRE: the cic store is a last-write-wins seed, so it
+      # cannot observe a payload arriving three times, and no browser test
+      # can either. Here the broadcast is directly countable.
+      #
+      # The client below opens what a real one opens: the user topic, a topic
+      # per joined channel, and the `$server` pseudo-window — which is a
+      # `{:channel, …}` topic the server cannot tell from a real channel, and
+      # is exactly how the pre-fix replay reached a channel-less client. With
+      # the replay back inside `push_channel_snapshot/4` this receives THREE
+      # byte-identical copies and the refutation below fails; the payload
+      # describes the network, so one is the only defensible number.
+      {irc_server, port} = start_irc_server()
+      {user, network} = setup_user_and_network_with_session(port)
+
+      welcome_session_on_channel(irc_server, "#snap")
+
+      # A second channel, so the count scales with windows if the scoping
+      # regresses — one channel could not tell "per network" from "per
+      # channel".
+      :ok = Session.send_join({:user, user.id}, network.id, "#snap2", nil)
+      {:ok, _} = IRCServer.wait_for_line(irc_server, &String.starts_with?(&1, "JOIN #snap2"), 1_000)
+      IRCServer.feed(irc_server, ":grappa-snap!u@h JOIN :#snap2\r\n")
+
+      IRCServer.feed(
+        irc_server,
+        ":irc.test.org 005 grappa-snap PREFIX=(qaohv)~&@%+ :are supported\r\n"
+      )
+
+      flush_server(irc_server)
+
+      socket = build_socket(user.name)
+
+      {:ok, _, _} = subscribe_and_join(socket, Topic.user(user.name), %{})
+
+      for window <- ["#snap", "#snap2", "$server"] do
+        {:ok, _, _} =
+          user.name
+          |> build_socket()
+          |> subscribe_and_join(Topic.channel(user.name, network.slug, window), %{})
+      end
+
+      # Exactly one: the user-topic replay lands, and nothing follows it from
+      # any of the three channel-shaped topics.
+      assert_push("event", %{kind: :isupport_changed, network_id: net_id})
+      assert net_id == network.id
+      refute_push("event", %{kind: :isupport_changed}, 500)
     end
 
     test "after-join snapshot: pushes the session's umodes on the user topic (#229)" do
