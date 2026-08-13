@@ -120,11 +120,21 @@ defmodule GrappaWeb.PushSubscriptionController do
   defp maybe_put_supersedes(attrs, _), do: attrs
 
   # `"provider"` (2026-08-13, UnifiedPush) — passed through verbatim when the
-  # caller sends one; `Subscription.changeset/2`'s `validate_inclusion/3`
-  # rejects anything outside the closed set, so an invalid string surfaces as
-  # a 422, not silently coerced. Absent entirely -> the schema field default
-  # (`"webpush"`) applies, matching every pre-2026-08-13 caller unchanged.
-  defp maybe_put_provider(attrs, %{"provider" => provider}) when is_binary(provider),
+  # caller sends a non-empty string; `Subscription`'s `Ecto.Enum` cast
+  # rejects anything OUTSIDE the closed set with a 422, same as
+  # `validate_inclusion/3` would. `""` is NOT in that "outside the set" case:
+  # `Ecto.Changeset.cast/3`'s default `empty_values` already treats `""` as
+  # "field not sent" and strips it before validation ever runs, so it
+  # 201s and falls back to the schema default (`:webpush`) exactly like an
+  # omitted field does — this is intentional (mirrors how a real client with
+  # an uninitialised provider setting should behave: safe fallback, not a
+  # rejected request). The `provider != ""` guard here mirrors
+  # `maybe_put_supersedes/2`'s `sup != ""` above for the same reason: make
+  # that fallback an explicit choice in THIS module instead of an unstated
+  # side effect of Ecto's `empty_values` default. Absent entirely (or `""`)
+  # -> the schema field default applies, matching every pre-2026-08-13
+  # caller unchanged.
+  defp maybe_put_provider(attrs, %{"provider" => provider}) when is_binary(provider) and provider != "",
     do: Map.put(attrs, :provider, provider)
 
   defp maybe_put_provider(attrs, _), do: attrs

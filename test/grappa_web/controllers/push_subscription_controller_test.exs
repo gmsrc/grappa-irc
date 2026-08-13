@@ -162,7 +162,7 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
       conn = post(conn, "/push/subscriptions", valid_body(endpoint: "https://example.com/push/no-provider"))
       assert json_response(conn, 201)
       [stored] = Push.list_for_subject({:user, user.id})
-      assert stored.provider == "webpush"
+      assert stored.provider == :webpush
     end
 
     test "accepts provider: unifiedpush — still requires keys, same as webpush", %{conn: conn, user: user} do
@@ -175,7 +175,7 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
 
       assert json_response(conn, 201)
       [stored] = Push.list_for_subject({:user, user.id})
-      assert stored.provider == "unifiedpush"
+      assert stored.provider == :unifiedpush
       assert is_binary(stored.p256dh_key)
       assert is_binary(stored.auth_key)
     end
@@ -190,6 +190,26 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
 
       assert %{"error" => "validation_failed", "field_errors" => fe} = json_response(conn, 422)
       assert ["is invalid"] = fe["provider"]
+    end
+
+    # `Ecto.Changeset.cast/3`'s default `empty_values` treats `""` as "field
+    # not sent" regardless of the controller-level guard, so an empty
+    # provider 201s and falls back to the default — same as omitting the
+    # field entirely, NOT the same as an out-of-set value like "apns" above
+    # (which 422s). This pins that distinction: an uninitialised client
+    # field (e.g. an Android field that hasn't loaded its setting yet) gets
+    # a safe fallback, not a rejected request.
+    test "empty-string provider falls back to the default, same as an omitted one", %{conn: conn, user: user} do
+      conn =
+        post(
+          conn,
+          "/push/subscriptions",
+          valid_body(endpoint: "https://example.com/push/empty-provider", provider: "")
+        )
+
+      assert json_response(conn, 201)
+      [stored] = Push.list_for_subject({:user, user.id})
+      assert stored.provider == :webpush
     end
   end
 
@@ -309,6 +329,30 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
       refute Map.has_key?(a, "p256dh_key")
     end
 
+    # The other :provider-tagged tests read `stored.provider` straight out of
+    # the DB via `Push.list_for_subject/1`, which never exercises the JSON
+    # view (`GrappaWeb.PushSubscriptionJSON.summary/1`) — the layer where the
+    # device-list feature this PR exists for actually renders. Without this
+    # test, `provider: sub.provider` in the view could regress to a
+    # hardcoded `"webpush"` and every other test in this suite would still
+    # pass.
+    test "index surfaces provider: unifiedpush on the wire", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      {:ok, _} =
+        Push.create({:user, user.id}, %{
+          endpoint: "https://ntfy.example/up/list-up",
+          p256dh_key: "k3",
+          auth_key: "a3",
+          user_agent: "ua-up",
+          provider: "unifiedpush"
+        })
+
+      conn = conn |> put_bearer(session.id) |> get("/push/subscriptions")
+      assert %{"subscriptions" => [a]} = json_response(conn, 200)
+      assert a["provider"] == "unifiedpush"
+    end
+
     test "scopes to the requesting user", %{conn: conn} do
       {alice, alice_session} = user_and_session()
       {bob, _} = user_and_session()
@@ -381,6 +425,27 @@ defmodule GrappaWeb.PushSubscriptionControllerTest do
           endpoint: "https://example.com/push/del",
           p256dh_key: "k",
           auth_key: "a"
+        })
+
+      conn = conn |> put_bearer(session.id) |> delete("/push/subscriptions/#{sub.id}")
+      assert response(conn, 204) == ""
+      assert Push.list_for_subject({:user, user.id}) == []
+    end
+
+    # Nit raised in review: "DELETE revokes either provider identically" was
+    # asserted in four prose locations (Sender/Subscription/controller
+    # moduledocs + DESIGN_NOTES) and zero tests. `delete/2` keys on id +
+    # subject with no `:provider` branch, so this is a cheap pin, not a
+    # new code path.
+    test "204 on a unifiedpush row, same as webpush", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      {:ok, sub} =
+        Push.create({:user, user.id}, %{
+          endpoint: "https://ntfy.example/up/del",
+          p256dh_key: "k",
+          auth_key: "a",
+          provider: "unifiedpush"
         })
 
       conn = conn |> put_bearer(session.id) |> delete("/push/subscriptions/#{sub.id}")
