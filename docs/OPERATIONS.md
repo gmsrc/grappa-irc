@@ -1334,10 +1334,13 @@ OTP application vsn, so the bump moves the release's lib directory to
 `:code.lib_dir(:grappa)` — the directory `Grappa.HotReload.reload_modified/0`
 walks — to its BOOT directory `lib/grappa-<old>/ebin`. Nothing in there
 changed, so `/admin/reload` answers `{"failed":[],"reloaded":[]}` and the node
-serves the OLD number with the new code already on disk. `Preflight.mix_deps?`
-no longer forces COLD on such a bump, so preflight will offer you a hot deploy
-anyway — that misclassification is a behaviour defect tracked on its own, not
-a licence to ship the bump hot. Corollary: an **unplanned** prod move (a
+serves the OLD number with the new code already on disk. **Preflight enforces
+this since #1287** — a diff touching `VERSION` is COLD with reason
+`version: VERSION` on `:jail` and `:linux`, so you no longer have to remember
+it. It stays HOT on `:docker`, which boots `mix phx.server` over a bind-mount
+and has no vsn in its lib-directory path; that asymmetry is pinned by a test,
+so if the container ever moves to a release layout, that test is where it
+surfaces. Corollary: an **unplanned** prod move (a
 migration, a jail cutover) is still something you version BEFORE, not after —
 bump `VERSION` in the range so the artifact self-reports honestly rather than
 patching a string afterward. Do NOT re-hardcode `@version` in `mix.exs`: it

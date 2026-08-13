@@ -41380,3 +41380,78 @@ retry is already counted somewhere that survives the restart — a failure
 counter kept for backoff is usually also the attempt ordinal, and deriving the
 second use from it costs one argument instead of one more thing to keep in
 sync.
+<!-- entry #1287 -->
+
+---
+
+## 2026-08-13 — #1287: the version bump is also the directory name
+
+A `VERSION`-only bump classified `:hot`, the deploy took the hot path,
+`POST /admin/reload` answered `{"failed":[],"reloaded":[],"migrated":[]}`,
+and the node went on running the old code. Reproduced in production on a
+self-hosted `:linux` install going v1.0.0 → v1.1.0: roughly six and a half
+hours serving the v1.0.0 BEAM under a v1.1.0 git history and config, with
+nothing in the deploy output to say so.
+
+The reason the reload cannot report the miss is worth stating precisely,
+because it is what decides where the fix belongs. `mix.exs` reads `VERSION`
+to stamp the OTP application vsn, so `mix release` lays the fresh artifacts
+under `lib/grappa-<new>/ebin`. The running node resolves
+`:code.lib_dir(:grappa)` from the code server's path list as it stood at
+load time, which is the BOOT directory `lib/grappa-<old>/ebin`.
+`HotReload.reload_modified/0` walks that directory, diffs it against
+itself, and correctly finds nothing. `reloaded: []` is not an error it
+withheld; it is the honest answer to the question it was asked. The
+migration scan lands in the same stale tree through
+`Application.app_dir/1,2`, so a new migration is not found-and-failed, it
+is absent. A downstream guard could notice the symptom, but the only place
+that can prevent it is the classifier, which is why `HotReload` is
+untouched here.
+
+The classifier could not see it. Before #652 the number lived in `mix.exs`
+and `mix_deps?/1` cold-tripped every bump — by accident, as a side effect
+of where the string was stored. #652 moved the number to a repo-root
+`VERSION` file and removed the accident without replacing the rule, and
+`grep -ci "vsn\|version"` over `preflight.ex` returned 0. The verdict on a
+release cut therefore depended on whatever else the commit range happened
+to touch. Measured on the real incident range before the fix
+(`4879785c^..4879785c`, the v1.1.0 cut, `VERSION` alone), substrate linux:
+`no unsafe markers → HOT`, exit 0. After: `version: VERSION`, exit 3.
+
+**Scoped to the release substrates, not universal.** The defect is that the
+vsn enters the lib directory's PATH, and that layout is what `mix release`
+produces — `infra/freebsd/deploy.sh:116` names `lib/grappa-X.Y/ebin` as the
+daemon's code path in its own words. Docker boots differently: the
+container execs `mix phx.server` over a bind-mounted tree, and
+`:code.lib_dir(:grappa)` measures as `/app/_build/dev/lib/grappa`, with no
+vsn anywhere in it, so the recompiled beams land exactly where the node is
+already looking. COLDing docker for a file its boot layout is immune to
+would be the needless-restart class the substrate argument was introduced
+to prevent (2026-06-10, #923), and on an always-on bouncer every restart
+drops every IRC session. The asymmetry is pinned by its own test rather
+than left to the comment: if the container ever moves to a release layout,
+that test is where it surfaces, instead of a self-hoster six hours later.
+`filter_on/4` takes a list of substrates at every call site now — this is
+the first class that spans two, and one helper with two shapes is two
+patterns for the next reader to choose between.
+
+This reverses the posture two tests pinned as a #652 acceptance criterion.
+That posture was not careless: the concern was that a bump must not
+cold-restart production over a string, and as a statement about strings it
+was right. What it could not see is that this particular string is also the
+name of the directory the code lives in.
+
+**Not measured, and not claimed:** anything about `MIX_ENV=prod` inside the
+container. The `_build/<env>/lib/grappa` reading above was taken at
+`MIX_ENV=dev`; the env name is the only segment that differs in Mix's build
+layout, but no prod container was stood up to confirm it. Nor was any
+production host probed — the reproduction is the operator's, in the issue.
+Two further defects the issue raises are deliberately left alone: the
+reload endpoint could compare the running vsn against the one on disk and
+refuse instead of answering empty lists, and the completed-deploy marker is
+written before the deploy is observed to have landed, which is what makes
+an ineffective hot deploy permanent and silent on retry.
+
+**Apply:** when a value moves out of a file to become its own SSOT, check
+what was classifying it *by side effect* at the old location. The move is
+visible in review; the rule that quietly stopped applying is not.

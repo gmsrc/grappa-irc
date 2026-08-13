@@ -716,7 +716,10 @@ is due. Don't just look at todo.md.
    the RUNNING node resolves to its BOOT directory `lib/grappa-<old>/ebin`.
    Nothing in the old directory changed, so `/admin/reload` answers
    `{"failed":[],"reloaded":[]}` and the node keeps serving the old number
-   with the new code on disk. Plan a restart for any release bump.
+   with the new code on disk. Plan a restart for any release bump —
+   `Preflight` enforces it since #1287 (reason `version`), on the two
+   substrates that boot a `mix release`; docker stays HOT because its
+   bind-mounted `mix phx.server` layout puts no vsn in the lib-dir path.
    Do NOT re-hardcode `@version` in `mix.exs`: it reads `VERSION` at build
    time, and re-inlining a literal silently reinstates the COLD (guarded by
    `version_single_source_test.exs`). Invoke deploy scripts by ABSOLUTE
