@@ -1553,8 +1553,9 @@ export async function getTotpStatus(token: string): Promise<{ enabled: boolean }
 }
 
 // #1283 — the account password is REQUIRED: the door re-authenticates,
-// because confirming the enrolment it opens revokes every other bearer
-// session and hands out the recovery codes.
+// because confirming the enrolment it opens revokes the account's other
+// browser sessions and hands out the recovery codes. Per-client tokens
+// survive that sweep (#1284); every other bearer does not.
 //
 // `readError(res, false)` for the same reason `disableTotp` and every
 // `passkeyRequest` use it: on a re-auth door a 401 says "wrong password",

@@ -197,7 +197,8 @@ describe("#1283 — starting an enrolment re-authenticates", () => {
   // c1657c3b; the pane went on posting an empty body, so the button could
   // not work for anyone — every press answered `bad_request`, rendered as
   // "The request was malformed.". The gate is deliberate (confirming an
-  // enrolment revokes every other bearer and hands out the recovery codes),
+  // enrolment revokes the account's other browser sessions — per-client
+  // tokens are spared, #1284 — and hands out the recovery codes),
   // so the pane has to ask, exactly as the passkey pane does for its five
   // privileged verbs and as the disable form already did.
 

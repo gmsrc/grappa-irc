@@ -30,8 +30,9 @@
 // Then the RIGHT password, which has to reach step two: QR and manual key on
 // screen. Enrolment STARTS here and is never confirmed — the returned secret
 // stays unarmed, so this spec mutates no account state. Confirming it is
-// what would revoke every other bearer and hand out the recovery codes, and
-// that is deliberately out of scope.
+// what would revoke the account's other browser sessions (per-client tokens
+// survive it, #1284) and hand out the recovery codes, and that is
+// deliberately out of scope.
 //
 // The account password is never asserted ON, only typed: it is the per-test
 // subject's throwaway fixture credential, and an assertion that compares it
