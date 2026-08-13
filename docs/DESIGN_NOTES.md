@@ -40935,3 +40935,84 @@ added `-v <root>/lib:/app/lib` assertion doubles as that fixture's own witness,
 since `WORKTREE_VOLUMES` is empty unless `SRC_ROOT != REPO_ROOT`. **General
 rule: a test that asserts a shape chosen by an environment predicate must
 establish that environment itself, or it is measuring the host.**
+<!-- entry #1267 -->
+
+---
+
+## 2026-08-13 — #1267: the same crash signature, a different cause, and the cwd we hand the VM
+
+A self-hoster on Debian 13 (unprivileged LXC, `.deb` 1.0.0) reported that every
+eval-backed verb of `/usr/bin/grappa` — `create-user`, `migrate`,
+`seed-themes`, `rpc`, `remote`, even `eval '1 + 1'` — died during ERTS boot
+with
+
+```
+{badarg,[{persistent_term,get,[code_server],...},{code_server,get_mode,0,...},
+         {code,ensure_loaded,1,...}]}
+```
+
+That is byte-for-byte the signature the packaging README already documents
+under *"Caveat — the migrate/eval proof"*, where it belongs to a **native-Linux
+asdf-built ERTS** and the cure is to avoid the `eval` boot variant. It is not
+that defect. The bundled ERTS is fine, and the report would have been closed as
+a known caveat if the narrowing had stopped at the stack trace.
+
+**The trigger, measured rather than deduced.** Against the published v1.0.0
+image, as the `grappa` user, varying only the mode of the working directory the
+verb is invoked from:
+
+| cwd mode | `other` bits | result |
+|---|---|---|
+| `0700` | `---` | boot dies with the badarg above |
+| `0711` | `--x` | boots |
+| `0555` | `r-x` | boots |
+| `0755` | `rwx` | boots |
+
+So it is precisely the **search (`x`) bit on the cwd for the effective user** —
+not read, not write; `0711` and `0555` both boot clean. And it is bare ERTS:
+the same crash reproduces under `erl -boot .../start_clean` with no grappa
+module loaded at all, so the VM never registers `code_server` and the logger's
+first `code:ensure_loaded/1` blows up. Which inner ERTS path first requires
+that bit was **not** isolated. The table is the boundary that was measured, and
+it is enough to act on — the alternative was filling the gap with supposition.
+
+**Grappa's part is only in handing the VM that cwd.** `runuser -u` — unlike
+`runuser -l` — does not change directory, so the child inherits the caller's
+(`cd /root/secret && runuser -u testu -- pwd` prints `/root/secret`, measured on
+`debian:trixie`). Debian 13 ships `HOME_MODE 0700` in `/etc/login.defs` and
+`/root` is `0700`, which means the operator's own login directory breaks the
+first command in the packaging README. The fix is a `cd /` in
+`infra/packaging/grappa-wrapper.sh` before either exec — `/` being the one
+directory every user can search. The cost accepted is that a relative path in
+`"$@"` now resolves against `/`; in the case this fixes it resolved against a
+directory the VM could not read either way.
+
+**Both branches, and only those two.** The already-unprivileged branch has the
+identical hole the moment someone `su - grappa`s inside a directory another
+user owns, so the `cd` sits before the branch rather than inside the
+privileged one. `infra/release/grappa.sh` execs the boot script with no `cd`
+either and is deliberately left alone: it does not change user, so a cwd it
+could search before it can search after. Symmetry is not a reason to touch it.
+
+**Why no gate ever saw it, which is the part worth generalising.** `dpkg` runs
+maintainer scriptlets with cwd `/`, and the `release.yml` job that installs the
+`.deb` and exercises migrations inherits the same `/`. The packaged path stayed
+green for as long as the interactive path was broken. **A gate that inherits
+its working directory cannot observe a working-directory-shaped defect** — so
+the new suite (`test/infra/packaging_wrapper_cwd_test.bats`) sets the cwd
+deliberately instead, runs the real wrapper from a directory that genuinely
+cannot be searched, and asserts the release is reached from `/`.
+
+**Two things about that suite, stated rather than implied.** It does not boot a
+BEAM: there is no ERTS in the bats environment, so *"the VM survives an
+unsearchable cwd"* stays pinned only by the measurement above, and a
+hypothetical regression inside ERTS would not be caught. What it does pin is
+grappa's own side of the contract, and it was mutation-checked twice: removing
+the `cd` kills both branch cases, and moving it into the `runuser` payload
+alone — the plausible half-fix — kills the unprivileged case and only that one.
+Second, the reproduction upstream used a root-owned `0700` directory entered as
+another user, which an unprivileged test suite cannot construct. It uses mode
+`000` on a directory it owns instead: the kernel's permission check is
+per-class, so denying the owner class the search bit puts the process in the
+same state as denying it to `other`. Ownership was never the variable — the
+effective user's search bit was.

@@ -224,6 +224,18 @@ whole: they are the FIRST thing a fresh install runs, and on a substrate
 where `eval` is broken they fail the same way `migrate` does, for the
 same reason.
 
+⚠️ **The same badarg has a second, unrelated cause — check this one first
+(#1267).** ERTS dies at kernel start with the *identical*
+`persistent_term`/`code_server` trace when the working directory it is
+launched from lacks the **search (`x`) bit for the effective user**. Measured:
+cwd `0700` dies, `0711` and `0555` boot; it reproduces on bare
+`erl -boot .../start_clean` with no grappa module loaded, and it has nothing to
+do with how the ERTS was built. Debian 13 ships `HOME_MODE 0700` and `/root` is
+`0700`, so it fires from the operator's own login directory. `grappa-wrapper.sh`
+`cd /`s before exec'ing the release since #1267; on an older package the
+operator workaround is `cd /` before any `grappa` subcommand. Do not read a
+`code_server` badarg as the asdf caveat below until the cwd has been ruled out.
+
 R1's job is to prove exactly that on a package built by `build.sh`
 (bundled ERTS, not asdf): install the `.deb` in a clean container, run
 `sudo grappa migrate` against a fresh DB, confirm the service boots and
