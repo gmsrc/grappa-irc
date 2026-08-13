@@ -2691,7 +2691,17 @@ defmodule Grappa.Session.Server do
         # subscribed, and nothing else on the user topic carries the verdict.
         identified: IdentityState.identified?(state),
         account: Map.get(state, :account),
-        invited_windows: WindowState.invited_windows(state.window_state, state.network_slug)
+        invited_windows: WindowState.invited_windows(state.window_state, state.network_slug),
+        # #1255 — the ISUPPORT table + LINELEN ride this snapshot because the
+        # fact is per (subject, network), like everything else here. The cold
+        # replay used to hang off the PER-CHANNEL snapshot, which sent the
+        # same payload once per joined channel and never at all to a client
+        # in no channel. Folded into the existing call rather than added as a
+        # sibling `get_isupport` / `get_linelen` pair: this is the login hot
+        # path, and #482 already measured what a third serial blocking call
+        # per network does to user-topic broadcast latency.
+        isupport: Map.get(state, :isupport, ISupport.default()),
+        linelen: state.linelen
       }}, state}
   end
 

@@ -415,11 +415,16 @@ moduleRoot(() => {
           seedModes(key, payload.modes);
           return;
         case "isupport_changed":
-          // #216 — per-network ISUPPORT capability set. Rides the
-          // per-channel cold-WS-subscribe snapshot (the always-on-session
-          // path: the live 005 fired long before this client subscribed).
-          // Seed the same store userTopic.ts's live arm feeds — keyed by
-          // network id, last-write-wins idempotent.
+          // #216 — per-network ISUPPORT capability set, seeded into the same
+          // store userTopic.ts feeds (keyed by network id, last-write-wins
+          // idempotent).
+          //
+          // #1255 — the CURRENT server does not send this on a channel
+          // topic: the cold replay moved to the user-topic snapshot, which
+          // is where a per-network fact belongs and the only door that
+          // reaches a client in no channel. This arm remains for a server
+          // older than the bundle (a `--cic`-only deploy), where it is the
+          // difference between a seeded table and a dropped payload.
           seedIsupport(payload.network_id, isupportEntryFromWire(payload));
           return;
         // UX-5 BJ (2026-05-19) — recognized-but-ignored. JoinBanner was

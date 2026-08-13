@@ -698,14 +698,18 @@ export type WireChannelEvent =
   | { kind: "channel_modes_changed"; network: string; channel: string; modes: ModesEntry }
   // #216 — per-network ISUPPORT capability set. This is a USER-topic event
   // (like own_nick_changed); the live 005 edge broadcasts it on
-  // `Topic.user/1` (handled in userTopic.ts). It ALSO rides the per-channel
-  // cold-WS-subscribe snapshot (push_isupport_if_live in
-  // push_channel_snapshot) because the network is already resolved there —
-  // so the SAME kind must narrow on BOTH topics (mirrors how joined/kicked/
-  // members_seeded are dual-declared). subscribe.ts dispatches it into
-  // `seedIsupport` exactly like userTopic.ts. Same flat wire shape both
-  // ways; last-write-wins idempotent, so a per-channel snapshot arriving
-  // after the live user-topic event is safe.
+  // `Topic.user/1` (handled in userTopic.ts). It USED to also ride the
+  // per-channel cold-WS-subscribe snapshot; #1255 moved that replay to the
+  // user-topic snapshot, where a fact keyed by `network_id` belongs — the
+  // per-channel copy was sent once per joined channel and never at all to a
+  // client in no channel.
+  //
+  // The kind stays declared on BOTH topics deliberately. The cic bundle and
+  // the BEAM are separately deployable (a `--cic` bundle deploy ships the
+  // client alone), so a current client can meet a server that still emits
+  // the per-channel copy. Narrowing it there costs nothing, keeps that
+  // client seeded instead of logging a dropped payload per JOIN, and the
+  // seed is last-write-wins idempotent either way.
   | {
       kind: "isupport_changed";
       network_id: number;

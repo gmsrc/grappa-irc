@@ -329,51 +329,25 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert "t" in modes
     end
 
-    test "after-join snapshot: pushes the network's ISUPPORT capability set (#216)" do
+    # #1255 — ISUPPORT is a per-NETWORK fact and the live broadcast always
+    # rode the user topic. Only the cold replay was mis-scoped, onto the
+    # per-channel snapshot: a client in ten channels got ten byte-identical
+    # copies, and a client in none got zero. This is the fan-out half.
+    test "after-join snapshot: does NOT push ISUPPORT on a channel topic (#1255)" do
       {irc_server, port} = start_irc_server()
       {user, network} = setup_user_and_network_with_session(port)
 
       welcome_session_on_channel(irc_server, "#snap")
 
-      # Advertise a non-default CHANMODES/PREFIX so we can tell the pushed
-      # snapshot came from the live session, not cic's built-in default.
       IRCServer.feed(
         irc_server,
         ":irc.test.org 005 grappa-snap CHANMODES=beI,k,l,imnpst PREFIX=(qaohv)~&@%+ :are supported\r\n"
       )
 
-      flush_server(irc_server)
-
-      topic = Topic.channel(user.name, network.slug, "#snap")
-
-      {:ok, _, _} =
-        user.name
-        |> build_socket()
-        |> subscribe_and_join(topic, %{})
-
-      assert_push("event", %{
-        kind: :isupport_changed,
-        network_id: net_id,
-        prefix: prefix
-      })
-
-      assert net_id == network.id
-      assert prefix["q"] == "~"
-    end
-
-    # #1108 — the cold snapshot is the ONLY door for a client that connects
-    # long after the 005 burst, which on an always-on bouncer is every
-    # client. Without the budget here the compose-box warning stays dark
-    # until the network happens to re-advertise.
-    test "after-join snapshot: carries the per-frame budget base (#1108)" do
-      {irc_server, port} = start_irc_server()
-      {user, network} = setup_user_and_network_with_session(port)
-
-      welcome_session_on_channel(irc_server, "#snap")
-
-      # A non-default LINELEN so the pushed number can only have come from
-      # the live session's 005, not from a hardcoded RFC default.
-      IRCServer.feed(irc_server, ":irc.test.org 005 grappa-snap LINELEN=600 :are supported\r\n")
+      # Seed the modes cache (324 RPL_CHANNELMODEIS) purely as a WITNESS:
+      # without it a refutation would also pass against a snapshot that had
+      # stopped pushing anything at all.
+      IRCServer.feed(irc_server, ":irc.test.org 324 grappa-snap #snap +nt\r\n")
 
       flush_server(irc_server)
 
@@ -384,9 +358,10 @@ defmodule GrappaWeb.GrappaChannelTest do
         |> build_socket()
         |> subscribe_and_join(topic, %{})
 
-      assert_push("event", %{kind: :isupport_changed, frame_budget_base: base})
-
-      assert base - byte_size("#snap") == Grappa.IRC.LineSplit.frame_budget("#snap", 600)
+      # The channel snapshot still delivers the facts that ARE channel
+      # properties; ISUPPORT, which is not one, no longer rides along.
+      assert_push("event", %{kind: :channel_modes_changed, channel: "#snap"})
+      refute_push("event", %{kind: :isupport_changed}, 200)
     end
 
     test "after-join snapshot: no push when no session is running for channel" do
@@ -986,6 +961,83 @@ defmodule GrappaWeb.GrappaChannelTest do
       assert is_map(windows)
       nicks = windows |> Map.values() |> List.flatten() |> Enum.map(& &1.target_nick)
       assert "alice" in nicks
+    end
+
+    # #1255 — the cold replay, on the topic the fact is scoped to. Two
+    # halves, one per consequence named in the issue: the payload reaches a
+    # client on the user topic, and it reaches a client that is in NO
+    # channel at all — which the per-channel snapshot could never serve.
+    test "after-join snapshot: pushes the network's ISUPPORT on the user topic (#216/#1255)" do
+      {irc_server, port} = start_irc_server()
+      {user, network} = setup_user_and_network_with_session(port)
+
+      welcome_session_on_channel(irc_server, "#snap")
+
+      # Advertise a non-default CHANMODES/PREFIX/CHANTYPES so the pushed
+      # snapshot can only have come from the live session, never from cic's
+      # built-in default.
+      IRCServer.feed(
+        irc_server,
+        ":irc.test.org 005 grappa-snap CHANMODES=beI,k,l,imnpst PREFIX=(qaohv)~&@%+ CHANTYPES=# LINELEN=600 :are supported\r\n"
+      )
+
+      flush_server(irc_server)
+
+      topic = Topic.user(user.name)
+
+      {:ok, _, _} =
+        user.name
+        |> build_socket()
+        |> subscribe_and_join(topic, %{})
+
+      assert_push("event", %{
+        kind: :isupport_changed,
+        network_id: net_id,
+        prefix: prefix,
+        chantypes: chantypes,
+        frame_budget_base: base
+      })
+
+      assert net_id == network.id
+      assert prefix["q"] == "~"
+      assert chantypes == ["#"]
+      # #1108 — the budget rides the same payload, so moving the replay must
+      # not leave the compose-box warning dark on a client with no channels.
+      assert base - byte_size("#snap") == Grappa.IRC.LineSplit.frame_budget("#snap", 600)
+    end
+
+    test "after-join snapshot: a client in NO channel still gets ISUPPORT (#1255)" do
+      # The functional half. A session parked on the server window, a fresh
+      # account before its first JOIN, a user who only reads DMs: none of
+      # them subscribe to a channel topic, so before #1255 the cold replay
+      # never ran and cic drove its /mode modal off the compile-time
+      # bahamut defaults for the whole session.
+      {irc_server, port} = start_irc_server()
+      {user, network} = setup_user_and_network_with_session(port)
+
+      # Registration WITHOUT joining any channel — the deliberate difference
+      # from `welcome_session_on_channel/2`, which is the only reason this
+      # test does the handshake by hand.
+      :ok = await_handshake(irc_server)
+      IRCServer.feed(irc_server, ":irc.test.org 001 grappa-snap :Welcome\r\n")
+
+      IRCServer.feed(
+        irc_server,
+        ":irc.test.org 005 grappa-snap PREFIX=(qaohv)~&@%+ :are supported\r\n"
+      )
+
+      flush_server(irc_server)
+
+      topic = Topic.user(user.name)
+
+      {:ok, _, _} =
+        user.name
+        |> build_socket()
+        |> subscribe_and_join(topic, %{})
+
+      assert_push("event", %{kind: :isupport_changed, network_id: net_id, prefix: prefix})
+      assert net_id == network.id
+      assert prefix["q"] == "~"
     end
 
     test "after-join snapshot: pushes the session's umodes on the user topic (#229)" do

@@ -1535,8 +1535,9 @@ defmodule Grappa.Session do
   @doc """
   Returns the per-session cold-WS-subscribe bundle for the user-topic
   after-join snapshot — the umode set (#229), the server-advertised
-  supported umodes (#249), and the `window_invited` payloads for EVERY
-  `:invited` window (#482) — in ONE round-trip.
+  supported umodes (#249), the `window_invited` payloads for EVERY
+  `:invited` window (#482), and the ISUPPORT table + LINELEN (#1255) — in
+  ONE round-trip.
 
   Folded into a single call so `GrappaWeb.GrappaChannel.push_user_snapshot`
   makes ONE per-network `Session.Server` round-trip on the login hot path
@@ -1556,7 +1557,9 @@ defmodule Grappa.Session do
              supported_umodes: [String.t()],
              identified: boolean(),
              account: String.t() | nil,
-             invited_windows: [Grappa.Session.Wire.window_invited_payload()]
+             invited_windows: [Grappa.Session.Wire.window_invited_payload()],
+             isupport: Grappa.Session.ISupport.t(),
+             linelen: pos_integer()
            }}
           | {:error, :no_session}
   def session_snapshot(subject, network_id)
