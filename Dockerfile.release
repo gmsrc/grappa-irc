@@ -62,6 +62,18 @@ RUN mix deps.get --only prod
 COPY config config
 COPY lib lib
 COPY priv priv
+# `mix release` is not just :assemble — mix.exs registers release STEPS that
+# read files from the repo, and every path they touch has to be in this build
+# context or the release dies at assembly time. Today that is the operator CLI
+# (#1158): `install_operator_cli/1` renames the generated launcher aside and
+# `File.cp!`s `infra/release/grappa.sh` (mix.exs `@operator_cli`) into its
+# place, so `bin/grappa` carries the account verbs. Without this COPY the step
+# raises `File.CopyError ... no such file or directory` — which is exactly how
+# the v1.0.0 release job died (run 31656721237): the packaging jobs build from
+# a full checkout and never noticed, and this image is the only build that
+# sees a hand-picked context. If a future release step reads another repo
+# path, COPY it here too.
+COPY infra/release/grappa.sh infra/release/grappa.sh
 RUN mix compile --warnings-as-errors
 RUN mix release --overwrite
 
