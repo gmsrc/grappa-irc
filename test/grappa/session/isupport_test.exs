@@ -353,6 +353,7 @@ defmodule Grappa.Session.ISupportTest do
       # empty value is malformed, so keep the prior set rather than making
       # every channel name unrecognisable.
       d = ISupport.default()
+
       assert ISupport.chantypes(ISupport.merge_isupport(["grappa-test", "CHANTYPES="], d)) ==
                ISupport.default_chantypes()
     end
@@ -398,6 +399,7 @@ defmodule Grappa.Session.ISupportTest do
     test "merge_isupport/2 ignores a MAXLIST token with nothing parseable" do
       d = ISupport.default()
       seeded = ISupport.merge_isupport(["grappa-test", "MAXLIST=b:60"], d)
+
       assert ISupport.maxlist(ISupport.merge_isupport(["grappa-test", "MAXLIST=junk"], seeded)) ==
                %{"b" => 60}
     end
