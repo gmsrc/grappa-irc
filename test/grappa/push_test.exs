@@ -189,7 +189,7 @@ defmodule Grappa.PushTest do
   describe "create/2 — :provider (2026-08-13, UnifiedPush)" do
     test "defaults to \"webpush\" when omitted — every pre-existing caller is unaffected" do
       user = user_fixture()
-      assert {:ok, %Subscription{provider: "webpush"}} = Push.create({:user, user.id}, valid_attrs())
+      assert {:ok, %Subscription{provider: :webpush}} = Push.create({:user, user.id}, valid_attrs())
     end
 
     test "accepts \"unifiedpush\", still with a real keypair (same encrypted Push.Sender path)" do
@@ -198,7 +198,7 @@ defmodule Grappa.PushTest do
       attrs = Map.put(valid_attrs(endpoint: "https://ntfy.example/up/abc"), :provider, "unifiedpush")
 
       assert {:ok, %Subscription{} = sub} = Push.create({:user, user.id}, attrs)
-      assert sub.provider == "unifiedpush"
+      assert sub.provider == :unifiedpush
       # A UnifiedPush registration still carries a real P-256 keypair —
       # Push.Sender's VAPID+encrypt path is unbranched on :provider (see
       # Grappa.Push.Sender moduledoc), so it needs one exactly like webpush.

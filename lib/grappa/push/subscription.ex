@@ -8,7 +8,13 @@ defmodule Grappa.Push.Subscription do
   that drives the "see + revoke my devices" UX in the cic settings
   drawer (B3).
 
-  ## `:provider` — `"webpush"` | `"unifiedpush"` (2026-08-13)
+  ## `:provider` — `:webpush` | `:unifiedpush` (2026-08-13)
+
+  `Ecto.Enum`-typed (mirrors `Networks.Credential.connection_state`
+  / `Accounts.Session.kind`) — the wire shape is still the strings
+  `"webpush"` / `"unifiedpush"` (Jason encodes an atom as its
+  `Atom.to_string/1` form), only the in-process representation is an
+  atom.
 
   Both provider kinds store the SAME three fields and are delivered
   through the SAME `Grappa.Push.Sender` VAPID+encrypt path,
@@ -68,9 +74,9 @@ defmodule Grappa.Push.Subscription do
   alias Grappa.Accounts.User
   alias Grappa.Visitors.Visitor
 
-  @providers ~w(webpush unifiedpush)
+  @providers [:webpush, :unifiedpush]
 
-  @type provider :: String.t()
+  @type provider :: :webpush | :unifiedpush
 
   @type t :: %__MODULE__{
           id: Ecto.UUID.t() | nil,
@@ -94,7 +100,7 @@ defmodule Grappa.Push.Subscription do
     belongs_to :user, User, type: :binary_id
     belongs_to :visitor, Visitor, type: :binary_id
 
-    field :provider, :string, default: "webpush"
+    field :provider, Ecto.Enum, values: @providers, default: :webpush
     field :endpoint, :string
     field :p256dh_key, :string
     field :auth_key, :string
@@ -138,9 +144,11 @@ defmodule Grappa.Push.Subscription do
     * `user_agent` — best-effort device identifier from request
       header. Cap at 512 B drops obviously-spoofed long values.
 
-  `:provider` is validated against the closed set (`"webpush"` |
-  `"unifiedpush"`) but does NOT change which fields are required —
-  see moduledoc.
+  `:provider` is `Ecto.Enum`-typed against the closed set (`:webpush`
+  | `:unifiedpush`) — `cast/3` rejects anything outside it with the
+  same `"is invalid"` token `validate_inclusion/3` would produce, so
+  no separate validation call is needed here. It does NOT change
+  which fields are required — see moduledoc.
 
   ## assoc_constraint vs unique_constraint
 
@@ -170,7 +178,6 @@ defmodule Grappa.Push.Subscription do
     sub
     |> cast(attrs, @subject ++ @required ++ @optional)
     |> validate_required(@required)
-    |> validate_inclusion(:provider, @providers)
     |> validate_length(:endpoint, max: 2048)
     |> validate_length(:p256dh_key, max: 256)
     |> validate_length(:auth_key, max: 64)
