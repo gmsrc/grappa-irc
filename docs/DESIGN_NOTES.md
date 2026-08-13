@@ -40595,3 +40595,85 @@ session, and must keep classifying a notification deep-link with the SPA
 closed. Neither is a per-network IRC fact rendered from a guess; both are
 context-free byte constraints, and they are named in `chantypes.ts` so the next
 reader who greps `#&+!` finds two survivors and knows they were considered.
+<!-- entry #1271 -->
+
+---
+
+## 2026-08-13 — #1271: `merge=union` does not save the separator, and the ritual that caught it is now a gate
+
+`docs/DESIGN_NOTES.md` has carried `merge=union` since #114 (2026-07-22) so
+that concurrent PRs appending entries auto-resolve instead of conflicting by
+hand on every merge. On 2026-08-13 four branches (#1261, #1262, #1263/#1266,
+#1255) came out of a rebase having silently lost the three-line separator block
+that opens their entry: `rc=0`, no conflict, no markers, and **zero deletions**,
+so the additions count of the branch's own contribution simply shrank by three.
+Every one of them was caught only because a human had pinned
+`git diff --numstat` before the rebase and compared after.
+
+**The mechanism, reproduced here rather than inherited from the report.** Every
+entry was appended with the same three leading lines — blank, `---`, blank —
+followed by a unique heading. When two branches append, the merge machinery
+aligns that identical prefix as a *common* addition and hands only the diverging
+tails to the union driver; union emits the shared prefix ONCE and concatenates
+both bodies after it. One entry keeps its separator, the other is glued straight
+onto the previous body. Five variants in a scratch repo, additions before → after
+the rebase:
+
+| setup | rebase | additions | separators |
+|---|---|---|---|
+| union, no marker | rc=0 | 7 → **4** | 2/3, entry glued |
+| no union, `---` | **conflict** | 7 → 7 | 2/3 |
+| union + marker on both sides | rc=0 | 8 → 8 | 3/3 |
+| union + marker on the rebased side only | rc=0 | 8 → 8 | 3/3 |
+| union + marker on the OTHER side only | rc=0 | 7 → 7 | 3/3 |
+
+**Two facts the report did not have.** First, a marker on *either* side is
+enough, in both directions — the pair is protected the moment one of the two
+entries carries one, so adoption is incremental and no old entry needs a
+retrofit. Second, the shape matters: the report measured 9 → 8 for the marker
+variant and read the lost line as a cosmetic blank. That loss is the *leading
+blank*, and it disappears if the marker is the FIRST appended line with no blank
+ahead of it — 8 → 8, nothing lost at all. Worth the pedantry, because a
+convention that routinely shrinks the diff by one line poisons the very numstat
+comparison this whole class is detected by. Conversely a *duplicated* marker is
+worse than none: the identical prefix is back and now includes the marker, so
+the collapse takes FOUR lines. Uniqueness is the mechanism, not decoration.
+
+**The repair sweep in the report was retracted, on measurement.** The claim was
+that entries which already lost their separator are on `main` and want a pass to
+re-insert it. Measured on `efa69e35`: the last fourteen entries are all in the
+canonical shape, and the four losses of 2026-08-13 were each caught before
+landing. Deriving the sweep as written — every `^## ` not preceded by `---` —
+selects **426 of 645** level-2 headings, overwhelmingly entries from before the
+convention existed; the oldest glued one is 2026-05-12, two months before the
+union attribute was added, so it cannot be union damage. And the rule is wrong in
+kind as well as in scale: **12 of those headings are not entry headings** — seven
+are the document's own front-matter sections, and five are mis-levelled
+subsections *inside* the 2026-08-08 #1038 entry. A file-wide "every `##` is
+preceded by `---`" would insert horizontal rules in the middle of an entry.
+Re-levelling the log is a question for its author, and it does not ride a bugfix.
+
+**So the gate is diff-scoped.** `scripts/design-notes-gate.sh` judges only the
+entry headings a branch ADDS relative to its merge base: no opinion about
+history, no exemption list, no false positives to teach people to ignore. It
+asserts the separator (the detector — it sees whatever the merge machinery does
+next, including a mechanism nobody has characterised yet) and the unique marker
+(the prevention). Both, because a convention that is only written down depends
+on somebody remembering it across sessions, which is exactly the property that
+let this happen four times in one day.
+
+Three consequences worth stating. The gate **fails closed**: a base ref it cannot
+resolve is an error, never a skip, because the reachable version of that is a
+shallow CI checkout and a green gate that looked at nothing is the shape of every
+guard that fails open — which is why the CI job now checks out with
+`fetch-depth: 0`, a cost paid for this one gate and declared as such. An added
+`^## ` is treated as an ENTRY heading, so a subsection inside an entry must be
+`###` or deeper; the #1038 entry above is why that constraint is worth having.
+And the gate proves nothing about entries already on `main` — by construction it
+never looks at them.
+
+The suite that proves the gate can fail does not use a hand-written broken
+fixture. It builds a scratch repository with the real attribute, appends an entry
+on each of two branches and runs a real `git rebase`, so what the gate is judged
+against is what the merge machinery actually produced. A fixture would have
+proved the regex works and nothing about the defect.
