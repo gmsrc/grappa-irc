@@ -213,19 +213,25 @@ defmodule Grappa.WindowCountsTest do
   # to the hydrated answer.
   # ---------------------------------------------------------------------------
 
-  test "hiding excludes the narrow suppressed kinds from events (#505)" do
+  test "hiding excludes the suppressed kinds from events (#505, :mode added #1262)" do
     c = ctx()
     anchor = insert(c, "#chan", st: 1, body: "anchor")
     insert(c, "#chan", st: 2, sender: "bob", kind: :join, body: nil)
     insert(c, "#chan", st: 3, sender: "bob", kind: :part, body: nil)
     insert(c, "#chan", st: 4, sender: "bob", kind: :mode, body: nil)
+    # `:topic` is body-required, and is the CONTROL row that must survive the
+    # hide — without it this test cannot tell the kind filter from a zeroed
+    # events bucket. It took over that job from `:mode` in #1262.
+    insert(c, "#chan", st: 5, sender: "bob", kind: :topic, body: "new topic")
 
-    # Showing: all three. This is the pre-#505 answer and must not move.
+    # Showing: all four. This is the pre-#505 answer and must not move.
     assert snap(c, "#chan", anchor.id, "vjt") ==
-             %{messages: 0, mentions: 0, events: 3, severity: :event}
+             %{messages: 0, mentions: 0, events: 4, severity: :event}
 
-    # Hiding: join + part go, :mode STAYS. If the filter were "zero the events
-    # bucket" instead of "apply the narrow kind set", this would read 0.
+    # Hiding: join + part + mode go, :topic STAYS. `:mode` joined the
+    # suppressed set in #1262 (vjt withdrew #458's carve-out), so it no longer
+    # counts toward a badge the operator cannot clear by reading — the pane
+    # does not render it either.
     assert snap_hiding(c, "#chan", anchor.id, "vjt") ==
              %{messages: 0, mentions: 0, events: 1, severity: :event}
   end
@@ -567,6 +573,9 @@ defmodule Grappa.WindowCountsTest do
         ins(subject, net.id, chan, st: 3, sender: "bob", kind: :join, body: nil)
         ins(subject, net.id, chan, st: 4, sender: "bob", kind: :quit, body: nil)
         ins(subject, net.id, chan, st: 5, sender: "bob", kind: :mode, body: nil)
+        # The surviving CONTROL row (see the sibling test): `:mode` stopped
+        # playing that part in #1262 when it entered the suppressed set.
+        ins(subject, net.id, chan, st: 6, sender: "bob", kind: :topic, body: "t")
         cursor(subject, net.id, chan, anchor.id)
       end
 
@@ -575,13 +584,13 @@ defmodule Grappa.WindowCountsTest do
 
       bulk = WindowCounts.bulk_snapshot(subject, own_nicks, [], hidden)
 
-      # #big: join + quit dropped, :mode survives.
+      # #big: join + quit + mode dropped, :topic survives.
       assert bulk[net.slug]["#big"] ==
                %{messages: 1, mentions: 0, events: 1, severity: :message}
 
       # #small: untouched — the exclusion is PER WINDOW, not a global switch.
       assert bulk[net.slug]["#small"] ==
-               %{messages: 1, mentions: 0, events: 3, severity: :message}
+               %{messages: 1, mentions: 0, events: 4, severity: :message}
     end
 
     test "agrees with snapshot/7 for the same window" do
