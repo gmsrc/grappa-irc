@@ -1,7 +1,9 @@
 defmodule Grappa.Session.ISupport do
   @moduledoc """
-  Per-network channel-mode capability table, parsed from the upstream's
-  005 RPL_ISUPPORT `CHANMODES=`, `PREFIX=`, and `STATUSMSG=` tokens.
+  Per-network capability table, parsed from the upstream's 005
+  RPL_ISUPPORT tokens: `CHANMODES=`, `PREFIX=`, `STATUSMSG=`,
+  `CASEMAPPING=`, `MONITOR=`/`WATCH=`, and — since #1255 — `CHANTYPES=`,
+  `MAXLIST=`, `NICKLEN=`, `CHANNELLEN=` and `TOPICLEN=`.
 
   ## Why this exists
 
@@ -88,13 +90,27 @@ defmodule Grappa.Session.ISupport do
   """
   @type casemapping :: Identifier.casemapping()
 
+  @typedoc """
+  Advertised entry cap per type-A (list) mode letter, from `MAXLIST=`
+  (#1255). `MAXLIST=beI:100` and `MAXLIST=b:100,e:100,I:100` both fold to
+  the same map — the shared-budget spelling is expanded per letter, since
+  no consumer can act on "these three share 100" that could not act on
+  "each is capped at 100". Empty means the network advertised no cap.
+  """
+  @type maxlist :: %{String.t() => pos_integer()}
+
   @type t :: %{
           chanmodes: chanmodes(),
           prefix: prefix(),
           statusmsg: [String.t()],
           monitor: presence_limit() | nil,
           watch: presence_limit() | nil,
-          casemapping: casemapping()
+          casemapping: casemapping(),
+          chantypes: [String.t()],
+          maxlist: maxlist(),
+          nicklen: pos_integer() | nil,
+          channellen: pos_integer() | nil,
+          topiclen: pos_integer() | nil
         }
 
   # Pre-005 seed = the exact values the old EventRouter constants held.
@@ -137,6 +153,22 @@ defmodule Grappa.Session.ISupport do
   # apart).
   @default_casemapping :ascii
 
+  # #1255 — CHANTYPES pre-005 seed: the RFC 2812 sigil class. This is the
+  # literal the whole stack already open-codes — `Identifier`'s channel
+  # regex server-side, and cic's compose / slashCommands / inviteLink /
+  # ScrollbackPane copies — so a network that omits the token keeps
+  # behaving exactly as it did before the token was parsed at all.
+  @default_chantypes ["#", "&", "+", "!"]
+
+  # #1255 — MAXLIST and the three length limits have NO honest pre-005
+  # default, and that is deliberate. Nothing in the stack caps a list or
+  # validates a length today, so seeding a number would start REJECTING
+  # input the ircd accepts — the opposite of "a session that never sees a
+  # 005 behaves identically to before". `%{}` / `nil` mean "unadvertised",
+  # which every consumer must read as "do not enforce", the same posture
+  # #1108 took for the frame budget.
+  @default_maxlist %{}
+
   @doc """
   The pre-005 default capability table (bahamut/Azzurra values). Used as
   the initial `Session.Server` state field and as the fallback whenever a
@@ -154,7 +186,12 @@ defmodule Grappa.Session.ISupport do
       # per review 2026-07-19) lives in Session.Server.arm_presence/1.
       monitor: nil,
       watch: nil,
-      casemapping: @default_casemapping
+      casemapping: @default_casemapping,
+      chantypes: @default_chantypes,
+      maxlist: @default_maxlist,
+      nicklen: nil,
+      channellen: nil,
+      topiclen: nil
     }
   end
 
@@ -293,6 +330,57 @@ defmodule Grappa.Session.ISupport do
   @spec default_casemapping() :: casemapping()
   def default_casemapping, do: @default_casemapping
 
+  @doc """
+  The sigils that open a CHANNEL name on this network (#1255), from
+  `CHANTYPES=`. Defaults to the RFC 2812 class the rest of the stack
+  open-codes.
+
+  Every accessor below reads via `Map.get`, never a key pattern-match, for
+  the same hot-reload reason as `statusmsg/1`: a live `Session.Server`
+  state seeded before these fields existed holds a table without them, and
+  a plain module reload does not rewrite process state.
+  """
+  @spec chantypes(t()) :: [String.t()]
+  def chantypes(isupport) when is_map(isupport),
+    do: Map.get(isupport, :chantypes, @default_chantypes)
+
+  @doc """
+  The pre-005 default channel sigils (RFC 2812 `#&+!`). Exposed so callers
+  and tests reference the seed through production code, not the literal.
+  """
+  @spec default_chantypes() :: [String.t()]
+  def default_chantypes, do: @default_chantypes
+
+  @doc """
+  Advertised entry caps per type-A list mode (#1255), from `MAXLIST=`.
+  Empty when the network advertised none — read that as "no cap known",
+  never as "cap of zero".
+  """
+  @spec maxlist(t()) :: maxlist()
+  def maxlist(isupport) when is_map(isupport),
+    do: Map.get(isupport, :maxlist, @default_maxlist)
+
+  @doc """
+  The advertised maximum nick length (#1255), or `nil` when the network
+  did not say. `nil` means "do not validate" — the pre-005 behaviour.
+  """
+  @spec nicklen(t()) :: pos_integer() | nil
+  def nicklen(isupport) when is_map(isupport), do: Map.get(isupport, :nicklen)
+
+  @doc """
+  The advertised maximum channel-name length (#1255), or `nil`. See
+  `nicklen/1` for why absent is not a number.
+  """
+  @spec channellen(t()) :: pos_integer() | nil
+  def channellen(isupport) when is_map(isupport), do: Map.get(isupport, :channellen)
+
+  @doc """
+  The advertised maximum topic length (#1255), or `nil`. See `nicklen/1`
+  for why absent is not a number.
+  """
+  @spec topiclen(t()) :: pos_integer() | nil
+  def topiclen(isupport) when is_map(isupport), do: Map.get(isupport, :topiclen)
+
   # ---------------------------------------------------------------------------
   # Token parsing
   # ---------------------------------------------------------------------------
@@ -338,7 +426,69 @@ defmodule Grappa.Session.ISupport do
   # hot-reload-window safety as STATUSMSG/MONITOR above.
   defp merge_token("CASEMAPPING=" <> rest, acc), do: Map.put(acc, :casemapping, parse_casemapping(rest))
 
+  # #1255 — CHANTYPES=<sigils>: a bare run of the sigils that open a
+  # channel name. Empty is malformed (a network with no channel sigils
+  # cannot be addressed at all): keep the prior set rather than making
+  # every channel name unrecognisable. `Map.put` for hot-reload safety,
+  # like every clause above.
+  defp merge_token("CHANTYPES=" <> rest, acc) do
+    case String.graphemes(rest) do
+      [] -> acc
+      sigils -> Map.put(acc, :chantypes, sigils)
+    end
+  end
+
+  # #1255 — MAXLIST=beI:100 / MAXLIST=b:60,e:60,I:50.
+  defp merge_token("MAXLIST=" <> rest, acc) do
+    case parse_maxlist(rest) do
+      {:ok, caps} -> Map.put(acc, :maxlist, caps)
+      :error -> acc
+    end
+  end
+
+  # #1255 — the advertised length limits. A non-numeric or non-positive
+  # value keeps the prior limit: an unusable cap (`NICKLEN=0` rejects every
+  # nick) is worse than no cap.
+  defp merge_token("NICKLEN=" <> rest, acc), do: put_limit(acc, :nicklen, rest)
+  defp merge_token("CHANNELLEN=" <> rest, acc), do: put_limit(acc, :channellen, rest)
+  defp merge_token("TOPICLEN=" <> rest, acc), do: put_limit(acc, :topiclen, rest)
+
   defp merge_token(_, acc), do: acc
+
+  @spec put_limit(t(), :nicklen | :channellen | :topiclen, String.t()) :: t()
+  defp put_limit(acc, key, rest) do
+    case Integer.parse(rest) do
+      {n, ""} when n > 0 -> Map.put(acc, key, n)
+      _ -> acc
+    end
+  end
+
+  # MAXLIST=<modes>:<limit>[,<modes>:<limit>...] — each entry caps a RUN of
+  # mode letters, so `beI:100` expands to one cap per letter. A malformed
+  # entry is dropped on its own: rejecting the whole token would silently
+  # uncap every list the network DID declare correctly. A token with
+  # nothing parseable at all is :error, so the prior caps survive.
+  @spec parse_maxlist(String.t()) :: {:ok, maxlist()} | :error
+  defp parse_maxlist(rest) do
+    caps =
+      rest
+      |> String.split(",")
+      |> Enum.flat_map(&parse_maxlist_entry/1)
+      |> Map.new()
+
+    if caps == %{}, do: :error, else: {:ok, caps}
+  end
+
+  @spec parse_maxlist_entry(String.t()) :: [{String.t(), pos_integer()}]
+  defp parse_maxlist_entry(entry) do
+    with [modes, limit] <- String.split(entry, ":", parts: 2),
+         [_ | _] = letters <- String.graphemes(modes),
+         {n, ""} when n > 0 <- Integer.parse(limit) do
+      Enum.map(letters, &{&1, n})
+    else
+      _ -> []
+    end
+  end
 
   # A presence-mechanism limit value. Non-numeric / empty / non-positive
   # values advertise the mechanism without a usable cap → :unlimited

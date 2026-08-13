@@ -318,6 +318,136 @@ defmodule Grappa.Session.ISupportTest do
     end
   end
 
+  # #1255 — CHANTYPES is the ISUPPORT token listing the sigils that open a
+  # CHANNEL name on this network. Everything in the stack open-codes the RFC
+  # 2812 set `#&+!` (cic's compose/slashCommands/inviteLink/ScrollbackPane,
+  # the server's `Identifier` channel regex), which is why the default IS
+  # that set: a network that omits the token must behave exactly as before.
+  describe "CHANTYPES (#1255)" do
+    test "default/0 seeds the RFC 2812 sigil set the stack already assumes" do
+      assert ISupport.chantypes(ISupport.default()) == ["#", "&", "+", "!"]
+      assert ISupport.default_chantypes() == ["#", "&", "+", "!"]
+    end
+
+    test "merge_isupport/2 narrows to what the network advertises" do
+      # bahamut/Azzurra advertises `#&`: `+foo` and `!foo` are NOT channels
+      # there, and a client offering them is offering a JOIN that fails.
+      params = ["grappa-test", "CHANTYPES=#&", "are supported by this server"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.chantypes(isupport) == ["#", "&"]
+    end
+
+    test "merge_isupport/2 ignores an empty CHANTYPES= token" do
+      # A network with no channel sigils at all cannot be addressed; an
+      # empty value is malformed, so keep the prior set rather than making
+      # every channel name unrecognisable.
+      d = ISupport.default()
+      assert ISupport.chantypes(ISupport.merge_isupport(["grappa-test", "CHANTYPES="], d)) ==
+               ISupport.default_chantypes()
+    end
+
+    test "chantypes/1 falls back to the default on a table predating the field" do
+      pre_1255 = Map.drop(ISupport.default(), [:chantypes])
+      refute Map.has_key?(pre_1255, :chantypes)
+      assert ISupport.chantypes(pre_1255) == ISupport.default_chantypes()
+    end
+  end
+
+  # #1255 — MAXLIST caps how many entries a type-A (list) mode holds. #1251
+  # made every advertised list mode queryable from cic, so a client offering
+  # a list needs the advertised cap. There is no honest default: pre-005 the
+  # stack enforced no cap at all, and inventing one would reject an entry the
+  # ircd would have accepted.
+  describe "MAXLIST (#1255)" do
+    test "default/0 advertises no caps" do
+      assert ISupport.maxlist(ISupport.default()) == %{}
+    end
+
+    test "merge_isupport/2 parses a shared cap across a run of letters" do
+      # `MAXLIST=beI:100` — ONE budget of 100 shared by b, e and I.
+      params = ["grappa-test", "MAXLIST=beI:100", "are supported by this server"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.maxlist(isupport) == %{"b" => 100, "e" => 100, "I" => 100}
+    end
+
+    test "merge_isupport/2 parses per-letter caps" do
+      params = ["grappa-test", "MAXLIST=b:60,e:60,I:50"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.maxlist(isupport) == %{"b" => 60, "e" => 60, "I" => 50}
+    end
+
+    test "merge_isupport/2 keeps the parseable entries and drops the malformed ones" do
+      # A garbled entry must not cost the caps that parsed: dropping the
+      # whole token would silently uncap every list the network DID declare.
+      params = ["grappa-test", "MAXLIST=b:60,e:,:50,I:abc,q:0"]
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.maxlist(isupport) == %{"b" => 60}
+    end
+
+    test "merge_isupport/2 ignores a MAXLIST token with nothing parseable" do
+      d = ISupport.default()
+      seeded = ISupport.merge_isupport(["grappa-test", "MAXLIST=b:60"], d)
+      assert ISupport.maxlist(ISupport.merge_isupport(["grappa-test", "MAXLIST=junk"], seeded)) ==
+               %{"b" => 60}
+    end
+
+    test "maxlist/1 falls back to the empty map on a table predating the field" do
+      pre_1255 = Map.drop(ISupport.default(), [:maxlist])
+      assert ISupport.maxlist(pre_1255) == %{}
+    end
+  end
+
+  # #1255 — the advertised length limits. `nil` (not a number) is the
+  # pre-005 seed on purpose: today nothing validates length client-side, so
+  # a guessed default would start REJECTING input the network accepts. Same
+  # posture as #1108's `frame_budget_base` — no honest default, say nothing.
+  describe "length limits (#1255)" do
+    test "default/0 advertises no length limits" do
+      d = ISupport.default()
+      assert ISupport.nicklen(d) == nil
+      assert ISupport.channellen(d) == nil
+      assert ISupport.topiclen(d) == nil
+    end
+
+    test "merge_isupport/2 parses NICKLEN, CHANNELLEN and TOPICLEN" do
+      params = [
+        "grappa-test",
+        "NICKLEN=30",
+        "CHANNELLEN=200",
+        "TOPICLEN=307",
+        "are supported by this server"
+      ]
+
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.nicklen(isupport) == 30
+      assert ISupport.channellen(isupport) == 200
+      assert ISupport.topiclen(isupport) == 307
+    end
+
+    test "merge_isupport/2 ignores non-numeric and non-positive limits" do
+      # `NICKLEN=0` would reject every nick; `TOPICLEN=abc` is noise. Keep
+      # the prior value — an unusable cap is worse than no cap.
+      seeded = ISupport.merge_isupport(["grappa-test", "NICKLEN=30"], ISupport.default())
+
+      junk =
+        ISupport.merge_isupport(
+          ["grappa-test", "NICKLEN=0", "CHANNELLEN=abc", "TOPICLEN="],
+          seeded
+        )
+
+      assert ISupport.nicklen(junk) == 30
+      assert ISupport.channellen(junk) == nil
+      assert ISupport.topiclen(junk) == nil
+    end
+
+    test "the limit accessors fall back to nil on a table predating the fields" do
+      pre_1255 = Map.drop(ISupport.default(), [:nicklen, :channellen, :topiclen])
+      assert ISupport.nicklen(pre_1255) == nil
+      assert ISupport.channellen(pre_1255) == nil
+      assert ISupport.topiclen(pre_1255) == nil
+    end
+  end
+
   describe "presence_mechanism/1 (#247)" do
     test "default/0 advertises no presence mechanism (:none pre-005)" do
       assert ISupport.presence_mechanism(ISupport.default()) == :none
