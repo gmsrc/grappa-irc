@@ -41707,3 +41707,54 @@ callers are part of the change. And when the added requirement is a
 credential, check what the endpoint's new failure code does on the way back —
 a 401 that used to be unreachable is not the same 401 the caller was written
 against.
+<!-- entry #1284 -->
+
+---
+
+## 2026-08-13 — #1284: who is at the door decides whether a client token dies
+
+`revoke_other_sessions_for_user!/2` swept an account's live bearers by
+`user_id` alone. A per-client token (#1196) is a `Session` row like any
+other, so arming TOTP revoked the exact credential the feature exists to
+provide — and the order `CLIENT_PROTOCOL.md` §7 puts an operator on (mint
+the token, hand it to the headless client, then arm the factor) was the
+order that broke. Silently: the enrolment succeeds, the recovery codes
+print, and the bridge starts answering `401 invalid_credentials`,
+indistinguishable from a wrong password.
+
+**Ruled: exclude.** The sweep now carries `s.kind != :client`, on all
+three of its call-sites — TOTP enrolment (`accounts.ex`), TOTP disable
+(same), and the passkey mode transaction (`webauthn.ex`). The first was
+the reported one; the other two were censused and ruled together, because
+they are one class rather than three cases.
+
+**The line is WHO is at the door, not WHICH factor moved.** All three
+call-sites are reached by an account holder who has just proven they hold
+the account — a password, a TOTP code, a passkey assertion — and who is
+changing their factors precisely so the headless credential keeps working.
+Operator recovery (`reset_totp` / `reset_passkeys`) and admin password
+rotation are the opposite: nobody proved anything, and burning every
+derived credential is the defensible blast radius. Those doors were
+already a DIFFERENT function — `revoke_sessions_for_user!/1`, the
+whole-account sweep with no `other` and no `kind` filter — so the fix
+needed nothing added there, only a test pinning that the filter did not
+leak into it.
+
+**Why a filter in the function and not a flag on the call.** An opt-out
+argument would put the security posture at three call-sites where it can
+drift, and a default argument would make the safe answer the one nobody
+typed (house rule). One function, one behaviour, and the docstring states
+what it no longer revokes; a caller that wants everything gone asks for
+the whole-account sweep by name.
+
+`!= :client` rather than `== :web`, so a future third kind is swept until
+someone rules otherwise — fail-closed is the right default for a revoke,
+and `:client` is the only kind with an argument for surviving.
+
+**Apply:** when a sweep exists to protect an account, ask what the door
+PROVED before deciding how wide it reaches. And a credential whose whole
+purpose is to outlive a change must be tested against the change itself,
+not only against its own kill switch — the `Accounts` moduledoc had
+asserted in prose that the sweeps deliberately did not special-case it,
+which is how a documented non-decision outlived the feature that
+contradicted it.
