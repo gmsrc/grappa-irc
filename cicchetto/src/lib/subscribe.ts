@@ -420,11 +420,15 @@ moduleRoot(() => {
           // idempotent).
           //
           // #1255 — the CURRENT server does not send this on a channel
-          // topic: the cold replay moved to the user-topic snapshot, which
-          // is where a per-network fact belongs and the only door that
-          // reaches a client in no channel. This arm remains for a server
-          // older than the bundle (a `--cic`-only deploy), where it is the
-          // difference between a seeded table and a dropped payload.
+          // topic: the cold replay moved to the user-topic snapshot, where a
+          // per-network fact belongs. Note for anyone reading this arm as
+          // load-bearing for a channel-less client — it is not, and the
+          // measurement is worth keeping: THIS handler also serves the
+          // `$server` pseudo-window, so the old per-channel replay did reach
+          // a client with zero channels, through a window unrelated to the
+          // fact it carried. The arm remains for a server older than the
+          // bundle (a `--cic`-only deploy), where it is the difference
+          // between a seeded table and a dropped payload.
           seedIsupport(payload.network_id, isupportEntryFromWire(payload));
           return;
         // UX-5 BJ (2026-05-19) — recognized-but-ignored. JoinBanner was

@@ -1443,10 +1443,18 @@ defmodule GrappaWeb.GrappaChannel do
           # Lives HERE, not on the per-channel snapshot where #216 first put
           # it: the payload is keyed by `network_id` and describes the
           # network, so a client in ten channels was receiving ten identical
-          # copies and a client in none — a parked session, a fresh account
-          # before its first JOIN, someone sitting on the server window —
-          # received none at all, and drove its `/mode` modal off cic's
-          # compile-time bahamut defaults for the whole session.
+          # copies of it.
+          #
+          # The stronger claim — that a client in NO channel received none —
+          # was measured and is FALSE, so it is recorded here rather than
+          # repeated: cic joins two channel-SHAPED topics with zero channels,
+          # the own-nick DM listener and the `$server` pseudo-window, and
+          # `$server` is wired to the ordinary channel handler, which seeds
+          # the table. The per-channel replay therefore did reach such a
+          # client — by way of an unrelated pseudo-window's topic join that
+          # nobody had declared a contract, and that no test held still.
+          # Making a per-network fact ride the per-network topic is what
+          # turns that accident into something stated.
           push(
             socket,
             "event",

@@ -2695,11 +2695,14 @@ defmodule Grappa.Session.Server do
         # #1255 — the ISUPPORT table + LINELEN ride this snapshot because the
         # fact is per (subject, network), like everything else here. The cold
         # replay used to hang off the PER-CHANNEL snapshot, which sent the
-        # same payload once per joined channel and never at all to a client
-        # in no channel. Folded into the existing call rather than added as a
-        # sibling `get_isupport` / `get_linelen` pair: this is the login hot
-        # path, and #482 already measured what a third serial blocking call
-        # per network does to user-topic broadcast latency.
+        # same payload once per joined channel — and reached a client in NO
+        # channel only through the `$server` pseudo-window's topic join, an
+        # accident rather than a contract (measured; see the note in
+        # `GrappaChannel.push_session_snapshot/2`). Folded into the existing
+        # call rather than added as a sibling `get_isupport` / `get_linelen`
+        # pair: this is the login hot path, and #482 already measured what a
+        # third serial blocking call per network does to user-topic
+        # broadcast latency.
         isupport: Map.get(state, :isupport, ISupport.default()),
         linelen: state.linelen
       }}, state}

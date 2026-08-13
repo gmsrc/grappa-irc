@@ -701,8 +701,8 @@ export type WireChannelEvent =
   // `Topic.user/1` (handled in userTopic.ts). It USED to also ride the
   // per-channel cold-WS-subscribe snapshot; #1255 moved that replay to the
   // user-topic snapshot, where a fact keyed by `network_id` belongs — the
-  // per-channel copy was sent once per joined channel and never at all to a
-  // client in no channel.
+  // per-channel copy was sent once per joined channel, N identical times for
+  // N channels.
   //
   // The kind stays declared on BOTH topics deliberately. The cic bundle and
   // the BEAM are separately deployable (a `--cic` bundle deploy ships the

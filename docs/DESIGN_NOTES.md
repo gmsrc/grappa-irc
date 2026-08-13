@@ -40517,30 +40517,49 @@ is published, and no consumer acts on it.
 been riding `push_channel_snapshot/4` since #216, where the network resolution
 was conveniently already done. The payload is keyed by `network_id` and
 describes the network, so a client in ten channels received ten identical
-copies, and a client in none — a parked session, a fresh account before its
-first JOIN, someone sitting on the server window — received none, and drove its
-`/mode` surfaces off cic's compile-time defaults for the whole session. It now
-rides `session_snapshot/2`, folded into the existing per-network call rather
-than added as a sibling `get_isupport`/`get_linelen` pair, because #482 already
-measured what a third serial blocking call on the login hot path does to
-user-topic broadcast latency. cic's channel-topic arm is kept, no longer as the
-live path but as the compatibility one: a `--cic`-only deploy leaves a server
-older than the bundle, and there it is the difference between a seeded table
-and a dropped payload.
+copies. It now rides `session_snapshot/2`, folded into the existing per-network
+call rather than added as a sibling `get_isupport`/`get_linelen` pair, because
+#482 already measured what a third serial blocking call on the login hot path
+does to user-topic broadcast latency. cic's channel-topic arm is kept, no
+longer as the live path but as the compatibility one: a `--cic`-only deploy
+leaves a server older than the bundle, and there it is the difference between a
+seeded table and a dropped payload.
 
-**Writing the e2e for that move found the sharper statement of the defect.**
-The obvious oracle — assert the frame arrives — would have passed on the broken
-code. cic joins exactly one channel-SHAPED topic while in no channel: the
-per-network DM listener on the own-nick topic. The server's `after_join` cannot
-tell it apart, it is a `{:channel, …}` topic, so the pre-fix code did push
-`isupport_changed` there — into a handler that drops that kind by contract,
-since the server has no business emitting it on a nick target. The payload
-arrived and was thrown away. So the witness is the STORE, read through the list
-modal's mode switcher: `+z` must appear (bahamut advertises `CHANMODES=bz` and
-no cic default carries it) and `+e`/`+I` must not (they are in cic's default
-table and bahamut has neither). It discriminates in both directions, and
-because the switcher is a reactive read the assertions retry into the payload's
-arrival rather than racing a barrier.
+**The other half of that defect — "and a client in NO channel received none" —
+was REFUTED by measurement, and the refutation is the more useful record.** It
+was asserted from the structure of the code and never measured, which is the
+mistake it is worth naming: reading the code gives you the structure, never the
+magnitude. A probe that dumped the live per-channel WS subscription keys for a
+client with zero channels came back with TWO of them —
+`"bahamut-test <ownnick>"` and `"bahamut-test $server"`. The own-nick key is
+the DM listener, whose handler drops `isupport_changed` by contract, since the
+server has no business emitting it on a nick target. But `$server` is wired to
+the ORDINARY channel handler (`subscribe.ts`, the `installChannelHandler` call
+for `SERVER_WINDOW_NAME`), and that one seeds the table. The server cannot tell
+the difference either: `$server` reaches `after_join` as a `{:channel, …}`
+topic like any other. So the pre-fix replay did reach a channel-less client,
+every time.
+
+**What that leaves is a better reason for the same patch.** A fact keyed by
+`network_id` was arriving through the topic join of an unrelated pseudo-window
+— a contract nobody had ever declared, that no test held still, and that any
+future change to how the server window subscribes would have broken silently
+and far from its cause. The residual defect is the MULTIPLICITY: N joined
+channels still means N identical copies plus `$server` plus the dropped
+own-nick one. Routing the fact onto the per-network topic is what turns the
+accident into something stated, and multiplicity is a property of the WIRE
+rather than of the store — the store is a last-write-wins seed and by
+construction cannot observe it — so it is pinned server-side, where the
+broadcast is directly countable, rather than through a browser.
+
+**No e2e ships with this change, deliberately and with the measurement to back
+it.** One was written, and it passed with the defect reinstated as well as
+without it — the `$server` door is why — so it was deleted rather than kept as
+a green that proves nothing. The user-visible surfaces the widening touches
+(CHANTYPES, CASEMAPPING, the length limits) have no distinct rendering on the
+testnet either: telling them apart needs an ircd advertising a non-standard
+`CHANTYPES`, which nothing in the harness does. Unit coverage plus the
+server-side multiplicity pin is the honest set here.
 
 **The length limits and `MAXLIST` are published and enforce nothing, on
 purpose.** Nothing in the stack capped a list or validated a length before, so
