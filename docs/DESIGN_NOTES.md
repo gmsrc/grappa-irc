@@ -40434,3 +40434,134 @@ the fix proves nothing: with the class branch reverted the spec dies on the
 claim, reporting the header as `+kbt` — the reported bug, reproduced in a
 browser. The barrier before it passed, so what the mutant killed is the fix,
 not the arrival of the MODE.
+## 2026-08-13 — #1255: the 005 was parsed six ways and published two, and the merge rule was documented backwards
+
+`Grappa.Session.ISupport` read `CHANMODES`, `PREFIX`, `STATUSMSG`,
+`CASEMAPPING`, `MONITOR` and `WATCH`, and `isupport_changed` shipped the first
+two. Everything else the network advertised about itself died at the door, so
+cic open-coded the answers as compile-time constants: the RFC 2812 channel
+sigils appeared as a literal `/^[#&+!]/` in `compose.ts`, `slashCommands.ts`
+and `ScrollbackPane.tsx`, each with its own copy. `compose.ts`'s comment
+already named the correct source and admitted nothing in the stack parsed it.
+That is the honest shape of the issue: not a missing feature, a fact that had
+nowhere to travel.
+
+**Last-wins is the contract, and the code always implemented it — only the
+prose said otherwise.** Both `merge_isupport/2`'s docstring and the
+`Session.Server` 005 handler claimed the FIRST occurrence of a token was
+honoured, described as protection against a misbehaving server downgrading us
+mid-session. No such guard has ever existed: every clause writes
+unconditionally into the accumulator. Rather than add the guard the comments
+promised, the comments were corrected to match, because
+draft-brocklesby-irc-isupport-03 §2 requires exactly what the code does — "it
+is not required to negate a parameter in order to change its value, the server
+should merely re-advertise the parameter with the new value". A first-wins
+merge would make a legitimate mid-session change unrepresentable. The two
+`reduce_while` scanners beside it (`MODES=`, `LINELEN=`) genuinely do halt on
+the first hit within one line, and are last-wins across lines because each call
+re-scans from the current value; the corrected comment now distinguishes the
+two rules instead of asserting one wrong one for both.
+
+**A `-TOKEN` negation restores the seed, never `nil`.** §2 defines negation as
+"revert to the behaviour that would occur if the parameter had not been
+specified", and the behaviour-if-unspecified is precisely `default/0` — so
+`-CHANTYPES` restores `#&+!` and `-CASEMAPPING` restores `:ascii`. Writing
+`nil` instead would invent a third state, "advertised as absent", that no
+accessor models and every consumer would have to learn. Before this change the
+`-` clause did not exist at all and negations fell through to the catch-all, so
+a capability the ircd revoked mid-session (a services restart, a listener mode
+change) stayed in the table until the next reconnect — `/notify` kept arming a
+mechanism nobody honoured. `@negatable` is an explicit token→key map rather
+than a derivation, so adding a parsed token without making it revocable is a
+visible omission at that map instead of a silent one at the catch-all. A
+negation is an ordinary write, so last-wins still governs it:
+`-NICKLEN NICKLEN=9` ends advertised.
+
+**`raw` is a server-side archive for the Phase 6 facade, and it must never
+cross the cic wire.** Every advertised token is now kept verbatim, including
+the ones the typed parser rejected as malformed — it records what the upstream
+SAID, not what we could use. The typed fields remain the contract for
+everything in-tree; this is the input the downstream IRCv3 listener facade
+translates from when it has to EMIT a 005 of its own. Two boundaries hold it
+in place. It stays off the client wire because a bag of verbatim tokens shipped
+to cicchetto is IRC protocol re-entering through the window, against the first
+invariant in this project — cic gets typed facts instead. And the facade must
+TRANSLATE rather than passthrough: `NETWORK`, `MODES`, `TARGMAX` and `LINELEN`
+describe the upstream ircd and the upstream path, while a downstream client is
+talking to grappa, whose framing budget (#246/#1108), chunking and target
+limits are its own. Re-advertising the upstream's numbers downstream would be
+a lie with consequences. A negation deletes the key, so the facade cannot
+re-advertise something the upstream just revoked.
+
+**`raw` archives an all-caps alphanumeric nick as a valueless flag, and that is
+the chosen residual.** A 005 parameter list is `<client> <token>… :<text>`, so
+the archive filters on the draft's parameter-name grammar — uppercase and
+digits — which drops the trailing human text and an ordinary nick. A nick like
+`VJT` survives that filter. The alternative was to drop the list head
+positionally, which would silently eat the first real token whenever a caller
+passes a bare token list; a stray key in a map nobody passes through is the
+cheaper mistake, and the facade translates against what it knows how to emit
+rather than echoing the map.
+
+**`CASEMAPPING` crosses the wire and nothing on the client folds with it. That
+is a decision, not an omission.** cic's `nickEquals`/`asciiFold` stay ASCII,
+pinned to the server's #525 posture, because #537 settled that per-network
+casemapping is normalised at INGRESS on the server precisely so that storage,
+queries and every downstream key stay pure ASCII. Teaching the client a second
+fold table would reintroduce the divergence #537 removed, and it would be a
+client originating identity state. What the field buys is that a divergence on
+an rfc1459 network is now KNOWABLE client-side instead of invisible — the fact
+is published, and no consumer acts on it.
+
+**The ISUPPORT replay is per-network, so it belongs on the user topic.** It had
+been riding `push_channel_snapshot/4` since #216, where the network resolution
+was conveniently already done. The payload is keyed by `network_id` and
+describes the network, so a client in ten channels received ten identical
+copies, and a client in none — a parked session, a fresh account before its
+first JOIN, someone sitting on the server window — received none, and drove its
+`/mode` surfaces off cic's compile-time defaults for the whole session. It now
+rides `session_snapshot/2`, folded into the existing per-network call rather
+than added as a sibling `get_isupport`/`get_linelen` pair, because #482 already
+measured what a third serial blocking call on the login hot path does to
+user-topic broadcast latency. cic's channel-topic arm is kept, no longer as the
+live path but as the compatibility one: a `--cic`-only deploy leaves a server
+older than the bundle, and there it is the difference between a seeded table
+and a dropped payload.
+
+**Writing the e2e for that move found the sharper statement of the defect.**
+The obvious oracle — assert the frame arrives — would have passed on the broken
+code. cic joins exactly one channel-SHAPED topic while in no channel: the
+per-network DM listener on the own-nick topic. The server's `after_join` cannot
+tell it apart, it is a `{:channel, …}` topic, so the pre-fix code did push
+`isupport_changed` there — into a handler that drops that kind by contract,
+since the server has no business emitting it on a nick target. The payload
+arrived and was thrown away. So the witness is the STORE, read through the list
+modal's mode switcher: `+z` must appear (bahamut advertises `CHANMODES=bz` and
+no cic default carries it) and `+e`/`+I` must not (they are in cic's default
+table and bahamut has neither). It discriminates in both directions, and
+because the switcher is a reactive read the assertions retry into the payload's
+arrival rather than racing a barrier.
+
+**The length limits and `MAXLIST` are published and enforce nothing, on
+purpose.** Nothing in the stack capped a list or validated a length before, so
+seeding a number would start REJECTING input the ircd accepts — the opposite of
+"a session that never sees a 005 behaves as it did". `nil` and `%{}` mean
+"unadvertised", which every consumer must read as "do not enforce", the same
+posture #1108 took for the frame budget. Turning `NICKLEN`/`CHANNELLEN`/
+`TOPICLEN` into composer validation is a UX change with its own decisions to
+make and is deliberately not in this one. `MAXLIST` is the exception that
+already has a consumer, because #1251 made every advertised list queryable.
+
+**`CHANTYPES` was rewired everywhere it was open-coded, and two copies survive
+on purpose.** The fact lives in `cicchetto/src/lib/chantypes.ts`, a module with
+no imports and no state, so the deliberately-pure `slashCommands.ts` parser can
+take the sigils as DATA exactly as it already takes the alias map; the
+store-reading half is `chantypesForNetwork` in `isupport.ts`. `inviteLink.ts`
+keeps its literal `#&+!` for URL-encoding reasons — a bare `#` truncates a
+query param at the fragment — and runs on the `?go=` boot path before any
+session exists, so there is no network to ask. `pushPayload.ts` keeps its own
+because it runs inside the service worker, with no store, no socket and no
+session, and must keep classifying a notification deep-link with the SPA
+closed. Neither is a per-network IRC fact rendered from a guess; both are
+context-free byte constraints, and they are named in `chantypes.ts` so the next
+reader who greps `#&+!` finds two survivors and knows they were considered.
