@@ -160,7 +160,7 @@ contribution() {
     # No rebase: `feat` is well formed apart from the marker.
     run scripts/design-notes-gate.sh main
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no \`<!-- entry ... -->\` line"* ]]
+    [[ "$output" == *"no <!-- entry ... --> marker line"* ]]
     refute grep -q "NOT preceded by" <<<"$output"
 }
 

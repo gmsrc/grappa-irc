@@ -107,7 +107,7 @@ separator_findings="$(printf '%s\n' "$findings" | grep -F "	SEPARATOR	" || true)
 if [ -n "$separator_findings" ]; then
 	status=1
 	{
-		printf 'design-notes-gate: entry heading(s) NOT preceded by `---`:\n'
+		printf 'design-notes-gate: entry heading(s) NOT preceded by a --- separator:\n'
 		printf '%s\n' "$separator_findings"
 		printf '\nThis is the #1271 shape. If the rebase reported rc=0 with zero\n'
 		printf 'deletions, the union driver ate the separator: restore it IN the\n'
@@ -121,7 +121,7 @@ marker_findings="$(printf '%s\n' "$findings" | grep -F "	MARKER	" || true)"
 if [ -n "$marker_findings" ]; then
 	status=1
 	{
-		printf 'design-notes-gate: entry heading(s) with no `<!-- entry ... -->` line:\n'
+		printf 'design-notes-gate: entry heading(s) with no <!-- entry ... --> marker line:\n'
 		printf '%s\n' "$marker_findings"
 		printf '\nAn entry must open with a UNIQUE marker line, as the FIRST appended\n'
 		printf 'line, in this exact shape:\n\n'
