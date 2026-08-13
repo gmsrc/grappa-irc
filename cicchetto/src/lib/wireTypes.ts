@@ -27,6 +27,9 @@ export const IRCAUTH_FSMAUTH_METHOD = [
 ] as const;
 export type IRCAuthFSMAuthMethod = (typeof IRCAUTH_FSMAUTH_METHOD)[number];
 
+export const IRCIDENTIFIER_CASEMAPPING = ["ascii", "rfc1459", "rfc1459_strict"] as const;
+export type IRCIdentifierCasemapping = (typeof IRCIDENTIFIER_CASEMAPPING)[number];
+
 export const LIVE_INTROSPECTION_SESSION_ENTRY_DEGRADED_FIELD = [
   "joined_channels",
   "peer_address",
@@ -59,6 +62,8 @@ export const SCROLLBACK_MESSAGE_KIND = [
 export type ScrollbackMessageKind = (typeof SCROLLBACK_MESSAGE_KIND)[number];
 
 export type ScrollbackMetaT = Record<string, unknown>;
+
+export type SessionISupportCasemapping = IRCIdentifierCasemapping;
 
 export const SESSION_LOG_EVENT = [
   "connected",
@@ -911,6 +916,12 @@ export type SessionWireIsupportChangedPayload = {
   chanmodes_d: string[];
   list_modes_queryable: string[];
   prefix: Record<string, string>;
+  chantypes: string[];
+  casemapping: SessionISupportCasemapping;
+  maxlist: Record<string, number>;
+  nicklen: number | null;
+  channellen: number | null;
+  topiclen: number | null;
   frame_budget_base: number;
 };
 

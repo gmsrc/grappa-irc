@@ -17,6 +17,7 @@ import {
   CHANNEL_DIRECTORY_STATUS,
   ERROR_TOKENS_SHARED_ERROR_TOKEN,
   IRCAUTH_FSMAUTH_METHOD,
+  IRCIDENTIFIER_CASEMAPPING,
   LIVE_INTROSPECTION_SESSION_ENTRY_DEGRADED_FIELD,
   NETWORKS_CREDENTIAL_CONNECTION_STATE,
   NETWORKS_CREDENTIALS_ADMIN_WIRE_SESSION_ACTION,
@@ -515,6 +516,9 @@ export const S_CicWireBundleHashPayload = {
 // Grappa.IRC.AuthFSM.auth_method/0
 export const S_IRCAuthFSMAuthMethod = { e: [...IRCAUTH_FSMAUTH_METHOD] } as const;
 
+// Grappa.IRC.Identifier.casemapping/0
+export const S_IRCIdentifierCasemapping = { e: [...IRCIDENTIFIER_CASEMAPPING] } as const;
+
 // Grappa.LiveIntrospection.SessionEntry.degraded_field/0
 export const S_LiveIntrospectionSessionEntryDegradedField = {
   e: [...LIVE_INTROSPECTION_SESSION_ENTRY_DEGRADED_FIELD],
@@ -869,6 +873,9 @@ export const S_ServerSettingsWireChangedPayload = {
   },
 } as const;
 
+// Grappa.Session.ISupport.casemapping/0
+export const S_SessionISupportCasemapping = S_IRCIdentifierCasemapping;
+
 // Grappa.Session.Wire.away_confirmed_payload/0
 export const S_SessionWireAwayConfirmedPayload = {
   o: { kind: { l: "away_confirmed" }, network: "s", state: { e: ["present", "away"] } },
@@ -955,6 +962,12 @@ export const S_SessionWireIsupportChangedPayload = {
     chanmodes_d: { a: "s" },
     list_modes_queryable: { a: "s" },
     prefix: { r: "s" },
+    chantypes: { a: "s" },
+    casemapping: S_SessionISupportCasemapping,
+    maxlist: { r: "i" },
+    nicklen: { u: ["i", "z"] },
+    channellen: { u: ["i", "z"] },
+    topiclen: { u: ["i", "z"] },
     frame_budget_base: "i",
   },
 } as const;

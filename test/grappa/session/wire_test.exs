@@ -103,6 +103,90 @@ defmodule Grappa.Session.WireTest do
       assert payload.list_modes_queryable == ["b", "z"]
     end
 
+    # #1255 — the per-network facts the client used to open-code. The point
+    # of the payload is that a network's REAL values reach cic, so the test
+    # advertises values that differ from the seed in every field.
+    test "publishes the widened per-network facts a client used to guess" do
+      isupport =
+        ISupport.merge_isupport(
+          [
+            "s",
+            "CHANTYPES=#&",
+            "CASEMAPPING=rfc1459",
+            "MAXLIST=beI:100",
+            "NICKLEN=30",
+            "CHANNELLEN=200",
+            "TOPICLEN=307"
+          ],
+          ISupport.default()
+        )
+
+      payload = Wire.isupport_changed(7, isupport, 512)
+
+      assert payload.chantypes == ["#", "&"]
+      assert payload.casemapping == :rfc1459
+      assert payload.maxlist == %{"b" => 100, "e" => 100, "I" => 100}
+      assert payload.nicklen == 30
+      assert payload.channellen == 200
+      assert payload.topiclen == 307
+    end
+
+    test "publishes the seed, and absent limits as nil, for a 005-less session" do
+      # A network that advertises nothing must leave the client behaving as
+      # it did before the widening: the RFC sigils, the ASCII fold, and NO
+      # caps — `nil` is "do not enforce", not "zero".
+      payload = Wire.isupport_changed(7, ISupport.default(), 512)
+
+      assert payload.chantypes == ISupport.default_chantypes()
+      assert payload.casemapping == ISupport.default_casemapping()
+      assert payload.maxlist == %{}
+      assert payload.nicklen == nil
+      assert payload.channellen == nil
+      assert payload.topiclen == nil
+    end
+
+    # The builder reaches a LIVE session state, and a plain hot reload does
+    # not rewrite process state — so a table seeded before #1255 arrives
+    # here without the new keys. It must publish the seed, not crash the
+    # PubSub fan-out with a KeyError. Same guarantee the #216/#247/#537
+    # accessors carry, asserted at the wire because THIS is the caller that
+    # meets the stale table first.
+    test "a capability table predating the widening still builds a payload" do
+      pre_1255 =
+        Map.drop(ISupport.default(), [
+          :chantypes,
+          :maxlist,
+          :nicklen,
+          :channellen,
+          :topiclen,
+          :raw
+        ])
+
+      payload = Wire.isupport_changed(7, pre_1255, 512)
+
+      assert payload.chantypes == ISupport.default_chantypes()
+      assert payload.maxlist == %{}
+      assert payload.nicklen == nil
+      assert {:ok, _} = Jason.encode(payload)
+    end
+
+    # The verbatim token archive is a Phase 6 listener-facade input. On this
+    # wire it would be IRC protocol re-entering the web client through the
+    # window (design principle #1), so it must never appear — including via
+    # a lazy `Map.merge` of the whole table into the payload.
+    test "does NOT publish the raw token archive" do
+      isupport =
+        ISupport.merge_isupport(
+          ["s", "NETWORK=Azzurra", "TARGMAX=PRIVMSG:4", "SAFELIST"],
+          ISupport.default()
+        )
+
+      payload = Wire.isupport_changed(7, isupport, 512)
+
+      refute Map.has_key?(payload, :raw)
+      refute payload |> Jason.encode!() |> String.contains?("Azzurra")
+    end
+
     # #1108 — the builder takes LINELEN and publishes the BUDGET, and the
     # number is checked the way a CLIENT will spend it: subtract the target's
     # bytes, fill a body with that many, and the worst-case relayed frame

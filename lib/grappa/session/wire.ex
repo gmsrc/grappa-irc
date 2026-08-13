@@ -141,6 +141,12 @@ defmodule Grappa.Session.Wire do
           chanmodes_d: [String.t()],
           list_modes_queryable: [String.t()],
           prefix: %{String.t() => String.t()},
+          chantypes: [String.t()],
+          casemapping: ISupport.casemapping(),
+          maxlist: %{String.t() => integer()},
+          nicklen: integer() | nil,
+          channellen: integer() | nil,
+          topiclen: integer() | nil,
           frame_budget_base: integer()
         }
 
@@ -901,6 +907,25 @@ defmodule Grappa.Session.Wire do
   terminates). A letter the network advertises and grappa has no pair for
   appears in `chanmodes_a` and NOT here — that difference IS the quiet
   degradation.
+
+  #1255 widened the payload to the rest of the per-network facts cic used
+  to open-code as constants: `chantypes` (the sigils that open a channel
+  name — the RFC class was a literal repeated across five cic modules),
+  `casemapping`, `maxlist` (the per-list caps #1251's mode switcher has to
+  respect), and the `nicklen` / `channellen` / `topiclen` limits. The three
+  limits and the cap map are `null` / empty when unadvertised, and that
+  means "do not enforce": inventing a number would reject input the ircd
+  accepts.
+
+  Every field is read through an `ISupport` accessor rather than a struct
+  match, so a live session state seeded before #1255 — a plain hot reload
+  does not rewrite process state — publishes the seed instead of crashing
+  the fan-out.
+
+  What does NOT cross: `ISupport.raw/1`, the verbatim token archive. That
+  is a Phase 6 listener-facade input; a bag of IRC tokens on this wire
+  would be IRC protocol re-entering the web client through the window
+  (design principle #1). cic gets typed facts it already understands.
   """
   @spec isupport_changed(integer(), ISupport.t(), pos_integer()) :: isupport_changed_payload()
   def isupport_changed(network_id, %{chanmodes: cm, prefix: prefix} = isupport, linelen)
@@ -914,6 +939,12 @@ defmodule Grappa.Session.Wire do
       chanmodes_d: Enum.sort(cm.d),
       list_modes_queryable: ListModes.queryable(isupport),
       prefix: prefix,
+      chantypes: ISupport.chantypes(isupport),
+      casemapping: ISupport.casemapping(isupport),
+      maxlist: ISupport.maxlist(isupport),
+      nicklen: ISupport.nicklen(isupport),
+      channellen: ISupport.channellen(isupport),
+      topiclen: ISupport.topiclen(isupport),
       frame_budget_base: LineSplit.frame_budget_base(linelen)
     }
   end
