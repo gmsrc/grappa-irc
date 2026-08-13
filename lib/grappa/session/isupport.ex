@@ -166,8 +166,16 @@ defmodule Grappa.Session.ISupport do
   are ignored so a misbehaving server can never corrupt param-arity
   classification.
 
-  Only the first occurrence of each token is honoured (an ircd emits at
-  most one per 005 line; if it repeats, the first wins).
+  **The LAST advertisement of a token wins** — within one 005 line and
+  across the several lines of a burst. Every clause writes
+  unconditionally, which is what draft-brocklesby-irc-isupport-03 §2
+  requires: "it is not required to negate a parameter in order to change
+  its value, the server should merely re-advertise the parameter with the
+  new value". There is deliberately no "already set" guard: honouring the
+  first occurrence would make a legitimate mid-session change
+  unrepresentable (#1255 — both this docstring and the `Session.Server`
+  005 handler used to claim a first-wins anti-downgrade protection that
+  no code ever implemented).
   """
   @spec merge_isupport([String.t()], t()) :: t()
   def merge_isupport(params, current) when is_list(params) do

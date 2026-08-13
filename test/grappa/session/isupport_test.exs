@@ -105,6 +105,50 @@ defmodule Grappa.Session.ISupportTest do
     end
   end
 
+  # #1255 — the merge contract, pinned. Both docstrings (this module's
+  # `merge_isupport/2` and the `Session.Server` 005 handler comment) used to
+  # claim "only the first occurrence is honoured", and neither the reduce nor
+  # any clause has ever implemented that: every clause writes unconditionally.
+  # Last-wins is ALSO what draft-brocklesby-irc-isupport-03 §2 requires ("the
+  # server should merely re-advertise the parameter with the new value"), so
+  # the code was right and the prose was a spec violation on paper. These
+  # tests are the executable form of the corrected contract — a future reader
+  # tempted to add the "already set" guard the old docstring described has to
+  # go through them.
+  describe "merge_isupport/2 merge semantics (#1255)" do
+    test "a token repeated within ONE 005 line honours the LAST occurrence" do
+      params = [
+        "grappa-test",
+        "CHANMODES=beI,k,l,imnpst",
+        "CHANMODES=b,k,l,imnpst",
+        "are supported by this server"
+      ]
+
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+
+      # The SECOND advertisement narrowed type A to `b` alone: `e` and `I`
+      # no longer take a param. A first-wins reduce would still classify
+      # them as list modes.
+      assert ISupport.takes_param?(isupport, "b", :add)
+      refute ISupport.takes_param?(isupport, "e", :add)
+      refute ISupport.takes_param?(isupport, "I", :add)
+    end
+
+    test "a re-advertisement on a LATER 005 line overwrites the earlier value" do
+      # A 005 burst arrives in several lines, and the draft's stated way to
+      # CHANGE a value is to re-advertise it — no negation required. Folding
+      # line 2 onto the table line 1 produced must therefore take the new
+      # value, not defend the old one.
+      isupport =
+        ISupport.default()
+        |> then(&ISupport.merge_isupport(["grappa-test", "PREFIX=(ov)@+"], &1))
+        |> then(&ISupport.merge_isupport(["grappa-test", "PREFIX=(qaohv)~&@%+"], &1))
+
+      assert ISupport.user_prefix(isupport, "q") == {:ok, "~"}
+      assert ISupport.user_prefix(isupport, "v") == {:ok, "+"}
+    end
+  end
+
   describe "takes_param?/3 type-C sign sensitivity" do
     test "type C consumes a param on + but not on -" do
       # l is the canonical type-C mode (+l 42 sets a limit; -l clears it

@@ -3509,11 +3509,23 @@ defmodule Grappa.Session.Server do
   # Params are space-separated ISUPPORT tokens (e.g. ["grappa-test",
   # "MODES=4", "LINELEN=512", "CHANTYPES=#", "are supported ..."]).  We
   # scan every param for the known prefixes. Defaults (3 modes,
-  # 512-byte linelen) are preserved when the token is absent. Only the
-  # first occurrence of each token is honoured (ircd should emit at
-  # most one per 005 line; idempotent values — use the first advertised
-  # and ignore later ones to avoid a misbehaving server downgrading us
-  # mid-session).
+  # 512-byte linelen) are preserved when the token is absent.
+  #
+  # #1255 — the two scanners below and the ISUPPORT table do NOT share a
+  # merge rule, and this comment used to claim the wrong one for both:
+  #
+  #   * `extract_modes_isupport/2` + `extract_linelen_isupport/2` are
+  #     `reduce_while` scanners that `:halt` on the first parseable hit,
+  #     so the FIRST occurrence wins WITHIN one line. Across lines they
+  #     are last-wins like everything else: each call re-scans a fresh
+  #     param list seeded from the current value, so a later line
+  #     carrying the token overwrites what an earlier one set.
+  #   * `ISupport.merge_isupport/2` is a plain reduce whose clauses write
+  #     unconditionally — LAST advertisement wins, which is what
+  #     draft-brocklesby-irc-isupport-03 §2 requires of a re-advertised
+  #     parameter. The "first advertised, ignore later ones to avoid a
+  #     misbehaving server downgrading us mid-session" protection this
+  #     comment used to describe has never existed in either place.
   #
   # #216: ALSO fold CHANMODES= + PREFIX= into the per-network
   # `isupport` capability table. When it changes, broadcast the typed
