@@ -41425,7 +41425,14 @@ daemon's code path in its own words. Docker boots differently: the
 container execs `mix phx.server` over a bind-mounted tree, and
 `:code.lib_dir(:grappa)` measures as `/app/_build/dev/lib/grappa`, with no
 vsn anywhere in it, so the recompiled beams land exactly where the node is
-already looking. COLDing docker for a file its boot layout is immune to
+already looking. That container has no release stage to reach at all:
+`Dockerfile:53` is `CMD ["bin/start.sh"]`, `bin/start.sh:76` is
+`exec mix phx.server`, the word `release` does not appear in the Dockerfile,
+and `bin/start.sh:5-7` says in as many words that the file exists *instead
+of* `rel/env.sh.eex` because the release stage was dropped — "`mix phx.server`
+is the canonical boot path in dev, prod, and CI". So the boot path is one
+path, not one per env, and the `lib/<app>-<vsn>/` layout is unreachable on
+docker regardless of `MIX_ENV`. COLDing docker for a file its boot layout is immune to
 would be the needless-restart class the substrate argument was introduced
 to prevent (2026-06-10, #923), and on an always-on bouncer every restart
 drops every IRC session. The asymmetry is pinned by its own test rather
@@ -41443,8 +41450,13 @@ name of the directory the code lives in.
 
 **Not measured, and not claimed:** anything about `MIX_ENV=prod` inside the
 container. The `_build/<env>/lib/grappa` reading above was taken at
-`MIX_ENV=dev`; the env name is the only segment that differs in Mix's build
-layout, but no prod container was stood up to confirm it. Nor was any
+`MIX_ENV=dev`, and no prod container was stood up to confirm it — standing
+one up would have written into the `_build/prod` every worktree on this host
+shares, and a poisoned cache is a debt someone else pays in a red they cannot
+attribute. The source evidence in the paragraph above closes the gap
+differently and should be read for exactly what it is: it proves the boot
+path is SINGLE and not parameterised by env, which is not the same thing as
+having watched it run under `MIX_ENV=prod`. Nor was any
 production host probed — the reproduction is the operator's, in the issue.
 Two further defects the issue raises are deliberately left alone: the
 reload endpoint could compare the running vsn against the one on disk and
