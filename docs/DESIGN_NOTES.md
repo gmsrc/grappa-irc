@@ -40360,6 +40360,9 @@ under a windows-1252 misread. Server-side, the red was measured before the fix
 existed: five of the six new controller assertions failed with
 `unsupported_media_type`, and the sixth — the mirror-image guard — passed, as
 it had to.
+
+---
+
 ## 2026-08-13 — #1249: a list is not a flag, and arity is not class
 
 A single `MODE #chan +b <mask>` made the channel header read `+blrnt`. The
@@ -40412,3 +40415,16 @@ here would have re-introduced the phantom flag for precisely the letters
 nobody has taught us about yet. One notion of "type A" — `chanmodes.a`, read
 per-network, never a hardcoded `["b","e","I"]`, because bahamut advertises
 `bz` and has no `+e`/`+I` at all — two questions asked of it.
+
+**The witness had to build its own pre-state, and that is a fact about the
+ircd worth writing down.** The e2e first asserted the mode indicator was
+visible on the freshly created channel, on the assumption that an ircd stamps
+its own flags at channel creation. The testnet bahamut does not: a channel
+comes up with an EMPTY mode set, cic renders the indicator only for a
+non-empty one, and the wait could only time out. So the spec now sets a plain
+`+t` first and watches it land — which is strictly better than the assumption
+it replaces, because it proves the indicator is live and bound to THIS channel
+BEFORE any ban exists, and re-asserting the `t` after the gesture shows the
+absent `b` is the same live indicator rather than a re-rendered empty one.
+Anyone writing the next channel-mode witness should establish the pre-state
+the same way instead of waiting for flags the server never sets.
