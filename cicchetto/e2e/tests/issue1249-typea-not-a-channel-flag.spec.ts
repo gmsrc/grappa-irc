@@ -42,11 +42,16 @@ test("#1249 — +b does not join the channel mode string, and its mask does not 
     ).toHaveCount(1, { timeout: 15_000 });
     await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
-    // PRE-STATE — the indicator is live and already carries the ircd's own
-    // fresh-channel flags. Without this the post-gesture `not.toContainText`
-    // could pass on an indicator that never rendered at all.
+    // PRE-STATE — established, not assumed. This bahamut creates a channel
+    // with NO modes at all (measured: on a fresh channel the indicator never
+    // renders, because it is shown only for a non-empty set), so waiting for
+    // the ircd's own flags waits forever. Set one plain flag and watch it
+    // land: that proves the indicator is live and tracking THIS channel
+    // before any ban exists, which is what makes the absence asserted below
+    // a change rather than an element that was never there.
+    await composeSend(page, `/mode ${channel} +t`);
     const modeIndicator = page.locator(".topic-bar-modes");
-    await expect(modeIndicator).toBeVisible({ timeout: 15_000 });
+    await expect(modeIndicator).toContainText("t", { timeout: 15_000 });
     await expect(modeIndicator).not.toContainText("b");
     await expect(modeIndicator).not.toContainText("k");
 
@@ -57,7 +62,10 @@ test("#1249 — +b does not join the channel mode string, and its mask does not 
     await expect(modeIndicator).toContainText("k", { timeout: 15_000 });
 
     // THE CLAIM — the ban is a list, not a flag: no `b` in the mode string.
+    // The `t` from the pre-state is still there, so this is the same live
+    // indicator, not a re-rendered empty one.
     await expect(modeIndicator).not.toContainText("b");
+    await expect(modeIndicator).toContainText("t");
 
     // ARG ALIGNMENT — the key is the KEY, not the ban mask.
     await composeSend(page, `/mode ${channel}`);
