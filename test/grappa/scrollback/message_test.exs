@@ -76,12 +76,15 @@ defmodule Grappa.Scrollback.MessageTest do
     end
   end
 
-  describe "suppressed_presence_kinds/0 (#458)" do
-    test "is the NARROW noise subset [:join, :part, :quit, :nick_change]" do
+  describe "suppressed_presence_kinds/0 (#458, widened by #1262)" do
+    test "is the noise subset [:join, :part, :quit, :nick_change, :mode]" do
       # Mirror order of cic's SUPPRESSED_PRESENCE_KINDS
       # (cicchetto/src/lib/presenceFilter.ts) — the server filter and the
       # client render-filter must agree on exactly which kinds are noise.
-      assert Message.suppressed_presence_kinds() == [:join, :part, :quit, :nick_change]
+      # `:mode` joined the set in #1262 when vjt withdrew #458's
+      # "mode carries operator-relevant signal" rule; the parity test in
+      # `presence_filter_test.exs` is what actually holds the two sides equal.
+      assert Message.suppressed_presence_kinds() == [:join, :part, :quit, :nick_change, :mode]
     end
 
     test "every suppressed kind is a valid schema kind (subset of kinds/0)" do
@@ -98,14 +101,24 @@ defmodule Grappa.Scrollback.MessageTest do
                Message.suppressed_presence_kinds()
     end
 
-    test "the broad control kinds (mode/topic/kick/server_event) are NOT suppressed" do
-      # NARROW vs broad: mode/topic/kick/server_event are presence/control
-      # but NOT noise — they carry operator-relevant signal and MUST stay
-      # visible. Suppressing them would be a bug (presenceFilter.ts:64-73).
-      for k <- [:mode, :topic, :kick, :server_event] do
+    test "the remaining control kinds (topic/kick/server_event) are NOT suppressed" do
+      # `:topic`, `:kick` and `:server_event` are presence/control but are not
+      # churn: they stay visible while a channel is denoised. `:mode` used to
+      # be in this list under #458 and was moved out by #1262 — see the
+      # sibling test below.
+      for k <- [:topic, :kick, :server_event] do
         refute k in Message.suppressed_presence_kinds(),
-               "#{inspect(k)} must NOT be in the narrow suppressed set"
+               "#{inspect(k)} must NOT be in the suppressed set"
       end
+    end
+
+    test "#1262 — :mode IS suppressed (the #458 carve-out is withdrawn)" do
+      # vjt, 2026-08-13: `:mode` may go into the suppressed set as a plain
+      # fifth kind. The accepted cost is that +b/+k/+l/+m/+i transitions are
+      # omitted from the fetch too while the channel is denoised — see
+      # DESIGN_NOTES. A future write-time split (#1262 body) can narrow this
+      # again; until then this assertion is the ruling.
+      assert :mode in Message.suppressed_presence_kinds()
     end
   end
 

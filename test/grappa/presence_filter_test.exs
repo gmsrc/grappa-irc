@@ -2,6 +2,7 @@ defmodule Grappa.PresenceFilterTest do
   use ExUnit.Case, async: true
 
   alias Grappa.PresenceFilter
+  alias Grappa.Scrollback.Message
 
   # #458 — the server-side twin of cic's `resolvePresenceVisible`
   # (`cicchetto/src/lib/presenceFilter.ts`), INVERTED: cic asks "is presence
@@ -70,6 +71,67 @@ defmodule Grappa.PresenceFilterTest do
              the REST history fetch). While they differ, every channel whose member
              count falls between the two values shows join/part/quit on the live WS
              tail and loses it on page-up. Move BOTH or neither.
+             """
+    end
+
+    # #1262 — the threshold was not the only thing held equal by prose. The
+    # KIND SET exists twice too (`Message.suppressed_presence_kinds/0` and
+    # cic's `SUPPRESSED_PRESENCE_KINDS`), and adding `:mode` to one side alone
+    # leaves BOTH suites green while the REST history page folds a mode row
+    # the live WS tail still renders. Same executable-drift-guard shape as the
+    # threshold test above: the rule is expressed once per language, so the
+    # EQUALITY has to be expressed as code. Order is asserted too — both sides
+    # document the mirror order, and a set-only compare would let the two
+    # documented orders diverge silently.
+    test "suppressed_presence_kinds/0 equals cic's SUPPRESSED_PRESENCE_KINDS, in order" do
+      source = File.read!(@cic_path)
+
+      body =
+        case Regex.run(
+               ~r/export\s+const\s+SUPPRESSED_PRESENCE_KINDS[^=]*=\s*new\s+Set\(\[(.*?)\]\)/s,
+               source
+             ) do
+          [_, captured] ->
+            captured
+
+          _ ->
+            flunk("Could not locate `export const SUPPRESSED_PRESENCE_KINDS = new Set([...])` in #{@cic_path}")
+        end
+
+      cic_kinds =
+        ~r/"([a-z_]+)"/
+        |> Regex.scan(body)
+        |> Enum.map(fn [_, kind] -> String.to_atom(kind) end)
+
+      # A drift guard that reads its subject out of ANOTHER language's source
+      # has one failure mode worse than being wrong: becoming a no-op. If a
+      # reformat, a quoting-style change, or a rename makes the parse yield
+      # NOTHING, the comparison below must not quietly degrade into a
+      # confusing `[] != [...]`. Assert the parse produced something FIRST, so
+      # the failure names the real cause — the gate stopped reading the file.
+      refute cic_kinds == [],
+             """
+             Parsed ZERO kinds out of #{@cic_path}.
+
+             The literal was located but no `"kind"` strings came out of it,
+             so this parity gate is no longer reading anything and would pass
+             vacuously the moment the two sides agreed on emptiness. Fix the
+             parse (quoting style? the array inlined or reformatted?) rather
+             than the assertion.
+             """
+
+      assert cic_kinds == Message.suppressed_presence_kinds(),
+             """
+             The denoise KIND SET has drifted between the two languages.
+
+               #{@cic_path}: #{inspect(cic_kinds)}
+               Grappa.Scrollback.Message:        #{inspect(Message.suppressed_presence_kinds())}
+
+             They MUST be equal AND in the same order: the server omits these
+             kinds from the REST history fetch (#458) while cic omits the same
+             kinds from the live-tail render. While they differ, page-up and
+             the live tail disagree about which rows exist. Move BOTH or
+             neither.
              """
     end
   end

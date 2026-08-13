@@ -3,19 +3,20 @@ import type { ScrollbackMessage } from "./api";
 import type { ChannelKey } from "./channelKey";
 import { moduleRoot } from "./moduleRoot";
 
-// #222 — hide join/part/quit/nick-change signalling on large channels by
-// default, with a per-channel opt-in to re-show. Closed-set per-channel
+// #222 — hide join/part/quit/nick-change signalling (and, since #1262,
+// channel mode churn) on large channels by default, with a per-channel opt-in
+// to re-show. Closed-set per-channel
 // preference with localStorage persistence, backed by a module-singleton
 // Solid signal so every open scrollback pane re-filters the moment the
 // operator toggles the per-channel control.
 //
 // ## The whole feature in one sentence
 //
-// grappa STILL delivers join/part/quit/nick_change over the wire (no wire
-// change, no server change); cic decides whether to RENDER them. The render
-// decision is: on a "large" channel these four kinds are pure noise, so hide
-// them by default — but let the operator pin a per-channel choice that WINS
-// over the size default.
+// grappa STILL delivers every suppressed kind over the wire (no wire change,
+// no server change); cic decides whether to RENDER them. The render decision
+// is: on a "large" channel these kinds are pure noise, so hide them by
+// default — but let the operator pin a per-channel choice that WINS over the
+// size default.
 //
 // ## Why a render-layer filter, not a store drop
 //
@@ -69,15 +70,33 @@ import { moduleRoot } from "./moduleRoot";
 // two moduledocs cross-reference and that is the whole guard.
 export const LARGE_CHANNEL_THRESHOLD = 200;
 
-// The NARROW noise set — join/part/quit/nick_change ONLY. Deliberately NOT
-// ScrollbackPane's `PRESENCE_KINDS` (which also holds mode/topic/kick/
-// server_event): those are NOT noise and MUST stay visible. Suppressing them
-// would be a bug.
+// The noise set — join/part/quit/nick_change/mode. Still NOT ScrollbackPane's
+// `PRESENCE_KINDS` (which also holds topic/kick/server_event): those three are
+// not churn and stay visible.
+//
+// `mode` joined the set in #1262. It was previously carved OUT by #458 on the
+// rule "mode carries operator-relevant signal and MUST stay visible"; vjt
+// withdrew that rule on 2026-08-13. The accepted cost, stated so nobody
+// rediscovers it as a bug: while a channel is denoised, structural mode
+// transitions (`+b` / `+k` / `+l` / `+m` / `+i`) are folded along with the
+// status-prefix churn this was aimed at. A write-time split that folds only
+// the churn is a possible follow-up, not a precondition. See DESIGN_NOTES
+// 2026-08-13.
+//
+// Own-nick mode rows (#154(b): `/umode +i`, the services-pushed `+r`/`+a` at
+// IDENTIFY) are NOT affected — they land on the synthetic `$server` window,
+// which has no member count, so the server resolves it to SHOW.
+//
+// MUST equal the server twin `Grappa.Scrollback.Message.suppressed_presence_kinds/0`
+// (lib/grappa/scrollback/message.ex), SAME ORDER. Unlike the threshold, this one
+// IS gated: `test/grappa/presence_filter_test.exs` parses this literal and fails
+// on any drift.
 export const SUPPRESSED_PRESENCE_KINDS: ReadonlySet<ScrollbackMessage["kind"]> = new Set([
   "join",
   "part",
   "quit",
   "nick_change",
+  "mode",
 ]);
 
 // unset (key absent) = follow the size default.
@@ -200,7 +219,7 @@ export function channelPresenceVisible(key: ChannelKey, memberCount: number): bo
 // so a hidden control row can never inflate a badge the operator cannot clear
 // (the count and the pane must agree on which rows "count" — CLAUDE.md "one
 // feature, one code path"). A row is visible unless the channel is suppressing
-// presence AND the row is one of the NARROW noise kinds. Reads the reactive
+// presence AND the row is one of the noise kinds. Reads the reactive
 // pref signal (via `channelPresenceVisible`) ONLY for a suppressed kind, so the
 // consumer memo/effect re-runs on toggle / membership-threshold changes exactly
 // when a suppressed row is present. Never fold a second copy of this rule.

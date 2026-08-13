@@ -151,17 +151,29 @@ defmodule Grappa.Scrollback.Message do
   # construction (#395).
   @notify_kinds for {kind, :notify} <- @content_kind_projection, do: kind
 
-  # #458 — the NARROW presence-noise subset the scrollback fetch omits when a
-  # channel is hiding presence. Deliberately NARROW: join/part/quit/nick_change
-  # ONLY. The broad presence/control kinds (:mode, :topic, :kick,
-  # :server_event) carry operator-relevant signal and MUST stay visible —
-  # suppressing them would be a bug. Mirrors cic's SUPPRESSED_PRESENCE_KINDS
-  # (cicchetto/src/lib/presenceFilter.ts), same order, so the server history
-  # filter (#458) and the client live-tail render-filter agree exactly on
-  # which kinds are noise. Disjoint from @content_kinds BY the test invariant
-  # (presence noise is never human content), so hiding presence can never drop
-  # a real message.
-  @suppressed_presence_kinds [:join, :part, :quit, :nick_change]
+  # #458 — the presence-noise subset the scrollback fetch omits when a channel
+  # is hiding presence. `:topic`, `:kick` and `:server_event` stay OUT: they are
+  # control rows, not churn, and a denoised channel still shows them.
+  #
+  # #1262 (2026-08-13) — `:mode` is IN. It was carved out by #458 on the rule
+  # "the broad presence/control kinds carry operator-relevant signal and MUST
+  # stay visible"; vjt withdrew that rule. The accepted cost, recorded here so
+  # nobody rediscovers it as a bug: while a channel is denoised, STRUCTURAL mode
+  # transitions (`+b` / `+k` / `+l` / `+m` / `+i`) are folded along with the
+  # status-prefix churn the issue was aimed at. A write-time split that folds
+  # only the churn is a possible follow-up, not a precondition. Own-nick mode
+  # rows (#154(b)) are untouched: they land on the synthetic `$server` window,
+  # which has no member count, so `PresenceFilter.hidden?/2` resolves it to
+  # SHOW. See DESIGN_NOTES 2026-08-13.
+  #
+  # Mirrors cic's SUPPRESSED_PRESENCE_KINDS (cicchetto/src/lib/presenceFilter.ts),
+  # SAME ORDER, so the server history filter and the client live-tail
+  # render-filter agree exactly on which kinds are noise — and unlike the size
+  # threshold, that agreement IS gated: `presence_filter_test.exs` parses the cic
+  # literal and fails on drift. Disjoint from @content_kinds BY the test
+  # invariant (presence noise is never human content), so hiding presence can
+  # never drop a real message.
+  @suppressed_presence_kinds [:join, :part, :quit, :nick_change, :mode]
 
   # M8 fix 2026-05-08: kinds for which `:dm_with` may legitimately
   # carry a peer nick. CP23 cluster `code-reload` extended the list to
@@ -226,17 +238,22 @@ defmodule Grappa.Scrollback.Message do
   def notify_kinds, do: @notify_kinds
 
   @doc """
-  Returns the NARROW presence-noise subset of `kinds/0` —
-  `[:join, :part, :quit, :nick_change]`. #458 SINGLE SOURCE: the scrollback
-  fetch omits exactly these kinds when a channel is hiding presence
-  (`Grappa.PresenceFilter.hidden?/2` resolves the per-channel decision). The
-  broad control kinds (`:mode`, `:topic`, `:kick`, `:server_event`) are
-  deliberately absent — they carry operator-relevant signal and stay visible.
-  Mirrors the cic `SUPPRESSED_PRESENCE_KINDS` set
-  (`cicchetto/src/lib/presenceFilter.ts`); the two MUST agree so the server
-  history filter and the client live-tail render-filter suppress the same rows.
+  Returns the presence-noise subset of `kinds/0` —
+  `[:join, :part, :quit, :nick_change, :mode]`. #458 SINGLE SOURCE: the
+  scrollback fetch omits exactly these kinds when a channel is hiding presence
+  (`Grappa.PresenceFilter.hidden?/2` resolves the per-channel decision).
+  `:topic`, `:kick` and `:server_event` are deliberately absent — they are
+  control rows rather than churn and stay visible.
+
+  `:mode` joined the set in #1262, when vjt withdrew #458's
+  "mode carries operator-relevant signal" carve-out; the accepted cost is that
+  structural `+b`/`+k`/`+l`/`+m`/`+i` rows are folded too while denoised. Mirrors
+  the cic `SUPPRESSED_PRESENCE_KINDS` set
+  (`cicchetto/src/lib/presenceFilter.ts`); the two MUST agree, in the same
+  order, so the server history filter and the client live-tail render-filter
+  suppress the same rows — enforced by `presence_filter_test.exs`.
   """
-  @spec suppressed_presence_kinds() :: [:join | :part | :quit | :nick_change, ...]
+  @spec suppressed_presence_kinds() :: [:join | :part | :quit | :nick_change | :mode, ...]
   def suppressed_presence_kinds, do: @suppressed_presence_kinds
 
   @type kind ::

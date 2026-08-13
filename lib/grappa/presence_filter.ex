@@ -1,7 +1,8 @@
 defmodule Grappa.PresenceFilter do
   @moduledoc """
   The server-side decision "should the scrollback fetch HIDE presence rows
-  (join/part/quit/nick_change) for this channel?" — the twin of cic's
+  (join/part/quit/nick_change and, since #1262, mode) for this channel?" — the
+  twin of cic's
   `resolvePresenceVisible` (`cicchetto/src/lib/presenceFilter.ts`), INVERTED:
   cic asks "is presence VISIBLE?" at render time; the server asks "should the
   REST fetch OMIT presence?" at query time (#458).

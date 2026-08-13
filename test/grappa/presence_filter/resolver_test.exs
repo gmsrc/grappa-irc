@@ -135,6 +135,35 @@ defmodule Grappa.PresenceFilter.ResolverTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #1262 / #154(b) — THE PIN vjt asked for. Own-nick MODE rows (`/umode +i`,
+    # the services-pushed `+r`/`+a` at IDENTIFY) land on the synthetic
+    # `$server` window, and `:mode` is now a suppressed kind — so the only
+    # thing keeping that confirmation visible is that `$server` resolves to
+    # SHOW. It does because `Session.list_members/3` cannot count a synthetic
+    # window, so the count is unknowable and `PresenceFilter.hidden?/2` reads
+    # nil as SHOW (decision D).
+    #
+    # The session is LIVE and joined to an OVERSIZED channel on purpose: it
+    # makes the assertion non-vacuous. Without it the test would pass merely
+    # because there is no session at all, which is a different clause and
+    # would not notice someone teaching `$server` a member count.
+    test "#1262 — the synthetic $server window SHOWS even beside an oversized live channel" do
+      user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
+      subject = {:user, user.id}
+      big = PresenceFilter.large_channel_threshold()
+      {network, pid} = session_with_members(user, "#big", big)
+
+      # Sanity: the live session really is oversized, so a count IS reachable
+      # on this network. If this flips, the $server assertion below proves
+      # nothing.
+      assert Resolver.hidden?(subject, network.slug, network.id, "#big")
+
+      refute Resolver.hidden?(subject, network.slug, network.id, "$server"),
+             "own-nick mode rows on $server must stay visible now that :mode is suppressible (#1262)"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "an unset channel below the threshold shows" do
       user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
       subject = {:user, user.id}

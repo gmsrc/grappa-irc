@@ -281,7 +281,7 @@ defmodule Grappa.ReadCursor do
 
   `%{network_slug => MapSet.of(channel)}`, resolved once by the caller via
   `Grappa.PresenceFilter.Resolver.hidden_channels/3`. For a window in that
-  set, the NARROW presence-noise kinds
+  set, the presence-noise kinds
   (`Message.suppressed_presence_kinds/0`) do not join, so they never land in
   its `events` bucket — the cold-load twin of `count_after_split/6`'s
   `hide_presence`, and the door the #505 badge jump is actually reported

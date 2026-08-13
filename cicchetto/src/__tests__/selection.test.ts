@@ -517,7 +517,8 @@ describe("selection store", () => {
         ["privmsg", 1], // visible content
         ["join", 2], // hidden by the presence filter
         ["part", 3], // hidden by the presence filter
-        ["mode", 4], // NOT in the narrow noise set → visible event
+        ["mode", 4], // #1262 — now hidden too (was the visible-event witness)
+        ["topic", 5], // NOT in the noise set → visible event
       ];
       for (const [kind, id] of rows) {
         scrollback.appendToScrollback(key, {
@@ -532,10 +533,10 @@ describe("selection store", () => {
         });
       }
 
-      // Facet A: the hidden join/part are excluded; the visible privmsg
-      // (message) and the visible mode (event) still count.
+      // Facet A: the hidden join/part/mode are excluded; the visible privmsg
+      // (message) and the visible topic (event) still count.
       expect(selection.messagesUnread()[key]).toBe(1); // privmsg
-      expect(selection.eventsUnread()[key]).toBe(1); // mode only — join/part hidden
+      expect(selection.eventsUnread()[key]).toBe(1); // topic only — join/part/mode hidden
       expect(selection.unreadCounts()[key]).toBe(2);
     });
 

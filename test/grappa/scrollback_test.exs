@@ -831,7 +831,7 @@ defmodule Grappa.ScrollbackTest do
       assert Enum.all?(shown_page, &(&1.kind == :join))
     end
 
-    test "hide_presence: true keeps the BROAD control kinds visible (mode/topic/kick/server_event)",
+    test "hide_presence: true keeps topic/kick/server_event visible but folds :mode (#1262)",
          %{user: user, network: net} do
       {:ok, _} =
         ScrollbackHelpers.insert(
@@ -850,8 +850,15 @@ defmodule Grappa.ScrollbackTest do
       page = Scrollback.fetch({:user, user.id}, net.id, "#sniffo", nil, 50, nil, true)
       kinds = page |> Enum.map(& &1.kind) |> MapSet.new()
 
-      assert MapSet.subset?(MapSet.new([:mode, :topic, :kick]), kinds), "broad control kinds must stay visible"
-      refute :join in kinds, "narrow presence noise is still filtered"
+      assert MapSet.subset?(MapSet.new([:topic, :kick]), kinds), "topic/kick must stay visible"
+      refute :join in kinds, "presence noise is still filtered"
+
+      # #1262 — the withdrawn #458 carve-out. A channel MODE row is churn on a
+      # denoised channel and is now folded WITH join/part/quit. The accepted
+      # cost: the `+o alice` row above is a structural-mode row's twin, and
+      # both go. Own-nick mode rows are unaffected — they land on `$server`,
+      # which resolves to SHOW (see PresenceFilter.Resolver test).
+      refute :mode in kinds, "channel mode churn is folded when denoised (#1262)"
     end
   end
 

@@ -40677,3 +40677,70 @@ fixture. It builds a scratch repository with the real attribute, appends an entr
 on each of two branches and runs a real `git rebase`, so what the gate is judged
 against is what the merge machinery actually produced. A fixture would have
 proved the regex works and nothing about the defect.
+<!-- entry #1262 -->
+
+---
+
+## 2026-08-13 — #1262: `:mode` is denoise churn, and #458's carve-out is withdrawn
+
+#458 pinned the suppressed presence set to a deliberately narrow four —
+`join`/`part`/`quit`/`nick_change` — and wrote the reason into
+`Grappa.Scrollback.Message` as a rule: *the broad presence/control kinds
+(`:mode`, `:topic`, `:kick`, `:server_event`) carry operator-relevant signal
+and MUST stay visible; suppressing them would be a bug.* #1262 opened against
+that rule, proposing a write-time split inside `:mode` (a `:status_mode` kind,
+or a boolean column) so that status-prefix churn — services re-opping on every
+join, mass `+o` after a netsplit, `+v` sprays — could fold while structural
+modes (`+b` `+k` `+l` `+m` `+i`) stayed.
+
+**vjt withdrew the #458 rule instead (2026-08-13).** `:mode` enters the
+suppressed set as a plain fifth kind. No sub-classification, no new column, no
+migration. The write-time split is demoted from precondition to possible
+follow-up.
+
+**The accepted cost, stated here so nobody rediscovers it as a bug report:**
+while a channel is denoised, structural channel-mode transitions are omitted
+from the fetch too. A ban set during a denoised session is not in that
+session's transcript. That is the trade, taken knowingly — the alternative was
+holding a genuinely noisy feature hostage to a write-time classifier nobody
+needed yet.
+
+Three consequences worth naming, because two of them are behaviour and not
+prose:
+
+* `count_after_split/6` and `ReadCursor`'s `hidden_channels` both derive from
+  the same SSOT list, so `:mode` also stops counting toward the `events`
+  badge on a hidden window. That is the correct direction: the pane no longer
+  renders those rows, and a badge the operator cannot clear by reading is the
+  #239/#505 defect. It is still a behaviour change that no line of the issue
+  asked for.
+* Own-nick mode rows (#154(b) — `/umode +i`, the services-pushed `+r`/`+a` at
+  IDENTIFY) are untouched. They land on the synthetic `$server` window, which
+  has no member count; `Grappa.PresenceFilter.hidden?/2` reads an unknowable
+  count as SHOW (decision D), so the operator keeps the only confirmation
+  those events ever produce. This is now pinned by a test that asserts
+  `$server` resolves to SHOW *beside a live oversized channel on the same
+  network* — without that neighbour the assertion would pass merely because no
+  session existed, which is a different clause.
+* The prose stating the withdrawn rule lived in six places, not the two the
+  change itself touches: `Message`'s attribute comment and its `@doc`,
+  `Scrollback.fetch/7`'s `hide_presence` section, `count_after_split/6`'s doc,
+  `PresenceFilter`'s moduledoc, and cic's `SUPPRESSED_PRESENCE_KINDS` comment.
+  All six were rewritten in the same commit. A withdrawn rule left in a
+  docstring is a rule that gets resurrected by the next reader who greps for
+  it.
+
+**The mirror is now gated, which it was not before.** `#915` had already
+observed that the size threshold exists once per language with nothing but two
+cross-referencing moduledocs holding it equal, and added a parser test. The
+KIND SET had the same weakness and no such test: adding `:mode` to one side
+alone leaves BOTH suites fully green while page-up and the live tail disagree
+about which rows exist. `presence_filter_test.exs` now parses
+`SUPPRESSED_PRESENCE_KINDS` out of `presenceFilter.ts` and asserts equality
+*and order* against `Message.suppressed_presence_kinds/0`. The threshold gate
+proved the shape; this is the second application of it.
+
+**Apply:** when a ruling is withdrawn, grep for the ruling's *sentence*, not
+for the symbol it constrained. The symbol appears where the code is; the
+sentence appears wherever someone once explained the code, and that is where
+the next contributor will read it back as current.

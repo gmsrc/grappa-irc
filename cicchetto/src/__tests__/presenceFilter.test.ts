@@ -70,18 +70,22 @@ describe("presenceFilter module", () => {
     });
   });
 
-  describe("SUPPRESSED_PRESENCE_KINDS — the NARROW noise set", () => {
-    it("suppresses exactly join/part/quit/nick_change", async () => {
+  describe("SUPPRESSED_PRESENCE_KINDS — the noise set", () => {
+    it("suppresses exactly join/part/quit/nick_change/mode", async () => {
       const { SUPPRESSED_PRESENCE_KINDS } = await import("../lib/presenceFilter");
       expect(SUPPRESSED_PRESENCE_KINDS.has("join")).toBe(true);
       expect(SUPPRESSED_PRESENCE_KINDS.has("part")).toBe(true);
       expect(SUPPRESSED_PRESENCE_KINDS.has("quit")).toBe(true);
       expect(SUPPRESSED_PRESENCE_KINDS.has("nick_change")).toBe(true);
+      expect(SUPPRESSED_PRESENCE_KINDS.has("mode")).toBe(true);
     });
 
-    it("does NOT suppress mode/topic/kick/server_event (they are not noise)", async () => {
+    // #1262 — `mode` moved INTO the set when vjt withdrew #458's
+    // "mode carries operator-relevant signal" carve-out. The server twin
+    // (`Grappa.Scrollback.Message.suppressed_presence_kinds/0`) must agree,
+    // and `presence_filter_test.exs` parses this file to enforce it.
+    it("does NOT suppress topic/kick/server_event (still not churn)", async () => {
       const { SUPPRESSED_PRESENCE_KINDS } = await import("../lib/presenceFilter");
-      expect(SUPPRESSED_PRESENCE_KINDS.has("mode")).toBe(false);
       expect(SUPPRESSED_PRESENCE_KINDS.has("topic")).toBe(false);
       expect(SUPPRESSED_PRESENCE_KINDS.has("kick")).toBe(false);
       expect(SUPPRESSED_PRESENCE_KINDS.has("server_event")).toBe(false);
@@ -187,13 +191,24 @@ describe("presenceFilter module", () => {
       expect(presenceRowVisible(key(), 999, "action")).toBe(true);
     });
 
-    it("non-suppressed event kinds (mode/topic/kick/server_event) stay visible when hiding", async () => {
+    it("non-suppressed event kinds (topic/kick/server_event) stay visible when hiding", async () => {
       const { presenceRowVisible, setChannelPresencePref } = await import("../lib/presenceFilter");
       setChannelPresencePref(key(), "hide");
-      expect(presenceRowVisible(key(), 999, "mode")).toBe(true);
       expect(presenceRowVisible(key(), 999, "topic")).toBe(true);
       expect(presenceRowVisible(key(), 999, "kick")).toBe(true);
       expect(presenceRowVisible(key(), 999, "server_event")).toBe(true);
+    });
+
+    // #1262 — the behavioural half of the ruling: a channel MODE row is folded
+    // with join/part/quit while the channel is denoised. Own-nick mode rows are
+    // NOT affected here — they live on the `$server` window, whose unknowable
+    // member count resolves to SHOW server-side (see the Resolver test).
+    it("mode is hidden when the channel hides presence, visible otherwise", async () => {
+      const { presenceRowVisible, setChannelPresencePref } = await import("../lib/presenceFilter");
+      setChannelPresencePref(key(), "hide");
+      expect(presenceRowVisible(key(), 999, "mode")).toBe(false);
+      setChannelPresencePref(key(), "show");
+      expect(presenceRowVisible(key(), 999, "mode")).toBe(true);
     });
 
     it("suppressed kinds hidden when the channel hides presence, visible otherwise", async () => {

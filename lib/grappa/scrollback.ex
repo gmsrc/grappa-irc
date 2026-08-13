@@ -98,7 +98,7 @@ defmodule Grappa.Scrollback do
   # never notify.
   @content_kinds Message.content_kinds()
 
-  # #458 — the NARROW presence-noise kinds the history reads omit when a
+  # #458 — the presence-noise kinds the history reads omit when a
   # channel is hiding presence. Derived from the schema SSOT
   # (`Message.suppressed_presence_kinds/0`); consumed by
   # `maybe_exclude_presence/2`. A module attribute (compile-time list) so the
@@ -394,11 +394,11 @@ defmodule Grappa.Scrollback do
 
   ## `hide_presence` (#458)
 
-  When `true`, the query excludes the NARROW presence-noise kinds
-  (`Message.suppressed_presence_kinds/0` — join/part/quit/nick_change) in
-  SQL, so `limit` counts VISIBLE rows: one page-up is one screenful instead
-  of a page that renders empty on a busy channel. The broad control kinds
-  (mode/topic/kick/server_event) always stay. When `false`, every kind is
+  When `true`, the query excludes the presence-noise kinds
+  (`Message.suppressed_presence_kinds/0` — join/part/quit/nick_change and,
+  since #1262, mode) in SQL, so `limit` counts VISIBLE rows: one page-up is
+  one screenful instead of a page that renders empty on a busy channel.
+  `:topic`, `:kick` and `:server_event` always stay. When `false`, every kind is
   returned (unchanged behaviour). REQUIRED positional (same no-default rule as
   `own_nick`): a `false` default would silently disable #458 for any caller
   that forgets to thread it. The per-channel decision (tri-state pref × live
@@ -476,7 +476,7 @@ defmodule Grappa.Scrollback do
 
   ## `hide_presence` (#458)
 
-  Same contract as `fetch/6` — excludes the narrow presence-noise kinds when
+  Same contract as `fetch/6` — excludes the presence-noise kinds when
   `true`, so the reconnect/backfill replay stays consistent with the history
   page (#458 decision B). Safe by construction: cic routes backfill rows ONLY
   to the render/scrollback store (`refreshScrollback`), NEVER through
@@ -614,9 +614,12 @@ defmodule Grappa.Scrollback do
   visibly DROPS the moment the channel hydrates. That jump is the reported
   bug.
 
-  The filter is NARROW: `Message.suppressed_presence_kinds/0` only. `:mode`,
-  `:topic`, `:kick` and `:server_event` still count under `events` when
-  hiding, because the pane still renders them. The content bucket is
+  The filter is `Message.suppressed_presence_kinds/0` only. `:topic`, `:kick`
+  and `:server_event` still count under `events` when hiding, because the pane
+  still renders them. `:mode` STOPPED counting there in #1262 when it entered
+  the suppressed set — the pane no longer renders it on a denoised channel, so
+  counting it would inflate a badge the operator cannot clear. The content
+  bucket is
   unaffected either way — every suppressed kind is disjoint from
   `@content_kinds`, so the exclusion can only ever shrink `events`.
   """
@@ -1153,7 +1156,7 @@ defmodule Grappa.Scrollback do
   defp maybe_before(query, before) when is_integer(before),
     do: where(query, [m], m.id < ^before)
 
-  # #458 — when hiding, exclude the narrow presence-noise kinds
+  # #458 — when hiding, exclude the presence-noise kinds
   # (@suppressed_presence_kinds) in SQL so `limit` counts VISIBLE rows. The
   # `not in ^...` renders `kind NOT IN (?, ?, ?)` with the atoms dumped to
   # their Ecto.Enum string values (same mechanism as count_after_split/6).
