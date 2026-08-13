@@ -41016,6 +41016,11 @@ another user, which an unprivileged test suite cannot construct. It uses mode
 per-class, so denying the owner class the search bit puts the process in the
 same state as denying it to `other`. Ownership was never the variable — the
 effective user's search bit was.
+
+<!-- entry #1261 -->
+
+---
+
 ## 2026-08-13 — UnifiedPush as a second Web Push provider, not a second push system
 
 Resentin (a third-party native Android client, `pm.antani.resentin`) wanted
@@ -41034,11 +41039,17 @@ the same way a browser's `PushManager.subscribe()` does internally. So a
 UnifiedPush subscription carries the exact same three fields a webpush one
 does, and `Grappa.Push.Sender`'s VAPID-signed `aes128gcm` encrypted POST
 (`WebPushElixir.send_notification/2`) works against a UnifiedPush endpoint
-completely unchanged — a distributor relay just forwards whatever bytes and
-headers it's given; only a Web-Push-vendor's OWN service (FCM, Mozilla
-autopush) actually verifies the VAPID JWT, so an unverified-but-present
-header on a UnifiedPush POST is inert, not wrong. `Push.Sender` needed
-**zero** code changes.
+completely unchanged — a distributor relay is reasoned, not observed, to
+just forward whatever bytes and headers it's given, the same way a
+Web-Push-vendor's own service (FCM, Mozilla autopush) does before it
+verifies the VAPID JWT; UnifiedPush 3.x's spec is built on RFC 8030/8291 Web
+Push, which points the same direction. That reasoning is NOT backed by an
+end-to-end delivery against a live distributor in this change — if it turns
+out a distributor rejects or strips an unrecognized VAPID header, the blast
+radius is confined to `unifiedpush` rows and surfaces through the existing
+`Push.Sender` failure taxonomy (dead-endpoint cleanup, per-sub telemetry);
+no webpush behavior changes either way. `Push.Sender` needed **zero** code
+changes regardless.
 
 What DOES differ is purely which endpoint a device registered and how — so
 that's the only thing that got a new field. `push_subscriptions` gained a

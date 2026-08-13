@@ -10,21 +10,25 @@ defmodule Grappa.Push.Sender do
 
   ## `:provider` (2026-08-13, UnifiedPush)
 
-  A subscription's `:provider` field (`"webpush"` | `"unifiedpush"`)
-  distinguishes how the ROW WAS REGISTERED — a browser's Push API vs.
-  an Android UnifiedPush distributor — for display purposes (the
-  device-list UX) and for the client-side registration flow. It does
+  A subscription's `:provider` field (`Ecto.Enum` — `:webpush` |
+  `:unifiedpush`) distinguishes how the ROW WAS REGISTERED — a browser's
+  Push API vs. an Android UnifiedPush distributor — for display purposes
+  (the device-list UX) and for the client-side registration flow. It does
   NOT branch delivery here: a UnifiedPush registration carries a real
   P-256 keypair + auth secret too, generated client-side the same way
   a browser's `PushManager.subscribe()` does internally, so the
   IDENTICAL VAPID-signed `aes128gcm` encrypted POST this module
   already sends for Web Push works unchanged for a UnifiedPush
-  endpoint — distributors relay whatever bytes and headers they are
-  given; only a Web-Push-vendor's OWN push service (Google FCM,
-  Mozilla autopush) actually verifies the VAPID JWT against the
-  subscribed key, so an unverified-but-present VAPID header on a
-  UnifiedPush POST is simply inert, not wrong. `send_to_subscription/2`
-  reads no branch on `:provider` at all.
+  endpoint — distributors are reasoned, not observed, to relay whatever
+  bytes and headers they are given; a Web-Push-vendor's OWN push service
+  (Google FCM, Mozilla autopush) is the party that verifies the VAPID JWT
+  against the subscribed key, and no end-to-end delivery against a live
+  UnifiedPush distributor has confirmed the same holds there. If a
+  distributor turns out to reject or strip an unrecognized VAPID header,
+  the failure surfaces through the ordinary paths below (dead-endpoint
+  cleanup, per-sub telemetry) — confined to `unifiedpush` rows, no webpush
+  behavior affected. `send_to_subscription/2` reads no branch on
+  `:provider` at all regardless.
 
   ## Subject-scoped — V3 (2026-05-15)
 
