@@ -103,14 +103,61 @@ test("#1262 — a channel MODE row folds when denoised (server-side too), the $s
     await expect(modeRows).toHaveCount(0, { timeout: 10_000 });
     await expect(contentRow).toHaveCount(1); // a filter, not a blanket drop
 
-    // --- THE SERVER HALF: reload → the page arrives without the mode row --
-    // RED before #1262's server change: `:mode` was not in
-    // `suppressed_presence_kinds/0`, so the cold-load page still carried the
-    // row and cic (with only its own side moved) would render it.
+    // --- THE SERVER HALF: the cold-load PAGE arrives without the mode row -
+    //
+    // Asserted on the RESPONSE BODY, not on the pane. Measured, because the
+    // first shape of this arm did the latter and was VACUOUS: with only
+    // `message.ex` reverted and cic's own filter intact, the render filter
+    // hides the row the server still sends, so the pane shows 0 either way
+    // and the spec passed with the server defect fully present. A server-only
+    // mutant survived it; that is what promoted this from a DOM count to a
+    // wire assertion. The pane count below stays as the operator-visible
+    // half, but it is the JSON that speaks for the server.
+    // The path must be ANCHORED, not `includes`-matched: the cold load also
+    // issues `/messages/count`, whose URL contains `/messages` and whose body
+    // is `{count: N}` — an object with no `.some`. Measured, not foreseen: the
+    // loose predicate matched it first and the arm died on a TypeError.
+    // EVERY such response is collected, not just the first one awaited. The
+    // first shape awaited a single response and read an array with no privmsg
+    // in it — the cold load issues more than one GET for a channel, and which
+    // one carries the rows is not something this spec should be pinning. The
+    // claim is about what the server served for this channel, so the subject
+    // is the UNION of what it served.
+    const servedPages: { kind: string }[][] = [];
+    page.on("response", (r) => {
+      if (
+        r.request().method() !== "GET" ||
+        r.status() !== 200 ||
+        !new URL(r.url()).pathname.endsWith(`/channels/${encodeURIComponent(channel)}/messages`)
+      ) {
+        return;
+      }
+      // `GET .../messages` answers a BARE ARRAY (api.ts's `fetchMessages`),
+      // not an envelope. Anchored on the path because `/messages/count`
+      // answers `{count: N}` and an `includes` match ate it first.
+      void r
+        .json()
+        .then((body) => {
+          if (Array.isArray(body)) servedPages.push(body as { kind: string }[]);
+        })
+        .catch(() => {});
+    });
+
     await page.reload();
     await selectChannel(page, NETWORK_SLUG, channel, { awaitWsReady: false });
+
+    // DOM barrier FIRST: the content row being back is the durable signal
+    // that the cold load has actually landed. Reading the collected pages
+    // before it would race the fetches still in flight.
     await expect(contentRow).toHaveCount(1, { timeout: 15_000 });
     await expect(modeRows).toHaveCount(0);
+
+    const served = servedPages.flat();
+    // Non-vacuity, twice over: a page set that was never populated, or one
+    // that carried nothing, would satisfy "no mode row" for the wrong reason.
+    expect(servedPages.length).toBeGreaterThan(0);
+    expect(served.some((m) => m.kind === "privmsg")).toBe(true);
+    expect(served.filter((m) => m.kind === "mode")).toEqual([]);
 
     // --- $server is NOT denoised by the channel's pin ---------------------
     // The pin is per-channel (`"<slug> <channel>"`), and `$server` has no

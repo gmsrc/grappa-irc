@@ -40745,6 +40745,32 @@ prose:
   that button by `data-testid="presence-toggle"` and never by its label —
   measured before touching it, not assumed.
 
+**The e2e's server half was VACUOUS, and only a second mutant found it.** The
+spec's title claims the MODE row folds "server-side too", and its cold-load arm
+asserted that by counting rendered rows after a reload. A both-sides mutant
+killed it — but on the FIRST assertion, the render one, and Playwright stops
+there, so the server arm was never reached. Mutating ONLY `message.ex` and
+leaving cic's filter intact, the spec PASSED with the server defect fully
+present: the render filter hides the row the server still sends, so the pane
+counts 0 in both worlds. The green that CI had already reported for this spec
+was, for that half, true by construction.
+
+The cure is to move the OBSERVATION, not to soften the claim: the arm now reads
+the cold-load `GET .../messages` RESPONSE BODY and asserts no `kind: "mode"` row
+is in it. Re-measured after the change, the server-only mutant dies on exactly
+that assertion, reporting the `+m` row the server served. Two further vacuities
+were found while writing it, both of the same "read nothing, pass" family: the
+first URL predicate used `includes` and matched `/messages/count`, whose body is
+an object; and awaiting a single response caught a page that carried no content
+row at all, since a cold load issues more than one GET per channel. The arm now
+collects every matching response, asserts the shape, waits on a DOM barrier
+before reading, and requires the content witness to be present in the union.
+
+The general rule, which is the reason this is in the log at all: **when two
+layers both suppress the same thing, a test that observes the OUTER layer cannot
+see the inner one fail.** The mutant has to be applied per-layer, and the
+observation has to sit at the layer being claimed.
+
 **The mirror is now gated, which it was not before.** `#915` had already
 observed that the size threshold exists once per language with nothing but two
 cross-referencing moduledocs holding it equal, and added a parser test. The
