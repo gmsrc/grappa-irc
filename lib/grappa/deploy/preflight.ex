@@ -39,7 +39,11 @@ defmodule Grappa.Deploy.Preflight do
   `:linux` and irrelevant elsewhere, and the whole nginx class —
   `infra/linux/nginx.conf` plus the shared `infra/snippets/*` proxy
   surface — is HOT on `:jail`, which since the jail-nginx removal
-  runs no proxy of its own at all (#923 scoping, widened). The 2026-06-10 metadata-strip
+  runs no proxy of its own at all (#923 scoping, widened). The repo-root
+  `VERSION` file spans TWO substrates rather than one: it is COLD on
+  `:jail` and `:linux`, which boot a `mix release` whose lib directory
+  carries the vsn in its path, and HOT on `:docker`, which does not —
+  see `version?/1`. The 2026-06-10 metadata-strip
   deploy cold-restarted prod (ALL IRC sessions dropped) for a
   Dockerfile diff the jail never reads — on an always-on bouncer
   every needless restart is incident-grade, so the substrate is an
@@ -73,6 +77,7 @@ defmodule Grappa.Deploy.Preflight do
           | {:migration, [String.t()]}
           | {:nginx, [String.t()]}
           | {:config, [String.t()]}
+          | {:version, [String.t()]}
           | {:state_shape, [String.t()]}
 
   @type verdict :: {:hot, []} | {:cold, [reason()]}
@@ -88,6 +93,10 @@ defmodule Grappa.Deploy.Preflight do
   @type migration_class :: :hot | :cold
 
   @substrates [:docker, :jail, :linux]
+  # The substrates that boot from a `mix release` artifact, whose lib
+  # directory carries the OTP application vsn in its PATH. Docker is
+  # absent by construction, not by omission — see `version?/1`.
+  @release_substrates [:jail, :linux]
   # CLI-boundary mirror of @substrates — derived, not hand-kept, so a
   # third substrate can't be accepted by classify_paths/2 yet rejected
   # at the cli/1 guard (or vice versa).
@@ -127,12 +136,13 @@ defmodule Grappa.Deploy.Preflight do
       []
       |> add_reason(:mix_deps, Enum.filter(paths, &mix_deps?/1))
       |> add_reason(:application, Enum.filter(paths, &application?/1))
-      |> add_reason(:image_substrate, filter_on(:docker, substrate, paths, &docker_image?/1))
-      |> add_reason(:rc_d, filter_on(:jail, substrate, paths, &rc_d?/1))
-      |> add_reason(:systemd_unit, filter_on(:linux, substrate, paths, &systemd_unit?/1))
+      |> add_reason(:image_substrate, filter_on([:docker], substrate, paths, &docker_image?/1))
+      |> add_reason(:rc_d, filter_on([:jail], substrate, paths, &rc_d?/1))
+      |> add_reason(:systemd_unit, filter_on([:linux], substrate, paths, &systemd_unit?/1))
       |> add_reason(:migration, contract_migrations(paths, migration_source_fn))
-      |> add_reason(:nginx, filter_on(:linux, substrate, paths, &nginx?/1))
+      |> add_reason(:nginx, filter_on([:linux], substrate, paths, &nginx?/1))
       |> add_reason(:config, Enum.filter(paths, &config?/1))
+      |> add_reason(:version, filter_on(@release_substrates, substrate, paths, &version?/1))
       |> Enum.reverse()
 
     case reasons do
@@ -397,11 +407,14 @@ defmodule Grappa.Deploy.Preflight do
   defp add_reason(reasons, _, []), do: reasons
   defp add_reason(reasons, kind, files), do: [{kind, files} | reasons]
 
-  # Substrate-scoped filter: the predicate only applies when the diff
-  # is being classified FOR the substrate that reads those files.
-  # First head matches when scope == substrate.
-  defp filter_on(scope, scope, paths, pred), do: Enum.filter(paths, pred)
-  defp filter_on(_, _, _, _), do: []
+  # Substrate-scoped filter: the predicate only applies when the diff is
+  # being classified FOR a substrate that reads those files. The scope is
+  # always a LIST, including at the single-substrate call sites — one
+  # shape for one helper, so the next class that spans two substrates
+  # has nothing to choose between.
+  defp filter_on(scopes, substrate, paths, pred) do
+    if substrate in scopes, do: Enum.filter(paths, pred), else: []
+  end
 
   # Class 1: dep / build config.
   defp mix_deps?(path), do: path in ["mix.lock", "mix.exs"]
@@ -651,6 +664,41 @@ defmodule Grappa.Deploy.Preflight do
   defp config?(path) do
     String.starts_with?(path, "config/") and String.ends_with?(path, ".exs")
   end
+
+  # Class 8 (#1287): the repo-root VERSION file — the SSOT for the OTP
+  # application vsn, which `mix.exs` reads at build time. COLD on the
+  # substrates that boot a `mix release`, and ONLY those.
+  #
+  # The bump does not merely change a string: it moves every artifact to
+  # `lib/grappa-<new>/ebin`, while the running node keeps resolving
+  # `:code.lib_dir(:grappa)` — the directory `HotReload.reload_modified/0`
+  # walks, and the root `Ecto.Migrator` reaches through
+  # `Application.app_dir/1,2` — to the BOOT directory `lib/grappa-<old>/ebin`.
+  # The new artifacts land in a SIBLING the node never looks at, so the
+  # reload diffs the stale tree against itself and answers
+  # `{"failed":[],"reloaded":[],"migrated":[]}`. That is indistinguishable
+  # from "nothing to do": the miss cannot be reported, only prevented here.
+  # Repro'd in production 2026-08-13 on a self-hosted `:linux` install
+  # deploying v1.0.0 → v1.1.0 — ~6.5 hours serving the old BEAM under the
+  # new git history. Before #652 the number lived in `mix.exs` and
+  # `mix_deps?/1` caught the bump by accident; moving it to VERSION removed
+  # the accident without replacing the rule.
+  #
+  # Docker is excluded by MEASUREMENT, not by omission: the container execs
+  # `mix phx.server` over a bind-mounted tree (`bin/start.sh:76`), where
+  # `:code.lib_dir(:grappa)` is `/app/_build/<env>/lib/grappa` — no vsn in
+  # the path, so the fresh beams land where the node is already looking.
+  # The two release substrates say the opposite in their own words:
+  # `infra/freebsd/deploy.sh:116` names `lib/grappa-X.Y/ebin` as the
+  # daemon's code path. COLDing docker for a file its boot layout is immune
+  # to would be the needless-restart class the substrate argument exists to
+  # prevent (moduledoc: 2026-06-10, #923) — on an always-on bouncer every
+  # restart drops every IRC session.
+  #
+  # Exact repo-root match: a sibling `VERSION` elsewhere in the tree (e.g.
+  # `cicchetto/VERSION`) is a different file with no bearing on the OTP vsn.
+  defp version?("VERSION"), do: true
+  defp version?(_), do: false
 
   # Walk the AST collecting nodes that match any of:
   #   * `@type t :: %{...}`     — bare-map state typespec

@@ -275,30 +275,51 @@ defmodule Grappa.Deploy.PreflightTest do
     end
   end
 
+  describe "classify_paths/2 — Class 8: VERSION (COLD on the release substrates)" do
+    # #1287, repro'd in production 2026-08-13 on a v1.0.0 → v1.1.0 deploy:
+    # the bump moves the release's lib directory to `lib/grappa-<new>/ebin`
+    # while the running node keeps resolving `:code.lib_dir(:grappa)` to its
+    # BOOT directory, so the hot reload diffs a stale tree against itself and
+    # answers `{"reloaded":[]}` — a success shape it has no way to distinguish
+    # from "nothing to do". REVERSES the #652 pin that used to live in the HOT
+    # describe below.
+    test "VERSION → cold (:version) on jail (mix release, versioned lib dir)" do
+      assert {:cold, reasons} = Preflight.classify_paths(["VERSION"], :jail)
+      assert {:version, ["VERSION"]} in reasons
+    end
+
+    test "VERSION → cold (:version) on linux (mix release, versioned lib dir)" do
+      assert {:cold, reasons} = Preflight.classify_paths(["VERSION"], :linux)
+      assert {:version, ["VERSION"]} in reasons
+    end
+
+    test "VERSION → hot on docker (mix phx.server, unversioned _build lib dir)" do
+      # The container execs `mix phx.server` over a bind-mounted tree
+      # (bin/start.sh), so `:code.lib_dir(:grappa)` is `_build/<env>/lib/grappa`
+      # — no vsn in the path, and the reload sees the fresh beams. COLDing
+      # docker for a file its boot layout is immune to is the needless-restart
+      # class the substrate argument exists to prevent (moduledoc, 2026-06-10).
+      assert {:hot, []} = Preflight.classify_paths(["VERSION"], :docker)
+    end
+
+    test "the real bump-commit shape (VERSION + version.ex) → cold on linux" do
+      assert {:cold, reasons} =
+               Preflight.classify_paths(["VERSION", "lib/grappa/version.ex"], :linux)
+
+      assert {:version, ["VERSION"]} in reasons
+    end
+
+    test "a VERSION-named file elsewhere in the tree → hot (exact repo-root match)" do
+      for substrate <- @substrates do
+        assert {:hot, []} = Preflight.classify_paths(["cicchetto/VERSION"], substrate)
+      end
+    end
+  end
+
   describe "classify_paths/2 — HOT path" do
     test "empty diff → hot on both substrates" do
       for substrate <- @substrates do
         assert {:hot, []} = Preflight.classify_paths([], substrate)
-      end
-    end
-
-    test "VERSION (a bump-only diff) → hot on every substrate (#652)" do
-      # The #652 acceptance criterion: the version SSOT moved out of mix.exs
-      # into the repo-root VERSION file precisely so a bump is HOT — it is NOT
-      # a Class 1 mix_deps path, so it falls through to HOT and every IRC
-      # session survives the deploy.
-      for substrate <- @substrates do
-        assert {:hot, []} = Preflight.classify_paths(["VERSION"], substrate)
-      end
-    end
-
-    test "VERSION rides with a hot module change → still hot (#652)" do
-      # The real bump commit shape: VERSION plus the recompiled Grappa.Version
-      # beam's source (version.ex is a regular module, not long-lived) — the
-      # whole diff must stay HOT.
-      for substrate <- @substrates do
-        assert {:hot, []} =
-                 Preflight.classify_paths(["VERSION", "lib/grappa/version.ex"], substrate)
       end
     end
 
