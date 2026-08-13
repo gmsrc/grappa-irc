@@ -16,19 +16,31 @@ defmodule Grappa.Push.Sender do
   (the device-list UX) and for the client-side registration flow. It does
   NOT branch delivery here: a UnifiedPush registration carries a real
   P-256 keypair + auth secret too, generated client-side the same way
-  a browser's `PushManager.subscribe()` does internally, so the
-  IDENTICAL VAPID-signed `aes128gcm` encrypted POST this module
-  already sends for Web Push works unchanged for a UnifiedPush
-  endpoint — distributors are reasoned, not observed, to relay whatever
-  bytes and headers they are given; a Web-Push-vendor's OWN push service
-  (Google FCM, Mozilla autopush) is the party that verifies the VAPID JWT
-  against the subscribed key, and no end-to-end delivery against a live
-  UnifiedPush distributor has confirmed the same holds there. If a
-  distributor turns out to reject or strip an unrecognized VAPID header,
-  the failure surfaces through the ordinary paths below (dead-endpoint
-  cleanup, per-sub telemetry) — confined to `unifiedpush` rows, no webpush
-  behavior affected. `send_to_subscription/2` reads no branch on
-  `:provider` at all regardless.
+  a browser's `PushManager.subscribe()` does internally.
+  `send_to_subscription/2` reads no branch on `:provider` at all.
+
+  ## What we actually put on the wire — the pre-RFC drafts (#1290)
+
+  NOT `aes128gcm`. An earlier revision of this docstring claimed the
+  POST below was "the IDENTICAL VAPID-signed `aes128gcm` encrypted
+  POST"; that was never checked against the dependency and is false.
+  `WebPushElixir` 0.8.0 emits draft-ietf-webpush-encryption-04
+  `aesgcm` (`deps/web_push_elixir/lib/web_push_elixir.ex:50,147`) and
+  draft-ietf-webpush-vapid-01 `Authorization: WebPush <jwt>` (`:146`).
+
+  The gap is structural, not cosmetic. Under `aesgcm` the salt and the
+  server ephemeral public key — both mandatory HKDF inputs — travel as
+  the `encryption:` and `crypto-key:` headers while the body is the
+  bare ciphertext (`:150-151,161`). RFC 8291 puts the same two values
+  in the body's own binary header, so the body decrypts standalone.
+  Any transport that does not preserve headers therefore hands the
+  application an undecryptable blob — reported for UnifiedPush by the
+  Resentin author (theirs; the header-discarding half is not measured
+  here, the dependency half above is).
+
+  What keeps browser push working is the big push services still
+  accepting a draft they superseded, not the draft being acceptable.
+  #1290 tracks the fix and owns the route decision.
 
   ## Subject-scoped — V3 (2026-05-15)
 

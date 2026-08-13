@@ -280,7 +280,13 @@ defmodule Grappa.MixProject do
       {:argon2_elixir, "~> 4.1"},
       {:cloak, "~> 1.1"},
       {:cloak_ecto, "~> 1.3"},
-      # Web Push delivery (RFC 8030 / VAPID RFC 8292). Picked over
+      # Web Push delivery. RFC 8030 (the delivery protocol —
+      # TTL/Urgency/Topic) is honoured; the encryption and VAPID layers
+      # are NOT the RFCs this comment used to advertise. 0.8.0 emits
+      # draft-ietf-webpush-encryption-04 `aesgcm` and
+      # draft-ietf-webpush-vapid-01 `Authorization: WebPush <jwt>`, not
+      # RFC 8291 `aes128gcm` + RFC 8292 `vapid t=…, k=…`. See #1290 and
+      # the wire section of `Grappa.Push.Sender`. Picked over
       # `web_push_encryption` (last release 2021-09-15, no native
       # 410-Gone signal) because:
       #   * Active maintenance — 0.8.0 released 2026-05-04.
