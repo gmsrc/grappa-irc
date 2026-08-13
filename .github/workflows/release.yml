@@ -73,10 +73,22 @@ name: release
 # OR via manual workflow_dispatch, which has TWO mutually-exclusive modes:
 #
 #   * REPAIR (default, `docker_validation=false`, #504): (re)build an EXISTING
-#     tag's deb/arch/rpm and upload to its release, no tag surgery — dispatch
-#     from main with the `tag` input (e.g. `v0.6.0`). deb/arch/rpm resolve the
-#     tag into `RELEASE_TAG` and check it out explicitly; the docker job does NOT
-#     run in this mode (image repair is out of scope — re-tag to rebuild it).
+#     tag's deb/arch/rpm AND its ghcr images and upload to its release, no tag
+#     surgery — dispatch from main with the `tag` input (e.g. `v0.6.0`). Every
+#     job resolves the tag into `RELEASE_TAG`/`REPAIR_TAG` and checks it out
+#     explicitly. Image repair used to be out of scope ("re-tag to rebuild it");
+#     it is now IN scope, because a release whose packages ship and whose image
+#     does not leaves `:latest` pointing at the PREVIOUS version — an operator
+#     pulling the announced release silently gets the old one (v1.0.0, 13/8).
+#     The image is built from the TAG's tree, but the build SCAFFOLDING
+#     (`Dockerfile.release`, `Dockerfile.shottino`, `.dockerignore`,
+#     `infra/docker`) is taken from the DISPATCHED ref — that is the whole point:
+#     the scaffolding is what was broken. The tree is therefore MIXED, which is
+#     why the version gate demands that the `tag` input match that tree's
+#     `VERSION` (a repair republishes a tag's own images, it never re-versions
+#     them) and why the pushed images carry
+#     `chat.grappa.image.scaffolding-revision` recording where the recipe came
+#     from. smoke pulls what was PUBLISHED, exactly as on a tag push.
 #   * DOCKER DRY-RUN (`docker_validation=true`): a ZERO-PUBLICATION validation of
 #     the release-image job ITSELF (not a copy of it — the same job that ships).
 #     Only the docker job runs; it builds `Dockerfile.release` multi-arch from
@@ -102,7 +114,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Repair path only: existing release tag to (re)build deb/arch/rpm for + attach assets to (e.g. v0.6.0). Ignored when docker_validation is true."
+        description: "Repair path only: existing release tag to (re)build deb/arch/rpm + ghcr images for, and attach assets to (e.g. v0.6.0). Images build from the tag's tree with the DISPATCHED ref's Dockerfiles. Ignored when docker_validation is true."
         required: false
         type: string
       docker_validation:
@@ -506,21 +518,58 @@ jobs:
 
   docker:
     name: build + push release images (ghcr, amd64 + arm64)
-    # Runs on a tag push (real release → PUBLISHES) and on an EXPLICIT
-    # docker_validation dispatch (dry-run → push:false, publishes NOTHING). A
-    # plain repair dispatch (docker_validation=false) does NOT run docker: no
-    # existing tag's tree carries Dockerfile.release yet, and image repair is
-    # out of scope (re-tag to rebuild an image). The tag-push path is byte-for-
-    # byte the shipping behavior; the dry-run only flips push→false + skips login.
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) }}
+    # THREE trigger shapes, not two:
+    #
+    #   * tag push                     → builds the tag, PUBLISHES to ghcr. The
+    #                                    byte-for-byte shipping behavior.
+    #   * docker_validation dispatch   → dry-run: builds the DISPATCHED BRANCH
+    #                                    both arches, push:false, no login,
+    #                                    publishes NOTHING. The pre-tag gate.
+    #   * repair dispatch (tag input)  → builds the TAG's tree with the image
+    #                                    build scaffolding taken from the
+    #                                    dispatched ref, and PUBLISHES.
+    #
+    # The repair path used to be refused here, on the grounds that image repair
+    # is out of scope and a broken image means "cut another tag". v1.0.0 is why
+    # that rule did not survive contact: `mix release` runs the #1158 operator-CLI
+    # step, Dockerfile.release did not COPY `infra/`, and the image job died at
+    # assembly (run 31656721237) — while deb, rpm and Arch built, were proven and
+    # were attached. So the release exists, its packages exist, and its images do
+    # not; `:latest` still resolved to the PREVIOUS release, which is what an
+    # operator's `docker pull` gets. Forcing a version bump to republish an
+    # already-shipped tag's images is worse than rebuilding them: it invents a
+    # release nobody wrote notes for.
+    #
+    # What the repair path is allowed to differ on is deliberately narrow: the
+    # BUILD SCAFFOLDING (Dockerfile.release, Dockerfile.shottino, .dockerignore,
+    # infra/docker) comes from the dispatched ref, everything the image actually
+    # SHIPS comes from the tag. That is the same principle #504 already applied to
+    # the package jobs — "dispatching from main runs the FIXED workflow against
+    # the tag" — extended from the workflow file to the build recipe it drives,
+    # because here the recipe IS the workflow's broken part. The scaffolding
+    # commit is stamped into the image as its own OCI label, so the difference is
+    # readable off the artifact and never has to be reconstructed from run logs.
+    #
+    # A repair dispatch with an EMPTY tag input is not a repair: it falls through
+    # to no job at all, rather than silently republishing main as some tag.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag != '') }}
     runs-on: ubuntu-latest
     # Job-level permissions REPLACE the workflow default (contents: write) for
     # this job — so re-grant `contents: read` for checkout and ADD
-    # `packages: write` to push to ghcr with the ambient GITHUB_TOKEN (used only
-    # on the tag-push path; a dry-run never logs in or pushes).
+    # `packages: write` to push to ghcr with the ambient GITHUB_TOKEN (used on
+    # the tag-push and repair paths; a dry-run never logs in or pushes).
     permissions:
       contents: read
       packages: write
+    env:
+      # ONE definition of "this is a repair run", referenced by every step that
+      # has to behave differently. Re-deriving the condition per step is how the
+      # publish gate and the checkout gate drift apart — and a drift here means
+      # either publishing the wrong tree or not publishing at all. Note the
+      # STRING comparison at each use: workflow-level `env` is text, never bool.
+      IMAGE_REPAIR: ${{ github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag != '' }}
+      # Empty on the two non-repair paths, where the checkout takes its default.
+      REPAIR_TAG: ${{ github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag || '' }}
     steps:
       - name: Checkout (the TRIGGERING ref; tags for #391 + :latest gate)
         uses: actions/checkout@v7
@@ -529,15 +578,44 @@ jobs:
           # the declared submodules are test-only, one behind a `git@` SSH URL the
           # ambient token cannot fetch — `recursive` would only add failure surface.
           submodules: false
-          # NO ref override: the default checkout is the ref that TRIGGERED the run
-          # — the pushed TAG on a release, the DISPATCHED BRANCH on a
-          # docker_validation dry-run. THIS is what makes the dry-run EXECUTABLE:
-          # the branch tree carries Dockerfile.release, whereas an existing tag
-          # (cut before this work) does not — the whole reason `ref: <tag>` was
-          # wrong here. fetch-depth 0 pulls tags for the version gate + the
-          # :latest check; the image build takes the no-git bare-version path
-          # (.git is .dockerignore'd).
+          # Empty on the tag-push and dry-run paths, where the default checkout is
+          # exactly right: the pushed TAG on a release, the DISPATCHED BRANCH on a
+          # docker_validation dry-run (which is what makes the dry-run executable
+          # at all — the branch tree carries a WORKING Dockerfile.release). On a
+          # repair dispatch it is the tag being repaired, because there the thing
+          # being republished is that tag's tree and nothing else. fetch-depth 0
+          # pulls tags for the version gate + the :latest check, and on the repair
+          # path it is also what makes the dispatched ref's commit reachable for
+          # the scaffolding step below. The image build itself takes the no-git
+          # bare-version path (.git is .dockerignore'd).
+          ref: ${{ env.REPAIR_TAG }}
           fetch-depth: 0
+
+      # The one deliberate difference between a repair build and the tag's own
+      # build. `git checkout <sha> -- <paths>` overwrites ONLY these paths in the
+      # work tree; HEAD stays on the tag, so `git rev-parse HEAD` below still
+      # reports the tag's commit as the image revision — which is honest, because
+      # every byte the image ships still comes from the tag.
+      #
+      # The list is the build recipe and nothing else. `lib`, `config`, `priv`,
+      # `mix.exs`, `mix.lock`, `VERSION` and `cicchetto` are POINTEDLY absent: the
+      # moment source joins this list, the artifact stops being the tag and the
+      # label lies.
+      - name: Repair path — take the image build scaffolding from the dispatched ref
+        if: ${{ env.IMAGE_REPAIR == 'true' }}
+        run: |
+          echo "repairing ${REPAIR_TAG} ($(git rev-parse --short HEAD)) with scaffolding from ${GITHUB_SHA}"
+          git checkout "${GITHUB_SHA}" -- \
+            Dockerfile.release \
+            Dockerfile.shottino \
+            .dockerignore \
+            infra/docker
+          # Print it. A repair that silently changed nothing means the tag was
+          # already fine and the failure is elsewhere; a repair that changed more
+          # than expected is the reviewer's business, not a surprise found later
+          # by diffing images.
+          echo "scaffolding delta vs the tag:"
+          git --no-pager diff --stat HEAD --
 
       - name: Resolve version (repo-root VERSION file = SSOT)
         id: ver
@@ -553,6 +631,18 @@ jobs:
               echo "::error::pushed tag v${tag_ver} does not match the VERSION file ${version} — bump VERSION before cutting the tag"
               exit 1
             fi
+          elif [ "${IMAGE_REPAIR}" = "true" ]; then
+            # Same gate, dispatched input instead of the pushed ref. It is not
+            # ceremony: this run PUBLISHES `:v<VERSION>`, and VERSION is read from
+            # the checked-out tree. A typo'd tag input would otherwise publish a
+            # tag's tree under a DIFFERENT version's name and quietly move
+            # `:latest` onto it.
+            tag_ver="${REPAIR_TAG#v}"
+            echo "repair dispatch tag=${tag_ver} VERSION=${version}"
+            if [ "${tag_ver}" != "${version}" ]; then
+              echo "::error::dispatched tag ${REPAIR_TAG} does not match that tree's VERSION file ${version} — repair republishes a tag's own images, it does not re-version them"
+              exit 1
+            fi
           else
             echo "docker_validation dry-run: building ${GITHUB_REF_NAME} @ VERSION ${version} — push:false, NOTHING will be published"
           fi
@@ -560,9 +650,20 @@ jobs:
       - name: Resolve the built commit (OCI revision label)
         id: rev
         run: |
-          # The commit actually built (the tag's commit on push, the branch HEAD
-          # on a dry-run) — never github.sha, which is main's HEAD on a dispatch.
+          # The commit actually built (the tag's commit on push AND on a repair,
+          # the branch HEAD on a dry-run) — never github.sha, which is the
+          # dispatched branch's HEAD, not the thing being built.
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          # The commit the BUILD RECIPE came from. Equal to the revision on every
+          # path except a repair, where it is the dispatched ref. Stamped as its
+          # own label so "why does this image's Dockerfile not match its
+          # revision's" is answerable from `docker inspect`, months later, by
+          # someone who never saw this run.
+          if [ "${IMAGE_REPAIR}" = "true" ]; then
+            echo "scaffolding=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "scaffolding=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compute image names + tag lists
         id: img
@@ -628,9 +729,11 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to ghcr.io
-        # Only on the tag-push (publishing) path — a docker_validation dry-run
-        # never authenticates to the registry, so it CANNOT publish.
-        if: ${{ github.event_name == 'push' }}
+        # Both publishing paths (tag push, repair). A docker_validation dry-run
+        # never authenticates to the registry, so it CANNOT publish — that is the
+        # dry-run's guarantee, and it stays a property of the credentials, not of
+        # a flag someone could flip by mistake.
+        if: ${{ github.event_name == 'push' || env.IMAGE_REPAIR == 'true' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -646,20 +749,23 @@ jobs:
           # arm64 builds under QEMU emulation (slow — the gha cache below keeps
           # re-runs cheap).
           platforms: linux/amd64,linux/arm64
-          # ZERO PUBLICATION on a dry-run: push ONLY on a tag push. A
+          # ZERO PUBLICATION on a dry-run: push on a tag push and on a repair. A
           # docker_validation dispatch still builds BOTH arches (proving the
           # arm64 QEMU path + the ABI-lockstep assertion + cic + mix release) and
           # then discards them — nothing reaches ghcr, no `:latest` moves.
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' || env.IMAGE_REPAIR == 'true' }}
           # `:v<version>` always; `:latest` only when highest (see the "Compute
           # image name + tag list" step). Consumed only when push:true.
           tags: ${{ steps.img.outputs.tags }}
           # OCI labels so the ghcr package page links back to source + the
-          # exact tag/commit it was built from.
+          # exact tag/commit it was built from. `revision` is the tree that was
+          # BUILT; the grappa-specific label next to it is the commit the build
+          # recipe came from, which differs only on a repair (see the rev step).
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
             org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
+            chat.grappa.image.scaffolding-revision=${{ steps.rev.outputs.scaffolding }}
           # SCOPED (#1168): two builds in one job share the gha cache backend,
           # and the default scope is one bucket — unscoped, the bridge build
           # would evict the bouncer's layers on every release and vice versa.
@@ -687,12 +793,13 @@ jobs:
           # bridge is ~12 C files against ncursesw/openssl, tens of seconds
           # under emulation, next to a full ERTS + SPA build in this same job.
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name == 'push' }}
+          push: ${{ github.event_name == 'push' || env.IMAGE_REPAIR == 'true' }}
           tags: ${{ steps.img.outputs.shottino_tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
             org.opencontainers.image.revision=${{ steps.rev.outputs.sha }}
+            chat.grappa.image.scaffolding-revision=${{ steps.rev.outputs.scaffolding }}
           cache-from: type=gha,scope=release-shottino
           cache-to: type=gha,mode=max,scope=release-shottino
           provenance: false
@@ -700,41 +807,51 @@ jobs:
   smoke:
     name: deploy + probe the release image (amd64)
     needs: [docker]
-    # Exactly the docker job's trigger set: a real tag (probe what was just
-    # published) or a docker_validation dry-run (probe what was just built).
-    # There is no third mode and no skip — if the image cannot be obtained,
-    # this job FAILS. A smoke test that quietly passes having tested nothing
-    # is worse than not having one.
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) }}
+    # Exactly the docker job's trigger set, all three shapes: a real tag and a
+    # repair (probe what was just PUBLISHED) or a docker_validation dry-run
+    # (probe what was just built). There is no skip — if the image cannot be
+    # obtained, this job FAILS. A smoke test that quietly passes having tested
+    # nothing is worse than not having one, and a repair is precisely the run
+    # you least want to take on trust: it publishes a mixed tree.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
+    env:
+      # Same single definition as the docker job — see its comment.
+      IMAGE_REPAIR: ${{ github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag != '' }}
+      # On a repair the driver AND the version must come from the tag, or this
+      # job would probe `:v<main's VERSION>` — an image this run never touched.
+      REPAIR_TAG: ${{ github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag || '' }}
     steps:
-      - name: Checkout (the TRIGGERING ref — it carries the smoke driver)
+      - name: Checkout (the ref whose image is under test — it carries the smoke driver)
         uses: actions/checkout@v7
         with:
           # Same reasoning as the docker job: the pushed TAG on a release, the
-          # DISPATCHED BRANCH on a dry-run. submodules:false + fetch-depth 1 —
-          # the driver is shell over infra/ and reads no git history.
+          # DISPATCHED BRANCH on a dry-run, the REPAIRED TAG on a repair.
+          # submodules:false + fetch-depth 1 — the driver is shell over infra/
+          # and reads no git history.
           submodules: false
+          ref: ${{ env.REPAIR_TAG }}
 
       - name: Resolve version (repo-root VERSION file = SSOT)
         id: ver
         run: echo "version=$(infra/packaging/version.sh)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to ghcr.io
-        # Only the tag path pulls from the registry; the dry-run builds locally.
-        if: ${{ github.event_name == 'push' }}
+        # The two publishing paths pull from the registry; the dry-run builds
+        # locally and never authenticates.
+        if: ${{ github.event_name == 'push' || env.IMAGE_REPAIR == 'true' }}
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull the PUBLISHED image (tag path)
+      - name: Pull the PUBLISHED image (tag + repair paths)
         id: pull
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' || env.IMAGE_REPAIR == 'true' }}
         run: |
           owner="$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/grappa:v${{ steps.ver.outputs.version }}"
@@ -743,12 +860,15 @@ jobs:
           echo "image=${image}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx (dry-run path)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        # docker_validation ONLY. A repair is also a workflow_dispatch but it
+        # PUBLISHES, so it takes the pull path above; re-exporting from cache
+        # there would probe a local image instead of the pushed one.
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_validation }}
         uses: docker/setup-buildx-action@v4
 
       - name: Re-export the amd64 image from the build cache (dry-run path)
         id: build
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_validation }}
         uses: docker/build-push-action@v7
         with:
           context: .
