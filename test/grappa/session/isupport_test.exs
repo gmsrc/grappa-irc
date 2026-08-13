@@ -459,6 +459,76 @@ defmodule Grappa.Session.ISupportTest do
     end
   end
 
+  # #1255 — draft-brocklesby-irc-isupport-03 §2: "-PARAMETER" is "used to
+  # negate a previously specified parameter; that is, revert to the
+  # behaviour that would occur if the parameter had not been specified".
+  # The behaviour-if-unspecified IS `default/0` — never nil, which would be
+  # a third state ("advertised as absent") no accessor models.
+  describe "-TOKEN negation (#1255)" do
+    test "-WATCH revokes a presence mechanism the session was armed for" do
+      # The functional case from the issue: services restart, the ircd pulls
+      # WATCH mid-session, and /notify keeps arming a mechanism nobody
+      # honours until the next reconnect.
+      armed = ISupport.merge_isupport(["grappa-test", "WATCH=128"], ISupport.default())
+      assert ISupport.presence_mechanism(armed) == {:watch, 128}
+
+      revoked = ISupport.merge_isupport(["grappa-test", "-WATCH"], armed)
+      assert ISupport.presence_mechanism(revoked) == :none
+    end
+
+    test "-STATUSMSG reverts to the default sigils, not to nil/empty" do
+      wide = ISupport.merge_isupport(["grappa-test", "STATUSMSG=@%+"], ISupport.default())
+      reverted = ISupport.merge_isupport(["grappa-test", "-STATUSMSG"], wide)
+      assert ISupport.statusmsg(reverted) == ISupport.default_statusmsg()
+    end
+
+    test "-CHANTYPES reverts to the RFC default set" do
+      narrowed = ISupport.merge_isupport(["grappa-test", "CHANTYPES=#"], ISupport.default())
+      reverted = ISupport.merge_isupport(["grappa-test", "-CHANTYPES"], narrowed)
+      assert ISupport.chantypes(reverted) == ISupport.default_chantypes()
+    end
+
+    test "-CASEMAPPING reverts to :ascii" do
+      rfc = ISupport.merge_isupport(["grappa-test", "CASEMAPPING=rfc1459"], ISupport.default())
+      reverted = ISupport.merge_isupport(["grappa-test", "-CASEMAPPING"], rfc)
+      assert ISupport.casemapping(reverted) == ISupport.default_casemapping()
+    end
+
+    test "-NICKLEN clears an advertised limit back to unknown" do
+      capped = ISupport.merge_isupport(["grappa-test", "NICKLEN=30"], ISupport.default())
+      assert ISupport.nicklen(ISupport.merge_isupport(["grappa-test", "-NICKLEN"], capped)) == nil
+    end
+
+    test "-CHANMODES reverts the whole capability table to the seed" do
+      narrowed =
+        ISupport.merge_isupport(["grappa-test", "CHANMODES=b,k,l,imnpst"], ISupport.default())
+
+      reverted = ISupport.merge_isupport(["grappa-test", "-CHANMODES"], narrowed)
+      assert ISupport.takes_param?(reverted, "e", :add)
+      assert ISupport.takes_param?(reverted, "I", :add)
+    end
+
+    test "negation of a token we do not model leaves the table untouched" do
+      d = ISupport.default()
+      merged = ISupport.merge_isupport(["grappa-test", "-SAFELIST", "-ELIST"], d)
+      assert Map.drop(merged, [:raw]) == Map.drop(d, [:raw])
+    end
+
+    test "a negation followed by a re-advertisement in the same line ends advertised" do
+      # Last-wins applies to the negation clause too — it is just another
+      # write. `-NICKLEN NICKLEN=9` leaves the limit at 9.
+      capped = ISupport.merge_isupport(["grappa-test", "NICKLEN=30"], ISupport.default())
+      params = ["grappa-test", "-NICKLEN", "NICKLEN=9"]
+      assert ISupport.nicklen(ISupport.merge_isupport(params, capped)) == 9
+    end
+
+    test "a re-advertisement followed by a negation in the same line ends reverted" do
+      capped = ISupport.merge_isupport(["grappa-test", "NICKLEN=30"], ISupport.default())
+      params = ["grappa-test", "NICKLEN=9", "-NICKLEN"]
+      assert ISupport.nicklen(ISupport.merge_isupport(params, capped)) == nil
+    end
+  end
+
   # #1255 scope note — the Phase 6 IRCv3 listener facade has to EMIT a 005
   # to a downstream client, and the typed six threw every other token away
   # at ingress. `raw` is the verbatim archive it will translate from. It is
@@ -512,6 +582,22 @@ defmodule Grappa.Session.ISupportTest do
       params = ["grappa-test", "NETWORK=Azzurra", "NETWORK=Freenode"]
       raw = ISupport.raw(ISupport.merge_isupport(params, ISupport.default()))
       assert raw["NETWORK"] == "Freenode"
+    end
+
+    test "-TOKEN removes the key from the archive" do
+      # §2 negation is "revert to the behaviour that would occur if the
+      # parameter had not been specified" — an archive that kept the key
+      # would have the facade re-advertise a revoked capability downstream.
+      seeded =
+        ISupport.merge_isupport(
+          ["grappa-test", "SAFELIST", "NETWORK=Azzurra"],
+          ISupport.default()
+        )
+
+      revoked = ISupport.merge_isupport(["grappa-test", "-SAFELIST"], seeded)
+      raw = ISupport.raw(revoked)
+      refute Map.has_key?(raw, "SAFELIST")
+      assert raw["NETWORK"] == "Azzurra"
     end
 
     test "raw/1 falls back to the empty archive on a table predating the field" do

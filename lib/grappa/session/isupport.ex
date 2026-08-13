@@ -419,7 +419,50 @@ defmodule Grappa.Session.ISupport do
   # Token parsing
   # ---------------------------------------------------------------------------
 
+  # #1255 — token name → the `t()` key a `-TOKEN` negation restores from
+  # `default/0`. One entry per typed field, so adding a parsed token
+  # without making it revocable is a visible omission here rather than a
+  # silent one at the catch-all.
+  @negatable %{
+    "CHANMODES" => :chanmodes,
+    "PREFIX" => :prefix,
+    "STATUSMSG" => :statusmsg,
+    "MONITOR" => :monitor,
+    "WATCH" => :watch,
+    "CASEMAPPING" => :casemapping,
+    "CHANTYPES" => :chantypes,
+    "MAXLIST" => :maxlist,
+    "NICKLEN" => :nicklen,
+    "CHANNELLEN" => :channellen,
+    "TOPICLEN" => :topiclen
+  }
+
+  # #1255 — draft-brocklesby-irc-isupport-03 §2: a token advertised with a
+  # leading `-` is "used to negate a previously specified parameter; that
+  # is, revert to the behaviour that would occur if the parameter had not
+  # been specified". The behaviour-if-unspecified is exactly `default/0`,
+  # so a negation RESTORES the seed — never `nil`, which would be a third
+  # state ("advertised as absent") that no accessor models and every
+  # consumer would have to learn.
+  #
+  # This clause comes FIRST: `-WATCH` must not reach the positive clauses,
+  # and before #1255 it fell through to the catch-all, so a capability the
+  # ircd revoked mid-session (services restart, a listener mode change)
+  # stayed in the table until the next reconnect — leaving `/notify`
+  # arming a mechanism nobody honours, with no presence until reconnect.
+  #
+  # A negation is an ordinary write, so last-wins still governs:
+  # `-NICKLEN NICKLEN=9` ends advertised, `NICKLEN=9 -NICKLEN` ends
+  # reverted. Negating a token we do not model is a no-op on the typed
+  # table (the archive still forgets it — see `archive_token/2`).
   @spec merge_token(String.t(), t()) :: t()
+  defp merge_token("-" <> token, acc) do
+    case Map.fetch(@negatable, token) do
+      {:ok, key} -> Map.put(acc, key, Map.fetch!(default(), key))
+      :error -> acc
+    end
+  end
+
   defp merge_token("CHANMODES=" <> rest, acc) do
     case parse_chanmodes(rest) do
       {:ok, chanmodes} -> %{acc | chanmodes: chanmodes}
