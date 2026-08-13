@@ -51,14 +51,29 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // (alias-b.test, compose.yaml EXTRA_CHECK_ORIGINS) — a third deployment.
 const FOREIGN_HOST = "other-grappa.test";
 const IMAGE_URL = `https://${FOREIGN_HOST}/uploads/cross-host.png`;
-const VIDEO_URL = `https://${FOREIGN_HOST}/uploads/cross-host.mp4`;
+const VIDEO_URL = `https://${FOREIGN_HOST}/uploads/cross-host.webm`;
 // Same host, same extension, http → still refused (mixed content on the
 // https page). The scheme leniency of the same-host branch (legacy
 // http-minted upload links) deliberately does not reach a foreign host.
 const INSECURE_IMAGE_URL = `http://${FOREIGN_HOST}/uploads/insecure.png`;
 
 const PNG_BYTES = Buffer.from(TINY_PNG_HEX, "hex");
-const MP4_BYTES = readFileSync(fileURLToPath(new URL("../fixtures/tiny.mp4", import.meta.url)));
+// VP9-in-WebM, NOT the H.264 `tiny.mp4` the upload specs use (#1292).
+// The runner's Chromium (Playwright's own build, runner/Dockerfile) has
+// no H.264 decoder — measured inside this stack, Chrome/147.0.7727.15:
+//   canPlayType('video/mp4; codecs="avc1.42E01E"')  → ""
+//   canPlayType("video/mp4")                        → "maybe"
+//   canPlayType('video/webm; codecs="vp9"')         → "probably"
+// With the mp4, videoWidth stayed 0 for the full 15s, and this oracle
+// cannot tell a missing decoder apart from bytes that never arrived.
+// Re-encoding tiny.mp4 in place would have reddened two specs that have
+// nothing to do with decoding: uploads2-video-doc-upload.spec.ts posts
+// it through the picker as `video/mp4`, and ux-6-b-admin-settings.spec.ts
+// pins its 1.000s duration. Regenerate (the grappa image carries ffmpeg
+// with libvpx-vp9, like test/support/fixtures/uploads/generate.sh):
+//   ffmpeg -y -f lavfi -i color=c=blue:s=128x72:d=1 \
+//     -c:v libvpx-vp9 -pix_fmt yuv420p tiny.webm
+const WEBM_BYTES = readFileSync(fileURLToPath(new URL("../fixtures/tiny.webm", import.meta.url)));
 
 // Stand in for the other deployment's /uploads store. Only reached when
 // the CSP admits the element — see the header note.
@@ -69,8 +84,8 @@ async function serveForeignMedia(page: Page): Promise<void> {
       await route.fulfill({ contentType: "image/png", body: PNG_BYTES });
       return;
     }
-    if (pathname.endsWith(".mp4")) {
-      await route.fulfill({ contentType: "video/mp4", body: MP4_BYTES });
+    if (pathname.endsWith(".webm")) {
+      await route.fulfill({ contentType: "video/webm", body: WEBM_BYTES });
       return;
     }
     await route.abort();

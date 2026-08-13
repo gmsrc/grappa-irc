@@ -41467,3 +41467,54 @@ an ineffective hot deploy permanent and silent on retry.
 **Apply:** when a value moves out of a file to become its own SSOT, check
 what was classifying it *by side effect* at the old location. The move is
 visible in review; the rule that quietly stopped applying is not.
+<!-- entry #1292 -->
+
+---
+
+## 2026-08-13 — #1292: an e2e media fixture must be decodable by the runner, not by the author's laptop
+
+`media-link-cross-host-modal.spec.ts` was red on `main` — not on a branch —
+on the host that runs the STACK lane, and only in its video half. The oracle
+is `videoWidth > 0`, chosen in #1240 because it proves the bytes were admitted
+and decoded rather than merely fetched; the mp4 fixture left it at 0 for the
+full 15s timeout.
+
+The diagnosis was a hypothesis until it was asked of the browser that was
+failing. Inside the e2e stack, on a throwaway spec:
+
+```
+canPlayType('video/mp4; codecs="avc1.42E01E"')  → ""
+canPlayType("video/mp4")                        → "maybe"
+canPlayType('video/webm; codecs="vp9"')         → "probably"
+```
+
+(Chrome/147.0.7727.15, the Playwright image's own build.) The container is
+playable, the codec is not: `tiny.mp4` is H.264. So `videoWidth` stayed 0 for
+the reason the oracle cannot distinguish from a CSP block or a dead route —
+which is the general hazard, not an incident: **a decode oracle is only as
+portable as the codec under it.** Weakening the assertion was refused; it is
+the whole content of the test.
+
+The fixture is therefore VP9-in-WebM, and it is a NEW file rather than a
+re-encode of `tiny.mp4` in place. The letter of the issue said re-encode, but
+two other specs read that fixture for reasons unrelated to decoding:
+`uploads2-video-doc-upload.spec.ts` posts it through the picker as
+`video/mp4`, and `ux-6-b-admin-settings.spec.ts` pins its 1.000s duration
+against the #201 duration ceiling. Re-encoding in place would have traded one
+red spec for two.
+
+Not measured, and not claimed: why the same spec is green in CI. The probe
+above answers for this host's runner container only; nobody has run it on the
+CI runner, so the difference between the two — image architecture, a
+differently-built Chromium, anything else — remains unestablished. The fix
+does not depend on that answer: VP9 decodes in every Chromium build, so the
+spec stops being a property of where it runs. Buying real-world codec fidelity
+instead (running this one spec on the `chrome` channel, which ships
+proprietary codecs) stays available and unspent — it costs a second browser
+install in the runner image.
+
+**Apply:** when an e2e assertion depends on the browser decoding something —
+video, audio, a font, an image format — the fixture must use a format the
+RUNNER's engine implements, not the one the author's tools produced. Ask the
+runner with a capability probe before believing any explanation of the red;
+and before re-encoding a shared fixture, grep who else reads it.
