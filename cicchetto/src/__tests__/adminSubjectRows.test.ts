@@ -3,10 +3,12 @@ import {
   type AdminSubjectRow,
   buildSubjectRows,
   channelCount,
+  DEFAULT_SESSION_SORT,
   endedSessions,
   liveSessions,
   rowActions,
   rowKey,
+  sortSubjectRows,
 } from "../lib/adminSubjectRows";
 import type {
   AdminCredential,
@@ -461,5 +463,208 @@ describe("rowActions — reconnect is visitor-only, and chosen on LIVE truth", (
 describe("rowKey", () => {
   it("builds the composite the server parses", () => {
     expect(rowKey("visitor", VISITOR_ID, 42)).toBe(`visitor:${VISITOR_ID}:42`);
+  });
+});
+
+// #1308 — `last joined` is the DEFAULT sort, so it has to exist on both
+// kinds before the sort does. It did not: the visitor row carried
+// `visitor.inserted_at` and the user row carried nothing at all, which
+// would have made the default order half-null on day one.
+describe("last_joined_at — the default sort key, populated for BOTH kinds", () => {
+  it("takes a visitor row's from the visitor identity", () => {
+    const rows = build({ visitors: [visitor({ inserted_at: "2026-07-01T00:00:00Z" })] });
+
+    expect(rows[0]?.last_joined_at).toBe("2026-07-01T00:00:00Z");
+  });
+
+  // THE gap. The credential's `inserted_at` was on the wire all along and
+  // simply never reached the row.
+  it("takes a user row's from the credential", () => {
+    const rows = build({ credentials: [credential({ inserted_at: "2026-07-02T00:00:00Z" })] });
+
+    expect(rows[0]?.last_joined_at).toBe("2026-07-02T00:00:00Z");
+  });
+
+  it("is null on an orphan pid — there is no DB row to have been created", () => {
+    const rows = build({
+      sessions: [session({ subject_id: "deadbeef-0000-0000-0000-000000000000" })],
+    });
+
+    expect(rows[0]?.origin).toBe("orphan_pid");
+    expect(rows[0]?.last_joined_at).toBeNull();
+  });
+
+  it("is null on a log-only row — the subject it would date is gone", () => {
+    const rows = build({ logSessions: [logEntry()] });
+
+    expect(rows[0]?.origin).toBe("session_log");
+    expect(rows[0]?.last_joined_at).toBeNull();
+  });
+});
+
+// #1308 — asc/desc on the three time columns, default `last joined` desc.
+//
+// The load-bearing rule is the null placement. A missing `last_event.at`
+// is the bounded ring having forgotten, NOT a session that never ran, so
+// treating it as epoch 0 would float exactly the rows we know least about
+// to the top of an ascending sort and state a fact we do not have.
+describe("sortSubjectRows", () => {
+  const base = (): AdminSubjectRow => build({ credentials: [credential()] })[0] as AdminSubjectRow;
+
+  const at = (key: string, over: Partial<AdminSubjectRow>): AdminSubjectRow => ({
+    ...base(),
+    key,
+    ...over,
+  });
+
+  const keysOf = (rows: AdminSubjectRow[]): string[] => rows.map((r) => r.key);
+
+  it("defaults to last joined, descending", () => {
+    expect(DEFAULT_SESSION_SORT).toEqual({ key: "last_joined", direction: "desc" });
+  });
+
+  it("orders by last joined, newest first", () => {
+    const rows = [
+      at("old", { last_joined_at: "2026-08-01T00:00:00Z" }),
+      at("new", { last_joined_at: "2026-08-09T00:00:00Z" }),
+      at("mid", { last_joined_at: "2026-08-05T00:00:00Z" }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_joined", direction: "desc" }))).toEqual([
+      "new",
+      "mid",
+      "old",
+    ]);
+  });
+
+  it("reverses on ascending", () => {
+    const rows = [
+      at("old", { last_joined_at: "2026-08-01T00:00:00Z" }),
+      at("new", { last_joined_at: "2026-08-09T00:00:00Z" }),
+      at("mid", { last_joined_at: "2026-08-05T00:00:00Z" }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_joined", direction: "asc" }))).toEqual([
+      "old",
+      "mid",
+      "new",
+    ]);
+  });
+
+  it("puts a null last when descending", () => {
+    const rows = [
+      at("unknown", { last_joined_at: null }),
+      at("known", { last_joined_at: "2026-08-01T00:00:00Z" }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_joined", direction: "desc" }))).toEqual([
+      "known",
+      "unknown",
+    ]);
+  });
+
+  // The one a "just negate the comparator" implementation fails: flipping
+  // the direction must NOT float the unknowns to the top.
+  it("puts a null last when ASCENDING too", () => {
+    const rows = [
+      at("unknown", { last_joined_at: null }),
+      at("known", { last_joined_at: "2026-08-01T00:00:00Z" }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_joined", direction: "asc" }))).toEqual([
+      "known",
+      "unknown",
+    ]);
+  });
+
+  it("sorts last active off the session log's newest event", () => {
+    const rows = [
+      at("quiet", { last_event: logEntry({ at: "2026-08-01T00:00:00Z" }) }),
+      at("busy", { last_event: logEntry({ at: "2026-08-12T00:00:00Z" }) }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_active", direction: "desc" }))).toEqual([
+      "busy",
+      "quiet",
+    ]);
+  });
+
+  // Same rule, on the key where the null is most common: the ring forgets.
+  it("puts a row the log remembers nothing about last, in both directions", () => {
+    const rows = [
+      at("forgotten", { last_event: null }),
+      at("logged", { last_event: logEntry({ at: "2026-08-01T00:00:00Z" }) }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_active", direction: "desc" }))).toEqual([
+      "logged",
+      "forgotten",
+    ]);
+    expect(keysOf(sortSubjectRows(rows, { key: "last_active", direction: "asc" }))).toEqual([
+      "logged",
+      "forgotten",
+    ]);
+  });
+
+  it("sorts last seen off the browser-touch column", () => {
+    const rows = [
+      at("stale", { last_seen_at: "2026-08-01T00:00:00Z" }),
+      at("fresh", { last_seen_at: "2026-08-12T00:00:00Z" }),
+      at("never", { last_seen_at: null }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_seen", direction: "asc" }))).toEqual([
+      "stale",
+      "fresh",
+      "never",
+    ]);
+  });
+
+  // #1308 — the row-origin grouping survives as a TIEBREAK. Both fixtures
+  // are created at the same instant, so the only thing left to order them
+  // is the assembly order, and it must still be visitors-before-users in
+  // BOTH directions — a comparator that reverses the whole array rather
+  // than negating the key comparison flips this.
+  it("keeps the assembly order between rows the key cannot separate", () => {
+    const rows = build({
+      visitors: [visitor({ inserted_at: "2026-08-01T00:00:00Z" })],
+      credentials: [credential({ inserted_at: "2026-08-01T00:00:00Z" })],
+    });
+    expect(keysOf(rows), "pre-state: assembly puts the visitor first").toEqual([
+      `visitor:${VISITOR_ID}:42`,
+      `user:${USER_ID}:42`,
+    ]);
+
+    for (const direction of ["asc", "desc"] as const) {
+      expect(keysOf(sortSubjectRows(rows, { key: "last_joined", direction }))).toEqual([
+        `visitor:${VISITOR_ID}:42`,
+        `user:${USER_ID}:42`,
+      ]);
+    }
+  });
+
+  // A timestamp we cannot read is a timestamp we do not have. Silently
+  // ordering it as epoch 0 would be the same lie the null rule refuses.
+  it("treats an unreadable timestamp as unknown rather than as the epoch", () => {
+    const rows = [
+      at("garbage", { last_joined_at: "not-a-date" }),
+      at("known", { last_joined_at: "2026-08-01T00:00:00Z" }),
+    ];
+
+    expect(keysOf(sortSubjectRows(rows, { key: "last_joined", direction: "asc" }))).toEqual([
+      "known",
+      "garbage",
+    ]);
+  });
+
+  it("does not mutate the row set it was handed", () => {
+    const rows = [
+      at("old", { last_joined_at: "2026-08-01T00:00:00Z" }),
+      at("new", { last_joined_at: "2026-08-09T00:00:00Z" }),
+    ];
+
+    sortSubjectRows(rows, { key: "last_joined", direction: "desc" });
+
+    expect(keysOf(rows)).toEqual(["old", "new"]);
   });
 });

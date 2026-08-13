@@ -99,6 +99,12 @@ export type AdminSubjectRow = {
   /** The upstream peer, known ONLY for rows with a registry entry. */
   upstream: AdminSession["live_state"] | null;
   last_seen_at: string | null;
+  /** #1308 — when this subject's DB row was created: the visitor
+   * identity's `inserted_at`, or the credential's. `null` on the two
+   * classes that have no DB row (orphan pid, log-only). Copied onto the
+   * row for BOTH kinds because it is the DEFAULT sort key, and a default
+   * that is null on half the table is not an order. */
+  last_joined_at: string | null;
   /** Present iff `subject_kind === "visitor"`. */
   visitor: VisitorIdentity | null;
   origin: RowOrigin;
@@ -148,6 +154,77 @@ export function liveSessions(rows: AdminSubjectRow[]): AdminSubjectRow[] {
 
 export function rowKey(kind: "user" | "visitor", subjectId: string, networkId: number): string {
   return `${kind}:${subjectId}:${networkId}`;
+}
+
+/**
+ * #1308 — the three time columns the operator can order the list by
+ * (vjt, 2026-08-14). Each binds to a timestamp the row already carries;
+ * none of them is a new fact.
+ */
+export const SESSION_SORT_KEYS = ["last_active", "last_joined", "last_seen"] as const;
+export type SessionSortKey = (typeof SESSION_SORT_KEYS)[number];
+export type SessionSortDirection = "asc" | "desc";
+export type SessionSort = { key: SessionSortKey; direction: SessionSortDirection };
+
+/** Dictated default (vjt, 2026-08-14): newest arrivals at the top. */
+export const DEFAULT_SESSION_SORT: SessionSort = { key: "last_joined", direction: "desc" };
+
+/** The header labels, here rather than in the tab so the sort control and
+ * the thing it sorts cannot drift apart. */
+export const SESSION_SORT_LABEL: Record<SessionSortKey, string> = {
+  last_active: "last active",
+  last_joined: "last joined",
+  last_seen: "last seen",
+};
+
+const SESSION_SORT_FIELD: Record<SessionSortKey, (row: AdminSubjectRow) => string | null> = {
+  // The session-log ring, which forgets by construction.
+  last_active: (row) => row.last_event?.at ?? null,
+  last_joined: (row) => row.last_joined_at,
+  last_seen: (row) => row.last_seen_at,
+};
+
+/**
+ * The row's value for a key as a comparable instant, or `null` for "we do
+ * not have this". An unparseable string collapses into the same `null`:
+ * a timestamp we cannot read is a timestamp we do not have, and
+ * `Date.parse` returning `NaN` would otherwise poison every comparison it
+ * touched into `false` and leave the order to the engine.
+ */
+function sortInstant(row: AdminSubjectRow, key: SessionSortKey): number | null {
+  const iso = SESSION_SORT_FIELD[key](row);
+  if (iso === null) return null;
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? null : at;
+}
+
+/**
+ * Order the rows by one time column. Returns a new array; the caller's
+ * row set is the memo's output and stays as assembled.
+ *
+ * Two rules carry the design:
+ *
+ *   * **Unknowns sort last in BOTH directions.** A missing
+ *     `last_event.at` is the bounded ring having forgotten, not a session
+ *     that never ran, and a missing `last_joined_at` is a row with no DB
+ *     row behind it at all. Coercing either to epoch 0 would float
+ *     exactly the rows we know least about to the top of an ascending
+ *     sort and assert a date we do not have.
+ *   * **The row-origin grouping degrades to a tiebreak.** It was the
+ *     primary order (visitors, users, orphans, log-only) and stays
+ *     meaningful, so this is a STABLE sort over the assembled array and
+ *     nothing else: rows the key cannot separate keep the order the merge
+ *     gave them, in either direction.
+ */
+export function sortSubjectRows(rows: AdminSubjectRow[], sort: SessionSort): AdminSubjectRow[] {
+  const sign = sort.direction === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const left = sortInstant(a, sort.key);
+    const right = sortInstant(b, sort.key);
+    if (left === null) return right === null ? 0 : 1;
+    if (right === null) return -1;
+    return (left - right) * sign;
+  });
 }
 
 /** Channel count for the dictated column. `null` (introspection timed
@@ -258,6 +335,7 @@ export function buildSubjectRows(input: {
         live: net.live_state,
         upstream: sessionByKey.get(key)?.live_state ?? null,
         last_seen_at: v.last_seen_at,
+        last_joined_at: v.inserted_at,
         visitor: identity,
         origin: "credential",
         last_event: logByKey.get(key) ?? null,
@@ -279,6 +357,7 @@ export function buildSubjectRows(input: {
       live: c.live_state,
       upstream: sessionByKey.get(key)?.live_state ?? null,
       last_seen_at: c.last_seen_at,
+      last_joined_at: c.inserted_at,
       visitor: null,
       origin: "credential",
       last_event: logByKey.get(key) ?? null,
@@ -306,6 +385,10 @@ export function buildSubjectRows(input: {
       live: s.live_state,
       upstream: s.live_state,
       last_seen_at: s.last_seen_at,
+      // No DB row, so nothing was ever created to be dated. NOT the pid's
+      // start time: that is a different fact and this column does not
+      // claim it.
+      last_joined_at: null,
       visitor: null,
       origin: "orphan_pid",
       last_event: logByKey.get(key) ?? null,
@@ -337,6 +420,10 @@ export function buildSubjectRows(input: {
       // NOT `e.at`: this column is when a BROWSER last touched the
       // bouncer, and there is no browser session left to have touched it.
       last_seen_at: null,
+      // The subject row this would date is gone; the log carries no
+      // creation time of its own, and `e.at` is the LAST event, not the
+      // first.
+      last_joined_at: null,
       visitor: null,
       origin: "session_log",
       last_event: e,
