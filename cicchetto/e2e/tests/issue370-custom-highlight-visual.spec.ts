@@ -67,6 +67,37 @@ test("#370 — a custom /hilight word paints the same visual highlight own-nick 
     await expect(liveLine).toHaveClass(/scrollback-highlight/);
     await expect(liveLine).toHaveClass(/scrollback-mention/);
 
+    // #1298 — the highlight must not INDENT the row. The accent bar used to be
+    // `border-left: 2px` + `padding-left: 0.25rem`, inline space no other row
+    // reserved, so a highlighted line's text column sat 5.5px right of every
+    // neighbour (measured, irssi-dark at the 14px font pref). The bar is
+    // painted in the pane's gutter now, which is only half the contract: the
+    // text column must be flush with a plain row's AND the bar must still be
+    // painted. A plain peer line, sent here, is the external reference box —
+    // measuring the highlighted row against itself could not fail.
+    peer.privmsg(SEED_CHANNEL, "i370 plain neighbour line");
+    const plainLine = scrollbackLine(page, "privmsg", "i370 plain neighbour line");
+    await expect(plainLine).toBeVisible({ timeout: 15_000 });
+    await expect(plainLine).not.toHaveClass(/scrollback-highlight/);
+
+    const highlightedTime = await liveLine.locator(".scrollback-time").boundingBox();
+    const plainTime = await plainLine.locator(".scrollback-time").boundingBox();
+    if (highlightedTime === null || plainTime === null) {
+      throw new Error("a scrollback row has no timestamp box — the markup or the classes drifted");
+    }
+    expect(
+      Math.abs(highlightedTime.x - plainTime.x),
+      "a highlighted row's text column must start where a plain row's does",
+    ).toBeLessThan(0.5);
+
+    const bar = await liveLine.evaluate((el) => {
+      const cs = getComputedStyle(el, "::before");
+      return { content: cs.content, width: cs.width, background: cs.backgroundColor };
+    });
+    expect(bar.content).not.toBe("none");
+    expect(bar.width).toBe("2px");
+    expect(bar.background).not.toBe("rgba(0, 0, 0, 0)");
+
     // Phase 2 — fresh reload: the keyword list starts empty and is re-pulled
     // on the user-topic (re)join. A NEW matching line must still highlight
     // without opening settings.

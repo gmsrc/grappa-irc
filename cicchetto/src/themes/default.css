@@ -2848,8 +2848,29 @@ html.resize-dragging * {
    no bold, so the two states are clearly different. */
 .scrollback-line.scrollback-highlight {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border-left: 2px solid var(--accent);
-  padding-left: 0.25rem;
+  /* #1298 — anchor for the accent bar below, which is PAINTED rather than
+     laid out. The bar used to be `border-left: 2px` + `padding-left: 0.25rem`,
+     space no other row reserved: a highlighted row's content started 5.5px
+     right of every neighbour (measured, irssi-dark at the 14px font pref —
+     7px at the 20px one, both halves being rem). Reserving the same inset on
+     every row instead would mean repeating it on `.scrollback-topic-join`,
+     the day separator and the unread marker, which share that column: four
+     selectors to keep one edge straight, against one here. */
+  position: relative;
+}
+
+.scrollback-line.scrollback-highlight::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Into the pane's own 1rem gutter (`.scrollback` padding), keeping the 2px
+     bar and the 0.25rem gap to the text that the padding used to provide.
+     Inside the scrollport, so nothing clips it and no axis gains a scrollbar;
+     a descendant box, so it travels with the swipe-to-reply `transform`. */
+  left: calc(-2px - 0.25rem);
+  width: 2px;
+  background: var(--accent);
 }
 
 /* C7.2: Muted events — presence/op kinds rendered with reduced contrast.

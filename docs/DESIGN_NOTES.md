@@ -41518,3 +41518,51 @@ video, audio, a font, an image format — the fixture must use a format the
 RUNNER's engine implements, not the one the author's tools produced. Ask the
 runner with a capability probe before believing any explanation of the red;
 and before re-encoding a shared fixture, grep who else reads it.
+<!-- entry #1298 -->
+
+---
+
+## 2026-08-13 — #1298: the highlight bar is painted, not laid out
+
+`.scrollback-line.scrollback-highlight` drew its accent bar with
+`border-left: 2px` + `padding-left: 0.25rem`, on a base row whose inline
+padding is `0`. No other row reserved that space, so a highlighted row's
+text column started **5.5px** right of every neighbour — measured in
+chromium against the real stylesheet and production markup, irssi-dark at
+the default font pref. Not the 6px the issue estimated off the source:
+`html { font-size: var(--font-size) }` pins the root at 14px, so `0.25rem`
+is 3.5px and the whole displacement rides the font-size pref — 7px at the
+20px step, also measured. A custom theme changes nothing about it: only the
+bar's colour comes from `--accent`.
+
+The bar is a `::before` now, absolutely positioned into the pane's own 1rem
+gutter (`.scrollback` padding) at `left: calc(-2px - 0.25rem)` — same 2px
+bar, same gap to the text, without the layout cost. After the change every
+row's content edge measures 14.00px, highlighted or not (20.00px at the 20px
+pref); the bar's ink sits at x=9..10, inside the scrollport, and
+`scrollWidth == clientWidth` says no axis gained a scrollbar. It travels
+with the swipe-to-reply `translateX(40px)` — ink at 49..50 — because a
+pseudo-element is a descendant box, not a sibling that would have to be
+moved in step.
+
+The issue's other sizing option, reserving the same inset on EVERY row, was
+rejected on blast radius, and the measurement is what settled it:
+`.scrollback-topic-join`, the day separator and the unread marker are not
+`.scrollback-line`s, yet they share that column at exactly the same 14.00px.
+Reserving space would have had to be repeated across four selectors to keep
+one edge straight, and every row type added later would inherit that
+obligation silently. Painting costs one selector and moves nothing. The
+issue's third option — drop the bar, let the background tint carry the
+state — changes the visible design and was left alone.
+
+**Checked and unchanged:** the muted/presence rows (`font-size` + `opacity`
+only) and `.scrollback-topic-join` measure the same before and after.
+
+**Not verified:** no iOS or WebKit run — every number here is chromium at
+`deviceScaleFactor: 1`. The e2e guard added to the #370 spec (the text
+column flush with a plain row's, and the bar still painted) has NOT been
+executed: this host runs no browser outside a container, and the
+integration stack was held by another worker. Observed, not fixed:
+`MentionsWindow` puts `scrollback-highlight` on rows that are not
+`.scrollback-line`, and no rule matches that class alone — the class is
+inert there, before this change and after it.
