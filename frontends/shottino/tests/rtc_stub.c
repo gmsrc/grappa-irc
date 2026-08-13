@@ -16,9 +16,15 @@
  *
  * Ids are two disjoint ranges so a peer-connection id used where a track id
  * belongs lands in bad_calls instead of quietly addressing something.
+ *
+ * The send record is the one part of this stub that is read from a DIFFERENT
+ * thread than the one that writes it: the pump thread sends, the test's main
+ * thread waits on the count and then reads the payload. So sent_count is not
+ * a statistic, it is a HANDSHAKE — see send_lock below.
  */
 #include "rtc_stub.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +54,19 @@ struct stub_track {
 static struct stub_pc *pcs[STUB_MAX_PCS];
 static struct stub_track *tracks[STUB_MAX_TRACKS];
 
+/* Guards the send record — sent_count, last_sent, last_sent_size — because
+ * a sender and a reader on two threads have to agree on WHICH send the
+ * count names. A reader waits for the count to reach N and then asks for
+ * the payload, so the count must not become N until the payload of send N
+ * is in place: the three fields move together, under this lock, or a reader
+ * that wakes mid-write is handed the packet before the one it waited for.
+ *
+ * A mutex rather than release/acquire atomics on the counter: this is
+ * test-only code, the lock is uncontended (one pump thread), and one lock
+ * around all three fields says "these are a set" in a way that a reviewer
+ * does not have to reconstruct from memory orders. */
+static pthread_mutex_t send_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static int pcs_created, pcs_deleted, tracks_added, cleanups, bad_calls;
 static bool fail_next_create;
 static int fail_track_at, track_attempts;
@@ -72,6 +91,18 @@ static void track_free(int index) {
     free(t->last_sent);
     free(t);
     tracks[index] = NULL;
+}
+
+/* Hand a finished payload to the readers. The counter moves LAST and inside
+ * the lock, so "the count says N" and "the payload is send N's" are the same
+ * observation — which is the whole contract a waiter relies on. */
+static void publish_send(struct stub_track *t, char *payload, int size) {
+    pthread_mutex_lock(&send_lock);
+    free(t->last_sent);
+    t->last_sent = payload;
+    t->last_sent_size = size;
+    t->sent_count++;
+    pthread_mutex_unlock(&send_lock);
 }
 
 void rtc_stub_reset(void) {
@@ -106,14 +137,21 @@ bool rtc_stub_track(int track, struct rtc_stub_track *out) {
 
 int rtc_stub_sent_count(int track) {
     struct stub_track *t = track_at(track);
-    return t ? t->sent_count : -1;
+    if (!t) return -1;
+    pthread_mutex_lock(&send_lock);
+    int count = t->sent_count;
+    pthread_mutex_unlock(&send_lock);
+    return count;
 }
 
 const char *rtc_stub_last_sent(int track, int *size) {
     struct stub_track *t = track_at(track);
     if (!t) return NULL;
+    pthread_mutex_lock(&send_lock);
+    const char *payload = t->last_sent;
     if (size) *size = t->last_sent_size;
-    return t->last_sent;
+    pthread_mutex_unlock(&send_lock);
+    return payload;
 }
 
 const char *rtc_stub_remote_description(int pc) {
@@ -328,15 +366,19 @@ int rtcSendMessage(int id, const char *data, int size) {
         bad_calls++;
         return RTC_ERR_INVALID;
     }
-    t->sent_count++;
-    free(t->last_sent);
-    t->last_sent = NULL;
-    t->last_sent_size = size;
-    if (!data || size <= 0) return RTC_ERR_SUCCESS;
+    if (!data || size <= 0) {
+        publish_send(t, NULL, 0);
+        return RTC_ERR_SUCCESS;
+    }
     /* The copy IS the check: `size` bytes are read from the caller's
-     * buffer, so a length the caller does not have is a read past it. */
-    t->last_sent = malloc((size_t)size);
-    if (t->last_sent) memcpy(t->last_sent, data, (size_t)size);
+     * buffer, so a length the caller does not have is a read past it.
+     * It happens before the lock because allocation is not what needs
+     * serialising — publication is. */
+    char *copy = malloc((size_t)size);
+    if (copy) memcpy(copy, data, (size_t)size);
+    /* A failed malloc publishes NULL AND zero: a size that describes no
+     * buffer is worse than no record, because the reader believes it. */
+    publish_send(t, copy, copy ? size : 0);
     return size;
 }
 
