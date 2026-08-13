@@ -1,5 +1,7 @@
 import { createSignal } from "solid-js";
+import { DEFAULT_CHANTYPES } from "./chantypes";
 import { moduleRoot } from "./moduleRoot";
+import type { SessionISupportCasemapping } from "./wireTypes";
 
 // #216 — per-network ISUPPORT channel-mode capability store.
 //
@@ -22,6 +24,13 @@ import { moduleRoot } from "./moduleRoot";
 // even before the WS snapshot lands (or for a parked session with no
 // live isupport).
 
+// #1255 — the fold the ircd applies to identifiers, as advertised by
+// `CASEMAPPING=`. Pinned to the GENERATED wire contract, not hand-listed:
+// `wireTypes.ts` is emitted from the Elixir typespec, so a server-side
+// change to the modelled set lands here as a type error instead of a
+// silently stale twin.
+export type Casemapping = SessionISupportCasemapping;
+
 export type IsupportEntry = {
   chanmodes: {
     a: string[];
@@ -36,6 +45,29 @@ export type IsupportEntry = {
   // the server cannot query never appears, so cic can never ask for a list
   // whose reply would never arrive.
   listModesQueryable: string[];
+  // #1255 — the sigils that open a CHANNEL name on this network. Read via
+  // `chantypesForNetwork` + `isChannelName` (see `chantypes.ts`, which owns
+  // the fact and names the two copies that deliberately survive). Defaults
+  // to the RFC 2812 class, so a network that omits the token behaves
+  // exactly as the open-coded literals did.
+  chantypes: string[];
+  // #1255 — how the ircd folds identifiers. cic still folds ASCII-only
+  // (`nickEquals.asciiFold`, pinned to the server's #525 posture); this
+  // carries the per-network fact that used to die at ingress, so a
+  // divergence on an rfc1459 network is at least KNOWABLE client-side.
+  casemapping: Casemapping;
+  // #1255 — advertised cap per type-A (list) mode letter, e.g.
+  // `{b: 100, e: 100, I: 100}`. Empty when the network advertised none:
+  // there is no honest default cap, and #1251 made every advertised list
+  // queryable from cic, so the cap now has a live consumer.
+  maxlist: Record<string, number>;
+  // #1255 — advertised length limits, `null` when unadvertised. Absent
+  // means "validate nothing", which IS the pre-005 behaviour: a guessed
+  // limit would start rejecting input the ircd accepts. Same posture as
+  // `frameBudgetBase` below.
+  nicklen: number | null;
+  channellen: number | null;
+  topiclen: number | null;
   // #1108 — the target-independent per-frame body budget, from the same 005
   // (see `frameBudget.ts` for what cic may and may not derive from it).
   // `null` when the server published none: unlike the capability table, this
@@ -54,6 +86,12 @@ export const DEFAULT_ISUPPORT: IsupportEntry = {
   },
   prefix: { o: "@", h: "%", v: "+" },
   listModesQueryable: ["b", "e", "I"],
+  chantypes: [...DEFAULT_CHANTYPES],
+  casemapping: "ascii",
+  maxlist: {},
+  nicklen: null,
+  channellen: null,
+  topiclen: null,
   frameBudgetBase: null,
 };
 
@@ -94,6 +132,12 @@ export function isupportEntryFromWire(payload: {
   chanmodes_d: string[];
   list_modes_queryable: string[];
   prefix: Record<string, string>;
+  chantypes: string[];
+  casemapping: Casemapping;
+  maxlist: Record<string, number>;
+  nicklen: number | null;
+  channellen: number | null;
+  topiclen: number | null;
   frame_budget_base: number | null;
 }): IsupportEntry {
   return {
@@ -105,8 +149,24 @@ export function isupportEntryFromWire(payload: {
     },
     prefix: payload.prefix,
     listModesQueryable: payload.list_modes_queryable,
+    chantypes: payload.chantypes,
+    casemapping: payload.casemapping,
+    maxlist: payload.maxlist,
+    nicklen: payload.nicklen,
+    channellen: payload.channellen,
+    topiclen: payload.topiclen,
     frameBudgetBase: payload.frame_budget_base,
   };
+}
+
+/**
+ * The channel sigils this network advertised (#1255), or the RFC 2812 class
+ * for an unseeded network / a null id (no active network). Callers that ask
+ * "is this token a channel name?" go through `isChannelName` instead.
+ */
+export function chantypesForNetwork(networkId: number | null): readonly string[] {
+  if (networkId === null) return DEFAULT_CHANTYPES;
+  return isupportForNetwork(networkId).chantypes;
 }
 
 /**

@@ -91,6 +91,12 @@ describe("availableModes", () => {
       chanmodes: { a: [], b: [], c: [], d: ["n", "t", "Z"] },
       prefix: {},
       listModesQueryable: [],
+      chantypes: DEFAULT_ISUPPORT.chantypes,
+      casemapping: DEFAULT_ISUPPORT.casemapping,
+      maxlist: {},
+      nicklen: null,
+      channellen: null,
+      topiclen: null,
       frameBudgetBase: null,
     };
     const modes = availableModes(isupport);
@@ -133,6 +139,12 @@ describe("editorSigils", () => {
       chanmodes: { a: [], b: [], c: [], d: ["n", "t"] },
       prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
       listModesQueryable: [],
+      chantypes: DEFAULT_ISUPPORT.chantypes,
+      casemapping: DEFAULT_ISUPPORT.casemapping,
+      maxlist: {},
+      nicklen: null,
+      channellen: null,
+      topiclen: null,
       frameBudgetBase: null,
     };
     const e = editorSigils(isupport);
@@ -148,6 +160,12 @@ describe("editorSigils", () => {
       chanmodes: { a: [], b: [], c: [], d: [] },
       prefix: { v: "+" },
       listModesQueryable: [],
+      chantypes: DEFAULT_ISUPPORT.chantypes,
+      casemapping: DEFAULT_ISUPPORT.casemapping,
+      maxlist: {},
+      nicklen: null,
+      channellen: null,
+      topiclen: null,
       frameBudgetBase: null,
     };
     const e = editorSigils(isupport);

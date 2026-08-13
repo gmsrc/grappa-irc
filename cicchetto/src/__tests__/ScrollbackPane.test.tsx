@@ -146,6 +146,9 @@ vi.mock("../lib/scrollback", () => ({
 }));
 
 vi.mock("../lib/networks", () => ({
+  // #1255 — the INVITE row asks which sigils open a channel on this
+  // network before offering its [Join] button.
+  networkIdBySlug: () => 1,
   user: () => {
     const n = userNick();
     return n === null ? null : { kind: "user", id: "u1", name: n, inserted_at: "x" };

@@ -15,6 +15,7 @@ import { openBanlistModal } from "./banlistModal";
 import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
+import { isChannelName } from "./chantypes";
 import { requestConfirm } from "./confirmDialog";
 import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
 import { sendCtcpQuery } from "./ctcpQuery";
@@ -23,7 +24,7 @@ import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
 import { addHighlight, delHighlight } from "./highlightList";
 import { identityScopedStore } from "./identityScopedStore";
-import { isupportForNetwork } from "./isupport";
+import { chantypesForNetwork, isupportForNetwork } from "./isupport";
 import { markLusersRequested } from "./lusersBundle";
 import { membersByChannel } from "./members";
 import { clearMentionsBundle } from "./mentionsWindow";
@@ -78,15 +79,14 @@ import { closeQueryWindow } from "./windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./windowKinds";
 import { windowStateByChannel } from "./windowState";
 
-// RFC 2812 channel sigils. The CORRECT source is the server's ISUPPORT
-// `CHANTYPES`, but nothing in this stack parses it: `Grappa.Session.ISupport`
-// carries CHANMODES / PREFIX / STATUSMSG / CASEMAPPING only, and cic's
-// `isupport.ts` store mirrors just chanmodes + prefix. So this is the same
-// literal class already open-coded across cic (slashCommands, linkify,
-// pushPayload, ScrollbackPane) — hoisted here so this file has ONE copy.
-// TODO(#30): plumb CHANTYPES through `isupport_changed` and read it per
-// network instead of assuming the RFC set.
-const CHANNEL_SIGIL = /^[#&+!]/;
+// #1255 — the channel sigils this NETWORK advertised (005 CHANTYPES),
+// falling back to the RFC 2812 class for a network with no live session or
+// one that omits the token. This replaced a hardcoded `/^[#&+!]/` whose
+// comment named the correct source and admitted nothing in the stack parsed
+// it; the widening plumbed it through `isupport_changed`. (The comment used
+// to carry a `TODO(#30)`, which pointed at a closed, unrelated issue.)
+const sigilsFor = (slug: string): readonly string[] =>
+  chantypesForNetwork(networkIdBySlug(slug) ?? null);
 
 // #536/#1251 — is this `/mode` a type-A LIST QUERY rather than a mode change?
 // Three conditions, all necessary: no parameter (a mask makes it a MUTATION,
@@ -831,7 +831,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   ): Promise<DispatchOutcome> => {
     // #385 — expand user-defined aliases (from the aliasList store) before
     // dispatch; the parser stays pure and takes the map as an argument.
-    const cmd = parseSlash(text, aliases());
+    // #1255 — the parser decides "channel or nick?" for /join, /part, /topic
+    // and /mode, and that answer is per-network. It stays pure and takes the
+    // advertised sigils as data, exactly as it takes the alias map.
+    const cmd = parseSlash(text, aliases(), sigilsFor(networkSlug));
     // Empty short-circuits before the token check — an empty submit is
     // a no-op regardless of session state, and the consumer (ComposeBox)
     // wants the same outcome whether or not a token is in play.
@@ -854,10 +857,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       const sel = selectedChannel();
       if (!sel) return null;
       const name = sel.channelName;
-      // Channel windows start with '#', '&', '+', or '!' per IRC spec.
-      // Query windows use a nick (no # prefix). Server/list/mentions
-      // pseudo-windows use synthetic keys that don't start with '#'.
-      if (!CHANNEL_SIGIL.test(name)) return null;
+      // A channel window opens with one of the sigils THIS network
+      // advertises. Query windows use a nick; server/list/mentions
+      // pseudo-windows use synthetic keys that carry no sigil at all.
+      if (!isChannelName(name, sigilsFor(sel.networkSlug))) return null;
       return name;
     };
 
@@ -1633,7 +1636,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // mutation: open the list modal instead of putting a raw MODE on
           // the wire whose reply rows nothing is primed to collect.
           const listMode = listModeQueryLetter(cmd.modes, cmd.params, networkId);
-          if (listMode !== null && CHANNEL_SIGIL.test(cmd.target)) {
+          if (listMode !== null && isChannelName(cmd.target, sigilsFor(networkSlug))) {
             openBanlistModal(networkSlug, cmd.target, listMode);
             pushChannelBanlist(networkId, cmd.target, listMode);
             result = { ok: true };
@@ -2209,6 +2212,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // so it needs the same refusal as setDraft / the history walk.
     if (isDraining(key)) return null;
 
+    // #1255 — completing a CHANNEL vs a NICK is decided by this network's
+    // advertised sigils, not the RFC class: on a `CHANTYPES=#` network a
+    // `&foo` token completes against members, not channels.
+    const tabSigils = sigilsFor(decodeChannelKey(key)?.slug ?? "");
+
     const continuing =
       tabCycle !== null &&
       tabCycle.key === key &&
@@ -2254,11 +2262,13 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       // for a NICK. A channel is a topic of conversation, never an
       // addressee, so `#chan: ` would be wrong at line start (#30).
       suffix =
-        !CHANNEL_SIGIL.test(typedWord) && input.slice(0, anchorStart).trim() === "" ? ": " : " ";
+        !isChannelName(typedWord, tabSigils) && input.slice(0, anchorStart).trim() === ""
+          ? ": "
+          : " ";
       oldEnd = cursor;
     }
 
-    const isChannel = CHANNEL_SIGIL.test(typedWord);
+    const isChannel = isChannelName(typedWord, tabSigils);
     const candidates = isChannel
       ? joinedChannelsOnNetwork(key)
       : (membersByChannel()[key] ?? []).map((m) => m.nick);

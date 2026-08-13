@@ -15,10 +15,12 @@ import { isContentKind, ownNickForNetwork, type ScrollbackMessage } from "./lib/
 import { acceptInvite, confirmJoinChannel } from "./lib/channelJoin";
 import { channelKey, decodeChannelKey } from "./lib/channelKey";
 import { type TopicJoinLine, topicByChannel, topicJoinLine } from "./lib/channelTopic";
+import { isChannelName } from "./lib/chantypes";
 import { stripCtcpAction } from "./lib/ctcpAction";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { highlightPatterns } from "./lib/highlightList";
 import { type InviteAckEntry, inviteAckBySlug } from "./lib/inviteAck";
+import { chantypesForNetwork } from "./lib/isupport";
 import { membersByChannel } from "./lib/members";
 import { matchesWatchlist } from "./lib/mentionMatch";
 import {
@@ -29,7 +31,7 @@ import {
 import { bindMessageContextMenu } from "./lib/messageContextMenu";
 import { bindMessageGestures } from "./lib/messageGestures";
 import { closeMessageMenu, openMessageMenu } from "./lib/messageMenu";
-import { networks, user } from "./lib/networks";
+import { networkIdBySlug, networks, user } from "./lib/networks";
 import { senderPrefix, snapshotSenderPrefix } from "./lib/nickColor";
 import { nickEquals } from "./lib/nickEquals";
 import { isOperatorActionEcho } from "./lib/operatorActionEcho";
@@ -557,7 +559,17 @@ const renderRawEvent = (
       // through to the generic arm so the row remains visible (the
       // catch-all from bucket 1 stays the safety net).
       const invitedChannel = params[1];
-      if (typeof invitedChannel === "string" && /^[#&+!]/.test(invitedChannel)) {
+      // #1255 — "is this a channel?" comes from THIS network's advertised
+      // CHANTYPES, not the RFC class: the row offers a JOIN button, and on a
+      // network that does not publish a sigil, a name wearing it is not a
+      // channel the ircd would let anyone join.
+      if (
+        typeof invitedChannel === "string" &&
+        isChannelName(
+          invitedChannel,
+          chantypesForNetwork(networkIdBySlug(handlers.networkSlug) ?? null),
+        )
+      ) {
         return (
           <span class="scrollback-body">
             *** {senderSpan(sender)} invited you to {invitedChannel}{" "}

@@ -1,3 +1,5 @@
+import { DEFAULT_CHANTYPES, isChannelName } from "./chantypes";
+
 // Pure slash-command parser for cicchetto's compose box.
 //
 // Discriminated union: callers `switch` on `result.kind` and TypeScript
@@ -349,7 +351,11 @@ function parsePing(rest: string): SlashCommand {
 
 // Dispatch table: verb (lowercased) → handler(verb, rest) → SlashCommand.
 // Every registered verb must appear here; unknown verbs produce {kind: "error"}.
-type Handler = (verb: string, rest: string) => SlashCommand;
+// #1255 — handlers receive the network's advertised channel sigils as DATA,
+// the same shape `aliases` takes: the parser stays pure and testable against
+// a network that publishes something other than the RFC class. A handler
+// that does not care about sigils simply declares two parameters.
+type Handler = (verb: string, rest: string, chantypes: readonly string[]) => SlashCommand;
 
 const DISPATCH: Readonly<Record<string, Handler>> = {
   me: (_verb, rest) => ({ kind: "me", body: rest }),
@@ -369,7 +375,7 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
   ctcp: (_verb, rest) => parseCtcp(rest),
   ping: (_verb, rest) => parsePing(rest),
 
-  join: (verb, rest) => {
+  join: (verb, rest, chantypes) => {
     // UX-4 bucket F: `/join #chan` OR `/join #chan key` (+k channel
     // support). Second positional token is the optional key. Tokens
     // beyond the second are rejected — keys per RFC 2812 are a single
@@ -377,8 +383,9 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     //
     // Issue #30/-pre / B (this bundle): bare-name UX — `/j sniffo`
     // and `/join sniffo` auto-prepend `#` so users don't have to type
-    // the prefix. Names that already carry an RFC channel-prefix
-    // [#&+!] are left untouched.
+    // the prefix. A name that already carries one of the sigils THIS
+    // network advertises (#1255 — 005 CHANTYPES, the RFC class when the
+    // network says nothing) is left untouched.
     //
     // Comma-safety: IRC JOIN treats `,` as a multi-channel separator
     // (`JOIN #a,#b` joins both). Auto-prepending `#` to `foo,bar` would
@@ -391,7 +398,7 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     if (!raw) return err(verb, `/${verb} requires a channel name`);
     if (toks.length > 2)
       return err(verb, `/${verb}: too many arguments (expected /${verb} <chan> [key])`);
-    if (!/^[#&+!]/.test(raw) && raw.includes(","))
+    if (!isChannelName(raw, chantypes) && raw.includes(","))
       return err(
         verb,
         `/${verb}: bare names with commas are ambiguous — spell each channel out (e.g. /${verb} #${raw.split(",").join(",#")})`,
@@ -403,13 +410,13 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     // on `,` yields one explicitly-prefixed channel per element (`["#a"]`
     // for the single-join case). compose.ts rejoins with `,` for the wire
     // (server splits it per #382) and focuses `channels[0]`.
-    const target = /^[#&+!]/.test(raw) ? raw : `#${raw}`;
+    const target = isChannelName(raw, chantypes) ? raw : `#${raw}`;
     const channels = target.split(",");
     const key = toks[1] ?? null;
     return { kind: "join", channels, key };
   },
 
-  part: (_verb, rest) => {
+  part: (_verb, rest, chantypes) => {
     // #1208 — `/part <reason>` is the common form and it MUST NOT eat its
     // first word as a target. Pre-fix the first token was the channel
     // unconditionally, so `/part non trovo utili le bestemmie` issued a
@@ -417,9 +424,9 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     // request was malformed." about a name they never typed.
     //
     // The sigil resolves the ambiguity, as it does in every other IRC
-    // client: a first token matching [#&+!] is the target, anything else is
-    // the start of the reason and the target falls back to the current
-    // window (in compose.ts).
+    // client: a first token carrying one of the network's advertised sigils
+    // (#1255) is the target, anything else is the start of the reason and
+    // the target falls back to the current window (in compose.ts).
     //
     // Deliberately NOT symmetric with `join` above: /join auto-prepends `#`
     // to a bare name because a JOIN has no second meaning for its first
@@ -428,12 +435,12 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     if (rest === "") return { kind: "part", channel: null, reason: null };
     const sp = rest.search(/\s/);
     const first = sp === -1 ? rest : rest.slice(0, sp);
-    if (!/^[#&+!]/.test(first)) return { kind: "part", channel: null, reason: rest };
+    if (!isChannelName(first, chantypes)) return { kind: "part", channel: null, reason: rest };
     if (sp === -1) return { kind: "part", channel: first, reason: null };
     return { kind: "part", channel: first, reason: rest.slice(sp + 1).trim() };
   },
 
-  topic: (_verb, rest) => {
+  topic: (_verb, rest, chantypes) => {
     // Context-aware /topic (issue #23):
     //   /topic                        → show topic of current channel
     //   /topic <text>                 → set current channel's topic to <text>
@@ -449,8 +456,8 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     //
     // Resolution of "current channel" + bail-if-not-in-channel happens
     // in compose.ts (parser stays pure — no selectedChannel() coupling).
-    // The explicit channel is recognized by the RFC channel-prefix set
-    // [#&+!]. The bare `#` escape (a single `#` followed by whitespace)
+    // The explicit channel is recognized by the network's advertised sigil
+    // set (#1255). The bare `#` escape (a single `#` followed by whitespace)
     // is the irssi convention for "the next thing is body, not a
     // channel arg" — required because some topic bodies legitimately
     // begin with `#hashtag`/`!urgent`/etc.
@@ -463,7 +470,7 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
       if (body === "-delete") return { kind: "topic-clear", channel: null };
       return { kind: "topic-set", channel: null, text: body };
     }
-    if (/^[#&+!]/.test(rest)) {
+    if (isChannelName(rest, chantypes)) {
       const sp = rest.search(/\s/);
       if (sp === -1) return { kind: "topic-show", channel: rest };
       const channel = rest.slice(0, sp);
@@ -635,7 +642,7 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     return { kind: "umode", modes: rest };
   },
 
-  mode: (_verb, rest) => {
+  mode: (_verb, rest, chantypes) => {
     // #216 — dispatch by argument shape. The rule (vjt): mode-args
     // present → execute directly (no modal); NO mode-args → open the
     // viewer/editor modal.
@@ -645,7 +652,8 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     //   /mode #chan +s [args] → mode (execute — channel + modes)
     //   /mode +s [args]       → mode-apply-current (current chan + modes)
     //
-    // A token is a CHANNEL when it carries an RFC channel sigil [#&+!];
+    // A token is a CHANNEL when it carries one of the network's advertised
+    // sigils (#1255);
     // a MODE string starts with +/-. Note `+` is BOTH a channel sigil
     // and a mode sign — disambiguate: a lone leading `+`/`-` followed by
     // mode letters (no further sigil) is a mode string, whereas `+chan`
@@ -664,7 +672,14 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
     if (!first) return { kind: "mode-view", channel: null };
 
     const isModeString = /^[+-]/.test(first);
-    const isChannel = /^[#&!]/.test(first);
+    // #1255 — advertised sigils, MINUS `+`: the exclusion above is not the
+    // RFC class disagreeing with the network, it is `+` being claimed by the
+    // mode-sign disambiguation two comments up. A `+`-sigil channel is
+    // addressed with the explicit two-token form.
+    const isChannel = isChannelName(
+      first,
+      chantypes.filter((sigil) => sigil !== "+"),
+    );
 
     if (isModeString) {
       // /mode +s [params] → apply to the current channel. #536/#1251: a bare
@@ -1076,6 +1091,7 @@ if (kbHandler) {
 export function parseSlash(
   input: string,
   aliases: Readonly<Record<string, string>> = {},
+  chantypes: readonly string[] = DEFAULT_CHANTYPES,
 ): SlashCommand {
   const trimmed = input.trim();
   if (trimmed === "") return { kind: "empty" };
@@ -1109,5 +1125,5 @@ export function parseSlash(
     return err(expanded.verb, `unknown command: /${expanded.verb}`);
   }
 
-  return handler(expanded.verb, expanded.rest);
+  return handler(expanded.verb, expanded.rest, chantypes);
 }

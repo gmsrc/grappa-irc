@@ -148,10 +148,8 @@ describe("ModeModal", () => {
     // PREFIX=(qaohv)~&@%+ — a founder who does NOT also hold @ must still
     // get an editable modal (editorSigils ranks ~ above op). #216 review.
     seedIsupport(1, {
-      chanmodes: DEFAULT_ISUPPORT.chanmodes,
+      ...DEFAULT_ISUPPORT,
       prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
-      listModesQueryable: DEFAULT_ISUPPORT.listModesQueryable,
-      frameBudgetBase: null,
     });
     mockModes[KEY] = { modes: [], params: {} };
     mockMembers[KEY] = [{ nick: "vjt-grappa", modes: ["~"] }];

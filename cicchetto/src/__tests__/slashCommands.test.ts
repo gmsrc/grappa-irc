@@ -1741,3 +1741,83 @@ describe("parseSlash — /ame + /amsg fan-out (#431)", () => {
     expect(parseSlash("/ame hello", { ame: "me" })).toEqual({ kind: "me", body: "hello" });
   });
 });
+
+// #1255 — the parser used to hardcode the RFC 2812 sigil class, so on a
+// network advertising `CHANTYPES=#` it read `&foo` as a channel and built a
+// JOIN the ircd refuses. The sigils now arrive as DATA, the same way the
+// alias map does, so the parser stays pure and the answer stays per-network.
+describe("parseSlash — network-advertised CHANTYPES (#1255)", () => {
+  const HASH_ONLY = ["#"];
+
+  it("defaults to the RFC class when no sigils are passed (pre-005 behaviour)", () => {
+    // Every one of the 200-odd pure call sites in this file relies on this:
+    // absent sigils must mean exactly what the literal used to mean.
+    expect(parseSlash("/part &local bye")).toEqual({
+      kind: "part",
+      channel: "&local",
+      reason: "bye",
+    });
+  });
+
+  it("/part treats an unadvertised sigil as the start of the reason", () => {
+    // The #1043 shape: `/part` with a non-channel first token must NOT
+    // manufacture a channel — it parts the current window with that text as
+    // the reason. On a `CHANTYPES=#` network, `&local` is not a channel.
+    expect(parseSlash("/part &local bye", {}, HASH_ONLY)).toEqual({
+      kind: "part",
+      channel: null,
+      reason: "&local bye",
+    });
+  });
+
+  it("/part still recognises an advertised sigil", () => {
+    expect(parseSlash("/part #italia bye", {}, HASH_ONLY)).toEqual({
+      kind: "part",
+      channel: "#italia",
+      reason: "bye",
+    });
+  });
+
+  it("/join auto-prepends # to a name wearing an unadvertised sigil", () => {
+    // `&local` is a bare name on this network, so it takes the same sugar a
+    // bare `sniffo` takes rather than being passed through as a channel.
+    expect(parseSlash("/join &local", {}, HASH_ONLY)).toEqual({
+      kind: "join",
+      channels: ["#&local"],
+      key: null,
+    });
+  });
+
+  it("/topic reads an advertised sigil as the explicit channel, and an unadvertised one as body", () => {
+    expect(parseSlash("/topic #italia ciao", {}, HASH_ONLY)).toEqual({
+      kind: "topic-set",
+      channel: "#italia",
+      text: "ciao",
+    });
+    expect(parseSlash("/topic &local ciao", {}, HASH_ONLY)).toEqual({
+      kind: "topic-set",
+      channel: null,
+      text: "&local ciao",
+    });
+  });
+
+  it("/mode reads an unadvertised sigil as a target nick, not a channel", () => {
+    expect(parseSlash("/mode &local +s", {}, HASH_ONLY)).toEqual({
+      kind: "mode",
+      target: "&local",
+      modes: "+s",
+      params: [],
+    });
+  });
+
+  it("/mode keeps `+` out of the channel set even when the network advertises it", () => {
+    // Not the network disagreeing with the RFC: `+` is claimed by the
+    // mode-sign disambiguation, so `+s` stays a mode string on a network
+    // whose CHANTYPES contains `+`. Removing the filter makes `+s` a channel.
+    expect(parseSlash("/mode +s", {}, ["#", "+"])).toEqual({
+      kind: "mode-apply-current",
+      modes: "+s",
+      params: [],
+    });
+  });
+});

@@ -421,9 +421,51 @@ describe("userTopic", () => {
         // server can only ever answer one list. Deriving the set from
         // `chanmodes_a` here would offer +e and +I queries it cannot serve.
         listModesQueryable: ["b"],
+        // #1255 — same story for the widened facts: this envelope predates
+        // them, so the narrower supplies exactly what cic assumed while the
+        // server was dropping them at ingress — the RFC 2812 sigil class,
+        // the ASCII fold, and no caps. A rejected envelope here would take
+        // the whole capability table down with it.
+        chantypes: ["#", "&", "+", "!"],
+        casemapping: "ascii",
+        maxlist: {},
+        nicklen: null,
+        channellen: null,
+        topiclen: null,
         // #1108 — this envelope carried no budget, so none is seeded.
         frameBudgetBase: null,
       });
+    });
+
+    // #1255 — the live door, carrying what the network really advertised.
+    it("seeds the widened per-network facts a 005 published", async () => {
+      const isupport = await import("../lib/isupport");
+      channelMock.fireEvent({
+        kind: "isupport_changed",
+        network_id: 7,
+        chanmodes_a: ["b", "e", "I"],
+        chanmodes_b: ["k"],
+        chanmodes_c: ["l"],
+        chanmodes_d: ["n", "t", "s"],
+        prefix: { q: "~", o: "@", v: "+" },
+        chantypes: ["#", "&"],
+        casemapping: "rfc1459",
+        maxlist: { b: 100, e: 100, I: 100 },
+        nicklen: 30,
+        channellen: 200,
+        topiclen: 307,
+      });
+      expect(isupport.seedIsupport).toHaveBeenCalledWith(
+        7,
+        expect.objectContaining({
+          chantypes: ["#", "&"],
+          casemapping: "rfc1459",
+          maxlist: { b: 100, e: 100, I: 100 },
+          nicklen: 30,
+          channellen: 200,
+          topiclen: 307,
+        }),
+      );
     });
 
     // #1108 — the LIVE 005 door. The frame budget rides the same event, and

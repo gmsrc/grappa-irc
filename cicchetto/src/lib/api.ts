@@ -53,6 +53,7 @@ import type {
   ScrollbackWireArchiveWireEntry,
   ScrollbackWireT,
   ServerSettingsWireUploadView,
+  SessionISupportCasemapping,
   SessionLogWireListResult,
   SessionLogWireSessionsResult,
   SessionLogWireT,
@@ -719,6 +720,16 @@ export type WireChannelEvent =
       // deploy) → `["b"]`, the capability that server does have.
       list_modes_queryable: string[];
       prefix: Record<string, string>;
+      // #1255 — the per-network facts cic used to open-code as constants.
+      // Absent means a server predating the widening (a cic-only bundle
+      // deploy again), so each falls back to what cic assumed before it:
+      // the RFC 2812 sigil class, the ASCII fold, and no caps at all.
+      chantypes: string[];
+      casemapping: SessionISupportCasemapping;
+      maxlist: Record<string, number>;
+      nicklen: number | null;
+      channellen: number | null;
+      topiclen: number | null;
       // #1108 — `null` when the server published no budget. Narrowed
       // permissively on purpose: the wire is additive-only, so a server
       // predating the field must still seed the capability table.
@@ -1040,6 +1051,16 @@ export type WireUserEvent =
       // deploy) → `["b"]`, the capability that server does have.
       list_modes_queryable: string[];
       prefix: Record<string, string>;
+      // #1255 — the per-network facts cic used to open-code as constants.
+      // Absent means a server predating the widening (a cic-only bundle
+      // deploy again), so each falls back to what cic assumed before it:
+      // the RFC 2812 sigil class, the ASCII fold, and no caps at all.
+      chantypes: string[];
+      casemapping: SessionISupportCasemapping;
+      maxlist: Record<string, number>;
+      nicklen: number | null;
+      channellen: number | null;
+      topiclen: number | null;
       // #1108 — `null` when the server published no budget. Narrowed
       // permissively on purpose: the wire is additive-only, so a server
       // predating the field must still seed the capability table.

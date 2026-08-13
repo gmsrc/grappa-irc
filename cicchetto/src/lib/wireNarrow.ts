@@ -12,7 +12,12 @@ import type { MemberEntry } from "./memberTypes";
 // `wireTypes.ts` mirrors at compile time, emitted as data so the boundary can
 // enforce them after tsc has erased the types.
 import { S_AdminEventsWireEvent, S_AdminOverviewWireT, S_SessionLogWireT } from "./wireSchema";
-import type { AdminOverviewWireT, SessionLogWireT, WindowCountsSeverity } from "./wireTypes";
+import type {
+  AdminOverviewWireT,
+  SessionISupportCasemapping,
+  SessionLogWireT,
+  WindowCountsSeverity,
+} from "./wireTypes";
 // #410 — the runtime allowlists derive from the codegen-emitted `as const`
 // enum arrays, so each closed set has ONE source (the server typespec via
 // wireTypes.ts), not a hand copy that can silently drift.
@@ -165,6 +170,33 @@ function narrowStringRecord(raw: unknown): Record<string, string> | null {
   return out;
 }
 
+// #1255 — `CASEMAPPING` is a closed set server-side; an unmodelled value
+// degrades to `ascii`, the same call `Grappa.Session.ISupport` makes (too
+// lax beats merging identities the ircd keeps apart), so client and server
+// cannot disagree about which fold a network got.
+function narrowCasemapping(raw: unknown): SessionISupportCasemapping {
+  return raw === "rfc1459" || raw === "rfc1459_strict" ? raw : "ascii";
+}
+
+// #1255 — a positive integer, or `null` for "unadvertised". Zero and
+// negatives are not caps, they are values that would reject everything.
+function narrowPositiveInt(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : null;
+}
+
+// #1255 — the MAXLIST caps: a letter→count map. A single bad entry voids
+// the map rather than half-capping the modal from a payload we cannot
+// trust; `null` lets the caller fall back to "no caps advertised".
+function narrowNumberRecord(raw: unknown): Record<string, number> | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const out: Record<string, number> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof val !== "number" || !Number.isInteger(val) || val <= 0) return null;
+    out[key] = val;
+  }
+  return out;
+}
+
 // #216 — narrows the flat `isupport_changed` payload. Shared by the
 // per-channel narrower (cold-WS-subscribe snapshot) AND the user-topic
 // narrower (live 005 edge) — the event is dual-topic (see `WireChannelEvent`
@@ -193,6 +225,20 @@ export function narrowIsupportChanged(
     // queries that server cannot answer.
     list_modes_queryable: narrowStringArray(r.list_modes_queryable) ?? ["b"],
     prefix,
+    // #1255 — same posture as the two fallbacks around it: absent means a
+    // server predating the widening, and the fallback is exactly what cic
+    // assumed while the fact was being dropped at ingress — the RFC 2812
+    // sigil class and the ASCII fold. Rejecting the envelope instead would
+    // take the /mode toggles down with it.
+    chantypes: narrowStringArray(r.chantypes) ?? ["#", "&", "+", "!"],
+    casemapping: narrowCasemapping(r.casemapping),
+    // No advertised cap and no advertised limit are the honest absent
+    // states, so a malformed value degrades to them rather than to a
+    // number nobody advertised.
+    maxlist: narrowNumberRecord(r.maxlist) ?? {},
+    nicklen: narrowPositiveInt(r.nicklen),
+    channellen: narrowPositiveInt(r.channellen),
+    topiclen: narrowPositiveInt(r.topiclen),
     // #1108 — absent or malformed means ABSENT, never a rejected envelope:
     // the /mode toggles this payload seeds must survive a server that
     // predates the budget, and cic's own rule for an unknown budget is to

@@ -217,9 +217,19 @@ vi.mock("../lib/banlistModal", () => ({
 // #1251 — compose decides "list QUERY vs mode change" from the network's 005
 // (`listModesQueryable`, published by the server). Default here is a
 // bahamut-shaped network: `b` and `z` are lists, everything else is a flag.
-const isupportMock = vi.hoisted(() => ({ listModesQueryable: ["b", "z"] }));
+const isupportMock = vi.hoisted(() => ({
+  listModesQueryable: ["b", "z"],
+  chantypes: ["#", "&", "+", "!"] as readonly string[],
+}));
 vi.mock("../lib/isupport", () => ({
-  isupportForNetwork: () => ({ listModesQueryable: isupportMock.listModesQueryable }),
+  isupportForNetwork: () => ({
+    listModesQueryable: isupportMock.listModesQueryable,
+    chantypes: isupportMock.chantypes,
+  }),
+  // #1255 — compose asks the store which sigils open a channel on THIS
+  // network. Mocked alongside the mode set so a test can narrow the class
+  // (see the CHANTYPES describe below) instead of assuming the RFC one.
+  chantypesForNetwork: () => isupportMock.chantypes,
 }));
 
 vi.mock("../lib/modeModal", () => ({
@@ -3260,13 +3270,23 @@ describe("compose submit — /query and /q DM verbs", () => {
     // bnd-A2: compose.ts consults `networkIdBySlug` (helper extracted
     // from the 14× repeated `networks()?.find(...)?.id` literal). Stub
     // it to undefined to reproduce the "no slug match" path.
-    (
-      networks.networkIdBySlug as unknown as { mockReturnValueOnce: (v: unknown) => void }
-    ).mockReturnValueOnce(undefined);
+    //
+    // #1255 — a blanket implementation, NOT `mockReturnValueOnce`: one
+    // dispatch now consults the helper more than once (the parser is handed
+    // this network's channel sigils before the verb resolves its network
+    // id), and a one-shot stub would be spent on the first call, leaving the
+    // branch under test looking at a network that WAS found. Restored below
+    // rather than left to `clearAllMocks`, which clears calls, not
+    // implementations.
+    const idBySlug = vi.mocked(networks.networkIdBySlug);
+    idBySlug.mockImplementation(() => undefined);
     const compose = await import("../lib/compose");
     const k = channelKey("freenode", "#a");
     compose.setDraft(k, "/msg alice hello");
     const result = await compose.submit(k, "freenode", "#a");
+    idBySlug.mockImplementation(
+      (slug: string) => mockNetworksData.find((n) => n.slug === slug)?.id,
+    );
 
     // networkId not found → inline error.
     expect(result).toMatchObject({ error: expect.stringContaining("network not found") });

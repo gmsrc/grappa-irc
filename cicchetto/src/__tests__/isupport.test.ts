@@ -11,9 +11,29 @@ import {
   frameBudgetBaseForNetwork,
   type IsupportEntry,
   isupportByNetwork,
+  isupportEntryFromWire,
   isupportForNetwork,
   seedIsupport,
 } from "../lib/isupport";
+
+// A full `isupport_changed` payload, as the server builds it. Tests override
+// the one field they exercise so a new wire fact cannot be added here
+// without every case seeing it.
+const WIRE_PAYLOAD = {
+  chanmodes_a: ["b", "e", "I"],
+  chanmodes_b: ["k"],
+  chanmodes_c: ["l"],
+  chanmodes_d: ["i", "m", "n", "s", "t"],
+  list_modes_queryable: ["b", "e", "I"],
+  prefix: { o: "@", v: "+" },
+  chantypes: ["#", "&"],
+  casemapping: "ascii" as const,
+  maxlist: { b: 100, e: 100, I: 100 },
+  nicklen: 30,
+  channellen: 200,
+  topiclen: 307,
+  frame_budget_base: 393,
+};
 
 describe("isupport store", () => {
   it("DEFAULT_ISUPPORT carries the bahamut/Azzurra seed", () => {
@@ -52,6 +72,12 @@ describe("isupport store", () => {
       chanmodes: { a: ["b", "e", "I"], b: ["k"], c: ["l"], d: ["i", "m", "n", "s", "t"] },
       prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
       listModesQueryable: ["b", "e", "I"],
+      chantypes: ["#", "&"],
+      casemapping: "ascii",
+      maxlist: { b: 100 },
+      nicklen: 30,
+      channellen: 200,
+      topiclen: 307,
       frameBudgetBase: 393,
     };
     seedIsupport(7, entry);
@@ -62,5 +88,70 @@ describe("isupport store", () => {
   it("isupportForNetwork falls back to default for an unseeded network", () => {
     seedIsupport(7, DEFAULT_ISUPPORT);
     expect(isupportForNetwork(12345)).toEqual(DEFAULT_ISUPPORT);
+  });
+});
+
+// #1255 — the server parsed six 005 tokens and shipped two. These are the
+// per-network facts cic used to open-code as constants: the channel sigil
+// class (`[#&+!]` repeated across compose/slashCommands/inviteLink/
+// ScrollbackPane), the identifier fold, the list caps #1251's mode switcher
+// has to respect, and the length limits that today are only discovered by
+// round-tripping an over-long nick or topic through the ircd.
+describe("isupport widening (#1255)", () => {
+  it("DEFAULT_ISUPPORT mirrors the server seed: RFC sigils, ascii fold, no caps", () => {
+    // These defaults are what makes a network that omits the token behave
+    // EXACTLY as cic behaved before the widening: the RFC 2812 sigil class
+    // is the literal every open-coded copy carried, and `ascii` is the fold
+    // `nickEquals.asciiFold` implements. The caps have no honest default —
+    // inventing one would reject input the ircd accepts.
+    expect(DEFAULT_ISUPPORT.chantypes).toEqual(["#", "&", "+", "!"]);
+    expect(DEFAULT_ISUPPORT.casemapping).toBe("ascii");
+    expect(DEFAULT_ISUPPORT.maxlist).toEqual({});
+    expect(DEFAULT_ISUPPORT.nicklen).toBeNull();
+    expect(DEFAULT_ISUPPORT.channellen).toBeNull();
+    expect(DEFAULT_ISUPPORT.topiclen).toBeNull();
+  });
+
+  it("isupportEntryFromWire folds the widened payload into the store shape", () => {
+    const entry = isupportEntryFromWire(WIRE_PAYLOAD);
+
+    expect(entry.chantypes).toEqual(["#", "&"]);
+    expect(entry.casemapping).toBe("ascii");
+    expect(entry.maxlist).toEqual({ b: 100, e: 100, I: 100 });
+    expect(entry.nicklen).toBe(30);
+    expect(entry.channellen).toBe(200);
+    expect(entry.topiclen).toBe(307);
+  });
+
+  it("carries a network whose fold is NOT ascii", () => {
+    // solanum/Libera advertise rfc1459, where `foo[1]` and `foo{1}` are the
+    // SAME identity. cic cannot act on that yet — `asciiFold` is one fold,
+    // pinned to the server's #525 posture — but the fact now reaches the
+    // client instead of being dropped at ingress.
+    const entry = isupportEntryFromWire({ ...WIRE_PAYLOAD, casemapping: "rfc1459" });
+    expect(entry.casemapping).toBe("rfc1459");
+  });
+
+  it("carries an absent length limit as null, never as a guess", () => {
+    const entry = isupportEntryFromWire({
+      ...WIRE_PAYLOAD,
+      nicklen: null,
+      channellen: null,
+      topiclen: null,
+    });
+
+    expect(entry.nicklen).toBeNull();
+    expect(entry.channellen).toBeNull();
+    expect(entry.topiclen).toBeNull();
+  });
+
+  it("seeds the widened facts per network, keeping networks independent", () => {
+    seedIsupport(31, isupportEntryFromWire({ ...WIRE_PAYLOAD, chantypes: ["#"] }));
+    seedIsupport(32, isupportEntryFromWire({ ...WIRE_PAYLOAD, chantypes: ["#", "&", "!"] }));
+
+    expect(isupportForNetwork(31).chantypes).toEqual(["#"]);
+    expect(isupportForNetwork(32).chantypes).toEqual(["#", "&", "!"]);
+    // An unseeded network still gets the RFC set, not a neighbour's.
+    expect(isupportForNetwork(33).chantypes).toEqual(["#", "&", "+", "!"]);
   });
 });
