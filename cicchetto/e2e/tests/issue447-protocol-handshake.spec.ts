@@ -47,6 +47,25 @@ test.describe("#447 protocol handshake + /api/config discovery", () => {
     expect(body).not.toHaveProperty("minProtocolVersion");
   });
 
+  // #1290 — the push-encoding capability, proven through the same
+  // unauthenticated door. It exists because the switch off the pre-RFC
+  // `aesgcm` drafts moves nothing on the WebSocket wire, so it does not
+  // bump `protocol_version`, and gating on the release string is
+  // forbidden: a third-party client holding an undecryptable payload
+  // otherwise cannot tell an old server from its own broken decryptor.
+  test("GET /api/config — publishes the push content coding capability", async ({ request }) => {
+    const res = await request.get("/api/config");
+    expect(res.status()).toBe(200);
+
+    const body = await res.json();
+    // Hardcoded on purpose, unlike the version numbers above: this is the
+    // RFC 8291 content coding itself, not a constant that moves. A server
+    // answering anything else cannot deliver a self-contained payload,
+    // which is exactly what a client is meant to check for.
+    expect(body.push_content_encoding).toBe("aes128gcm");
+    expect(body).not.toHaveProperty("pushContentEncoding");
+  });
+
   test("WS handshake below the floor → 426 Upgrade Required (NOT an accepted socket)", async ({
     request,
   }) => {
