@@ -42281,3 +42281,60 @@ ours were false for a year. And when a swap changes a library's return
 vocabulary, enumerate the shapes from its source before writing the
 adapter: the branch that matters is rarely the one that changes
 behaviour loudly, it is the one that quietly stops sweeping.
+<!-- entry #1315 -->
+
+---
+
+## 2026-08-14 — #1315: the account is a second identity fact, not a better nick
+
+**A session forced onto `GuestNNNNN` by services was unidentifiable in the
+admin console, and only half of that was a rendering job.** The console
+prints one identity string per row (`adminSubjectRows.ts`), and for a user
+row that string is the credential nick. When Azzurra's services rename an
+unidentified session, the nick becomes `GuestNNNNN` and the row's other
+column is a bare `user_id` UUID that the card never printed — so the
+operator had nothing to act on. vjt's ruling (on `#grappa`): *show the
+credential nick where one is available*, neither option 1 (a
+`configured_nick` column) nor option 2 (stop echoing for anon), and the
+amendment extends the same rule to the user credential rather than making
+it a visitor rule with a user exception.
+
+**So the fix is additive: `users.name` joins the wire beside `nick`, and
+nothing about the nick changes.** `Credentials.AdminWire.t` gains
+`user_name`, `AdminSubjectRow` gains `user_name`, and the identity line
+renders both. The two are separate facts and neither is computed from the
+other — the same posture #618 set for `nick` against `live_state.nick`,
+for the same reason: the divergence IS the information. A row reading
+`Guest12345 · vjt` says what the operator configured, who the account is,
+and that services moved it, all at once; collapsing any pair of those
+would erase exactly the state the console exists to show.
+
+**The name is resolved by the CALLER, not read off an association.**
+`credential_to_admin_json/5` takes it as an argument, like `last_seen_at`
+and `session_ip` before it (#1157, #1308), and the controller fills it
+from `GrappaWeb.Admin.SubjectLabels.resolve/1` — the batched
+subject→display-name join every other admin listing already uses. A
+`Repo.preload(:user)` would have read the same column with a shorter
+diff, and put a per-row `users` lookup on the one endpoint that
+enumerates the entire table. `nil` means the caller resolved no name;
+the console still has `user_id`, and we do not fabricate a placeholder.
+
+**Three doors render this shape, so all three pass the name.** `GET`
+resolves it batched; `PATCH` and `POST` take it from the `%User{}` they
+already fetched in their `with` chain. A field added at one door only
+would have made the console's answer depend on which verb last touched
+the row.
+
+**What did NOT change, deliberately.** No `configured_nick` column and no
+migration. No change to `Credentials.update_visitor_credential_nick/3` or
+its `auth_method: :none` gate — the #561 invariant (an identified
+credential's nick is its login key) stands untouched, and the anon
+visitor's overwritten nick stays unrecoverable, which is the accepted
+cost of declining option 1. The recoverable set and the echo-writable set
+are disjoint by construction, so no `/recover` path reads a clobbered
+nick.
+
+**Apply:** when a row is unidentifiable, ask whether the identity is
+MISSING or merely UNPROJECTED. Unprojected is an additive wire field and
+a batched join at the edge; missing is a migration, and the two should
+never be argued as one change.
