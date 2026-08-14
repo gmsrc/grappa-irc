@@ -42091,3 +42091,116 @@ still say what it is". If two id spaces would share one signed
 namespace, tag the payload AND move the salt in the same change — the
 tag makes the new tokens readable, and only the salt bump makes the old
 ones unreadable.
+<!-- entry #378 -->
+
+---
+
+## 2026-08-14 — #378: `/notify` presence transitions push, and only transitions
+
+`/notify` (#247) already classified every MONITOR/WATCH report as a
+baseline or a genuine flip, and cic already toasted the flips. The toast
+only exists while a client is attached, so the OS-level push had to
+originate where the classification happens — `Session.Server`'s
+`presence_changed` effect arm, next to the broadcast that was already
+there. One effect, two consumers: the wire event feeds the attached
+clients, `Push.Triggers.dispatch_presence/4` feeds the closed ones.
+
+**The `:initial` gate sits in the function head, before the Task spawn.**
+Not an optimisation detail — it is the difference between a connect
+spawning zero Tasks and spawning one per watched nick. Every baseline
+shape folds into that one gate: the MONITOR/WATCH arm burst at
+end-of-MOTD, a bulk `/notify add` (`track/2` seeds `:unknown`), the 421
+fallback re-arm, and every reconnect re-seed. The cost is the delivery
+guarantee, and it is worth stating plainly rather than overselling: the
+presence map dies with the process, so anything that happens while grappa
+is reconnecting re-seeds as a baseline and is never pushed. The promise is
+"only while the session stayed continuously connected". Fixing that needs
+a restart-surviving map (the `Session.Backoff` ETS-above-the-supervisor
+pattern); out of scope here.
+
+**Both prefs default OFF.** The first design defaulted `presence_online`
+on, as an "intended opt-out rollout". It cannot be one: at `read_bool/3` a
+map written by someone who deliberately configured push is
+byte-indistinguishable from a never-configured one, so a default-on key
+overrides an explicitly-expressed preference on the deploy that ships it.
+Default-off makes the two new checkboxes the opt-in and deletes the
+problem for zero code.
+
+**The two prefs are NOT in `@prefs_trigger_keys`, and the two attributes
+now diverge for the first time.** `ensure_at_least_one_trigger/2` exists
+to reject a prefs map that silently mutes all MESSAGE push. Counting
+presence there would let a user uncheck every message trigger and pass
+validation on the strength of `presence_online` alone — exactly the state
+the guard prevents. Accepted consequence: a presence-only-push
+configuration is unrepresentable, ≥1 message trigger must stay on. Both
+attributes carry a why-comment now, because the next reader sees two
+identical-looking lists and one of them is load-bearing.
+
+**A boolean added to `@prefs_bool_keys` is REQUIRED in a PUT**, so a cic
+bundle older than this change 422s until it reloads. Accepted: server and
+bundle ship together, the window is already-open tabs. The tempting fix —
+make the two new booleans absence-tolerant like `muted_targets` (#866) —
+was rejected: `muted_targets` is exempt because a client that has never
+heard of it is saying nothing about mutes it cannot reconstruct, whereas a
+boolean map with two classes of boolean is the half-migrated shape
+CLAUDE.md forbids. Reverse skew (new cic, old BEAM) is silently lossy —
+the old server drops the unknown keys without error. Stated, not fixed.
+
+**The tag carries a `presence:` infix.** `Payload.build/3` writes
+`"<slug>:<channel_or_dm_peer>"`, so a bare-nick presence tag would EQUAL
+the DM tag for that nick, and the OS would coalesce alice's DM banner with
+alice's presence banner — each silently overwriting the other. `:` is
+excluded from both `nickname` and `chanstring` in RFC 2812, which is what
+makes the infix a proof rather than a convention; the guard is a
+StreamData property over both grammars, not one example. The nick folds in
+the tag and only there, so flaps of the same nick coalesce into one
+banner while the title and the deep link keep the display case.
+
+**Badge omitted, deliberately.** `BadgeSource.count/1` counts unread
+MESSAGES; a presence flip creates none. Stamping the current count would
+attach a stale, causally-unrelated number and cost a DB read per
+transition — and absent `badge` is already defined as "leave the icon
+alone". It also keeps `build_presence/3` a pure function of three
+arguments.
+
+**A rename is not a transition — the false half of it, anyway.** A watched
+peer renaming vacates its nick, and the ircd reports that as a genuine
+offline flip: "alice went offline" about someone who is still here. #247
+could live with that for a status dot; a lockscreen banner is an identity
+assertion. The `{:peer_nick_renamed, _, _}` arm now demotes the entry to
+`:unknown` (`Presence.reset/2`), so the vacancy report classifies
+`:initial` and stays silent.
+
+The design also claimed this buys the other half — that a DIFFERENT human
+taking the freed nick would stay silent too. **Measured: it does not, and
+one demotion cannot buy it.** The vacancy report CONSUMES the `:unknown`
+and re-baselines the entry to `:offline`, so the next online report for
+that nick is a genuine transition and pushes. Chasing it means a second
+"vacated" state living beside the presence map — parallel state needing
+housekeeping, for a case #247 already ruled on: the watch list watches
+NICKS, not people. Left as behaviour, with a test that pins it so it is a
+decision on the record rather than a field surprise. Bounded further by
+IRC itself: a NICK reaches us only from channel-sharing peers.
+`notify_entries` stays outside the #373 rename-migration set, per #247 —
+the watch entry does not follow the rename.
+
+**No debounce, and the real bound named.** N transitions in one numeric
+produce N pushes; the per-nick tag coalesces repeat flaps of the SAME nick
+and does not bound a burst. What bounds it is the 64-entry watch cap per
+(subject, network), both prefs defaulting off, and the fact that our own
+reconnect produces baselines rather than a burst. A per-nick timer is
+parallel state needing housekeeping — heavier than the residual problem.
+
+**Drift gate: one shared fixture, not a copied literal.** The payload
+contract to `pushPayload.ts` is hand-synced with no codegen gate. A
+payload literal copied into a vitest file is not a tripwire — change the
+builder and the copy does not move. So `presencePushPayloads.json` is read
+by both ports, the technique `shouldNotifyTruthTable.json` established:
+ExUnit asserts the server EMITS those bytes, vitest asserts the SW ACCEPTS
+them and that `parsePushTargetUrl` lands on the watched nick's query
+window.
+
+**Apply:** when a second event class reuses a delivery pipeline, the
+question is not "can it reuse the payload builder" but "which 20% does not
+fit". Here it was three things — no row, no badge, and a dedup key that
+would have collided with the first class's.
