@@ -42383,3 +42383,72 @@ the issue cited, and no other prose interpolation survives.
 **Accepted cost, stated so the next one is not read as a regression:** this
 fixes the instance, not the class. A third compose-only knob added tomorrow
 is undocumented again, and no gate says so.
+<!-- entry #1322 -->
+
+---
+
+## 2026-08-14 — #1322: the alternate doors move behind Advanced, and the height rule moves with them
+
+**Passkey and Recovery code now live inside the Advanced disclosure, one per
+row.** They used to share the toggle's row, always visible. vjt asked for the
+move on IRC and ruled the design fork himself: *"in merito a 1322 va bene
+allentare l'altezza"* — option 2 of the three the issue costed.
+
+The move is cheap in one direction and expensive in the other, which is the
+whole reason it needed a ruling. **Collapsed**, the default view every login
+starts in, the card sheds a whole 44px row. **Open**, two stacked rows add
+~88px against the 25px of slack #442 measured on 1024x900 (an 875px card in a
+900px viewport, less than one tap target). #442 crammed the pair onto the
+toggle's row precisely to pay zero height; #1322 is that decision reversed
+once the constraint that forced it was lifted.
+
+### The height rule did not disappear, it moved
+
+Relaxing a constraint is not the same as dropping it, and the specs say which
+is which. `login-advanced-scroll-reachability` now asserts, with Advanced
+OPEN, that every field and both doors and Connect are REACHABLE — driven by a
+real wheel gesture, not `scrollIntoViewIfNeeded`, for the reason that file
+already documents: a programmatic `scrollTop` bypasses `overflow:hidden` and
+would green-wash a card the user cannot actually scroll. The assertion is
+deliberately agnostic to whether the card overflows at that size, so it does
+not need relaxing again the next time the panel grows.
+
+The strict no-scroll claim moved to the **collapsed** state, where the move
+made it strictly easier to hold, and `login-alt-auth-entry-points` now
+requires 44px of slack there rather than merely non-negative. That is the
+honest place for it: a fits-in-the-viewport invariant asserted about a
+disclosure that can hold arbitrary future content is a promise the next issue
+has to break, while the same invariant about the minimal view is one the
+product actually intends to keep.
+
+### What was kept deliberately
+
+`login-advanced-toggle` stays a strict-single-match selector contract
+(issue281) and the pair keeps its own `login-alt-auth` class. The pair's count
+is now a FUNCTION of the disclosure — zero collapsed, two open — and both
+counts are asserted either side of the toggle, so the invariant that matters
+(the toggle is always exactly one) is pinned across the transition rather than
+in one state.
+
+The toggle stays alone inside `.login-alt-auth-row` instead of moving to the
+bare form column. A one-child flex row preserves its content-width box
+exactly, so issue204's position assertions and the iPhone tap-target geometry
+see no change from a move that is about the other two buttons. #442's
+`margin-right: auto` went with the pair: with nothing left to push against,
+auto and the default flex-start put the box in the same place.
+
+**#724's Enter swallow was re-verified in the new position, not assumed.** The
+recovery field moved into the disclosure but NOT out of the credential form —
+which is exactly why the hazard survives the move and the handler still
+matters. `onRecoveryKeyDown` is unchanged; what is new is a test that pins the
+field's containment in the panel, so a future refactor that lifts it out of
+the form (silently restoring the password-login-on-Enter bug #724 fixed)
+fails on position before anyone has to rediscover it on behaviour.
+
+### Accepted cost, stated so it is not re-litigated as a bug
+
+The passwordless path is now two clicks instead of one for users whose
+primary method it is. The issue named that cost and vjt asked for the move
+anyway. The doors sit LAST in the panel, adjacent to Connect, because they
+are actions rather than identity fields like realname/ident — a placement
+choice, cheap to flip, not a constraint.
