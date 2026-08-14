@@ -42348,3 +42348,38 @@ nick.
 MISSING or merely UNPROJECTED. Unprojected is an additive wire field and
 a batched join at the edge; missing is a migration, and the two should
 never be argued as one change.
+<!-- entry #1037 -->
+
+---
+
+## 2026-08-14 — #1037: document the two compose-only knobs, not the class
+
+#1036 made `compose.yaml` a derived source for the env-registry drift pin.
+That makes an orchestration var ALLOWED in `.env.example`; it does not make
+it REQUIRED there, and only `app_vars/0` — what `config/runtime.exs` and
+`bin/start.sh` read — is required. `GRAPPA_VERSION` and `CIC_BUILD_OUT` lived
+in that gap: compose reads both, nothing demanded they be written down, and
+an operator driving the `cicchetto-build` service by hand had to read
+`compose.yaml` to learn they exist.
+
+Ruling (vjt): document them in `.env.example` and leave the pin untouched.
+Requiring every compose-interpolated var instead would need an exemption set
+for internal wiring — the hand-kept parallel list #1036 had just deleted, and
+the exact shape whose drift the pin exists to catch. Declaring compose-only
+knobs deliberately undocumented was refused on the facts: both are
+operator-facing. An entry that does not say WHICH block reads the var is not
+documentation, so each names its side of the service — `GRAPPA_VERSION` the
+`environment:` vite bakes into `<meta cicchetto-version>`, `CIC_BUILD_OUT` the
+`volumes:` source the SPA is written to.
+
+Two of the issue's "not verified" items were measured while the file was
+open. The pair IS the whole set: every `${VAR}` interpolation in
+`compose.yaml` (35 of them) minus the names `.env.example` already declares
+leaves exactly these two. And the `${VAR:-}` ghost written inside a comment
+— a text scan counts it as a read, so it can only ever widen the allow-set —
+is gone from `compose.yaml` altogether: #1159 (`85a1f188`) deleted the line
+the issue cited, and no other prose interpolation survives.
+
+**Accepted cost, stated so the next one is not read as a regression:** this
+fixes the instance, not the class. A third compose-only knob added tomorrow
+is undocumented again, and no gate says so.
