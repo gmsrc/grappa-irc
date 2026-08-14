@@ -93,6 +93,7 @@ defmodule Grappa.Session.Server do
 
   alias Grappa.IRC.{AuthFSM, Client, CTCP, Identifier, LineSplit, Message}
   alias Grappa.Net.SourceAliasManager
+  alias Grappa.Push.Triggers, as: PushTriggers
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback.Wire
 
@@ -5319,6 +5320,21 @@ defmodule Grappa.Session.Server do
         )
       )
 
+    # #378 — one effect, two consumers: the wire broadcast above feeds the
+    # attached clients' in-app toast, this feeds the OS-level push for the
+    # clients that are NOT attached. Both gates (baseline-vs-transition and
+    # the two prefs) live in Triggers, per the canonical-gate rule the
+    # message path documents — the effect arm must not fork the decision.
+    # `source` is a transport detail and does not travel: a notification
+    # cannot care whether MONITOR or WATCH carried the report.
+    :ok =
+      PushTriggers.dispatch_presence(nick, presence, kind, %{
+        subject: state.subject,
+        subject_label: state.subject_label,
+        network_slug: state.network_slug,
+        own_nick: state.nick
+      })
+
     apply_effects(rest, state)
   end
 
@@ -6120,7 +6136,14 @@ defmodule Grappa.Session.Server do
         :ok
     end
 
-    apply_effects(rest, state)
+    # #378 — a rename is not a presence transition. The vacated nick draws a
+    # 601/605/731 from the ircd, which classifies as a genuine offline flip
+    # and would push "<old> went offline" about someone who is still here;
+    # whoever grabs the freed nick next then pushes "<old> is online" about a
+    # different human. Demote the entry to `:unknown` and both reports become
+    # baselines, which never push. Unconditional on whether a query window
+    # moved: presence and windows are independent stores.
+    apply_effects(rest, reset_presence_for(state, old_nick))
   end
 
   # #514: WE renamed. Deliberately NOT the peer arm above with the arguments
@@ -7127,6 +7150,14 @@ defmodule Grappa.Session.Server do
       |> Presence.untrack(removed)
 
     Map.put(state, :presence, next_map)
+  end
+
+  # #378 — see the `{:peer_nick_renamed, _, _}` arm. `Map.get` with a default
+  # because `:presence` only exists on state once the watch armed; a rename
+  # observed before end-of-MOTD has nothing to demote.
+  @spec reset_presence_for(t(), String.t()) :: t()
+  defp reset_presence_for(state, nick) do
+    Map.put(state, :presence, Presence.reset(Map.get(state, :presence, %{}), nick))
   end
 
   @spec send_sync_lines(t(), ISupport.presence_mechanism(), [String.t()], [String.t()]) :: :ok

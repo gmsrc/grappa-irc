@@ -6,11 +6,16 @@ defmodule Grappa.Push.Triggers do
 
   ## Where this fits
 
-  `Grappa.Session.Server`'s `apply_effects/2` `:persist` arm calls
-  `evaluate_and_dispatch/2` immediately after a successful
-  `Scrollback.persist_event/1` for a `:privmsg` or `:action` row. The
-  call is fire-and-forget — Triggers spawns an unlinked `Task` so the
-  hot path stays sub-millisecond and Sender failures don't bleed into
+  `Grappa.Session.Persistor` calls `evaluate_and_dispatch/2` immediately
+  after a successful `Scrollback.persist_event/1` for a `:privmsg` or
+  `:action` row — it owns the post-persist obligations (#369 A3), which is
+  why the call moved off `Session.Server`'s `apply_effects/2` `:persist`
+  arm. `dispatch_presence/4` is the one Push entry point `Session.Server`
+  still calls directly: a presence transition persists no row, so there is
+  nothing for `Persistor` to be the guardian of.
+
+  Both calls are fire-and-forget — Triggers spawns an unlinked `Task` so
+  the hot path stays sub-millisecond and Sender failures don't bleed into
   the mailbox.
 
   ## Decision logic — `should_notify?/5`
@@ -66,6 +71,20 @@ defmodule Grappa.Push.Triggers do
   All other kinds (`:join`, `:part`, `:quit`, `:nick_change`,
   `:mode`, `:topic`, `:kick`, `:server_event`) are presence /
   control plane and do not push.
+
+  ## The second trigger class — `/notify` presence (#378)
+
+  Scrollback KINDS still never push, as above. What does push is a
+  `/notify` presence TRANSITION, via `dispatch_presence/4` — a different
+  event on a different path (`Session.Server`'s `presence_changed` effect
+  arm, no `%Message{}` involved), gated by its own two prefs
+  `presence_online` / `presence_offline`, both default OFF. Baselines
+  (`:initial`) never push, whatever the prefs: adding a watch list or
+  reconnecting must not fire a notification storm.
+
+  The two classes are deliberately orthogonal — the watch list curates
+  WHO, the prefs gate push-vs-toast-only globally, and neither pref is a
+  member of `UserSettings`' at-least-one-trigger set (see there for why).
 
   #395 — the kind gate reads `Message.notify_kinds/0` (a subset of
   `Message.content_kinds/0`, derived from ONE projection declaration) via
@@ -130,6 +149,17 @@ defmodule Grappa.Push.Triggers do
   """
   @type prefs :: UserSettings.notification_prefs()
 
+  @typedoc """
+  Classification of one `/notify` presence report — the closed pair
+  `t:Grappa.Session.Presence.change_kind/0` carries.
+
+  DUPLICATED rather than referenced on purpose: `Presence` is not a
+  `Grappa.Session` export, and `Grappa.Push` cannot dep `Grappa.Session`
+  anyway because `Grappa.Session` already deps `Grappa.Push` — that is a
+  Boundary cycle. Two atoms are cheaper than either alternative.
+  """
+  @type presence_kind :: :initial | :transition
+
   # ---------------------------------------------------------------------------
   # Public — call from Session.Server
   # ---------------------------------------------------------------------------
@@ -189,6 +219,46 @@ defmodule Grappa.Push.Triggers do
 
   def evaluate_and_dispatch(%Message{}, _), do: :ok
 
+  @doc """
+  Dispatches the Web Push for one `/notify` presence report (#378).
+
+  Same fire-and-forget shape as `evaluate_and_dispatch/2`: unlinked `Task`,
+  always `:ok`, no `try/rescue` (the no-silent-drops contract above).
+
+  A baseline (`:initial`) short-circuits in the FUNCTION HEAD, before the
+  Task spawn — that is the whole point of splitting the clause rather than
+  branching inside: a MONITOR/WATCH baseline burst on connect, a bulk
+  `/notify add`, and every reconnect re-arm are the high-volume shapes, and
+  they must spawn ZERO Tasks, not N no-op ones.
+
+  There is deliberately NO catch-all clause. `change_kind()` is a closed
+  pair, so a third kind must crash `Session.Server` rather than be dropped
+  in silence.
+  """
+  @spec dispatch_presence(String.t(), :online | :offline, presence_kind(), ctx()) :: :ok
+  def dispatch_presence(nick, presence, :transition, ctx)
+      when is_binary(nick) and presence in [:online, :offline] and is_map(ctx) do
+    %{subject: subject, subject_label: subject_label, network_slug: network_slug} = ctx
+
+    {:ok, _} =
+      Task.start(fn ->
+        prefs = UserSettings.get_notification_prefs(subject)
+
+        # #182 — the same foreground-suppression gate as the message path,
+        # and for the same reason it is a SEPARATE step: the pure predicate
+        # stays free of IO. If ANY device has the PWA on-screen, the in-app
+        # presence toast IS the notification and the push is skipped.
+        if should_notify_presence?(presence, prefs) and
+             not WSPresence.any_visible?(subject_label) do
+          Push.Sender.send_to_subject(subject, Payload.build_presence(nick, presence, network_slug))
+        end
+      end)
+
+    :ok
+  end
+
+  def dispatch_presence(_nick, _presence, :initial, _ctx), do: :ok
+
   # ---------------------------------------------------------------------------
   # Public — pure predicate (testable in isolation)
   # ---------------------------------------------------------------------------
@@ -246,6 +316,23 @@ defmodule Grappa.Push.Triggers do
       true -> channel_match?(message, prefs, own_nick, patterns)
     end
   end
+
+  @doc """
+  Returns `true` when a presence transition in `presence` should push,
+  given `prefs`. Pure — the twin of `should_notify?/5` for the second
+  trigger class.
+
+  `Map.fetch!/2`, not `Map.get/3` with a default: `merge_with_defaults/1`
+  guarantees both keys are present in every prefs map a reader can get,
+  so a fallback would be a second place stating the default — and it
+  would state it silently if that guarantee ever broke.
+  """
+  @spec should_notify_presence?(:online | :offline, prefs()) :: boolean()
+  def should_notify_presence?(:online, prefs) when is_map(prefs),
+    do: Map.fetch!(prefs, :presence_online)
+
+  def should_notify_presence?(:offline, prefs) when is_map(prefs),
+    do: Map.fetch!(prefs, :presence_offline)
 
   # ---------------------------------------------------------------------------
   # Private
