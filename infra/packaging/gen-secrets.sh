@@ -73,7 +73,7 @@ rand_hex() { openssl rand -hex "$1" | tr -d '\n'; }
 # Mix.Tasks.Grappa.GenVapid emits: public = base64url(uncompressed point
 # 0x04||X||Y, 65 bytes), private = base64url(32-byte big-endian scalar),
 # both unpadded. openssl produces an EQUIVALENT keypair in that exact
-# encoding, so web_push_elixir (which reads the same raw shapes) accepts
+# encoding, so ex_nudge (which reads the same raw shapes) accepts
 # it without a BEAM in the loop. Pinned byte-exact by
 # test/infra/gen_secrets_test.bats — keep the shapes below matching it.
 gen_vapid() {

@@ -9,7 +9,7 @@ defmodule GrappaWeb.PushVapidController do
       `%{public_key: <base64url-encoded-uncompressed-P256-point>}`.
       Status 200 always (the key is pinned in `:persistent_term` at
       application boot via `Grappa.Push.boot/0`, which raises if the
-      `:web_push_elixir` env keys are missing — Bootstrap refuses to
+      `:ex_nudge` env keys are missing — Bootstrap refuses to
       start without them, so a running server always has a key to
       publish).
 
@@ -30,7 +30,7 @@ defmodule GrappaWeb.PushVapidController do
   Reads from `Grappa.Push.vapid_public_key/0`, which returns the
   value pinned in `:persistent_term` at application boot via
   `Grappa.Push.boot/0` (H16, REV-D 2026-05-22 — pre-fix this
-  controller did `Application.fetch_env!(:web_push_elixir,
+  controller did `Application.fetch_env!(:ex_nudge,
   :vapid_public_key)` per request, the lone CLAUDE.md "boot-time
   only, runtime banned" violation in the codebase). The upstream
   library's own signing path still reads from `Application.get_env/2`

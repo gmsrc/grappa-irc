@@ -356,14 +356,21 @@ if config_env() == :prod do
   # silently dropping push delivery — same loud-failure posture as
   # SECRET_KEY_BASE / GRAPPA_ENCRYPTION_KEY above.
   #
-  # The keys live in the `:web_push_elixir` application environment
-  # because that's where the upstream library reads them from at
-  # request time (see `WebPushElixir.send_notification/2` —
-  # `Application.get_env(:web_push_elixir, :vapid_public_key)`).
-  # Routing through the library's namespace avoids keeping a
-  # parallel `:grappa, :vapid` mirror that would have to be kept in
-  # sync at boot. The cic-facing controller reads from the SAME
-  # `:web_push_elixir` namespace so the two consumers cannot drift.
+  # The keys live in the `:ex_nudge` application environment because
+  # that's where the upstream library reads them from at request time
+  # (see `ExNudge.VAPID.get_keys/0` + the `k=` header in
+  # `ExNudge.send_notification/3`). Routing through the library's
+  # namespace avoids keeping a parallel `:grappa, :vapid` mirror that
+  # would have to be kept in sync at boot. `Grappa.Push.boot/0` pins
+  # the public key from the SAME namespace so the two consumers
+  # cannot drift.
+  #
+  # #1290 moved this from `:web_push_elixir`. The VALUES are
+  # untouched: both libraries want base64url-unpadded, both decode to
+  # the raw 65-byte point + 32-byte scalar, and both build the same
+  # `:ECPrivateKey` record for ES256 — so an existing deployment's
+  # `VAPID_*` env vars keep working and no resubscription follows
+  # from the namespace move.
   vapid_public_key = System.get_env("VAPID_PUBLIC_KEY") || missing_vapid.("VAPID_PUBLIC_KEY")
 
   vapid_private_key = System.get_env("VAPID_PRIVATE_KEY") || missing_vapid.("VAPID_PRIVATE_KEY")
@@ -375,7 +382,7 @@ if config_env() == :prod do
       subject -> subject
     end
 
-  config :web_push_elixir,
+  config :ex_nudge,
     vapid_public_key: vapid_public_key,
     vapid_private_key: vapid_private_key,
     vapid_subject: vapid_subject

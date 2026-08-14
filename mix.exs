@@ -280,24 +280,40 @@ defmodule Grappa.MixProject do
       {:argon2_elixir, "~> 4.1"},
       {:cloak, "~> 1.1"},
       {:cloak_ecto, "~> 1.3"},
-      # Web Push delivery. RFC 8030 (the delivery protocol —
-      # TTL/Urgency/Topic) is honoured; the encryption and VAPID layers
-      # are NOT the RFCs this comment used to advertise. 0.8.0 emits
-      # draft-ietf-webpush-encryption-04 `aesgcm` and
-      # draft-ietf-webpush-vapid-01 `Authorization: WebPush <jwt>`, not
-      # RFC 8291 `aes128gcm` + RFC 8292 `vapid t=…, k=…`. See #1290 and
-      # the wire section of `Grappa.Push.Sender`. Picked over
-      # `web_push_encryption` (last release 2021-09-15, no native
-      # 410-Gone signal) because:
-      #   * Active maintenance — 0.8.0 released 2026-05-04.
-      #   * `send_notification/2` returns `{:error, :expired}` for
-      #     404/410, mapping cleanly onto `Push.delete_dead/1`.
-      #   * Reads `vapid_{public,private,subject}_key` from
-      #     `Application.get_env/2` at request time, so
-      #     `config/runtime.exs` can populate from env vars at boot
-      #     without any compile-time leakage.
+      # Web Push delivery, RFC-conformant on all three layers (#1290,
+      # 2026-08-14): RFC 8030 delivery (TTL/Urgency/Topic), RFC 8291
+      # `aes128gcm` payload encryption over the RFC 8188 content
+      # coding, and RFC 8292 `Authorization: vapid t=…, k=…`.
+      #
+      # Replaces `web_push_elixir ~> 0.8`, which emitted the
+      # superseded drafts — draft-ietf-webpush-encryption-04 `aesgcm`
+      # with the salt and server key in the `encryption:` /
+      # `crypto-key:` HEADERS, and draft-ietf-webpush-vapid-01
+      # `Authorization: WebPush <jwt>`. That is not a conformance
+      # nicety: a transport that does not preserve headers (UnifiedPush
+      # discards them by design) hands the application a body it
+      # structurally cannot decrypt. `aes128gcm` carries salt + keyid
+      # in the body's own RFC 8188 header, so the body stands alone.
+      #
+      # `web_push_encryption` was re-checked and rejected again: it
+      # emits the same draft-04 shape (last release 2021-09-15).
+      #
+      # Accepted costs, priced on #1290 before the swap:
+      #   * A SECOND HTTP stack — `httpoison ~> 2.0` (hackney) + `jose`
+      #     are runtime deps, next to our `Req`. Release size, a second
+      #     TLS config surface, two connection pools.
+      #   * `ex_nudge` maps 410 to `{:error, :subscription_expired}` and
+      #     leaves 404 in the generic `{:error, {:http_error, 404}}`
+      #     bucket, so `Grappa.Push.Sender` adapts all three return
+      #     shapes and treats 404 as terminal itself (RFC 8030 §7.3).
+      #     See the wire + adapter sections of that module.
+      #   * VAPID config moves to the `:ex_nudge` app-env namespace.
+      #     The keypair ENCODING is unchanged (base64url, unpadded, raw
+      #     65-byte point + 32-byte scalar) and both libraries build the
+      #     identical `:ECPrivateKey` record, so an existing deployment's
+      #     `VAPID_*` env vars carry over untouched.
       # Push notifications cluster B2 (2026-05-14).
-      {:web_push_elixir, "~> 0.8"},
+      {:ex_nudge, "~> 1.0"},
       {:telemetry, "~> 1.3"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.1"},

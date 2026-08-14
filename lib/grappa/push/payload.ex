@@ -71,7 +71,7 @@ defmodule Grappa.Push.Payload do
   Wire shape consumed by `Grappa.Push.Sender.send_to_subscription/2`.
   Same shape as `t:Grappa.Push.Sender.payload/0` (cross-module reference
   not used directly so this module stays free of the cycle through
-  `Push.Sender`'s `WebPushElixir` dep).
+  `Push.Sender`'s `ExNudge` dep).
   """
   @type t :: %{
           required(:title) => String.t(),

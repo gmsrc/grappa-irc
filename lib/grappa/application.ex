@@ -59,7 +59,7 @@ defmodule Grappa.Application do
     # request instead of doing a runtime `Application.fetch_env!/2`
     # (CLAUDE.md "boot-time only, runtime banned" — the lone offender
     # in the codebase). Mirrors `Grappa.Uploads.boot/1`. Must run
-    # AFTER `config/runtime.exs` has populated `:web_push_elixir,
+    # AFTER `config/runtime.exs` has populated `:ex_nudge,
     # :vapid_public_key` from `VAPID_PUBLIC_KEY` env, which is
     # guaranteed by the time `Application.start/2` is invoked.
     :ok = Grappa.Push.boot()

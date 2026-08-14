@@ -109,14 +109,14 @@ config :grappa, Grappa.Session.Server, auto_away_debounce_ms: 2_000
 # Push notifications cluster B5 (2026-05-14) — fixed VAPID keypair
 # for dev/e2e. The integration harness (cicchetto/e2e/compose.yaml)
 # boots grappa-test under MIX_ENV=dev; without this, Application.
-# fetch_env!(:web_push_elixir, :vapid_public_key) crashes the
+# fetch_env!(:ex_nudge, :vapid_public_key) crashes the
 # PushVapidController and any e2e push-trigger spec. Mirrors
 # config/test.exs's keypair byte-for-byte so the dev + test surfaces
 # share the same fixture (rotating either MUST update the other —
 # both are non-secret + dev/test-only). Real ECDSA P-256 pair (NOT
 # random bytes — JOSE.JWS rejects malformed keys at sign time, which
 # would mask trigger failures behind misleading sign errors).
-config :web_push_elixir,
+config :ex_nudge,
   vapid_public_key: "BH4P62bQOEfkSsfjpCyBWnz88Nnlyn2mtwapDEXWswb1cwR9YDE-3E-aBjNhwY2e3ErL410rgSNUBD7nQyPXGSY",
   vapid_private_key: "MIC0fm1A_ZcPF0P3ffUizcNUYwMyU-AklNw2e4aPXGw",
   vapid_subject: "mailto:dev@example.org"

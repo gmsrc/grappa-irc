@@ -39,12 +39,12 @@ defmodule GrappaWeb.PushVapidControllerTest do
       sentinel = "sentinel-#{System.unique_integer([:positive])}"
 
       try do
-        Application.put_env(:web_push_elixir, :vapid_public_key, sentinel)
+        Application.put_env(:ex_nudge, :vapid_public_key, sentinel)
         :ok = Push.boot()
 
         # Now flip the env to something else; the persistent_term value
         # remains the sentinel because boot has already pinned it.
-        Application.put_env(:web_push_elixir, :vapid_public_key, "different-value")
+        Application.put_env(:ex_nudge, :vapid_public_key, "different-value")
 
         conn = get(conn, "/push/vapid-public-key")
 
@@ -53,7 +53,7 @@ defmodule GrappaWeb.PushVapidControllerTest do
                  "not runtime Application.fetch_env!/2 (H16 regression)."
       after
         # Restore original env + pin so siblings see the production value.
-        Application.put_env(:web_push_elixir, :vapid_public_key, original)
+        Application.put_env(:ex_nudge, :vapid_public_key, original)
         :ok = Push.boot()
       end
     end

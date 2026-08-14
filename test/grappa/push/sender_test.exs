@@ -3,18 +3,27 @@ defmodule Grappa.Push.SenderTest do
   Push notifications cluster B2 (2026-05-14) — Web Push delivery
   fan-out + dead-endpoint cleanup + telemetry coverage.
 
-  Strategy: real `WebPushElixir.send_notification/2` calls into a
+  Strategy: real `ExNudge.send_notification/3` calls into a
   Bypass-backed listener. The lib reads the endpoint from the
-  subscription JSON itself, so swapping the production vendor URL
+  subscription struct itself, so swapping the production vendor URL
   for `http://localhost:<bypass-port>/wp` exercises the full code
   path including the ECDH encryption + JWT signing — which is why
   the test fixture uses a REAL P-256 client public key (random bytes
   fail at `:crypto.compute_key/4`).
 
+  These tests own the ADAPTER (#1290): every one of `ExNudge`'s
+  return shapes differs from what this module used to match, and the
+  sweep that a naive swap loses is what the 404/410 cases below pin.
+  The wire format those calls produce is pinned separately, by
+  `Grappa.Push.WireFormatTest`.
+
   ## What this verifies
     * 200 vendor response → `:ok` + `last_used_at` bumped on the row.
     * 410 vendor response → `Push.delete_dead/1` purges the row +
       `[:grappa, :push, :delete_dead]` telemetry fires.
+    * 404 vendor response → the SAME sweep. `ex_nudge` maps only 410
+      natively; 404 is terminal per RFC 8030 §7.3 and the adapter
+      says so.
     * 503 vendor response → `{:error, {:http_error, 503}}` + Logger
       warning + telemetry tally lands in the `error` bucket.
     * Connection refused → `{:error, _}` per the no-silent-drops rule.
@@ -93,8 +102,8 @@ defmodule Grappa.Push.SenderTest do
 
     test "200 from vendor → :ok + last_used_at bumped", %{bypass: bypass, endpoint: endpoint} do
       Bypass.expect_once(bypass, "POST", "/wp", fn conn ->
-        assert ["WebPush " <> _] = Plug.Conn.get_req_header(conn, "authorization")
-        assert ["aesgcm"] = Plug.Conn.get_req_header(conn, "content-encoding")
+        assert ["vapid " <> _] = Plug.Conn.get_req_header(conn, "authorization")
+        assert ["aes128gcm"] = Plug.Conn.get_req_header(conn, "content-encoding")
         Plug.Conn.resp(conn, 201, "")
       end)
 
@@ -127,7 +136,16 @@ defmodule Grappa.Push.SenderTest do
       assert_receive {:telemetry, [:grappa, :push, :delete_dead], %{count: 1}, %{endpoint: ^endpoint}}
     end
 
-    test "404 from vendor → {:error, :gone}", %{bypass: bypass, endpoint: endpoint} do
+    test "404 from vendor → {:error, :gone} + row deleted (RFC 8030 §7.3)", %{
+      bypass: bypass,
+      endpoint: endpoint
+    } do
+      # `ex_nudge` returns the generic `{:error, {:http_error, 404}}`
+      # here — only 410 gets its own atom. If the adapter forwarded
+      # that verbatim the call would still LOG and still emit telemetry,
+      # so the regression this pins is not a missing signal: it is the
+      # missing SWEEP. The row below would survive forever and every
+      # later fan-out would pay a round-trip for it.
       Bypass.expect_once(bypass, "POST", "/wp", fn conn ->
         Plug.Conn.resp(conn, 404, "")
       end)
@@ -136,6 +154,7 @@ defmodule Grappa.Push.SenderTest do
       sub = subscription_fixture({:user, user.id}, endpoint)
 
       assert {:error, :gone} = Sender.send_to_subscription(sub, @payload)
+      assert is_nil(Repo.get(Grappa.Push.Subscription, sub.id))
     end
 
     test "503 from vendor → {:error, {:http_error, 503}}, row preserved", %{
@@ -216,10 +235,10 @@ defmodule Grappa.Push.SenderTest do
         Plug.Conn.resp(conn, 201, "")
       end)
 
-      # Pre-warm the Finch pool (see warm-pool note in the
+      # Pre-warm the connection pool (see the note in the
       # mixed-success/410 test below). Matches the Bypass route shape
       # so it accepts the request — POST /wp/<anything>.
-      _ = Req.post(bypass_url <> "/wp/warm", body: "")
+      _ = HTTPoison.post(bypass_url <> "/wp/warm", "")
 
       user = user_fixture()
       subject = {:user, user.id}
@@ -274,16 +293,15 @@ defmodule Grappa.Push.SenderTest do
         end
       end)
 
-      # Pre-warm the Finch pool for this Bypass host:port. The Sender's
-      # Task.async_stream fan-out races two parallel requests through
-      # the SAME pool (same scheme+host+port); under CI load Finch's
-      # `Pool.Manager.maybe_start_pool/4` registers the supervisor for
-      # the first request but the 2nd request arrives BEFORE a worker
-      # is registered → `:not_ready` → surfaces as `pool_not_available`
-      # in our Sender's defensive rescue, error tallied. Warming with a
-      # synchronous pre-call guarantees the pool has a ready worker
-      # before the parallel fan-out.
-      _ = Req.post(bypass_url <> "/wp/warm", body: "")
+      # Pre-warm the connection pool for this Bypass host:port. The
+      # Sender's Task.async_stream fan-out races two parallel requests
+      # through the SAME pool (same scheme+host+port), and a pool that
+      # is still starting answers the second one with a checkout error
+      # that tallies as `error` instead of `success`. A synchronous
+      # pre-call guarantees a ready worker before the parallel fan-out.
+      # Kept across the #1290 dependency swap: the pool is hackney's
+      # now rather than Finch's, but a cold pool races the same way.
+      _ = HTTPoison.post(bypass_url <> "/wp/warm", "")
 
       user = user_fixture()
       subject = {:user, user.id}

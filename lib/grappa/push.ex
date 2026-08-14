@@ -94,7 +94,7 @@ defmodule Grappa.Push do
   reads lock-free without re-hitting `Application.get_env/2` per
   request (H16, REV-D 2026-05-22).
 
-  The upstream `:web_push_elixir` library itself reads the key from
+  The upstream `:ex_nudge` library itself reads the key from
   `Application.get_env/2` at delivery time — that's the library's
   concern and out of our control. We mirror the value here so OUR
   callers (the controller) observe the boot-time-pinned constant
@@ -104,7 +104,7 @@ defmodule Grappa.Push do
   """
   @spec boot() :: :ok
   def boot do
-    key = Application.fetch_env!(:web_push_elixir, :vapid_public_key)
+    key = Application.fetch_env!(:ex_nudge, :vapid_public_key)
     :persistent_term.put(@vapid_public_key_term, key)
     :ok
   end
@@ -117,6 +117,28 @@ defmodule Grappa.Push do
   """
   @spec vapid_public_key() :: String.t()
   def vapid_public_key, do: :persistent_term.get(@vapid_public_key_term)
+
+  @doc """
+  The HTTP content coding every Web Push payload is encrypted under —
+  `"aes128gcm"`, the RFC 8188 coding that RFC 8291 mandates (#1290).
+
+  Published verbatim by `GET /api/config` as `push_content_encoding`.
+  A third-party client (Resentin's settings-screen warning is the
+  motivating case) needs an HONEST way to ask whether this server
+  emits RFC 8291 payloads: the switch away from the `aesgcm` drafts is
+  not a WS-protocol change, so it does not bump `protocol_version`,
+  and `config_controller.ex`'s own docstring forbids gating features
+  on the release string. An explicit capability is the only truthful
+  answer left.
+
+  A constant, not a runtime probe of the library: it is the value the
+  dependency is CHOSEN for. `Grappa.Push.WireFormatTest` asserts that
+  the `content-encoding` header actually observed on a send equals
+  this string, so a dependency that stopped emitting it turns the
+  suite red rather than letting this quietly become a lie.
+  """
+  @spec content_encoding() :: String.t()
+  def content_encoding, do: "aes128gcm"
 
   @doc """
   Inserts a new push subscription for the given subject.

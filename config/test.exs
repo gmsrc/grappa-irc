@@ -250,9 +250,9 @@ config :grappa, :request_budget,
   sever_window_ms: 60_000
 
 # Push notifications cluster B2 (2026-05-14) — fixed VAPID keypair for
-# the `:web_push_elixir` library so `Push.Sender` tests don't need to
+# the `:ex_nudge` library so `Push.Sender` tests don't need to
 # generate a fresh pair per run (and so the lib's
-# `Application.get_env(:web_push_elixir, ...)` reads succeed under
+# `Application.get_env(:ex_nudge, ...)` reads succeed under
 # `mix test`). Real ECDSA P-256 pair (NOT random bytes — JOSE.JWS
 # rejects malformed keys at sign time, which would surface as
 # misleading test failures). Non-secret + dev/test-only; rotating
@@ -260,7 +260,7 @@ config :grappa, :request_budget,
 # (B5 added the dev mirror so the integration harness's MIX_ENV=dev
 # grappa-test boots with VAPID set). When rotating, update both files
 # in lockstep.
-config :web_push_elixir,
+config :ex_nudge,
   vapid_public_key: "BH4P62bQOEfkSsfjpCyBWnz88Nnlyn2mtwapDEXWswb1cwR9YDE-3E-aBjNhwY2e3ErL410rgSNUBD7nQyPXGSY",
   vapid_private_key: "MIC0fm1A_ZcPF0P3ffUizcNUYwMyU-AklNw2e4aPXGw",
   vapid_subject: "mailto:test@example.org"

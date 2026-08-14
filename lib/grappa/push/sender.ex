@@ -4,9 +4,9 @@ defmodule Grappa.Push.Sender do
   push subscription belonging to a subject.
 
   Push notifications cluster B2 (2026-05-14). Sits between the trigger
-  hot path (B4 — `Grappa.Push.Triggers`) and the upstream
-  `WebPushElixir` library, owning the fan-out, dead-endpoint cleanup,
-  and telemetry emission.
+  hot path (B4 — `Grappa.Push.Triggers`) and the upstream `ExNudge`
+  library, owning the fan-out, dead-endpoint cleanup, the return-shape
+  adapter, and telemetry emission.
 
   ## `:provider` (2026-08-13, UnifiedPush)
 
@@ -19,28 +19,40 @@ defmodule Grappa.Push.Sender do
   a browser's `PushManager.subscribe()` does internally.
   `send_to_subscription/2` reads no branch on `:provider` at all.
 
-  ## What we actually put on the wire — the pre-RFC drafts (#1290)
+  ## What we put on the wire — RFC 8291 + RFC 8292 (#1290, 2026-08-14)
 
-  NOT `aes128gcm`. An earlier revision of this docstring claimed the
-  POST below was "the IDENTICAL VAPID-signed `aes128gcm` encrypted
-  POST"; that was never checked against the dependency and is false.
-  `WebPushElixir` 0.8.0 emits draft-ietf-webpush-encryption-04
-  `aesgcm` (`deps/web_push_elixir/lib/web_push_elixir.ex:50,147`) and
-  draft-ietf-webpush-vapid-01 `Authorization: WebPush <jwt>` (`:146`).
+  A POST here carries:
 
-  The gap is structural, not cosmetic. Under `aesgcm` the salt and the
-  server ephemeral public key — both mandatory HKDF inputs — travel as
-  the `encryption:` and `crypto-key:` headers while the body is the
-  bare ciphertext (`:150-151,161`). RFC 8291 puts the same two values
-  in the body's own binary header, so the body decrypts standalone.
-  Any transport that does not preserve headers therefore hands the
-  application an undecryptable blob — reported for UnifiedPush by the
-  Resentin author (theirs; the header-discarding half is not measured
-  here, the dependency half above is).
+    * `content-encoding: aes128gcm` — the RFC 8188 content coding
+      mandated by RFC 8291, with the 16-byte salt, the record size,
+      and the server's ephemeral P-256 public key (`keyid`) in the
+      BODY's own binary header, ahead of the ciphertext.
+    * `authorization: vapid t=<jwt>, k=<base64url public key>` — the
+      RFC 8292 scheme.
+    * No `encryption:` and no `crypto-key: dh=` header. There is
+      nothing left to put in them.
 
-  What keeps browser push working is the big push services still
-  accepting a draft they superseded, not the draft being acceptable.
-  #1290 tracks the fix and owns the route decision.
+  Until this issue landed we emitted the superseded drafts —
+  `aesgcm` (draft-ietf-webpush-encryption-04) with the salt and the
+  server key in HEADERS, and `Authorization: WebPush <jwt>`
+  (draft-ietf-webpush-vapid-01). The gap was structural, not
+  cosmetic: those two header values are mandatory HKDF inputs, so a
+  transport that does not preserve headers handed the application a
+  body it could not decrypt no matter how correct its key material
+  was. UnifiedPush discards headers by design, which is where the
+  breakage was first reported (by the Resentin author — theirs, not
+  measured here). Browser push kept working only because the big
+  push services still accept a draft they superseded, and that
+  tolerance is theirs to withdraw, not ours to rely on.
+
+  `Grappa.Push.content_encoding/0` is the single source of truth for
+  the coding name and is what `GET /api/config` publishes, so a
+  third-party client can ASK whether this server speaks RFC 8291
+  instead of inferring it from the release string.
+  `test/grappa/push/wire_format_test.exs` pins the whole shape —
+  headers, the body header block, and a decrypt performed with
+  nothing but the subscription's own `p256dh`/`auth` — so a
+  dependency bump cannot quietly walk it back.
 
   ## Subject-scoped — V3 (2026-05-15)
 
@@ -48,9 +60,9 @@ defmodule Grappa.Push.Sender do
   `send_to_subject/2` API takes a `Grappa.Subject.t()` tagged tuple
   and fans out across every row matching that subject FK column.
 
-  ## Why a thin wrapper instead of inlining `WebPushElixir`
+  ## Why a thin wrapper instead of inlining `ExNudge`
 
-  Three concerns the upstream lib doesn't cover and B4 callers MUST
+  Four concerns the upstream lib doesn't cover and B4 callers MUST
   NOT have to repeat at every call site:
 
     * **Fan-out across a subject's devices** — one PushEvent per
@@ -65,6 +77,9 @@ defmodule Grappa.Push.Sender do
       delivery emits `start` + `stop` events so the Phase 5 PromEx
       exporter can derive per-subject delivery rate, success ratio,
       and dead-endpoint pruning rate without parsing logs.
+    * **The return-shape adapter** — `deliver/2` below is the ONLY
+      place that knows `ExNudge`'s vocabulary. See its comment for
+      the mapping and for why 404 sweeps.
 
   ## API
 
@@ -102,32 +117,33 @@ defmodule Grappa.Push.Sender do
   unexpected crashes propagate to the spawned Task and surface in
   SASL crash logs (telemetry-aggregated by Phase 5).
 
-    * `{:ok, _}` from `WebPushElixir.send_notification/2` →
-      `Push.touch_last_used/1` + `:ok`.
-    * `{:error, :expired}` (vendor 404/410) → `Push.delete_dead/1`
-      + telemetry + `{:error, :gone}`.
-    * `{:error, {:http_error, status, _body}}` (any other 4xx/5xx)
-      → Logger.warning + `{:error, {:http_error, status}}`.
-    * Network errors / timeouts surface as a `CaseClauseError`
-      raised by the upstream lib (v0.8.0 has an unhandled `case` arm
-      for `Req.TransportError`-bearing AND `Req.HTTPError`-bearing
-      results) — caught at the
-      boundary and mapped to `{:error, {:transport_error, reason}}`.
-      A defensible exception to "let it crash" because (a) we cannot
-      wait for upstream patch, (b) silent-dropping the network-error
-      path violates the no-silent-drops rule, (c) the rescue scope is
-      narrow (single library call, single exception class).
-    * Encryption failures (malformed P-256 key, base64url decode
-      failure on stored `p256dh_key`/`auth_key`, JOSE.JWS sign error
-      on a malformed VAPID private key) raise `ArgumentError` /
-      `MatchError` from inside the lib BEFORE the HTTP POST. These
-      are also caught at the boundary and mapped to
-      `{:error, {:encrypt_error, reason}}` — same boundary
-      justification as the transport rescue. Server-side data is
+  `deliver/2` normalizes every `ExNudge` shape onto the closed set
+  documented on `t:sub_result/0`, so the taxonomy below is the whole
+  contract and no caller sees a library atom:
+
+    * vendor 2xx → `Push.touch_last_used/1` + `:ok`.
+    * vendor 404 **or** 410 → `Push.delete_dead/1` + telemetry +
+      `{:error, :gone}`.
+    * any other 4xx/5xx → Logger.warning +
+      `{:error, {:http_error, status}}`.
+    * network error / DNS failure / timeout →
+      `{:error, {:transport_error, reason}}`.
+    * encryption or VAPID-signing failure →
+      `{:error, {:encrypt_error, reason}}`. Server-side data is
       changeset-validated at write time (`Subscription.changeset/2`'s
-      length caps), so this branch should never fire in practice; if
-      it does, it indicates upstream-lib drift or a stored-data
-      corruption that operators MUST see in telemetry.
+      length caps), so this should never fire in practice; if it does
+      it indicates upstream-lib drift or stored-data corruption that
+      operators MUST see in telemetry.
+
+  A narrow `rescue` still guards the lib call. `ExNudge` RETURNS its
+  encryption and transport errors rather than raising (its
+  `HTTPoison.post/3` case covers both of that function's return
+  shapes, so the `CaseClauseError` arm the previous dependency needed
+  is gone), but `ExNudge.VAPID.sign_jwt/2` runs JOSE unguarded and a
+  malformed VAPID private key raises there, BEFORE the POST. Scope is
+  the single library call and the same three exception classes as
+  before — silent-dropping that path would violate the
+  no-silent-drops rule.
 
   ## Boundary
 
@@ -242,10 +258,11 @@ defmodule Grappa.Push.Sender do
   the failure taxonomy.
 
   Encodes `payload` with `Jason` so cic SW receives a parsable JSON
-  string. The upstream library's `send_notification/2` accepts the
-  subscription as a JSON STRING (not a map) — re-encoding here
-  matches that contract while keeping the storage shape (struct) in
-  the caller's hands.
+  string, and restates our stored row as an `ExNudge.Subscription`
+  struct — the library's own input shape. The two key columns cross
+  unchanged: both are base64url exactly as `PushManager.subscribe()`
+  produced them, which is why the switch to RFC 8291 needs no
+  re-subscription on our side of the wire.
 
   Provider-agnostic on purpose — see moduledoc "`:provider`
   (2026-08-13, UnifiedPush)" for why a UnifiedPush row goes through
@@ -253,16 +270,15 @@ defmodule Grappa.Push.Sender do
   """
   @spec send_to_subscription(Subscription.t(), payload()) :: sub_result()
   def send_to_subscription(%Subscription{} = sub, payload) when is_map(payload) do
-    subscription_json =
-      Jason.encode!(%{
-        endpoint: sub.endpoint,
-        keys: %{p256dh: sub.p256dh_key, auth: sub.auth_key}
-      })
+    ex_nudge_subscription = %ExNudge.Subscription{
+      endpoint: sub.endpoint,
+      keys: %{p256dh: sub.p256dh_key, auth: sub.auth_key}
+    }
 
     message = Jason.encode!(payload)
 
-    case web_push_send(subscription_json, message) do
-      {:ok, _} ->
+    case deliver(ex_nudge_subscription, message) do
+      :ok ->
         case Push.touch_last_used(sub) do
           {:ok, _} ->
             :ok
@@ -277,7 +293,7 @@ defmodule Grappa.Push.Sender do
             :ok
         end
 
-      {:error, :expired} ->
+      {:error, :gone} ->
         # #590 — `delete_dead/1` degrades a sustained SQLITE_BUSY to
         # `{:error, :db_unavailable}`. This is a background delivery task with no
         # client waiting, so the terminal is best-effort DROP: log + carry on —
@@ -306,7 +322,7 @@ defmodule Grappa.Push.Sender do
 
         {:error, :gone}
 
-      {:error, {:http_error, status, _}} ->
+      {:error, {:http_error, status}} ->
         Logger.warning(
           "push.send http error",
           status: status,
@@ -326,56 +342,75 @@ defmodule Grappa.Push.Sender do
     end
   end
 
-  # Indirection for testability — Bypass-backed tests override the
-  # subscription endpoint URL but cannot easily reach the upstream
-  # library's `Application.get_env(:web_push_elixir, ...)` config
-  # mid-test. The real implementation calls into the library; tests
-  # that want to stub the HTTP layer can use Bypass against the
-  # endpoint URL embedded in the subscription itself (the lib reads
-  # endpoint from the JSON, not from app env).
+  # The ONE place that speaks `ExNudge`'s vocabulary (#1290). Its
+  # three return shapes all differ from the ones this module used to
+  # match, so without this adapter every non-2xx path would fall to
+  # the catch-all and the dead-subscription sweep would be lost —
+  # measured on the issue before the swap, not discovered after.
   #
-  # Defensive rescue: `WebPushElixir.send_notification/2` (v0.8.0)
-  # has an unhandled `case` arm for `Req.TransportError`-bearing
-  # results — connection refused, timeout, DNS failures, etc. all
-  # raise `CaseClauseError` instead of returning `{:error, _}`. After
-  # the `req 0.5.17 → 0.5.18` bump (2026-05-26), the same unhandled
-  # arm also fires for `Req.HTTPError`-bearing results — the new req
-  # surfaces HTTP/2 pool-exhaustion (`:pool_not_available`) as
-  # `{%Req.Response{}, %Req.HTTPError{...}}` instead of a plain
-  # `{:error, _}`, and `web_push_elixir`'s case doesn't cover it.
-  # The encryption preamble (`Base.url_decode64!` on stored
-  # `p256dh_key`/`auth_key`, `:crypto.compute_key` on the P-256
-  # point, JOSE.JWS sign on the VAPID private key) raises
-  # `ArgumentError` / `MatchError` on malformed inputs. We cannot
-  # wait for upstream patches and silent-dropping any of these
-  # paths violates the no-silent-drops rule. The rescue scope is
-  # narrowed to the direct lib call so any genuine programmer error
-  # in our own code (changeset, JSON encoding) still propagates
-  # cleanly — and unrecognized `CaseClauseError` shapes get a
-  # Logger.error breadcrumb before the reraise so future-Claude
-  # debugging an upstream-lib v0.9 shape change has a starting point.
-  defp web_push_send(subscription_json, message) do
-    WebPushElixir.send_notification(subscription_json, message)
+  #   `{:error, :subscription_expired}`  (410) → `{:error, :gone}`
+  #   `{:error, {:http_error, 404}}`           → `{:error, :gone}`
+  #   `{:error, {:http_error, status}}`        → same, our 2-tuple
+  #   `{:error, {:request_failed, reason}}`    → `{:error, {:transport_error, reason}}`
+  #   encryption / VAPID errors                → `{:error, {:encrypt_error, reason}}`
+  #
+  # **404 is terminal, exactly like 410** (RFC 8030 §7.3: a push
+  # resource that no longer exists is gone for good, not a transient
+  # failure). `ex_nudge` maps only 410 natively, so the terminality of
+  # 404 is OUR rule and lives here. Getting this wrong is not a
+  # missing SIGNAL — the catch-all still logs and emits telemetry —
+  # it is a missing SWEEP: the row is never deleted and every future
+  # fan-out pays a vendor round-trip for a subscription that can
+  # never be delivered again.
+  #
+  # Payload-too-large (413) is deliberately NOT terminal: the
+  # subscription is fine, our payload was too big, so it reports as
+  # the plain HTTP error it is and the row survives.
+  #
+  # The rescue survives the swap in narrowed form. `ExNudge` returns
+  # its encryption and transport errors, but `ExNudge.VAPID.sign_jwt/2`
+  # runs `JOSE.JWK.from_key/1` + `JOSE.JWS.compact/1` unguarded, so a
+  # malformed VAPID private key still raises before the POST. Scope is
+  # the single library call, so a genuine programmer error in our own
+  # code (changeset, JSON encoding) still propagates cleanly.
+  @spec deliver(ExNudge.Subscription.t(), String.t()) :: sub_result()
+  defp deliver(%ExNudge.Subscription{} = subscription, message) do
+    subscription
+    |> ExNudge.send_notification(message)
+    |> normalize()
   rescue
-    e in CaseClauseError ->
-      case e.term do
-        {%Req.Request{}, %Req.TransportError{reason: reason}} ->
-          {:error, {:transport_error, reason}}
-
-        {%Req.Request{}, %Req.HTTPError{reason: reason}} ->
-          {:error, {:transport_error, reason}}
-
-        other ->
-          Logger.error(
-            "push.send unexpected upstream lib shape — reraising",
-            error: inspect(other)
-          )
-
-          reraise e, __STACKTRACE__
-      end
-
     e in [ArgumentError, MatchError, ErlangError] ->
       {:error, {:encrypt_error, Exception.message(e)}}
+  end
+
+  @spec normalize(ExNudge.send_result()) :: sub_result()
+  defp normalize({:ok, _}), do: :ok
+  defp normalize({:error, :subscription_expired}), do: {:error, :gone}
+  defp normalize({:error, {:http_error, status}}) when status in [404, 410], do: {:error, :gone}
+  defp normalize({:error, {:http_error, status}}), do: {:error, {:http_error, status}}
+  defp normalize({:error, :payload_too_large}), do: {:error, {:http_error, 413}}
+  defp normalize({:error, {:request_failed, reason}}), do: {:error, {:transport_error, reason}}
+
+  defp normalize({:error, reason})
+       when reason in [:missing_vapid_keys, :invalid_base64, :invalid_input],
+       do: {:error, {:encrypt_error, reason}}
+
+  defp normalize({:error, {kind, _} = reason})
+       when kind in [:invalid_ecdh_key, :ecdh_failed, :aes_encryption_failed],
+       do: {:error, {:encrypt_error, reason}}
+
+  # An `ExNudge` shape we have never seen. Passes through to the
+  # caller's catch-all (which logs + tallies it as an error), with an
+  # `error:` breadcrumb naming the adapter so the next reader knows a
+  # dependency bump moved the vocabulary rather than hunting a bug in
+  # the delivery path.
+  defp normalize({:error, reason}) do
+    Logger.error(
+      "push.send unexpected upstream lib shape — adapter has no clause",
+      error: inspect(reason)
+    )
+
+    {:error, reason}
   end
 
   defp tally(results) do
