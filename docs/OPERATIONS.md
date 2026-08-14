@@ -2189,8 +2189,9 @@ factor, because the identity has no first one. Therefore:
   TTL.
 * **Every mint is recorded** as a `visitor_share_token_minted` admin
   event naming the admin who pressed it, visible in the console's
-  Events tab, with telemetry distinct from the visitor's own share
-  mint. The capability is abusable by an admin by construction (see
+  Events tab, with telemetry distinct from the self-mint every subject
+  can do for itself (#1306 — a user shares to a second device the same
+  way). The capability is abusable by an admin by construction (see
   `docs/DESIGN_NOTES.md`); the audit trail is the mitigation, so do
   not expect the mint to be deniable.
 * **Incognito visitors are refused (403).** An incognito session is

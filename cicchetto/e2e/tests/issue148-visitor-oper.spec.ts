@@ -2,7 +2,7 @@
 //
 // What this covers (server gate relaxation + visitor UX, end-to-end):
 //   1. Boot cic as a VISITOR (mintVisitor → bearer + subject seeded into
-//      localStorage, same dance as visitor-session-sharing.spec.ts).
+//      localStorage, same dance as session-sharing.spec.ts).
 //   2. Focus the visitor's $server window and wait until the upstream
 //      handshake has delivered numerics (≥1 :notice row → connected).
 //   3. Issue `/oper testoper testoperpass` from the visitor's compose box.

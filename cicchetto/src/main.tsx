@@ -382,7 +382,7 @@ render(
       </Show>
       <Router>
         <Route path="/login" component={Login} />
-        {/* Visitor session-sharing landing — outside RequireAuth so
+        {/* Session-sharing landing — outside RequireAuth so
             the link works even when the destination device has no
             existing bearer. The route auto-consumes the one-shot
             signed token and navigates into Shell once localStorage

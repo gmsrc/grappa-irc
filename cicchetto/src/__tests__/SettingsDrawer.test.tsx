@@ -33,6 +33,10 @@ const subjectHolder = vi.hoisted(() => ({
         id: string;
         nick: string;
         registered?: boolean;
+        // #363 — the ephemerality flag the share-session gate reads. #1306
+        // made it the ONLY subject-shaped exclusion left, so it finally
+        // needs to be expressible here.
+        incognito?: boolean;
       }
     | null,
 }));
@@ -957,14 +961,24 @@ describe("SettingsDrawer (bucket M — upload-TTL fieldset)", () => {
   });
 });
 
-// Visitor session-sharing — the share entry is
-// visitor-only. Server still 403s for user subjects, but the cic UI
-// hides the entry point so users never see a button that would just
-// fail. Tests three subject states: user (hide), visitor (show),
-// not-loaded (hide).
-describe("SettingsDrawer (share entry — visitor only)", () => {
-  it("hides share-session entry when subject is a user", () => {
+// Session-sharing — the share entry mirrors what the server actually
+// mints. #1306 widened that to a user subject, so the entry shows for
+// BOTH kinds; the exclusions left are #363's incognito visitor (whose
+// session must not be portable) and the not-yet-loaded subject.
+describe("SettingsDrawer (share entry — every subject but incognito)", () => {
+  it("shows share-session entry when subject is a user (#1306)", () => {
+    // Pre-#1306 this asserted the opposite, because the mint 403'd a
+    // password subject. It does not any more, and a client-side gate that
+    // outlives the server one is a feature hidden by accident.
     subjectHolder.current = { kind: "user", id: "u1", name: "alice" };
+    wrap(true);
+    expect(screen.getByTestId("share-session-entry")).toBeInTheDocument();
+  });
+
+  it("hides share-session entry for an incognito visitor (#363)", () => {
+    // The ONLY subject-shaped exclusion left after #1306 — and it had no
+    // unit witness before, only an e2e one.
+    subjectHolder.current = { kind: "visitor", id: "v1", nick: "alice", incognito: true };
     wrap(true);
     expect(screen.queryByTestId("share-session-entry")).toBeNull();
   });

@@ -781,8 +781,9 @@ describe("HomePane", () => {
   });
 
   // #392 — session-wide "open on another device" button, placed after the
-  // network list. Visitor-gated (server 403s /me/share-token for password
-  // users). Opens the SAME modal the settings button opens (openShareModal).
+  // network list. Opens the SAME modal the settings button opens
+  // (openShareModal). #1306 — no longer visitor-gated: the server mints for
+  // a user too, so the ONLY exclusion left here is #363's incognito visitor.
   describe("#392 open-on-another-device (home share button)", () => {
     it("shows the share button for a visitor and opens the share modal on click", () => {
       userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest" });
@@ -797,8 +798,24 @@ describe("HomePane", () => {
       expect(openShareModalMock).toHaveBeenCalledTimes(1);
     });
 
-    it("hides the share button for a user subject (server 403s the mint)", () => {
+    it("shows the share button for a user subject too (#1306)", () => {
+      // The pre-#1306 gate hid this because /me/share-token 403'd a
+      // password subject. It mints now, so hiding the button would be the
+      // client refusing a door the server holds open.
       userMock.mockReturnValue({ kind: "user", id: "u1", name: "vjt" });
+      homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
+      render(() => <HomePane />);
+
+      const btn = screen.getByTestId("home-share-session");
+      expect(btn).toBeInTheDocument();
+      fireEvent.click(btn);
+      expect(openShareModalMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("hides the share button for an incognito visitor (#363)", () => {
+      // With the visitor half of the gate gone, this is the ONLY exclusion
+      // left — and it had no unit witness before #1306, only an e2e one.
+      userMock.mockReturnValue({ kind: "visitor", id: "v1", nick: "guest", incognito: true });
       homeDataMock.mockReturnValue(connectedNetworks("azzurra"));
       render(() => <HomePane />);
 

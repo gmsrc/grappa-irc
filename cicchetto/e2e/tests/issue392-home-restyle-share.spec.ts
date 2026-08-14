@@ -13,7 +13,7 @@
 // PLACEMENT is a pure DOM fact verified deterministically in the HomePane
 // unit test (it depends on a network's server-side services_flavor, which
 // would make an e2e assertion testnet-config-dependent). The cross-device
-// mint→consume flow is owned by visitor-session-sharing.spec.ts.
+// mint→consume flow is owned by session-sharing.spec.ts.
 //
 // Desktop chromium (untagged): the drawer + modal are layout-agnostic and
 // the QR is inline SVG, not a device camera.

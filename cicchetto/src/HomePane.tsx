@@ -24,7 +24,7 @@ import { networkIdBySlug, refetchNetworks, refetchUser, user } from "./lib/netwo
 import { flavorForSlug, registerableFlavor } from "./lib/registrationTemplates";
 import { openRegistrationWizard } from "./lib/registrationWizard";
 import { setSelectedChannel } from "./lib/selection";
-import { openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
+import { isShareableSubject, openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
 import { pushLinks, pushRecover } from "./lib/socket";
 import { confirmDisconnectNetwork } from "./lib/windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./lib/windowKinds";
@@ -245,13 +245,13 @@ function isVisitorSubject(): boolean {
   return m?.kind === "visitor";
 }
 
-// #363 — is the current visitor session incognito (ephemeral)? Drives the
-// share-session gate: an incognito session is deleted on browser close, so
-// it must not be made portable to another device. Reads the /me resource
-// (like `isVisitorSubject`) so a mid-session refetch is honoured.
-function isIncognitoSession(): boolean {
-  const m = user();
-  return m?.kind === "visitor" && m.incognito === true;
+// #1306 — may this session be shared to a second device? Delegates the rule
+// to `isShareableSubject` so the settings-drawer door answers identically;
+// what stays local is the SOURCE, the /me resource (not the static subject)
+// so a mid-session refetch is honoured. #363's incognito exclusion is the
+// only thing the rule still refuses.
+function canShareSession(): boolean {
+  return isShareableSubject(user());
 }
 
 // UX-5 BR row sub-component. Per-row local error signal so each
@@ -498,14 +498,14 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
 // The unified home body — renders for BOTH subjects off `homeData()`
 // (populated for both since phase 6). `homeData()` is non-null here (the
 // top-level `HomePane` gates on it). The welcome + per-subject session line
-// (#496) and the networks list are identical for both subjects; visitor-only
-// extras (the share-session button) stay gated on `isVisitorSubject()`.
+// (#496) and the networks list are identical for both subjects; what still
+// reads the subject kind is the empty-networks copy, not the share button
+// (#1306 opened that to users).
 const HomePaneBody: Component = () => {
   const rows = () => homeData()?.networks ?? [];
   const available = () => homeData()?.available_networks ?? [];
   const visitor = () => isVisitorSubject();
-  // #363 — an incognito session is ephemeral, so share-session is disabled.
-  const incognito = () => isIncognitoSession();
+  const shareable = () => canShareSession();
   // #496 — the honest per-subject session-lifetime copy. `user()` is non-null
   // here (HomePane gates on `homeData()`, which derives from the same /me
   // resource); the null-guard keeps the type total.
@@ -572,11 +572,12 @@ const HomePaneBody: Component = () => {
           network list because the share is session-wide (every network),
           unlike the per-network 📝 Register nick that lives in each row's
           action area. Opens the SAME modal (QR + native-share + countdown) the
-          settings button opens. Visitor-gated: the server's /me/share-token
-          403s for password-holding users, who log in directly on the second
-          device — mirrors the settings-side isVisitor() gate. #363 — also
-          hidden while incognito: an ephemeral session must not be portable. */}
-      <Show when={visitor() && !incognito()}>
+          settings button opens. #1306 — no longer visitor-gated: the server
+          mints for a password subject too, so a user shares to their second
+          device with the same link instead of re-typing a password. #363 —
+          still hidden while incognito: an ephemeral session must not be
+          portable. Same `canShareSession()` rule as the settings-side door. */}
+      <Show when={shareable()}>
         <button
           type="button"
           class="home-pane-share"

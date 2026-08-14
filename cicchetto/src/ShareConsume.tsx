@@ -3,7 +3,7 @@ import { type Component, createSignal, onMount, Show } from "solid-js";
 import { consumeShareToken } from "./lib/api";
 import { installSharedSession } from "./lib/auth";
 
-// Visitor session-sharing — landing route for `/share/:token`.
+// Session-sharing — landing route for `/share/:token`.
 // Mounted in `main.tsx` under the hash router. Auto-consumes on mount:
 //   1. POST /auth/share/consume with the URL token.
 //   2. On 200, installSharedSession({token, subject}) writes the bearer
@@ -15,14 +15,14 @@ import { installSharedSession } from "./lib/auth";
 // Error wire-shape mapping (server → user):
 //   share_token_expired   → link expired (TTL elapsed)
 //   share_token_consumed  → already used on another device
-//   not_found             → original session no longer exists
+//   not_found             → the shared identity no longer exists
 //   unauthorized          → tampered / unsigned token
 //   bad_request           → malformed
 //
 // Auto-consume on mount because the link IS the auth credential — any
 // additional "click here to log in" intermediary defeats the
-// one-tap-to-second-device flow. The visitor already chose to open the
-// link; we just complete the loop.
+// one-tap-to-second-device flow. Whoever opened the link already chose
+// to; we just complete the loop.
 
 const ShareConsume: Component = () => {
   const params = useParams<{ token: string }>();

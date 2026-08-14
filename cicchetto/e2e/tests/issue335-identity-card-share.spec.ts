@@ -13,7 +13,7 @@
 // visitor, loads its bearer, and drives the settings drawer.
 //
 // The cross-device mint→consume→both-connected flow is owned by
-// visitor-session-sharing.spec.ts; the #392 modal-from-both-triggers + QR is
+// session-sharing.spec.ts; the #392 modal-from-both-triggers + QR is
 // owned by issue392-home-restyle-share.spec.ts. Here we retain the
 // native-share branch/contract (the unique #335 value). The Web Share API
 // branch is verified by stubbing navigator.share (per TESTING.md — assert the

@@ -46,7 +46,7 @@ import {
 import { reconnectConnectedNetworks } from "./lib/reconnect";
 import { selectedChannel } from "./lib/selection";
 import { consumePendingSettingsPage, type SettingsSubPage } from "./lib/settingsNav";
-import { openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
+import { isShareableSubject, openShareModal, SHARE_SESSION_LABEL } from "./lib/shareModal";
 import { getTimeFormat, type TimeFormatKey } from "./lib/timeFormat";
 import { activeHost } from "./lib/uploadHost";
 import {
@@ -156,20 +156,15 @@ const SettingsDrawer: Component<Props> = (props) => {
   // tab signal. cic never originates vhost state — the sub-page reads
   // `vhostView` + reports changes up via the same save-on-change PUT flow.
   const [settingsPage, setSettingsPage] = createSignal<SettingsSubPage>("main");
-  // Visitor-only gate for the share-session section. #392 — the share entry
-  // opens a Shell-mounted MODAL (openShareModal), visitor-only (a user has no
-  // portable session to share). #476 — the identity editor is NO LONGER gated
-  // here: it moved to hasNetworks() (both subjects carry per-network identity
-  // on their /networks rows), so isVisitor now guards ONLY share-session.
-  const isVisitor = (): boolean => getSubject()?.kind === "visitor";
-  // #363 — an incognito (ephemeral) visitor session must not be portable, so
-  // share-session is hidden for it. Reads the persisted subject (same source
-  // as isVisitor); narrow on kind first — `incognito` lives only on the
-  // visitor variant.
-  const isIncognito = (): boolean => {
-    const s = getSubject();
-    return s?.kind === "visitor" && s.incognito === true;
-  };
+  // #1306 — gate for the share-session entry. The share used to be
+  // visitor-only ("a user has no portable session to share"); the server
+  // mints for a password subject now, so the rule left is #363's: an
+  // incognito (ephemeral) session must not be made portable. Delegated to
+  // `isShareableSubject` so the home-pane door answers identically; what
+  // stays local is the SOURCE, the persisted subject. #476 — the identity
+  // editor is NOT gated here (it moved to hasNetworks()), so this is the
+  // only thing the subject kind still decides in this drawer.
+  const canShareSession = (): boolean => isShareableSubject(getSubject());
   // #986 — the `showDetach()` gate + the two-tap `quitArmed` latch moved to
   // the rail with the buttons they served (`canDetach()` in lib/lifecycle
   // asks the same `isPersistentIdentity` question; the latch has no
@@ -1113,13 +1108,13 @@ const SettingsDrawer: Component<Props> = (props) => {
             with it — a dead prop left behind is how the next reader concludes
             the two paths differed. */}
 
-          {/* #392 — session-share entry. isVisitor()-gated (mint 403s for
-              users — the modal is never reachable for a password subject).
-              #363 — also hidden while incognito: an ephemeral session must not
-              be portable to another device. #460 — split out of the old
-              isVisitor block (identity moved into the general sub-page); the
-              share entry STAYS on the main index. */}
-          <Show when={isVisitor() && !isIncognito()}>
+          {/* #392 — session-share entry. #1306 — no longer isVisitor()-gated:
+              the mint serves a password subject too, so a user reaches the
+              same modal. #363 — still hidden while incognito: an ephemeral
+              session must not be portable to another device. #460 — split out
+              of the old isVisitor block (identity moved into the general
+              sub-page); the share entry STAYS on the main index. */}
+          <Show when={canShareSession()}>
             <button
               type="button"
               class="settings-share-button"

@@ -25,6 +25,29 @@ import { moduleRoot } from "./moduleRoot";
 // state to a root; a frozen string has no lifecycle to scope.
 export const SHARE_SESSION_LABEL = "open on another device";
 
+// #1306 — the ONE gate question behind both doors: may THIS subject be
+// shared to a second device? It used to be spelled `isVisitor() &&
+// !isIncognito()` in each of the two callers, because the server 403'd a
+// password subject. It mints for a user now, so the visitor half is gone
+// and the incognito half (#363 — an ephemeral session must not be made
+// portable) is the whole rule.
+//
+// Single-sourced rather than repeated per caller: the two doors read
+// DIFFERENT subject sources (the home pane reads the /me resource so a
+// mid-session refetch is honoured, the settings drawer reads the persisted
+// subject), but they must answer the same question, and a gate that drifts
+// between two entry points to one modal shows a button on one screen and
+// hides it on the other. Structural parameter so both sources fit without
+// either importing the other's type.
+//
+// A null subject is NOT shareable: "not loaded yet" is not "allowed".
+export function isShareableSubject(
+  subject: { kind: "user" } | { kind: "visitor"; incognito?: boolean } | null | undefined,
+): boolean {
+  if (subject === null || subject === undefined) return false;
+  return !(subject.kind === "visitor" && subject.incognito === true);
+}
+
 const exports_ = moduleRoot(() => {
   const [shareModalOpen, setShareModalOpen] = createSignal(false);
   const openShareModal = (): void => {

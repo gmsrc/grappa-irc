@@ -20,11 +20,12 @@ import { closeShareModal, SHARE_SESSION_LABEL, shareModalOpen } from "./lib/shar
 // a focused overlay reachable from home.
 //
 // Reuses the #335 mint/countdown/native-share/copy logic; adds a scannable QR
-// (lib/qr.ts). VISITOR-ONLY by design — the server's /me/share-token 403s for
-// password-holding users, and BOTH triggers gate their button on the visitor
-// subject, so a user never reaches this modal (they log in directly on the
-// second device). #392 keeps the existing visitor-only token/TTL infra
-// untouched: no server change.
+// (lib/qr.ts). #1306 — reachable by EVERY subject the server mints for: a
+// user shares to their second device with the same link rather than re-typing
+// a password. The modal itself never knew the subject kind (it mints and
+// renders a URL), so #1306 changed nothing here beyond this paragraph — the
+// kind is decided by the two triggers' `isShareableSubject` gate, whose one
+// remaining exclusion is #363's incognito visitor.
 //
 // SECURITY: the share URL is a signed, single-use, short-TTL credential.
 // Closing DISCARDS it (a token left on screen leaks to anyone watching) and

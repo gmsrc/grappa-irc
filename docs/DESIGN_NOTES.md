@@ -41977,3 +41977,98 @@ rework is a separate call (vjt, same ruling).
 **Apply:** when one wire field is replaced by a better one, ask whether
 the old field is a WORSE ANSWER or a DIFFERENT QUESTION. A different
 question stays on the wire and leaves the view.
+<!-- entry #1306 -->
+
+---
+
+## 2026-08-14 — #1306: a share link is a subject, not a uuid
+
+`POST /me/share-token` was visitor-only, on the argument that a user has
+a password and can simply log in on the second device. True, and beside
+the point: what the QR removes is typing a password, then a TOTP code,
+then possibly a passkey ceremony, on a phone. The bearer that reaches
+the mint has ALREADY cleared whatever second factor the identity
+carries, so no re-auth gates it. Admins are not excluded — an admin is
+just a user here. TTL stays one constant, 600s, for both kinds: a user
+link is not longer-lived because the identity behind it is permanent.
+
+### The gate was the small half; the payload was the work
+
+`GrappaWeb.ShareToken` signed the BARE visitor uuid under
+`visitor-share-v1`. A user id and a visitor id are the same shape, so
+admitting users would have put two id spaces in one signed namespace and
+left the consume to GUESS which table to read. The payload is now the
+`Grappa.Subject.t()` tuple — `{:user, id} | {:visitor, id}`, the same
+discriminator the context-side writes already speak and the exact
+argument `Accounts.create_session/4` takes, so the verified value is
+handed straight through instead of re-derived.
+
+**The salt moved to `share-v2`, and that is the guarantee rather than a
+cosmetic.** The signing key derives from the salt, so a v1 token does
+not verify at all: there is no window in which an in-flight untagged
+link is re-read as EITHER kind. `verify/1` additionally refuses a
+correctly-salted token whose payload is not one of the two known tags —
+reaching the v2 namespace is necessary, not sufficient.
+
+The consume's success body now renders through `GrappaWeb.AuthJSON`
+`login/1` instead of a hand-rolled visitor envelope. A share consume IS
+a login as far as the client is concerned (cic feeds it to the same
+`installSharedSession` path), and the user variant existed there
+already; the second copy would have been the drift.
+
+### Internal names generalised, the wire kind ADDED
+
+`Grappa.Visitors.ShareTokens` / `:visitor_share_tokens_used` needed no
+behaviour change to serve both kinds — the ledger keys on the token
+string, which carries no kind. Only the NAME had become false, so it is
+`Grappa.ShareTokens` / `:share_tokens_used`, and the telemetry is
+`[:grappa, :share_token, :minted | :consumed | :rejected]` carrying
+`subject_kind` + `subject_id` (the old `visitor_id` metadata would have
+been a lie for half its emitters).
+
+The admin-register event could NOT be generalised the same way, and the
+reason is an invariant rather than taste: **the client-facing wire is
+additive-only, so renaming `:visitor_share_token_minted` to something
+kind-neutral is a REMOVAL of an existing kind.** New kinds may appear at
+any time; existing ones are never renamed or repurposed. So
+`:visitor_share_token_minted` stays byte-identical — it means, as #982
+made it mean, "an ADMIN minted a grant for someone ELSE's visitor" — and
+`:user_share_token_minted` is a new, additive sibling. The
+`wireTypes.ts` + `wireSchema.ts` twins come from one
+`grappa.gen_wire_types` run, so they cannot drift apart if the codegen
+is run instead of hand-edited; the cic static gate fails loudly on a
+kind the generated union does not declare, which is how that was
+verified rather than assumed.
+
+**The visitor self-mint deliberately records NOTHING, and the asymmetry
+is the argument.** A visitor share hands out a visitor session — the
+routine case, unattributed since #392. A user share hands out a session
+for a PASSWORD identity, obtained without presenting the password, over
+whatever channel carried the link, and the no-exclusion ruling means
+that identity may hold the console. Recording both halves would spend a
+bounded ring buffer on the routine one. The new event carries no actor
+pair either: the subject IS the actor, so the three states stay
+distinguishable — both set means somebody acted on somebody else, both
+nil means the system acted, ABSENT means self. No `is_admin` flag, for
+the same reason the ruling gave: a flag would re-import through the
+audit trail the distinction the ruling removed.
+
+### One gate question, two doors
+
+cic had the rule spelled twice, `isVisitor() && !isIncognito()`, in the
+home pane and the settings drawer. The two read different sources on
+purpose (the /me resource so a mid-session refetch is honoured; the
+persisted subject) but must answer the same question, and a gate that
+drifts between two entry points to ONE modal shows a button on one
+screen and hides it on the other. The rule is now
+`isShareableSubject` in `lib/shareModal.ts`, fed by each caller's own
+source. Its whole content is #363: a session is shareable unless it is
+an incognito visitor — and a null subject is not shareable, because "not
+loaded yet" is not "allowed".
+
+**Apply:** when a signed token starts serving a second subject kind, the
+question is not "does the gate let it through" but "can the payload
+still say what it is". If two id spaces would share one signed
+namespace, tag the payload AND move the salt in the same change — the
+tag makes the new tokens readable, and only the salt bump makes the old
+ones unreadable.

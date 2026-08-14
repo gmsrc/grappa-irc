@@ -3125,9 +3125,9 @@ export async function adminUnbindCredential(
   if (!res.ok) throw await readError(res);
 }
 
-// Visitor session-sharing — mint endpoint. Visitor-only (server gives
-// 403 to user subjects). Returns the signed token + ISO8601 expires_at
-// for the share-link modal countdown.
+// Session-sharing — mint endpoint. #1306 — serves a visitor AND a user
+// subject; the one 403 left is #363's incognito visitor. Returns the
+// signed token + ISO8601 expires_at for the share-link modal countdown.
 export type ShareTokenMintResponse = {
   token: string;
   expires_at: string;
@@ -3142,7 +3142,7 @@ export async function mintShareToken(token: string): Promise<ShareTokenMintRespo
   return (await res.json()) as ShareTokenMintResponse;
 }
 
-// Visitor session-sharing — consume endpoint. Unauthenticated by design:
+// Session-sharing — consume endpoint. Unauthenticated by design:
 // the signed token IS the auth credential. Returns the same shape as
 // /auth/login so the caller can hand it to localStorage symmetric with
 // the regular login flow.
