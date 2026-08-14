@@ -144,6 +144,30 @@ defmodule Grappa.Session.Presence do
   end
 
   @doc """
+  Puts a tracked `nick` back to `:unknown`, so its NEXT report classifies
+  `:initial` instead of `:transition`. Untracked nicks are left alone —
+  never invent an entry the DB list doesn't carry.
+
+  The rename path (#378). A watched peer renaming emits `601`/`605` (or
+  `731`) for the nick it vacated, which IS a genuine offline transition by
+  every local test — but it is not the assertion a push would make ("alice
+  went offline"), and worse, whoever takes the freed nick next produces an
+  online report about a DIFFERENT human. #247 could live with that for a
+  status dot; a lockscreen banner is an identity claim, so the entry is
+  demoted to "no baseline yet" and the imminent report re-establishes it
+  silently. The watch ENTRY deliberately does not follow the rename.
+  """
+  @spec reset(state_map(), String.t()) :: state_map()
+  def reset(map, nick) when is_map(map) and is_binary(nick) do
+    key = Identifier.canonical_target(nick)
+
+    case Map.fetch(map, key) do
+      {:ok, _} -> Map.put(map, key, :unknown)
+      :error -> map
+    end
+  end
+
+  @doc """
   Drops `nicks` (folded) from the map — the live `/notify del` /
   `clear` path.
   """

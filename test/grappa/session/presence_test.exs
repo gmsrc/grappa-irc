@@ -119,4 +119,28 @@ defmodule Grappa.Session.PresenceTest do
       assert Presence.untrack(map, ["FOO[1]"]) == %{"bar" => :unknown}
     end
   end
+
+  describe "reset/2 — a rename is not a transition (#378)" do
+    test "a tracked nick goes back to :unknown, so the next report is :initial" do
+      map = Presence.seed(["Alice"])
+      {:changed, :initial, map} = Presence.apply_report(map, "Alice", :online)
+
+      reset = Presence.reset(map, "Alice")
+      assert reset == %{"alice" => :unknown}
+
+      # And that is the whole point: the 601/605 that follows the NICK now
+      # classifies :initial, which never pushes.
+      assert {:changed, :initial, _} = Presence.apply_report(reset, "Alice", :offline)
+    end
+
+    test "the match folds — the display case of the renamed nick is irrelevant" do
+      map = Presence.seed(["Alice"])
+      assert Presence.reset(map, "ALICE") == %{"alice" => :unknown}
+    end
+
+    test "an untracked nick leaves the map untouched — never invents an entry" do
+      map = Presence.seed(["Alice"])
+      assert Presence.reset(map, "bob") == map
+    end
+  end
 end
