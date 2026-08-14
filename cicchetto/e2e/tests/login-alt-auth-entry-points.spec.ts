@@ -275,20 +275,27 @@ test.describe("login alt-auth entry points — 1024x900 with Advanced expanded",
     await openLogin(page);
   });
 
-  test("the COLLAPSED card fits with room to spare, and got shorter", async ({ page }) => {
+  test("the COLLAPSED card fits the viewport", async ({ page }) => {
     // #442 measured 875px of card against 900px of viewport with Advanced
     // OPEN: 25px of slack, less than one 44px tap target, which is why the
     // pair shared a row. #1322 relaxed that for the open state (see the
     // reachability test below), so the fits-in-the-viewport invariant now
-    // belongs to the COLLAPSED card — the view every login starts in, and
-    // the one the move made strictly shorter by a whole 44px row.
+    // belongs to the COLLAPSED card — the view every login starts in.
+    //
+    // The threshold stays at "fits", NOT at some slack the move is supposed
+    // to have bought. A collapsed card was already hundreds of px inside a
+    // 900px viewport, so any such number would pass with the pair put back
+    // on the toggle row and would be decoration reading as a measurement.
+    // What actually witnesses "this view got a row shorter" is the absence
+    // of the two doors, asserted by count in the 390x480 block above, in
+    // issue204-foolproof-login and in login-advanced-scroll-reachability.
     const box = await page.locator(".login-form").boundingBox();
     expect(box).not.toBeNull();
     const height = box?.height ?? Number.POSITIVE_INFINITY;
     expect(
       900 - height,
       `collapsed login card is ${height}px tall in a 900px viewport`,
-    ).toBeGreaterThanOrEqual(44);
+    ).toBeGreaterThanOrEqual(0);
 
     await expect(connectButton(page)).toBeInViewport();
   });
