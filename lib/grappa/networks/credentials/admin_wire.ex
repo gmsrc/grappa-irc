@@ -75,6 +75,7 @@ defmodule Grappa.Networks.Credentials.AdminWire do
 
   @type t :: %{
           user_id: Ecto.UUID.t(),
+          user_name: String.t() | nil,
           network_id: integer(),
           network_slug: String.t(),
           nick: String.t(),
@@ -146,6 +147,17 @@ defmodule Grappa.Networks.Credentials.AdminWire do
   operator a truthful last-seen instead of a `—` that reads "never
   used".
 
+  #1315 — `user_name` is the ACCOUNT behind the row (`users.name`), and
+  like the two above it is resolved by the caller rather than read off the
+  credential: `GrappaWeb.Admin.SubjectLabels` already batches that lookup
+  for every admin listing, and an association read here would put an N+1
+  on the one page that enumerates the whole table. `nil` means the caller
+  resolved no name — missing is missing, and the console still has
+  `user_id`. It is an ADDITIONAL identity fact, never a substitute for
+  `nick`: the ruling (vjt, on #1315) is that the row shows the credential
+  nick where one is available, and the account name beside it, with
+  neither computed from the other.
+
   #1308 — `session_ip` is the address that session logged in from, and
   it is the FIRST source address a user row has ever carried: before
   this the console could show one only for a visitor, out of the
@@ -161,18 +173,21 @@ defmodule Grappa.Networks.Credentials.AdminWire do
           Credential.t(),
           SessionEntry.t() | nil,
           DateTime.t() | nil,
+          String.t() | nil,
           String.t() | nil
         ) :: t()
   def credential_to_admin_json(
         %Credential{network: %Network{slug: slug}} = c,
         live,
         last_seen_at,
-        session_ip
+        session_ip,
+        user_name
       ) do
     %{
       last_seen_at: last_seen_at,
       session_ip: session_ip,
       user_id: c.user_id,
+      user_name: user_name,
       network_id: c.network_id,
       network_slug: slug,
       nick: c.nick,

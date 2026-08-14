@@ -37,7 +37,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
     }
   end
 
-  describe "credential_to_admin_json/4" do
+  describe "credential_to_admin_json/5" do
     test "projects operator-relevant fields + nil live_state when no session" do
       now = DateTime.utc_now()
       c = %{credential_fixture() | inserted_at: now, updated_at: now}
@@ -57,7 +57,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
                inserted_at: ^now,
                updated_at: ^now,
                live_state: nil
-             } = AdminWire.credential_to_admin_json(c, nil, nil, nil)
+             } = AdminWire.credential_to_admin_json(c, nil, nil, nil, nil)
     end
 
     test "projects live_state when a SessionEntry is supplied" do
@@ -92,7 +92,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
                  joined_channels: ["#bofh"],
                  introspection_degraded: []
                }
-             } = AdminWire.credential_to_admin_json(c, entry, nil, nil)
+             } = AdminWire.credential_to_admin_json(c, entry, nil, nil, nil)
 
       assert is_binary(pid_str)
       assert String.starts_with?(pid_str, "#PID<")
@@ -113,11 +113,11 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
       seen = DateTime.truncate(DateTime.utc_now(), :second)
 
       assert %{last_seen_at: ^seen, live_state: nil} =
-               AdminWire.credential_to_admin_json(credential_fixture(), nil, seen, nil)
+               AdminWire.credential_to_admin_json(credential_fixture(), nil, seen, nil, nil)
     end
 
     test "renders last_seen_at: nil when the user has never been seen" do
-      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil)
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil, nil)
 
       assert Map.has_key?(json, :last_seen_at)
       assert json.last_seen_at == nil
@@ -130,18 +130,43 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
     # be a lie to the operator.
     test "carries session_ip on a row with no live session" do
       assert %{session_ip: "203.0.113.9", live_state: nil} =
-               AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, "203.0.113.9")
+               AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, "203.0.113.9", nil)
     end
 
     test "renders session_ip: nil when the user has never logged in" do
-      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil)
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil, nil)
 
       assert Map.has_key?(json, :session_ip)
       assert json.session_ip == nil
     end
 
+    # #1315 — the account BEHIND the row, which the wire did not carry at
+    # all. The operator read a nick and a `user_id`, and services renaming
+    # a session to `GuestNNNNN` left a row nothing on the card identified.
+    # Deliberately unequal to the credential nick: a projection that put
+    # `c.nick` in this key would satisfy a fixture where the two agree.
+    test "carries the account name beside the credential nick" do
+      json =
+        AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil, "vjt-the-account")
+
+      assert json.user_name == "vjt-the-account"
+      # Additive, per the #618 posture: an extra identity fact, never a
+      # substitute for the configured nick.
+      assert json.nick == "vjt"
+    end
+
+    # Missing is missing, as on every other admin projection: the caller
+    # resolves the name and hands over `nil` when there is none, and the
+    # console falls back to the `user_id` it still has. We never fabricate.
+    test "renders user_name: nil when the caller resolved no account name" do
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil, nil)
+
+      assert Map.has_key?(json, :user_name)
+      assert json.user_name == nil
+    end
+
     test "NEVER includes password_encrypted or password (credential material exclusion)" do
-      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil)
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil, nil)
 
       refute Map.has_key?(json, :password)
       refute Map.has_key?(json, :password_encrypted)

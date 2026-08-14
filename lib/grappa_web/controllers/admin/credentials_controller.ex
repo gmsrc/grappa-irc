@@ -51,7 +51,7 @@ defmodule GrappaWeb.Admin.CredentialsController do
   alias Grappa.AdminEvents.Wire, as: AdminEventsWire
   alias Grappa.Networks.{Credential, Credentials}
   alias Grappa.Networks.Credentials.AdminWire
-  alias GrappaWeb.Admin.AuthPlug
+  alias GrappaWeb.Admin.{AuthPlug, SubjectLabels}
   alias GrappaWeb.Validation
 
   @doc """
@@ -68,11 +68,24 @@ defmodule GrappaWeb.Admin.CredentialsController do
     user_ids = creds |> Enum.map(& &1.user_id) |> Enum.uniq()
     touches = Accounts.newest_touch_by_subject_ids(:user, user_ids)
 
+    # #1315 — the account name, through the resolver every other admin
+    # listing already joins on. Batched for the same reason as the touches
+    # above: this endpoint enumerates the whole table, which is exactly
+    # where a per-row `users` lookup would hide an N+1.
+    names = SubjectLabels.resolve(Enum.map(user_ids, &{:user, &1}))
+
     rows =
       for cred <- creds do
         live = LiveIntrospection.lookup_session({:user, cred.user_id}, cred.network_id)
         touch = Accounts.touch_of(touches, cred.user_id)
-        AdminWire.credential_to_admin_json(cred, live, touch.last_seen_at, touch.ip)
+
+        AdminWire.credential_to_admin_json(
+          cred,
+          live,
+          touch.last_seen_at,
+          touch.ip,
+          Map.get(names, {:user, cred.user_id})
+        )
       end
 
     json(conn, %{credentials: rows})
@@ -111,7 +124,7 @@ defmodule GrappaWeb.Admin.CredentialsController do
       json(
         conn,
         updated
-        |> AdminWire.credential_to_admin_json(live, touch.last_seen_at, touch.ip)
+        |> AdminWire.credential_to_admin_json(live, touch.last_seen_at, touch.ip, user.name)
         |> AdminWire.with_session_action(action)
       )
     end
@@ -148,7 +161,7 @@ defmodule GrappaWeb.Admin.CredentialsController do
       |> put_status(:created)
       |> json(
         cred
-        |> AdminWire.credential_to_admin_json(live, touch.last_seen_at, touch.ip)
+        |> AdminWire.credential_to_admin_json(live, touch.last_seen_at, touch.ip, user.name)
         |> AdminWire.with_bind_outcome(outcome)
       )
     end

@@ -166,6 +166,29 @@ defmodule GrappaWeb.Admin.CredentialsControllerTest do
       assert row["session_ip"] == nil
     end
 
+    # #1315 — who the row IS, not just which nick it configured. The
+    # console rendered `nick` alone, so a session services had renamed to
+    # `GuestNNNNN` was identified by nothing at all: `user_id` is a bare
+    # UUID and is not even on the card. The account name is an additional
+    # identity fact, resolved from `users.name` — assert it against BOTH
+    # the account and the nick, which the fixture keeps distinct, or a
+    # projection that echoed the nick into the key would pass.
+    test "200 + user_name is the owning account, beside the nick", %{conn: conn} do
+      {user, network, _} = bound_credential()
+
+      session = admin_session()
+      conn = conn |> put_bearer(session.id) |> get("/admin/credentials")
+
+      row =
+        Enum.find(json_response(conn, 200)["credentials"], fn r ->
+          r["user_id"] == user.id and r["network_id"] == network.id
+        end)
+
+      assert row["user_name"] == user.name
+      assert row["nick"] == "vjt"
+      refute row["user_name"] == row["nick"]
+    end
+
     test "200 + NEVER includes password_encrypted or password (defense-in-depth)", %{conn: conn} do
       _ = bound_credential()
 
@@ -213,6 +236,26 @@ defmodule GrappaWeb.Admin.CredentialsControllerTest do
 
       reload = Credentials.get_credential!(user, network)
       assert reload.nick == "renamed"
+    end
+
+    # #1315 — the PATCH reply is one GET row, so it owes the same identity
+    # fact. Three doors render this shape and a field added at only one of
+    # them makes the console's answer depend on which verb last touched
+    # the row.
+    test "200 + the reply carries user_name like an index row", %{conn: conn} do
+      {user, network, _} = bound_credential()
+
+      session = admin_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> patch("/admin/credentials/#{user.id}/#{network.id}", Jason.encode!(%{nick: "renamed"}))
+
+      body = json_response(conn, 200)
+      assert body["user_name"] == user.name
+      assert body["nick"] == "renamed"
     end
 
     test "200 + edits autojoin_channels + realname together", %{conn: conn} do
@@ -443,6 +486,35 @@ defmodule GrappaWeb.Admin.CredentialsControllerTest do
 
       # Verify cred persisted.
       assert {:ok, _} = Credentials.get_credential(target_user, network)
+    end
+
+    # #1315 — third door, same shape. The bind reply is what the console
+    # renders for the row it just created, before any refetch.
+    test "201 + the bind reply carries user_name", %{conn: conn} do
+      target_user = user_fixture(name: "bind-name-#{System.unique_integer([:positive])}")
+
+      {:ok, network} =
+        Networks.find_or_create_network(%{slug: "bind-name-#{System.unique_integer([:positive])}"})
+
+      session = admin_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> post(
+          "/admin/credentials",
+          Jason.encode!(%{
+            user_id: target_user.id,
+            network_id: network.id,
+            nick: "vjt",
+            auth_method: "none"
+          })
+        )
+
+      body = json_response(conn, 201)
+      assert body["user_name"] == target_user.name
+      assert body["nick"] == "vjt"
     end
 
     test "201 + binds with auth_method :auto + password", %{conn: conn} do
