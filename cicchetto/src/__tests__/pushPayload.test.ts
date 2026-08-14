@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import presencePayloads from "../lib/presencePushPayloads.json";
 import { narrowPushPayload, parsePushTargetUrl } from "../lib/pushPayload";
 
 // Push notifications cluster B2 (2026-05-14) — pushPayload helpers.
@@ -143,5 +144,49 @@ describe("parsePushTargetUrl", () => {
 
   it("returns null on malformed URL", () => {
     expect(parsePushTargetUrl("not a url at all")).toBeNull();
+  });
+});
+
+// #378 — /notify presence push, cross-language drift gate.
+//
+// The payload contract between `Grappa.Push.Payload` and this module is
+// hand-synced: there is no codegen gate over it the way `scripts/check.sh`
+// has one for `wireTypes.ts`. A payload literal COPIED into this file would
+// not be a tripwire — change `build_presence/3` and the copy does not move.
+//
+// So both ports read ONE fixture: the ExUnit
+// `Grappa.Push.PresencePayloadParityTest` asserts the server EMITS these
+// exact bytes, and the cases below assert the SW ACCEPTS them and resolves
+// the deep link. Change either side and the fixture has to move, which
+// drags the other side's assertion with it. Same technique as
+// `shouldNotifyTruthTable.json`.
+describe("presence push payloads — shared-fixture parity with build_presence/3", () => {
+  type PresenceCase = {
+    name: string;
+    nick: string;
+    presence: "online" | "offline";
+    network_slug: string;
+    payload: { title: string; body: string; tag: string; url: string };
+    target: { networkSlug: string; channelName: string; kind: "channel" | "query" };
+  };
+
+  const cases = presencePayloads as PresenceCase[];
+
+  it("the shared fixture is non-empty (guards an accidental empty array)", () => {
+    expect(cases.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it.each(cases)("$name — the SW narrower accepts it verbatim", (c) => {
+    expect(narrowPushPayload(c.payload)).toEqual(c.payload);
+  });
+
+  it.each(cases)("$name — no badge is stamped on a presence transition", (c) => {
+    // A presence transition creates no unread message, so the server omits
+    // `badge` and the SW must leave the home-screen icon untouched.
+    expect(narrowPushPayload(c.payload)).not.toHaveProperty("badge");
+  });
+
+  it.each(cases)("$name — notificationclick lands on the watched nick's query", (c) => {
+    expect(parsePushTargetUrl(c.payload.url)).toEqual(c.target);
   });
 });

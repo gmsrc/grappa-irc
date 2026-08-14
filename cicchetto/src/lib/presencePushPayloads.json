@@ -1,0 +1,67 @@
+[
+  {
+    "name": "a watched nick comes online",
+    "nick": "alice",
+    "presence": "online",
+    "network_slug": "azzurra",
+    "payload": {
+      "title": "alice is online",
+      "body": "on azzurra",
+      "tag": "azzurra:presence:alice",
+      "url": "/?network=azzurra&channel=alice"
+    },
+    "target": { "networkSlug": "azzurra", "channelName": "alice", "kind": "query" }
+  },
+  {
+    "name": "a watched nick goes offline",
+    "nick": "alice",
+    "presence": "offline",
+    "network_slug": "azzurra",
+    "payload": {
+      "title": "alice went offline",
+      "body": "on azzurra",
+      "tag": "azzurra:presence:alice",
+      "url": "/?network=azzurra&channel=alice"
+    },
+    "target": { "networkSlug": "azzurra", "channelName": "alice", "kind": "query" }
+  },
+  {
+    "name": "the tag folds the nick while title and url keep it raw",
+    "nick": "Alice",
+    "presence": "online",
+    "network_slug": "libera",
+    "payload": {
+      "title": "Alice is online",
+      "body": "on libera",
+      "tag": "libera:presence:alice",
+      "url": "/?network=libera&channel=Alice"
+    },
+    "target": { "networkSlug": "libera", "channelName": "Alice", "kind": "query" }
+  },
+  {
+    "name": "brackets survive the fold and percent-encode in the url",
+    "nick": "Al[i]ce",
+    "presence": "online",
+    "network_slug": "libera",
+    "payload": {
+      "title": "Al[i]ce is online",
+      "body": "on libera",
+      "tag": "libera:presence:al[i]ce",
+      "url": "/?network=libera&channel=Al%5Bi%5Dce"
+    },
+    "target": { "networkSlug": "libera", "channelName": "Al[i]ce", "kind": "query" }
+  },
+  {
+    "name": "a non-ASCII nick round-trips through the url",
+    "nick": "Renée",
+    "presence": "offline",
+    "network_slug": "azzurra",
+    "payload": {
+      "title": "Renée went offline",
+      "body": "on azzurra",
+      "tag": "azzurra:presence:renée",
+      "url": "/?network=azzurra&channel=Ren%C3%A9e"
+    },
+    "target": { "networkSlug": "azzurra", "channelName": "Renée", "kind": "query" }
+  }
+]

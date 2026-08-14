@@ -22,6 +22,15 @@ defmodule Grappa.Push.Payload do
       body = message body verbatim. Reader sees both who spoke and
       where in one glance.
 
+  ## Presence transitions (#378)
+
+  `build_presence/3` is the sibling constructor for a `/notify` presence
+  flip. It returns the same `t()` and needs no service-worker change, but
+  it is a SEPARATE function rather than a clause of `build/3`: that one is
+  hard-wired to a `%Scrollback.Message{}`, and a presence transition has no
+  row, no sender and no body. It is also PURE in all three arguments — no
+  `subject`, no badge count, no DB (see the badge note below).
+
   ## Tag — OS-level dedup key
 
   Format: `"<network_slug>:<channel_or_dm_peer>"`. Browsers + mobile
@@ -112,6 +121,53 @@ defmodule Grappa.Push.Payload do
       url: build_url(network_slug, deep_link_target)
     }
   end
+
+  @doc """
+  Builds a notification payload for a `/notify` presence transition (#378).
+
+  Pure function of its three arguments — deliberately no `subject` and no
+  badge stamp: `Push.BadgeSource.count/1` counts unread MESSAGES, and a
+  presence flip creates none, so stamping the current count would attach a
+  stale, causally-unrelated number and cost a DB read per transition. An
+  absent `badge` leaves the home-screen icon untouched, which is exactly
+  right here.
+
+  ## Copy
+
+  `"<nick> is online"` / `"<nick> went offline"`, body `"on <slug>"`. The
+  verbs are the ones cic's in-app toast already renders for the SAME event
+  (`Toasts.tsx`) — one event, one spelling. The network rides in the body
+  because a watch list spanning two networks otherwise produces two
+  identical-looking banners.
+
+  ## Tag
+
+  `"<network_slug>:presence:<folded_nick>"`. The `presence:` infix is
+  load-bearing, not decoration: `build/3` writes
+  `"<slug>:<channel_or_dm_peer>"`, so a BARE-nick presence tag would equal
+  the DM tag for that same nick and the OS would coalesce alice's DM banner
+  with alice's presence banner, each overwriting the other. `:` is excluded
+  from both `nickname` and `chanstring` in RFC 2812, so no legal message
+  tag can ever collide with this one.
+
+  The nick FOLDS in the tag (and only there): flaps of `Alice` and `alice`
+  coalesce under one banner, and an online banner replaces the stale
+  offline one for the same nick — free OS-level flap coalescing. The title
+  and the deep link keep the nick RAW, per the key/display split.
+  """
+  @spec build_presence(nick :: String.t(), :online | :offline, network_slug :: String.t()) :: t()
+  def build_presence(nick, presence, network_slug)
+      when is_binary(nick) and presence in [:online, :offline] and is_binary(network_slug) do
+    %{
+      title: "#{nick} #{presence_verb(presence)}",
+      body: "on #{network_slug}",
+      tag: "#{network_slug}:presence:#{Grappa.IRC.Identifier.canonical_target(nick)}",
+      url: build_url(network_slug, nick)
+    }
+  end
+
+  defp presence_verb(:online), do: "is online"
+  defp presence_verb(:offline), do: "went offline"
 
   @doc """
   Stamps the PWA icon-badge count onto a built payload (door #1,
