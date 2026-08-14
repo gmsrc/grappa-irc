@@ -16,7 +16,15 @@ type TruthCase = {
   message: ShouldNotifyMessage;
   network_slug: string;
   own_nick: string;
-  prefs: NotificationPrefs;
+  // #378 added two presence booleans to `NotificationPrefs`. They are NOT in
+  // the shared fixture and must not be: this table drives the MESSAGE
+  // predicate, which never reads them, and the ExUnit twin likewise builds
+  // its prefs map from the fixture's keys alone. Filling 30+ rows with two
+  // irrelevant booleans would say they matter here. They are supplied at the
+  // call site instead — and ONLY they, never the other defaults: a case that
+  // omits `private_messages_all` means it, and spreading defaults over it
+  // would silently rewrite the case.
+  prefs: Omit<NotificationPrefs, "presence_online" | "presence_offline">;
   patterns: string[];
   expected: boolean;
 };
@@ -34,7 +42,9 @@ describe("shouldNotify — shared truth-table parity with should_notify?/5", () 
       // fixture carries cases that differ ONLY in the slug, and a hardcoded
       // one here would make them indistinguishable on this port while the
       // ExUnit side still told them apart.
-      expect(shouldNotify(c.message, c.network_slug, c.own_nick, c.prefs, c.patterns)).toBe(
+      const prefs = { presence_online: false, presence_offline: false, ...c.prefs };
+
+      expect(shouldNotify(c.message, c.network_slug, c.own_nick, prefs, c.patterns)).toBe(
         c.expected,
       );
     });

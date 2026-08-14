@@ -25,6 +25,8 @@ const sample = {
   channel_mentions: true,
   private_messages_all: true,
   private_messages_only: [],
+  presence_online: false,
+  presence_offline: false,
 };
 
 beforeEach(() => {
@@ -45,6 +47,12 @@ describe("DEFAULT_NOTIFICATION_PREFS", () => {
       channel_mentions: true,
       private_messages_all: true,
       private_messages_only: [],
+      // #378 — presence push is opt-IN in both directions. Mirrors the
+      // server's `default_notification_prefs/0`: a subject who never opened
+      // Settings gets no lockscreen banner when a watched nick flips, only
+      // the in-app toast (which these prefs do not gate).
+      presence_online: false,
+      presence_offline: false,
       // #866 — nothing muted by default. This map must stay byte-identical to
       // the server's `UserSettings.default_notification_prefs/0`: it is what
       // an un-hydrated client decides beeps with, so a divergence here means

@@ -32,6 +32,8 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       "channel_mentions" => true,
       "private_messages_all" => true,
       "private_messages_only" => [],
+      "presence_online" => false,
+      "presence_offline" => false,
       # #866 — nothing muted by default; the wire carries the key so a client
       # can tell "no mutes" from "a server that predates the field".
       "muted_targets" => %{}
@@ -81,7 +83,9 @@ defmodule GrappaWeb.UserSettingsControllerTest do
           channel_messages_only: ["#sbiffo"],
           channel_mentions: true,
           private_messages_all: false,
-          private_messages_only: ["alice"]
+          private_messages_only: ["alice"],
+          presence_online: false,
+          presence_offline: false
         })
 
       conn = get(conn, "/me/settings/notification-prefs")
@@ -94,6 +98,8 @@ defmodule GrappaWeb.UserSettingsControllerTest do
                "channel_mentions" => true,
                "private_messages_all" => false,
                "private_messages_only" => ["alice"],
+               "presence_online" => false,
+               "presence_offline" => false,
                "muted_targets" => %{}
              }
     end
@@ -377,7 +383,9 @@ defmodule GrappaWeb.UserSettingsControllerTest do
           channel_messages_only: ["#sbiffo"],
           channel_mentions: true,
           private_messages_all: true,
-          private_messages_only: []
+          private_messages_only: [],
+          presence_online: false,
+          presence_offline: false
         })
 
       conn = put(conn, "/me/settings/upload-ttl-seconds", %{"upload_ttl_seconds" => 3600})

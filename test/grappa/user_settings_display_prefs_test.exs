@@ -297,7 +297,9 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
           channel_messages_only: [],
           channel_mentions: true,
           private_messages_all: true,
-          private_messages_only: []
+          private_messages_only: [],
+          presence_online: false,
+          presence_offline: false
         })
 
       {:ok, _} = UserSettings.put_display_prefs(subject, valid_wire(%{"time_format" => "hm"}))

@@ -145,7 +145,11 @@ defmodule Grappa.UserSettings do
   @typedoc """
   Per-subject notification preferences — push-notifications cluster B3.
 
-  Three booleans + two string-list whitelists + one mute map (#866).
+  Five booleans + two string-list whitelists + one mute map (#866).
+  Three of the booleans gate MESSAGE push; `presence_online` /
+  `presence_offline` gate `/notify` presence push (#378) and are a
+  SEPARATE trigger class — see `@prefs_trigger_keys` for why they are
+  excluded from the at-least-one-trigger guard.
   Whitelist semantics: IF `channel_messages_all` is true the
   `channel_messages_only` list is ignored at trigger-eval time (UI greys
   it out, server still stores the value so toggling `_all` off restores
@@ -168,6 +172,8 @@ defmodule Grappa.UserSettings do
           channel_mentions: boolean(),
           private_messages_all: boolean(),
           private_messages_only: [String.t()],
+          presence_online: boolean(),
+          presence_offline: boolean(),
           muted_targets: muted_targets()
         }
 
@@ -436,6 +442,14 @@ defmodule Grappa.UserSettings do
   for IRC users" — opt out of all-channel-noise, opt in to mentions
   and DMs.
 
+  Both `/notify` presence prefs default OFF (#378), in both directions.
+  A stored map written by someone who deliberately configured push is
+  byte-indistinguishable from a never-configured one at `read_bool/3`, so
+  a default-ON key would override an explicitly-expressed preference on
+  the deploy that introduced it. Default-off makes the two new checkboxes
+  the opt-in and costs nothing: #247's Watched panel already tells users
+  the feature exists.
+
   The spec's return type is the wider `notification_prefs()` (not the
   Dialyzer-inferred singleton shape) so callers can pattern-match
   the result interchangeably with `get_notification_prefs/1` results.
@@ -449,6 +463,8 @@ defmodule Grappa.UserSettings do
       channel_mentions: true,
       private_messages_all: true,
       private_messages_only: [],
+      presence_online: false,
+      presence_offline: false,
       muted_targets: %{}
     }
   end
@@ -502,10 +518,11 @@ defmodule Grappa.UserSettings do
 
   ## Validation
 
-    * At least one of the five trigger flags must be true. A prefs
-      shape with every trigger off would silently mute the subject;
-      surface that as `:no_triggers_enabled` rather than persist a
-      "notifications never fire" config.
+    * At least one MESSAGE trigger flag (`@prefs_trigger_keys`) must be
+      true. A prefs shape with every one of them off would silently mute
+      the subject; surface that as `:no_triggers_enabled` rather than
+      persist a "notifications never fire" config. The `/notify` presence
+      flags do NOT count here — see `@prefs_trigger_keys`.
     * `channel_messages_only` and `private_messages_only` must be
       lists of non-empty strings. Channel names AND nicks are
       lowercased + trimmed before persistence (IRC nicks/channels
@@ -1254,7 +1271,25 @@ defmodule Grappa.UserSettings do
   # notification_prefs helpers
   # ---------------------------------------------------------------------------
 
-  @prefs_bool_keys ~w(channel_messages_all channel_mentions private_messages_all)a
+  # 🔴 These two lists are NO LONGER the same list, since #378 — do not
+  # "tidy up" the duplication.
+  #
+  # `@prefs_bool_keys` is every boolean in the map: it drives the read
+  # (`merge_with_defaults/1`), the validate/write (`cast_bools/2`) and hence
+  # `stringify_prefs`. `@prefs_trigger_keys` is the subset that
+  # `ensure_at_least_one_trigger/2` counts, and its whole job is to reject a
+  # prefs map that would silently mute all MESSAGE push.
+  #
+  # The `/notify` presence booleans are an orthogonal trigger class, so they
+  # belong to the first list and NOT the second: were they counted, a user
+  # unchecking every message trigger would pass validation on the strength of
+  # `presence_online` alone — silently muting messages, which is precisely
+  # what the guard exists to prevent. Accepted consequence: a
+  # presence-only-push configuration is unrepresentable (≥1 message trigger
+  # must stay on). The invariant that must hold is
+  # `@prefs_trigger_keys ⊆ @prefs_bool_keys` — a trigger key outside the bool
+  # list would blow up `Map.fetch!/2` in the validator.
+  @prefs_bool_keys ~w(channel_messages_all channel_mentions private_messages_all presence_online presence_offline)a
   @prefs_list_keys ~w(channel_messages_only private_messages_only)a
   @prefs_trigger_keys ~w(channel_messages_all channel_mentions private_messages_all)a
 

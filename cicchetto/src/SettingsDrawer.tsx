@@ -1740,6 +1740,38 @@ const SettingsDrawer: Component<Props> = (props) => {
                 />
               </label>
 
+              {/* #378 — the /notify watch list curates WHO; these two gate
+                  whether a transition also becomes an OS notification. The
+                  labels say "push" on purpose: unlike every other checkbox
+                  here, these gate ONLY push — the in-app toast fires either
+                  way — so "watched nick comes online" would read as "notify
+                  me at all". */}
+              <h3>watched nicks</h3>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={prefs().presence_online}
+                  disabled={savingPrefs()}
+                  onChange={(e) =>
+                    togglePref("presence_online", (e.currentTarget as HTMLInputElement).checked)
+                  }
+                  data-testid="pref-presence-online"
+                />
+                push when a watched nick comes online
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={prefs().presence_offline}
+                  disabled={savingPrefs()}
+                  onChange={(e) =>
+                    togglePref("presence_offline", (e.currentTarget as HTMLInputElement).checked)
+                  }
+                  data-testid="pref-presence-offline"
+                />
+                push when a watched nick goes offline
+              </label>
+
               <h3>muted conversations</h3>
               <p class="prefs-hint">
                 A muted conversation never notifies — not even when someone says your nick. A mute

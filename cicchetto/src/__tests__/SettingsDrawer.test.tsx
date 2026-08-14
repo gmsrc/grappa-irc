@@ -436,7 +436,7 @@ describe("SettingsDrawer display options section (#443)", () => {
 });
 
 describe("SettingsDrawer notifications section", () => {
-  it("renders the master toggle + 4 prefs checkboxes + 2 whitelist inputs", () => {
+  it("renders the master toggle + 5 prefs checkboxes + 2 whitelist inputs", () => {
     wrap(true);
     openSub("push-settings-entry");
     expect(screen.getByTestId("push-master-toggle")).toBeInTheDocument();
@@ -445,6 +445,37 @@ describe("SettingsDrawer notifications section", () => {
     expect(screen.getByTestId("pref-private-all")).toBeInTheDocument();
     expect(screen.getByTestId("pref-channels-only")).toBeInTheDocument();
     expect(screen.getByTestId("pref-nicks-only")).toBeInTheDocument();
+    // #378 — the two /notify presence gates.
+    expect(screen.getByTestId("pref-presence-online")).toBeInTheDocument();
+    expect(screen.getByTestId("pref-presence-offline")).toBeInTheDocument();
+  });
+
+  it("toggling a presence pref PUTs the whole map with that field flipped (#378)", async () => {
+    const userSettings = await import("../lib/userSettings");
+    wrap(true);
+    openSub("push-settings-entry");
+    await waitFor(() => {
+      expect(userSettings.getNotificationPrefs).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByTestId("pref-presence-online"));
+
+    await waitFor(() => {
+      expect(userSettings.putNotificationPrefs).toHaveBeenCalled();
+    });
+
+    const body = (userSettings.putNotificationPrefs as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+
+    // The save path is a FULL PUT, and the server's `cast_bools` requires
+    // every boolean present — so the flipped field is not enough, the other
+    // six have to ride along or the save 422s.
+    expect(body[1]).toEqual({
+      ...userSettings.DEFAULT_NOTIFICATION_PREFS,
+      presence_online: true,
+    });
   });
 
   it("loads prefs on mount via getNotificationPrefs", async () => {

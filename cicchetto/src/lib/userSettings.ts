@@ -39,6 +39,13 @@ export type NotificationPrefs = {
   channel_mentions: boolean;
   private_messages_all: boolean;
   private_messages_only: string[];
+  // #378 — the two `/notify` presence gates. They gate PUSH only: the in-app
+  // presence toast fires regardless, on `initial: false` alone. Required (not
+  // optional like `muted_targets`) because the server's `cast_bools` requires
+  // every boolean present in a PUT — the full-PUT save path below has to
+  // carry them or the save 422s.
+  presence_online: boolean;
+  presence_offline: boolean;
   // Optional because cic ships independently of the server (#618): a bundle
   // newer than the BEAM it talks to must tolerate the field being absent
   // rather than crash the predicate on every arriving message. Present in
@@ -56,6 +63,8 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   channel_mentions: true,
   private_messages_all: true,
   private_messages_only: [],
+  presence_online: false,
+  presence_offline: false,
   muted_targets: {},
 };
 

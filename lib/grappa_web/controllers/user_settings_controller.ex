@@ -12,8 +12,10 @@ defmodule GrappaWeb.UserSettingsController do
 
     * `PUT /me/settings/notification-prefs` — body matches the
       `notification_prefs()` shape directly (5 booleans + 2 string
-      lists). 200 with the persisted shape on success. Validation
-      lives in `put_notification_prefs/2`: at least one trigger
+      lists + the `muted_targets` map). EVERY boolean must be present:
+      a bundle older than a boolean-adding release 422s until it
+      reloads. 200 with the persisted shape on success. Validation
+      lives in `put_notification_prefs/2`: at least one MESSAGE trigger
       enabled, list elements non-empty strings, whitelists normalized
       (lowercase + trim). 422 with `field_errors.notification_prefs`
       on validation failure (uniform changeset envelope per
