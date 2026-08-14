@@ -28,7 +28,8 @@ GET /api/config
   "server": "grappa",
   "version": "1.4.2-abc1234",
   "protocol_version": 1,
-  "min_protocol_version": 1
+  "min_protocol_version": 1,
+  "push_content_encoding": "aes128gcm"
 }
 ```
 
@@ -38,6 +39,25 @@ GET /api/config
 | `version` | human-facing **software release** string (the CTCP VERSION value). Diagnostic only — **never** key compatibility off this. |
 | `protocol_version` | the wire protocol the server currently speaks. |
 | `min_protocol_version` | the oldest client protocol the server still accepts. If your protocol is below this, the server will refuse your WebSocket (see §3). |
+| `push_content_encoding` | the HTTP content coding this server encrypts Web Push payloads under. `"aes128gcm"` is RFC 8291 over the RFC 8188 coding — salt and server key live in the body header, so the body decrypts standalone. |
+
+> **Web Push clients: check `push_content_encoding` before you blame
+> your decryptor.** A server older than 2026-08-14 answers without this
+> field, and what it sends is the superseded
+> draft-ietf-webpush-encryption-04 `aesgcm`, whose salt and server key
+> travel in the `encryption:` and `crypto-key:` HEADERS. Any transport
+> that drops headers — UnifiedPush does, by design — hands you a body
+> you cannot decrypt no matter how correct your key material is. So:
+> **field absent, or any value other than `"aes128gcm"`** ⇒ that server
+> cannot deliver you a self-contained payload, and the honest thing to
+> show the user is "this server is too old for encrypted push", not a
+> decryption error. Treating an absent field as `"aes128gcm"` will make
+> you diagnose your own crypto for someone else's bug.
+>
+> This is a **capability, not a version**: the coding switched without
+> moving `protocol_version` (it changes nothing about the WebSocket
+> wire), and `version` is off-limits for feature gating per the rule
+> above. That is exactly why the field exists.
 
 > **Operator note — this endpoint is public by design.** It requires no
 > auth and carries no secrets, so `version` (the software release string —
@@ -49,10 +69,12 @@ GET /api/config
 > concern can front `/api/config` however they like; grappa treats it as
 > public.
 
-Source: `lib/grappa_web/controllers/config_controller.ex:35`
+Source: `lib/grappa_web/controllers/config_controller.ex:43`
 (`show/2`), routed at `lib/grappa_web/router.ex:233`. The two numbers come
 from `Grappa.Protocol` (`lib/grappa/protocol.ex:64` `version/0`, `:71`
-`min_version/0`) — the single source of truth.
+`min_version/0`) and the push capability from
+`Grappa.Push.content_encoding/0` (`lib/grappa/push.ex:141`) — each the
+single source of truth for its own value.
 
 ---
 

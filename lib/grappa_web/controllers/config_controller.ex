@@ -16,6 +16,14 @@ defmodule GrappaWeb.ConfigController do
       (`Grappa.Version.current/0`, the CTCP VERSION value). Diagnostic,
       NOT the negotiation number — a client keys compatibility off
       `protocol_version`, never this.
+    * `push_content_encoding` — the HTTP content coding this server
+      encrypts Web Push payloads under (`Grappa.Push.content_encoding/0`;
+      `"aes128gcm"` since #1290). A CAPABILITY, not a version: the
+      switch off the pre-RFC `aesgcm` drafts is invisible to the WS
+      protocol, so it does not move `protocol_version`, and the rule
+      just above forbids inferring it from `version`. Without this
+      field a client that receives an undecryptable payload cannot
+      tell a broken crypto path from an old server.
 
   No auth, no secrets, snake_case like the whole wire contract (the
   divergence from the issue's camelCase spelling is deliberate — see
@@ -39,7 +47,8 @@ defmodule GrappaWeb.ConfigController do
       server: "grappa",
       version: Grappa.Version.current(),
       protocol_version: Grappa.Protocol.version(),
-      min_protocol_version: Grappa.Protocol.min_version()
+      min_protocol_version: Grappa.Protocol.min_version(),
+      push_content_encoding: Grappa.Push.content_encoding()
     })
   end
 end

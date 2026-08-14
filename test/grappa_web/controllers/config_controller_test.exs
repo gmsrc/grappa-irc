@@ -15,7 +15,7 @@ defmodule GrappaWeb.ConfigControllerTest do
   """
   use GrappaWeb.ConnCase, async: true
 
-  alias Grappa.{Protocol, Version}
+  alias Grappa.{Protocol, Push, Version}
 
   describe "GET /api/config" do
     test "publishes protocol_version, min_protocol_version + server identity", %{conn: conn} do
@@ -30,6 +30,22 @@ defmodule GrappaWeb.ConfigControllerTest do
       assert body["min_protocol_version"] == Protocol.min_version()
       assert body["server"] == "grappa"
       assert body["version"] == Version.current()
+    end
+
+    test "publishes the push content coding as an explicit capability (#1290)", %{conn: conn} do
+      body =
+        conn
+        |> get("/api/config")
+        |> json_response(200)
+
+      # The reason this field exists: the switch off the pre-RFC `aesgcm`
+      # drafts is invisible to the WS protocol, so it does not move
+      # `protocol_version`, and this endpoint's own docstring forbids
+      # gating on `version`. Without the field a client holding an
+      # undecryptable payload cannot tell a broken crypto path from an
+      # old server.
+      assert body["push_content_encoding"] == Push.content_encoding()
+      assert body["push_content_encoding"] == "aes128gcm"
     end
 
     test "requires no authentication — it is pre-auth discovery", %{conn: conn} do
