@@ -366,6 +366,14 @@ describe("admin-events boundary — malformed-payload measurement (#429)", () =>
           "types": "actor_user_id:string, actor_user_name:string, at:string, kind:string, user_id:string, user_name:string",
           "unknownKey": "accept",
         },
+        "user_share_token_minted": {
+          "baseline": "accept",
+          "survivesMissing": "-",
+          "survivesNull": "-",
+          "survivesWrongType": "-",
+          "types": "at:string, kind:string, user_id:string, user_name:string",
+          "unknownKey": "accept",
+        },
         "user_updated": {
           "baseline": "accept",
           "survivesMissing": "-",
