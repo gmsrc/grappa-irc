@@ -161,6 +161,15 @@ self-heals both trees, pre-installing on demand for every non-install
 verb. Either signature means you invoked something other than the
 wrapper, or the install failed earlier in the same run — scroll up.
 
+**A worktree that ran the testnet has an `e2e/node_modules` that exists
+and is EMPTY**, because `cicchetto/e2e/compose.yaml` mounts a named volume
+at `/work/node_modules` inside the `.:/work` bind and docker materialises
+that mount point on the host. Until #1311 the self-heal tested existence
+only, so those worktrees skipped the install and hit the `@playwright/test`
+signature above; the guard now tests for CONTENT, and absence and
+emptiness are one state. If you see the self-heal install on a tree that
+looks populated, check whether it holds anything.
+
 **`scripts/bun.sh run check` counts a biome FORMAT violation as an
 ERROR, and hides which file it came from.** `check` starts with `biome
 check`: a line biome would reflow (a long `foo({ a, b, c })`

@@ -41878,3 +41878,37 @@ throttled upstream reply, widening it by "a bit" re-loses the same race
 one tick later. Measure the arrival with the assert UNCENSORED first: if
 the values come out on a lattice, place the budget in ticks above the
 measured maximum rather than in milliseconds above the mode.
+<!-- entry #1311 -->
+
+---
+
+## 2026-08-14 — #1311: existence is not installedness
+
+`scripts/bun.sh` self-heals a fresh worktree by installing
+`cicchetto/node_modules` and `cicchetto/e2e/node_modules` on demand, and
+it decided whether to do so with `[ ! -d ]`. That predicate answers "does
+the directory exist"; the question the self-heal actually has is "are the
+dependencies there". The two diverge routinely, not exotically.
+
+`cicchetto/e2e/compose.yaml` mounts a named volume at `/work/node_modules`,
+and `/work` is the host's `cicchetto/e2e` bind. For the volume to mount,
+that path must exist inside `/work` — so docker materialises it on the
+host, EMPTY. Every worktree that runs the testnet before its first
+`bun run check` therefore owns a directory that satisfies the guard with
+no toolchain in it, and the check dies with `TS2688 Cannot find type
+definition file for '@playwright/test'`: a bootstrap gap reported as a
+type error in the branch under test, arriving exactly when a worker is
+gating a diff. Order decides, so it presents as intermittent rather than
+as a permanent break — which is what kept it alive.
+
+**The volume is not the defect and was not touched.** Its comment explains
+why the runner needs it: without it the `.:/work` bind hides the image's
+own install. Two individually reasonable halves met. The half answerable
+in one line is the guard, now `needs_install`, which treats absent and
+empty alike because to a caller that needs `tsc` they are one state.
+
+**Apply:** when a guard exists to spare a bootstrap step, write the
+predicate over the RESOURCE the step produces, not over a container that
+something else may have created for its own reasons. A directory, a lock
+file, a pid file can all be materialised by a neighbour; only the contents
+witness the work.
