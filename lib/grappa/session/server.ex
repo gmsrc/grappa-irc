@@ -93,8 +93,8 @@ defmodule Grappa.Session.Server do
 
   alias Grappa.IRC.{AuthFSM, Client, CTCP, Identifier, LineSplit, Message}
   alias Grappa.Net.SourceAliasManager
-  alias Grappa.Push.Triggers, as: PushTriggers
   alias Grappa.PubSub.Topic
+  alias Grappa.Push.Triggers, as: PushTriggers
   alias Grappa.Scrollback.Wire
 
   alias Grappa.Session.{

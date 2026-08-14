@@ -64,6 +64,7 @@ defmodule Grappa.Push.Payload do
   trivial to test.
   """
 
+  alias Grappa.IRC.Identifier
   alias Grappa.Scrollback.Message
 
   @typedoc """
@@ -101,8 +102,8 @@ defmodule Grappa.Push.Payload do
       when is_binary(network_slug) and is_binary(own_nick) do
     dm? =
       is_binary(message.channel) and
-        Grappa.IRC.Identifier.canonical_target(message.channel) ==
-          Grappa.IRC.Identifier.canonical_target(own_nick)
+        Identifier.canonical_target(message.channel) ==
+          Identifier.canonical_target(own_nick)
 
     sender = message.sender || ""
     body = message.body || ""
@@ -161,7 +162,7 @@ defmodule Grappa.Push.Payload do
     %{
       title: "#{nick} #{presence_verb(presence)}",
       body: "on #{network_slug}",
-      tag: "#{network_slug}:presence:#{Grappa.IRC.Identifier.canonical_target(nick)}",
+      tag: "#{network_slug}:presence:#{Identifier.canonical_target(nick)}",
       url: build_url(network_slug, nick)
     }
   end

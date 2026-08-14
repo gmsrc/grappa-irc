@@ -158,7 +158,7 @@ defmodule Grappa.Session.PresencePushTest do
     end)
 
     {server, port} = start_server()
-    {user, network, _subject} = watching_session(port, endpoint, ["#pp"])
+    {user, network, _} = watching_session(port, endpoint, ["#pp"])
 
     pid = start_session_for(user, network)
     :ok = arm_monitor(server)

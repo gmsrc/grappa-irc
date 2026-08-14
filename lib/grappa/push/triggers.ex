@@ -257,7 +257,7 @@ defmodule Grappa.Push.Triggers do
     :ok
   end
 
-  def dispatch_presence(_nick, _presence, :initial, _ctx), do: :ok
+  def dispatch_presence(_, _, :initial, _), do: :ok
 
   # ---------------------------------------------------------------------------
   # Public — pure predicate (testable in isolation)

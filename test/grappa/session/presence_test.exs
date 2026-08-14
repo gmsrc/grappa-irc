@@ -122,10 +122,10 @@ defmodule Grappa.Session.PresenceTest do
 
   describe "reset/2 — a rename is not a transition (#378)" do
     test "a tracked nick goes back to :unknown, so the next report is :initial" do
-      map = Presence.seed(["Alice"])
-      {:changed, :initial, map} = Presence.apply_report(map, "Alice", :online)
+      seeded = Presence.seed(["Alice"])
+      {:changed, :initial, online} = Presence.apply_report(seeded, "Alice", :online)
 
-      reset = Presence.reset(map, "Alice")
+      reset = Presence.reset(online, "Alice")
       assert reset == %{"alice" => :unknown}
 
       # And that is the whole point: the 601/605 that follows the NICK now
