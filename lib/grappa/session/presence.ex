@@ -151,11 +151,18 @@ defmodule Grappa.Session.Presence do
   The rename path (#378). A watched peer renaming emits `601`/`605` (or
   `731`) for the nick it vacated, which IS a genuine offline transition by
   every local test — but it is not the assertion a push would make ("alice
-  went offline"), and worse, whoever takes the freed nick next produces an
-  online report about a DIFFERENT human. #247 could live with that for a
+  went offline" about someone still here). #247 could live with that for a
   status dot; a lockscreen banner is an identity claim, so the entry is
-  demoted to "no baseline yet" and the imminent report re-establishes it
+  demoted to "no baseline yet" and the vacancy report re-establishes it
   silently. The watch ENTRY deliberately does not follow the rename.
+
+  Bounded, and the bound is on the record: this buys the FALSE departure
+  only. The vacancy report consumes the `:unknown`, re-baselining the entry
+  to `:offline`, so a DIFFERENT human later taking the freed nick is a
+  genuine transition and does push. Suppressing that needs a second
+  "vacated" state beside this map — parallel state needing housekeeping,
+  for a case #247 already ruled on: the watch list watches NICKS, not
+  people. Pinned by `Grappa.Session.PresencePushTest`.
   """
   @spec reset(state_map(), String.t()) :: state_map()
   def reset(map, nick) when is_map(map) and is_binary(nick) do
