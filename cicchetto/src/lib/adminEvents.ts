@@ -84,6 +84,7 @@ function ingest(ev: WireAdminEvent): void {
     case "visitor_deleted":
     case "visitor_reaped":
     case "visitor_share_token_minted":
+    case "user_share_token_minted":
     case "reaper_swept":
     case "upload_reaped":
     case "uploads_swept":

@@ -55,8 +55,8 @@ defmodule Grappa.Visitors.Visitor do
   verbs (a `Grappa.Visitors` edge would close cycles via
   Accounts/Networks/Themes/Subject). #415 — this retired the twelve
   `dirty_xrefs: [Grappa.Visitors.Visitor]` waivers. Mirror of the
-  `Grappa.Visitors.Reaper` / `Grappa.Visitors.ShareTokens` top-level
-  carve-outs.
+  `Grappa.Visitors.Reaper` top-level carve-out (`Grappa.ShareTokens` was
+  a third until #1306 moved it out of the namespace entirely).
   """
 
   use Boundary, top_level?: true, deps: []

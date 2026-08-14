@@ -37,6 +37,12 @@ defmodule Grappa.AdminEvents.Wire do
   `:admin_authn` and an unattributed session grant is precisely what
   the event exists to surface.
 
+  `:user_share_token_minted` (#1306) is the opposite pole and carries
+  NO actor pair: it is a self-mint, so the subject IS the actor. The
+  three states are therefore distinguishable at a glance — both fields
+  set means somebody acted on somebody else, both nil means the system
+  acted, and absent means the subject acted on itself.
+
   Admission-side telemetry events (`:circuit_open`, `:circuit_close`,
   `:capacity_reject`) DO NOT carry actor attribution — they fire
   inside admission-layer modules with no controller-side conn in
@@ -56,6 +62,7 @@ defmodule Grappa.AdminEvents.Wire do
           | :visitor_deleted
           | :visitor_reaped
           | :visitor_share_token_minted
+          | :user_share_token_minted
           | :reaper_swept
           | :upload_reaped
           | :uploads_swept
@@ -139,6 +146,40 @@ defmodule Grappa.AdminEvents.Wire do
           visitor_nick: String.t() | nil,
           actor_user_id: String.t(),
           actor_user_name: String.t(),
+          at: String.t()
+        }
+
+  @typedoc """
+  #1306 — a USER minted a share link for their OWN session, making a
+  password-identity session portable to a second device.
+
+  Deliberately actor-free, unlike its `:visitor_share_token_minted`
+  sibling: there the actor is an admin acting on someone ELSE's
+  identity, and naming them is the whole point. Here the subject IS
+  the actor, so an `actor_user_id` would be the `user_id` again.
+  Absence of actor fields is therefore the signal "self-minted", not a
+  gap.
+
+  ## Why the visitor self-mint has NO counterpart event
+
+  Not an oversight, and the asymmetry is the reasoning. A visitor share
+  hands out a visitor session — the routine case the feature was built
+  for, unattributed since #392 and left that way. A user share hands
+  out a session for a PASSWORD identity, obtained without presenting
+  the password, over whatever channel the link travelled. #1306's
+  ruling admits admins with no exclusion, so that identity may hold the
+  console. Recording every visitor self-mint too would spend the
+  bounded ring buffer on the routine half and push the interesting half
+  out of it.
+
+  No `is_admin` field, deliberately: the same ruling says an admin is
+  just a user here, and a flag would re-import through the audit trail
+  the distinction the ruling removed. The admin roster answers it.
+  """
+  @type user_share_token_minted_event :: %{
+          kind: :user_share_token_minted,
+          user_id: String.t(),
+          user_name: String.t(),
           at: String.t()
         }
 
@@ -444,6 +485,7 @@ defmodule Grappa.AdminEvents.Wire do
           | visitor_deleted_event()
           | visitor_reaped_event()
           | visitor_share_token_minted_event()
+          | user_share_token_minted_event()
           | reaper_swept_event()
           | upload_reaped_event()
           | uploads_swept_event()
@@ -567,6 +609,23 @@ defmodule Grappa.AdminEvents.Wire do
       visitor_nick: visitor_nick,
       actor_user_id: actor_user_id,
       actor_user_name: actor_user_name,
+      at: now()
+    }
+  end
+
+  @doc false
+  @spec user_share_token_minted(String.t(), String.t()) :: user_share_token_minted_event()
+  def user_share_token_minted(user_id, user_name)
+      when is_binary(user_id) and is_binary(user_name) do
+    # No `validate_actor/2` and no actor pair at all: this verb is a
+    # SELF-mint, so the actor is the subject and a second copy of the
+    # same id would only invite a reader to look for a third party who
+    # was never there. See the typedoc for why the visitor self-mint
+    # has no counterpart, and why there is no `is_admin` flag.
+    %{
+      kind: :user_share_token_minted,
+      user_id: user_id,
+      user_name: user_name,
       at: now()
     }
   end

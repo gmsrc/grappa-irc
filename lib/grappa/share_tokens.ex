@@ -1,17 +1,27 @@
-defmodule Grappa.Visitors.ShareTokens do
+defmodule Grappa.ShareTokens do
   @moduledoc """
-  ETS-backed one-shot consumption set for visitor share-token IDs.
+  ETS-backed one-shot consumption set for share-token IDs.
 
   ## What this owns
 
   A single named ETS table that records which Phoenix-signed share
-  tokens have already been redeemed. The token signing + TTL check
-  live in `GrappaWeb.AuthController` (Phoenix.Token.sign/verify); this
-  module is just the "has this token already been used?" ledger.
+  tokens have already been redeemed. The token signing + TTL check live
+  in `GrappaWeb.ShareToken`; this module is just the "has this token
+  already been used?" ledger.
+
+  ## Why it is not named after visitors any more (#1306)
+
+  It was `Grappa.Visitors.ShareTokens` over `:visitor_share_tokens_used`
+  when only a visitor could share a session. #1306 lets a user mint the
+  same link, and the ledger needed NO change to serve it — the key is
+  the signed token string, which says nothing about the subject kind.
+  The name was the only thing that had become false, and a module whose
+  name excludes half its callers is how the next reader concludes there
+  must be a second ledger somewhere.
 
   ## Why
 
-  The share-link flow (visitor mints a token on device A, opens it on
+  The share-link flow (a subject mints a token on device A, opens it on
   device B) needs one-shot semantics: a token verifies-once and is
   thereafter rejected, even if the link is forwarded or clicked twice
   by accident. Phoenix.Token alone doesn't track consumption — its
@@ -19,7 +29,7 @@ defmodule Grappa.Visitors.ShareTokens do
   We layer one-shot on top via `:ets.insert_new/2`'s atomic insert.
 
   ETS over DB by intent: the threat model is benign (operator clicks
-  their own link twice), and TTL is short (≤15 min). Losing the
+  their own link twice), and TTL is short (10 min). Losing the
   consumed-set on a BEAM restart opens a small reuse window for any
   unconsumed-but-signed tokens still inside their TTL — acceptable
   for this surface. A future hardening path (DB table with
@@ -55,7 +65,7 @@ defmodule Grappa.Visitors.ShareTokens do
   ## Test isolation
 
   Application-wide singleton (`name: __MODULE__`, ETS table
-  `:visitor_share_tokens_used`) shared across the entire `mix test`
+  `:share_tokens_used`) shared across the entire `mix test`
   run. `config :ex_unit, max_cases: 1` in `config/test.exs` is the
   global guard. Tests touching this module MUST stay `async: false`
   even if `max_cases` is later relaxed for a faster lane.
@@ -63,29 +73,28 @@ defmodule Grappa.Visitors.ShareTokens do
   ## Telemetry
 
   None at this layer — the controllers emit
-  `[:grappa, :visitor, :share_token, :consumed | :rejected]` with
-  rich metadata. Surfacing telemetry from the ETS lookup itself
-  would be noise.
+  `[:grappa, :share_token, :consumed | :rejected]` with rich metadata.
+  Surfacing telemetry from the ETS lookup itself would be noise.
 
   ## Boundary
 
-  `top_level?: true` — opts out of `Grappa.Visitors`'s boundary so
-  the application supervisor + downstream controllers can reach the
-  module without dragging the entire Visitors public surface into
-  their deps (mirrors `Grappa.Visitors.Reaper`).
+  `top_level?: true` — a leaf singleton with no deps, reachable by the
+  application supervisor and the consume controller alike. Before #1306
+  this was an opt-OUT of `Grappa.Visitors`'s boundary; the module has
+  since left that namespace, so it is simply top-level now.
   """
   use Boundary, top_level?: true, deps: []
 
   use GenServer
 
-  @table :visitor_share_tokens_used
+  @table :share_tokens_used
 
   @doc """
   Returns the ETS table atom — public surface so callers / tests
   single-source the table-name boundary instead of duplicating the
   literal.
   """
-  @spec table_name() :: :visitor_share_tokens_used
+  @spec table_name() :: :share_tokens_used
   def table_name, do: @table
 
   @doc false

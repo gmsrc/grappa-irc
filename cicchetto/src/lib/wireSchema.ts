@@ -372,6 +372,11 @@ export const S_AdminEventsWireUserPasswordChangedEvent = {
   },
 } as const;
 
+// Grappa.AdminEvents.Wire.user_share_token_minted_event/0
+export const S_AdminEventsWireUserShareTokenMintedEvent = {
+  o: { kind: { l: "user_share_token_minted" }, user_id: "s", user_name: "s", at: "s" },
+} as const;
+
 // Grappa.AdminEvents.Wire.user_updated_event/0
 export const S_AdminEventsWireUserUpdatedEvent = {
   o: {
@@ -435,6 +440,7 @@ export const S_AdminEventsWireEvent = {
     S_AdminEventsWireVisitorDeletedEvent,
     S_AdminEventsWireVisitorReapedEvent,
     S_AdminEventsWireVisitorShareTokenMintedEvent,
+    S_AdminEventsWireUserShareTokenMintedEvent,
     S_AdminEventsWireReaperSweptEvent,
     S_AdminEventsWireUploadReapedEvent,
     S_AdminEventsWireUploadsSweptEvent,

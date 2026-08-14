@@ -358,7 +358,12 @@ defmodule GrappaWeb.Admin.VisitorsControllerTest do
       # Verified through the production verifier, not a re-implemented
       # `Phoenix.Token.verify` — a test that re-derives the salt would
       # keep passing if the two doors drifted apart.
-      assert ShareToken.verify(body["token"]) == {:ok, visitor.id}
+      #
+      # #1306 — the payload is the TAGGED subject now, and the tag being
+      # `:visitor` is part of what this door promises: the admin verb
+      # mints a VISITOR grant, and a drift to `:user` here would hand
+      # out the wrong identity class entirely.
+      assert ShareToken.verify(body["token"]) == {:ok, {:visitor, visitor.id}}
 
       {:ok, expires_at, _} = DateTime.from_iso8601(body["expires_at"])
       ttl = DateTime.diff(expires_at, DateTime.utc_now())
@@ -459,9 +464,12 @@ defmodule GrappaWeb.Admin.VisitorsControllerTest do
       assert event.actor_user_name == admin.name
     end
 
-    test "emits admin-distinct telemetry, not the visitor-side mint event", %{conn: conn} do
+    test "emits admin-distinct telemetry, not the self-mint event", %{conn: conn} do
       # Mitigation 3 of the issue: folding both mints into one event
       # makes "did an operator do this?" unanswerable from telemetry.
+      # #1306 renamed the self-mint event to [:grappa, :share_token,
+      # :minted] (it serves both subject kinds now); the admin one stays
+      # separate, which is the whole point of this assertion.
       visitor = visitor_fixture()
       session = admin_session()
       parent = self()
@@ -471,7 +479,7 @@ defmodule GrappaWeb.Admin.VisitorsControllerTest do
         handler,
         [
           [:grappa, :admin, :visitor, :share_token, :minted],
-          [:grappa, :visitor, :share_token, :minted]
+          [:grappa, :share_token, :minted]
         ],
         fn name, _, meta, _ -> send(parent, {:telemetry, name, meta}) end,
         nil
@@ -486,7 +494,7 @@ defmodule GrappaWeb.Admin.VisitorsControllerTest do
 
       assert_received {:telemetry, [:grappa, :admin, :visitor, :share_token, :minted], meta}
       assert meta.visitor_id == visitor.id
-      refute_received {:telemetry, [:grappa, :visitor, :share_token, :minted], _}
+      refute_received {:telemetry, [:grappa, :share_token, :minted], _}
     end
   end
 end

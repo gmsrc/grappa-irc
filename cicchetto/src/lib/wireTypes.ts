@@ -122,6 +122,7 @@ export const ADMIN_EVENTS_WIRE_EVENT_KIND = [
   "visitor_deleted",
   "visitor_reaped",
   "visitor_share_token_minted",
+  "user_share_token_minted",
   "reaper_swept",
   "upload_reaped",
   "uploads_swept",
@@ -196,6 +197,13 @@ export type AdminEventsWireVisitorShareTokenMintedEvent = {
   visitor_nick: string | null;
   actor_user_id: string;
   actor_user_name: string;
+  at: string;
+};
+
+export type AdminEventsWireUserShareTokenMintedEvent = {
+  kind: "user_share_token_minted";
+  user_id: string;
+  user_name: string;
   at: string;
 };
 
@@ -443,6 +451,7 @@ export type AdminEventsWireEvent =
   | AdminEventsWireVisitorDeletedEvent
   | AdminEventsWireVisitorReapedEvent
   | AdminEventsWireVisitorShareTokenMintedEvent
+  | AdminEventsWireUserShareTokenMintedEvent
   | AdminEventsWireReaperSweptEvent
   | AdminEventsWireUploadReapedEvent
   | AdminEventsWireUploadsSweptEvent

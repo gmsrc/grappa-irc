@@ -67,6 +67,12 @@ const EVENT_TONE: Record<WireAdminEvent["kind"], Tone> = {
   // is the one event here that hands out access, so it should not read
   // as routine.
   visitor_share_token_minted: "ok",
+  // #1306 — the user self-mint sits with it for the same reason: access
+  // granted, not destroyed, and worth seeing rather than routine. Same
+  // tone deliberately — the operator triages "a share link exists" as
+  // one class, and a louder tone here would read as "this one is
+  // suspicious", which it is not by itself.
+  user_share_token_minted: "ok",
   user_created: "ok",
   network_created: "ok",
   server_added: "ok",
@@ -157,6 +163,11 @@ function renderEvent(ev: WireAdminEvent): string {
       // constructor), so it is named outright rather than through
       // `actorSuffix`, which renders nothing when the name is absent.
       return `share link minted for ${visitorLabel(ev.visitor_nick, ev.visitor_id)} by ${ev.actor_user_name}`;
+    case "user_share_token_minted":
+      // #1306 — no actor to name: this is a self-mint, so "for their own
+      // session" is the whole attribution. Worded to be unmistakable
+      // against the line above, which names a third party.
+      return `${ev.user_name} minted a share link for their own session`;
     case "reaper_swept":
       return `reaper swept ${ev.count} visitor(s)`;
     case "upload_reaped":

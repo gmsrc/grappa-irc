@@ -1,21 +1,23 @@
-defmodule Grappa.Visitors.ShareTokensTest do
+defmodule Grappa.ShareTokensTest do
   @moduledoc """
-  ETS-backed one-shot consumption set for visitor share-token IDs.
+  ETS-backed one-shot consumption set for share-token IDs.
 
-  The actual Phoenix.Token signing / verification stays in the controller
-  layer — this module is the "has this token already been redeemed?"
-  ledger. Two devices clicking the same share link race here.
+  The actual Phoenix.Token signing / verification stays in
+  `GrappaWeb.ShareToken` — this module is the "has this token already
+  been redeemed?" ledger. Two devices clicking the same share link race
+  here. Kind-agnostic by construction: the key is the token string
+  (#1306 needed no change here, only the honest name).
 
   `async: false` because the ShareTokens GenServer + ETS table is a
   module-singleton (named-table), shared across the whole suite.
   """
   use ExUnit.Case, async: false
 
-  alias Grappa.Visitors.ShareTokens
+  alias Grappa.ShareTokens
 
   setup do
     # Fresh table state per test — clear all entries.
-    for key <- ShareTokens.all_keys(), do: :ets.delete(:visitor_share_tokens_used, key)
+    for key <- ShareTokens.all_keys(), do: :ets.delete(:share_tokens_used, key)
     :ok
   end
 
@@ -73,7 +75,7 @@ defmodule Grappa.Visitors.ShareTokensTest do
 
   describe "table_name/0" do
     test "returns the named ETS table atom" do
-      assert ShareTokens.table_name() == :visitor_share_tokens_used
+      assert ShareTokens.table_name() == :share_tokens_used
     end
   end
 end

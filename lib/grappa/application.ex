@@ -23,12 +23,12 @@ defmodule Grappa.Application do
       Grappa.RateLimit,
       Grappa.Repo,
       Grappa.Session,
+      Grappa.ShareTokens,
       Grappa.Uploads,
       Grappa.Uploads.Reaper,
       Grappa.Vault,
       Grappa.Accounts.Reaper,
       Grappa.Visitors.Reaper,
-      Grappa.Visitors.ShareTokens,
       # #364 J/cross-module-S2: start/2 calls WindowCounts.PushSource.boot/0
       # + Themes.boot/0 to inject the two remaining DI-seams at boot.
       Grappa.WindowCounts,
@@ -269,12 +269,13 @@ defmodule Grappa.Application do
         # attach); unlike AdminEvents/SessionLog it needs NO sandbox
         # allow — the fold touches no Repo.
         {Grappa.DbLatency, attach_telemetry: attach_db_latency_telemetry?()},
-        # ShareTokens: ETS-backed one-shot set for visitor share-link
-        # token redemption. Must come before Endpoint so the consume
-        # controller never races a missing table. No upstream deps;
-        # placed here to sit alongside the other ETS singletons
-        # (Backoff, NetworkCircuit) for ordering clarity.
-        Grappa.Visitors.ShareTokens,
+        # ShareTokens: ETS-backed one-shot set for share-link token
+        # redemption (#1306 — both subject kinds; the ledger keys on the
+        # token string, which carries no kind). Must come before Endpoint
+        # so the consume controller never races a missing table. No
+        # upstream deps; placed here to sit alongside the other ETS
+        # singletons (Backoff, NetworkCircuit) for ordering clarity.
+        Grappa.ShareTokens,
         # #75 — per-(bucket, subject, day) creation quota. ETS-backed
         # singleton, sibling of Backoff / NetworkCircuit / ShareTokens:
         # must exist before Endpoint so `Grappa.Themes.create_theme/2`'s

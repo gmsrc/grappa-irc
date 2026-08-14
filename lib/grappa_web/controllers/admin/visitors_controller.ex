@@ -109,12 +109,15 @@ defmodule GrappaWeb.Admin.VisitorsController do
   def share_token(conn, %{"id" => id}) when is_binary(id) do
     with {:ok, visitor} <- fetch_visitor(id),
          :ok <- refuse_incognito(visitor) do
-      {token, expires_at} = ShareToken.mint(visitor.id)
+      # #1306 — the payload is the TAGGED subject now. This door stays
+      # visitor-only (there is no admin verb for minting a user's link),
+      # so the tag is a constant here rather than a branch.
+      {token, expires_at} = ShareToken.mint({:visitor, visitor.id})
       {actor_id, actor_name} = AuthPlug.actor_from_conn(conn)
 
-      # Distinct from the visitor-side `[:grappa, :visitor, :share_token,
-      # :minted]` on purpose: folding both into one event would make
-      # "was this grant operator-issued?" unanswerable from telemetry.
+      # Distinct from the self-mint's `[:grappa, :share_token, :minted]`
+      # on purpose: folding both into one event would make "was this
+      # grant operator-issued?" unanswerable from telemetry.
       :telemetry.execute(
         [:grappa, :admin, :visitor, :share_token, :minted],
         %{count: 1},

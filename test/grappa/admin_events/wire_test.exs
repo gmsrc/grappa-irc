@@ -161,6 +161,44 @@ defmodule Grappa.AdminEvents.WireTest do
     end
   end
 
+  describe "user_share_token_minted/2 (#1306)" do
+    test "renders the self-minting user" do
+      event = Wire.user_share_token_minted("u-uuid", "vjt")
+
+      assert event.kind == :user_share_token_minted
+      assert event.user_id == "u-uuid"
+      assert event.user_name == "vjt"
+    end
+
+    test "carries NO actor pair — the subject IS the actor" do
+      # The absence is the signal, not a gap: both-set means somebody
+      # acted on somebody else, both-nil means the system acted, absent
+      # means self. A later "tidy-up" that adds `actor_user_id: user_id`
+      # for uniformity would erase that third state and invite a reader
+      # to look for a third party who was never there.
+      event = Wire.user_share_token_minted("u-uuid", "vjt")
+
+      refute Map.has_key?(event, :actor_user_id)
+      refute Map.has_key?(event, :actor_user_name)
+    end
+
+    test "the #982 kind is NOT reused for it — they are distinct kinds" do
+      # The client-facing wire is additive-only: an existing kind is
+      # never renamed or repurposed. Widening
+      # `:visitor_share_token_minted` to cover users would have been a
+      # REMOVAL of that kind's meaning, which is why #1306 added one.
+      # Pinned so a later consolidation has to argue with this line.
+      # Asserted as two positive pins rather than as `a.kind != b.kind`:
+      # the compiler knows both sides are literal atoms and flags the
+      # inequality as a comparison between distinct types — i.e. it is
+      # true before the code runs, which makes it no assertion at all.
+      assert Wire.user_share_token_minted("u-uuid", "vjt").kind == :user_share_token_minted
+
+      assert Wire.visitor_share_token_minted("v-uuid", "nick", "u-uuid", "vjt").kind ==
+               :visitor_share_token_minted
+    end
+  end
+
   describe "visitor_reaped/2 + reaper_swept/1" do
     test "visitor_reaped" do
       event = Wire.visitor_reaped("v-uuid", "nick")

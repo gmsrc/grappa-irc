@@ -5,7 +5,7 @@ defmodule Grappa.ApplicationSupervisionTreeTest do
   # block is documentation-as-authority: it's the map new contributors
   # (human and Claude) read to understand what runs at boot. It rotted —
   # ten children were added to `lib/grappa/application.ex` over time
-  # (AdminEvents, SessionLog, Visitors.ShareTokens, the three RateLimit
+  # (AdminEvents, SessionLog, ShareTokens, the three RateLimit
   # singletons, Net.PtrCache, Task.Supervisor, Uploads.Reaper,
   # Accounts.Reaper) without ever being added to the doc tree, and nothing
   # caught it.

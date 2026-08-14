@@ -4,35 +4,41 @@ defmodule GrappaWeb.ShareTokenControllerTest do
 
   Mint side (`/me/share-token`):
     * visitor subject → 200 + signed token + expires_at
-    * user subject → 403 forbidden
+    * user subject → 200 too (#1306 — the 403 this used to assert was
+      the whole defect; a password subject shares to a second device
+      with the same link)
     * incognito visitor subject → 403 forbidden (#363 — a non-portable
       ephemeral session must not be shareable to another device)
     * missing Bearer → 401 unauthorized
 
   Consume side (`/auth/share/consume`):
-    * valid token + visitor exists → 200 + new bearer + visitor envelope
+    * valid visitor token + visitor exists → 200 + bearer + visitor envelope
+    * valid user token + user exists → 200 + bearer + user envelope
+    * a `visitor-share-v1` token (untagged payload, old salt) → 401
     * unsigned/invalid token → 401 unauthorized
     * expired token (past TTL) → 410 gone
     * already-consumed token (second redemption) → 410 gone
-    * visitor row deleted between mint and consume → 404 not_found
+    * subject row deleted between mint and consume → 404 not_found
     * missing token param → 400 bad_request
 
   Wire shape (mint):
     %{token: "<signed>", expires_at: "<ISO8601 UTC>"}
 
-  Wire shape (consume success):
-    %{token: "<bearer-uuid>", subject: %{kind: "visitor", id, nick, network_slug}}
+  Wire shape (consume success) — the `GrappaWeb.AuthJSON.login/1`
+  envelope, per kind:
+    %{token: "<bearer-uuid>", subject: %{kind: "visitor", id, registered}}
+    %{token: "<bearer-uuid>", subject: %{kind: "user", id, name}}
 
-  `async: true` — sandbox per test. Touches `Grappa.Visitors.ShareTokens`
-  but consume tests use distinct token strings so the suite-wide ETS
-  table never collides.
+  `async: true` — sandbox per test. Touches `Grappa.ShareTokens` but
+  consume tests use distinct token strings so the suite-wide ETS table
+  never collides.
   """
   use GrappaWeb.ConnCase, async: true
 
   import Grappa.AuthFixtures
 
   alias Grappa.Repo.BusyRetry
-  alias Grappa.Visitors.ShareTokens
+  alias Grappa.ShareTokens
   alias GrappaWeb.ShareToken
 
   # #982 — read from the production module rather than re-declared here.
@@ -40,6 +46,12 @@ defmodule GrappaWeb.ShareTokenControllerTest do
   # salt would stay green through a drift that breaks both of them.
   @max_age_seconds ShareToken.max_age_seconds()
   @salt ShareToken.salt()
+
+  # #1306 — the PRE-tag salt, frozen deliberately. This one IS a literal
+  # copy, because it names a value production no longer holds: reading it
+  # from `ShareToken.salt/0` would make the v1-refused test vacuous the
+  # instant the salt regressed, which is the exact drift it exists to catch.
+  @v1_salt "visitor-share-v1"
 
   describe "POST /me/share-token — mint" do
     test "visitor subject returns 200 + signed token + expires_at", %{conn: conn} do
@@ -55,11 +67,9 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       assert is_binary(body["token"])
       assert body["token"] != ""
 
-      # Token verifies back to the visitor's id with the salt + max_age
-      # contract. The endpoint passes its own context to Phoenix.Token.
-      assert {:ok, visitor_id} =
-               Phoenix.Token.verify(GrappaWeb.Endpoint, @salt, body["token"], max_age: @max_age_seconds)
-
+      # #1306 — the token verifies back to the TAGGED subject, not a bare
+      # id: that tag is what tells the consume which table to read.
+      assert {:ok, {:visitor, visitor_id}} = ShareToken.verify(body["token"])
       assert visitor_id == visitor.id
 
       # ISO8601 UTC string ~600s in the future (allow ±2s for clock skew
@@ -70,20 +80,63 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       assert delta <= @max_age_seconds + 2
     end
 
-    test "user subject returns 403 forbidden", %{conn: conn} do
-      {_, session} = user_and_session()
+    test "user subject returns 200 + a token tagged :user (#1306)", %{conn: conn} do
+      # This asserted 403 until #1306. The old rationale — "a user has a
+      # password, they can just log in" — priced a password + TOTP entry
+      # on a phone at zero.
+      {user, session} = user_and_session()
 
       conn =
         conn
         |> put_bearer(session.id)
         |> post("/me/share-token")
 
-      assert json_response(conn, 403) == %{"error" => "forbidden"}
+      body = json_response(conn, 200)
+      assert {:ok, {:user, user_id}} = ShareToken.verify(body["token"])
+      assert user_id == user.id
+    end
+
+    test "an admin user is not excluded (#1306 ruling)", %{conn: conn} do
+      # Explicitly ruled: an admin is just a user here. Pinned because
+      # "surely not for admins" is the first instinct a later reader will
+      # have, and a silent re-narrowing would be invisible otherwise.
+      {admin, session} = user_and_session(is_admin: true)
+
+      body =
+        conn
+        |> put_bearer(session.id)
+        |> post("/me/share-token")
+        |> json_response(200)
+
+      assert {:ok, {:user, minted_for}} = ShareToken.verify(body["token"])
+      assert minted_for == admin.id
+    end
+
+    test "the TTL is the same constant for a user as for a visitor" do
+      # One constant for both kinds (#1306 ruling) — a user link is not
+      # longer-lived just because the identity behind it is permanent.
+      {_, user_session} = user_and_session()
+      visitor_session = visitor_session_fixture(visitor_fixture())
+
+      expiry = fn session ->
+        body =
+          Phoenix.ConnTest.build_conn()
+          |> put_bearer(session.id)
+          |> post("/me/share-token")
+          |> json_response(200)
+
+        {:ok, at, 0} = DateTime.from_iso8601(body["expires_at"])
+        DateTime.diff(at, DateTime.utc_now())
+      end
+
+      assert_in_delta expiry.(user_session), expiry.(visitor_session), 2
     end
 
     test "incognito visitor subject returns 403 forbidden", %{conn: conn} do
       # #363 — an incognito session is deliberately non-portable; the mint
-      # door is closed server-side, not just hidden in cic.
+      # door is closed server-side, not just hidden in cic. #1306 removed
+      # the user 403 and left this one VERBATIM: it is now the only
+      # subject-shaped refusal on this door.
       visitor = visitor_fixture(incognito: true)
       session = visitor_session_fixture(visitor)
 
@@ -101,13 +154,13 @@ defmodule GrappaWeb.ShareTokenControllerTest do
     end
   end
 
-  describe "POST /auth/share/consume — consume" do
+  describe "POST /auth/share/consume — visitor token" do
     setup do
       # Each test gets its own visitor (ShareTokens ETS is suite-wide
       # but consume tests partition by the token string itself; distinct
       # signed payloads → distinct ETS keys).
       visitor = visitor_fixture()
-      token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor.id)
+      {token, _} = ShareToken.mint({:visitor, visitor.id})
       {:ok, visitor: visitor, token: token}
     end
 
@@ -153,19 +206,131 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       assert me["id"] == visitor.id
     end
 
+    test "visitor deleted between mint and consume returns 404", %{
+      conn: conn,
+      visitor: visitor,
+      token: token
+    } do
+      :ok = Grappa.Visitors.delete(visitor.id)
+
+      conn = post(conn, "/auth/share/consume", %{"token" => token})
+      assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+  end
+
+  describe "POST /auth/share/consume — user token (#1306)" do
+    setup do
+      {user, _} = user_and_session()
+      {token, _} = ShareToken.mint({:user, user.id})
+      {:ok, user: user, token: token}
+    end
+
+    test "returns 200 + the user login envelope", %{conn: conn, user: user, token: token} do
+      body = conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
+
+      assert is_binary(body["token"])
+      assert body["subject"]["kind"] == "user"
+      assert body["subject"]["id"] == user.id
+      assert body["subject"]["name"] == user.name
+    end
+
+    test "the minted bearer really authenticates as that user", %{
+      conn: conn,
+      user: user,
+      token: token
+    } do
+      # The substantive outcome: not "a 200 came back" but "the second
+      # device is logged in as the sharer". A branch that read the wrong
+      # table would 404 here at the latest.
+      body = conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
+
+      me =
+        Phoenix.ConnTest.build_conn()
+        |> put_bearer(body["token"])
+        |> get("/me")
+        |> json_response(200)
+
+      assert me["kind"] == "user"
+      assert me["id"] == user.id
+    end
+
+    test "user deleted between mint and consume returns 404", %{conn: conn, token: token} do
+      # Same 404 the visitor arm gives: a link outliving its identity is
+      # one condition, not two.
+      {other_user, _} = user_and_session()
+      {orphan_token, _} = ShareToken.mint({:user, other_user.id})
+      :ok = Grappa.Accounts.delete_user(other_user)
+
+      orphan_conn = post(conn, "/auth/share/consume", %{"token" => orphan_token})
+      assert json_response(orphan_conn, 404) == %{"error" => "not_found"}
+
+      # Control: the live user's token in the same test still redeems, so
+      # the 404 above is attributable to the deletion, not to the arm.
+      assert Phoenix.ConnTest.build_conn()
+             |> post("/auth/share/consume", %{"token" => token})
+             |> json_response(200)
+    end
+
+    test "a user token is one-shot exactly like a visitor one", %{conn: conn, token: token} do
+      assert conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
+
+      assert Phoenix.ConnTest.build_conn()
+             |> post("/auth/share/consume", %{"token" => token})
+             |> json_response(410) == %{"error" => "share_token_consumed"}
+    end
+  end
+
+  describe "POST /auth/share/consume — rejections" do
+    test "a v1 token (untagged payload under the old salt) returns 401", %{conn: conn} do
+      # #1306 — the salt bump is what makes the payload change safe. An
+      # in-flight link from the untagged era cannot be re-read as EITHER
+      # kind; it is simply not ours any more.
+      visitor = visitor_fixture()
+      v1_token = Phoenix.Token.sign(GrappaWeb.Endpoint, @v1_salt, visitor.id)
+
+      conn = post(conn, "/auth/share/consume", %{"token" => v1_token})
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
+    test "a correctly-salted token with an untagged payload returns 401", %{conn: conn} do
+      # Reaching the v2 namespace is necessary but not sufficient: the
+      # payload still has to present a kind the branch understands.
+      visitor = visitor_fixture()
+      untagged = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor.id)
+
+      conn = post(conn, "/auth/share/consume", %{"token" => untagged})
+      assert json_response(conn, 401) == %{"error" => "unauthorized"}
+    end
+
     test "unsigned / invalid token returns 401 unauthorized", %{conn: conn} do
       conn = post(conn, "/auth/share/consume", %{"token" => "not-a-signed-token"})
       assert json_response(conn, 401) == %{"error" => "unauthorized"}
     end
 
-    test "expired token (TTL elapsed) returns 410 gone", %{conn: conn, visitor: visitor} do
+    test "expired token (TTL elapsed) returns 410 gone", %{conn: conn} do
       # Sign with a baseline now, then verify with max_age that already
       # elapsed by passing a `signed_at` parameter that's older than TTL.
+      visitor = visitor_fixture()
       old_signed_at = System.system_time(:second) - @max_age_seconds - 60
-      token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor.id, signed_at: old_signed_at)
+
+      token =
+        Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, {:visitor, visitor.id}, signed_at: old_signed_at)
 
       conn = post(conn, "/auth/share/consume", %{"token" => token})
       assert json_response(conn, 410) == %{"error" => "share_token_expired"}
+    end
+
+    test "missing token param returns 400 bad_request", %{conn: conn} do
+      conn = post(conn, "/auth/share/consume", %{})
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+  end
+
+  describe "POST /auth/share/consume — one-shot claim (#593)" do
+    setup do
+      visitor = visitor_fixture()
+      {token, _} = ShareToken.mint({:visitor, visitor.id})
+      {:ok, visitor: visitor, token: token}
     end
 
     test "already-consumed token returns 410 gone on second call", %{conn: conn, token: token} do
@@ -197,7 +362,12 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       # Black-box proof: with the transient faults cleared, the SAME link
       # mints for real. A dead link would 410 here.
       BusyRetry.inject_transient_faults(0)
-      body = Phoenix.ConnTest.build_conn() |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
+
+      body =
+        Phoenix.ConnTest.build_conn()
+        |> post("/auth/share/consume", %{"token" => token})
+        |> json_response(200)
+
       assert body["subject"]["id"] == visitor.id
     end
 
@@ -222,27 +392,11 @@ defmodule GrappaWeb.ShareTokenControllerTest do
              |> post("/auth/share/consume", %{"token" => token})
              |> json_response(410) == %{"error" => "share_token_consumed"}
     end
-
-    test "visitor deleted between mint and consume returns 404", %{
-      conn: conn,
-      visitor: visitor,
-      token: token
-    } do
-      :ok = Grappa.Visitors.delete(visitor.id)
-
-      conn = post(conn, "/auth/share/consume", %{"token" => token})
-      assert json_response(conn, 404) == %{"error" => "not_found"}
-    end
-
-    test "missing token param returns 400 bad_request", %{conn: conn} do
-      conn = post(conn, "/auth/share/consume", %{})
-      assert json_response(conn, 400) == %{"error" => "bad_request"}
-    end
   end
 
   describe "ShareTokens module ETS sanity" do
     test "table_name is reachable from the test harness" do
-      assert ShareTokens.table_name() == :visitor_share_tokens_used
+      assert ShareTokens.table_name() == :share_tokens_used
     end
   end
 
@@ -255,9 +409,9 @@ defmodule GrappaWeb.ShareTokenControllerTest do
         :telemetry.attach_many(
           handler,
           [
-            [:grappa, :visitor, :share_token, :minted],
-            [:grappa, :visitor, :share_token, :consumed],
-            [:grappa, :visitor, :share_token, :rejected]
+            [:grappa, :share_token, :minted],
+            [:grappa, :share_token, :consumed],
+            [:grappa, :share_token, :rejected]
           ],
           fn event, measurements, metadata, _ ->
             send(parent, {:telemetry, event, measurements, metadata})
@@ -269,63 +423,79 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       :ok
     end
 
-    test "mint emits :minted with visitor_id metadata", %{conn: conn} do
+    test "mint emits :minted tagged with the subject kind", %{conn: conn} do
+      # #1306 — the metadata carries `subject_kind` + `subject_id`, not a
+      # `visitor_id` that would be a lie for half its emitters.
       visitor = visitor_fixture()
       session = visitor_session_fixture(visitor)
 
       conn |> put_bearer(session.id) |> post("/me/share-token") |> json_response(200)
 
-      assert_receive {:telemetry, [:grappa, :visitor, :share_token, :minted], %{count: 1}, %{visitor_id: vid}}
+      assert_receive {:telemetry, [:grappa, :share_token, :minted], %{count: 1},
+                      %{subject_kind: :visitor, subject_id: sid}}
 
-      assert vid == visitor.id
+      assert sid == visitor.id
     end
 
-    test "consume happy path emits :consumed with visitor_id metadata", %{conn: conn} do
+    test "a user mint emits :minted with subject_kind :user", %{conn: conn} do
+      {user, session} = user_and_session()
+
+      conn |> put_bearer(session.id) |> post("/me/share-token") |> json_response(200)
+
+      assert_receive {:telemetry, [:grappa, :share_token, :minted], %{count: 1},
+                      %{subject_kind: :user, subject_id: sid}}
+
+      assert sid == user.id
+    end
+
+    test "consume happy path emits :consumed with the subject metadata", %{conn: conn} do
       visitor = visitor_fixture()
-      token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor.id)
+      {token, _} = ShareToken.mint({:visitor, visitor.id})
 
       conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
 
-      assert_receive {:telemetry, [:grappa, :visitor, :share_token, :consumed], %{count: 1}, %{visitor_id: vid}}
+      assert_receive {:telemetry, [:grappa, :share_token, :consumed], %{count: 1},
+                      %{subject_kind: :visitor, subject_id: sid}}
 
-      assert vid == visitor.id
+      assert sid == visitor.id
     end
 
     test "consume rejects emit :rejected with :reason metadata", %{conn: conn} do
       # invalid signature → :unauthorized
       conn |> post("/auth/share/consume", %{"token" => "bogus"}) |> json_response(401)
 
-      assert_receive {:telemetry, [:grappa, :visitor, :share_token, :rejected], %{count: 1}, %{reason: :unauthorized}}
+      assert_receive {:telemetry, [:grappa, :share_token, :rejected], %{count: 1}, %{reason: :unauthorized}}
 
       # expired
       visitor = visitor_fixture()
 
       expired_token =
-        Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor.id,
+        Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, {:visitor, visitor.id},
           signed_at: System.system_time(:second) - @max_age_seconds - 60
         )
 
       conn |> post("/auth/share/consume", %{"token" => expired_token}) |> json_response(410)
 
-      assert_receive {:telemetry, [:grappa, :visitor, :share_token, :rejected], %{count: 1},
-                      %{reason: :share_token_expired}}
+      assert_receive {:telemetry, [:grappa, :share_token, :rejected], %{count: 1}, %{reason: :share_token_expired}}
     end
 
-    test "a saturated mint (503) emits exactly one :rejected{db_unavailable}, no :consumed", %{conn: conn} do
+    test "a saturated mint (503) emits exactly one :rejected{db_unavailable}, no :consumed", %{
+      conn: conn
+    } do
       # #593 — the post-claim failure path is DRY'd through `reject/1`; assert
       # it fires the reject telemetry once (not zero, not doubled) and never
       # the :consumed event when the mint rolls its claim back.
       visitor = visitor_fixture()
-      token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor.id)
+      {token, _} = ShareToken.mint({:visitor, visitor.id})
 
       BusyRetry.inject_transient_faults(10_000)
       conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(503)
       BusyRetry.inject_transient_faults(0)
 
-      assert_receive {:telemetry, [:grappa, :visitor, :share_token, :rejected], %{count: 1}, %{reason: :db_unavailable}}
+      assert_receive {:telemetry, [:grappa, :share_token, :rejected], %{count: 1}, %{reason: :db_unavailable}}
 
-      refute_received {:telemetry, [:grappa, :visitor, :share_token, :rejected], _, _}
-      refute_received {:telemetry, [:grappa, :visitor, :share_token, :consumed], _, _}
+      refute_received {:telemetry, [:grappa, :share_token, :rejected], _, _}
+      refute_received {:telemetry, [:grappa, :share_token, :consumed], _, _}
     end
   end
 end

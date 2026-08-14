@@ -1,11 +1,11 @@
 defmodule GrappaWeb.ShareToken do
   @moduledoc """
-  The visitor share-link token itself: salt, TTL, signing, verification.
+  The session share-link token itself: salt, TTL, signing, verification.
 
   ## Why this is a module and not two copies
 
   TWO doors mint this token — `POST /me/share-token`
-  (`GrappaWeb.ShareTokenController`, the visitor's own device-to-device
+  (`GrappaWeb.ShareTokenController`, the subject's own device-to-device
   share) and `POST /admin/visitors/:id/share-token`
   (`GrappaWeb.Admin.VisitorsController`, #982's recovery door for a
   visitor who lost access and, having no password, cannot mint their
@@ -19,22 +19,56 @@ defmodule GrappaWeb.ShareToken do
   locked out. Signing and verification live together here so a change
   to either constant moves both doors at once.
 
+  ## Why the payload is a TAGGED subject (#1306)
+
+  Until #1306 the payload was the bare visitor UUID, because only a
+  visitor could share. A user can now (`/me/share-token` no longer 403s
+  a password subject), and a user id and a visitor id are the same
+  shape: two UUIDs, indistinguishable inside one signed namespace. A
+  consume reading a bare id would have to GUESS which table to read,
+  and guess wrong the moment the two id spaces ever collided.
+
+  So the payload is the `t:Grappa.Subject.t/0` tuple — the same
+  `{:user, id} | {:visitor, id}` discriminator every context-side
+  subject-scoped write already speaks, and the exact shape
+  `Grappa.Accounts.create_session/4` takes, so the consume hands the
+  verified payload straight through instead of re-deriving it.
+
+  **The salt bump to `share-v2` is what makes that safe.** The signing
+  key is derived from the salt, so a `visitor-share-v1` token does not
+  verify here at all: there is no window in which an in-flight token
+  from the untagged era is re-read as EITHER kind. That is the whole
+  point of moving the salt rather than merely widening the payload —
+  the change is not cosmetic, it is the guarantee. `verify/1` also
+  refuses a correctly-salted token whose payload is not one of the two
+  known tags, so reaching the v2 namespace is necessary but not
+  sufficient.
+
   ## Why `Phoenix.Token` and not the DB
 
   Unchanged from the original design: the threat model is benign, the
-  TTL is short (10 min), and the one-shot ledger
-  (`Grappa.Visitors.ShareTokens`) is ETS, so losing it on a BEAM
-  restart opens at most a TTL-bounded reuse window for tokens already
-  signed. Zero migrations, HOT-deploy friendly.
+  TTL is short (10 min), and the one-shot ledger (`Grappa.ShareTokens`)
+  is ETS, so losing it on a BEAM restart opens at most a TTL-bounded
+  reuse window for tokens already signed. Zero migrations, HOT-deploy
+  friendly.
 
-  #982 does NOT widen either constant. Ten minutes and single use are
-  what keep a leaked link from being a standing key, and the admin door
-  hands the link to a third party over some channel the server cannot
-  see — the exact case the short TTL is for.
+  Neither #982 nor #1306 widens either constant. Ten minutes and single
+  use are what keep a leaked link from being a standing key — and #1306
+  raises the stakes rather than lowering them, since the identity behind
+  the link may now be a password-holding (possibly admin) user, so ONE
+  constant governs both kinds and it is the short one.
   """
 
-  @salt "visitor-share-v1"
+  @salt "share-v2"
   @max_age_seconds 600
+
+  @typedoc """
+  What the token carries: the tagged subject the link grants a session
+  for. Same shape as `t:Grappa.Subject.t/0` and as the argument of
+  `Grappa.Accounts.create_session/4`, deliberately — the consume passes
+  the verified value straight on.
+  """
+  @type subject :: Grappa.Subject.t()
 
   @doc """
   The `Phoenix.Token` salt. Public so tests assert against the real
@@ -45,39 +79,49 @@ defmodule GrappaWeb.ShareToken do
 
   @doc """
   Token lifetime in seconds — the same number the mint reports as
-  `expires_at` and the consume enforces as `max_age`.
+  `expires_at` and the consume enforces as `max_age`. ONE constant for
+  both subject kinds (#1306 ruling): a user link is not longer-lived
+  than a visitor one.
   """
   @spec max_age_seconds() :: unquote(@max_age_seconds)
   def max_age_seconds, do: @max_age_seconds
 
   @doc """
-  Sign a token for `visitor_id`. Returns `{token, expires_at}`, where
+  Sign a token for `subject`. Returns `{token, expires_at}`, where
   `expires_at` is the absolute UTC instant at which `verify/1` starts
   refusing it — cic renders the countdown from it.
 
   Cannot fail: `Phoenix.Token.sign/3` is pure over the endpoint's
   secret. Both doors therefore have nothing to roll back at this step.
   """
-  @spec mint(Ecto.UUID.t()) :: {String.t(), DateTime.t()}
-  def mint(visitor_id) when is_binary(visitor_id) do
-    token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, visitor_id)
+  @spec mint(subject()) :: {String.t(), DateTime.t()}
+  def mint({kind, id} = subject) when kind in [:user, :visitor] and is_binary(id) do
+    token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, subject)
     {token, DateTime.add(DateTime.utc_now(), @max_age_seconds, :second)}
   end
 
   @doc """
-  Verify a token and recover the visitor id it was signed for.
+  Verify a token and recover the tagged subject it was signed for.
 
   The two failure atoms are already wire-shaped for
   `GrappaWeb.FallbackController`: `:share_token_expired` → 410 Gone (the
   link was real and ran out), `:unauthorized` → 401 (the signature does
   not hold). Keeping them distinct is what lets cic tell "ask for a new
   link" apart from "this link is not ours".
+
+  A payload that is not one of the two known tags is `:unauthorized`,
+  not a crash: `Phoenix.Token` deserialises whatever was signed under
+  this salt, so the shape check is a boundary rejection and belongs
+  here rather than in the branch downstream.
   """
   @spec verify(String.t()) ::
-          {:ok, Ecto.UUID.t()} | {:error, :unauthorized | :share_token_expired}
+          {:ok, subject()} | {:error, :unauthorized | :share_token_expired}
   def verify(token) when is_binary(token) do
     case Phoenix.Token.verify(GrappaWeb.Endpoint, @salt, token, max_age: @max_age_seconds) do
-      {:ok, visitor_id} when is_binary(visitor_id) -> {:ok, visitor_id}
+      {:ok, {kind, id}} when kind in [:user, :visitor] and is_binary(id) -> {:ok, {kind, id}}
+      # A payload that is not one of the two known tags: correctly
+      # signed, but not something this branch can route.
+      {:ok, _} -> {:error, :unauthorized}
       {:error, :expired} -> {:error, :share_token_expired}
       {:error, _} -> {:error, :unauthorized}
     end
