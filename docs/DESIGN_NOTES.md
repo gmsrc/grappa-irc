@@ -42204,3 +42204,80 @@ window.
 question is not "can it reuse the payload builder" but "which 20% does not
 fit". Here it was three things — no row, no badge, and a dedup key that
 would have collided with the first class's.
+<!-- entry #1290 -->
+
+---
+
+## 2026-08-14 — #1290: we spoke a superseded draft, and legacy tolerance hid it
+
+`web_push_elixir` 0.8.0 emitted draft-ietf-webpush-encryption-04
+`aesgcm` and draft-ietf-webpush-vapid-01 `Authorization: WebPush <jwt>`.
+Chrome, Mozilla and Apple all still accept both, so nothing in our
+telemetry ever complained. The report came from outside that comfort
+zone: an Android UnifiedPush distributor, which was built after the RFCs
+landed and never implemented the draft at all.
+
+**The gap is structural, not cosmetic.** Under `aesgcm` the salt and the
+server's ephemeral public key — both mandatory HKDF inputs — travel as
+the `encryption:` and `crypto-key:` headers, and the body is bare
+ciphertext. UnifiedPush discards headers by design, so the application
+received a blob it could not decrypt with any amount of correct key
+material. RFC 8291's `aes128gcm` puts those two values in the body's own
+RFC 8188 header, and the body then stands alone. Framing this as "a
+distributor that needs accommodating" had it backwards: the conformant
+party was them.
+
+**Route:** adopt `ex_nudge` 1.0.2, ruled by vjt after the two
+measurement comments priced it. Not a fork of the old dependency — that
+earlier ruling is superseded, and the no-unsolicited-patch exception it
+lifted reverts to the default.
+
+**All three of the library's return shapes differ from the ones
+`Push.Sender` matched**, so the adapter is the substance of the change,
+not paperwork. Left naive, every non-2xx path falls to the catch-all.
+That failure would not be silent — the catch-all logs and emits
+telemetry, and the per-subscription contract holds — it is a missing
+SWEEP: `{:error, :gone}` is the only branch that reaches
+`Push.delete_dead/1`, so dead rows would accumulate forever and every
+fan-out would pay a vendor round-trip for each. **404 is terminal
+exactly like 410** (RFC 8030 §7.3); `ex_nudge` maps only 410, so that
+rule now lives in `Sender.normalize/1` where it is ours to keep.
+
+**Accepted costs, named before the swap rather than discovered at build
+time:** a second HTTP stack (httpoison/hackney beside `Req`) plus
+`jose`, and the VAPID app-env namespace moving to `:ex_nudge`. The
+keypair VALUES are untouched — both libraries want base64url-unpadded
+input, decode to the same raw 65-byte point + 32-byte scalar, and build
+the identical `:ECPrivateKey` record for ES256 — so an existing
+deployment's `VAPID_*` env vars carry over and the namespace move forces
+no resubscription.
+
+**`GET /api/config` gained `push_content_encoding`.** The switch does
+not move `protocol_version` (it changes nothing on the WebSocket wire)
+and `config_controller.ex` forbids gating features on the release
+string, so without an explicit capability a third-party client had no
+honest way to ask whether this server speaks RFC 8291. Absent field
+means an old server, and the client should say so rather than blame its
+own decryptor.
+
+**What is measured and what is not.** `Grappa.Push.WireFormatTest`
+decrypts a real captured POST body using nothing but a
+browser-shaped `p256dh` + `auth` pair and an RFC 8188/8291 receiver
+written longhand — reusing the production encryptor as its own oracle
+would pass for any two mutually-consistent implementations. That
+establishes the stored key material is SUFFICIENT and the body needs no
+header context. It does **not** establish that existing browser
+subscriptions survive the switch on real devices, and it says nothing
+about iOS/Safari: both need a real send to a real device and neither has
+had one. vjt's datum that iOS push works today is about the DRAFT we
+were sending, and under this issue's framing that is Apple's backwards
+compatibility, not evidence about `aes128gcm`. Treat "existing
+registrations may need to be regenerated" as open until the production
+soak answers it.
+
+**Apply:** when a dependency's comment and its code disagree about which
+RFC it implements, the code wins and the comment is a bug — both of
+ours were false for a year. And when a swap changes a library's return
+vocabulary, enumerate the shapes from its source before writing the
+adapter: the branch that matters is rarely the one that changes
+behaviour loudly, it is the one that quietly stops sweeping.
