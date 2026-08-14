@@ -624,6 +624,7 @@ export const S_NetworksCredentialsAdminWireT = {
     inserted_at: "s",
     updated_at: "s",
     last_seen_at: { u: ["s", "z"] },
+    session_ip: { u: ["s", "z"] },
     live_state: { u: [S_NetworksCredentialsAdminWireLiveStateJson, "z"] },
   },
 } as const;
@@ -1425,6 +1426,7 @@ export const S_VisitorsAdminWireT = {
     expires_at: { u: ["s", "z"] },
     identified: "b",
     ip: { u: ["s", "z"] },
+    session_ip: { u: ["s", "z"] },
     inserted_at: "s",
     last_seen_at: { u: ["s", "z"] },
     networks: { a: S_VisitorsAdminWireNetworkJson },

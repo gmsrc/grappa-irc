@@ -181,47 +181,98 @@ defmodule Grappa.Accounts do
     |> Map.new(fn user -> {user.id, user} end)
   end
 
+  @typedoc """
+  What the subject's NEWEST cookie session says about them: when it
+  last touched the bouncer, and the source address recorded on it.
+
+  `ip` is `nil` for a row minted by a caller that had no connection to
+  read one from (every mix task), and for a row created before the
+  column existed.
+  """
+  @type touch :: %{last_seen_at: DateTime.t() | nil, ip: String.t() | nil}
+
+  # The answer for a subject with no cookie session at all — the U-0
+  # honesty case, spelled once so no caller invents a different shape
+  # for it. `last_seen_at: nil` is what the wire has always carried
+  # there; `ip: nil` joins it for the same reason.
+  @no_touch %{last_seen_at: nil, ip: nil}
+
   @doc """
-  Batched MAX(`last_seen_at`) across cookie sessions, keyed by
-  subject id. Used by `GrappaWeb.Admin.SessionsController` to
-  surface "when did this subject's browser last touch the bouncer"
-  alongside live BEAM state (mailbox, memory).
+  Batched newest-cookie-session lookup, keyed by subject id. Used by
+  the three admin listings to surface "when did this subject's browser
+  last touch the bouncer, and where from" alongside live BEAM state.
 
-  `subject_kind` discriminates the column: `:user` selects
-  `user_id`, `:visitor` selects `visitor_id`. Result map keys are
-  ONLY ids that had at least one cookie session — missing ids
-  signal the U-0 honesty case (`nil` on the wire: bouncer pid
-  exists but no browser ever logged in).
+  `subject_kind` discriminates the column: `:user` selects `user_id`,
+  `:visitor` selects `visitor_id`. Result map keys are ONLY ids that
+  had at least one cookie session — missing ids signal the U-0 honesty
+  case (bouncer pid exists but no browser ever logged in); read them
+  through `touch_of/2` rather than `Map.get/2` so that case keeps one
+  shape.
 
-  MAX across N cookie rows per subject collapses multi-device
-  users to "most recent touch." Both `Accounts.authenticate/1`
-  (REST plug) and `UserSocket.connect/3` (WS upgrade) bump
-  `last_seen_at`, cadence-capped at 60 s — so the timestamp is
-  per-minute precision in practice, ISO8601 microseconds on the
-  wire only because the underlying column is `:utc_datetime_usec`.
+  One row per subject: the session with the greatest `last_seen_at`,
+  picked by `row_number()` rather than by `MAX()` with bare columns,
+  because the address must come from THE SAME ROW as the timestamp and
+  SQLite's bare-column-beside-max rule is a dialect quirk no reader
+  should have to know. Multi-device subjects therefore collapse to
+  "most recent device", and the address is that device's — never a
+  coalesce across rows, which would report an address the subject is
+  no longer at.
+
+  #1308 — `ip` is where that session LOGGED IN FROM, not where its
+  newest request came from: `Session.touch_changeset/2` moves
+  `last_seen_at` alone, so a `:web` row keeps the address
+  `create_session/4` recorded for its whole life (a `:client` row is
+  the exception — `record_client_token_use/4` refreshes both). It is
+  per-SESSION all the same, which is what the operator asked for and
+  what `visitors.ip` — identity-wide, frozen at first sight — is not.
+
+  Both `Accounts.authenticate/1` (REST plug) and `UserSocket.connect/3`
+  (WS upgrade) bump `last_seen_at`, cadence-capped at 60 s — so the
+  timestamp is per-minute precision in practice, ISO8601 microseconds
+  on the wire only because the underlying column is
+  `:utc_datetime_usec`.
 
   Empty input → `%{}` (skip the round-trip).
   """
-  @spec max_last_seen_by_subject_ids(:user | :visitor, [Ecto.UUID.t()]) ::
-          %{Ecto.UUID.t() => DateTime.t()}
-  def max_last_seen_by_subject_ids(_, []), do: %{}
+  @spec newest_touch_by_subject_ids(:user | :visitor, [Ecto.UUID.t()]) ::
+          %{Ecto.UUID.t() => touch()}
+  def newest_touch_by_subject_ids(_, []), do: %{}
 
-  def max_last_seen_by_subject_ids(:user, ids) when is_list(ids) do
-    Session
-    |> where([s], s.user_id in ^ids)
-    |> group_by([s], s.user_id)
-    |> select([s], {s.user_id, max(s.last_seen_at)})
-    |> Repo.all()
-    |> Map.new()
-  end
+  def newest_touch_by_subject_ids(:user, ids) when is_list(ids),
+    do: newest_touch(:user_id, ids)
 
-  def max_last_seen_by_subject_ids(:visitor, ids) when is_list(ids) do
-    Session
-    |> where([s], s.visitor_id in ^ids)
-    |> group_by([s], s.visitor_id)
-    |> select([s], {s.visitor_id, max(s.last_seen_at)})
-    |> Repo.all()
-    |> Map.new()
+  def newest_touch_by_subject_ids(:visitor, ids) when is_list(ids),
+    do: newest_touch(:visitor_id, ids)
+
+  @doc """
+  Reads one subject out of a `newest_touch_by_subject_ids/2` map,
+  answering the "no cookie session on record" shape for an absent id
+  instead of a bare `nil` every call site would have to unwrap.
+  """
+  @spec touch_of(%{optional(Ecto.UUID.t()) => touch()}, Ecto.UUID.t()) :: touch()
+  def touch_of(touches, subject_id) when is_map(touches) and is_binary(subject_id),
+    do: Map.get(touches, subject_id, @no_touch)
+
+  @spec newest_touch(:user_id | :visitor_id, [Ecto.UUID.t()]) :: %{Ecto.UUID.t() => touch()}
+  defp newest_touch(column, ids) do
+    ranked =
+      from(s in Session,
+        where: field(s, ^column) in ^ids,
+        select: %{
+          subject_id: field(s, ^column),
+          last_seen_at: s.last_seen_at,
+          ip: s.ip,
+          rank: over(row_number(), partition_by: field(s, ^column), order_by: [desc: s.last_seen_at])
+        }
+      )
+
+    newest =
+      from(r in subquery(ranked),
+        where: r.rank == 1,
+        select: {r.subject_id, %{last_seen_at: r.last_seen_at, ip: r.ip}}
+      )
+
+    newest |> Repo.all() |> Map.new()
   end
 
   @doc """

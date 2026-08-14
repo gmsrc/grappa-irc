@@ -91,6 +91,7 @@ defmodule Grappa.Networks.Credentials.AdminWire do
           inserted_at: DateTime.t(),
           updated_at: DateTime.t(),
           last_seen_at: DateTime.t() | nil,
+          session_ip: String.t() | nil,
           live_state: live_state_json() | nil
         }
 
@@ -132,12 +133,12 @@ defmodule Grappa.Networks.Credentials.AdminWire do
   JSON shape. `live` is `nil` when no `Session.Server` is registered
   for `{:user, user_id} × network_id` — the U-0 honesty signal.
 
-  `last_seen_at` is the OWNING USER's newest browser-session touch
-  (`Grappa.Accounts.max_last_seen_by_subject_ids/2`). It is a property
-  of the subject, not of this network, so a user bound to three networks
-  reports the same value on all three rows — the same subject-wide grain
-  `GET /admin/sessions` already publishes. `nil` = no
-  `accounts_sessions` row on record.
+  `last_seen_at` and `session_ip` are the OWNING USER's newest browser
+  session (`Grappa.Accounts.newest_touch_by_subject_ids/2`). They are
+  properties of the subject, not of this network, so a user bound to
+  three networks reports the same values on all three rows — the same
+  subject-wide grain `GET /admin/sessions` already publishes. `nil` =
+  no `accounts_sessions` row on record.
 
   #1157 — see the twin note on `Grappa.Visitors.AdminWire`: the admin's
   unified session list is ROW-backed, so a parked credential (no pid, no
@@ -145,14 +146,32 @@ defmodule Grappa.Networks.Credentials.AdminWire do
   operator a truthful last-seen instead of a `—` that reads "never
   used".
 
+  #1308 — `session_ip` is the address that session logged in from, and
+  it is the FIRST source address a user row has ever carried: before
+  this the console could show one only for a visitor, out of the
+  identity-wide `visitors.ip`, and there is no such column on the user
+  side to fall back to. Never to be confused with
+  `live_state.peer_address`, which is the upstream IRC endpoint the
+  bouncer's own socket landed on.
+
   Crashes loudly when `:network` association isn't preloaded — the
   wire carries `network_slug`, not `network_id` alone.
   """
-  @spec credential_to_admin_json(Credential.t(), SessionEntry.t() | nil, DateTime.t() | nil) ::
-          t()
-  def credential_to_admin_json(%Credential{network: %Network{slug: slug}} = c, live, last_seen_at) do
+  @spec credential_to_admin_json(
+          Credential.t(),
+          SessionEntry.t() | nil,
+          DateTime.t() | nil,
+          String.t() | nil
+        ) :: t()
+  def credential_to_admin_json(
+        %Credential{network: %Network{slug: slug}} = c,
+        live,
+        last_seen_at,
+        session_ip
+      ) do
     %{
       last_seen_at: last_seen_at,
+      session_ip: session_ip,
       user_id: c.user_id,
       network_id: c.network_id,
       network_slug: slug,

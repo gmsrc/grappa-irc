@@ -260,6 +260,52 @@ defmodule GrappaWeb.Admin.VisitorsControllerTest do
       assert Map.has_key?(row, "last_seen_at")
       assert row["last_seen_at"] == nil
     end
+
+    # #1308 — the visitor row already carried an address, and it answers a
+    # different question: `ip` is the identity row's, written once when
+    # the visitor was provisioned. `session_ip` is the newest browser
+    # session's. Provision from one address and log in from another, or
+    # the two fields are indistinguishable and the console cannot be shown
+    # to render the per-session one.
+    test "200 + session_ip from the newest session, beside the identity-wide ip", %{conn: conn} do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      {:ok, _} = Grappa.Networks.find_or_create_network(%{slug: slug})
+
+      visitor =
+        visitor_fixture(
+          network_slug: slug,
+          nick: "roamer-#{System.unique_integer([:positive])}",
+          ip: "10.0.0.5"
+        )
+
+      {:ok, _} = Accounts.create_session({:visitor, visitor.id}, "203.0.113.9", "ua", [])
+      session = admin_session()
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/visitors")
+      row = Enum.find(json_response(conn, 200)["visitors"], &(&1["id"] == visitor.id))
+
+      assert row["session_ip"] == "203.0.113.9"
+      assert row["ip"] == "10.0.0.5"
+    end
+
+    test "200 + session_ip: null for a visitor that never had a browser session", %{conn: conn} do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      {:ok, _} = Grappa.Networks.find_or_create_network(%{slug: slug})
+
+      visitor =
+        visitor_fixture(
+          network_slug: slug,
+          nick: "unseen-ip-#{System.unique_integer([:positive])}"
+        )
+
+      session = admin_session()
+
+      conn = conn |> put_bearer(session.id) |> get("/admin/visitors")
+      row = Enum.find(json_response(conn, 200)["visitors"], &(&1["id"] == visitor.id))
+
+      assert Map.has_key?(row, "session_ip")
+      assert row["session_ip"] == nil
+    end
   end
 
   describe "POST /admin/visitors/:id/share-token — auth gate (#982)" do

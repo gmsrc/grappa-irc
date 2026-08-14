@@ -37,7 +37,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
     }
   end
 
-  describe "credential_to_admin_json/3" do
+  describe "credential_to_admin_json/4" do
     test "projects operator-relevant fields + nil live_state when no session" do
       now = DateTime.utc_now()
       c = %{credential_fixture() | inserted_at: now, updated_at: now}
@@ -57,7 +57,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
                inserted_at: ^now,
                updated_at: ^now,
                live_state: nil
-             } = AdminWire.credential_to_admin_json(c, nil, nil)
+             } = AdminWire.credential_to_admin_json(c, nil, nil, nil)
     end
 
     test "projects live_state when a SessionEntry is supplied" do
@@ -92,7 +92,7 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
                  joined_channels: ["#bofh"],
                  introspection_degraded: []
                }
-             } = AdminWire.credential_to_admin_json(c, entry, nil)
+             } = AdminWire.credential_to_admin_json(c, entry, nil, nil)
 
       assert is_binary(pid_str)
       assert String.starts_with?(pid_str, "#PID<")
@@ -113,18 +113,35 @@ defmodule Grappa.Networks.Credentials.AdminWireTest do
       seen = DateTime.truncate(DateTime.utc_now(), :second)
 
       assert %{last_seen_at: ^seen, live_state: nil} =
-               AdminWire.credential_to_admin_json(credential_fixture(), nil, seen)
+               AdminWire.credential_to_admin_json(credential_fixture(), nil, seen, nil)
     end
 
     test "renders last_seen_at: nil when the user has never been seen" do
-      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil)
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil)
 
       assert Map.has_key?(json, :last_seen_at)
       assert json.last_seen_at == nil
     end
 
+    # #1308 — the first source address a user row has ever carried. Pinned
+    # on a row whose `live_state` is nil so the value cannot be mistaken
+    # for anything the registry supplied: `live_state.peer_address` is the
+    # UPSTREAM endpoint, and rendering that as the client's address would
+    # be a lie to the operator.
+    test "carries session_ip on a row with no live session" do
+      assert %{session_ip: "203.0.113.9", live_state: nil} =
+               AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, "203.0.113.9")
+    end
+
+    test "renders session_ip: nil when the user has never logged in" do
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil)
+
+      assert Map.has_key?(json, :session_ip)
+      assert json.session_ip == nil
+    end
+
     test "NEVER includes password_encrypted or password (credential material exclusion)" do
-      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil)
+      json = AdminWire.credential_to_admin_json(credential_fixture(), nil, nil, nil)
 
       refute Map.has_key?(json, :password)
       refute Map.has_key?(json, :password_encrypted)

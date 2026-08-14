@@ -93,13 +93,15 @@ defmodule GrappaWeb.Admin.SessionsController do
     entries = LiveIntrospection.list_sessions()
     {user_ids, visitor_ids} = partition_subject_ids(entries)
     labels = SubjectLabels.resolve(Enum.map(entries, & &1.subject))
-    # MAX(accounts_sessions.last_seen_at) per subject. Two batched
-    # queries (one per subject_kind, same shape as the labels lookup)
-    # so the controller's DB cost stays O(1) regardless of session
-    # count. Missing keys → `nil` on the wire, same U-0 honesty rule
-    # the label resolution uses.
-    user_last_seen = Accounts.max_last_seen_by_subject_ids(:user, user_ids)
-    visitor_last_seen = Accounts.max_last_seen_by_subject_ids(:visitor, visitor_ids)
+    # The newest cookie session per subject. Two batched queries (one
+    # per subject_kind, same shape as the labels lookup) so the
+    # controller's DB cost stays O(1) regardless of session count.
+    # Missing keys → `nil` on the wire, same U-0 honesty rule the label
+    # resolution uses. This wire takes the timestamp only: #1308 put the
+    # source address on the two ROW-backed listings, which are the ones
+    # the admin console builds its rows from.
+    user_touches = Accounts.newest_touch_by_subject_ids(:user, user_ids)
+    visitor_touches = Accounts.newest_touch_by_subject_ids(:visitor, visitor_ids)
     # #550 — resolve every connected session's upstream peer reverse-DNS in
     # ONE batched, lock-free PtrCache read. Out of band (a cold/expired
     # entry fires an async resolve so the NEXT scan is warm) — NEVER a
@@ -117,7 +119,7 @@ defmodule GrappaWeb.Admin.SessionsController do
         AdminWire.session_to_admin_json(
           entry,
           Map.get(labels, entry.subject),
-          resolve_last_seen(entry, user_last_seen, visitor_last_seen),
+          resolve_last_seen(entry, user_touches, visitor_touches),
           resolve_peer_name(entry, peer_names)
         )
       end)
@@ -141,11 +143,11 @@ defmodule GrappaWeb.Admin.SessionsController do
     end)
   end
 
-  defp resolve_last_seen(%{subject: {:user, id}}, user_last_seen, _),
-    do: Map.get(user_last_seen, id)
+  defp resolve_last_seen(%{subject: {:user, id}}, user_touches, _),
+    do: Accounts.touch_of(user_touches, id).last_seen_at
 
-  defp resolve_last_seen(%{subject: {:visitor, id}}, _, visitor_last_seen),
-    do: Map.get(visitor_last_seen, id)
+  defp resolve_last_seen(%{subject: {:visitor, id}}, _, visitor_touches),
+    do: Accounts.touch_of(visitor_touches, id).last_seen_at
 
   # #550 — the reverse-DNS name for this entry's upstream peer, or nil when
   # the session is not connected (no address to resolve) or the batched

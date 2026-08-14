@@ -130,6 +130,42 @@ defmodule GrappaWeb.Admin.CredentialsControllerTest do
       assert row["last_seen_at"] == nil
     end
 
+    # #1308 — a user row could not show a source address at all before
+    # this: the only one the console had was `visitors.ip`, and there is
+    # no user-side twin of that column. The address rides the SAME
+    # batched lookup as `last_seen_at`, so assert both, from the same
+    # session, or a query that pairs them wrongly still passes.
+    test "200 + session_ip from the user's newest browser session", %{conn: conn} do
+      {user, network, _} = bound_credential()
+      {:ok, _} = Accounts.create_session({:user, user.id}, "203.0.113.9", "ua", [])
+
+      session = admin_session()
+      conn = conn |> put_bearer(session.id) |> get("/admin/credentials")
+
+      row =
+        Enum.find(json_response(conn, 200)["credentials"], fn r ->
+          r["user_id"] == user.id and r["network_id"] == network.id
+        end)
+
+      assert row["session_ip"] == "203.0.113.9"
+      assert row["last_seen_at"] != nil
+    end
+
+    test "200 + session_ip: null for a user that never had a browser session", %{conn: conn} do
+      {user, network, _} = bound_credential()
+
+      session = admin_session()
+      conn = conn |> put_bearer(session.id) |> get("/admin/credentials")
+
+      row =
+        Enum.find(json_response(conn, 200)["credentials"], fn r ->
+          r["user_id"] == user.id and r["network_id"] == network.id
+        end)
+
+      assert Map.has_key?(row, "session_ip")
+      assert row["session_ip"] == nil
+    end
+
     test "200 + NEVER includes password_encrypted or password (defense-in-depth)", %{conn: conn} do
       _ = bound_credential()
 

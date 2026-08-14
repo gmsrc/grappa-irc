@@ -585,6 +585,7 @@ export type NetworksCredentialsAdminWireT = {
   inserted_at: string;
   updated_at: string;
   last_seen_at: string | null;
+  session_ip: string | null;
   live_state: NetworksCredentialsAdminWireLiveStateJson | null;
 };
 
@@ -1438,6 +1439,7 @@ export type VisitorsAdminWireT = {
   expires_at: string | null;
   identified: boolean;
   ip: string | null;
+  session_ip: string | null;
   inserted_at: string;
   last_seen_at: string | null;
   networks: VisitorsAdminWireNetworkJson[];

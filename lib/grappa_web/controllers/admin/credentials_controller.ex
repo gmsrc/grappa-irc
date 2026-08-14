@@ -66,21 +66,24 @@ defmodule GrappaWeb.Admin.CredentialsController do
     # yields N rows sharing one subject-wide last-seen, so resolve per
     # USER, not per row.
     user_ids = creds |> Enum.map(& &1.user_id) |> Enum.uniq()
-    last_seen = Accounts.max_last_seen_by_subject_ids(:user, user_ids)
+    touches = Accounts.newest_touch_by_subject_ids(:user, user_ids)
 
     rows =
       for cred <- creds do
         live = LiveIntrospection.lookup_session({:user, cred.user_id}, cred.network_id)
-        AdminWire.credential_to_admin_json(cred, live, Map.get(last_seen, cred.user_id))
+        touch = Accounts.touch_of(touches, cred.user_id)
+        AdminWire.credential_to_admin_json(cred, live, touch.last_seen_at, touch.ip)
       end
 
     json(conn, %{credentials: rows})
   end
 
   # Single-row twin of the batch above, for the create / update replies.
-  @spec user_last_seen(Ecto.UUID.t()) :: DateTime.t() | nil
-  defp user_last_seen(user_id) do
-    Map.get(Accounts.max_last_seen_by_subject_ids(:user, [user_id]), user_id)
+  @spec user_touch(Ecto.UUID.t()) :: Accounts.touch()
+  defp user_touch(user_id) do
+    :user
+    |> Accounts.newest_touch_by_subject_ids([user_id])
+    |> Accounts.touch_of(user_id)
   end
 
   @doc """
@@ -103,11 +106,12 @@ defmodule GrappaWeb.Admin.CredentialsController do
            Credentials.update_credential_with_session_lifecycle(user, network, attrs) do
       :ok = emit_credential_updated(user, network, action, conn)
       live = LiveIntrospection.lookup_session({:user, updated.user_id}, updated.network_id)
+      touch = user_touch(updated.user_id)
 
       json(
         conn,
         updated
-        |> AdminWire.credential_to_admin_json(live, user_last_seen(updated.user_id))
+        |> AdminWire.credential_to_admin_json(live, touch.last_seen_at, touch.ip)
         |> AdminWire.with_session_action(action)
       )
     end
@@ -138,12 +142,13 @@ defmodule GrappaWeb.Admin.CredentialsController do
       :ok = emit_credential_bound(user, network, cred, conn)
       {cred, outcome} = connect_bound_credential(cred)
       live = LiveIntrospection.lookup_session({:user, cred.user_id}, cred.network_id)
+      touch = user_touch(cred.user_id)
 
       conn
       |> put_status(:created)
       |> json(
         cred
-        |> AdminWire.credential_to_admin_json(live, user_last_seen(cred.user_id))
+        |> AdminWire.credential_to_admin_json(live, touch.last_seen_at, touch.ip)
         |> AdminWire.with_bind_outcome(outcome)
       )
     end

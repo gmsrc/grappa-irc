@@ -72,11 +72,13 @@ defmodule GrappaWeb.Admin.VisitorsController do
     # `SessionsController.index/2` already uses. Resolved HERE rather
     # than inside the wire so the render stays a pure projection.
     visitor_ids = Enum.map(entries, fn {v, _} -> v.id end)
-    last_seen = Accounts.max_last_seen_by_subject_ids(:visitor, visitor_ids)
+    touches = Accounts.newest_touch_by_subject_ids(:visitor, visitor_ids)
 
     rows =
-      for {v, per_network} <- entries,
-          do: AdminWire.visitor_to_admin_json(v, per_network, Map.get(last_seen, v.id))
+      for {v, per_network} <- entries do
+        touch = Accounts.touch_of(touches, v.id)
+        AdminWire.visitor_to_admin_json(v, per_network, touch.last_seen_at, touch.ip)
+      end
 
     json(conn, %{visitors: rows})
   end

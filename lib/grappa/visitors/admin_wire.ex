@@ -66,6 +66,7 @@ defmodule Grappa.Visitors.AdminWire do
           expires_at: DateTime.t() | nil,
           identified: boolean(),
           ip: String.t() | nil,
+          session_ip: String.t() | nil,
           inserted_at: DateTime.t(),
           last_seen_at: DateTime.t() | nil,
           networks: [network_json()]
@@ -78,29 +79,41 @@ defmodule Grappa.Visitors.AdminWire do
   when no `Session.Server` is registered for `{:visitor, v.id} ×
   credential.network_id` — the U-0 honesty signal.
 
-  `last_seen_at` is the visitor's newest browser-session touch
-  (`Grappa.Accounts.max_last_seen_by_subject_ids/2`), identity-wide like
-  `expires_at` — it is a property of the subject, not of one network.
-  `nil` means no `accounts_sessions` row has ever been seen for it.
+  `last_seen_at` and `session_ip` both come from the visitor's newest
+  browser session (`Grappa.Accounts.newest_touch_by_subject_ids/2`),
+  identity-wide like `expires_at` — properties of the subject, not of
+  one network. `nil` on either means no `accounts_sessions` row has
+  ever been seen for it.
 
-  #1157 — the field is here because the admin's unified session list is
-  ROW-backed: it must show a last-seen for a parked or expired visitor,
-  which by construction has no registry entry and so never appears in
-  `GET /admin/sessions`, where this value used to live alone. A column
-  reading `—` for every inactive row would say "never used", which is
-  not what the server observed — it is what the server never asked.
+  #1157 — the fields are here because the admin's unified session list
+  is ROW-backed: it must show a last-seen for a parked or expired
+  visitor, which by construction has no registry entry and so never
+  appears in `GET /admin/sessions`, where this value used to live alone.
+  A column reading `—` for every inactive row would say "never used",
+  which is not what the server observed — it is what the server never
+  asked.
+
+  #1308 — `session_ip` is the address the newest session logged in
+  from. `ip` beside it is a DIFFERENT fact and stays: `visitors.ip` is
+  written once on the identity row, so it answers "where was this
+  visitor first seen", not "where is this session coming from". The
+  admin console renders the per-session one (vjt, 2026-08-14); the
+  identity-wide one keeps its place on the wire because the contract is
+  additive-only and other readers exist.
   """
   @spec visitor_to_admin_json(
           Visitor.t(),
           [{Credential.t(), SessionEntry.t() | nil}],
-          DateTime.t() | nil
+          DateTime.t() | nil,
+          String.t() | nil
         ) :: t()
-  def visitor_to_admin_json(%Visitor{} = v, per_network, last_seen_at)
+  def visitor_to_admin_json(%Visitor{} = v, per_network, last_seen_at, session_ip)
       when is_list(per_network) do
     %{
       id: v.id,
       expires_at: v.expires_at,
       last_seen_at: last_seen_at,
+      session_ip: session_ip,
       # #211 phase 7 — "identified/registered" is DERIVED from the
       # credentials (any network holds a committed NickServ secret), not a
       # `visitors.expires_at`-nil flag. The per_network list is already

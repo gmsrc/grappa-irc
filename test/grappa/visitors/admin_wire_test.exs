@@ -9,7 +9,7 @@ defmodule Grappa.Visitors.AdminWireTest do
   ## #211 phase 7 — multi-network shape
 
   A visitor is multi-network; per-network identity (nick) + connection
-  state live on the credential. So `visitor_to_admin_json/3` takes a
+  state live on the credential. So `visitor_to_admin_json/4` takes a
   `[{%Credential{}, live_state | nil}]` list and renders a `:networks`
   list — one entry per credential.
 
@@ -30,7 +30,7 @@ defmodule Grappa.Visitors.AdminWireTest do
   alias Grappa.Visitors
   alias Grappa.Visitors.{AdminWire, Visitor}
 
-  describe "visitor_to_admin_json/3" do
+  describe "visitor_to_admin_json/4" do
     test "includes operator-visible fields + per-network live_state and never password_encrypted" do
       network = network_fixture(slug: "azzurra-#{System.unique_integer([:positive])}")
 
@@ -55,7 +55,7 @@ defmodule Grappa.Visitors.AdminWireTest do
         introspection_degraded: []
       }
 
-      json = AdminWire.visitor_to_admin_json(v, [{cred, live}], nil)
+      json = AdminWire.visitor_to_admin_json(v, [{cred, live}], nil, nil)
 
       assert json.id == v.id
       assert json.ip == "10.0.0.5"
@@ -86,7 +86,7 @@ defmodule Grappa.Visitors.AdminWireTest do
       {:ok, v} = Visitors.find_or_provision_anon("solo", network.slug, "10.0.0.5")
       [cred] = Credentials.list_visitor_credentials(v.id)
 
-      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil)
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil, nil)
 
       assert [net] = json.networks
       assert net.live_state == nil
@@ -97,7 +97,7 @@ defmodule Grappa.Visitors.AdminWireTest do
       # A bare visitor row whose slug does not resolve → no credential.
       v = visitor_fixture(nick: "bare", network_slug: "no-such-network")
 
-      json = AdminWire.visitor_to_admin_json(v, [], nil)
+      json = AdminWire.visitor_to_admin_json(v, [], nil, nil)
 
       assert json.networks == []
     end
@@ -111,7 +111,7 @@ defmodule Grappa.Visitors.AdminWireTest do
       # holds a committed secret), so the credential list must be passed in.
       [cred] = Credentials.list_visitor_credentials(v.id)
 
-      json = AdminWire.visitor_to_admin_json(identified, [{cred, nil}], nil)
+      json = AdminWire.visitor_to_admin_json(identified, [{cred, nil}], nil, nil)
 
       assert json.identified == true
       refute Map.has_key?(json, :password_encrypted)
@@ -126,7 +126,7 @@ defmodule Grappa.Visitors.AdminWireTest do
       [cred] = Credentials.list_visitor_credentials(v.id)
       seen = DateTime.truncate(DateTime.utc_now(), :second)
 
-      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], seen)
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], seen, nil)
 
       assert json.last_seen_at == seen
       assert [%{live_state: nil}] = json.networks
@@ -137,10 +137,37 @@ defmodule Grappa.Visitors.AdminWireTest do
       {:ok, v} = Visitors.find_or_provision_anon("never", network.slug, "10.0.0.5")
       [cred] = Credentials.list_visitor_credentials(v.id)
 
-      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil)
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil, nil)
 
       assert Map.has_key?(json, :last_seen_at)
       assert json.last_seen_at == nil
+    end
+
+    # #1308 — the two addresses answer different questions and the wire
+    # must keep them apart. `ip` is the identity row's, written once when
+    # the visitor was first provisioned; `session_ip` is the newest cookie
+    # session's. Feed them DIFFERENT values, or a single-value fixture
+    # would pass with the two fields wired to the same source.
+    test "session_ip is the per-session address, distinct from the identity-wide ip" do
+      network = network_fixture(slug: "azzurra-#{System.unique_integer([:positive])}")
+      {:ok, v} = Visitors.find_or_provision_anon("roamer", network.slug, "10.0.0.5")
+      [cred] = Credentials.list_visitor_credentials(v.id)
+
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil, "203.0.113.9")
+
+      assert json.session_ip == "203.0.113.9"
+      assert json.ip == "10.0.0.5"
+    end
+
+    test "renders session_ip: nil when the newest session recorded no address" do
+      network = network_fixture(slug: "azzurra-#{System.unique_integer([:positive])}")
+      {:ok, v} = Visitors.find_or_provision_anon("addressless", network.slug, "10.0.0.5")
+      [cred] = Credentials.list_visitor_credentials(v.id)
+
+      json = AdminWire.visitor_to_admin_json(v, [{cred, nil}], nil, nil)
+
+      assert Map.has_key?(json, :session_ip)
+      assert json.session_ip == nil
     end
   end
 end

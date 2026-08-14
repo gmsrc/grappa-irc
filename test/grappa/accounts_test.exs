@@ -1,6 +1,8 @@
 defmodule Grappa.AccountsTest do
   use Grappa.DataCase, async: true
 
+  import Grappa.AuthFixtures, only: [visitor_fixture: 1]
+
   alias Grappa.Accounts
   alias Grappa.Accounts.User
   alias Grappa.Repo.BusyRetry
@@ -561,6 +563,86 @@ defmodule Grappa.AccountsTest do
 
       assert ["srch-alice", "srch-bob", "srch-charlie"] ==
                Enum.map(Accounts.search_users("srch-", 10), & &1.name)
+    end
+  end
+
+  # #1308 — the admin console's source-address column. The contract that
+  # matters is the PAIRING: the address must come from the very row the
+  # timestamp came from, because a multi-device subject has several and
+  # the operator is being told where that subject is now.
+  describe "newest_touch_by_subject_ids/2" do
+    defp move_last_seen(%{id: id}, seconds_ago) do
+      when_seen = DateTime.add(DateTime.utc_now(), -seconds_ago, :second)
+      query = from(s in Grappa.Accounts.Session, where: s.id == ^id)
+      {1, _} = Repo.update_all(query, set: [last_seen_at: when_seen])
+      when_seen
+    end
+
+    test "returns the newest session's timestamp AND that session's address" do
+      {:ok, user} = Accounts.create_user(%{name: "touch-two-devices", password: @password})
+      {:ok, old} = Accounts.create_session({:user, user.id}, "198.51.100.7", "old-ua", [])
+      {:ok, new} = Accounts.create_session({:user, user.id}, "203.0.113.9", "new-ua", [])
+      _ = move_last_seen(old, 3600)
+      newest_at = move_last_seen(new, 60)
+
+      touches = Accounts.newest_touch_by_subject_ids(:user, [user.id])
+
+      # Both halves, or the test passes on a query that reads the address
+      # off an arbitrary row and the timestamp off the right one.
+      assert %{last_seen_at: at, ip: "203.0.113.9"} = Accounts.touch_of(touches, user.id)
+      assert DateTime.compare(at, newest_at) == :eq
+    end
+
+    test "reports the newest session's nil address rather than an older row's" do
+      {:ok, user} = Accounts.create_user(%{name: "touch-addressless", password: @password})
+      {:ok, old} = Accounts.create_session({:user, user.id}, "198.51.100.7", "ua", [])
+      {:ok, new} = Accounts.create_session({:user, user.id}, nil, nil, [])
+      _ = move_last_seen(old, 3600)
+      _ = move_last_seen(new, 60)
+
+      touches = Accounts.newest_touch_by_subject_ids(:user, [user.id])
+
+      # Coalescing to the older row would answer "the subject is at
+      # 198.51.100.7", which is a claim about an address they have not
+      # used since. Unknown is the honest answer.
+      assert %{ip: nil} = Accounts.touch_of(touches, user.id)
+    end
+
+    test "a visitor's sessions are keyed off visitor_id, not user_id" do
+      visitor = visitor_fixture(nick: "touch-visitor")
+      {:ok, _} = Accounts.create_session({:visitor, visitor.id}, "192.0.2.44", "ua", [])
+
+      assert %{ip: "192.0.2.44"} =
+               Accounts.touch_of(
+                 Accounts.newest_touch_by_subject_ids(:visitor, [visitor.id]),
+                 visitor.id
+               )
+    end
+
+    test "a subject with no session at all is absent from the map, and reads as unknown" do
+      {:ok, user} = Accounts.create_user(%{name: "touch-never", password: @password})
+
+      touches = Accounts.newest_touch_by_subject_ids(:user, [user.id])
+
+      refute Map.has_key?(touches, user.id)
+      assert Accounts.touch_of(touches, user.id) == %{last_seen_at: nil, ip: nil}
+    end
+
+    test "one query serves N subjects, each with its own newest address" do
+      {:ok, a} = Accounts.create_user(%{name: "touch-batch-a", password: @password})
+      {:ok, b} = Accounts.create_user(%{name: "touch-batch-b", password: @password})
+      {:ok, _} = Accounts.create_session({:user, a.id}, "198.51.100.1", "ua", [])
+      {:ok, _} = Accounts.create_session({:user, b.id}, "198.51.100.2", "ua", [])
+
+      touches = Accounts.newest_touch_by_subject_ids(:user, [a.id, b.id])
+
+      assert Accounts.touch_of(touches, a.id).ip == "198.51.100.1"
+      assert Accounts.touch_of(touches, b.id).ip == "198.51.100.2"
+    end
+
+    test "empty input skips the round-trip" do
+      assert Accounts.newest_touch_by_subject_ids(:user, []) == %{}
+      assert Accounts.newest_touch_by_subject_ids(:visitor, []) == %{}
     end
   end
 end
