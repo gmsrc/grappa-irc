@@ -322,6 +322,44 @@ describe("buildSubjectRows — the per-session source address", () => {
   });
 });
 
+// #1315, the ruling itself (vjt on `#grappa`: "show the credential nick
+// where one is available", amended to "the same for the user cred"). It
+// is ONE rule for both subject kinds, not a visitor rule with a user
+// exception, so it gets ONE block — and it closes with a pin rather than
+// a change, because both kinds already read this way.
+//
+// This is the scenario the issue is named for: services rename the
+// session to `GuestNNNNN`, and the row must keep saying what the operator
+// CONFIGURED while the live nick stays beside it, unreconciled (#618).
+// Computing either from the other is what would erase the divergence.
+describe("buildSubjectRows — the label is the CREDENTIAL nick, on both kinds", () => {
+  it("keeps a USER row on the configured nick when the live session diverges", () => {
+    const rows = build({ credentials: [credential({ live_state: live({ nick: "Guest12345" }) })] });
+
+    expect(rows[0]?.label).toBe("vjt");
+    expect(rows[0]?.live?.nick).toBe("Guest12345");
+  });
+
+  it("keeps a VISITOR row on the configured nick when the live session diverges", () => {
+    const renamed = visitor({
+      networks: [
+        {
+          network_slug: "azzurra",
+          network_id: 42,
+          nick: "guest1",
+          connection_state: "connected",
+          live_state: live({ nick: "Guest12345" }),
+        },
+      ],
+    });
+
+    const rows = build({ visitors: [renamed] });
+
+    expect(rows[0]?.label).toBe("guest1");
+    expect(rows[0]?.live?.nick).toBe("Guest12345");
+  });
+});
+
 // #1315 — the account behind a user row. The console identified a user
 // row by its configured nick alone, so a session services had renamed to
 // `GuestNNNNN` read as nobody: the only other thing on the row is a UUID,
@@ -341,19 +379,6 @@ describe("buildSubjectRows — the account name behind a user row", () => {
 
     expect(rows[0]?.user_name).toBeNull();
     expect(rows[0]?.label).toBe("vjt");
-  });
-
-  // The ruling's other half for a user row: "show the credential nick
-  // where one is available" — already true, and now pinned rather than
-  // rebuilt. This is the scenario the issue is named for: services rename
-  // the session to `GuestNNNNN`, and the row must keep saying what the
-  // operator CONFIGURED while the live nick stays visible beside it,
-  // neither computed from the other (#618).
-  it("keeps the label on the configured nick when the live session diverges", () => {
-    const rows = build({ credentials: [credential({ live_state: live({ nick: "Guest12345" }) })] });
-
-    expect(rows[0]?.label).toBe("vjt");
-    expect(rows[0]?.live?.nick).toBe("Guest12345");
   });
 
   it("reports null on a visitor row, which has no account at all", () => {

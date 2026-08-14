@@ -42325,6 +42325,16 @@ already fetched in their `with` chain. A field added at one door only
 would have made the console's answer depend on which verb last touched
 the row.
 
+**The other half of the ruling closes with a PIN, not a change.** "Show
+the credential nick where one is available" was already true on both
+subject kinds — `adminSubjectRows.ts` reads `net.nick` for a visitor and
+`c.nick` for a user, and `Visitors.AdminWire` has carried the credential
+nick beside `live_state.nick` since #618. Pinning it is not ceremony:
+each of the two assertions dies to its own mutant (a label following
+`live_state.nick`) and to nothing else in a 109-test suite, so before
+this the console could have started rendering the live nick on either
+kind without one test noticing.
+
 **What did NOT change, deliberately.** No `configured_nick` column and no
 migration. No change to `Credentials.update_visitor_credential_nick/3` or
 its `auth_method: :none` gate — the #561 invariant (an identified
