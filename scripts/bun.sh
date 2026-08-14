@@ -66,15 +66,29 @@ run_bun() {
 # absent toolchain reported as a missing command or a type error. The
 # install-family verbs manage node_modules themselves — skip those.
 # Why: docs/TESTING.md § "Architecture: why the scripts exist" (#484).
+#
+# The question is "are the dependencies there", NOT "does the directory
+# exist" — those differ, and the difference is routine (#1311). The e2e
+# stack mounts a named volume at /work/node_modules INSIDE the `.:/work`
+# bind of cicchetto/e2e, so docker materialises an EMPTY
+# cicchetto/e2e/node_modules on the host: any worktree that ran the testnet
+# before its first `run check` satisfied an existence test with nothing
+# installed, and the check died with `TS2688 Cannot find type definition
+# file for '@playwright/test'` — an absent toolchain wearing the mask of a
+# type error in the branch under test.
+needs_install() {
+    [ -z "$(ls -A "$1" 2>/dev/null)" ]
+}
+
 case "${1:-}" in
     install | add | remove | update | outdated | pm | ci | link | unlink) ;;
     *)
-        if [ ! -d "$CICCHETTO_DIR/node_modules" ]; then
-            printf 'scripts/bun.sh: cicchetto/node_modules missing — running bun install...\n' >&2
+        if needs_install "$CICCHETTO_DIR/node_modules"; then
+            printf 'scripts/bun.sh: cicchetto/node_modules has no dependencies installed — running bun install...\n' >&2
             run_bun "$BUN_IMAGE" bun install >&2
         fi
-        if [ ! -d "$CICCHETTO_DIR/e2e/node_modules" ]; then
-            printf 'scripts/bun.sh: cicchetto/e2e/node_modules missing — running bun install --cwd e2e...\n' >&2
+        if needs_install "$CICCHETTO_DIR/e2e/node_modules"; then
+            printf 'scripts/bun.sh: cicchetto/e2e/node_modules has no dependencies installed — running bun install --cwd e2e...\n' >&2
             run_bun "$BUN_IMAGE" bun install --cwd e2e >&2
         fi
         ;;
