@@ -42003,12 +42003,31 @@ discriminator the context-side writes already speak and the exact
 argument `Accounts.create_session/4` takes, so the verified value is
 handed straight through instead of re-derived.
 
-**The salt moved to `share-v2`, and that is the guarantee rather than a
-cosmetic.** The signing key derives from the salt, so a v1 token does
-not verify at all: there is no window in which an in-flight untagged
-link is re-read as EITHER kind. `verify/1` additionally refuses a
-correctly-salted token whose payload is not one of the two known tags —
-reaching the v2 namespace is necessary, not sufficient.
+**The salt moved to `share-v2`.** The signing key derives from the salt,
+so a v1 token does not verify at all, and `verify/1` separately refuses
+a correctly-salted token whose payload is not one of the two known tags.
+Two independent layers, and the second one alone would in fact have
+sufficed for every token that exists in the world: a real v1 payload is
+a bare uuid, which the shape guard rejects whatever the salt says.
+
+That is worth writing down because the first attempt at testing it was
+WRONG, and the mutation pass is what said so. The test signed a bare
+uuid under the old salt and asserted a refusal; reverting the salt in
+production killed ZERO assertions, because the shape guard went on
+refusing the same token for its own reasons. A passing test attributing
+to the wrong mechanism is indistinguishable from a working guarantee
+until something removes the guarantee. The witness that discriminates
+signs a payload the shape guard ACCEPTS — a properly tagged tuple —
+under the v1 salt, so the only thing left to refuse it is the key; that
+one dies on the salt mutant and on no other. The bare-uuid test stays,
+relabelled: it is the input that actually occurs, it asserts the
+outcome, and it attributes to neither layer by construction.
+
+The rule that leaves: a defence-in-depth pair needs one test per layer,
+each constructed so the OTHER layer cannot be what passes it. Test the
+realistic input too, but do not let it stand as the witness for either
+mechanism — mutate each layer separately and check that exactly one
+assertion dies, or the redundancy is silently one layer deep.
 
 The consume's success body now renders through `GrappaWeb.AuthJSON`
 `login/1` instead of a hand-rolled visitor envelope. A share consume IS

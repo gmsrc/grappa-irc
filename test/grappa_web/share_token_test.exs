@@ -59,14 +59,31 @@ defmodule GrappaWeb.ShareTokenTest do
   end
 
   describe "verify/1 rejections" do
-    test "a v1 token (bare uuid under the old salt) is refused" do
-      # #1306 — the salt bump is the whole reason the payload change is
-      # safe: a token from the untagged era can never be re-read as
-      # EITHER kind, so there is no window in which an in-flight v1 link
-      # resolves against the wrong table.
+    test "a real v1 token (bare uuid under the old salt) is refused" do
+      # The realistic historical artefact: an in-flight link minted
+      # before #1306. TWO independent layers refuse it — the salt no
+      # longer derives the same key, AND the payload is not a known tag.
+      # Measured by mutation: neither the salt nor the shape guard alone
+      # can be removed to make this fail, so this test asserts the
+      # OUTCOME and attributes it to neither. The two tests below take
+      # one layer each; this one is here because it is the input that
+      # actually exists in the world.
       v1_token = Phoenix.Token.sign(GrappaWeb.Endpoint, @v1_salt, Ecto.UUID.generate())
 
       assert {:error, :unauthorized} = ShareToken.verify(v1_token)
+    end
+
+    test "a TAGGED payload signed under the v1 salt is refused — this one is the salt" do
+      # The discriminator for the salt bump, and the reason it exists as
+      # a separate test: the token above is refused by the shape guard
+      # even with the salt reverted, so it witnesses nothing about the
+      # salt. Give the payload a shape the guard ACCEPTS and the only
+      # thing left to refuse it is the signing key. Restore
+      # `visitor-share-v1` in production and this — and only this — goes
+      # green, which is what makes it the witness.
+      forged = Phoenix.Token.sign(GrappaWeb.Endpoint, @v1_salt, {:visitor, Ecto.UUID.generate()})
+
+      assert {:error, :unauthorized} = ShareToken.verify(forged)
     end
 
     test "a correctly-salted token carrying an untagged payload is refused" do
