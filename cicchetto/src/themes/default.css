@@ -5470,6 +5470,20 @@ html.resize-dragging * {
   overflow-wrap: anywhere;
 }
 
+/* #1315 — the account name sits ON the identity line, dimmed and a size
+   down for the same reason the network line is: it qualifies the nick
+   rather than competing with it, and the nick is what the admin verbs act
+   on. Same treatment as `.admin-session-network` deliberately — one
+   visual weight for "context about this row's identity", so a third fact
+   would not need a third style. */
+.admin-session-account {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 400;
+  color: var(--adm-text-dim);
+  overflow-wrap: anywhere;
+}
+
 /* Second line — dimmed and a size down because it qualifies the nick above
    rather than competing with it. `font-weight: 400` undoes
    `.adm-row-expand`'s 600: the disclosure is bold because it is the row's

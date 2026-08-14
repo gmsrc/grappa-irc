@@ -578,6 +578,7 @@ export type NetworksCredentialsAdminWireLiveStateJson = {
 
 export type NetworksCredentialsAdminWireT = {
   user_id: string;
+  user_name: string | null;
   network_id: number;
   network_slug: string;
   nick: string;

@@ -85,6 +85,8 @@ const CRED: AdminCredential = {
   last_seen_at: null,
   session_ip: null,
   user_id: USER.id,
+  // #1315 — the account this credential belongs to, as the server sends it.
+  user_name: USER.name,
   network_id: NETWORK.id,
   network_slug: NETWORK.slug,
   nick: "alice",

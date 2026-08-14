@@ -91,6 +91,16 @@ export type AdminSubjectRow = {
   /** Display name: the configured nick, or the user's account name.
    * `null` only on an orphan-pid row whose DB row is gone. */
   label: string | null;
+  /** #1315 — the ACCOUNT behind a user row (`users.name`), beside the
+   * nick rather than instead of it: a session services renamed to
+   * `GuestNNNNN` keeps a nick that identifies nobody, and the only other
+   * thing the row had was a UUID the card never printed.
+   *
+   * `null` on every class that has no user credential behind it — a
+   * visitor (which has no account at all), an orphan pid, a log-only row
+   * — and on a user row whose name the server could not resolve. Never
+   * derived from `label`: the two are separate facts, per #618. */
+  user_name: string | null;
   network_id: number;
   /** `null` when the FK resolves to no known network (deleted-network
    * race). Never blanked silently — the caller renders the raw id. */
@@ -343,6 +353,7 @@ export function buildSubjectRows(input: {
         subject_kind: "visitor",
         subject_id: v.id,
         label: net.nick,
+        user_name: null,
         network_id: net.network_id,
         network_slug: net.network_slug,
         connection_state: net.connection_state,
@@ -366,6 +377,7 @@ export function buildSubjectRows(input: {
       subject_kind: "user",
       subject_id: c.user_id,
       label: c.nick,
+      user_name: c.user_name,
       network_id: c.network_id,
       network_slug: c.network_slug,
       connection_state: c.connection_state,
@@ -395,6 +407,11 @@ export function buildSubjectRows(input: {
       subject_kind: s.subject_kind,
       subject_id: s.subject_id,
       label: s.subject_label,
+      // #1315 — no credential row, so no account fact to carry. On a USER
+      // orphan `subject_label` IS the account name, and it is already the
+      // label: repeating it here would print the same string twice under
+      // two different meanings.
+      user_name: null,
       network_id: s.network_id,
       network_slug: slugOf(networks, s.network_id),
       connection_state: null,
@@ -430,6 +447,9 @@ export function buildSubjectRows(input: {
       subject_kind: parsed.kind,
       subject_id: parsed.subjectId,
       label: e.nick,
+      // The log has no account column, and the subject row that held one
+      // is gone. Absent, not blank.
+      user_name: null,
       network_id: parsed.networkId,
       // The log stores the slug it saw at emit time; fall back to the
       // live network list, then to null (the caller renders the raw id).

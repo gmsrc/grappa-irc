@@ -501,6 +501,24 @@ const AdminSessionsTab: Component = () => {
                                     rows are on their own page now, so the
                                     badge would have nothing to mark. */}
                                     <span class="admin-session-nick">{renderLabel(row)}</span>
+                                    {/* #1315 — the account behind a user
+                                    row, beside the nick and never in
+                                    place of it: services renaming a
+                                    session to `GuestNNNNN` leaves a nick
+                                    that identifies nobody, and the only
+                                    other thing the row carried was a UUID
+                                    that is not printed anywhere. Absent
+                                    on every class with no account
+                                    (visitor, orphan pid, log-only), where
+                                    an empty element would read as an
+                                    account we failed to fetch. */}
+                                    <Show when={row.user_name}>
+                                      {(name) => (
+                                        <span class="admin-session-account" title="account">
+                                          {name()}
+                                        </span>
+                                      )}
+                                    </Show>
                                   </span>
                                   <span class="admin-session-network">
                                     {row.network_slug ?? `network ${row.network_id}`}

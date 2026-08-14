@@ -614,6 +614,7 @@ export const S_NetworksCredentialsAdminWireSpawnError = {
 export const S_NetworksCredentialsAdminWireT = {
   o: {
     user_id: "s",
+    user_name: { u: ["s", "z"] },
     network_id: "i",
     network_slug: "s",
     nick: "s",

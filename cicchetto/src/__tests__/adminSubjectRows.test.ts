@@ -67,6 +67,10 @@ const visitor = (over: Partial<AdminVisitor> = {}): AdminVisitor =>
 const credential = (over: Partial<AdminCredential> = {}): AdminCredential =>
   ({
     user_id: USER_ID,
+    // #1315 — deliberately NOT the nick: the account and the nick it
+    // configured are two facts, and a fixture where they agree cannot tell
+    // which one the row is carrying.
+    user_name: "vjt-the-account",
     network_id: 42,
     network_slug: "azzurra",
     nick: "vjt",
@@ -315,6 +319,60 @@ describe("buildSubjectRows — the per-session source address", () => {
     const rows = build({ credentials: [credential({ session_ip: null })] });
 
     expect(rows[0]?.session_ip).toBeNull();
+  });
+});
+
+// #1315 — the account behind a user row. The console identified a user
+// row by its configured nick alone, so a session services had renamed to
+// `GuestNNNNN` read as nobody: the only other thing on the row is a UUID,
+// and that is not rendered anywhere. The name is an ADDITIONAL fact and
+// the nick stays exactly where it was (vjt's ruling: show the credential
+// nick where one is available, per the #618 never-reconcile posture).
+describe("buildSubjectRows — the account name behind a user row", () => {
+  it("carries the account name onto a user row without displacing the nick", () => {
+    const rows = build({ credentials: [credential()] });
+
+    expect(rows[0]?.user_name).toBe("vjt-the-account");
+    expect(rows[0]?.label).toBe("vjt");
+  });
+
+  it("passes a missing account name through as null instead of inventing one", () => {
+    const rows = build({ credentials: [credential({ user_name: null })] });
+
+    expect(rows[0]?.user_name).toBeNull();
+    expect(rows[0]?.label).toBe("vjt");
+  });
+
+  // The ruling's other half for a user row: "show the credential nick
+  // where one is available" — already true, and now pinned rather than
+  // rebuilt. This is the scenario the issue is named for: services rename
+  // the session to `GuestNNNNN`, and the row must keep saying what the
+  // operator CONFIGURED while the live nick stays visible beside it,
+  // neither computed from the other (#618).
+  it("keeps the label on the configured nick when the live session diverges", () => {
+    const rows = build({ credentials: [credential({ live_state: live({ nick: "Guest12345" }) })] });
+
+    expect(rows[0]?.label).toBe("vjt");
+    expect(rows[0]?.live?.nick).toBe("Guest12345");
+  });
+
+  it("reports null on a visitor row, which has no account at all", () => {
+    const rows = build({ visitors: [visitor()] });
+
+    expect(rows[0]?.subject_kind).toBe("visitor");
+    expect(rows[0]?.user_name).toBeNull();
+  });
+
+  it("reports null on the two classes with no credential row behind them", () => {
+    const orphan = build({
+      sessions: [session({ subject_id: "deadbeef-0000-0000-0000-000000000000" })],
+    });
+    const logOnly = build({ logSessions: [logEntry()] });
+
+    expect(orphan[0]?.origin).toBe("orphan_pid");
+    expect(orphan[0]?.user_name).toBeNull();
+    expect(logOnly[0]?.origin).toBe("session_log");
+    expect(logOnly[0]?.user_name).toBeNull();
   });
 });
 

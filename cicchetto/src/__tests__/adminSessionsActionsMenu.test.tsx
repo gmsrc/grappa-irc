@@ -68,6 +68,7 @@ const userCredential = (): AdminCredential =>
   ({
     session_ip: null,
     user_id: USER_ID,
+    user_name: "vjt-the-account",
     network_id: 1,
     network_slug: "azzurra",
     nick: "vjt",

@@ -86,6 +86,9 @@ const parkedVisitor = (over: Partial<AdminVisitor> = {}): AdminVisitor =>
 const userCredential = (over: Partial<AdminCredential> = {}): AdminCredential =>
   ({
     user_id: USER_ID,
+    // #1315 — the account, kept distinct from the nick it configured so a
+    // render that printed one where the other belongs is visible.
+    user_name: "vjt-the-account",
     network_id: 1,
     network_slug: "azzurra",
     nick: "vjt",
@@ -201,6 +204,27 @@ describe("AdminSessionsTab — the dictated columns", () => {
     const row = await screen.findByTestId(`admin-session-row-${USER_KEY}`);
     expect(row.textContent).toContain("user");
     expect(row.textContent).toContain("vjt");
+  });
+
+  // #1315 — BESIDE the nick, not instead of it. A session services renamed
+  // to `GuestNNNNN` was identified by nothing the operator could act on:
+  // the nick is the rename, and the `user_id` is not printed anywhere on
+  // the card. Asserting both elements separately is what makes a render
+  // that swapped one for the other fail here.
+  it("shows the account name beside the configured nick on a user row", async () => {
+    await mountWith({ credentials: [userCredential()] });
+
+    const row = await screen.findByTestId(`admin-session-row-${USER_KEY}`);
+    expect(row.querySelector(".admin-session-nick")?.textContent).toBe("vjt");
+    expect(row.querySelector(".admin-session-account")?.textContent).toBe("vjt-the-account");
+  });
+
+  it("shows no account element on a visitor row, which has no account", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
+
+    const row = await screen.findByTestId(`admin-session-row-${VISITOR_KEY}`);
+    expect(row.querySelector(".admin-session-nick")?.textContent).toBe("guest1");
+    expect(row.querySelector(".admin-session-account")).toBeNull();
   });
 
   it("shows the network under the nick", async () => {
