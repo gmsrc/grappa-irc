@@ -41912,3 +41912,68 @@ predicate over the RESOURCE the step produces, not over a container that
 something else may have created for its own reasons. A directory, a lock
 file, a pid file can all be materialised by a neighbour; only the contents
 witness the work.
+<!-- entry #1308-ip -->
+
+---
+
+## 2026-08-14 — #1308: the source address is per-SESSION, and it is a login address
+
+#1157 merged the Visitors tab into the unified admin Sessions view and
+dropped the source-IP column on the way. What survived was one
+detail-panel fact, visitor-only, reading `visitors.ip`. vjt ruled the
+replacement (2026-08-14): *"yes account_sessions.ip and we can drop
+visitors.ip, keep it in the current card, reworking the layout comes
+later."* Four things in carrying that out are worth keeping.
+
+**The two addresses answer different questions, and only one of them is
+the operator's.** `visitors.ip` is written once, on the identity row, at
+provisioning: it says where a visitor was FIRST seen, identity-wide, and
+it does not follow the session. `accounts_sessions.ip` is per cookie
+session. Once a visitor reconnects from another network the two disagree,
+and the one an operator opens this pane for is the second. The
+identity-wide one is out of the VIEW and still on the wire — the client
+contract is additive-only, `GET /admin/visitors` has always published
+`ip`, and removing a field to tidy up a console is how a wire breaks a
+reader nobody enumerated.
+
+**`session_ip` is where that session LOGGED IN from, not where its newest
+request came from.** `Session.touch_changeset/2` moves `last_seen_at`
+alone, so a `:web` row keeps the address `create_session/4` recorded for
+its whole life; the `:client` rows of #1196 are the exception, because
+`record_client_token_use/4` refreshes address and timestamp together. The
+field is named and documented for what it is rather than for the pairing
+it travels in: `last_seen_ip` would have read as "the address of the last
+touch" and been wrong for every browser session in the system. Making the
+touch write the address too was rejected as out of scope — it is a
+behaviour change to the auth hot path, and the ruling asked for a column
+that exists, not for a new one to be maintained.
+
+**The address must come from the SAME ROW as the timestamp, so the query
+picks a row rather than aggregating columns.** `max_last_seen_by_subject_ids/2`
+grouped by subject and selected `max(last_seen_at)`; adding `s.ip` beside
+it would have worked on SQLite — bare columns beside `min()`/`max()` come
+from the matching row — and worked by dialect quirk, invisible to a reader
+and to a future PostgreSQL swap. It is now
+`newest_touch_by_subject_ids/2`: one `row_number() OVER (PARTITION BY
+subject ORDER BY last_seen_at DESC)` subquery filtered to rank 1, still
+one batched query per `subject_kind`, still no per-row cost. A
+multi-device subject therefore collapses to its most recent device, and
+the address is THAT device's — never coalesced across rows to avoid a
+null, which would report an address the subject has stopped using.
+
+**Rendering it on the user row is new code, not a value swap.** The
+existing fact lived inside `if (row.visitor !== null)`, so a user row
+carried no address anywhere and `AdminSubjectRow` had no field for one.
+The fact is now unconditional and sits directly above `upstream`, which
+is deliberate: `live_state.peer_address` is the upstream IRC endpoint the
+bouncer's own socket landed on, it renders on the same card, and
+labelling it "ip" would be a lie to the operator. The two are adjacent so
+the labels have to do their work.
+
+**Scope:** no migration, no column dropped from `visitors`, and no table
+column at any width — the fact keeps its place in the card and the layout
+rework is a separate call (vjt, same ruling).
+
+**Apply:** when one wire field is replaced by a better one, ask whether
+the old field is a WORSE ANSWER or a DIFFERENT QUESTION. A different
+question stays on the wire and leaves the view.
