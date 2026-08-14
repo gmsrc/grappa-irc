@@ -47,6 +47,10 @@ vi.mock("../lib/api", async () => {
     adminDeleteNetwork: vi.fn(),
     adminListServers: vi.fn(),
     adminListFeaturedChannels: vi.fn(),
+    adminListVisitors: vi.fn(),
+    adminListCredentials: vi.fn(),
+    adminListSessions: vi.fn(),
+    adminListSessionLogSessions: vi.fn(),
   };
 });
 
@@ -55,12 +59,18 @@ vi.mock("../lib/socket", () => ({
 }));
 
 import AdminNetworksTab from "../AdminNetworksTab";
+import AdminSessionsTab from "../AdminSessionsTab";
 import AdminUsersTab from "../AdminUsersTab";
+import type { AdminCredential } from "../lib/api";
 import {
+  adminListCredentials,
   adminListFeaturedChannels,
   adminListNetworks,
   adminListServers,
+  adminListSessionLogSessions,
+  adminListSessions,
   adminListUsers,
+  adminListVisitors,
 } from "../lib/api";
 
 const ALICE: AdminUser = {
@@ -208,5 +218,55 @@ describe("#1074 — Networks drops its secondary columns on a phone", () => {
     const panelRow = panel.closest("tr");
     expect(panelRow).not.toBeNull();
     expect(row.nextElementSibling).toBe(panelRow);
+  });
+});
+
+// #1308 — the per-session source address, on the form factor the card
+// exists for. vjt ruled the fact stays in the card and the table grows no
+// column ("reworking the layout comes later"), so a phone reaching it is
+// the whole delivery: below 900px the card is not a convenience, it is
+// the only place the operator can read this.
+describe("#1308 — the source address is reachable on a phone", () => {
+  const SESSION_USER_ID = "00000000-0000-0000-0000-0000000000aa";
+  const SESSION_USER_KEY = `user:${SESSION_USER_ID}:1`;
+
+  const CREDENTIAL = {
+    user_id: SESSION_USER_ID,
+    network_id: 1,
+    network_slug: "bahamut-test",
+    nick: "alice",
+    ident: null,
+    realname: null,
+    sasl_user: null,
+    auth_method: "sasl",
+    auth_command_template: null,
+    autojoin_channels: [],
+    last_joined_channels: [],
+    connection_state: "parked",
+    connection_state_reason: null,
+    connection_state_changed_at: null,
+    inserted_at: "2026-05-16T00:00:00Z",
+    updated_at: "2026-05-16T00:00:00Z",
+    last_seen_at: "2026-08-10T00:00:00Z",
+    session_ip: "198.51.100.7",
+    live_state: null,
+  } as unknown as AdminCredential;
+
+  it("puts it in the USER row's own detail, which is where a phone can read it", async () => {
+    vi.mocked(adminListVisitors).mockResolvedValue([]);
+    vi.mocked(adminListCredentials).mockResolvedValue([CREDENTIAL]);
+    vi.mocked(adminListSessions).mockResolvedValue([]);
+    vi.mocked(adminListSessionLogSessions).mockResolvedValue([]);
+    vi.mocked(adminListNetworks).mockResolvedValue([BAHAMUT]);
+    render(() => <AdminSessionsTab />);
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${SESSION_USER_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${SESSION_USER_KEY}`);
+    const labels = Array.from(panel.querySelectorAll(".adm-fact dt")).map((el) =>
+      el.textContent?.trim(),
+    );
+    expect(labels).toContain("ip");
+    expect(panel).toHaveTextContent("198.51.100.7");
   });
 });

@@ -66,6 +66,9 @@ const parkedVisitor = (over: Partial<AdminVisitor> = {}): AdminVisitor =>
     expires_at: "2099-01-01T00:00:00Z",
     identified: false,
     ip: "1.2.3.4",
+    // #1308 — distinct from `ip` on purpose: the console renders the
+    // per-session address now, and equal fixtures could not tell which.
+    session_ip: "5.6.7.8",
     inserted_at: "2026-05-16T00:00:00Z",
     last_seen_at: null,
     networks: [
@@ -99,6 +102,7 @@ const userCredential = (over: Partial<AdminCredential> = {}): AdminCredential =>
     inserted_at: "2026-05-16T00:00:00Z",
     updated_at: "2026-05-16T00:00:00Z",
     last_seen_at: "2026-08-10T00:00:00Z",
+    session_ip: "9.9.9.9",
     live_state: LIVE,
     ...over,
   }) as AdminCredential;
@@ -403,6 +407,19 @@ describe("AdminSessionsTab — Delete is identity-wide and lives behind the dril
   });
 });
 
+// Read ONE fact out of a detail panel by its label. `toHaveTextContent`
+// over the whole panel cannot tell "the address is the ip fact" from "the
+// address appears somewhere on the card", and #1308 turns on exactly that
+// distinction: `upstream` renders an address too.
+function factValue(panel: HTMLElement, label: string): string | null {
+  for (const pair of Array.from(panel.querySelectorAll(".adm-fact"))) {
+    if (pair.querySelector("dt")?.textContent?.trim() === label) {
+      return pair.querySelector("dd")?.textContent?.trim() ?? null;
+    }
+  }
+  return null;
+}
+
 describe("AdminSessionsTab — the drill-down keeps both sources of truth", () => {
   it("shows DB intent and live pid separately when they disagree", async () => {
     // The U-0 divergence: the credential still says connected, the BEAM
@@ -431,7 +448,62 @@ describe("AdminSessionsTab — the drill-down keeps both sources of truth", () =
     fireEvent.click(await screen.findByTestId(`admin-session-details-${VISITOR_KEY}`));
 
     const panel = await screen.findByTestId(`admin-session-detail-${VISITOR_KEY}`);
-    expect(panel).toHaveTextContent("1.2.3.4");
+    expect(panel).toHaveTextContent("expires");
+    expect(panel).toHaveTextContent("2026-05-16T00:00:00Z");
+  });
+
+  // #1308 — the address the operator asked for is the SESSION's, and it
+  // must reach both kinds. The user half is the new rendering: that card
+  // carried no address at all before, because the only one the console
+  // had was the visitor identity's.
+  it("shows the per-session source address on a USER row", async () => {
+    await mountWith({ credentials: [userCredential()] });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${USER_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${USER_KEY}`);
+    expect(factValue(panel, "ip")).toBe("9.9.9.9");
+  });
+
+  it("shows the per-session source address on a VISITOR row", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${VISITOR_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${VISITOR_KEY}`);
+    expect(factValue(panel, "ip")).toBe("5.6.7.8");
+  });
+
+  // vjt (2026-08-14): "we can drop visitors.ip". The identity-wide
+  // address is off the VIEW — still on the wire, still on the row, no
+  // longer shown, because two addresses labelled almost the same is how
+  // an operator reads the wrong one.
+  it("no longer shows the identity-wide visitors.ip", async () => {
+    await mountWith({ visitors: [parkedVisitor()] });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${VISITOR_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${VISITOR_KEY}`);
+    expect(panel).not.toHaveTextContent("1.2.3.4");
+  });
+
+  // The trap the issue names: `live_state.peer_address` is the upstream
+  // IRC endpoint the bouncer's socket landed on. It renders — under
+  // `upstream`, which is what it is — and must never be what the `ip`
+  // fact reports.
+  it("does not pass the upstream peer off as the client's address", async () => {
+    await mountWith({
+      credentials: [userCredential({ session_ip: null })],
+      sessions: [userSession()],
+    });
+
+    fireEvent.click(await screen.findByTestId(`admin-session-details-${USER_KEY}`));
+
+    const panel = await screen.findByTestId(`admin-session-detail-${USER_KEY}`);
+    expect(factValue(panel, "upstream")).toContain("allnight6.azzurra.chat");
+    // Unknown, and said so — not quietly backfilled from the socket's
+    // other end, which is the one address this panel must never borrow.
+    expect(factValue(panel, "ip")).toBe("—");
   });
 });
 

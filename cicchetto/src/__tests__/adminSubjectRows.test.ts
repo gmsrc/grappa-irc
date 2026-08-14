@@ -46,6 +46,10 @@ const visitor = (over: Partial<AdminVisitor> = {}): AdminVisitor =>
     expires_at: "2026-08-20T00:00:00Z",
     identified: false,
     ip: "10.0.0.5",
+    // #1308 — deliberately NOT `ip`: the identity-wide address and the
+    // newest session's are different facts, and a fixture that made them
+    // equal could not tell which one the row carried.
+    session_ip: "203.0.113.9",
     inserted_at: "2026-08-01T00:00:00Z",
     last_seen_at: "2026-08-10T00:00:00Z",
     networks: [
@@ -79,6 +83,7 @@ const credential = (over: Partial<AdminCredential> = {}): AdminCredential =>
     inserted_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
     last_seen_at: "2026-08-09T00:00:00Z",
+    session_ip: "198.51.100.7",
     live_state: null,
     ...over,
   }) as AdminCredential;
@@ -263,6 +268,53 @@ describe("buildSubjectRows — the /admin/sessions left join", () => {
 
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((r) => r.key)).size).toBe(2);
+  });
+});
+
+// #1308 — the source address. The user half is the new fact: before this
+// the row type had no field for it at all, so a user row could show no
+// address anywhere, and the only one the console had was the visitor
+// identity's.
+describe("buildSubjectRows — the per-session source address", () => {
+  it("carries the newest session's address onto a USER row", () => {
+    const rows = build({ credentials: [credential()] });
+
+    expect(rows[0]?.session_ip).toBe("198.51.100.7");
+  });
+
+  it("carries it onto a VISITOR row without collapsing it into the identity ip", () => {
+    const rows = build({ visitors: [visitor()] });
+
+    // Both, and different: `ip` says where the identity was born,
+    // `session_ip` where this session comes from. One value standing in
+    // for the other is the mistake the pair exists to prevent.
+    expect(rows[0]?.session_ip).toBe("203.0.113.9");
+    expect(rows[0]?.visitor?.ip).toBe("10.0.0.5");
+  });
+
+  it("reports null on an orphan pid rather than the upstream peer address", () => {
+    const orphan = session({ subject_id: "deadbeef-0000-0000-0000-000000000000" });
+
+    const rows = build({ sessions: [orphan] });
+
+    // `203.0.113.5` IS on this row — as `upstream.peer_address`, the IRC
+    // server the bouncer dialled. Reporting it as the client's address
+    // would be a lie, so the honest answer is that we do not have one.
+    expect(rows[0]?.upstream?.peer_address).toBe("203.0.113.5");
+    expect(rows[0]?.session_ip).toBeNull();
+  });
+
+  it("reports null on a log-only row, whose subject is gone", () => {
+    const rows = build({ logSessions: [logEntry()] });
+
+    expect(rows[0]?.origin).toBe("session_log");
+    expect(rows[0]?.session_ip).toBeNull();
+  });
+
+  it("passes a missing address through as null instead of inventing one", () => {
+    const rows = build({ credentials: [credential({ session_ip: null })] });
+
+    expect(rows[0]?.session_ip).toBeNull();
   });
 });
 

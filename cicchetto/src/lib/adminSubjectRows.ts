@@ -65,6 +65,11 @@ export type VisitorIdentity = {
   visitor_id: string;
   expires_at: string | null;
   inserted_at: string;
+  /** Where the IDENTITY was first seen — `visitors.ip`, written once at
+   * provisioning and identity-wide like everything else here. #1308 took
+   * it off the console in favour of the per-session `session_ip`, which
+   * is the address the operator was actually asking for; it stays on the
+   * row because it is still on the wire and answers its own question. */
   ip: string | null;
   identified: boolean;
 };
@@ -99,6 +104,15 @@ export type AdminSubjectRow = {
   /** The upstream peer, known ONLY for rows with a registry entry. */
   upstream: AdminSession["live_state"] | null;
   last_seen_at: string | null;
+  /** #1308 — the source address of the subject's newest browser session
+   * (`accounts_sessions.ip`), for BOTH kinds. `null` on the classes that
+   * have no subject row to have logged in (orphan pid, log-only) and on
+   * a subject that never did.
+   *
+   * NOT `upstream.peer_address`: that is the IRC server the bouncer's own
+   * socket landed on, and calling it the client's address would be a lie.
+   * Not `visitor.ip` either — see `VisitorIdentity`. */
+  session_ip: string | null;
   /** #1308 — when this subject's DB row was created: the visitor
    * identity's `inserted_at`, or the credential's. `null` on the two
    * classes that have no DB row (orphan pid, log-only). Copied onto the
@@ -335,6 +349,7 @@ export function buildSubjectRows(input: {
         live: net.live_state,
         upstream: sessionByKey.get(key)?.live_state ?? null,
         last_seen_at: v.last_seen_at,
+        session_ip: v.session_ip,
         last_joined_at: v.inserted_at,
         visitor: identity,
         origin: "credential",
@@ -357,6 +372,7 @@ export function buildSubjectRows(input: {
       live: c.live_state,
       upstream: sessionByKey.get(key)?.live_state ?? null,
       last_seen_at: c.last_seen_at,
+      session_ip: c.session_ip,
       last_joined_at: c.inserted_at,
       visitor: null,
       origin: "credential",
@@ -385,6 +401,10 @@ export function buildSubjectRows(input: {
       live: s.live_state,
       upstream: s.live_state,
       last_seen_at: s.last_seen_at,
+      // No subject row, so no login of its own to have an address. The
+      // pid's upstream peer is a DIFFERENT address and stays in
+      // `upstream`, where it is labelled as what it is.
+      session_ip: null,
       // No DB row, so nothing was ever created to be dated. NOT the pid's
       // start time: that is a different fact and this column does not
       // claim it.
@@ -420,6 +440,9 @@ export function buildSubjectRows(input: {
       // NOT `e.at`: this column is when a BROWSER last touched the
       // bouncer, and there is no browser session left to have touched it.
       last_seen_at: null,
+      // Same reason: the subject whose session this was is gone, and the
+      // log keeps no address of its own.
+      session_ip: null,
       // The subject row this would date is gone; the log carries no
       // creation time of its own, and `e.at` is the LAST event, not the
       // first.

@@ -83,6 +83,7 @@ const OTHER_NETWORK: AdminNetwork = { ...NETWORK, id: 9, slug: "libera" };
 
 const CRED: AdminCredential = {
   last_seen_at: null,
+  session_ip: null,
   user_id: USER.id,
   network_id: NETWORK.id,
   network_slug: NETWORK.slug,

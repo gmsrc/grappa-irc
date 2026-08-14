@@ -725,6 +725,16 @@ function detailFacts(row: AdminSubjectRow): { label: string; value: string }[] {
     // would erase it.
     { label: "connection", value: row.connection_state ?? "no DB row" },
     { label: "live", value: renderLive(row) },
+    // #1308 — the source address, and the reason it sits directly above
+    // `upstream`: the two are the opposite ends of one session and the
+    // pair is only readable together. This one is where the BROWSER came
+    // from; `upstream` is the IRC server the bouncer dialled out to.
+    //
+    // Unconditional, unlike the `visitors.ip` fact it replaces: that one
+    // lived inside the visitor-only block, so a user row showed no
+    // address anywhere, and per-session is exactly the grain a user row
+    // can answer (vjt, 2026-08-14).
+    { label: "ip", value: row.session_ip ?? "—" },
     // NO `network` fact. #1223 item 1 reported the panel repeating it,
     // and unlike the Users/Credentials repeats this one is not the
     // `.adm-col-detail` specificity defect: Sessions drops no column at
@@ -763,7 +773,6 @@ function detailFacts(row: AdminSubjectRow): { label: string; value: string }[] {
 
   if (row.visitor !== null) {
     facts.push(
-      { label: "ip", value: row.visitor.ip ?? "—" },
       { label: "expires", value: renderExpires(row) },
       { label: "joined", value: row.visitor.inserted_at },
     );

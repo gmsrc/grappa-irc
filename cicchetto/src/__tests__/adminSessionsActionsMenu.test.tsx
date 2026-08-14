@@ -66,6 +66,7 @@ const NETWORK = {
 // collapse has anything to collapse.
 const userCredential = (): AdminCredential =>
   ({
+    session_ip: null,
     user_id: USER_ID,
     network_id: 1,
     network_slug: "azzurra",
