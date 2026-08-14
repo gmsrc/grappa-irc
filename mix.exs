@@ -299,9 +299,9 @@ defmodule Grappa.MixProject do
       # emits the same draft-04 shape (last release 2021-09-15).
       #
       # Accepted costs, priced on #1290 before the swap:
-      #   * A SECOND HTTP stack — `httpoison ~> 2.0` (hackney) + `jose`
-      #     are runtime deps, next to our `Req`. Release size, a second
-      #     TLS config surface, two connection pools.
+      #   * A SECOND HTTP stack — httpoison (hackney) + `jose` are
+      #     runtime deps, next to our `Req`. Release size, a second TLS
+      #     config surface, two connection pools.
       #   * `ex_nudge` maps 410 to `{:error, :subscription_expired}` and
       #     leaves 404 in the generic `{:error, {:http_error, 404}}`
       #     bucket, so `Grappa.Push.Sender` adapts all three return
@@ -313,6 +313,26 @@ defmodule Grappa.MixProject do
       #     identical `:ECPrivateKey` record, so an existing deployment's
       #     `VAPID_*` env vars carry over untouched.
       # Push notifications cluster B2 (2026-05-14).
+      #
+      # 🔴 The `override: true` below is LOAD-BEARING, not tidying.
+      # `ex_nudge 1.0.2` declares `httpoison ~> 2.0`, and every version
+      # inside that range resolves hackney on the 1.x line, which is
+      # end-of-line at 1.25.0 and carries advisories whose only fixed
+      # release is 4.0.1 — so `mix deps.audit`, a HARD gate, fails for
+      # the whole `~> 2.0` range and no bump within it can help.
+      # `httpoison 3.0.0` requires `hackney ~> 4.0`, the patched line.
+      # Measured with the override in place: `mix deps.audit` reports no
+      # vulnerabilities and the full suite passes.
+      #
+      # What the override COSTS: it silences `ex_nudge`'s own
+      # requirement, so nothing checks that pairing any more. It holds
+      # today because `ex_nudge` touches exactly `HTTPoison.post/3` and
+      # the `%HTTPoison.Response{status_code:}` / `%HTTPoison.Error{}`
+      # shapes, all unchanged across the 2.x→3.x major. Re-verify that
+      # on any bump of either package; the risk is a silent divergence,
+      # not a resolution error, because the override is what stops the
+      # solver from complaining.
+      {:httpoison, "~> 3.0", override: true},
       {:ex_nudge, "~> 1.0"},
       {:telemetry, "~> 1.3"},
       {:telemetry_metrics, "~> 1.0"},

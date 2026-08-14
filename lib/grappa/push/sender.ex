@@ -376,13 +376,27 @@ defmodule Grappa.Push.Sender do
   @spec deliver(ExNudge.Subscription.t(), String.t()) :: sub_result()
   defp deliver(%ExNudge.Subscription{} = subscription, message) do
     subscription
-    |> ExNudge.send_notification(message)
+    |> ExNudge.send_notification(message, [])
     |> normalize()
   rescue
     e in [ArgumentError, MatchError, ErlangError] ->
       {:error, {:encrypt_error, Exception.message(e)}}
   end
 
+  # `ExNudge`'s declared types are narrower than what it returns, so
+  # Dialyzer calls the encryption clause below unreachable. It is not:
+  # removing it turns the malformed-P-256 test red with
+  # `{:error, {:invalid_ecdh_key, ~c"Can't do fromdata"}}` — measured by
+  # mutation, not argued. `ExNudge.known_error/0` (`ex_nudge.ex:43-47`)
+  # simply omits the three tuples `encryption.ex:70,73,130` produces.
+  #
+  # The sibling defect is already worked around rather than silenced:
+  # the arity-2 `@spec` at `ex_nudge.ex:49` promises `{:error, atom()}`,
+  # contradicting the arity-3 spec at `:70` AND the code, which is why
+  # `deliver/2` calls the 3-arity form with an explicit `[]`. That fixed
+  # three of the four warnings honestly; this one has no honest fix on
+  # our side of the boundary.
+  @dialyzer {:nowarn_function, normalize: 1}
   @spec normalize(ExNudge.send_result()) :: sub_result()
   defp normalize({:ok, _}), do: :ok
   defp normalize({:error, :subscription_expired}), do: {:error, :gone}
