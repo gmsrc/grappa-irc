@@ -58,8 +58,18 @@ test("P-0b — /msg to away peer surfaces peer_away banner in DM window", async 
     // Banner renders peer + the away message verbatim. Server is the
     // source of truth for the message text; the "is away" framing is
     // built by cic per feedback_no_localized_strings_server_side.
+    // Banner budget is 10 s, not 5 s, and the number is measured (#1307).
+    // The 301 crosses bahamut's fake-lag ceiling: `do_client_queue` drains
+    // the recvQ only while `cptr->since - timeofday < 10` (s_bsd.c), and
+    // `timeofday` is a `time_t` — whole seconds. So the reply resumes on an
+    // integer-second boundary and the banner arrives on a 1 s LATTICE. Over
+    // 20 uncensored local iterations at a constant −3.5 s headroom the
+    // arrivals were 2.91 (x2) / 3.92 (x4) / 4.91 (x12) / 5.93 (x2): the old 5 s
+    // budget cut 54 ms above the MODE, so it failed whenever the run landed
+    // one tick out. 10 s clears the measured maximum by four ticks, and is
+    // what `issue270-peer-away-overlap` already budgets for this same banner.
     const banner = page.locator("[data-testid='peer-away-banner']");
-    await expect(banner).toBeVisible({ timeout: 5_000 });
+    await expect(banner).toBeVisible({ timeout: 10_000 });
     await expect(banner).toContainText(peer.nick);
     await expect(banner).toContainText("is away");
     await expect(banner).toContainText(AWAY_MESSAGE);

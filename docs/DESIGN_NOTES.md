@@ -41812,3 +41812,69 @@ whether an IP column fits at every width).
 **Apply:** when a sort key can be absent, ask what the absence MEANS
 before picking its sort position. If absence is ignorance rather than a
 value, it belongs at the bottom whichever way the arrow points.
+<!-- entry #1307 -->
+
+---
+
+## 2026-08-14 — #1307: the away banner is late on a one-second lattice
+
+`p0b-peer-away` failed intermittently on a 5 s `toBeVisible`, always at
+the same line. #1307 measured that the banner ARRIVES — the reds miss by
+tens of milliseconds — and deliberately left the remedy open, with one
+condition attached: a wider budget needs a MEASURED tail behind it,
+because a failing `toBeVisible` is censored at its own deadline and
+nothing in the data bounded how far past 5 s the arrival could go.
+
+**Uncensoring the assert turned the "unexplained residual" into a
+lattice.** Twenty local iterations with the budget temporarily raised to
+60 s (throwaway edit, reverted) and the arrival printed per iteration:
+
+```
+2.908 2.912 | 3.907 3.927 3.927 3.930 | 4.900 4.908 4.914 4.914 4.917
+4.920 4.921 4.922 4.924 4.926 4.932 4.946 | 5.918 5.931
+```
+
+Four values one second apart, each carrying the same ~0.92 s of
+pipeline. The server-side `upstream send` headroom was constant across
+every iteration (−1.55 s at the rail WHOIS, −3.52 s at the operator's
+PRIVMSG), so the command count is NOT what picks the step. #1307's
+"bimodal at fixed headroom, something else decides the side" residual is
+this lattice seen through a 5 s window — explained, not hidden.
+
+**The mechanism is bahamut's clock, and it counts in whole seconds.**
+`do_client_queue` (`src/s_bsd.c`) drains a client's recvQ only while
+`cptr->since - timeofday < 10`, and `timeofday` is a `time_t` refreshed
+from `time(NULL)` once per io loop. Above the fake-lag ceiling the ircd
+still READS grappa's socket but stops PARSING it, and the test that lets
+parsing resume cannot change value until the whole second turns. A
+throttled reply therefore returns on a second boundary and never between
+two. Source gives the structure; the twenty iterations give the
+magnitude — and here they agree.
+
+**So the budget is 10 s, and the number is the lattice's.** The old 5 s
+cut 54 ms above the MODE — 12 of 20 iterations arrived at 4.9 s — which
+is why the spec looked comfortable and failed about one run in ten: any
+iteration landing one tick out was lost, and 2 of 20 did. 10 s clears
+the measured maximum (5.931 s) by four ticks, and is what the sibling
+`issue270-peer-away-overlap` already budgets for this same banner, so
+the two specs stop disagreeing about the cost of the same round trip.
+
+**A barrier was the other candidate and was rejected on coupling.**
+Waiting for the rail's WHOIS card to fill before timing the banner would
+have absorbed the same delay without a new number, since the speculative
+WHOIS that `/msg` provokes is answered ahead of the 301. It welds P-0b
+to behaviour that is not P-0b's contract: the rail's on-screen fetch has
+already been added (#606), removed (#800) and reshaped (#782), and the
+next reshape would turn this spec into a slow red for a reason having
+nothing to do with peer-away.
+
+**Not claimed.** That the lattice stops at 5.9 s — twenty iterations on
+one idle host bound what was OBSERVED, not the distribution. That CI
+behaves as this host does. And nothing here touches the rail's
+auto-WHOIS, which stays exactly as #782 shipped it.
+
+**Apply:** when an e2e budget sits just above the modal arrival of a
+throttled upstream reply, widening it by "a bit" re-loses the same race
+one tick later. Measure the arrival with the assert UNCENSORED first: if
+the values come out on a lattice, place the budget in ticks above the
+measured maximum rather than in milliseconds above the mode.
