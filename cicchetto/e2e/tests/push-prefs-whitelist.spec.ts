@@ -31,6 +31,7 @@ import {
   assertNoPushDelivery,
   awaitPushDelivery,
   enablePushFromSettings,
+  expectRfc8291Delivery,
   pushCatcherEndpoint,
   resetPushCatcher,
   resetPushSubscriptions,
@@ -115,7 +116,7 @@ test("notification_prefs whitelist: messages in allow-list push, messages elsewh
     peer.privmsg(ALLOW_CHANNEL, "small talk in allow");
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
-    expect(deliveries[0].headers["content-encoding"]).toBe("aesgcm");
+    expectRfc8291Delivery(deliveries[0]);
   } finally {
     await peer.disconnect("B5 prefs done");
     await partChannel(vjt.token, NETWORK_SLUG, ALLOW_CHANNEL).catch(() => {});

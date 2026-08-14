@@ -8,8 +8,8 @@
 // fires `Push.Sender.send_to_user`.
 //
 // Same outcome shape as the channel-mention spec: a vendor-shaped
-// HTTP POST lands in push-catcher with `content-encoding: aesgcm`
-// + `ttl` headers.
+// HTTP POST lands in push-catcher carrying the RFC 8291 + RFC 8292
+// wire format (#1290) — see `expectRfc8291Delivery`.
 //
 // DM has its own routing concern: the spec uses `enablePushFromSettings`
 // + a peer DM `privmsg(specNick(), ...)`. The cic UI does NOT need
@@ -22,6 +22,7 @@ import { IrcPeer } from "../fixtures/ircClient";
 import {
   awaitPushDelivery,
   enablePushFromSettings,
+  expectRfc8291Delivery,
   pushCatcherEndpoint,
   resetPushCatcher,
   resetPushSubscriptions,
@@ -67,9 +68,10 @@ test("DM while push-enabled fires Sender → push-catcher receives a POST", asyn
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
 
-    const headers = deliveries[0].headers;
-    expect(headers["content-encoding"]).toBe("aesgcm");
-    expect(headers.ttl).toBeDefined();
+    // #1290 — the wire contract, asserted in one place for all five
+    // push specs: aes128gcm, salt + sender key in the BODY header, no
+    // `encryption:`/`crypto-key:` left over, RFC 8292 `vapid t=…, k=…`.
+    expectRfc8291Delivery(deliveries[0]);
   } finally {
     await peer.disconnect("B5 DM done");
   }

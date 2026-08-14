@@ -411,29 +411,101 @@ export async function setPageFocus(page: Page, focused: boolean): Promise<void> 
 }
 
 /**
- * Decodes the body of a CaughtDelivery into the JSON push payload
- * `Push.Payload.build/3` wrote. Helper around base64 + `JSON.parse`
- * so spec assertions stay readable.
+ * Returns the headers of a CaughtDelivery, downcased by node:http.
  *
- * NOTE: in production the lib AES-GCM-encrypts the body with the
- * subscription's p256dh+auth keys; the SW decrypts. Push-catcher
- * receives the encrypted bytes — but we use the same fixture key
- * pair as the sender_test.exs tests, and the upstream
- * `:web_push_elixir` lib does NOT encrypt when `body == ""` (see
- * `crypto: false` shape — applied at lib level). We pass real JSON
- * payloads so encryption DOES happen, then we assert on
- * structurally-meaningful headers (`content-encoding: aesgcm` —
- * the legacy RFC 8188 encoding emitted by `:web_push_elixir`
- * v0.8.0; new spec is RFC 8291 `aes128gcm` and the assertion will
- * need a bump when the lib upgrades — and `ttl`) instead of the
- * body bytes themselves. Body-shape assertions are validated
- * server-side by Push.Payload tests
- * (test/grappa/push/payload_test.exs); the e2e contract is "did
- * fan-out fire with vendor-shaped headers", not "did the body
- * decrypt to a specific JSON".
+ * The body is ciphertext: push-catcher plays the vendor, and the vendor
+ * cannot read a Web Push payload — only the subscription's private key
+ * can. So the e2e contract is not "did the body decrypt to this JSON"
+ * (that is `test/grappa/push/wire_format_test.exs`, which owns the
+ * subscription keys and performs a real decrypt) but "did fan-out reach
+ * a vendor-shaped endpoint carrying the wire format we promise".
+ * `expectRfc8291Delivery` below is that contract.
  */
 export function deliveryHeaders(delivery: CaughtDelivery): Record<string, string> {
   return delivery.headers;
+}
+
+// RFC 8188 §2.1 content-coding header block: salt(16) ‖ rs(4) ‖ idlen(1)
+// ‖ keyid(idlen). Under RFC 8291 the keyid IS the sender's ephemeral
+// P-256 public key, uncompressed — 65 bytes opening with 0x04.
+const RFC8188_SALT_BYTES = 16;
+const RFC8188_RECORD_SIZE_BYTES = 4;
+const RFC8188_IDLEN_BYTES = 1;
+const P256_UNCOMPRESSED_POINT_BYTES = 65;
+const AES_GCM_TAG_BYTES = 16;
+const RFC8188_HEADER_BYTES = RFC8188_SALT_BYTES + RFC8188_RECORD_SIZE_BYTES + RFC8188_IDLEN_BYTES;
+
+/**
+ * Asserts one caught delivery is RFC 8291 + RFC 8292 on the wire (#1290).
+ *
+ * This is the tripwire the issue asks for, and it lives here rather than
+ * copy-pasted into five specs so there is ONE statement of the wire
+ * contract to update — five copies would be five chances to update four.
+ *
+ * What it pins, and why each half matters:
+ *
+ *   * `content-encoding: aes128gcm` — the coding RFC 8291 mandates.
+ *   * The salt and the sender's ephemeral key are in the BODY's own
+ *     binary header, not in HTTP headers. That relocation IS the fix:
+ *     both values are mandatory HKDF inputs, so under the superseded
+ *     `aesgcm` draft any transport that drops headers (UnifiedPush
+ *     discards them by design) handed the app a body it could not
+ *     decrypt however correct its keys were.
+ *   * The ABSENCE of `encryption:` and `crypto-key:` — half the point.
+ *     Emitting them alongside the new coding would mean the old draft
+ *     had merely been supplemented, not replaced, and a lenient vendor
+ *     would keep the regression invisible.
+ *   * `authorization: vapid t=<jwt>, k=<key>` — the RFC 8292 scheme,
+ *     not draft-01's `Authorization: WebPush <jwt>`.
+ *
+ * Deliberately NOT asserted here: JWT claims and the decrypt itself.
+ * Both need key material the vendor never sees, and both are already
+ * pinned server-side by `wire_format_test.exs`. Measuring them here
+ * would mean re-implementing ES256 verification in the harness for a
+ * weaker assertion than the one that already exists.
+ */
+export function expectRfc8291Delivery(delivery: CaughtDelivery): void {
+  const headers = delivery.headers;
+
+  expect(headers["content-encoding"]).toBe("aes128gcm");
+  // RFC 8030 — every vendor-bound push MUST carry a TTL.
+  expect(headers.ttl).toBeDefined();
+
+  // The superseded draft's two headers must be GONE, not merely joined.
+  expect(headers.encryption).toBeUndefined();
+  expect(headers["crypto-key"]).toBeUndefined();
+
+  // RFC 8292 §3: `vapid t=<JWS compact>, k=<base64url public key>`, and
+  // NOT draft-01's `Authorization: WebPush <jwt>`. Same regex as the
+  // server-side pin in `test/grappa/push/wire_format_test.exs` — one
+  // statement of the shape, not a second one that can drift from it. The
+  // whitespace after the comma is OWS per RFC 7235's #auth-param rule, so
+  // it stays unpinned.
+  expect(headers.authorization).not.toMatch(/^WebPush /);
+  expect(headers.authorization).toMatch(/^vapid t=[A-Za-z0-9_.-]+,\s*k=[A-Za-z0-9_-]+$/);
+
+  const body = Buffer.from(delivery.body_b64, "base64");
+
+  // Header block + at least one non-empty record (ciphertext ‖ GCM tag).
+  expect(body.length).toBeGreaterThan(
+    RFC8188_HEADER_BYTES + P256_UNCOMPRESSED_POINT_BYTES + AES_GCM_TAG_BYTES,
+  );
+
+  const salt = body.subarray(0, RFC8188_SALT_BYTES);
+  // A constant salt is a real defect and a passing length check would
+  // hide it, so assert the value is not the degenerate one.
+  expect(salt.every((b) => b === 0)).toBe(false);
+
+  const recordSize = body.readUInt32BE(RFC8188_SALT_BYTES);
+  expect(recordSize).toBeGreaterThanOrEqual(body.length);
+
+  const idlen = body.readUInt8(RFC8188_SALT_BYTES + RFC8188_RECORD_SIZE_BYTES);
+  expect(idlen).toBe(P256_UNCOMPRESSED_POINT_BYTES);
+
+  const keyid = body.subarray(RFC8188_HEADER_BYTES, RFC8188_HEADER_BYTES + idlen);
+  expect(keyid.length).toBe(P256_UNCOMPRESSED_POINT_BYTES);
+  // Uncompressed EC point marker — the sender's ephemeral public key.
+  expect(keyid[0]).toBe(0x04);
 }
 
 /**

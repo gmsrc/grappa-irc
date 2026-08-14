@@ -31,6 +31,7 @@ import {
   assertNoPushDelivery,
   awaitPushDelivery,
   enablePushFromSettings,
+  expectRfc8291Delivery,
   pushCatcherEndpoint,
   resetPushCatcher,
   resetPushSubscriptions,
@@ -75,7 +76,7 @@ test("server suppresses push while a device reports visible, delivers once hidde
 
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
-    expect(deliveries[0].headers["content-encoding"]).toBe("aesgcm");
+    expectRfc8291Delivery(deliveries[0]);
   } finally {
     await peer.disconnect("#182 foreground-suppression done");
   }

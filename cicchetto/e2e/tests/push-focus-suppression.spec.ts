@@ -28,6 +28,7 @@ import {
   assertNoPushDelivery,
   awaitPushDelivery,
   enablePushFromSettings,
+  expectRfc8291Delivery,
   pushCatcherEndpoint,
   resetPushCatcher,
   resetPushSubscriptions,
@@ -80,7 +81,7 @@ test("server delivers push once the window is blurred though still on-screen, su
 
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
-    expect(deliveries[0].headers["content-encoding"]).toBe("aesgcm");
+    expectRfc8291Delivery(deliveries[0]);
 
     // Phase 3 — REFOCUS (still visible) → suppression restored.
     await resetPushCatcher();

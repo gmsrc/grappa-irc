@@ -10,10 +10,10 @@
 //
 // Asserting the OUTCOME — not implementation details:
 //   * Catcher saw at least one POST for the seeded subscription's id
-//   * The POST carries `content-encoding: aesgcm` (the lib
-//     encrypted the payload — RFC 8188 legacy encoding emitted by
-//     `:web_push_elixir` v0.8.0; new spec is RFC 8291 `aes128gcm`,
-//     bump the assertion when the lib upgrades)
+//   * The POST is RFC 8291 + RFC 8292 on the wire — `content-encoding:
+//     aes128gcm`, the salt and the sender key in the BODY's RFC 8188
+//     header, no leftover `encryption:`/`crypto-key:`, and a `vapid
+//     t=…, k=…` authorization (#1290; see `expectRfc8291Delivery`)
 //   * A `ttl` header (RFC 8030 — every vendor-bound push MUST set TTL)
 //
 // `urgency` is RFC 8030 SHOULD-set-but-optional; the upstream lib
@@ -39,6 +39,7 @@ import {
   assertNoPushDelivery,
   awaitPushDelivery,
   enablePushFromSettings,
+  expectRfc8291Delivery,
   pushCatcherEndpoint,
   resetPushCatcher,
   resetPushSubscriptions,
@@ -109,10 +110,8 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
     const deliveries = await awaitPushDelivery(SUB_ID);
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
 
-    const headers = deliveries[0].headers;
-    // RFC 8030 + lib invariants. Headers are downcased by node:http.
-    expect(headers["content-encoding"]).toBe("aesgcm");
-    expect(headers.ttl).toBeDefined();
+    // #1290 — the wire contract; see `expectRfc8291Delivery`.
+    expectRfc8291Delivery(deliveries[0]);
     // The vendor sees the cic-stored endpoint via the URL path; the
     // path includes the per-spec id we minted.
     // (verified by push-catcher partitioning by id; recurrence here
