@@ -461,17 +461,24 @@ const Login: Component = () => {
                 layout fix). Real button + aria-expanded + conditional render
                 (not display:none) so a11y + tests see the truth.
 
-                #442 — the alternate-auth entry points (passkey / recovery
-                code) SHARE this row instead of stacking above it. Measured on
-                1024x900 with Advanced open: the card is 875px of a 900px
-                viewport, i.e. 25px of slack, so any extra full-width row
-                pushes Connect out of the viewport and reds
-                login-advanced-scroll-reachability:138 ("every field + Connect
-                visible with no scroll"). Riding the existing 44px row costs
-                zero height, so both that spec and the 390x480 one keep the
-                exact geometry they have on main. Own class, not
-                login-advanced-toggle — that one is a selector contract the
-                e2e clicks as a strict single match (issue281). */}
+                #1322 — the alternate-auth entry points (passkey / recovery
+                code) moved INSIDE the disclosure, one per row, superseding
+                #442's shared row. #442 crammed them onto this row because on
+                1024x900 with Advanced open the card was 875px of a 900px
+                viewport — 25px of slack, less than one 44px tap target — so a
+                stacked row pushed Connect off-screen. vjt relaxed that height
+                constraint ("va bene allentare l'altezza"): with Advanced OPEN
+                a scroll is now acceptable and
+                login-advanced-scroll-reachability asserts REACHABILITY there.
+                The collapsed view, which is what most logins ever see, gets
+                strictly shorter — this row sheds two buttons — and keeps the
+                no-scroll assertion.
+
+                The toggle stays alone in this row rather than moving to the
+                bare form column: a one-child flex row preserves its
+                content-width box exactly, so issue204's position assertions
+                and the iPhone tap-target geometry are untouched by a change
+                that is about the OTHER two buttons. */}
                   <div class="login-alt-auth-row">
                     <button
                       type="button"
@@ -482,41 +489,7 @@ const Login: Component = () => {
                     >
                       {advanced() ? "▾ Advanced" : "▸ Advanced"}
                     </button>
-                    <button
-                      type="button"
-                      class="login-quiet-button login-alt-auth"
-                      onClick={() => void onPasskeyLogin()}
-                    >
-                      Passkey
-                    </button>
-                    <button
-                      type="button"
-                      class="login-quiet-button login-alt-auth"
-                      onClick={() => setRecoveryMode((value) => !value)}
-                    >
-                      Recovery code
-                    </button>
                   </div>
-                  <Show when={recoveryMode()}>
-                    <div>
-                      <label for="login-recovery-code">Recovery code</label>
-                      <input
-                        id="login-recovery-code"
-                        type="text"
-                        autocomplete="one-time-code"
-                        value={recoveryCode()}
-                        onInput={(event) => setRecoveryCode(event.currentTarget.value)}
-                        onKeyDown={onRecoveryKeyDown}
-                      />
-                      <button
-                        type="button"
-                        class="login-connect"
-                        onClick={() => void onRecoveryLogin()}
-                      >
-                        Recover account
-                      </button>
-                    </div>
-                  </Show>
                   <Show when={advanced()}>
                     <div id="login-advanced" class="login-advanced">
                       {/* #152 — realname + ident, optional. Blank = server
@@ -569,6 +542,56 @@ const Login: Component = () => {
                         <p class="login-advanced-hint" data-testid="login-incognito-hint">
                           {INCOGNITO_HINT}
                         </p>
+                      </Show>
+
+                      {/* #1322 — the alternate doors, last in the panel and so
+                      adjacent to Connect: they are ACTIONS ("another way to
+                      sign in"), not identity fields like realname/ident, and
+                      grouping them with the button that signs you in reads
+                      better than burying them above the optional fields.
+                      `.login-advanced` is a flex COLUMN, so one per row needs
+                      no rule of its own. Own class, never
+                      login-advanced-toggle — that one is a selector contract
+                      the e2e clicks as a strict single match (issue281). */}
+                      <button
+                        type="button"
+                        class="login-quiet-button login-alt-auth"
+                        onClick={() => void onPasskeyLogin()}
+                      >
+                        Passkey
+                      </button>
+                      <button
+                        type="button"
+                        class="login-quiet-button login-alt-auth"
+                        onClick={() => setRecoveryMode((value) => !value)}
+                      >
+                        Recovery code
+                      </button>
+                      {/* #724 — the field still renders inside the credential
+                      form, so Enter here still reaches that form's implicit
+                      submission and `onRecoveryKeyDown` must still swallow it.
+                      Moving it into the disclosure changes its POSITION, not
+                      its enclosing form; the handler is unchanged and the
+                      contract is re-pinned in Login.test.tsx + the e2e. */}
+                      <Show when={recoveryMode()}>
+                        <div>
+                          <label for="login-recovery-code">Recovery code</label>
+                          <input
+                            id="login-recovery-code"
+                            type="text"
+                            autocomplete="one-time-code"
+                            value={recoveryCode()}
+                            onInput={(event) => setRecoveryCode(event.currentTarget.value)}
+                            onKeyDown={onRecoveryKeyDown}
+                          />
+                          <button
+                            type="button"
+                            class="login-connect"
+                            onClick={() => void onRecoveryLogin()}
+                          >
+                            Recover account
+                          </button>
+                        </div>
                       </Show>
                     </div>
                   </Show>

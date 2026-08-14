@@ -1083,21 +1083,19 @@ html.overlay-open #root > div {
    A future per-instance tweak goes in a rule reintroduced here, not by
    re-copying the block above. */
 
-/* #442 — the alt-auth entry points ride the Advanced toggle's row so they
-   add NO height to the card. On 1024x900 with Advanced open the form is
-   875px tall against a 900px viewport: 25px of slack, less than one 44px
-   tap target, so a stacked row pushes Connect off-screen and reds
-   login-advanced-scroll-reachability:138. */
+/* #1322 — this row now holds the Advanced toggle ALONE. The alt-auth pair
+   that #442 parked here (to add no height, against 25px of slack on
+   1024x900) moved inside the disclosure, one per row, once vjt relaxed the
+   height constraint. Kept as a flex row rather than dropped: a one-child
+   flex row preserves the toggle's content-width box, so issue204's position
+   assertions and the iPhone tap-target geometry see no change from a move
+   that is about the other two buttons. #442's `margin-right: auto` on the
+   toggle went with the pair — with nothing left to push against, auto and
+   the default flex-start put the box in the same place. */
 .login-alt-auth-row {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-}
-
-/* Push the alt-auth pair to the trailing edge; the disclosure toggle keeps
-   the leading edge it has on main. */
-.login-alt-auth-row .login-advanced-toggle {
-  margin-right: auto;
 }
 
 .login-advanced {

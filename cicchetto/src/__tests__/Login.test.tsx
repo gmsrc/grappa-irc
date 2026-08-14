@@ -310,11 +310,51 @@ describe("Login — TOTP", () => {
 // hold here too, and an empty field must stop before the ceremony rather
 // than firing a request for the identifier "".
 const passkeyBtn = () => screen.getByRole("button", { name: "Passkey" });
+const recoveryBtn = () => screen.getByRole("button", { name: "Recovery code" });
+
+describe("Login — #1322 the alternate doors live inside Advanced", () => {
+  it("keeps Passkey and Recovery code out of the collapsed view", () => {
+    renderLogin();
+    expect(screen.queryByRole("button", { name: "Passkey" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Recovery code" })).toBeNull();
+
+    openAdvanced();
+
+    expect(passkeyBtn()).toBeInTheDocument();
+    expect(recoveryBtn()).toBeInTheDocument();
+  });
+
+  it("puts both doors inside the disclosure the toggle controls", () => {
+    // The toggle names its panel via aria-controls; containment in THAT
+    // element is what makes the collapse above structural rather than a
+    // coincidence of render order.
+    renderLogin();
+    openAdvanced();
+
+    const panel = document.getElementById("login-advanced");
+    expect(panel).not.toBeNull();
+    expect(panel?.contains(passkeyBtn())).toBe(true);
+    expect(panel?.contains(recoveryBtn())).toBe(true);
+  });
+
+  it("puts the revealed recovery field inside the disclosure too (#724 position)", () => {
+    // #724's swallow of the implicit submit is asserted below; this pins the
+    // POSITION that re-verification is about — the field must not escape the
+    // panel when Recovery code is clicked from inside it.
+    renderLogin();
+    openAdvanced();
+    fireEvent.click(recoveryBtn());
+
+    const panel = document.getElementById("login-advanced");
+    expect(panel?.contains(screen.getByLabelText(/^recovery code$/i))).toBe(true);
+  });
+});
 
 describe("Login — #442 alternate auth (passkey / recovery code)", () => {
   it("signs in with the SANITIZED identifier when Passkey is clicked", async () => {
     vi.mocked(auth.loginWithPasskey).mockResolvedValue(undefined);
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "my nick" } });
     fireEvent.click(passkeyBtn());
     await waitFor(() => {
@@ -329,6 +369,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
 
   it("refuses to start the ceremony with an empty identifier", async () => {
     renderLogin();
+    openAdvanced();
     fireEvent.click(passkeyBtn());
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/account name or email first/i);
@@ -344,6 +385,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
       new Error("Passkey authentication cancelled"),
     );
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "my nick" } });
     fireEvent.click(passkeyBtn());
     await waitFor(() => {
@@ -358,6 +400,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
   it("renders friendly copy for an ApiError from the ceremony", async () => {
     vi.mocked(auth.loginWithPasskey).mockRejectedValue(new ApiError(401, "invalid_credentials"));
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "alice" } });
     fireEvent.click(passkeyBtn());
     await waitFor(() => {
@@ -380,6 +423,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
       // of the lockout budget.
       vi.mocked(auth.loginWithRecoveryCode).mockReturnValue(pending<void>());
       renderLogin();
+      openAdvanced();
       fireEvent.input(nickField(), { target: { value: "alice" } });
       fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
       fireEvent.input(screen.getByLabelText(/^recovery code$/i), {
@@ -399,6 +443,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
       // Chrome ("A request is already pending").
       vi.mocked(auth.loginWithPasskey).mockReturnValue(pending<void>());
       renderLogin();
+      openAdvanced();
       fireEvent.input(nickField(), { target: { value: "alice" } });
 
       const button = passkeyBtn();
@@ -412,6 +457,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
     it("gives the recovery flow the same in-flight feedback the password login has", async () => {
       vi.mocked(auth.loginWithRecoveryCode).mockReturnValue(pending<void>());
       renderLogin();
+      openAdvanced();
       fireEvent.input(nickField(), { target: { value: "alice" } });
       fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
       fireEvent.input(screen.getByLabelText(/^recovery code$/i), {
@@ -430,6 +476,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
         new ApiError(401, "invalid_two_factor"),
       );
       renderLogin();
+      openAdvanced();
       fireEvent.input(nickField(), { target: { value: "alice" } });
       fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
       fireEvent.input(screen.getByLabelText(/^recovery code$/i), { target: { value: "nope" } });
@@ -445,6 +492,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
 
   it("keeps the recovery-code field collapsed until Recovery code is clicked", () => {
     renderLogin();
+    openAdvanced();
     expect(screen.queryByLabelText(/^recovery code$/i)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
     expect(screen.getByLabelText(/^recovery code$/i)).toBeInTheDocument();
@@ -453,6 +501,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
   it("submits the identifier and the recovery code together", async () => {
     vi.mocked(auth.loginWithRecoveryCode).mockResolvedValue(undefined);
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "alice" } });
     fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
     fireEvent.input(screen.getByLabelText(/^recovery code$/i), {
@@ -469,6 +518,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
       new ApiError(401, "invalid_credentials"),
     );
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "alice" } });
     fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
     fireEvent.input(screen.getByLabelText(/^recovery code$/i), { target: { value: "nope" } });
@@ -497,6 +547,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
     // this field runs recovery, and never the password login.
     vi.mocked(auth.loginWithRecoveryCode).mockResolvedValue(undefined);
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "alice" } });
     fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
     fireEvent.input(recoveryField(), { target: { value: "abcd-1234" } });
@@ -513,6 +564,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
     // `required` used to supply this, from inside the wrong form. Dropping it
     // without replacement would silently POST an empty code.
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "alice" } });
     fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
     fireEvent.click(screen.getByRole("button", { name: /recover account/i }));
@@ -529,6 +581,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
     // submit and point at a field unrelated to the credentials just typed.
     vi.mocked(auth.login).mockResolvedValue({ kind: "authenticated" });
     renderLogin();
+    openAdvanced();
     fireEvent.input(nickField(), { target: { value: "alice" } });
     fireEvent.input(screen.getByLabelText(/password/i), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
@@ -547,6 +600,7 @@ describe("Login — #442 alternate auth (passkey / recovery code)", () => {
 
   it("refuses to recover with an empty identifier", async () => {
     renderLogin();
+    openAdvanced();
     fireEvent.click(screen.getByRole("button", { name: "Recovery code" }));
     fireEvent.input(screen.getByLabelText(/^recovery code$/i), { target: { value: "abcd-1234" } });
     fireEvent.click(screen.getByRole("button", { name: /recover account/i }));
@@ -735,11 +789,8 @@ describe("Login — captcha flow (carried forward)", () => {
 describe("Login — #740 the quiet text-buttons wear the shared class", () => {
   it("puts .login-quiet-button on the Advanced toggle and on both alt-auth buttons", () => {
     renderLogin();
-    const quiet = [
-      screen.getByRole("button", { name: /Advanced/ }),
-      passkeyBtn(),
-      screen.getByRole("button", { name: "Recovery code" }),
-    ];
+    openAdvanced();
+    const quiet = [screen.getByRole("button", { name: /Advanced/ }), passkeyBtn(), recoveryBtn()];
     for (const button of quiet) {
       expect(button.classList.contains("login-quiet-button")).toBe(true);
     }
@@ -747,9 +798,16 @@ describe("Login — #740 the quiet text-buttons wear the shared class", () => {
 
   it("keeps the per-instance classes the e2e clicks as strict single matches", () => {
     // issue281: `.login-advanced-toggle` must stay ONE element per rendered
-    // branch and `.login-alt-auth` exactly two. Composing a second class
-    // must not disturb either count.
+    // branch. #1322 moved the alt-auth pair behind the disclosure, so their
+    // count is now a FUNCTION of the toggle: zero collapsed, two open. The
+    // toggle's own count is invariant across both — that is the contract
+    // issue281 clicks, and hiding the pair must not perturb it.
     renderLogin();
+    expect(document.querySelectorAll(".login-advanced-toggle")).toHaveLength(1);
+    expect(document.querySelectorAll(".login-alt-auth")).toHaveLength(0);
+
+    openAdvanced();
+
     expect(document.querySelectorAll(".login-advanced-toggle")).toHaveLength(1);
     expect(document.querySelectorAll(".login-alt-auth")).toHaveLength(2);
   });

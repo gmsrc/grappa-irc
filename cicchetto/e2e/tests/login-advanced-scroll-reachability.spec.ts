@@ -99,14 +99,34 @@ test.describe("login Advanced section stays reachable on a short viewport", () =
       .toBe(true);
     await expect(connect).toBeInViewport();
     await expect(connect).toBeEnabled();
-    // #284 — the disclosure content (realname, immediately above Connect) is
-    // reachable at the bottom-scroll position too: a regression that clipped
-    // ONLY the disclosure top would be caught here, not masked by Connect.
-    await expect(realname).toBeInViewport();
+    // #284's witness here was `realname`, the disclosure's TOP, on the claim
+    // that it sits immediately above Connect. #1322 put two more rows between
+    // them, so at 390x480 the disclosure no longer fits alongside Connect and
+    // that assertion would now be demanding the impossible. The intent —
+    // "a regression that clips ONLY the disclosure is caught here, not masked
+    // by Connect" — is kept by witnessing the disclosure's BOTTOM instead,
+    // which is what is genuinely adjacent to Connect now. The top end is
+    // asserted on the upward leg below, so neither end goes unwatched.
+    await expect(page.getByRole("button", { name: /^recovery code$/i })).toBeInViewport();
 
     // Wheel back UP — the TOP of the card must be reachable too (the
-    // centered-clip bug clipped BOTH ends). The always-visible password field
-    // is the topmost input above the toggle; poll until it is back in view.
+    // centered-clip bug clipped BOTH ends). Pass through the disclosure's top
+    // (realname) on the way to the always-visible password field, so a clip
+    // that swallowed only the middle of the card cannot hide between them.
+    await expect
+      .poll(
+        async () => {
+          await page.mouse.wheel(0, -600);
+          return await realname.evaluate((el) => {
+            const r = el.getBoundingClientRect();
+            return r.top >= 0 && r.bottom <= window.innerHeight;
+          });
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    await expect(realname).toBeInViewport();
+
     await expect
       .poll(
         async () => {
@@ -124,9 +144,8 @@ test.describe("login Advanced section stays reachable on a short viewport", () =
 });
 
 test.describe("login on a tall viewport — fix must not break the common case", () => {
-  // Desktop-shaped: the open Advanced form fits without scrolling. Guards the
-  // margin:auto centering — the fix must not push the card off-screen or
-  // require a scroll when there's plenty of room.
+  // Desktop-shaped. Guards the margin:auto centering — the fix must not push
+  // the card off-screen or make anything unreachable when there's room.
   test.use({ viewport: { width: 1024, height: 900 } });
 
   test.beforeEach(async ({ page }) => {
@@ -137,12 +156,82 @@ test.describe("login on a tall viewport — fix must not break the common case",
     await expect(page.getByLabel(/nick or email/i)).toBeVisible({ timeout: 10_000 });
   });
 
-  test("open Advanced → every field + Connect is visible with no scroll", async ({ page }) => {
-    await page.getByRole("button", { name: /advanced/i }).click();
-    // No wheel — everything is on screen immediately when the viewport is tall.
+  // #1322 — the COLLAPSED view keeps the strict assertion, and gains from the
+  // move: the alt-auth pair left this view, so the card is one 44px row
+  // SHORTER than it was on #442's layout. Asserting their absence next to the
+  // no-scroll claim ties the height win to its cause, so a future change that
+  // puts a button back here reds the geometry test that pays for it.
+  test("collapsed → every control is visible with no scroll at all", async ({ page }) => {
+    await expect(page.getByRole("button", { name: /^passkey$/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^recovery code$/i })).toHaveCount(0);
+
+    await expect(page.getByLabel(/nick or email/i)).toBeInViewport();
     await expect(page.getByLabel(/password/i)).toBeInViewport();
-    await expect(page.getByLabel(/real name/i)).toBeInViewport();
-    await expect(page.getByLabel(/^ident$/i)).toBeInViewport();
+    await expect(page.getByRole("button", { name: /advanced/i })).toBeInViewport();
     await expect(page.getByRole("button", { name: /^connect$/i })).toBeInViewport();
+
+    // No wheel was driven above, so nothing may have scrolled to get there.
+    const scrolled = await page.evaluate(() => {
+      const scroller = document.querySelector(".login-scroll");
+      return (scroller?.scrollTop ?? 0) + window.scrollY;
+    });
+    expect(scrolled).toBe(0);
+  });
+
+  // #1322 — with Advanced OPEN the height constraint is relaxed by ruling: a
+  // scroll is acceptable, so the contract is REACHABILITY, not fit. Driven
+  // with the real wheel rather than scrollIntoViewIfNeeded for the reason in
+  // this file's header — a programmatic scrollTop bypasses `overflow:hidden`
+  // and would green-wash a card that a user cannot actually scroll. The
+  // assertion is deliberately agnostic to whether the card overflows at this
+  // size: if it fits, the first poll iteration already finds the control in
+  // view; if it does not, the wheel brings it there. That is what "relax the
+  // height" has to mean for a spec that must not need relaxing again.
+  const reachableByWheel = async (
+    page: import("@playwright/test").Page,
+    target: import("@playwright/test").Locator,
+    direction: -1 | 1,
+  ) => {
+    await page.locator("main.login").hover();
+    await expect
+      .poll(
+        async () => {
+          const inView = await target.evaluate((el) => {
+            const r = el.getBoundingClientRect();
+            return r.top >= 0 && r.bottom <= window.innerHeight;
+          });
+          if (inView) return true;
+          await page.mouse.wheel(0, direction * 400);
+          return false;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+  };
+
+  test("open Advanced → every field, both alt-auth doors and Connect are reachable", async ({
+    page,
+  }) => {
+    await page.getByRole("button", { name: /advanced/i }).click();
+    await expect(page.getByLabel(/real name/i)).toBeVisible();
+
+    // Downward leg: everything from the disclosure's own fields to Connect.
+    for (const target of [
+      page.getByLabel(/real name/i),
+      page.getByLabel(/^ident$/i),
+      page.getByRole("button", { name: /^passkey$/i }),
+      page.getByRole("button", { name: /^recovery code$/i }),
+      page.getByRole("button", { name: /^connect$/i }),
+    ]) {
+      await reachableByWheel(page, target, 1);
+      await expect(target).toBeInViewport();
+      // Reachable is not enough — the ruling says reachable AND clickable.
+      await expect(target).toBeEnabled();
+    }
+
+    // Upward leg: the TOP of the card must come back. A layout that reaches
+    // Connect by clipping the head of the card fails here.
+    await reachableByWheel(page, page.getByLabel(/password/i), -1);
+    await expect(page.getByLabel(/password/i)).toBeInViewport();
   });
 });

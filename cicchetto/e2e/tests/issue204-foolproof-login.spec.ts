@@ -40,6 +40,11 @@ test.describe("#204 foolproof login", () => {
     await expect(page.getByLabel(/password/i)).toBeVisible();
     // realname/ident are conditionally rendered — absent until Advanced opens.
     await expect(page.getByLabel(/real name/i)).toHaveCount(0);
+    // #1322 — and so are the alternate doors now. The minimal view this
+    // issue is named for is nick + password + Advanced + Connect, nothing
+    // else; the pair that #442 parked on the Advanced row has left it.
+    await expect(page.getByRole("button", { name: /^passkey$/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^recovery code$/i })).toHaveCount(0);
   });
 
   test("Advanced toggle reveals realname + ident and sits between nick and Connect", async ({
@@ -53,6 +58,10 @@ test.describe("#204 foolproof login", () => {
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByLabel(/real name/i)).toBeVisible();
     await expect(page.getByLabel(/^ident$/i)).toBeVisible();
+    // #1322 — the same one gesture now also reveals the alternate doors, so
+    // the disclosure's contents are asserted where its aria-expanded is.
+    await expect(page.getByRole("button", { name: /^passkey$/i })).toBeVisible();
+    await expect(page.getByRole("button", { name: /^recovery code$/i })).toBeVisible();
 
     // DOM order: nick → Advanced → Connect (vjt layout fix). Compare
     // document positions in-page.

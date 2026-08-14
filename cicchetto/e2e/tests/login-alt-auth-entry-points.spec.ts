@@ -56,6 +56,16 @@ const passkeyButton = (page: Page) => page.getByRole("button", { name: /^passkey
 const recoveryButton = (page: Page) => page.getByRole("button", { name: /^recovery code$/i });
 const connectButton = (page: Page) => page.getByRole("button", { name: /^connect$/i });
 
+// #1322 — both doors now live behind the Advanced disclosure, so every test
+// below that touches them opens it first. Written out at each call site
+// rather than hidden in `openLogin`, because "you must open Advanced to get
+// here" IS the behaviour this issue introduced and a spec that buries it in
+// setup stops asserting it.
+async function openAdvanced(page: Page): Promise<void> {
+  await page.getByRole("button", { name: /advanced/i }).click();
+  await expect(page.getByLabel(/real name/i)).toBeVisible();
+}
+
 test.describe("login alt-auth entry points — 390x480 (shortest supported viewport)", () => {
   test.use({ viewport: { width: 390, height: 480 } });
 
@@ -63,25 +73,30 @@ test.describe("login alt-auth entry points — 390x480 (shortest supported viewp
     await openLogin(page);
   });
 
-  test("both entry points render, sit in the viewport, and keep the toggle selector single", async ({
+  test("both doors stay hidden until Advanced opens, and keep the toggle selector single", async ({
     page,
   }) => {
+    // #1322 — the collapsed card is the default view; neither door is in it.
+    // `toHaveCount(0)` and not `not.toBeVisible()`: the disclosure is a
+    // conditional render, so the absence is from the DOM, not a style.
+    await expect(passkeyButton(page)).toHaveCount(0);
+    await expect(recoveryButton(page)).toHaveCount(0);
+    await expect(page.locator(".login-alt-auth")).toHaveCount(0);
+    // The toggle's own count is invariant across the disclosure — that is
+    // the issue281 contract, and it must not move when the pair does.
+    await expect(page.locator(".login-advanced-toggle")).toHaveCount(1);
+
+    await openAdvanced(page);
+
     await expect(passkeyButton(page)).toBeVisible();
     await expect(recoveryButton(page)).toBeVisible();
-    // The default (collapsed) card fits this viewport, so "rendered" and
-    // "reachable without scrolling" are the same claim here.
-    await expect(passkeyButton(page)).toBeInViewport();
-    await expect(recoveryButton(page)).toBeInViewport();
-    await expect(connectButton(page)).toBeInViewport();
-
-    // The issue281 regression, asserted head-on: `.login-advanced-toggle` is
-    // a selector CONTRACT — the e2e clicks it as a strict single match. The
-    // alt-auth pair must keep its own class.
-    await expect(page.locator(".login-advanced-toggle")).toHaveCount(1);
     await expect(page.locator(".login-alt-auth")).toHaveCount(2);
+    await expect(page.locator(".login-advanced-toggle")).toHaveCount(1);
 
     // #204 tap-target rule: `--tap-min` is an absolute 44px (the root font
     // is 14px here, so a rem-based assertion would silently under-measure).
+    // The ruling picked full 44px buttons over compact text actions, so this
+    // is the floor that choice has to keep paying.
     for (const control of [passkeyButton(page), recoveryButton(page)]) {
       const box = await control.boundingBox();
       expect(box).not.toBeNull();
@@ -89,24 +104,28 @@ test.describe("login alt-auth entry points — 390x480 (shortest supported viewp
     }
   });
 
-  test("the alt-auth pair rides the Advanced row instead of stacking a new one", async ({
-    page,
-  }) => {
-    // #442's load-bearing layout decision: sharing the toggle's row costs
-    // the card ZERO height. Stack them and the 1024x900 card (875px of a
-    // 900px viewport) pushes Connect off-screen — the exact red that
-    // login-advanced-scroll-reachability:138 caught by accident. Asserting
-    // the shared row here fails at the CAUSE, with 25px of slack still in
-    // hand, rather than at the downstream symptom.
-    const tops = await Promise.all(
-      [
-        page.locator(".login-alt-auth-row .login-advanced-toggle"),
-        passkeyButton(page),
-        recoveryButton(page),
-      ].map(async (l) => (await l.boundingBox())?.y ?? Number.NaN),
-    );
-    for (const top of tops) expect(Number.isNaN(top)).toBe(false);
-    expect(Math.max(...tops) - Math.min(...tops)).toBeLessThanOrEqual(2);
+  test("each door gets its own row inside the disclosure", async ({ page }) => {
+    // #1322 inverts #442: the pair no longer rides the toggle's row. The
+    // oracle is the pair's own geometry — on the superseded layout all three
+    // boxes shared a `y`, so "stacked" is exactly the assertion that was
+    // false before and is true now, and it fails at the CAUSE rather than at
+    // some downstream viewport symptom.
+    await openAdvanced(page);
+
+    const panel = page.locator("#login-advanced");
+    await expect(panel.locator(".login-alt-auth")).toHaveCount(2);
+
+    const passkey = await passkeyButton(page).boundingBox();
+    const recovery = await recoveryButton(page).boundingBox();
+    const toggle = await page.locator(".login-alt-auth-row .login-advanced-toggle").boundingBox();
+    expect(passkey).not.toBeNull();
+    expect(recovery).not.toBeNull();
+    expect(toggle).not.toBeNull();
+
+    // Recovery starts at or below where Passkey ends: two rows, not one.
+    expect(recovery?.y ?? 0).toBeGreaterThanOrEqual((passkey?.y ?? 0) + (passkey?.height ?? 0));
+    // And neither shares the toggle's row any more.
+    expect(passkey?.y ?? 0).toBeGreaterThanOrEqual((toggle?.y ?? 0) + (toggle?.height ?? 0));
   });
 
   test("Passkey with an empty identifier surfaces the inline prompt, no request", async ({
@@ -120,6 +139,7 @@ test.describe("login alt-auth entry points — 390x480 (shortest supported viewp
       await route.continue();
     });
 
+    await openAdvanced(page);
     await passkeyButton(page).click();
     await expect(page.getByRole("alert")).toHaveText(/account name or email/i);
     expect(requested).toBe(false);
@@ -130,6 +150,7 @@ test.describe("login alt-auth entry points — 390x480 (shortest supported viewp
   }) => {
     const identifier = probeIdentifier();
     await page.getByLabel(/nick or email/i).fill(identifier);
+    await openAdvanced(page);
 
     // Armed BEFORE the click — a waiter installed after the action races the
     // response and can miss the request entirely.
@@ -154,10 +175,16 @@ test.describe("login alt-auth entry points — 390x480 (shortest supported viewp
   test("Recovery code reveals its field and a bogus code is reported", async ({ page }) => {
     const identifier = probeIdentifier();
     await page.getByLabel(/nick or email/i).fill(identifier);
+    await openAdvanced(page);
 
     const recoveryField = page.locator("#login-recovery-code");
     await expect(recoveryField).toBeHidden();
     await recoveryButton(page).click();
+    // #1322/#724 — the field must be revealed INSIDE the panel it was opened
+    // from. Its enclosing form is unchanged (that is what keeps the Enter
+    // swallow honest), so escaping the panel would be a silent regression
+    // that no behavioural assertion below would notice.
+    await expect(page.locator("#login-advanced #login-recovery-code")).toHaveCount(1);
     // `toBeVisible`, deliberately NOT `toBeInViewport`: an earlier draft
     // asserted the latter and a mutation run proved it fires on card
     // GEOMETRY (a taller card pushes the revealed field below the fold),
@@ -185,35 +212,39 @@ test.describe("login alt-auth entry points — 390x480 (shortest supported viewp
     await expect(recoveryField).toBeHidden();
   });
 
-  test("both entry points are keyboard-reachable and Connect is still last", async ({ page }) => {
-    await page.getByLabel(/nick or email/i).focus();
-    const collapsed = await tabThroughForm(page);
+  test("both doors are keyboard-reachable inside Advanced and Connect is still last", async ({
+    page,
+  }) => {
+    // #1322 — the collapsed tab walk is now THREE stops. Pinned exactly,
+    // because "the default view got shorter" is the win this issue bought
+    // and an extra stop appearing here is precisely how it would be spent.
     // The toggle carries a ▸/▾ glyph in its label; match it loosely so the
     // ORDER is what's under test, not the disclosure's copy.
-    expect(collapsed).toEqual([
-      "login-password",
-      expect.stringMatching(/advanced/i),
-      "Passkey",
-      "Recovery code",
-      "Connect",
-    ]);
+    await page.getByLabel(/nick or email/i).focus();
+    const collapsed = await tabThroughForm(page);
+    expect(collapsed).toEqual(["login-password", expect.stringMatching(/advanced/i), "Connect"]);
 
-    // Expanded state: both disclosures add focusable rows BETWEEN the
-    // alt-auth pair and Connect. Connect must remain the tail — a new row
-    // appended after it would strand the primary CTA behind the whole form.
+    // Expanded: the pair is now INSIDE the panel, so it must follow the
+    // panel's own fields rather than precede them, and Connect must remain
+    // the tail — a row appended after it would strand the primary CTA behind
+    // the whole form. Asserted by relative order, not as a frozen list: the
+    // panel's contents are a product decision that has already changed twice
+    // (#152 realname/ident, #363 incognito), and re-pinning the whole walk
+    // every time would make this test about the panel, not about the doors.
     await page.reload();
     await expect(page.getByLabel(/nick or email/i)).toBeVisible();
+    await openAdvanced(page);
     await recoveryButton(page).click();
-    await page.getByRole("button", { name: /advanced/i }).click();
-    await expect(page.getByLabel(/real name/i)).toBeVisible();
     await page.getByLabel(/nick or email/i).focus();
     const expanded = await tabThroughForm(page);
-    expect(expanded.slice(0, 4)).toEqual([
-      "login-password",
-      expect.stringMatching(/advanced/i),
-      "Passkey",
-      "Recovery code",
-    ]);
+
+    expect(expanded.slice(0, 2)).toEqual(["login-password", expect.stringMatching(/advanced/i)]);
+    const at = (needle: string) => expanded.indexOf(needle);
+    expect(at("login-realname")).toBeGreaterThan(1);
+    expect(at("Passkey")).toBeGreaterThan(at("login-realname"));
+    expect(at("Recovery code")).toBeGreaterThan(at("Passkey"));
+    // The revealed field follows the button that reveals it, not the form.
+    expect(at("login-recovery-code")).toBeGreaterThan(at("Recovery code"));
     expect(expanded.at(-1)).toBe("Connect");
   });
 });
@@ -244,23 +275,39 @@ test.describe("login alt-auth entry points — 1024x900 with Advanced expanded",
     await openLogin(page);
   });
 
-  test("the card still fits the viewport and every control stays in view", async ({ page }) => {
-    await page.getByRole("button", { name: /advanced/i }).click();
-    await expect(page.getByLabel(/real name/i)).toBeVisible();
-
-    // #442 measured 875px of card against 900px of viewport: 25px of slack,
-    // less than one 44px tap target. That is the whole reason the alt-auth
-    // pair shares a row. Guard the invariant (card fits) rather than the
-    // measurement (which is a product decision), and report the slack so a
-    // future failure names how much room was left.
+  test("the COLLAPSED card fits with room to spare, and got shorter", async ({ page }) => {
+    // #442 measured 875px of card against 900px of viewport with Advanced
+    // OPEN: 25px of slack, less than one 44px tap target, which is why the
+    // pair shared a row. #1322 relaxed that for the open state (see the
+    // reachability test below), so the fits-in-the-viewport invariant now
+    // belongs to the COLLAPSED card — the view every login starts in, and
+    // the one the move made strictly shorter by a whole 44px row.
     const box = await page.locator(".login-form").boundingBox();
     expect(box).not.toBeNull();
     const height = box?.height ?? Number.POSITIVE_INFINITY;
-    const slack = 900 - height;
-    expect(slack, `login card is ${height}px tall in a 900px viewport`).toBeGreaterThanOrEqual(0);
+    expect(
+      900 - height,
+      `collapsed login card is ${height}px tall in a 900px viewport`,
+    ).toBeGreaterThanOrEqual(44);
 
-    await expect(passkeyButton(page)).toBeInViewport();
-    await expect(recoveryButton(page)).toBeInViewport();
     await expect(connectButton(page)).toBeInViewport();
+  });
+
+  test("with Advanced open both doors and Connect stay reachable", async ({ page }) => {
+    // The ruling: with Advanced open a scroll is acceptable, so the claim is
+    // reachability, not fit. `scrollIntoViewIfNeeded` is the right tool HERE
+    // and not in login-advanced-scroll-reachability: that spec exists to
+    // prove a real scroll container exists (a programmatic scrollTop would
+    // green-wash `overflow:hidden`), and having proved it there, this test
+    // is free to ask the narrower question of whether each control can be
+    // brought into view and clicked.
+    await page.getByRole("button", { name: /advanced/i }).click();
+    await expect(page.getByLabel(/real name/i)).toBeVisible();
+
+    for (const control of [passkeyButton(page), recoveryButton(page), connectButton(page)]) {
+      await control.scrollIntoViewIfNeeded();
+      await expect(control).toBeInViewport();
+      await expect(control).toBeEnabled();
+    }
   });
 });
