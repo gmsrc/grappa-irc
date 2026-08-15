@@ -62,6 +62,7 @@
 
 import { expect, type Locator, type Page } from "@playwright/test";
 import type { SeededUser } from "./grappaApi";
+import { type ScrollGestureResult, scrollByGesture } from "./scrollGesture";
 
 const SHELL_READY_TIMEOUT_MS = 10_000;
 const MOBILE_BREAKPOINT_PX = 768;
@@ -1332,4 +1333,36 @@ export async function inlineNickColorVar(locator: Locator): Promise<string> {
     throw new Error(`expected an inline nick-colour var on the span, got style=${String(style)}`);
   }
   return match[0];
+}
+
+// #1336 — page the scrollback UP with a wheel gesture that has demonstrably
+// LANDED before the caller moves on.
+//
+// `page.mouse.wheel()` resolves before the scroll is applied (measured: the
+// pane still read its pre-gesture `scrollTop` immediately after the call, and
+// moved ~250 ms later), so a spec that wheels and reads in one breath asserts
+// about a pane nobody has moved yet — and the scroll then lands inside the
+// NEXT step. The gesture core (`scrollGesture.ts`, unit-tested without a
+// testnet) owns the hover → wheel → moved-and-held wait and REJECTS both a
+// gesture that never landed and one still in flight.
+//
+// `pixels` is the distance to travel UP, positive; the DOM's negative-is-up
+// sign convention is applied here so callers read as the operator's intent.
+// Sampling every 50 ms: two agreeing samples then mean the pane has held
+// still for 50 ms, which chromium's wheel animation (hundreds of ms of
+// continuous travel, measured) does not do mid-flight.
+export async function pageScrollbackUp(
+  page: Page,
+  pixels: number,
+  timeoutMs: number,
+): Promise<ScrollGestureResult> {
+  const pane = page.locator('[data-testid="scrollback"]');
+  return await scrollByGesture(
+    {
+      hover: () => pane.hover(),
+      wheel: async (deltaY: number) => await page.mouse.wheel(0, deltaY),
+      scrollTop: () => pane.evaluate((el) => el.scrollTop),
+    },
+    { deltaY: -pixels, timeoutMs, pollMs: 50 },
+  );
 }

@@ -41,6 +41,7 @@ import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
+  pageScrollbackUp,
   scrollbackLines,
   selectChannel,
   waitForScrollbackRefreshed,
@@ -192,12 +193,15 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     // marker-activation latch (arms the operator-input gate), so the subsequent
     // send goes through the normal follow path. A programmatic scrollTop set
     // would not arm the gate; the wheel event marks a genuine operator scroll.
-    await page.locator('[data-testid="scrollback"]').hover();
+    //
+    // #1336 — the gesture must have LANDED before the send. This used to wheel
+    // inside the poll below, which returned on its first evaluation because the
+    // pane was already 339px above the tail on the marker: the `> 50` was true
+    // of a pane nobody had moved, and the wheel's scroll arrived later, inside
+    // the send window, where it disarms the follow intent and freezes the pane.
+    await pageScrollbackUp(page, 4000, 5_000);
     await expect
-      .poll(async () => {
-        await page.mouse.wheel(0, -4000);
-        return await distanceToBottom(page);
-      })
+      .poll(async () => await distanceToBottom(page))
       .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // SEND — must snap back to the bottom UNCONDITIONALLY (issue #168 asks:
