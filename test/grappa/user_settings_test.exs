@@ -171,6 +171,58 @@ defmodule Grappa.UserSettingsTest do
       assert settings.data["highlight_patterns"] == []
     end
 
+    test "accepts a list exactly at the entry cap (#1353)" do
+      # The boundary belongs to the accepted side: a cap that refuses at
+      # its own number is a different cap from the one documented, and
+      # only an at-cap arm can tell the two apart.
+      user = user_fixture()
+      patterns = for i <- 1..UserSettings.max_highlight_patterns(), do: "pattern#{i}"
+
+      assert {:ok, settings} = UserSettings.set_highlight_patterns({:user, user.id}, patterns)
+      assert length(settings.data["highlight_patterns"]) == UserSettings.max_highlight_patterns()
+    end
+
+    test "refuses a list past the entry cap (#1353)" do
+      # The ceiling is stated here, at the write boundary, which is what
+      # lets every reader on the other side of it take the list as given.
+      user = user_fixture()
+      patterns = for i <- 0..UserSettings.max_highlight_patterns(), do: "pattern#{i}"
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.set_highlight_patterns({:user, user.id}, patterns)
+    end
+
+    test "accepts a pattern exactly at the byte cap (#1353)" do
+      user = user_fixture()
+      pattern = String.duplicate("a", UserSettings.max_highlight_pattern_bytes())
+
+      assert {:ok, settings} = UserSettings.set_highlight_patterns({:user, user.id}, [pattern])
+      assert settings.data["highlight_patterns"] == [pattern]
+    end
+
+    test "refuses a pattern past the byte cap (#1353)" do
+      user = user_fixture()
+      pattern = String.duplicate("a", UserSettings.max_highlight_pattern_bytes() + 1)
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.set_highlight_patterns({:user, user.id}, [pattern])
+    end
+
+    test "the byte cap counts BYTES, not graphemes (#1353)" do
+      # A watchlist term is matched against message bodies, which are
+      # bytes on the wire; a multi-byte term must therefore be measured
+      # the same way the body it scans is. `String.length/1` here would
+      # admit four times the material `byte_size/1` admits.
+      user = user_fixture()
+      over = String.duplicate("é", UserSettings.max_highlight_pattern_bytes())
+
+      assert byte_size(over) > UserSettings.max_highlight_pattern_bytes()
+      assert String.length(over) == UserSettings.max_highlight_pattern_bytes()
+
+      assert {:error, %Ecto.Changeset{}} =
+               UserSettings.set_highlight_patterns({:user, user.id}, [over])
+    end
+
     test "rejects a list containing an empty string" do
       user = user_fixture()
       assert {:error, %Ecto.Changeset{}} = UserSettings.set_highlight_patterns({:user, user.id}, [""])

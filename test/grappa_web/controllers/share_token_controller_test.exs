@@ -39,9 +39,8 @@ defmodule GrappaWeb.ShareTokenControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.Accounts
+  alias Grappa.{Accounts, ShareTokens}
   alias Grappa.Repo.BusyRetry
-  alias Grappa.ShareTokens
   alias GrappaWeb.ShareToken
 
   # #982 — read from the production module rather than re-declared here.

@@ -244,6 +244,19 @@ defmodule Grappa.UserSettings do
   @alias_expansion_max_bytes 512
   @aliases_max_count 200
 
+  # Structural bounds for the mention watchlist — the same treatment
+  # @aliases_max_count gives the alias map one door over: a
+  # subject-writable list carries a ceiling at the write boundary, so
+  # every reader downstream can take the list as given. Sized against
+  # real use: a watchlist is a handful of words, added one at a time
+  # from the settings drawer.
+  #
+  # Bytes, not graphemes: the bodies these terms are matched against are
+  # bytes on the wire, and `String.length/1` would admit up to four times
+  # the material for the same number.
+  @max_highlight_patterns 64
+  @max_highlight_pattern_bytes 128
+
   # Structural bounds for the #449 presence-filter map — a user-writable blob
   # needs a boundary (same rationale as @aliases_max_count / @upload_ttl_seconds_max).
   @presence_filter_max_count 2_000
@@ -384,6 +397,22 @@ defmodule Grappa.UserSettings do
   end
 
   @doc """
+  How many `highlight_patterns` entries a subject may hold.
+
+  Public so callers and tests read the number the boundary enforces
+  instead of re-declaring it.
+  """
+  @spec max_highlight_patterns() :: unquote(@max_highlight_patterns)
+  def max_highlight_patterns, do: @max_highlight_patterns
+
+  @doc """
+  The byte ceiling on one `highlight_patterns` entry. Bytes, not
+  graphemes — see the attribute's comment.
+  """
+  @spec max_highlight_pattern_bytes() :: unquote(@max_highlight_pattern_bytes)
+  def max_highlight_pattern_bytes, do: @max_highlight_pattern_bytes
+
+  @doc """
   Sets the `highlight_patterns` list for `subject`, preserving any
   other keys already present in `data`.
 
@@ -393,8 +422,12 @@ defmodule Grappa.UserSettings do
   are untouched.
 
   **Validation**: every element of `patterns` must be a non-empty
-  binary. Returns `{:error, %Ecto.Changeset{}}` if validation fails,
-  BEFORE any DB work.
+  binary of at most `max_highlight_pattern_bytes/0` bytes, and the list
+  holds at most `max_highlight_patterns/0` of them. Returns
+  `{:error, %Ecto.Changeset{}}` if validation fails, BEFORE any DB work.
+  The two ceilings are here, at the write boundary, so every reader of
+  the list — including the ones on the inbound-message path — can stay
+  simple and take the list as given.
 
   **Out of scope**: deduplication, case-folding, and regex
   validation of pattern syntax are the responsibility of the matcher
@@ -1333,21 +1366,37 @@ defmodule Grappa.UserSettings do
 
   @spec validate_patterns([term()], Subject.t()) :: :ok | {:error, Ecto.Changeset.t()}
   defp validate_patterns(patterns, subject) do
-    if Enum.all?(patterns, &(is_binary(&1) and byte_size(&1) > 0)) do
-      :ok
-    else
-      attrs = Subject.put_subject_id(%{data: %{}}, subject)
+    cond do
+      length(patterns) > @max_highlight_patterns ->
+        pattern_error(subject, "highlight_patterns must hold at most #{@max_highlight_patterns} entries")
 
-      cs =
-        %Settings{}
-        |> Settings.changeset(attrs)
-        |> Ecto.Changeset.add_error(
-          :data,
-          "highlight_patterns elements must be non-empty strings"
+      not Enum.all?(patterns, &(is_binary(&1) and byte_size(&1) > 0)) ->
+        pattern_error(subject, "highlight_patterns elements must be non-empty strings")
+
+      not Enum.all?(patterns, &(byte_size(&1) <= @max_highlight_pattern_bytes)) ->
+        pattern_error(
+          subject,
+          "each highlight_patterns entry must be at most #{@max_highlight_pattern_bytes} bytes"
         )
 
-      {:error, cs}
+      true ->
+        :ok
     end
+  end
+
+  # Clause order is load-bearing: the byte-size arm runs `byte_size/1`
+  # over every element, so it may only be reached once the shape arm has
+  # established they are all binaries.
+  @spec pattern_error(Subject.t(), String.t()) :: {:error, Ecto.Changeset.t()}
+  defp pattern_error(subject, message) do
+    attrs = Subject.put_subject_id(%{data: %{}}, subject)
+
+    cs =
+      %Settings{}
+      |> Settings.changeset(attrs)
+      |> Ecto.Changeset.add_error(:data, message)
+
+    {:error, cs}
   end
 
   # ---------------------------------------------------------------------------

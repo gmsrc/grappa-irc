@@ -219,10 +219,14 @@ defmodule Grappa.WindowCounts do
     Map.new(counts, fn {slug, per_channel} ->
       own_nick = own_nick_for_slug(own_nicks, slug)
       slug_tails = Map.get(tails, slug, %{})
+      # The watchlist is one per subject and the nick one per network, so
+      # the matcher set is constant across this network's windows: build
+      # it here rather than inside the per-window fold below.
+      matchers = slug_matchers(own_nick, patterns)
 
       windows =
         Map.new(per_channel, fn {channel, %{messages: messages, events: events}} ->
-          mentions = count_tail_mentions(Map.get(slug_tails, channel, []), own_nick, patterns)
+          mentions = count_tail_mentions(Map.get(slug_tails, channel, []), own_nick, matchers)
 
           {channel,
            %{
@@ -258,18 +262,26 @@ defmodule Grappa.WindowCounts do
   # own-sent rows (fold `sender` via the ASCII nick SSOT, #121/#525), then the
   # `Mentions.mentioned?/3` SSOT predicate. `nil` own_nick → nothing to
   # match, so no mentions.
-  @spec count_tail_mentions([%{sender: String.t(), body: String.t() | nil}], String.t() | nil, [
-          String.t()
-        ]) :: non_neg_integer()
+  @spec count_tail_mentions(
+          [%{sender: String.t(), body: String.t() | nil}],
+          String.t() | nil,
+          Mentions.matchers()
+        ) :: non_neg_integer()
   defp count_tail_mentions(_, nil, _), do: 0
 
-  defp count_tail_mentions(tail, own_nick, patterns) do
+  defp count_tail_mentions(tail, own_nick, matchers) do
     own = Identifier.canonical_target(own_nick)
 
     Enum.count(tail, fn %{sender: sender, body: body} ->
-      Identifier.canonical_target(sender) != own and Mentions.mentioned?(body, own_nick, patterns)
+      Identifier.canonical_target(sender) != own and Mentions.matches?(body, matchers)
     end)
   end
+
+  # No configured nick on this network → `count_tail_mentions/3` answers 0
+  # without consulting the matchers, so there is nothing to compile.
+  @spec slug_matchers(String.t() | nil, [String.t()]) :: Mentions.matchers()
+  defp slug_matchers(nil, _), do: []
+  defp slug_matchers(own_nick, patterns), do: Mentions.matchers(own_nick, patterns)
 
   # Counts unread content rows that mention the subject, excluding own-sent
   # rows (fold via the ASCII nick SSOT, #121/#525). Bounded by the scan cap.
@@ -286,11 +298,12 @@ defmodule Grappa.WindowCounts do
 
   defp count_mentions(subject, network_id, channel, after_id, own_nick, patterns) do
     own = Identifier.canonical_target(own_nick)
+    matchers = Mentions.matchers(own_nick, patterns)
 
     subject
     |> Scrollback.unread_content_tail(network_id, channel, after_id, own_nick, @mention_scan_cap)
     |> Enum.count(fn %{sender: sender, body: body} ->
-      Identifier.canonical_target(sender) != own and Mentions.mentioned?(body, own_nick, patterns)
+      Identifier.canonical_target(sender) != own and Mentions.matches?(body, matchers)
     end)
   end
 

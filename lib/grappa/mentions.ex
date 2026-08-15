@@ -145,10 +145,41 @@ defmodule Grappa.Mentions do
           boolean()
   def mentioned?(body, own_nick, patterns)
       when (is_binary(body) or is_nil(body)) and is_binary(own_nick) and is_list(patterns) do
-    case build_matchers([own_nick | patterns]) do
-      [] -> false
-      compiled -> body_matches?(body, compiled)
-    end
+    matches?(body, matchers(own_nick, patterns))
+  end
+
+  @typedoc """
+  Compiled word-boundary matchers for one `(own_nick, patterns)` pair —
+  the compile-once half of `mentioned?/3`, split out so a caller with
+  many bodies and one watchlist pays the compilation once.
+  """
+  @type matchers :: [Regex.t()]
+
+  @doc """
+  Compile the matcher set for `own_nick` + `patterns`.
+
+  Pair with `matches?/2` when scanning MORE THAN ONE body against the
+  same watchlist — a per-row `mentioned?/3` re-compiles every term for
+  every row, which is what `aggregate_mentions/6` hoists out of its own
+  loop and what the row-counting callers in `Grappa.WindowCounts` do
+  through this pair. For a single body, `mentioned?/3` is the same work
+  in one call.
+  """
+  @spec matchers(own_nick :: String.t(), patterns :: [String.t()]) :: matchers()
+  def matchers(own_nick, patterns) when is_binary(own_nick) and is_list(patterns) do
+    build_matchers([own_nick | patterns])
+  end
+
+  @doc """
+  Does `body` match any of the pre-compiled `matchers`?
+
+  The predicate half of `mentioned?/3` — same rule, same result; an
+  empty matcher set never matches, and a `nil` body never matches.
+  """
+  @spec matches?(body :: String.t() | nil, matchers()) :: boolean()
+  def matches?(body, matchers)
+      when (is_binary(body) or is_nil(body)) and is_list(matchers) do
+    body_matches?(body, matchers)
   end
 
   # ---------------------------------------------------------------------------
