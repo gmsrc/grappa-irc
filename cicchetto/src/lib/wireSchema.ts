@@ -1553,6 +1553,7 @@ export const S_ErrorTokensRestErrorToken = {
     { l: "internal" },
     { l: "session_plan_resolve_failed" },
     { l: "contract_migrations_pending" },
+    { l: "duplicate_migration_versions" },
     { l: "invalid_message" },
     { l: "anon_collision" },
     { l: "nick_in_use" },

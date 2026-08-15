@@ -138,6 +138,10 @@ defmodule GrappaWeb.ErrorTokens do
           # pending migration is contract, so the hot deploy is refused
           # and nothing ran — see Grappa.HotReload.migrate_and_reload/0.
           | :contract_migrations_pending
+          # Operator-facing, same endpoint, same "nothing ran" — but the
+          # OPPOSITE next move (#1348): two files claim one migration
+          # version, and a cold deploy migrates through the same defect.
+          | :duplicate_migration_versions
           | :invalid_message
           | :anon_collision
           | :nick_in_use

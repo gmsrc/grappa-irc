@@ -456,6 +456,13 @@ function friendlyKnown(err: ApiError, code: ErrorTokensRestErrorToken): string {
       // token the server can emit and the switch is exhaustive by
       // construction. Copy stays operator-shaped, not reassuring.
       return "The server needs a full restart to apply a database change.";
+    case "duplicate_migration_versions":
+      // #1348 — 409 from the same loopback-gated POST /admin/reload, so
+      // this string is likewise unreachable from a browser and exists
+      // because the union is exhaustive. Deliberately NOT the sibling's
+      // copy: a restart is what the other token asks for and the wrong
+      // move for this one, which needs the duplicate resolved in the repo.
+      return "Two migration files claim the same version; nothing was applied.";
     case "client_token_scope":
       // #1196 — 403 for a per-client token on a credential-management
       // route. cic authenticates with a browser session, so this arm is
