@@ -76,6 +76,30 @@ defmodule Grappa.Session.Backoff do
   hammering; a whole-network outage retries at most every 5 min, so
   recovery is prompt when upstream returns without pummelling it.
 
+  ## Bound (#1349 L-S1)
+
+  The wait is bounded at the EXPONENT, never at the stored count. The
+  ladder used to compute `@base_ms * trunc(:math.pow(2, count - 1))`
+  and cap the product afterwards, so the exponent tracked the raw
+  failure count forever: a bignum recomputed on every session start,
+  and `badarith` at exponent 1024, where `:math.pow/2`'s double
+  overflows. That raise lands in `Session.Server`'s
+  `handle_continue({:start_client, _}, _)` — BEFORE any delay is
+  scheduled — so the `:transient` respawn re-enters the same crash at
+  full rate, which is the spin this module exists to prevent. The
+  counter reaches those heights on its own: `record_success/2` is the
+  only reset and it fires from the #100 `:connection_stable` timer, so
+  a network that never completes registration (decommissioned
+  endpoint, long k-line, DNS blackhole) never clears the ladder, and a
+  plain connect refusal is not one of the terminal escalations.
+
+  The count itself stays UNCLAMPED on purpose: `failure_count/2` is
+  also the fail-over ring ordinal that both SessionPlans hand to
+  `Grappa.Networks.Servers.pick_server!/2`
+  (`Enum.at(ring, rem(attempt, length(ring)))`). Clamping it at write
+  would pin a multi-server network to one endpoint for as long as the
+  outage lasts — trading an arithmetic bug for a fail-over regression.
+
   ## Telemetry
 
   The `:reset` and `:success` cast handlers are operationally identical
@@ -137,6 +161,11 @@ defmodule Grappa.Session.Backoff do
 
   @base_ms Application.compile_env(:grappa, [:session_backoff, :base_ms], 5_000)
   @cap_ms Application.compile_env(:grappa, [:session_backoff, :cap_ms], 5 * 60 * 1_000)
+
+  # Smallest exponent whose doubling already reaches the cap — past it
+  # the product is discarded by `min(raw, @cap_ms)` anyway, so there is
+  # nothing to compute. 7 at the production curve (5s × 2^6 = 320s).
+  @max_exponent Enum.find(0..64, 64, fn e -> @base_ms * Bitwise.bsl(1, e) >= @cap_ms end)
 
   @typep entry :: {key(), pos_integer(), integer()}
   @typep key :: {Session.subject(), integer()}
@@ -311,8 +340,10 @@ defmodule Grappa.Session.Backoff do
   def compute_wait(count) when count <= 0, do: 0
 
   def compute_wait(count) do
-    # 2^(count-1) — count=1 → base, count=2 → 2*base, count=3 → 4*base.
-    raw = @base_ms * trunc(:math.pow(2, count - 1))
+    # 2^(count-1) — count=1 → base, count=2 → 2*base, count=3 → 4*base —
+    # with the exponent clamped at @max_exponent and shifted, not
+    # exponentiated (#1349 L-S1, see "Bound" above).
+    raw = @base_ms * Bitwise.bsl(1, min(count - 1, @max_exponent))
     capped = min(raw, @cap_ms)
     jitter = trunc(capped * @jitter_pct / 100)
     # Window is [capped - jitter, capped + jitter]. :rand.uniform/1

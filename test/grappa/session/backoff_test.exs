@@ -64,6 +64,60 @@ defmodule Grappa.Session.BackoffTest do
     end
   end
 
+  describe "exponent bound (#1349 L-S1)" do
+    # A count-30 assertion on the WAIT passes against an unbounded
+    # exponent too — `min(raw, cap)` hides any finite `raw`. The bound
+    # only shows itself where the pre-fix arithmetic cannot follow:
+    # `:math.pow/2` returns a float, so exponent >= 1024 overflows the
+    # double and raises `badarith` inside `wait_ms/2` — i.e. inside
+    # `handle_continue({:start_client, _}, _)`, BEFORE any delay is
+    # scheduled, which is the full-rate restart spin this bound kills.
+    @overflowing_count 1_025
+
+    test "a count past the float-overflow exponent still yields the capped wait" do
+      cap = Backoff.cap_ms()
+      jitter = trunc(cap * 0.25)
+
+      ms = Backoff.compute_wait(@overflowing_count)
+
+      assert ms >= cap - jitter
+      assert ms <= cap + jitter
+    end
+
+    test "every count from the cap knee to past overflow stays inside the cap window" do
+      cap = Backoff.cap_ms()
+      jitter = trunc(cap * 0.25)
+
+      for count <- [8, 64, 512, 1_023, 1_024, @overflowing_count, 8_192] do
+        ms = Backoff.compute_wait(count)
+
+        assert ms >= cap - jitter, "count=#{count} fell below the cap window"
+        assert ms <= cap + jitter, "count=#{count} exceeded the cap window"
+      end
+    end
+
+    test "the counter itself survives past overflow — wait_ms/2 answers, and the ordinal is not clamped" do
+      key_subject = {:user, "overflow"}
+
+      for _ <- 1..@overflowing_count do
+        :ok = Backoff.record_failure(key_subject, 1)
+      end
+
+      cap = Backoff.cap_ms()
+      jitter = trunc(cap * 0.25)
+      ms = Backoff.wait_ms(key_subject, 1)
+
+      assert ms >= cap - jitter
+      assert ms <= cap + jitter
+
+      # The bound belongs to the EXPONENT, never to the stored count:
+      # `Networks.Servers.pick_server!/2` consumes this counter as the
+      # fail-over ring ordinal (`rem(attempt, length(ring))`), so a
+      # write-side clamp would freeze the ring on one endpoint forever.
+      assert Backoff.failure_count(key_subject, 1) == @overflowing_count
+    end
+  end
+
   describe "wait_ms/2" do
     test "fresh key returns 0" do
       assert Backoff.wait_ms({:user, "u1"}, 1) == 0
