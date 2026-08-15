@@ -32,7 +32,9 @@ defmodule Grappa.Deploy.MigrationAuditTest do
         {:up, @collided, "add_mute_to_user_settings"}
       ]
 
-      assert {:error, [duplicate]} = MigrationAudit.audit(statuses)
+      disk = [20_260_425_000_000, @collided, @collided]
+
+      assert {:error, [duplicate]} = MigrationAudit.audit(statuses, disk)
       assert duplicate.version == @collided
       assert duplicate.applied
 
@@ -45,7 +47,7 @@ defmodule Grappa.Deploy.MigrationAuditTest do
     test "refuses a duplicate that is still pending, and says it is pending" do
       statuses = [{:down, @collided, "add_mute"}, {:down, @collided, "add_peer"}]
 
-      assert {:error, [duplicate]} = MigrationAudit.audit(statuses)
+      assert {:error, [duplicate]} = MigrationAudit.audit(statuses, [@collided, @collided])
       refute duplicate.applied
     end
 
@@ -68,7 +70,9 @@ defmodule Grappa.Deploy.MigrationAuditTest do
             {:up, @collided, "add_peer"}
           ]
 
-      assert {:error, duplicates} = MigrationAudit.audit(statuses)
+      disk = Enum.map(statuses, fn {_, version, _} -> version end)
+
+      assert {:error, duplicates} = MigrationAudit.audit(statuses, disk)
       assert Enum.map(duplicates, & &1.version) == [@collided, 20_260_811_130_000]
     end
 
@@ -79,11 +83,43 @@ defmodule Grappa.Deploy.MigrationAuditTest do
         {:down, 20_260_811_130_000, "add_notes"}
       ]
 
-      assert {:ok, %{applied: 2, pending: 1}} = MigrationAudit.audit(statuses)
+      disk = [20_260_425_000_000, 20_260_504_013_318, 20_260_811_130_000]
+
+      assert {:ok, %{applied: 2, pending: 1, applied_without_file: []}} =
+               MigrationAudit.audit(statuses, disk)
     end
 
     test "passes an empty set — a fresh database is not a fault" do
-      assert {:ok, %{applied: 0, pending: 0}} = MigrationAudit.audit([])
+      assert {:ok, %{applied: 0, pending: 0, applied_without_file: []}} =
+               MigrationAudit.audit([], [])
+    end
+
+    test "REPORTS a version applied with no file on disk, and does not refuse it" do
+      # The case that cost two people an hour on 2026-08-15: a shared test
+      # database carrying another branch's migration. `20260815210238` was
+      # in `schema_migrations` with no file in this checkout, and nothing
+      # said so — the symptom was three unrelated tests raising
+      # Ecto.ConstraintError on an index no one here declared.
+      #
+      # It REPORTS rather than refuses because a database ahead of the code
+      # is also a legitimate rollback, and a deploy from an older checkout.
+      # Refusing there would block a valid operation at three doors.
+      #
+      # The name is deliberately Ecto's own placeholder, to show it is not
+      # read: this is a set difference over versions, applied MINUS
+      # on-disk, so nothing here depends on that literal.
+      statuses = [
+        {:up, 20_260_425_000_000, "init"},
+        {:up, 20_260_815_210_238, "** FILE NOT FOUND **"},
+        {:down, 20_260_811_130_000, "add_notes"}
+      ]
+
+      # `add_notes` is on disk and NOT applied — the opposite direction.
+      # Subtracting the wrong way round would report it instead.
+      disk = [20_260_425_000_000, 20_260_811_130_000]
+
+      assert {:ok, summary} = MigrationAudit.audit(statuses, disk)
+      assert summary.applied_without_file == [20_260_815_210_238]
     end
   end
 
