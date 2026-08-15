@@ -148,8 +148,14 @@ substrate_migrate() {
 	# a one-shot `run` exits before Bootstrap's first DB hit can race an
 	# unapplied migration.
 	# Why: docs/OPERATIONS.md § "Developer and deploy scripts (scripts/*.sh)".
+	# `grappa.migrate`, not `ecto.migrate`: same migrator, same footprint
+	# (the task starts the Repo and nothing else), preceded by the #1348
+	# duplicate-version audit. `ecto.migrate` cannot carry that audit —
+	# a version claimed by two files and already applied leaves the
+	# pending set empty, so the migrator reports success having run
+	# neither file, forever.
 	echo "Running migrations..."
-	docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
+	docker compose "${COMPOSE_ARGS[@]}" --profile prod run --rm --no-deps grappa mix grappa.migrate
 }
 
 substrate_seed() {

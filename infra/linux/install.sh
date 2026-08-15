@@ -211,17 +211,26 @@ mkdir -p "${REPO_ROOT}/runtime/uploads"
 chown -R "${GRAPPA_USER}:${GRAPPA_USER}" "${REPO_ROOT}/runtime"
 
 say "6/11 first migration"
-# Plain `mix ecto.migrate`, NOT `release.sh eval 'Grappa.Release.migrate()'`:
-# the packaged release's eval/remote/rpc boot path crashes the BEAM on this
-# substrate (systemd's own `bin/grappa start` is unaffected). This host keeps
-# the full mix toolchain, so nothing is lost by not using it.
+# A mix task, NOT `release.sh eval 'Grappa.Release.migrate()'`: the packaged
+# release's eval/remote/rpc boot path crashes the BEAM on this substrate
+# (systemd's own `bin/grappa start` is unaffected). This host keeps the full
+# mix toolchain, so nothing is lost by not using it.
 # Why: docs/OPERATIONS.md § "Native Linux and the cloud one-click box (infra/linux/, infra/cloud/)".
+#
+# `grappa.migrate` carries the #1348 duplicate-version audit. The database
+# file does NOT exist yet at this point — DATABASE_PATH was written into the
+# env a few lines up and only `runtime/` was created — and the audit is fine
+# with that: its one DB touch is `Ecto.Migrator.migrations/1`, which creates
+# `schema_migrations` through the very door the migrator opens a moment
+# later, on a file sqlite creates on open. Measured, not assumed:
+# `test/grappa/migrations/duplicate_version_gate_test.exs` drives the audit
+# against a database file it asserts absent beforehand.
 run_as_grappa "
 	${asdf_path_export}
 	set -a; . '${ENV_FILE}'; set +a
 	export MIX_ENV=prod
 	cd '${REPO_ROOT}'
-	mix ecto.migrate
+	mix grappa.migrate
 "
 
 say "7/11 seed built-in themes"

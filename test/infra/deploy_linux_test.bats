@@ -76,6 +76,7 @@ EOF
     export HEALTHCHECK_RETRIES=2 HEALTHCHECK_SLEEP=0
     export PREFLIGHT_RC=0
     export RELOAD_FAILS=0
+    export RELOAD_HTTP_FAILS=0
     # #440: SEED_RC injects a failing seed task (a busy DB, a bad payload —
     # all the same shape from out here). Default 0 so every other test's
     # seed succeeds and the warn-path assertions below are the only ones
@@ -130,12 +131,22 @@ EOF
 
     # curl: reload POST answers clean (or failing, gated by $RELOAD_FAILS);
     # healthcheck answers 200 (curl -f success).
+    #
+    # $RELOAD_HTTP_FAILS is a DIFFERENT failure from $RELOAD_FAILS and the
+    # distinction is the point: RELOAD_FAILS is a 200 reporting per-module
+    # failures IN-BAND, while RELOAD_HTTP_FAILS is a non-2xx, on which
+    # `curl -f` exits non-zero and discards the body — the branch where the
+    # deploy knows the POST failed and nothing about why, so its printed
+    # guess is all the operator gets. Nothing exercised that branch before
+    # #1348.
     cat > "$FAKE_DIR/curl" <<'EOF'
 #!/bin/sh
 printf 'curl %s\n' "$*" >> "$ARGV_LOG"
 case "$*" in
     *"-X POST"*reload*)
-        if [ "$RELOAD_FAILS" = "1" ]; then
+        if [ "$RELOAD_HTTP_FAILS" = "1" ]; then
+            exit 22
+        elif [ "$RELOAD_FAILS" = "1" ]; then
             printf '{"loaded":[],"failed":[{"module":"Foo","reason":"old_code_in_use"}]}'
         else
             printf '{"loaded":[],"failed":[]}'
@@ -224,6 +235,24 @@ run_deploy() {
     refute grep -q "systemctl" "$ARGV_LOG"   # hot path never restarts
 }
 
+@test "a non-2xx reload names BOTH 409 causes, and says which one a cold deploy fixes (#1348)" {
+    # `curl -f` threw the body away, so these printed lines are the whole
+    # of what the operator learns. Since #1348 a 409 has two causes and
+    # they need OPPOSITE moves: a pending CONTRACT migration is what a
+    # cold deploy is for, while a duplicated version is a repo defect a
+    # cold deploy walks straight back into. Naming only the first sends
+    # the operator to restart production for nothing.
+    export RELOAD_HTTP_FAILS=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"CONTRACT"* ]]
+    [[ "$output" == *"duplicate"* ]]
+    [[ "$output" == *"cold deploy will not"* ]]
+    [ ! -f "$REPO_ROOT/runtime/last-deployed-sha" ]
+}
+
 @test "hot reload reporting per-module failures aborts non-zero, no marker" {
     export RELOAD_FAILS=1
     commit_upstream lib/base.txt > /dev/null
@@ -254,13 +283,13 @@ run_deploy() {
     run_deploy
     [ "$status" -eq 0 ]
     grep -q "cic_build.sh" "$ARGV_LOG"
-    grep -q "mix ecto.migrate" "$ARGV_LOG"
+    grep -q "mix grappa.migrate" "$ARGV_LOG"
     grep -q "install_systemd.sh" "$ARGV_LOG"
     grep -q "systemctl stop grappa" "$ARGV_LOG"
     grep -q "systemctl start grappa" "$ARGV_LOG"
 
     cic_line=$(grep -n "cic_build.sh" "$ARGV_LOG" | head -1 | cut -d: -f1)
-    mig_line=$(grep -n "mix ecto.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    mig_line=$(grep -n "mix grappa.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
     unit_line=$(grep -n "install_systemd.sh" "$ARGV_LOG" | head -1 | cut -d: -f1)
     stop_line=$(grep -n "systemctl stop grappa" "$ARGV_LOG" | head -1 | cut -d: -f1)
     start_line=$(grep -n "systemctl start grappa" "$ARGV_LOG" | head -1 | cut -d: -f1)
@@ -415,7 +444,7 @@ run_deploy() {
     run_deploy
     [ "$status" -eq 0 ]
 
-    mig_line=$(grep -n "mix ecto.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    mig_line=$(grep -n "mix grappa.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
     seed_line=$(grep -n "mix grappa.seed_themes" "$ARGV_LOG" | head -1 | cut -d: -f1)
     stop_line=$(grep -n "systemctl stop grappa" "$ARGV_LOG" | head -1 | cut -d: -f1)
     [ -n "$mig_line" ]

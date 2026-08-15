@@ -43193,3 +43193,81 @@ and a transform callback would focus one.
 **Not established:** jsdom only. Both behaviours are asserted on the compose
 STORE; that a real engine shows the caret after the surviving tail is the
 e2e's job and no e2e was run for this pair.
+<!-- entry #1348 -->
+
+---
+
+## 2026-08-16 — #1348: the duplicate no pending count can see, gated at the doors instead of the preflight
+
+#1343 gated migration FILENAMES, which catches a duplicated version before it
+is applied. It cannot catch the regime CLAUDE.md marks as the dangerous one:
+once the duplicated version is IN `schema_migrations`, both files leave the
+pending set, `ensure_no_duplication!([])` answers `:ok`, the run reports
+SUCCESS, and neither migration ever runs again. A gate that counts pending
+files sees zero — which is exactly what a healthy deploy sees too.
+
+**The deploy preflight cannot host this gate, and the reason is structural.**
+All three substrates invoke the classifier with `mix run --no-start`
+(`scripts/deploy.sh`, `infra/freebsd/deploy.sh`, `infra/linux/deploy.sh`), so
+`Grappa.Deploy.Preflight.cli/1` runs with no application started and no Repo.
+It cannot read `schema_migrations` at all. The issue asked for "a preflight
+that compares version sets"; what it gets is the same comparison hung off
+every door that migrates, where a pool is live by construction. `Preflight`
+stays pure and git-only.
+
+**Six doors, three call sites, one rule.** `Grappa.HotReload.migrate_and_reload/2`
+(hot, every substrate, behind `POST /admin/reload`); `Grappa.Release.migrate/0`
+(the jail's cold deploy, the published image's boot-time migrate from #867,
+and the `grappa migrate` operator verb — all three reach it through
+`eval`); and `mix grappa.migrate` (Docker cold, native-Linux cold, and the
+first-install migration in `infra/linux/install.sh`). Adding a seventh door
+means calling the audit from it; there is no ambient hook that would catch it
+for you.
+
+**The collector is `Ecto.Migrator.migrations/1`**, which already fuses disk
+and `schema_migrations` into `[{:up | :down, version, name}]` — a duplicated
+version simply appears twice. No hand-rolled glob, no raw SQL, no re-derived
+convention.
+
+**What is deliberately NOT reported: the third `comm` column.** A version in
+`schema_migrations` with no file on disk is real and observable, but only by
+recognising the literal `"** FILE NOT FOUND **"` that Ecto's
+`collect_migrations/2` writes into the name field. Coupling a gate to another
+project's internal string means the day it changes the report silently goes
+to zero — a gate that lies by omission is worse than an absent one. It was
+also the wrong shape for a refusal: a legitimate deploy-backwards, or an old
+migration squashed away, would brick every subsequent deploy.
+
+**`mix grappa.migrate` starts nothing.** `docs/OPERATIONS.md` requires any mix
+task run against a live host on the systemd substrate to go through
+`Mix.Tasks.Grappa.Boot`, and that rule is about the APP START — it suppresses
+`Grappa.Bootstrap` and `GrappaWeb.Endpoint` so nothing dials IRC or fights
+port 4000. The migrate door has always sat outside it: `mix ecto.migrate`
+starts the Repo and nothing else, which is why `substrate_migrate` has run it
+bare against a live host since the substrate existed. The new task keeps that
+regime exactly — `app.config`, then the audit and the migrator inside
+`Ecto.Migrator.with_repo/2`. Routing it through `Boot` would ADD an app boot
+to the cold path of the one substrate whose documented pathology is a boot
+that kills the BEAM; routing it through `Grappa.Release` is forbidden by name
+in the same section. Starting NOTHING satisfies the rule's reason more
+strictly than starting everything with two children suppressed.
+
+**A 409 now has two causes that need opposite moves.** The hot deploy's
+`curl -f` discards the response body, so the line `deploy_common.sh` prints is
+all the operator gets, and it named only the contract-migration cause with
+"run a cold deploy". A duplicated version is a repo defect a cold deploy walks
+straight back into. Both causes are named now, and the second says plainly
+that a cold deploy will not help.
+
+**The first-install door was measured, not assumed.** At
+`infra/linux/install.sh`'s `6/11 first migration` the database file does not
+exist yet — `DATABASE_PATH` was written into the env moments earlier. The
+audit is fine with that: its only DB touch is `Ecto.Migrator.migrations/1`,
+which creates `schema_migrations` through the same door the migrator opens a
+line later, on a file sqlite creates on open. The test drives the audit
+against a path it asserts absent beforehand, rather than reasoning about it.
+
+**Log honesty on the passing arm.** The audit's `:ok` reports the applied and
+pending counts it OBSERVED, never "no pending migrations, nothing to do" — a
+pending count of zero is the silent regime's own signature, so a fast path
+that reports the absence of work would be reporting the defect as health.

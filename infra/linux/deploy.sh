@@ -134,13 +134,17 @@ substrate_cic() {
 }
 
 substrate_migrate() {
-	# Plain `mix ecto.migrate`, not release eval — the packaged release's
-	# eval boot path crashes the BEAM on this substrate (see install.sh).
+	# A mix task, not release eval — the packaged release's eval boot path
+	# crashes the BEAM on this substrate (see install.sh). `grappa.migrate`
+	# rather than `ecto.migrate` since #1348: it runs the same migrator with
+	# the same footprint (Repo started, nothing else — no Endpoint, no
+	# Bootstrap, so it stays safe against the live host) and adds the
+	# duplicate-version audit that `ecto.migrate` structurally cannot carry.
 	deploy_log "migrate"
 	run_as_grappa "
 		set -a; . '${ENV_FILE}'; set +a
 		export MIX_ENV=prod
-		mix ecto.migrate
+		mix grappa.migrate
 	"
 }
 

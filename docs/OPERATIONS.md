@@ -3532,7 +3532,7 @@ pins the outcomes (#441); the reasons follow.
   finished file is 0644 with every secret readable by anyone on the box.
   Pinned by "the finished env file is 0640, not the tmp+mv default (#441)".
 
-### Migrations run `mix ecto.migrate`, never the release's `eval`
+### Migrations run a mix task, never the release's `eval`
 
 **On this substrate the packaged release's `eval` / `remote` / `rpc`
 crash the BEAM at kernel boot** — even for a trivial `eval '1 + 1'`.
@@ -3548,19 +3548,32 @@ hypotheses and the console fallback are in `infra/linux/README.md`
 "Day-2 operations".
 
 So `install.sh` and `deploy.sh` (`substrate_migrate` and
-`substrate_seed` both) drive the plain **mix task** instead — viable
+`substrate_seed` both) drive a plain **mix task** instead — viable
 here precisely because this substrate keeps the whole mix/asdf toolchain
 around permanently, unlike a minimal prod container, and consistent with
-what Docker already does (§ "Hot vs cold deploy": Docker via `mix
-ecto.migrate`, the jail via `Grappa.Release.migrate()`). Do not "restore
-symmetry" with the jail by routing these through the release.
+what Docker already does (§ "Hot vs cold deploy": Docker and Linux via
+`mix grappa.migrate`, the jail via `Grappa.Release.migrate()`). Do not
+"restore symmetry" with the jail by routing these through the release.
 
-**Any mix task run against a LIVE host on this substrate must go through
-`Mix.Tasks.Grappa.Boot`.** It suppresses both `Grappa.Bootstrap` and
-`GrappaWeb.Endpoint`, so the task neither opens upstream IRC connections
-for every bound network nor fights the running daemon for port 4000
-(`:eaddrinuse`). That is what makes seeding safe on a HOT deploy, which
-is the entire point of seeding on one.
+**Any mix task that STARTS THE APP against a LIVE host on this substrate
+must go through `Mix.Tasks.Grappa.Boot`.** It suppresses both
+`Grappa.Bootstrap` and `GrappaWeb.Endpoint`, so the task neither opens
+upstream IRC connections for every bound network nor fights the running
+daemon for port 4000 (`:eaddrinuse`). That is what makes seeding safe on
+a HOT deploy, which is the entire point of seeding on one.
+
+The rule is about the APP START, not about the words "mix task", and the
+migrate door has always sat outside it: `mix ecto.migrate` starts the
+Repo and nothing else — no Bootstrap to connect, no Endpoint to bind —
+which is why `substrate_migrate` has run it bare against a live host
+since this substrate existed. `mix grappa.migrate` (#1348) keeps exactly
+that regime: `app.config`, the duplicate-version audit and the migrator,
+all inside `Ecto.Migrator.with_repo/2`, with no
+`Application.ensure_all_started/1` anywhere. Satisfying the rule's
+reason by starting NOTHING is stricter than satisfying it by starting
+everything with two children suppressed — so do not "tidy" that task
+onto `Boot`, it would ADD an app boot to the cold path of the substrate
+whose documented pathology is a boot that kills the BEAM.
 
 ### deploy.sh — what is Linux-specific
 
@@ -4194,11 +4207,19 @@ it.
   `/home/grappa/grappa/runtime/`.
 - **Migrations**: standard Ecto.
   - Write migration in `priv/repo/migrations/<timestamp>_<name>.exs`.
-  - Dev: `scripts/mix.sh ecto.migrate`.
+  - Dev: `scripts/mix.sh grappa.migrate`. The same migrator plus the
+    #1348 audit — and a long-lived dev database is precisely where a
+    duplicated version goes silent, because the version is already
+    applied there long before anyone deploys it.
   - Deploys: the preflight classifies ANY new migration file as COLD
     (Class 5 — there is no in-reload migrate until #41 lands). The
-    cold paths run it: Docker via `mix ecto.migrate`, the jail via
-    `Grappa.Release.migrate()` before `service grappa restart`.
+    cold paths run it: Docker and native Linux via `mix grappa.migrate`,
+    the jail via `Grappa.Release.migrate()` before `service grappa
+    restart`. Every one of those doors — plus the hot
+    `POST /admin/reload`, the published image's boot entrypoint and the
+    `grappa migrate` operator verb — runs the #1348 duplicate-version
+    audit first, and refuses rather than migrate past a version claimed
+    by two files.
     Never `--force-hot` past a new migration — the DML is skipped
     and the code reads defaults (the uploads-2 key-rename would have
     silently reverted tuned caps this way).

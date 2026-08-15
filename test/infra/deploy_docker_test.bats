@@ -91,7 +91,7 @@ EOF
     #   compose run … mix run --no-start → preflight oneshot, honors PREFLIGHT_RC
     #   compose exec … curl … reload     → reload JSON (clean, or failing when
     #                                      $RELOAD_FAILS=1)
-    #   everything else (build, run cicchetto-build, deps.get, ecto.migrate,
+    #   everything else (build, run cicchetto-build, deps.get, grappa.migrate,
     #   up -d, exec … curl … healthz)    → succeed silently
     cat > "$FAKE_DIR/docker" <<'EOF'
 #!/bin/sh
@@ -242,13 +242,13 @@ run_deploy() {
     grep -q "build grappa" "$ARGV_LOG"
     grep -q "cicchetto-build" "$ARGV_LOG"
     grep -q "deps.get" "$ARGV_LOG"
-    grep -q "ecto.migrate" "$ARGV_LOG"
+    grep -q "grappa.migrate" "$ARGV_LOG"
     grep -q "up -d --force-recreate" "$ARGV_LOG"
 
     build_line=$(grep -n "build grappa" "$ARGV_LOG" | head -1 | cut -d: -f1)
     cic_line=$(grep -n "cicchetto-build" "$ARGV_LOG" | head -1 | cut -d: -f1)
     deps_line=$(grep -n "deps.get" "$ARGV_LOG" | head -1 | cut -d: -f1)
-    mig_line=$(grep -n "ecto.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
+    mig_line=$(grep -n "grappa.migrate" "$ARGV_LOG" | head -1 | cut -d: -f1)
     up_line=$(grep -n "up -d --force-recreate" "$ARGV_LOG" | head -1 | cut -d: -f1)
     [ "$build_line" -lt "$cic_line" ]
     [ "$cic_line" -lt "$deps_line" ]
