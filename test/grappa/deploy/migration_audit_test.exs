@@ -50,12 +50,23 @@ defmodule Grappa.Deploy.MigrationAuditTest do
     end
 
     test "reports EVERY duplicated version, not just the first, oldest first" do
-      statuses = [
-        {:down, 20_260_811_130_000, "add_notes"},
-        {:down, 20_260_811_130_000, "add_labels"},
-        {:up, @collided, "add_mute"},
-        {:up, @collided, "add_peer"}
-      ]
+      # The filler is not padding. `duplicates/1` groups by version, and an
+      # Erlang map holds ≤32 keys as a flatmap, which enumerates in TERM
+      # order — so a two-version input comes out ascending whether or not
+      # anything sorted it, and the ordering claim would be bought by the
+      # runtime rather than by the code. Past 32 keys the map is a hashmap
+      # and enumeration order is unspecified. Production is ~86 migrations,
+      # so this is also the realistic size.
+      filler = for v <- 1..40, do: {:up, 20_250_000_000_000 + v, "filler_#{v}"}
+
+      statuses =
+        filler ++
+          [
+            {:down, 20_260_811_130_000, "add_notes"},
+            {:down, 20_260_811_130_000, "add_labels"},
+            {:up, @collided, "add_mute"},
+            {:up, @collided, "add_peer"}
+          ]
 
       assert {:error, duplicates} = MigrationAudit.audit(statuses)
       assert Enum.map(duplicates, & &1.version) == [@collided, 20_260_811_130_000]
