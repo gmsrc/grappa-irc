@@ -74,6 +74,29 @@ function cappedQuotedBody(body: string): string {
     : chars.slice(0, QUOTED_BODY_LIMIT).join("") + QUOTED_ELLIPSIS;
 }
 
+// Hardcoded in lockstep with `REPLY_QUOTE_TAIL` in `src/lib/replyQuote.ts`,
+// the same convention as the two constants above and for the same reason:
+// `e2e/tsconfig.json` spans `e2e/` only, so no spec in this suite imports from
+// `src`.
+const REPLY_QUOTE_TAIL = " << ";
+
+// What the draft holds after `replies` swipes on the same row. #1357: vjt
+// ruled the compose line accumulates and the marker does NOT repeat, so N
+// replies leave N quotes and ONE tail at the end — `draftBeforeReplyQuote`
+// sheds the marker from a draft that ends with the tail, and the tail's
+// LEADING space is what then separates the two quotes. Derived here once
+// instead of spelled per iteration, so the expectation cannot drift from the
+// rule it claims to state.
+//
+// At `replies === 1` this is character-for-character the pre-#1357 value: the
+// single-reply path is unmoved, which is the acceptance criterion of the
+// ruling and the reason this spec's own subject (caret geometry) is untouched.
+function draftAfterReplies(quoted: string, replies: number): string {
+  const separator = REPLY_QUOTE_TAIL.slice(0, 1);
+
+  return Array.from({ length: replies }, () => quoted).join(separator) + REPLY_QUOTE_TAIL;
+}
+
 // A body unique per run: the e2e sqlite scrollback persists across
 // KEEP_STACK=1 re-runs, and a static string would match two rows on the
 // second run and trip Playwright strict mode.
@@ -143,10 +166,10 @@ test("issue1105 — replying to a wrapping message scrolls the compose caret int
 
   // Each reply is awaited before the next is fired: the value IS the barrier
   // proving the previous append landed, so the swipes cannot overlap.
-  const quote = `<${specNick()}> ${cappedQuotedBody(body)} << `;
+  const quoted = `<${specNick()}> ${cappedQuotedBody(body)}`;
   for (let i = 1; i <= REPLIES; i++) {
     await swipeRowRight(page, body);
-    await expect(ta).toHaveValue(quote.repeat(i), { timeout: 5_000 });
+    await expect(ta).toHaveValue(draftAfterReplies(quoted, i), { timeout: 5_000 });
   }
 
   // THE regression: caret at the end of the quote AND that line inside the
