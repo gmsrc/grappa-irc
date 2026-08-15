@@ -42,9 +42,17 @@ defmodule Grappa.Release do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Accounts, Grappa.Networks, Grappa.Repo, Grappa.Themes, Grappa.Vault],
+    deps: [
+      Grappa.Accounts,
+      Grappa.Deploy.MigrationAudit,
+      Grappa.Networks,
+      Grappa.Repo,
+      Grappa.Themes,
+      Grappa.Vault
+    ],
     exports: [CLI]
 
+  alias Grappa.Deploy.MigrationAudit
   alias Grappa.Release.CLI
   alias Grappa.Themes
 
@@ -63,7 +71,16 @@ defmodule Grappa.Release do
     start_vault!()
 
     for repo <- repos() do
-      case Ecto.Migrator.with_repo(repo, &Ecto.Migrator.run(&1, :up, all: true)) do
+      # The audit is INSIDE the callback because that is the only place the
+      # pool is up — `with_repo/2` starts the repo around the fun and stops
+      # it after. It raises rather than returns: the deploy scripts read the
+      # exit code, and `_deploy_cold` aborts before the seed and the restart.
+      migrate = fn repo ->
+        MigrationAudit.check!(repo)
+        Ecto.Migrator.run(repo, :up, all: true)
+      end
+
+      case Ecto.Migrator.with_repo(repo, migrate) do
         {:ok, _, _} -> :ok
         {:error, reason} -> raise "migration failed: #{inspect(reason)}"
       end

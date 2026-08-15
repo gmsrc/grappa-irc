@@ -7,7 +7,7 @@ defmodule GrappaWeb.AdminController do
   Delegates to `Grappa.HotReload.migrate_and_reload/0`, which applies
   pending migrations on the already-open `Grappa.Repo` pool and only
   THEN reloads modules (GH #41 — see that function for why the order is
-  load-bearing and why it refuses a pending contract migration). Two
+  load-bearing and why it refuses a pending contract migration). Three
   outcomes join the pre-#41 one:
 
     * `409` `%{"error" => "contract_migrations_pending", "migrations" =>
@@ -17,6 +17,11 @@ defmodule GrappaWeb.AdminController do
       suppresses this body, so the deploy script can only report that
       the POST failed, not why — `infra/lib/deploy_common.sh` names both
       possibilities rather than guessing one.
+    * `409` `%{"error" => "duplicate_migration_versions", "duplicates" =>
+      [%{"version" => v, "files" => [...], "applied" => bool}, ...]}` —
+      two files claim one version (#1348); nothing ran. Same status, but
+      the OPPOSITE next move: a cold deploy migrates through the same
+      defect, so the repo has to be fixed first.
     * a raising migration is NOT rescued: it 5xxes, the transaction
       rolls back, and no module is reloaded.
 
@@ -140,6 +145,15 @@ defmodule GrappaWeb.AdminController do
         conn
         |> put_status(:conflict)
         |> json(%{error: "contract_migrations_pending", migrations: files})
+
+      {:error, {:duplicate_migration_versions, duplicates}} ->
+        # Also 409, and also nothing ran — but the operator's next move
+        # is the OPPOSITE one (#1348). A cold deploy walks straight back
+        # into a version claimed by two files, so the body names them
+        # and the deploy script's printed hint says so out loud.
+        conn
+        |> put_status(:conflict)
+        |> json(%{error: "duplicate_migration_versions", duplicates: duplicates})
     end
   end
 

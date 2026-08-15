@@ -48,8 +48,12 @@ defmodule Grappa.HotReload do
   retry, or schedule a cold window).
   """
 
-  use Boundary, top_level?: true, deps: [Grappa.Deploy.Preflight, Grappa.Repo], exports: []
+  use Boundary,
+    top_level?: true,
+    deps: [Grappa.Deploy.MigrationAudit, Grappa.Deploy.Preflight, Grappa.Repo],
+    exports: []
 
+  alias Grappa.Deploy.MigrationAudit
   alias Grappa.Deploy.Preflight
 
   @typedoc "Per-module failure: soft-purge refusal or load error."
@@ -65,10 +69,15 @@ defmodule Grappa.HotReload do
         }
 
   @typedoc """
-  Refusal to hot-deploy: the named migration files are pending and at
-  least one of their ops is contract (or unprovable). Nothing ran.
+  Refusal to migrate. Either the named migration files are pending and at
+  least one of their ops is contract (or unprovable), or a version is
+  claimed by two files (#1348). Nothing ran, in both cases — and the two
+  need OPPOSITE operator moves: the first is what a cold deploy is for,
+  the second is a repo defect a cold deploy walks straight back into.
   """
-  @type refusal :: {:contract_migrations, [Path.t()]}
+  @type refusal ::
+          {:contract_migrations, [Path.t()]}
+          | {:duplicate_migration_versions, [MigrationAudit.duplicate()]}
 
   @doc """
   Apply pending migrations on the live pool, THEN reload modules (#41).
@@ -132,6 +141,18 @@ defmodule Grappa.HotReload do
   @spec migrate_and_reload(module(), (-> result())) ::
           {:ok, migrate_result()} | {:error, refusal()}
   def migrate_and_reload(repo, reload_fn) when is_atom(repo) and is_function(reload_fn, 0) do
+    # The audit runs FIRST, and not only because a duplicate is the worse
+    # defect: `pending_migration_files/1` below matches `[path] =
+    # Path.wildcard(…)` per pending version, so a duplicate that is still
+    # PENDING would blow up there as a MatchError. Auditing first turns
+    # that crash into a refusal that names the two files.
+    case MigrationAudit.check(repo) do
+      :ok -> migrate_expand_only(repo, reload_fn)
+      {:error, duplicates} -> {:error, {:duplicate_migration_versions, duplicates}}
+    end
+  end
+
+  defp migrate_expand_only(repo, reload_fn) do
     case contract_migrations(repo) do
       [] ->
         migrated = Ecto.Migrator.run(repo, :up, all: true)
