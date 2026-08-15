@@ -6439,4 +6439,40 @@ defmodule Grappa.Session.EventRouterTest do
       assert new_state.links_pending == nil
     end
   end
+
+  describe "effect() :server_reply source (#1349 L-S6)" do
+    # `Grappa.Session.Wire` owns this closed set and its moduledoc records
+    # the price of a second spelling: #992 added `:admin` to one copy and
+    # not the other, every unit test passed, and the first real 259 off a
+    # live ircd raised `FunctionClauseError` inside `apply_effects/2` and
+    # took the whole `Session.Server` down. `apply_effects/2` still has no
+    # catch-all, so the assertion is on the SPELLING, not on the members:
+    # a re-spelled union that happens to be correct today is the same
+    # drift class that killed the session last time.
+    test "the source position references the Wire SSOT type rather than re-spelling the union" do
+      assert {:remote_type, _,
+              [{:atom, _, Grappa.Session.Wire}, {:atom, _, :server_reply_source}, []]} =
+               server_reply_source_type()
+    end
+  end
+
+  # Erlang abstract-form typespec AST (as returned by
+  # `Code.Typespec.fetch_types/1`): `effect()` is a union whose members
+  # are tuple types; the `:server_reply` arm's elements are `ann_type`
+  # nodes (`name :: type`), so the source position unwraps one level.
+  defp server_reply_source_type do
+    {:ok, types} = Code.Typespec.fetch_types(EventRouter)
+    {:type, {:effect, {:type, _, :union, arms}, _}} = Enum.find(types, &match?({:type, {:effect, _, _}}, &1))
+
+    {:type, _, :tuple, [_tag, source | _]} =
+      Enum.find(arms, fn
+        {:type, _, :tuple, [{:atom, _, :server_reply} | _]} -> true
+        _ -> false
+      end)
+
+    unwrap_ann(source)
+  end
+
+  defp unwrap_ann({:ann_type, _, [{:var, _, _}, type]}), do: type
+  defp unwrap_ann(type), do: type
 end

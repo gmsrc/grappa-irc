@@ -5570,7 +5570,11 @@ defmodule Grappa.Session.Server do
     apply_effects(rest, state)
   end
 
-  # #127 — /info, /version, /motd reply drained (374 / 351 / 376|422).
+  # #127 — /info, /version, /motd reply drained (374 / 351 / 376|422),
+  # plus /admin on 259 (#992). The closed set is
+  # `Grappa.Session.Wire.server_reply_source/0` — this arm has no
+  # catch-all sibling, so a source missing from that set arrives here as
+  # a FunctionClauseError that takes the session down.
   # Broadcast the raw reply lines + typed source on the user-level topic —
   # ephemeral, NOT persisted (mirrors :who_reply). cic's serverReplyModal
   # keys by network and renders a dismissable retro modal; it maps `source`

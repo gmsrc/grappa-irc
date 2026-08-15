@@ -206,7 +206,8 @@ defmodule Grappa.Session.EventRouter do
           | {:members_seeded, String.t(), %{(nick :: String.t()) => modes :: [String.t()]}}
           | {:names_reply, channel :: String.t(), roster :: [{String.t(), [String.t()]}], Grappa.Session.reply_to()}
           | {:who_reply, target :: String.t(), users :: [map()], Grappa.Session.reply_to()}
-          | {:server_reply, source :: :info | :version | :motd, lines :: [String.t()], Grappa.Session.reply_to()}
+          | {:server_reply, source :: Grappa.Session.Wire.server_reply_source(), lines :: [String.t()],
+             Grappa.Session.reply_to()}
           | {:joined, String.t()}
           | {:join_failed, channel :: String.t(), reason :: String.t(), numeric :: pos_integer()}
           | {:parted, String.t()}
