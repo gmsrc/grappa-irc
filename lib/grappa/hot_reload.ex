@@ -53,8 +53,7 @@ defmodule Grappa.HotReload do
     deps: [Grappa.Deploy.MigrationAudit, Grappa.Deploy.Preflight, Grappa.Repo],
     exports: []
 
-  alias Grappa.Deploy.MigrationAudit
-  alias Grappa.Deploy.Preflight
+  alias Grappa.Deploy.{MigrationAudit, Preflight}
 
   @typedoc "Per-module failure: soft-purge refusal or load error."
   @type failure :: {module(), :old_code_in_use | term()}
