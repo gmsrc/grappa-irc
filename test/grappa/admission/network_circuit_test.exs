@@ -355,6 +355,70 @@ defmodule Grappa.Admission.NetworkCircuitTest do
 
       refute_receive {:telemetry, [:grappa, :admission, :circuit, :close], _, _}, 100
     end
+
+    # #1349 L-S7 — the open→closed edge the `{:failure, _}` cast owns.
+    # `check/1` is what casts `:cooldown_expire`, so a network whose only
+    # traffic is failures (no admission attempt races past the cooldown)
+    # reaches this arm with the row still :open. It writes a fresh :closed
+    # row — a real transition — so a consumer counting transitions must see
+    # its :close, or it reads one :open, no :close, then a second :open.
+    test "a failure landing after an unobserved cooldown emits the :close before the row reopens" do
+      attach_circuit_event([:grappa, :admission, :circuit, :close])
+      net_id = 1007
+
+      for _ <- 1..NetworkCircuit.threshold() do
+        :ok = NetworkCircuit.record_failure(net_id)
+      end
+
+      _ = :sys.get_state(NetworkCircuit)
+
+      # 2x clears the ±25% jitter ceiling on the cooldown. No check/1 in
+      # between: nothing has cast :cooldown_expire.
+      Process.sleep(NetworkCircuit.cooldown_ms() * 2)
+
+      :ok = NetworkCircuit.record_failure(net_id)
+      _ = :sys.get_state(NetworkCircuit)
+
+      assert_receive {:telemetry, [:grappa, :admission, :circuit, :close], %{},
+                      %{network_id: ^net_id, reason: :cooldown_expired}},
+                     500
+
+      # And the transition it reports actually happened: fresh window,
+      # count back to 1.
+      assert [{^net_id, 1, _, :closed, 0}] =
+               :ets.lookup(:admission_network_circuit_state, net_id)
+    end
+
+    # The deferred cast that was never observed must not double-count the
+    # same epoch once this arm has already closed it.
+    test "a late :cooldown_expire cast for the closed epoch does not re-emit" do
+      attach_circuit_event([:grappa, :admission, :circuit, :close])
+      net_id = 1008
+
+      for _ <- 1..NetworkCircuit.threshold() do
+        :ok = NetworkCircuit.record_failure(net_id)
+      end
+
+      _ = :sys.get_state(NetworkCircuit)
+      [{_, _, _, :open, observed_cooled_at}] = :ets.lookup(:admission_network_circuit_state, net_id)
+
+      Process.sleep(NetworkCircuit.cooldown_ms() * 2)
+
+      :ok = NetworkCircuit.record_failure(net_id)
+      _ = :sys.get_state(NetworkCircuit)
+
+      assert_receive {:telemetry, [:grappa, :admission, :circuit, :close], %{},
+                      %{network_id: ^net_id, reason: :cooldown_expired}},
+                     500
+
+      # The token the racing check/1 would have carried is the OLD
+      # cooled_at_ms; the fresh :closed row carries 0, so the H6 pin
+      # mismatches and the cast no-ops.
+      GenServer.cast(NetworkCircuit, {:cooldown_expire, net_id, observed_cooled_at})
+      _ = :sys.get_state(NetworkCircuit)
+
+      refute_receive {:telemetry, [:grappa, :admission, :circuit, :close], _, _}, 100
+    end
   end
 
   describe "reset/1 (M-5 operator-driven clear)" do

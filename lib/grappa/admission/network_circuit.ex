@@ -279,6 +279,14 @@ defmodule Grappa.Admission.NetworkCircuit do
         # :closed row with count=1, cooled_at=0. Any deferred
         # :cooldown_expire cast carrying the OLD observed cooled_at_ms
         # will mismatch on the H6 token pin and no-op cleanly.
+        #
+        # #1349 L-S7 — this IS an open→closed transition, so it owes the
+        # paired :close both moduledocs promise. Without it a consumer
+        # counting transitions reads one :open, no :close, then a second
+        # :open. Same `:cooldown_expired` reason as the cast that would
+        # have fired had a check/1 raced past the cooldown first — the
+        # cause is identical, only the observer differs.
+        Telemetry.circuit_close(network_id, :cooldown_expired)
         handle_closed_failure(network_id, 0, now, now)
         {:noreply, state}
     end
