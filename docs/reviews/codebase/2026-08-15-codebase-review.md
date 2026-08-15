@@ -1328,3 +1328,121 @@ Method: extracted every backticked path (341 unique) and every backticked `Modul
 
 ### Families enumerated and found CLEAN (recorded so they are not re-derived)
 `InlineConfirmButton` call sites (13) — **resolved** by #462's `.settings-drawer .inline-confirm-btn` scoping, i.e. the brief's canonical case is already fixed. Modal a11y across 17 modals; the 4 inline scrollback cards; the 4 telemetry sinks (detach-then-attach, `terminate/2`, `attach_telemetry:` opt); 20 `:persistent_term` DI seams (the 4 no-default reads each documented as deliberate); `action_fallback` across all controllers; migration version collisions (0 duplicates, none future-dated); silent narrowing on the server (9 `List.first` + 10 `hd` + 3 `Enum.at` — all documented deliberate, e.g. `representative_*_credential` anchors at `credentials.ex:464-491`, `resolve_visitor_network`'s `[anchor | _]` backed by `order_by: [asc: :slug]`); the two `list_user_names` fan-out mirrors (byte-identical, cross-referenced in both).
+
+---
+
+# Coverage — what this review did NOT cover
+
+A review that does not declare its holes reads as complete and is not. Each agent reported its own
+coverage; this is the consolidated list of what nobody read.
+
+**Nothing was executed.** No `mix`, no `bun`, no docker, no test run, no `EXPLAIN QUERY PLAN`, no
+`mix boundary.find_violations`, no Dialyzer. The compile and stack lanes belonged to another worker
+for the duration, and the agents were instructed read-only. Every claim is derived from source and
+from counted greps. Three findings would materially benefit from execution and say so in place:
+persistence P-S1 and P-S4 (both index claims need `EXPLAIN QUERY PLAN` against a prod copy before
+anyone acts), lifecycle L-S1 (the overflow threshold is stated from the OTP `math` contract, not
+measured — the unbounded-counter half is directly readable), and cicchetto C-S1 (the stale-closure
+consequences are traced through the code, not observed in a browser).
+
+**Large files read in part, with the unread regions named.** `lib/grappa/session/server.ex` (7,230
+lines) — the state type, `init/1`, the `handle_continue`/`terminate` path, the timer block, the
+`apply_effects/2` head and tail, the terminal-failure numerics and the pending sweep were read; the
+~50 send-verb `handle_call` arms and the mode/ban/WHO helper blocks were not. `event_router.ex`
+(4,401) — the moduledoc, the full type block, `route/2` and the canonicalisation pipeline were
+read; the ~50 `do_route/2` clauses were surveyed structurally and by targeted grep, not linearly,
+and the eleven near-identical single-field WHOIS-leg folds were skimmed. `wire.ex` (1,778),
+`numeric_router.ex` (1,142) and `isupport.ex` (682) — public-surface maps plus targeted reads.
+`api.ts` (3,159) — the type declarations and the fetch boundary; not the ~80 REST helper bodies.
+`ScrollbackPane.tsx` (3,985) — greppped for a11y and meta reads only; its scroll-settle and
+unread-divider logic, the densest reactive code in the tree, deserves a pass of its own and did not
+get one. `default.css` (12,822) — whole-file mechanical passes (every rule head mapped and
+cross-referenced against all 587 sources, every `!important`, every colour literal, every tap
+target, every animation against every reduced-motion block) plus ~700 lines read directly; the
+layout and geometry bands were read only where a pass flagged them.
+
+**Not covered at all.** `infra/freebsd/**` beyond the shebangs and the OPERATIONS.md account of the
+rails — **this is the largest remaining gap, because prod is that jail**; twelve jail rails whose
+documented contract reads as carefully thought through but was not verified against the code.
+`infra/linux/**`, `infra/cloud/**`, `infra/packaging/**` and the CloudFormation template, read only
+through the runbook. `Dockerfile.release` and `Dockerfile.shottino` (the brief scoped the root
+`Dockerfile`), so the single-vs-multi-stage question is answered from the docs' argument rather
+than from the files. `cicchetto/e2e/compose.yaml` (~750 lines), greppped only. The 30 bats suites
+under `test/infra/` and 12 under `test/scripts/` were enumerated, not read — several "no gate
+exists for X" claims rest on `grep -rln` over `test/`, and only D-S1, D-S5 and D-S18 were confirmed
+by reading the specific suite. Server test bodies were sampled through two mechanical proxies
+(`:sys.replace_state` and source-reading tests); "does this assertion mirror the implementation"
+needs per-test reading and 106,905 lines of test code did not fit. The 78 migrations not read in
+full — a defect confined to one backfill body would not have surfaced. `frontends/shottino`, which
+`CLIENT_PROTOCOL.md` names as a second first-party client and which nobody checked against the
+contract at all. Admin tab components beyond their type usage and dynamic class names.
+
+**`docs/DESIGN_NOTES.md` was grepped per topic, never read linearly** — 42,708 lines, per the brief.
+Every finding was checked against it before being reported, and several candidate findings were
+dropped after reading the recorded rationale (named in place where that happened). It remains
+possible that a finding here is blessed under wording no agent guessed at; the agents flagged their
+own likeliest candidates. The HIGH findings are all code-vs-code or code-vs-published-doc, so they
+do not depend on that.
+
+**One scope-file correction.** The review skill lists `cicchetto/public/{manifest.json,sw.js}` —
+**neither file exists**, and has not for some time. The manifest is generated by `VitePWA` from the
+inline block in `vite.config.ts:130-180` (verified complete: `id`, `start_url`, `display`,
+`theme_color`, `background_color`, icons via the shared `PWA_ICONS` SSOT, and the #1103
+`share_target`), and the service worker is compiled from `src/service-worker.ts` in `injectManifest`
+mode. `index.html` correctly carries no hand-written manifest link — the plugin injects it.
+
+**One doc-reality gap this review owns rather than an agent.** `docs/checkpoints/` **does not
+exist** in this tree, yet `docs/reviewing.md`, the review skill, `CLAUDE.md`'s `/start` protocol and
+`docs/todo.md`'s closing line all direct a reader to it. Every agent was told to skip it. Either the
+directory belongs back, or four documents need correcting.
+
+---
+
+# Trajectory
+
+**What was built recently.** The last 26 days were dominated by client-side correctness and
+release plumbing rather than new surface: the #1229 unread-exemption ceiling, the #1331 inline
+reconnect at the parked seam, the #1321 push rejection-reason sink, the #1290 RFC 8291 push
+transport pin, the #1315 account-beside-nick admin wire, #1322's settings reorganisation, #1323's
+VAPID reconciliation, and the 1.2.0 cut with the #165 testnet unpin behind it. Throughput is high
+and the theme is coherent: **hardening what shipped, not widening it.** 409 issues closed since
+2026-08-01 against 44 open is a ratio that says the backlog is being worked, not accumulating.
+
+**Does it serve the mission?** Yes, and unusually directly. Every one of those clusters is on the
+bouncer↔client path — unread accounting, reconnect ergonomics, push delivery, the admin console an
+operator actually uses. The infrastructure work in the same window (the nginx removal's aftermath,
+the deploy-decision library, the `GRAPPA_CACHE_ID` cache split) is the kind that serves the product
+rather than becoming it: it exists so multiple workers can gate concurrently, which is what made
+this review's parallelism possible at all.
+
+**What is stalling.** The 44 open issues skew heavily to one surface — **24 are labelled
+`cicchetto`, 10 `bug`, 3 `tech-debt`** — and the oldest open items are all roadmap epics rather
+than neglected work: #5 (multi-protocol BNC), #65 (OMEMO), #83 (AI-generated themes), #99/#101
+(Phase 5 telemetry and scrollback eviction), #102 (the Phase 6 IRCv3 listener), #106 (voice).
+Those are deliberately parked, not forgotten. What IS stalling is quieter and this review found it
+twice: **declared follow-up slices that were scoped in a DESIGN_NOTES entry and never taken.** #429
+emitted 162 runtime wire schemas and wired 3. #411's `as const` mechanism single-sourced the
+message-kind set and left the window-state set hand-copied in six places. #415 promoted one schema
+to a leaf boundary and left two populations on the older patterns. Each stopped at a defensible
+boundary and each left the codebase teaching two answers to one question — which is the specific
+condition CLAUDE.md says produces propagation by proximity.
+
+**Risk check.** Three things are worth naming. (1) **Prod is the least-reviewed substrate.** The
+FreeBSD jail's twelve rails were not read by anyone in this round, and the one env template with no
+drift gate is the one prod uses. (2) **Several controls are asserted by documentation rather than
+enforced** — the migration-version rule, `LongLivedModules`, the POSIX file set, `CLIENT_PROTOCOL.md`
+— and in at least two cases the document over-claims what the gate covers, which is worse than no
+gate, because a reviewer reads the sentence as an audit result. (3) `Session.Server` grew 54% in 26
+days to 7,230 lines and 87 state keys with a 12,491-line test; hub *concentration* is flat, so this
+is not a runaway, but the absolute width is now the coupling surface every session-touching change
+must reason about, and it is the merge-conflict epicentre for concurrent worktrees.
+
+**Recommendation.** Finish one migration completely before starting another. The wire codegen is
+the highest-leverage candidate by a wide margin: it is built, gated, proved on the admin surface,
+and it would retire findings on five of the six architecture concerns plus three cross-surface
+HIGHs in the codebase review — and every week it stays half-adopted, the hand-written side grows.
+Second, convert the four hand-maintained lists into gates; each is a ten-line test, and each
+currently has a document claiming the gate already exists. Third, and cheapest of all: the
+`canonical_*` doc sweep, because 51 references to two deleted functions — two of which now assert
+the opposite of the live fold — is an active instruction to reintroduce the over-fold that #364,
+#525 and #537 spent three clusters removing.

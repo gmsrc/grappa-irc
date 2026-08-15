@@ -159,6 +159,68 @@ LOW findings (22) are improvement opportunities — see each concern's section.
 
 ---
 
+## Coverage — what this review did NOT cover
+
+**Nothing was executed.** No `mix`, no `bun`, no docker, no Dialyzer, and — load-bearing for the
+dependency concern — **no `mix boundary.find_violations`**. The Boundary analysis reasons from the
+ANNOTATIONS, which is sound for cycle-freedom only because `mix.exs:33` puts `:boundary` in
+`compilers` with `check: [in: true, out: true]` and CI fails on violations, i.e. declared ≡ actual
+is enforced elsewhere. The one class this cannot see is precisely the class finding A1 is about:
+runtime edges via injected closures, behaviours resolved from `:persistent_term`, and
+`dirty_xrefs`. Those were enumerated by hand and the counts are believed complete for
+`Session.Server`'s opts (10, exhaustively listed from the `@type` blocks) and for `dirty_xrefs` (5,
+whole-tree grep) — a runtime edge implemented some fourth way would not appear.
+
+**Established rather than sampled** (recorded because these are the claims a future reader may want
+to re-run): the full server Boundary graph — all 93 `use Boundary` blocks parsed, deps resolved to
+owning boundaries, Tarjan run, zero cycles, then re-run with `dirty_xrefs` promoted, exactly 5
+cycles sharing one prefix. The full client import graph — 301 modules, 1,165 resolved relative
+edges, value-level SCC finding exactly one cycle of size > 1 (`tsconfig.json` declares no path
+aliases, so relative resolution is exhaustive). Schema→context direction — all 23 `use Ecto.Schema`
+files checked; no schema calls a context. Runtime `Application.{get,put}_env` — every occurrence in
+`lib/` read in context. Web-layer internal direction — all 42 controllers, 3 channels, 9 plugs and
+10 JSON views scanned; no view calls a context function and `GrappaWeb` takes no `Repo` dep.
+Supervision tree — `application.ex` read in full, every per-child why-comment checked against the
+actual sequence; every stated rationale holds.
+
+**Not covered.** Context internals for `visitors.ex` (1,363 lines, the widest dep list in the tree
+at 15), `accounts.ex` (1,311), `networks/credentials.ex` (1,360) and `operator.ex` (1,137) — read
+by function list and moduledoc only, so an abstraction defect *inside* a well-bounded context would
+not surface; `visitors.ex` is where a deeper pass should start. ~6,800 unread lines of
+`session/server.ex` handler bodies — the findings are derived from its type and its cross-module
+read set, so a fuller read could find more coupling but would not change their shape.
+`event_router.ex`'s internal per-verb organisation (a size question, not a cohesion one).
+`hot_reload/`, `deploy/`, `release/`, `sys/`, `infra/`, `scripts/` — deploy machinery, outside a
+client/server architecture concern, and covered by a dedicated agent in the codebase review.
+Component bodies in `cicchetto/src/*.tsx` — import edges and the join/focus paths were traced, but
+a store bypass happening through a correctly-imported store's INTERNAL setter would not show in an
+import-edge scan; the proposed lint rule is the durable answer rather than a manual sweep. Tests
+and `cicchetto/e2e/` as graphs in their own right — excluded by brief, so test-only import cycles
+and test→production direction are unmeasured. The e2e spec bodies behind the duplication counts:
+those were profiled by helper SIGNATURE (name frequency plus a diffed sample per cluster), so
+duplicated INLINE blocks that were never extracted into named functions are not counted and A3 is a
+**lower bound**. `GrappaWeb` as a single 51-dep boundary was checked by hand and found disciplined,
+but nothing mechanically enforces structure inside the web layer — recorded so the absence of that
+gate is on the record rather than mistaken for a clean result.
+
+**`docs/DESIGN_NOTES.md` was grepped per topic, never read linearly.** Every deliberate shape
+reported as a finding was checked against its recorded rationale first, and two candidate findings
+were **dropped** after reading it: `Visitors.Login` bypassing `SpawnOrchestrator` (argued
+explicitly under "reuse the verbs, not the nouns", and the argument holds) and `*.Wire` modules
+performing PubSub broadcasts as well as shape conversion (established as the standard). Where a
+finding is about a POPULATION rather than a decision — A1, A2, A6 and A7 on the dependency concern
+— each instance's rationale is sound and the finding is the count, not the choice.
+
 ## Trajectory
 
-*(Deferred to the follow-up commit on this branch — see the codebase review's trajectory section for the session-level read.)*
+The trajectory read for this cycle lives in the companion codebase review
+(`docs/reviews/codebase/2026-08-15-codebase-review.md`), which has the session history and the issue
+data in front of it. The one thing worth adding from the structural side: **the recurring shape in
+this document is not decay, it is arrested improvement.** Every HIGH here sits on top of a
+mechanism the project already built and proved — the wire codegen, the `as const` closed-set
+emitter, the leaf-boundary promotion, the `WindowState` extraction pattern, the shared-fixture
+parity gate. None of them failed. Each was applied to one surface, demonstrated, and then left with
+the older pattern still standing beside it, which is why the same finding appears from five
+different concerns. The remediation is therefore unusually cheap per unit of risk retired: finishing
+migrations that already have a proven mechanism, a working gate and a measurement harness, rather
+than designing anything new.
