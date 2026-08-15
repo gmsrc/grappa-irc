@@ -61,12 +61,14 @@ describe("#1336 — scrollByGesture", () => {
     expect(moved).toEqual({ from: 1078, to: 800 });
   });
 
-  it("does not return on the FIRST movement — it waits for the value to hold", async () => {
-    // 900 is a mid-flight sample; returning it would report a position the
-    // pane is about to leave, which is the whole defect being fixed.
-    const { pane } = fakePane([1078, 900, 800, 800]);
+  it("does not return on a mid-flight sample — it waits for two that AGREE", async () => {
+    // 900 and 800 are both mid-flight: the pane is still travelling and each
+    // would report a position it is about to leave, which is the whole defect
+    // being fixed. Only 700 repeats, so only 700 is a resting place. A
+    // "return once it changed twice" implementation answers 800 here.
+    const { pane } = fakePane([1078, 900, 800, 700, 700]);
     const moved = await scrollByGesture(pane, { deltaY: -4000, timeoutMs: 1_000, pollMs: 1 });
-    expect(moved.to).not.toBe(900);
+    expect(moved.to).toBe(700);
   });
 
   it("REJECTS when the wheel never moved the pane", async () => {
