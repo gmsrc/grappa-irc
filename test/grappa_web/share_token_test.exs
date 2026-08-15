@@ -22,17 +22,48 @@ defmodule GrappaWeb.ShareTokenTest do
   # v1-rejected test vacuous the moment the salt regressed.
   @v1_salt "visitor-share-v1"
 
-  describe "mint/1 + verify/1 round-trip" do
+  describe "mint/2 — the minting session's kind" do
+    test "a full session gets a signed token" do
+      id = Ecto.UUID.generate()
+
+      assert {:ok, {token, %DateTime{}}} = ShareToken.mint({:visitor, id}, :web)
+      assert {:ok, {:visitor, ^id}} = ShareToken.verify(token)
+    end
+
+    test "a scoped session gets no token, for either subject kind" do
+      # #1353 — the scope of the session the link yields is decided at
+      # the mint. Asserted at THIS boundary rather than only through the
+      # route, because the guarantee has to hold for a door that does
+      # not exist yet: `mint/2` cannot be called without naming the kind,
+      # and only one of the two kinds returns a token.
+      assert {:error, :client_token_scope} =
+               ShareToken.mint({:user, Ecto.UUID.generate()}, :client)
+
+      assert {:error, :client_token_scope} =
+               ShareToken.mint({:visitor, Ecto.UUID.generate()}, :client)
+    end
+
+    test "the refusal is the atom the scope gate already speaks" do
+      # One atom, one 403 body, whichever layer answers first — the
+      # pipeline's `RequireFullSession` or this one. A second spelling
+      # here would be a second wire shape for the same refusal.
+      {:error, reason} = ShareToken.mint({:user, Ecto.UUID.generate()}, :client)
+
+      assert reason == :client_token_scope
+    end
+  end
+
+  describe "mint/2 + verify/1 round-trip" do
     test "a visitor token verifies back to the tagged visitor subject" do
       id = Ecto.UUID.generate()
-      {token, _} = ShareToken.mint({:visitor, id})
+      {:ok, {token, _}} = ShareToken.mint({:visitor, id}, :web)
 
       assert {:ok, {:visitor, ^id}} = ShareToken.verify(token)
     end
 
     test "a user token verifies back to the tagged user subject" do
       id = Ecto.UUID.generate()
-      {token, _} = ShareToken.mint({:user, id})
+      {:ok, {token, _}} = ShareToken.mint({:user, id}, :web)
 
       assert {:ok, {:user, ^id}} = ShareToken.verify(token)
     end
@@ -42,15 +73,15 @@ defmodule GrappaWeb.ShareTokenTest do
       # which table the consume reads. Two tokens over the SAME uuid
       # recover two DIFFERENT subjects.
       id = Ecto.UUID.generate()
-      {visitor_token, _} = ShareToken.mint({:visitor, id})
-      {user_token, _} = ShareToken.mint({:user, id})
+      {:ok, {visitor_token, _}} = ShareToken.mint({:visitor, id}, :web)
+      {:ok, {user_token, _}} = ShareToken.mint({:user, id}, :web)
 
       assert {:ok, {:visitor, ^id}} = ShareToken.verify(visitor_token)
       assert {:ok, {:user, ^id}} = ShareToken.verify(user_token)
     end
 
     test "expires_at is max_age_seconds in the future" do
-      {_, expires_at} = ShareToken.mint({:user, Ecto.UUID.generate()})
+      {:ok, {_, expires_at}} = ShareToken.mint({:user, Ecto.UUID.generate()}, :web)
 
       delta = DateTime.diff(expires_at, DateTime.utc_now())
       assert delta >= ShareToken.max_age_seconds() - 2

@@ -87,18 +87,42 @@ defmodule GrappaWeb.ShareToken do
   def max_age_seconds, do: @max_age_seconds
 
   @doc """
-  Sign a token for `subject`. Returns `{token, expires_at}`, where
+  Sign a token for `subject`, on behalf of a session of kind
+  `minting_kind`. Returns `{:ok, {token, expires_at}}`, where
   `expires_at` is the absolute UTC instant at which `verify/1` starts
   refusing it — cic renders the countdown from it.
 
-  Cannot fail: `Phoenix.Token.sign/3` is pure over the endpoint's
-  secret. Both doors therefore have nothing to roll back at this step.
+  `minting_kind` is the `t:Grappa.Accounts.Session.kind/0` of the
+  session presenting itself at the door, and it decides whether there
+  is a token at all: only a full (`:web`) session mints one, and a
+  scoped per-client session is answered `{:error, :client_token_scope}`
+  — the same atom `GrappaWeb.Plugs.RequireFullSession` raises, so both
+  layers render one 403 through `GrappaWeb.FallbackController`.
+
+  ## Why the rule lives HERE and not only on the route (#1353)
+
+  What the link yields on the receiving device is a full session for
+  the identity, so the scope of the redeemed session is decided at the
+  MINT, not at the redeem. A route-shaped rule states that once, for
+  the doors that exist today; this states it for the signing act
+  itself, so a door added later inherits the rule by being unable to
+  call `mint/2` without naming the kind it is minting under.
+
+  The argument is required rather than defaulted for the same reason:
+  a default is a caller that never had to think about it.
+
+  A `:web` mint is unchanged from #1306 — same salt, same payload, same
+  TTL — so links already in flight are unaffected by this gate.
   """
-  @spec mint(subject()) :: {String.t(), DateTime.t()}
-  def mint({kind, id} = subject) when kind in [:user, :visitor] and is_binary(id) do
+  @spec mint(subject(), Grappa.Accounts.Session.kind()) ::
+          {:ok, {String.t(), DateTime.t()}} | {:error, :client_token_scope}
+  def mint({kind, id} = subject, :web) when kind in [:user, :visitor] and is_binary(id) do
     token = Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, subject)
-    {token, DateTime.add(DateTime.utc_now(), @max_age_seconds, :second)}
+    {:ok, {token, DateTime.add(DateTime.utc_now(), @max_age_seconds, :second)}}
   end
+
+  def mint({kind, id}, :client) when kind in [:user, :visitor] and is_binary(id),
+    do: {:error, :client_token_scope}
 
   @doc """
   Verify a token and recover the tagged subject it was signed for.

@@ -60,7 +60,10 @@ defmodule GrappaWeb.ShareTokenController do
     * `:share_token_expired` → 410 Gone
     * `:share_token_consumed` → 410 Gone
 
-  Reused: `:forbidden` (an incognito visitor trying to mint — #363),
+  Reused: `:client_token_scope` → 403 (#1353 — the mint takes a full
+  session; the route's `:full_session` pipeline and
+  `GrappaWeb.ShareToken.mint/2` answer with the same atom, so one body
+  covers both), `:forbidden` (an incognito visitor trying to mint — #363),
   `:bad_request` (missing token param), `:unauthorized` (invalid
   signature), `:not_found` (the subject row gone between mint and
   consume).
@@ -84,7 +87,8 @@ defmodule GrappaWeb.ShareTokenController do
   #1306 — a user mints exactly as a visitor does; the only 403 left is
   the incognito visitor (#363).
   """
-  @spec mint(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, :forbidden | :unauthorized}
+  @spec mint(Plug.Conn.t(), map()) ::
+          Plug.Conn.t() | {:error, :forbidden | :unauthorized | :client_token_scope}
   def mint(conn, _) do
     case conn.assigns[:current_subject] do
       {:visitor, %Visitor{incognito: true}} ->
@@ -117,22 +121,33 @@ defmodule GrappaWeb.ShareTokenController do
   # token payload is `Subject.to_session/1`'s bare-id tuple — the same
   # discriminator `Accounts.create_session/4` takes, so the consume can
   # hand the verified payload straight through without re-deriving it.
-  @spec mint_for(Plug.Conn.t(), Subject.t()) :: Plug.Conn.t()
+  #
+  # #1353 — the kind of the session AT THE DOOR is handed to the signing
+  # boundary, which decides whether there is a token to return. The
+  # route is mounted on `:full_session`, so the refusal below is not the
+  # reachable path today; it is what keeps the rule true if the route
+  # ever moves. `current_session_kind` is assigned by
+  # `GrappaWeb.Plugs.Authn` for every authenticated bearer, user or
+  # visitor, so it is read directly rather than defaulted.
+  @spec mint_for(Plug.Conn.t(), Subject.t()) ::
+          Plug.Conn.t() | {:error, :client_token_scope}
   defp mint_for(conn, subject) do
     {kind, id} = Subject.to_session(subject)
-    {token, expires_at} = ShareToken.mint({kind, id})
 
-    :telemetry.execute(
-      [:grappa, :share_token, :minted],
-      %{count: 1},
-      %{subject_kind: kind, subject_id: id}
-    )
+    with {:ok, {token, expires_at}} <-
+           ShareToken.mint({kind, id}, conn.assigns.current_session_kind) do
+      :telemetry.execute(
+        [:grappa, :share_token, :minted],
+        %{count: 1},
+        %{subject_kind: kind, subject_id: id}
+      )
 
-    record_admin_event(subject)
+      record_admin_event(subject)
 
-    conn
-    |> put_status(:ok)
-    |> json(%{token: token, expires_at: DateTime.to_iso8601(expires_at)})
+      conn
+      |> put_status(:ok)
+      |> json(%{token: token, expires_at: DateTime.to_iso8601(expires_at)})
+    end
   end
 
   # #1306 — a USER self-mint reaches the admin register; a visitor

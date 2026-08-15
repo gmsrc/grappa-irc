@@ -9,10 +9,35 @@ defmodule GrappaWeb.RouterScopeTest do
   about it looks wrong at the call site.
 
   So this enumerates the compiled route table and actually DRIVES every
-  credential-management route with a client-token bearer, asserting the
-  scope refusal each time. Exercising beats introspecting the pipelines:
-  it survives a plug being moved between pipelines, and it fails on the
-  thing that matters — the response — rather than on a spelling.
+  route with a client-token bearer, asserting the scope refusal each
+  time. Exercising beats introspecting the pipelines: it survives a plug
+  being moved between pipelines, and it fails on the thing that matters
+  — the response — rather than on a spelling.
+
+  ## The invariant is stated as an ALLOWLIST (#1353)
+
+  It used to run the other way round: a hand-maintained list of
+  credential-looking path PREFIXES was driven, and everything else was
+  left alone. That direction fails OPEN — a route the prefixes do not
+  describe is not asserted about at all, and the invariant passes
+  vacuously over it while looking exhaustive.
+
+  This runs from the complement instead. `@client_usable_*` names what a
+  per-client token is FOR — reading, sending, and configuring the
+  connection it reads and sends on — plus `@unauthenticated_*` for the
+  routes that carry no bearer gate at all. **Every other route in the
+  table must answer `403 client_token_scope`.** A new route is therefore
+  refused by default and joining either list is a deliberate act, which
+  is the review moment that should exist.
+
+  Prefix vs exact is chosen per family, not for brevity:
+
+    * resource families whose whole point is "use the account"
+      (`/networks/...`, `/themes/...`, the push subscriptions) are
+      prefix-listed, so a sibling verb added later inherits;
+    * `/me` is exact-listed to the last route, because that namespace
+      is MIXED — the account's settings live next to the account's
+      credentials, so nothing there may be inherited by prefix.
 
   The bearer belongs to an ADMIN account on purpose. A non-admin would
   be refused by `GrappaWeb.Admin.AuthPlug` first, and every `/admin` arm
@@ -25,14 +50,72 @@ defmodule GrappaWeb.RouterScopeTest do
 
   alias Grappa.Accounts
 
-  # Paths that can change what the account IS, as opposed to using it.
-  # Prefix-matched, so `/me/totp/enrollment/confirm` is covered by
-  # `/me/totp` and a new sibling needs no edit here.
-  @credential_prefixes ["/admin", "/me/totp", "/me/passkeys", "/me/client-tokens"]
+  # Resource families a per-client token may reach in full. Prefix-
+  # matched: a verb added to one of these families is, by the family's
+  # definition, another way to use the account rather than to change it.
+  #
+  # `/networks` carries the per-network connection settings —
+  # `/identity`, `/perform`, `/password` (the upstream services secret,
+  # not the account password). They are deliberately IN this list: they
+  # configure the upstream connection a headless client exists to hold
+  # open, and #1196 shipped them reachable. Named here rather than left
+  # implicit so that moving them behind the full-session gate is a
+  # decision someone takes, not a default someone inherits.
+  @client_usable_prefixes [
+    "/networks",
+    "/themes",
+    "/push/subscriptions",
+    "/session/networks",
+    "/api/uploads",
+    "/api/server-settings"
+  ]
 
-  # Exact `{method, path}` pairs that are credential management without
-  # looking like it from the prefix alone.
-  @credential_routes [{"DELETE", "/me"}]
+  # The `/me` namespace, one route at a time — it holds the account's
+  # settings AND the account's credentials, so no prefix may stand in
+  # for it. Everything under `/me` that is not here must answer the
+  # scope refusal.
+  @client_usable_routes [
+    {"DELETE", "/auth/logout"},
+    {"GET", "/me"},
+    {"GET", "/me/theme"},
+    {"PUT", "/me/theme"},
+    # The owned-library listing. It reads as part of the `/themes`
+    # family but is spelled under `/me`, so the prefix does not reach
+    # it — which is the whole reason `/me` is enumerated.
+    {"GET", "/me/themes"},
+    {"GET", "/me/settings/notification-prefs"},
+    {"PUT", "/me/settings/notification-prefs"},
+    {"GET", "/me/settings/upload-ttl-seconds"},
+    {"PUT", "/me/settings/upload-ttl-seconds"},
+    {"GET", "/me/settings/auto-away-debounce-seconds"},
+    {"PUT", "/me/settings/auto-away-debounce-seconds"},
+    {"GET", "/me/settings/vhost"},
+    {"PUT", "/me/settings/vhost"},
+    {"GET", "/me/settings/aliases"},
+    {"PUT", "/me/settings/aliases"},
+    {"GET", "/me/settings/display-prefs"},
+    {"PUT", "/me/settings/display-prefs"}
+  ]
+
+  # Routes with no bearer gate at all — the login doors, the public
+  # discovery endpoints, the upload GET and the SPA shell. They cannot
+  # answer `client_token_scope` because nothing there reads a session,
+  # so they are excluded by name rather than by hopeful pattern.
+  @unauthenticated_routes [
+    {"GET", "/healthz"},
+    {"POST", "/auth/login"},
+    {"POST", "/auth/totp/verify"},
+    {"POST", "/auth/passkeys/options"},
+    {"POST", "/auth/passkeys/verify"},
+    {"POST", "/auth/passkeys/second-factor"},
+    {"POST", "/auth/passkeys/recover"},
+    {"POST", "/auth/share/consume"},
+    {"GET", "/push/vapid-public-key"},
+    {"GET", "/api/config"},
+    {"GET", "/uploads/:slug"},
+    {"GET", "/service-worker.js"},
+    {"GET", "/*path"}
+  ]
 
   # The loopback `/admin` scope (`POST /admin/reload`,
   # `/admin/cic-bundle-changed`) carries no bearer at all: it is gated on
@@ -46,15 +129,18 @@ defmodule GrappaWeb.RouterScopeTest do
 
   defp method(%{verb: verb}), do: verb |> Atom.to_string() |> String.upcase()
 
-  defp credential_management?(%{path: path} = route) do
-    Enum.any?(@credential_prefixes, &String.starts_with?(path, &1)) or
-      {method(route), path} in @credential_routes
+  defp client_usable?(%{path: path} = route) do
+    Enum.any?(@client_usable_prefixes, &String.starts_with?(path, &1)) or
+      {method(route), path} in @client_usable_routes
   end
 
-  defp credential_routes do
-    Enum.filter(
+  defp unauthenticated?(route), do: {method(route), route.path} in @unauthenticated_routes
+
+  # The complement: everything the two lists above do not name.
+  defp gated_routes do
+    Enum.reject(
       GrappaWeb.Router.__routes__(),
-      &(credential_management?(&1) and &1.plug != @loopback_plug)
+      &(client_usable?(&1) or unauthenticated?(&1) or &1.plug == @loopback_plug)
     )
   end
 
@@ -83,11 +169,11 @@ defmodule GrappaWeb.RouterScopeTest do
     end
   end
 
-  test "no credential-management route answers a per-client token" do
+  test "every route outside the client-usable set answers the scope refusal" do
     admin = user_fixture(is_admin: true)
     {:ok, token} = Accounts.create_client_token(admin, "headless", nil, nil, [])
 
-    for route <- credential_routes() do
+    for route <- gated_routes() do
       conn =
         Phoenix.ConnTest.build_conn()
         |> put_bearer(token.id)
@@ -95,10 +181,13 @@ defmodule GrappaWeb.RouterScopeTest do
 
       assert json_response(conn, 403) == %{"error" => "client_token_scope"},
              """
-             #{method(route)} #{route.path} is reachable by a per-client token.
+             #{method(route)} #{route.path} answers a per-client token.
 
-             Mount it on the `:full_session` scope (or `:admin_authn`) in
-             GrappaWeb.Router — see GH #1196.
+             Either mount it on the `:full_session` scope (or
+             `:admin_authn`) in GrappaWeb.Router, or — if a headless
+             client is meant to reach it — add it to
+             `@client_usable_routes` / `@client_usable_prefixes` here
+             and say why. Silence is not one of the options.
              """
     end
   end
@@ -106,18 +195,23 @@ defmodule GrappaWeb.RouterScopeTest do
   test "the invariant has something to check" do
     # A filter that matches nothing passes vacuously forever. This is the
     # arm that notices when a router refactor renames the paths out from
-    # under the prefixes above.
-    matched = credential_routes()
+    # under the lists above.
+    assert length(gated_routes()) > 40
+  end
 
-    assert length(matched) > 20
+  test "every allowlisted route still exists in the table" do
+    # The other direction of the same drift. A stale entry here silently
+    # exempts nothing today and quietly re-exempts whatever claims the
+    # path tomorrow, so an entry that matches no route is an error.
+    routes = GrappaWeb.Router.__routes__()
 
-    for prefix <- @credential_prefixes do
-      assert Enum.any?(matched, &String.starts_with?(&1.path, prefix)),
-             "no route matches the credential prefix #{prefix} any more"
+    for prefix <- @client_usable_prefixes do
+      assert Enum.any?(routes, &String.starts_with?(&1.path, prefix)),
+             "no route starts with the client-usable prefix #{prefix} any more"
     end
 
-    for {verb, path} <- @credential_routes do
-      assert Enum.any?(matched, &(&1.path == path and method(&1) == verb)),
+    for {verb, path} <- @client_usable_routes ++ @unauthenticated_routes do
+      assert Enum.any?(routes, &(&1.path == path and method(&1) == verb)),
              "no route matches #{verb} #{path} any more"
     end
   end

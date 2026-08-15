@@ -9,6 +9,8 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       with the same link)
     * incognito visitor subject → 403 forbidden (#363 — a non-portable
       ephemeral session must not be shareable to another device)
+    * per-client token bearer → 403 client_token_scope (#1353 — the
+      mint is credential management, so it takes a full session)
     * missing Bearer → 401 unauthorized
 
   Consume side (`/auth/share/consume`):
@@ -37,6 +39,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
 
   import Grappa.AuthFixtures
 
+  alias Grappa.Accounts
   alias Grappa.Repo.BusyRetry
   alias Grappa.ShareTokens
   alias GrappaWeb.ShareToken
@@ -152,6 +155,25 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       conn = post(conn, "/me/share-token")
       assert json_response(conn, 401) == %{"error" => "unauthorized"}
     end
+
+    test "only a full session mints a share link (#1353)", %{conn: conn} do
+      # A share link hands the receiving device a session for the same
+      # identity, so minting one is credential management: the door
+      # belongs on the `:full_session` scope, alongside the token
+      # surface it resembles. `GrappaWeb.RouterScopeTest` states the
+      # same thing as a table-wide invariant; this arm pins the answer
+      # at the door — the status AND the body — so a pipeline
+      # reshuffle cannot quietly downgrade it to some other 4xx.
+      {user, _} = user_and_session()
+      {:ok, client_token} = Accounts.create_client_token(user, "headless", nil, nil, [])
+
+      conn =
+        conn
+        |> put_bearer(client_token.id)
+        |> post("/me/share-token")
+
+      assert json_response(conn, 403) == %{"error" => "client_token_scope"}
+    end
   end
 
   describe "POST /auth/share/consume — visitor token" do
@@ -160,7 +182,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       # but consume tests partition by the token string itself; distinct
       # signed payloads → distinct ETS keys).
       visitor = visitor_fixture()
-      {token, _} = ShareToken.mint({:visitor, visitor.id})
+      {:ok, {token, _}} = ShareToken.mint({:visitor, visitor.id}, :web)
       {:ok, visitor: visitor, token: token}
     end
 
@@ -221,7 +243,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
   describe "POST /auth/share/consume — user token (#1306)" do
     setup do
       {user, _} = user_and_session()
-      {token, _} = ShareToken.mint({:user, user.id})
+      {:ok, {token, _}} = ShareToken.mint({:user, user.id}, :web)
       {:ok, user: user, token: token}
     end
 
@@ -258,7 +280,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       # Same 404 the visitor arm gives: a link outliving its identity is
       # one condition, not two.
       {other_user, _} = user_and_session()
-      {orphan_token, _} = ShareToken.mint({:user, other_user.id})
+      {:ok, {orphan_token, _}} = ShareToken.mint({:user, other_user.id}, :web)
       :ok = Grappa.Accounts.delete_user(other_user)
 
       orphan_conn = post(conn, "/auth/share/consume", %{"token" => orphan_token})
@@ -329,7 +351,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
   describe "POST /auth/share/consume — one-shot claim (#593)" do
     setup do
       visitor = visitor_fixture()
-      {token, _} = ShareToken.mint({:visitor, visitor.id})
+      {:ok, {token, _}} = ShareToken.mint({:visitor, visitor.id}, :web)
       {:ok, visitor: visitor, token: token}
     end
 
@@ -450,7 +472,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
 
     test "consume happy path emits :consumed with the subject metadata", %{conn: conn} do
       visitor = visitor_fixture()
-      {token, _} = ShareToken.mint({:visitor, visitor.id})
+      {:ok, {token, _}} = ShareToken.mint({:visitor, visitor.id}, :web)
 
       conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(200)
 
@@ -486,7 +508,7 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       # it fires the reject telemetry once (not zero, not doubled) and never
       # the :consumed event when the mint rolls its claim back.
       visitor = visitor_fixture()
-      {token, _} = ShareToken.mint({:visitor, visitor.id})
+      {:ok, {token, _}} = ShareToken.mint({:visitor, visitor.id}, :web)
 
       BusyRetry.inject_transient_faults(10_000)
       conn |> post("/auth/share/consume", %{"token" => token}) |> json_response(503)

@@ -105,14 +105,20 @@ defmodule GrappaWeb.Admin.VisitorsController do
   404, the same 404 the `DELETE` verb returns.
   """
   @spec share_token(Plug.Conn.t(), map()) ::
-          Plug.Conn.t() | {:error, :not_found | :forbidden}
+          Plug.Conn.t() | {:error, :not_found | :forbidden | :client_token_scope}
   def share_token(conn, %{"id" => id}) when is_binary(id) do
     with {:ok, visitor} <- fetch_visitor(id),
-         :ok <- refuse_incognito(visitor) do
-      # #1306 — the payload is the TAGGED subject now. This door stays
-      # visitor-only (there is no admin verb for minting a user's link),
-      # so the tag is a constant here rather than a branch.
-      {token, expires_at} = ShareToken.mint({:visitor, visitor.id})
+         :ok <- refuse_incognito(visitor),
+         # #1306 — the payload is the TAGGED subject now. This door stays
+         # visitor-only (there is no admin verb for minting a user's link),
+         # so the tag is a constant here rather than a branch.
+         #
+         # #1353 — the operator's own session kind decides whether the
+         # link exists, exactly as at the self-mint door. `:admin_authn`
+         # already carries `RequireFullSession`, so this states the rule
+         # a second time rather than adding a new one.
+         {:ok, {token, expires_at}} <-
+           ShareToken.mint({:visitor, visitor.id}, conn.assigns.current_session_kind) do
       {actor_id, actor_name} = AuthPlug.actor_from_conn(conn)
 
       # Distinct from the self-mint's `[:grappa, :share_token, :minted]`

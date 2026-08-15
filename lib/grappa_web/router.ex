@@ -326,6 +326,19 @@ defmodule GrappaWeb.Router do
     get "/me/client-tokens", ClientTokenController, :index
     post "/me/client-tokens", ClientTokenController, :create
     delete "/me/client-tokens/:handle", ClientTokenController, :delete
+
+    # Session-sharing mint. Returns a short-TTL Phoenix-signed token +
+    # ISO8601 expires_at; the cic SPA wraps it in a shareable URL and the
+    # consume endpoint lives under /auth above (unauthenticated by
+    # design, since the signed token IS the credential there).
+    #
+    # #1353 — it belongs in THIS block, next to the token surface it
+    # resembles: what the link yields on the receiving device is a
+    # session for the same identity, so minting one is credential
+    # management by definition and takes a full session. The signing
+    # boundary (`GrappaWeb.ShareToken.mint/2`) states the same rule
+    # independently of where the route is declared.
+    post "/me/share-token", ShareTokenController, :mint
   end
 
   scope "/", GrappaWeb do
@@ -403,12 +416,6 @@ defmodule GrappaWeb.Router do
     # (no proxy change), like the sibling settings endpoints.
     get "/me/settings/display-prefs", UserSettingsController, :show_display_prefs
     put "/me/settings/display-prefs", UserSettingsController, :update_display_prefs
-
-    # Visitor session-sharing mint — visitor-only (users get 403).
-    # Returns a short-TTL Phoenix-signed token + ISO8601 expires_at.
-    # The cic SPA wraps the token in a shareable URL; the consume
-    # endpoint lives under /auth above (unauthenticated by design).
-    post "/me/share-token", ShareTokenController, :mint
 
     # #75 — themes gallery + owned library + share-by-id + server-persisted
     # active theme. Every theme is public by id (share-link target); authz
