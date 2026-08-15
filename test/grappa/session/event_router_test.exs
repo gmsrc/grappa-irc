@@ -6450,8 +6450,7 @@ defmodule Grappa.Session.EventRouterTest do
     # a re-spelled union that happens to be correct today is the same
     # drift class that killed the session last time.
     test "the source position references the Wire SSOT type rather than re-spelling the union" do
-      assert {:remote_type, _,
-              [{:atom, _, Grappa.Session.Wire}, {:atom, _, :server_reply_source}, []]} =
+      assert {:remote_type, _, [{:atom, _, Grappa.Session.Wire}, {:atom, _, :server_reply_source}, []]} =
                server_reply_source_type()
     end
   end
