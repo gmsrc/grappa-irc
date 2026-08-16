@@ -49,9 +49,8 @@ defmodule Grappa.Vhosts.SourceMappingKeyTest do
       ours = derive!(@secret, @client_v6)
       theirs = derive!(@other_secret, @client_v6)
 
-      # This is the whole property. Under the unkeyed derivation these two
-      # are equal — the address was a function of the client alone, so
-      # anyone holding the published host could recompute it from a guess.
+      # This is the whole property: the address is a function of the
+      # client AND the deployment, so it is ours and not the code's.
       refute ours == theirs,
              "the same client derived #{ours} under both deployment keys — the derivation is not keyed"
 
@@ -89,13 +88,13 @@ defmodule Grappa.Vhosts.SourceMappingKeyTest do
   end
 
   describe "an unbooted node refuses to derive" do
-    test "derive raises rather than falling back to a guessable address" do
+    test "derive raises rather than deriving without a deployment key" do
       :persistent_term.erase({SourceMapping, :mac_key})
 
       # The one seam in the codebase with no default. Every other
       # `:persistent_term` reader degrades gracefully; here the only
-      # available fallback is a constant this repository publishes, which
-      # is the defect being fixed — so absence has to be loud.
+      # fallback available is a compiled-in constant, which is not a key —
+      # so absence has to be loud.
       assert_raise ArgumentError, fn ->
         SourceMapping.derive(SourceMapping.client_key(@client_v6), @prefix)
       end

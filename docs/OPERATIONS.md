@@ -1846,10 +1846,10 @@ session lifetime.
 
 > ⚠️ **The derivation is keyed to YOUR deployment, and the key is
 > `SECRET_KEY_BASE` (#1404).** The derived address is what the IRC
-> network publishes as the user's host, so it must not be a value a
-> stranger can recompute from a guessed client address. It is now
-> `HMAC-SHA256` under a subkey derived from `SECRET_KEY_BASE` at boot;
-> two deployments derive different addresses for the same subscriber.
+> network publishes as the user's host, so it must be private to your
+> deployment. It is now `HMAC-SHA256` under a subkey derived from
+> `SECRET_KEY_BASE` at boot; two deployments derive different addresses
+> for the same subscriber.
 > No new secret to manage — but two consequences you need before you
 > hit them:
 >

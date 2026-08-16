@@ -28,23 +28,22 @@ defmodule Grappa.Vhosts.SourceMapping do
   ## The derivation is KEYED (#1404, correcting #543)
 
   `derive/2` fills the host bits of the prefix from
-  `hmac_sha256(deployment_key, client_key)`.
+  `hmac_sha256(deployment_key, client_key)`, so the client → address
+  mapping is a property of the DEPLOYMENT rather than of the code.
 
-  #543 shipped this as a bare `sha256(@domain_tag <> client_key)` on the
-  premise, stated in this moduledoc, that reversibility was irrelevant
-  because the mapping runs client-prefix → our-own-block rather than
-  holding a secret. **That premise does not survive contact with what the
-  output IS**: the derived address is the host the ircd publishes for the
-  session, the input space is a single client prefix, and the domain tag
-  was a public constant in this file. Anyone who can see the published
-  host can confirm a guessed input. Hiding the subscriber behind the
-  bouncer is the property the bouncer exists to provide, so this is the
-  one derivation in the codebase where reversibility is the whole point.
+  #543 shipped this unkeyed, on the premise — stated in this moduledoc —
+  that reversibility was irrelevant because the mapping runs
+  client-prefix → our-own-block rather than holding a secret. That
+  premise was wrong about what the output IS: the derived address is the
+  host the ircd publishes for the session, and hiding the subscriber
+  behind the bouncer is the property the bouncer exists to provide. So
+  this is the one derivation in the codebase where non-reversibility is
+  the point, and it is keyed accordingly.
 
   The MAC keeps every property #543 actually relied on. HMAC-SHA256 is
   the same near-uniform spread over the host bits, so the collision math
-  below is unchanged; determinism is unchanged (same client, same
-  address); only guessability moves.
+  below is unchanged, and determinism is unchanged (same client, same
+  deployment, same address).
 
   ## The key, and why there is no default
 
@@ -57,10 +56,9 @@ defmodule Grappa.Vhosts.SourceMapping do
 
   `mac_key/0` deliberately has **no default**. Every other
   `:persistent_term` seam in the codebase defaults to a value that
-  preserves graceful degradation; a key cannot, because the only
-  available default is a constant every reader of this file knows, which
-  is exactly the defect being fixed. An unbooted node raises rather than
-  silently deriving a guessable address.
+  preserves graceful degradation; a key cannot, because the only default
+  available is a constant compiled into the release, which is not a key.
+  An unbooted node raises rather than deriving without a deployment key.
 
   ## Operator consequence — this renumbers a mode-2 deployment ONCE
 
@@ -122,8 +120,7 @@ defmodule Grappa.Vhosts.SourceMapping do
   end
 
   # No default, deliberately — see the moduledoc. An unbooted node must
-  # raise here rather than fall back to a constant that is public by
-  # construction.
+  # raise here rather than fall back to a compiled-in constant.
   @spec mac_key() :: binary()
   defp mac_key, do: :persistent_term.get(@mac_key)
 
@@ -148,8 +145,8 @@ defmodule Grappa.Vhosts.SourceMapping do
 
   Returns `{:error, :invalid_prefix}` when `prefix_cidr` is not a strict
   IPv6 CIDR (`parse_cidr6/1` rejects it). Raises if `boot/1` has not run
-  — a missing key is a boot defect, never a reason to degrade to a
-  guessable address.
+  — a missing key is a boot defect, never a reason to derive without a
+  deployment key.
   """
   @spec derive(binary(), String.t()) :: {:ok, String.t()} | {:error, :invalid_prefix}
   def derive(key, prefix_cidr) when is_binary(key) do

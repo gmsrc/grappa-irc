@@ -109,11 +109,11 @@ defmodule Grappa.Application do
 
     # #1404 — derive the source-mapping MAC key from the deployment's
     # `secret_key_base` into `:persistent_term`, so mode-2's outbound
-    # address is a keyed function of the client prefix rather than a
-    # constant-tagged hash anyone can recompute. Same boot-time
-    # `Application.get_env` boundary as the seams above; reads the endpoint
-    # config because that is where `config/runtime.exs` already puts the
-    # secret, rather than introducing a second place it lives.
+    # address is a keyed function of the client prefix, private to this
+    # deployment. Same boot-time `Application.get_env` boundary as the
+    # seams above; reads the endpoint config because that is where
+    # `config/runtime.exs` already puts the secret, rather than
+    # introducing a second place it lives.
     #
     # Ordering: before `SourceAliasManager` (which reconciles the alias set
     # against derived addresses) and before any session can egress, both of
