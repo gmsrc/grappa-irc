@@ -44205,6 +44205,18 @@ of five. The stored PNG additionally consumes the global storage cap every
 other write to that store consumes, checked beside `Uploads.create/3`
 because the byte count only exists after the re-encode.
 
+**Where the cap VALUE is read from is a boundary decision, and the answer
+already existed.** `Uploads.check_global_cap/2` takes the ceiling as an
+ARGUMENT so `Grappa.Uploads` needs no `ServerSettings` dep — which means
+the read belongs to whichever context calls it. `Grappa.Themes` therefore
+gains that dep rather than growing a cap parameter on a public door. It is
+the same split `Grappa.Networks` makes for `Vhosts.effective_source/3`:
+the leaf that ENFORCES takes the number, the context that CALLS it reads
+the setting, and the leaf stays reusable by a caller with a different
+source for the same ceiling. Threading the value down from the controller
+would have put an Uploads-owned number in a Themes signature and given one
+setting two unlike read sites.
+
 **Deliberately not done: an `expires_at` on these rows.** A background is
 referenced by a live theme payload, so an expiry would delete the image
 out from under a theme still in use. Unswept AND unbounded was the
