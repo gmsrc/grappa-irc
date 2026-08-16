@@ -16,7 +16,7 @@
 # Scope: guard ordering + the #526 loud-fail contract. Runs the scripts
 # against a throwaway repo + a real `git worktree add` (so _lib.sh derives
 # a genuine SRC_ROOT!=REPO_ROOT), with `docker` stubbed on PATH. Asserts
-# the guard fires before the side-effect echo ("Pulling latest main..." /
+# the guard fires before the side-effect echo ("Pulling <branch> (fast-forward only)" /
 # "Building cicchetto dist..."), AND that deploy-cic.sh treats an empty
 # (HTTP 204) bundle-hash response as a hard failure — see #526: the server
 # built the bundle but resolved the wrong CIC_DIST_ROOT, could not read
@@ -56,6 +56,9 @@ setup() {
     # top — before the guards these cases are about. Missing it would kill them
     # for the wrong reason.
     cp "$BATS_TEST_DIRNAME/../../infra/lib/cic_dist.sh" "$MAIN/infra/lib/cic_dist.sh"
+    # #1384: the two Docker hook sets folded into one shared lib that
+    # deploy.sh sources — the throwaway clone must carry it too.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_docker.sh" "$MAIN/infra/lib/deploy_docker.sh"
     # #538/#652 — deploy-cic.sh (and deploy.sh's cold path) derive the cic
     # version from the repo-root VERSION file via infra/packaging/version.sh.
     # The fixture needs both the script and a VERSION file to derive from, or
@@ -114,7 +117,7 @@ EOF
     run "$WT/scripts/deploy.sh" --force-hot
     [ "$status" -ne 0 ]
     [[ "$output" == *"worktree"* ]]
-    [[ "$output" != *"Pulling latest main"* ]]
+    [[ "$output" != *"fast-forward only"* ]]
 }
 
 @test "deploy.sh from the main checkout passes the worktree guard" {
@@ -122,7 +125,7 @@ EOF
     run "$MAIN/scripts/deploy.sh" --force-hot
     # Reaching the pull echo proves the guard did not over-fire on main
     # (the pull itself then fails — the throwaway repo has no upstream).
-    [[ "$output" == *"Pulling latest main"* ]]
+    [[ "$output" == *"fast-forward only"* ]]
     [[ "$output" != *"worktree"* ]]
 }
 
@@ -132,7 +135,7 @@ EOF
     run "$MAIN/scripts/deploy.sh" --force-hot
     [ "$status" -ne 0 ]
     [[ "$output" == *"branch"* ]]
-    [[ "$output" != *"Pulling latest main"* ]]
+    [[ "$output" != *"fast-forward only"* ]]
 }
 
 # --- deploy-cic.sh -----------------------------------------------------------

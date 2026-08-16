@@ -618,91 +618,13 @@ cmd_update() {
 	DEPLOY_FEATURE_MARKER=1
 	DEPLOY_FEATURE_PREV_SHA_CARRY=1
 	DEPLOY_SEED_RETRY_HINT="${COMPOSE[*]} --profile prod run --rm grappa mix grappa.seed_themes"
-	HOT_HEALTHCHECK_RETRIES="${HOT_HEALTHCHECK_RETRIES:-30}"
-	HOT_HEALTHCHECK_SLEEP="${HOT_HEALTHCHECK_SLEEP:-1}"
-	COLD_HEALTHCHECK_RETRIES="${COLD_HEALTHCHECK_RETRIES:-120}"
-	COLD_HEALTHCHECK_SLEEP="${COLD_HEALTHCHECK_SLEEP:-2}"
-
 	# ---- substrate hooks --------------------------------------------
-	substrate_pull() {
-		PREV_SHA="$(git rev-parse HEAD)"
-		if [ "$NO_PULL" -eq 1 ]; then
-			NEW_SHA="$PREV_SHA"
-		else
-			local branch
-			branch="$(git rev-parse --abbrev-ref HEAD)"
-			say "Pulling ${branch} (fast-forward only)"
-			git pull --ff-only || die "pull is not a fast-forward — the branch diverged. Resolve it by hand."
-			NEW_SHA="$(git rev-parse HEAD)"
-		fi
-	}
-
-	substrate_read_marker()  { cat runtime/last-deployed-sha 2>/dev/null || true; }
-	substrate_write_marker() { mkdir -p runtime; printf '%s\n' "$NEW_SHA" > runtime/last-deployed-sha; }
-	substrate_commit_exists() { git cat-file -e "$1^{commit}" >/dev/null 2>&1; }
-	substrate_changed_files() { git diff --name-only "$1..$2"; }
-
-	substrate_preflight() {
-		# Classify via Grappa.Deploy.Preflight (substrate "docker"), the
-		# same SoT every substrate uses: 0=HOT, 3=COLD, anything else is a
-		# crash the lib aborts on.
-		"${COMPOSE[@]}" run --rm --no-deps -e MIX_ENV=dev grappa \
-			mix run --no-start -e "Grappa.Deploy.Preflight.cli([\"$1\", \"$2\", \"docker\"])"
-	}
-
-	substrate_build() {
-		# Hot needs no build — compose.yaml bind-mounts ./:/app, so the
-		# pulled commit is already in place. Cold rebuilds the image.
-		[ "$MODE" = cold ] || return 0
-		say "Rebuilding the grappa image"
-		"${COMPOSE[@]}" --profile prod build grappa
-	}
-
-	substrate_reload() {
-		# The lib captures this hook's stdout as the reload response body,
-		# so pre-reload chatter MUST go to stderr or it pollutes the JSON
-		# the lib inspects.
-		say "Reloading modules in the live BEAM" >&2
-		"${COMPOSE[@]}" exec -T grappa curl -fsS -X POST http://localhost:4000/admin/reload
-	}
-
-	substrate_cic() {
-		# Build into a staging sibling and rename it in — never in place.
-		# Why: docs/OPERATIONS.md § "The Docker deploy driver
-		# (infra/docker/)" (#1020).
-		local cic_served="runtime/cicchetto-dist"
-		local cic_build_out
-		cic_build_out="$(cic_dist_docker_stage "$cic_served")"
-		# AFTER substrate_pull, so the bundle carries the version the box is
-		# moving TO — the pull may have bumped VERSION.
-		export_cic_version
-		say "Rebuilding the cicchetto bundle"
-		CIC_BUILD_OUT="$cic_build_out" "${COMPOSE[@]}" --profile prod run --rm cicchetto-build
-		cic_dist_promote "$cic_served" "$cic_build_out"
-	}
-
-	substrate_migrate() {
-		say "Syncing deps + running migrations"
-		# shellcheck disable=SC1010  # `mix do` is a mix subcommand, not shell `do`
-		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa \
-			mix do local.hex --force, local.rebar --force, deps.get
-		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa mix ecto.migrate
-	}
-
-	substrate_seed() {
-		# The same seed cmd_install runs, on the UPGRADE path — so a
-		# built-in theme added after install actually reaches the box.
-		say "Seeding the built-in theme gallery"
-		"${COMPOSE[@]}" --profile prod run --rm --no-deps grappa mix grappa.seed_themes
-	}
-
-	substrate_restart() {
-		"${COMPOSE[@]}" --profile prod up -d --force-recreate --no-deps --remove-orphans grappa
-	}
-
-	substrate_healthcheck() {
-		"${COMPOSE[@]}" exec -T grappa curl -fsS -o /dev/null http://localhost:4000/healthz
-	}
+	# ONE hook set for this substrate, shared with `scripts/deploy.sh`
+	# (#1384). The healthcheck knobs come with it: two doors onto one
+	# substrate must not wait for it with different patience.
+	DOCKER_COMPOSE=("${COMPOSE[@]}")
+	# shellcheck source=infra/lib/deploy_docker.sh
+	. "$REPO_ROOT/infra/lib/deploy_docker.sh"
 
 	substrate_done_banner() {
 		if [ "$MODE" = hot ]; then
@@ -720,11 +642,10 @@ EOF
 
 	# shellcheck source=infra/lib/deploy_common.sh
 	. "$REPO_ROOT/infra/lib/deploy_common.sh"
-	# The build-beside-then-swap helpers substrate_cic uses. Sourced HERE and
-	# not at the top of the file: only source mode builds a bundle, so the
-	# get.sh mirror needs no extra file.
-	# shellcheck source=infra/lib/cic_dist.sh
-	. "$REPO_ROOT/infra/lib/cic_dist.sh"
+	# cic_dist.sh (the build-beside-then-swap helpers substrate_cic uses)
+	# arrives with the shared hook set above, sourced HERE and not at the top
+	# of the file for the same reason it always was: only source mode builds
+	# a bundle, so the get.sh mirror needs neither file.
 	# Empty-array-safe expansion for bash 3.2 under `set -u`.
 	deploy_main ${libargs[@]+"${libargs[@]}"}
 }

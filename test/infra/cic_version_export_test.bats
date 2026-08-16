@@ -29,8 +29,10 @@ setup() {
 # Every launcher, as of #692. A new one belongs here AND must export.
 ROSTER=(
     scripts/bun.sh
-    scripts/deploy.sh
     scripts/deploy-cic.sh
+    # #1384 — the Docker substrate's cic launch moved out of both deploy
+    # entry points into the ONE hook set they now share.
+    infra/lib/deploy_docker.sh
     scripts/integration.sh
     scripts/testnet.sh
     infra/docker/deploy.sh

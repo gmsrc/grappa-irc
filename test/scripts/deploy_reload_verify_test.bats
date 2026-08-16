@@ -50,6 +50,9 @@ setup() {
     # #1020 — the cic build's build-beside-then-swap helper, sourced by the
     # same orchestrator. A checkout has it; the throwaway clone must too.
     cp "$BATS_TEST_DIRNAME/../../infra/lib/cic_dist.sh" "$UPSTREAM/infra/lib/cic_dist.sh"
+    # #1384: the two Docker hook sets folded into one shared lib that
+    # deploy.sh sources — the throwaway clone must carry it too.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_docker.sh" "$UPSTREAM/infra/lib/deploy_docker.sh"
     : > "$UPSTREAM/compose.yaml"
     # NB: deliberately NO runtime/.gitkeep here — git drops the empty dir,
     # so the clone has NO runtime/. This mimics a checkout-less install

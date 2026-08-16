@@ -45,6 +45,9 @@ setup() {
     # #1020 — the cic build's build-beside-then-swap helper, sourced by the
     # same orchestrator. A checkout has it; the throwaway clone must too.
     cp "$REPO_SRC/infra/lib/cic_dist.sh" "$UPSTREAM/infra/lib/cic_dist.sh"
+    # #1384: the Docker substrate's hook set moved into one shared lib
+    # that both deploy entry points source.
+    cp "$REPO_SRC/infra/lib/deploy_docker.sh" "$UPSTREAM/infra/lib/deploy_docker.sh"
     # The REAL version carrier + extractor (#538/#652): source mode derives
     # GRAPPA_VERSION from them at init so every compose call inherits it, and a
     # cic build with an empty value is refused by vite (#692).

@@ -395,9 +395,11 @@ code_of() {
 }
 
 DOCKER_LAUNCHERS=(
-    scripts/deploy.sh
     scripts/deploy-cic.sh
-    infra/docker/deploy.sh
+    # #1384 — the deploy path's compose launch lives in the ONE Docker hook
+    # set now, sourced by both scripts/deploy.sh and infra/docker/deploy.sh,
+    # so the staging + promote pair is asserted where it is written.
+    infra/lib/deploy_docker.sh
 )
 
 @test "docker: every compose launcher aims the build at a staging dir and promotes it" {

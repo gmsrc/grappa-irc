@@ -68,6 +68,9 @@ setup() {
     # #1020 — the cic build's build-beside-then-swap helper, sourced by the
     # same orchestrator. A checkout has it; the throwaway clone must too.
     cp "$BATS_TEST_DIRNAME/../../infra/lib/cic_dist.sh" "$UPSTREAM/infra/lib/cic_dist.sh"
+    # #1384: the Docker substrate's hook set moved into one shared lib
+    # that both deploy entry points source.
+    cp "$BATS_TEST_DIRNAME/../../infra/lib/deploy_docker.sh" "$UPSTREAM/infra/lib/deploy_docker.sh"
     # version.sh delegate → committed recorder that echoes a version.
     cat > "$UPSTREAM/infra/packaging/version.sh" <<'EOF'
 #!/bin/sh
