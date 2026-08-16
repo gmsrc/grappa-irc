@@ -5936,6 +5936,51 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    test "an INVITE past the ceiling opens no window, broadcasts nothing, and says so (#1404)" do
+      # An INVITE needs no shared channel upstream, and an `:invited` window
+      # leaves only when the operator joins or declines. So this is the one
+      # window state a stranger creates and only the subject clears, which is
+      # why it is the one with a top.
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      cap = WindowState.invited_cap()
+
+      Enum.each(1..cap, fn i ->
+        IRCServer.feed(server, ":someguy!u@h INVITE grappa-test :#flood#{i}\r\n")
+      end)
+
+      log =
+        capture_log(fn ->
+          IRCServer.feed(server, ":someguy!u@h INVITE grappa-test :#overtheceiling\r\n")
+          IRCServer.feed(server, "PING :flush\r\n")
+          {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PONG :flush\r\n"), 5_000)
+        end)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       payload: %{kind: :window_invited, channel: "#overtheceiling"}
+                     },
+                     200
+
+      state = SessionStateHelpers.fetch(pid)
+      window_state = SessionStateHelpers.window_state(state)
+
+      assert WindowState.state_of(window_state, "#overtheceiling") == nil
+      # The refusal is drop-NEW: what the operator already has on screen is
+      # not spent to make room for whoever is flooding.
+      assert WindowState.state_of(window_state, "#flood1") == :invited
+      # Silently dropping it would leave an operator wondering why invitations
+      # stopped arriving.
+      assert log =~ "invited-window ceiling"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "001 autojoin loop broadcasts window_pending per channel + sets :pending state" do
       # CP17 — symmetric to the :send_join cast: the 001 RPL_WELCOME
       # autojoin path also flows through record_in_flight_join/2, so

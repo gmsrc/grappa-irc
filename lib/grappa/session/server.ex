@@ -5850,34 +5850,10 @@ defmodule Grappa.Session.Server do
   # both the broadcast and the stored state so that banner can name who
   # invited you on a cold subscribe as well as live.
   #
-  # Guard against downgrading a window the operator is already engaging
-  # with: `:joined` (already in the room) and `:pending` (a JOIN in
-  # flight) must NOT be flipped to a greyed `:invited` tab. A `:failed` /
-  # `:kicked` / absent window DOES flip — an INVITE there is newly
-  # actionable (the invite bypasses +i/+k upstream, so the prior failure
-  # is moot). The persist row still lands in the skipped cases — an
-  # invite-while-joined / invite-while-joining is a legitimate in-channel
-  # event. A repeat INVITE while already `:invited` re-affirms the state
-  # (idempotent value + broadcast); harmless.
+  # Which windows an INVITE may move, and whether one may be opened at all,
+  # is `apply_invited/3` below.
   defp apply_effects([{:invited, channel, inviter} | rest], state) do
-    state =
-      case WindowState.state_of(state.window_state, channel) do
-        joined_or_pending when joined_or_pending in [:joined, :pending] ->
-          state
-
-        _ ->
-          broadcast_window_state(
-            state,
-            SessionWire.window_invited(state.network_slug, channel, inviter)
-          )
-
-          %{
-            state
-            | window_state: WindowState.set_invited(state.window_state, channel, inviter)
-          }
-      end
-
-    apply_effects(rest, state)
+    apply_effects(rest, apply_invited(state, channel, inviter))
   end
 
   # CP15 B3 + cluster #6: own-target KICK → window transitions to
@@ -6360,6 +6336,58 @@ defmodule Grappa.Session.Server do
     end
 
     apply_effects(rest, state)
+  end
+
+  # An inbound INVITE we did not ask for, applied to the window model.
+  #
+  # `:joined` (already in the room) and `:pending` (a JOIN in flight) must
+  # NOT be flipped to a greyed `:invited` tab. A `:failed` / `:kicked` /
+  # absent window DOES flip — an INVITE there is newly actionable (the invite
+  # bypasses +i/+k upstream, so the prior failure is moot). A repeat INVITE
+  # while already `:invited` re-affirms the state (idempotent value +
+  # broadcast); harmless. The persist row still lands in the skipped cases —
+  # an invite-while-joined / invite-while-joining is a legitimate in-channel
+  # event.
+  @spec apply_invited(t(), String.t(), String.t()) :: t()
+  defp apply_invited(state, channel, inviter) do
+    case WindowState.state_of(state.window_state, channel) do
+      joined_or_pending when joined_or_pending in [:joined, :pending] ->
+        state
+
+      _ ->
+        admit_invited(state, channel, inviter)
+    end
+  end
+
+  # The ceiling (`WindowState.invite_admissible?/2`) sits HERE, on the arm
+  # that opens the window, and not in the router: what it bounds is the pair
+  # of permanent map entries plus the cold-subscribe payload rebuilt from
+  # them, all of which live on this side. The persist row is deliberately
+  # untouched — it lands for the skipped states already, an invite is a real
+  # thing that happened, and the archive is where a row whose window is not
+  # open is meant to be readable.
+  #
+  # A refusal is logged per occurrence, like a dropped scrollback row: log
+  # volume is bounded by whatever rate the upstream lets a sender INVITE at,
+  # rotates, and is the only trace the operator gets that invitations are
+  # being turned away.
+  @spec admit_invited(t(), String.t(), String.t()) :: t()
+  defp admit_invited(state, channel, inviter) do
+    if WindowState.invite_admissible?(state.window_state, channel) do
+      broadcast_window_state(
+        state,
+        SessionWire.window_invited(state.network_slug, channel, inviter)
+      )
+
+      %{state | window_state: WindowState.set_invited(state.window_state, channel, inviter)}
+    else
+      Logger.warning("inbound INVITE opened no window: session at its invited-window ceiling",
+        network: state.network_slug,
+        channel: channel
+      )
+
+      state
+    end
   end
 
   # The session-side half of an own-nick migration: what an operator reads

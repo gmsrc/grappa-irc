@@ -33,6 +33,14 @@ defmodule Grappa.Session.WindowStateTest do
 
   alias Grappa.Session.WindowState
 
+  # A window model holding exactly as many `:invited` windows as the ceiling
+  # allows — driven from the production number so the two cannot drift.
+  defp invited_to_cap do
+    Enum.reduce(1..WindowState.invited_cap(), WindowState.new(), fn i, ws ->
+      WindowState.set_invited(ws, "#chan#{i}", "stranger#{i}")
+    end)
+  end
+
   describe "new/0" do
     test "returns an empty struct (no channels tracked)" do
       ws = WindowState.new()
@@ -51,6 +59,42 @@ defmodule Grappa.Session.WindowStateTest do
       assert WindowState.state_of(ws, "#grappa") == :pending
       assert WindowState.failure_meta(ws, "#grappa") == nil
       assert WindowState.kicked_meta(ws, "#grappa") == nil
+    end
+  end
+
+  describe "invite_admissible?/2 — the ceiling on :invited" do
+    test "an empty window model admits an invite" do
+      assert WindowState.invite_admissible?(WindowState.new(), "#grappa")
+    end
+
+    test "a fresh channel is refused once the ceiling is reached" do
+      refute WindowState.invite_admissible?(invited_to_cap(), "#one-too-many")
+    end
+
+    test "the last slot below the ceiling is still admitted" do
+      ws = invited_to_cap()
+      # Declining one frees exactly one slot: the ceiling is a live count,
+      # not a high-water mark the session never comes back down from.
+      {:ok, freed} = WindowState.decline_invite(ws, "#chan1")
+
+      assert WindowState.invite_admissible?(freed, "#one-more")
+    end
+
+    test "re-affirming a channel already invited is admissible at the ceiling" do
+      # It writes a key that exists, so it cannot grow the store — and
+      # refusing it would drop the inviter of a window still on screen.
+      assert WindowState.invite_admissible?(invited_to_cap(), "#chan1")
+    end
+
+    test "the ceiling counts invited windows, not windows in general" do
+      # Joined / failed / kicked windows are entered by the subject's own
+      # actions and are not what the ceiling exists to bound.
+      ws =
+        Enum.reduce(1..(WindowState.invited_cap() * 2), WindowState.new(), fn i, acc ->
+          WindowState.set_joined(acc, "#joined#{i}")
+        end)
+
+      assert WindowState.invite_admissible?(ws, "#grappa")
     end
   end
 

@@ -44372,3 +44372,33 @@ exactly, and it would also delete a feature: ban-mask derivation
 legitimately wants the answer for someone in no channel of ours. The ceiling
 keeps that use and bounds the abuse of it; the gate would have traded one
 for the other.
+
+### The invited-window store
+
+The same shape, one state along. `:invited` is the only member of the window
+state set a third party puts there: an INVITE needs no shared channel
+upstream, and the window leaves only when the subject joins or declines.
+Population by a stranger, eviction by the operator — so the set that empties
+it is not the set that fills it, and there was no top.
+
+There is one now, checked on the arm that opens the window rather than at
+the router, because what it bounds — two permanent map entries and the
+cold-subscribe payload rebuilt from them — lives on that side. The persist
+row is deliberately left alone: it already lands for the states that skip
+the flip, an invitation is a real thing that happened, and a row whose
+window is not open is precisely what the archive is for. This is a ceiling
+on the window model, not a claim to have bounded inbound writes in general —
+any stranger can already write rows by sending a message.
+
+The count is `invited_by`'s size rather than a scan of the state map,
+leaning on the existing key-iff-`:invited` invariant, so the check is
+constant-time and the two cannot disagree.
+
+**Drop-new, not evict-oldest.** Under a flood the windows already held are
+the likelier genuine ones, and evicting by age would mean an arrival-order
+structure the struct does not carry, paid for by every mutator, in exchange
+for letting a flood displace the invitation the operator was about to
+accept. Refusals are logged per occurrence: the volume is bounded by
+whatever rate upstream lets a sender INVITE at, and it rotates, whereas the
+alternative is an operator who never learns that invitations are being
+turned away.

@@ -91,6 +91,14 @@ defmodule Grappa.Session.WindowState do
             kicked_meta: %{},
             invited_by: %{}
 
+  # The ceiling on concurrently `:invited` windows. Every other state in the
+  # set is reached by something the operator did — a JOIN they issued, a
+  # channel they were in. `:invited` is the only one a stranger can create,
+  # and it is the only one with no expiry, so it is the only one that needs
+  # a number. Set where a human's real backlog of unanswered invitations
+  # cannot reach it, and far below what a flood produces in a second.
+  @invited_cap 64
+
   @doc """
   Returns an empty `WindowState`. Used by `Session.Server.init/1`.
   """
@@ -346,6 +354,38 @@ defmodule Grappa.Session.WindowState do
   @spec invited_by(t(), String.t()) :: String.t() | nil
   def invited_by(%__MODULE__{} = ws, channel) when is_binary(channel) do
     Map.get(ws.invited_by, channel)
+  end
+
+  @doc """
+  The ceiling on concurrently `:invited` windows. Public so a caller — and a
+  test — reads the number instead of restating it.
+  """
+  @spec invited_cap() :: pos_integer()
+  def invited_cap, do: @invited_cap
+
+  @doc """
+  Whether an inbound INVITE may open an `:invited` window for `channel`.
+
+  Every other member of the state set is entered by something the SUBJECT
+  did; `:invited` is entered by something a third party did, needs no shared
+  channel upstream, and leaves only when the subject joins or declines. A
+  store a stranger fills and only the operator empties has to have a top.
+
+  Re-affirming a channel already `:invited` is always admissible — it writes
+  a key that exists and so cannot grow the store. That is also why the count
+  is `invited_by`'s size and not a scan of `states`: by the invariant on
+  `invited_by/2` the key exists if and only if the state is `:invited`, so
+  the size IS the number of invited windows, in constant time.
+
+  Refusal is deliberately drop-NEW rather than evict-oldest. Under a flood
+  the entries already held are the likelier genuine ones, and evicting by
+  age would need an arrival-order structure this struct does not carry —
+  paid for by every mutator, to make a flood able to displace the invitation
+  the operator was about to accept.
+  """
+  @spec invite_admissible?(t(), String.t()) :: boolean()
+  def invite_admissible?(%__MODULE__{invited_by: invited_by}, channel) when is_binary(channel) do
+    Map.has_key?(invited_by, channel) or map_size(invited_by) < @invited_cap
   end
 
   @doc """
