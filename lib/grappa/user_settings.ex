@@ -25,27 +25,12 @@ defmodule Grappa.UserSettings do
 
   ## Access model
 
-  - **Writers** call a typed setter (`set_highlight_patterns/2`), which
-    routes through the ONE private write path, `update_data/2`.
+  - **Writers** use `get_or_init/1` first (which creates the row on
+    first access), then a typed accessor (`set_highlight_patterns/2`).
   - **Readers** use typed accessors directly (`get_highlight_patterns/1`),
     which return safe defaults (`[]`, `nil`, etc.) when no row exists.
     Readers do NOT auto-create the row — side-effect-free reads are
     observable-stable and don't pollute the DB with empty rows.
-
-  ## One write path, because a JSON blob loses concurrent writes (#1375)
-
-  `data` is a single column. Every setter necessarily REPLACES it whole, so
-  a read-modify-write pair that straddles another writer's commit drops that
-  writer's key — two writers touching completely DIFFERENT keys, last one
-  wins, no error anywhere. That is not hypothetical: `put_last_client_prefix64/2`
-  fires from `Grappa.Vhosts.record_client_source/2` on every client connect,
-  in the socket's own process and its own pool connection, while the settings
-  drawer PUTs from another.
-
-  So there is exactly ONE writer here — `update_data/2` — and it holds the
-  read and the write in a single `Repo.immediate_transaction/1`. A new
-  setter MUST go through it; a second read-modify-write pair spelled by
-  hand reintroduces the defect for its own key.
 
   ## String-key invariant
 
@@ -356,29 +341,15 @@ defmodule Grappa.UserSettings do
   @spec get_or_init(Subject.t()) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def get_or_init({_, _} = subject) do
-    # #523 — ride out a transient SQLITE_BUSY on the row init; sustained
-    # saturation degrades to `{:error, :db_unavailable}` → a clean 503 (#518).
-    do_get_or_init(subject, fn op -> Repo.BusyRetry.run(op) end)
-  end
-
-  # In-transaction twin of `get_or_init/1` (#1375): the row init as the first
-  # statement of `update_data/2`'s transaction. NO retry of its own — the
-  # enclosing `BusyRetry.run/1` retries the WHOLE transaction, and a nested
-  # retry would sleep holding the open transaction's connection, extending the
-  # very contention it waits on. The bang is that contract: a transient busy
-  # RAISES through to the enclosing budget instead of becoming a return value.
-  @spec get_or_init!(Subject.t()) :: {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
-  defp get_or_init!(subject), do: do_get_or_init(subject, fn op -> op.() end)
-
-  @spec do_get_or_init(Subject.t(), ((-> term()) -> term())) ::
-          {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
-  defp do_get_or_init(subject, run) do
     with :ok <- validate_subject_exists(subject) do
       attrs = Subject.put_subject_id(%{data: %{}}, subject)
       cs = Settings.changeset(%Settings{}, attrs)
 
+      # #523 — ride out a transient SQLITE_BUSY on the row init; sustained
+      # saturation degrades to `{:error, :db_unavailable}` → a clean 503 (#518)
+      # at every PUT /me/settings setter (they all init through here first).
       insert_result =
-        run.(fn ->
+        Repo.BusyRetry.run(fn ->
           Repo.insert(cs, on_conflict: :nothing, conflict_target: conflict_target(subject))
         end)
 
@@ -469,8 +440,11 @@ defmodule Grappa.UserSettings do
   @spec set_highlight_patterns(Subject.t(), [String.t()]) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def set_highlight_patterns({_, _} = subject, patterns) when is_list(patterns) do
-    with :ok <- validate_patterns(patterns, subject) do
-      update_data(subject, &Map.put(&1, "highlight_patterns", patterns))
+    with :ok <- validate_patterns(patterns, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, "highlight_patterns", patterns)
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
     end
   end
 
@@ -610,9 +584,11 @@ defmodule Grappa.UserSettings do
   @spec put_notification_prefs(Subject.t(), notification_prefs()) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def put_notification_prefs({_, _} = subject, prefs) when is_map(prefs) do
-    with {:ok, normalized} <- validate_and_normalize_prefs(prefs, subject) do
-      stringified = stringify_prefs(normalized)
-      update_data(subject, &Map.put(&1, @notification_prefs_key, stringified))
+    with {:ok, normalized} <- validate_and_normalize_prefs(prefs, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, @notification_prefs_key, stringify_prefs(normalized))
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
     end
   end
 
@@ -669,17 +645,13 @@ defmodule Grappa.UserSettings do
     if old_key == new_key do
       {:ok, :noop}
     else
-      # Same `data` blob, same lost-update hazard as the setters (#1375), so
-      # the same frame — but NOT `update_data/2`: a rename must never CREATE
-      # the row, and it reports which of the two things it did.
-      write_transaction(fn ->
-        rekey_muted_target(fetch_existing_or_nil(subject), old_key, new_key)
-      end)
+      rekey_muted_target(fetch_existing_or_nil(subject), old_key, new_key)
     end
   end
 
-  @spec rekey_muted_target(Settings.t() | nil, String.t(), String.t()) :: :renamed | :noop
-  defp rekey_muted_target(nil, _, _), do: :noop
+  @spec rekey_muted_target(Settings.t() | nil, String.t(), String.t()) ::
+          {:ok, :renamed | :noop} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  defp rekey_muted_target(nil, _, _), do: {:ok, :noop}
 
   defp rekey_muted_target(%Settings{} = settings, old_key, new_key) do
     prefs = Map.get(settings.data, @notification_prefs_key, %{})
@@ -687,16 +659,19 @@ defmodule Grappa.UserSettings do
 
     case is_map(muted) and Map.has_key?(muted, old_key) do
       false ->
-        :noop
+        {:ok, :noop}
 
       true ->
         {entry, without_old} = Map.pop(muted, old_key)
         # put_new, not put: the destination's own entry wins the collision.
         next_muted = Map.put_new(without_old, new_key, entry)
         next_prefs = Map.put(prefs, "muted_targets", next_muted)
+        next_data = Map.put(settings.data, @notification_prefs_key, next_prefs)
 
-        _ = write_data!(settings, Map.put(settings.data, @notification_prefs_key, next_prefs))
-        :renamed
+        case persist(Settings.changeset(settings, %{data: next_data})) do
+          {:ok, _} -> {:ok, :renamed}
+          {:error, _} = error -> error
+        end
     end
   end
 
@@ -744,8 +719,16 @@ defmodule Grappa.UserSettings do
   @spec put_upload_ttl_seconds(Subject.t(), pos_integer() | nil) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def put_upload_ttl_seconds({_, _} = subject, seconds) do
-    with :ok <- validate_upload_ttl_seconds(seconds, subject) do
-      update_data(subject, &put_or_delete(&1, @upload_ttl_seconds_key, seconds))
+    with :ok <- validate_upload_ttl_seconds(seconds, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data =
+        case seconds do
+          nil -> Map.delete(settings.data, @upload_ttl_seconds_key)
+          n -> Map.put(settings.data, @upload_ttl_seconds_key, n)
+        end
+
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
     end
   end
 
@@ -839,12 +822,20 @@ defmodule Grappa.UserSettings do
   def put_auto_away_debounce_seconds({_, _} = subject, value, subject_label)
       when is_binary(subject_label) do
     with :ok <- validate_auto_away_debounce_seconds(value, subject),
-         {:ok, saved} <- update_data(subject, &put_auto_away_debounce(&1, value)) do
-      # AFTER the transaction returned, never inside it: a retried attempt
-      # (`BusyRetry` wraps `update_data/2`'s transaction) would re-announce a
-      # change that had been rolled back.
-      :ok = broadcast_auto_away_debounce(value, subject_label)
-      {:ok, saved}
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data =
+        case value do
+          nil -> Map.delete(settings.data, @auto_away_debounce_seconds_key)
+          :disabled -> Map.put(settings.data, @auto_away_debounce_seconds_key, 0)
+          n -> Map.put(settings.data, @auto_away_debounce_seconds_key, n)
+        end
+
+      cs = Settings.changeset(settings, %{data: merged_data})
+
+      with {:ok, saved} <- persist(cs) do
+        :ok = broadcast_auto_away_debounce(value, subject_label)
+        {:ok, saved}
+      end
     end
   end
 
@@ -875,15 +866,6 @@ defmodule Grappa.UserSettings do
         Wire.auto_away_debounce_changed(value)
       )
   end
-
-  # Write-side twin of `decode_auto_away_debounce/1`: `:disabled` is the `0`
-  # sentinel on the JSON side, `nil` clears the key back to the server default.
-  @spec put_auto_away_debounce(map(), auto_away_debounce()) :: map()
-  defp put_auto_away_debounce(data, :disabled),
-    do: Map.put(data, @auto_away_debounce_seconds_key, 0)
-
-  defp put_auto_away_debounce(data, value),
-    do: put_or_delete(data, @auto_away_debounce_seconds_key, value)
 
   @spec decode_auto_away_debounce(term()) :: auto_away_debounce()
   defp decode_auto_away_debounce(0), do: :disabled
@@ -958,8 +940,11 @@ defmodule Grappa.UserSettings do
   @spec put_vhost_selection(Subject.t(), [String.t()]) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def put_vhost_selection({_, _} = subject, addresses) when is_list(addresses) do
-    with :ok <- validate_vhost_selection(addresses, subject) do
-      update_data(subject, &Map.put(&1, @vhost_selection_key, addresses))
+    with :ok <- validate_vhost_selection(addresses, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, @vhost_selection_key, addresses)
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
     end
   end
 
@@ -1016,8 +1001,11 @@ defmodule Grappa.UserSettings do
   @spec put_last_client_prefix64(Subject.t(), String.t()) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def put_last_client_prefix64({_, _} = subject, hex) when is_binary(hex) do
-    with :ok <- validate_base16(hex, subject) do
-      update_data(subject, &Map.put(&1, @last_client_prefix64_key, hex))
+    with :ok <- validate_base16(hex, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, @last_client_prefix64_key, hex)
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
     end
   end
 
@@ -1092,14 +1080,20 @@ defmodule Grappa.UserSettings do
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def put_theme_pair({_, _} = subject, light_id, dark_id) do
     with :ok <- validate_theme_pointer(light_id, subject, :active_theme_id),
-         :ok <- validate_theme_pointer(dark_id, subject, :dark_theme_id) do
-      update_data(subject, fn data ->
-        data
+         :ok <- validate_theme_pointer(dark_id, subject, :dark_theme_id),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data =
+        settings.data
         |> put_or_delete(@active_theme_id_key, light_id)
         |> put_or_delete(@dark_theme_id_key, dark_id)
-      end)
+
+      persist(Settings.changeset(settings, %{data: merged_data}))
     end
   end
+
+  # Merge helper: a positive id is stored, a nil clears the key.
+  defp put_or_delete(data, key, nil), do: Map.delete(data, key)
+  defp put_or_delete(data, key, id), do: Map.put(data, key, id)
 
   @spec validate_theme_pointer(term(), Subject.t(), atom()) :: :ok | {:error, Ecto.Changeset.t()}
   defp validate_theme_pointer(nil, _, _), do: :ok
@@ -1198,8 +1192,11 @@ defmodule Grappa.UserSettings do
   @spec set_aliases(Subject.t(), %{optional(String.t()) => term()}) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def set_aliases({_, _} = subject, aliases) when is_map(aliases) do
-    with {:ok, normalized} <- validate_and_normalize_aliases(aliases, subject) do
-      update_data(subject, &Map.put(&1, @aliases_key, normalized))
+    with {:ok, normalized} <- validate_and_normalize_aliases(aliases, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, @aliases_key, normalized)
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
     end
   end
 
@@ -1285,8 +1282,11 @@ defmodule Grappa.UserSettings do
   @spec put_display_prefs(Subject.t(), map()) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def put_display_prefs({_, _} = subject, prefs) when is_map(prefs) do
-    with {:ok, normalized} <- validate_and_normalize_display_prefs(prefs, subject) do
-      update_data(subject, &Map.put(&1, @display_prefs_key, normalized))
+    with {:ok, normalized} <- validate_and_normalize_display_prefs(prefs, subject),
+         {:ok, settings} <- get_or_init(subject) do
+      merged_data = Map.put(settings.data, @display_prefs_key, normalized)
+      cs = Settings.changeset(settings, %{data: merged_data})
+      persist(cs)
     end
   end
 
@@ -1294,51 +1294,14 @@ defmodule Grappa.UserSettings do
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  # #1375 — the single write path for every `data` key. `fun` receives the
-  # CURRENT `data` map and returns the next one; it must be pure, because a
-  # `BusyRetry` retry replays the whole transaction and therefore replays it.
-  #
-  # Read and write are ONE `BEGIN IMMEDIATE` transaction (see the moduledoc):
-  # SQLite serialises writers at the file level, so a concurrent writer waits
-  # for this commit and then reads the merged blob, instead of overwriting it
-  # from a snapshot taken before it.
-  @spec update_data(Subject.t(), (map() -> map())) ::
+  # #523 — the single write choke point for every setter. Rides out a transient
+  # SQLITE_BUSY on the `user_settings` UPDATE; sustained saturation degrades to
+  # `{:error, :db_unavailable}` → a clean 503 (#518) at the PUT /me/settings
+  # family instead of a 500 raise. `Repo.update/1` returns exactly the
+  # `{:ok, _} | {:error, changeset}` shape `BusyRetry.run/1` expects.
+  @spec persist(Ecto.Changeset.t()) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
-  defp update_data(subject, fun) do
-    write_transaction(fn ->
-      case get_or_init!(subject) do
-        {:ok, settings} -> write_data!(settings, fun.(settings.data))
-        {:error, cs} -> Repo.rollback(cs)
-      end
-    end)
-  end
-
-  # The retry goes OUTSIDE the transaction and the transaction INSIDE it — the
-  # `Grappa.Visitors.create_anon/4` nesting. A retry loop opened inside an
-  # already-open transaction would sleep while holding that transaction's
-  # connection, extending the very contention it waits on. #523's degrade
-  # contract is unchanged: sustained saturation still surfaces as
-  # `{:error, :db_unavailable}` → a clean 503 (#518) at PUT /me/settings.
-  @typep write_result :: Settings.t() | :renamed | :noop
-  @spec write_transaction((-> write_result())) ::
-          {:ok, write_result()} | {:error, Ecto.Changeset.t() | :db_unavailable}
-  defp write_transaction(fun), do: Repo.BusyRetry.run(fn -> Repo.immediate_transaction(fun) end)
-
-  # The module's only `Repo.update`. In-transaction by construction, so a
-  # changeset error ROLLS BACK rather than returning into a half-applied
-  # transaction; `write_transaction/1` surfaces it as `{:error, changeset}`.
-  @spec write_data!(Settings.t(), map()) :: Settings.t()
-  defp write_data!(settings, data) do
-    case Repo.update(Settings.changeset(settings, %{data: data})) do
-      {:ok, saved} -> saved
-      {:error, cs} -> Repo.rollback(cs)
-    end
-  end
-
-  # Merge helper: a value is stored, a nil clears the key.
-  @spec put_or_delete(map(), String.t(), term()) :: map()
-  defp put_or_delete(data, key, nil), do: Map.delete(data, key)
-  defp put_or_delete(data, key, value), do: Map.put(data, key, value)
+  defp persist(cs), do: Repo.BusyRetry.run(fn -> Repo.update(cs) end)
 
   # Mirror of `Grappa.QueryWindows.conflict_target/1` — partial
   # indexes carry the predicate so the upsert must repeat it.
