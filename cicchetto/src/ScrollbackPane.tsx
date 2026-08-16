@@ -671,11 +671,21 @@ const statusmsgBadge = (
       <span
         class="scrollback-statusmsg"
         data-testid="statusmsg-badge"
-        // A bare <span> is role=generic, which is name-PROHIBITED: an
-        // `aria-label` on it computes to no accessible name at all, and the
-        // sigil would still reach a screen reader as an `@` character. The
-        // sigil run is a glyph standing for a phrase, so `role="img"` is the
-        // role that both admits a name and makes it REPLACE the glyph.
+        // A bare <span> is role=generic, for which ARIA declares "name from
+        // author: PROHIBITED" — a label on it is not a name the spec
+        // guarantees any AT will speak. `role="img"` is a role that admits
+        // one, and it is the truthful role here: the sigil run is a glyph
+        // standing for a phrase, and the name is meant to REPLACE it rather
+        // than annotate it.
+        //
+        // Measured, so nobody re-derives it from this comment: our own
+        // toolchain (dom-accessibility-api) does NOT implement the
+        // prohibition — it computes the name from the label with or without
+        // the role, so the empty accessible names seen while building this
+        // came from the #130 flicker gate hiding the container, not from the
+        // missing role. What the tests pin is therefore the spec-legal
+        // SHAPE, via a byRole query; the prohibition itself is unmeasured
+        // here and is the reason to keep the role, not a thing to assert.
         role="img"
         title={description}
         aria-label={description}

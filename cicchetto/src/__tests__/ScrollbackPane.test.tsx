@@ -597,6 +597,13 @@ describe("ScrollbackPane", () => {
     expect(badge.textContent).toBe("@");
     expect(badge).toHaveAttribute("title", "delivered to ops only");
     expect(badge).toHaveAccessibleName("delivered to ops only");
+    // …and reachable BY that name through a role that ARIA lets carry one.
+    // The assertion above is not enough on its own: dom-accessibility-api
+    // computes a name from a label on a bare <span> too, even though
+    // role=generic is name-PROHIBITED and no AT owes us that reading. This
+    // query fails on a badge that drops the role, which the name assertion
+    // does not.
+    expect(screen.getByRole("img", { name: "delivered to ops only" })).toBe(badge);
     // The body still renders — the badge annotates the row, it does not
     // replace it.
     expect(lines[0]).toHaveTextContent("-carol- rehash in 5");
