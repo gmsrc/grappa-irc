@@ -92,28 +92,49 @@ defmodule GrappaWeb.MeJSON do
           }
         }
 
-  @type me_json ::
-          %{
-            kind: String.t(),
-            id: Ecto.UUID.t(),
-            name: String.t(),
-            is_admin: boolean(),
-            inserted_at: DateTime.t(),
-            read_cursors: read_cursors(),
-            unread_counts: unread_counts(),
-            badge_count: non_neg_integer(),
-            home_data: NetworksWire.home_data()
-          }
-          | %{
-              kind: String.t(),
-              id: Ecto.UUID.t(),
-              expires_at: DateTime.t() | nil,
-              registered: boolean(),
-              read_cursors: read_cursors(),
-              unread_counts: unread_counts(),
-              badge_count: non_neg_integer(),
-              home_data: NetworksWire.home_data()
-            }
+  @typedoc """
+  The user arm of `GET /me`. The discriminator is the atom `:user`, which
+  Jason encodes as the string `"user"` — the wire is byte-identical to the
+  string literal it replaces, and the closed set is now something the
+  codegen can see and the client can narrow on.
+  """
+  @type user_me_json :: %{
+          kind: :user,
+          id: Ecto.UUID.t(),
+          name: String.t(),
+          is_admin: boolean(),
+          inserted_at: DateTime.t(),
+          read_cursors: read_cursors(),
+          unread_counts: unread_counts(),
+          badge_count: non_neg_integer(),
+          home_data: NetworksWire.home_data()
+        }
+
+  @typedoc """
+  The visitor arm of `GET /me`. `incognito` is declared here because
+  `VisitorsWire.visitor_to_json/2` has always emitted it (#363) while no
+  typespec named it — invisible to codegen that was a stale comment; as a
+  codegen SOURCE it would be a generated type denying a field the server
+  sends on every request.
+  """
+  @type visitor_me_json :: %{
+          kind: :visitor,
+          id: Ecto.UUID.t(),
+          expires_at: DateTime.t() | nil,
+          registered: boolean(),
+          incognito: boolean(),
+          read_cursors: read_cursors(),
+          unread_counts: unread_counts(),
+          badge_count: non_neg_integer(),
+          home_data: NetworksWire.home_data()
+        }
+
+  # Split into NAMED arms rather than left as an inline union of object
+  # literals: the committed `wireTypes.ts` contains zero `} | {` object
+  # unions, so emitting one would be unbroken ground for biome on a file no
+  # human may hand-correct. `A | B` of two aliases is a shape the generator
+  # already produces.
+  @type me_json :: user_me_json() | visitor_me_json()
 
   @doc "Renders the `:show` action — discriminated union per subject kind."
   @spec show(
@@ -143,7 +164,7 @@ defmodule GrappaWeb.MeJSON do
       when is_map(home_data) do
     user
     |> Wire.user_to_json()
-    |> Map.put(:kind, "user")
+    |> Map.put(:kind, :user)
     |> Map.put(:read_cursors, cursors)
     |> Map.put(:unread_counts, unread_counts)
     |> Map.put(:badge_count, badge_count)
@@ -161,7 +182,7 @@ defmodule GrappaWeb.MeJSON do
       when is_boolean(registered) and is_map(home_data) do
     visitor
     |> VisitorsWire.visitor_to_json(registered)
-    |> Map.put(:kind, "visitor")
+    |> Map.put(:kind, :visitor)
     |> Map.put(:read_cursors, cursors)
     |> Map.put(:unread_counts, unread_counts)
     |> Map.put(:badge_count, badge_count)

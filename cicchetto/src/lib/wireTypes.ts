@@ -1,6 +1,6 @@
 // GENERATED FILE — DO NOT EDIT
 // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-// Source: lib/grappa/**/*wire.ex + lib/grappa_web/error_tokens.ex
+// Source: lib/grappa/**/*wire.ex + GrappaWeb.AuthJSON + GrappaWeb.ErrorTokens + GrappaWeb.MeJSON
 
 // === External types (referenced by Wire modules) ===
 
@@ -1565,6 +1565,23 @@ export type WindowCountsWireEvent = {
   severity: WindowCountsSeverity;
 };
 
+// === GrappaWeb.AuthJSON ===
+
+export type AuthJSONUserSubjectWire = {
+  kind: "user";
+  id: string;
+  name: string;
+};
+
+export type AuthJSONVisitorSubjectWire = {
+  kind: "visitor";
+  id: string;
+  registered: boolean;
+  incognito: boolean;
+};
+
+export type AuthJSONSubjectWire = AuthJSONUserSubjectWire | AuthJSONVisitorSubjectWire;
+
 // === GrappaWeb.ErrorTokens ===
 
 export const ERROR_TOKENS_SHARED_ERROR_TOKEN = [
@@ -1673,3 +1690,44 @@ export const ERROR_TOKENS_CHANNEL_ERROR_TOKEN = [
   "rate_limited",
 ] as const;
 export type ErrorTokensChannelErrorToken = (typeof ERROR_TOKENS_CHANNEL_ERROR_TOKEN)[number];
+
+// === GrappaWeb.MeJSON ===
+
+export type MeJSONReadCursors = Record<string, Record<string, number>>;
+
+export type MeJSONUnreadCounts =
+  | Record<string, Record<string, {
+  messages: number;
+  mentions: number;
+  events: number;
+  severity: "mention"
+  | "message"
+  | "event"
+  | "none";
+}>>;
+
+export type MeJSONUserMeJson = {
+  kind: "user";
+  id: string;
+  name: string;
+  is_admin: boolean;
+  inserted_at: string;
+  read_cursors: MeJSONReadCursors;
+  unread_counts: MeJSONUnreadCounts;
+  badge_count: number;
+  home_data: NetworksWireHomeData;
+};
+
+export type MeJSONVisitorMeJson = {
+  kind: "visitor";
+  id: string;
+  expires_at: string | null;
+  registered: boolean;
+  incognito: boolean;
+  read_cursors: MeJSONReadCursors;
+  unread_counts: MeJSONUnreadCounts;
+  badge_count: number;
+  home_data: NetworksWireHomeData;
+};
+
+export type MeJSONMeJson = MeJSONUserMeJson | MeJSONVisitorMeJson;

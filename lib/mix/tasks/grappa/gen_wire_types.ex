@@ -90,13 +90,25 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # skips modules looks like coverage but isn't a real gate.
   @wire_glob "lib/grappa/**/*wire.ex"
 
-  # #411 D6b — the wire-token error space (`GrappaWeb.ErrorTokens`) is the
-  # codegen source for the cicchetto client's error unions, but it lives in
-  # the WEB layer on purpose (HTTP/Channel wire tokens are not domain data),
-  # so it sits outside `@wire_glob`. Widen the source set to reach it
-  # WITHOUT relocating the module into `lib/grappa/**/wire.ex` — a
-  # boundary-preserving glob widen, not a file move.
-  @extra_globs ["lib/grappa_web/error_tokens.ex"]
+  # Codegen sources that live in the WEB layer on purpose (HTTP/Channel wire
+  # shapes are not domain data), so they sit outside `@wire_glob`. Naming the
+  # MODULES rather than their paths is deliberate: `module_from_path/1`
+  # camelizes each path segment, so `controllers/me_json.ex` derives
+  # `GrappaWeb.Controllers.MeJson` — a module that does not exist, on two
+  # counts (the `controllers/` segment and the `JSON`/`Json` casing). It
+  # would fail `Code.ensure_loaded?`, become `nil`, and be dropped SILENTLY,
+  # delivering zero coverage while looking widened. `error_tokens.ex` only
+  # ever worked because it sits directly under `grappa_web/` and camelizes
+  # exactly. A module list has no path→name guess to get wrong.
+  @extra_modules [
+    GrappaWeb.AuthJSON,
+    GrappaWeb.ErrorTokens,
+    GrappaWeb.MeJSON
+  ]
+
+  # Derived, so the artefact header cannot drift from the source set it
+  # describes — it used to be the same string typed by hand in two places.
+  @source_description "#{@wire_glob} + #{Enum.map_join(@extra_modules, " + ", &inspect/1)}"
 
   @impl Mix.Task
   def run(argv) do
@@ -137,10 +149,12 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   end
 
   defp wire_modules do
-    (Path.wildcard(@wire_glob) ++ Enum.flat_map(@extra_globs, &Path.wildcard/1))
+    @wire_glob
+    |> Path.wildcard()
     |> Enum.sort()
     |> Enum.map(&module_from_path/1)
     |> Enum.reject(&is_nil/1)
+    |> Enum.concat(@extra_modules)
     |> Enum.sort_by(&inspect/1)
   end
 
@@ -204,6 +218,20 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   end
 
   defp render_external_type(mod, type_name, alias_name) do
+    # The external path renders one alias at a time and never sets
+    # `:wire_current_module`, so `do_render/1`'s `user_type` clause has
+    # nothing to resolve a SAME-module reference against. Record who is
+    # being rendered so that clause can name the culprit instead of
+    # inventing an identifier — see `unresolvable_user_type!/1`.
+    Process.put(:wire_external_typedef, {mod, type_name})
+
+    result = do_render_external_type(mod, type_name, alias_name)
+
+    Process.delete(:wire_external_typedef)
+    result
+  end
+
+  defp do_render_external_type(mod, type_name, alias_name) do
     with {:ok, types} <- Code.Typespec.fetch_types(mod),
          {_, {_, ast, _}} <-
            Enum.find(types, :error, fn {_, {name, _, _}} -> name == type_name end) do
@@ -313,7 +341,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     """
     // GENERATED FILE — DO NOT EDIT
     // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-    // Source: lib/grappa/**/*wire.ex + lib/grappa_web/error_tokens.ex
+    // Source: #{@source_description}
 
     #{body}
     """
@@ -720,7 +748,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # render_typedef/2 invocation).
   defp do_render({:user_type, _, [name]}) when is_atom(name) do
     case Process.get(:wire_current_module) do
-      nil -> camelize(Atom.to_string(name))
+      nil -> unresolvable_user_type!(name)
       mod -> render_alias_name(mod, name)
     end
   end
@@ -774,6 +802,35 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
       end)
 
     "{\n#{body}\n}"
+  end
+
+  # Reachable only from the EXTERNAL type path, which is the one place that
+  # never sets `:wire_current_module` (`render_typedef/3` is the sole setter).
+  # This used to fall back to `camelize/1`, which is a GUESS: the two
+  # emitters then disagreed — the typedef emitted `Variant` while the runtime
+  # schema computed `THEMES_BUILTIN_BACKGROUNDS_VARIANT` and imported that —
+  # so neither artefact declared what the other referenced. The generator
+  # exited 0 and the client compiler reported the breakage as TS2304 + TS2724
+  # with no named culprit. Teaching the external path to resolve siblings is
+  # not the fix (`format_external_typedef/2` documents why it renders one
+  # alias at a time); a codegen hole must be a codegen ERROR, as the unmapped
+  # Erlang remote type and the cyclic enum reference already are.
+  defp unresolvable_user_type!(name) do
+    {mod, type} = Process.get(:wire_external_typedef)
+
+    raise """
+    gen_wire_types: cannot resolve `#{name}/0`, referenced by the external \
+    type #{inspect(mod)}.#{type}/0.
+
+    External types are rendered one alias at a time with no same-module \
+    sibling registry, so a `user_type` reference has nothing to resolve \
+    against. Emitting a camelized guess produces an identifier no \
+    declaration backs.
+
+    Fix the SOURCE: give #{inspect(mod)} a `*wire.ex` home (or add it to \
+    `@extra_modules`) so its types are rendered as a module, or inline \
+    `#{name}/0` into #{type}/0.
+    """
   end
 
   defp register_external_ref(mod, type, alias_name) do
@@ -1272,7 +1329,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     """
     // GENERATED FILE — DO NOT EDIT
     // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-    // Source: lib/grappa/**/*wire.ex + lib/grappa_web/error_tokens.ex
+    // Source: #{@source_description}
     //
     // #429 — the RUNTIME twin of `wireTypes.ts`: the same typespecs, emitted
     // as schema literals `wireValidate.ts` interprets. `wireTypes.ts` is

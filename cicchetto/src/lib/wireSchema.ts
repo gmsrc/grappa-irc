@@ -1,6 +1,6 @@
 // GENERATED FILE — DO NOT EDIT
 // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-// Source: lib/grappa/**/*wire.ex + lib/grappa_web/error_tokens.ex
+// Source: lib/grappa/**/*wire.ex + GrappaWeb.AuthJSON + GrappaWeb.ErrorTokens + GrappaWeb.MeJSON
 //
 // #429 — the RUNTIME twin of `wireTypes.ts`: the same typespecs, emitted
 // as schema literals `wireValidate.ts` interprets. `wireTypes.ts` is
@@ -1519,6 +1519,21 @@ export const S_WindowCountsWireEvent = {
   },
 } as const;
 
+// GrappaWeb.AuthJSON.user_subject_wire/0
+export const S_AuthJSONUserSubjectWire = {
+  o: { kind: { l: "user" }, id: "s", name: "s" },
+} as const;
+
+// GrappaWeb.AuthJSON.visitor_subject_wire/0
+export const S_AuthJSONVisitorSubjectWire = {
+  o: { kind: { l: "visitor" }, id: "s", registered: "b", incognito: "b" },
+} as const;
+
+// GrappaWeb.AuthJSON.subject_wire/0
+export const S_AuthJSONSubjectWire = {
+  u: [S_AuthJSONUserSubjectWire, S_AuthJSONVisitorSubjectWire],
+} as const;
+
 // GrappaWeb.ErrorTokens.shared_error_token/0
 export const S_ErrorTokensSharedErrorToken = { e: [...ERROR_TOKENS_SHARED_ERROR_TOKEN] } as const;
 
@@ -1624,3 +1639,53 @@ export const S_ErrorTokensRestErrorToken = {
     { l: "validation_failed" },
   ],
 } as const;
+
+// GrappaWeb.MeJSON.read_cursors/0
+export const S_MeJSONReadCursors = { r: { r: "i" } } as const;
+
+// GrappaWeb.MeJSON.unread_counts/0
+export const S_MeJSONUnreadCounts = {
+  r: {
+    r: {
+      o: {
+        messages: "i",
+        mentions: "i",
+        events: "i",
+        severity: { e: ["mention", "message", "event", "none"] },
+      },
+    },
+  },
+} as const;
+
+// GrappaWeb.MeJSON.user_me_json/0
+export const S_MeJSONUserMeJson = {
+  o: {
+    kind: { l: "user" },
+    id: "s",
+    name: "s",
+    is_admin: "b",
+    inserted_at: "s",
+    read_cursors: S_MeJSONReadCursors,
+    unread_counts: S_MeJSONUnreadCounts,
+    badge_count: "i",
+    home_data: S_NetworksWireHomeData,
+  },
+} as const;
+
+// GrappaWeb.MeJSON.visitor_me_json/0
+export const S_MeJSONVisitorMeJson = {
+  o: {
+    kind: { l: "visitor" },
+    id: "s",
+    expires_at: { u: ["s", "z"] },
+    registered: "b",
+    incognito: "b",
+    read_cursors: S_MeJSONReadCursors,
+    unread_counts: S_MeJSONUnreadCounts,
+    badge_count: "i",
+    home_data: S_NetworksWireHomeData,
+  },
+} as const;
+
+// GrappaWeb.MeJSON.me_json/0
+export const S_MeJSONMeJson = { u: [S_MeJSONUserMeJson, S_MeJSONVisitorMeJson] } as const;
