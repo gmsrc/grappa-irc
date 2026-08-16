@@ -295,6 +295,51 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
     end
   end
 
+  # #1406 X-S10 — `GET /me` and `POST /auth/login` are the last two doors
+  # whose subject discriminator was typed `String.t()`: a closed set carried
+  # as an untyped string, with the literals restated by hand on the cic side
+  # and nothing tying the two together. Both render modules live in the web
+  # layer, outside `@wire_glob`, so reaching them is a source-set widen —
+  # the same move #411 made for `GrappaWeb.ErrorTokens`.
+  describe "subject-discriminated JSON views (#1406 X-S10)" do
+    test "the extra source set reaches both subject render modules in generate/0" do
+      full = GenWireTypes.generate()
+
+      assert full =~ "// === GrappaWeb.AuthJSON ==="
+      assert full =~ "// === GrappaWeb.MeJSON ==="
+    end
+
+    test "the /me discriminator is a closed set, not a bare string" do
+      output = GenWireTypes.render_module_for_test(GrappaWeb.MeJSON)
+
+      assert output =~ ~s|export type MeJSONUserMeJson = {|
+      assert output =~ ~s|export type MeJSONVisitorMeJson = {|
+      assert output =~ ~s|  kind: "user";|
+      assert output =~ ~s|  kind: "visitor";|
+      refute output =~ ~s|  kind: string;|
+    end
+
+    test "the login subject discriminator is a closed set, not a bare string" do
+      output = GenWireTypes.render_module_for_test(GrappaWeb.AuthJSON)
+
+      assert output =~ ~s|export type AuthJSONUserSubjectWire = {|
+      assert output =~ ~s|export type AuthJSONVisitorSubjectWire = {|
+      assert output =~ ~s|  kind: "user";|
+      assert output =~ ~s|  kind: "visitor";|
+      refute output =~ ~s|  kind: string;|
+    end
+
+    # Both visitor renderers emit `incognito`, and neither typespec declared
+    # it. Invisible to codegen that was a stale comment; as a codegen SOURCE
+    # it would be a generated type that denies a field the server sends.
+    test "the visitor arms declare the incognito flag both renderers emit" do
+      assert GenWireTypes.render_module_for_test(GrappaWeb.MeJSON) =~ ~s|  incognito: boolean;|
+
+      assert GenWireTypes.render_module_for_test(GrappaWeb.AuthJSON) =~
+               ~s|  incognito: boolean;|
+    end
+  end
+
   # #1406 3b — the EXTERNAL type path renders one alias at a time and keeps no
   # sibling registry, so a same-module `user_type` ref has nothing to resolve
   # against. It used to fall back to `camelize/1` and emit an identifier
