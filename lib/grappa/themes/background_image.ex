@@ -205,10 +205,10 @@ defmodule Grappa.Themes.BackgroundImage do
     # `expires_at` omitted → NULL → the Uploads Reaper never sweeps theme
     # backgrounds, and that stays deliberate: a background is referenced by a
     # live theme payload, so an expiry would delete the image out from under
-    # a theme the subject is still using. What was missing is the OTHER half —
-    # the global storage cap `UploadsController` consumes on every other write
-    # to the same store. Unswept and unbounded is the combination that does
-    # not hold; unswept and bounded is a design choice.
+    # a theme the subject is still using. The OTHER half is the global storage
+    # cap `UploadsController` consumes on every other write to the same store,
+    # and this path consumes it too: unswept and bounded is a design choice,
+    # unswept and unbounded is not.
     #
     # Checked here rather than in the context door because the byte count only
     # exists after the re-encode: what lands on disk is this PNG, not whatever
