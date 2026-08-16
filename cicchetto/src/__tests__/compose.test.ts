@@ -100,6 +100,10 @@ vi.mock("../lib/socket", () => ({
   // #155 — /stats + /rehash ship the raw frame via pushRaw (the #153-de-gated
   // raw transport). #375 asserts the /rehash option rides this frame.
   pushRaw: vi.fn().mockResolvedValue(undefined),
+  // #581 — /recover. Needed by the #1396 guard tests below: the whole-module
+  // mock otherwise leaves `pushRecover` undefined, the arm throws, and a
+  // correct network rejection becomes indistinguishable from a wrong one.
+  pushRecover: vi.fn().mockResolvedValue(undefined),
 }));
 
 // #248 — compose marks a /lusers request solicited so the incoming
@@ -3294,6 +3298,133 @@ describe("compose submit — /query and /q DM verbs", () => {
     );
 
     // networkId not found → inline error.
+    expect(result).toMatchObject({ error: expect.stringContaining("network not found") });
+  });
+});
+
+// #1396 — the network-id guard is spelled out in 36 arms of the dispatch
+// switch. These four tests pin the properties a shared resolver must keep, and
+// they are written BEFORE that resolver exists: each one passes against the
+// per-arm guards as they stand, so a later failure is a regression the
+// collapse introduced, not a bug being discovered.
+//
+// Why they are needed at all: the suite's only pre-existing coverage of this
+// guard is one `/msg` test, and it exercises the guard ALONE. Every property
+// below is about the guard's INTERACTION with something else — which other
+// guard runs first, which arms skip it, and which SLUG it resolves — and none
+// of those survive a naive "resolve it once at the top" rewrite.
+describe("compose submit — the network-id guard's shape (#1396)", () => {
+  // 13 arms run `requireChannel` BEFORE resolving the network id. When BOTH
+  // would fail, the channel error is the one the operator sees. Hoisting the
+  // network resolution above the switch flips that silently: the existing
+  // "/op without channel window" test cannot catch it, because there the
+  // network resolves fine and only one guard can fire.
+  it("/op reports the channel guard, not the network one, when both would fail", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sel = await import("../lib/selection");
+    const networks = await import("../lib/networks");
+    // Not `…Once`: dispatch consults both helpers more than once per submit
+    // (the parser is handed this network's sigils before any verb resolves),
+    // so a one-shot stub is spent before the branch under test is reached.
+    vi.mocked(sel.selectedChannel).mockReturnValue({
+      networkSlug: "freenode",
+      channelName: "alice",
+      kind: "query",
+    });
+    const idBySlug = vi.mocked(networks.networkIdBySlug);
+    idBySlug.mockImplementation(() => undefined);
+    try {
+      const socket = await import("../lib/socket");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "alice");
+      compose.setDraft(k, "/op bob");
+      const result = await compose.submit(k, "freenode", "alice");
+
+      expect(socket.pushChannelOp).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ error: expect.stringContaining("channel window") });
+      expect(result).not.toMatchObject({ error: expect.stringContaining("network not found") });
+    } finally {
+      idBySlug.mockImplementation(
+        (slug: string) => mockNetworksData.find((n) => n.slug === slug)?.id,
+      );
+      vi.mocked(sel.selectedChannel).mockReturnValue({
+        networkSlug: "freenode",
+        channelName: "#a",
+        kind: "channel",
+      });
+    }
+  });
+
+  // 14 arms never resolve a network id at all — the REST verbs address the
+  // network by SLUG, and the client-local ones address no network. Resolving
+  // eagerly would reject submissions that succeed today.
+  it("/join and /nick still dispatch when no network id resolves", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const networks = await import("../lib/networks");
+    const idBySlug = vi.mocked(networks.networkIdBySlug);
+    idBySlug.mockImplementation(() => undefined);
+    try {
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+
+      compose.setDraft(k, "/join #elsewhere");
+      expect(await compose.submit(k, "freenode", "#a")).toEqual({ ok: true });
+      expect(api.postJoin).toHaveBeenCalledWith("tok", "freenode", "#elsewhere", null);
+
+      compose.setDraft(k, "/nick bob");
+      expect(await compose.submit(k, "freenode", "#a")).toEqual({ ok: true });
+      expect(api.postNick).toHaveBeenCalledWith("tok", "freenode", "bob");
+    } finally {
+      idBySlug.mockImplementation(
+        (slug: string) => mockNetworksData.find((n) => n.slug === slug)?.id,
+      );
+    }
+  });
+
+  // Bare /query closes the SELECTED window, and it resolves that window's OWN
+  // slug — not compose's argument, which can name a different network when
+  // the submit was queued before a window switch (the cross-network safety
+  // note on the arm). Pinned by making only the SELECTED network unresolvable:
+  // a resolver wired to compose's slug would find `freenode`, close the wrong
+  // row and answer ok.
+  it("bare /query resolves the SELECTED window's network, not the submitting one", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sel = await import("../lib/selection");
+    vi.mocked(sel.selectedChannel).mockReturnValue({
+      networkSlug: "ghost",
+      channelName: "bob",
+      kind: "query",
+    });
+    try {
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/query");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(result).toMatchObject({
+        error: expect.stringContaining("selected window's network not found"),
+      });
+    } finally {
+      vi.mocked(sel.selectedChannel).mockReturnValue({
+        networkSlug: "freenode",
+        channelName: "#a",
+        kind: "channel",
+      });
+    }
+  });
+
+  // Same property, second arm: /recover resolves `cmd.network ?? networkSlug`,
+  // so an explicit network argument outranks the active window's.
+  it("/recover <network> resolves the named network, not the active window's", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const socket = await import("../lib/socket");
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/recover ghost");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(socket.pushRecover).not.toHaveBeenCalled();
     expect(result).toMatchObject({ error: expect.stringContaining("network not found") });
   });
 });
