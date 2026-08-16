@@ -24,6 +24,24 @@ name: integration
 # in scope: they define the images the suite boots. The e2e-local
 # Dockerfiles and compose files are already covered by cicchetto/e2e/**.
 #
+# That rule was stated here before it was applied (#1408 D-S8). Two e2e
+# services build `grappa:e2e` with `context: ../..`, so `.dockerignore`
+# governs what is tarred into that context — its own trailing entries
+# (`.worktrees/`, the e2e cert dir) exist because a bad exclude BREAKS the
+# build. And the cic build container mounts only ../../cicchetto, so it
+# cannot read the version: `scripts/integration.sh` runs
+# `infra/packaging/version.sh` over the repo-root `VERSION` and exports
+# `GRAPPA_VERSION`, which an empty value makes vite fail loud on. All
+# three are listed below. `bin/start.sh` is NOT, though it is the image
+# CMD and is docker-COLD in preflight.ex: both services that build from
+# the repo root override `command:`, so this suite never executes it.
+#
+# The two blocks below are byte-identical by necessity — GitHub Actions
+# does not expand YAML anchors — and
+# `test/infra/integration_path_filter_test.bats` is what keeps them so,
+# and what derives the three entries above from the compose file and the
+# script rather than trusting this comment.
+#
 # Stack timing: cold ~6-8 min for the testnet+grappa+nginx images +
 # Playwright base pull; warm with cache it's faster but we don't cache
 # docker layers cross-runs (would need a registry push). Suite itself
@@ -63,7 +81,10 @@ on:
       - "mix.exs"
       - "mix.lock"
       - "Dockerfile"
+      - ".dockerignore"
       - "compose.yaml"
+      - "VERSION"
+      - "infra/packaging/version.sh"
       - ".github/workflows/integration.yml"
   pull_request:
     branches: [main]
@@ -81,7 +102,10 @@ on:
       - "mix.exs"
       - "mix.lock"
       - "Dockerfile"
+      - ".dockerignore"
       - "compose.yaml"
+      - "VERSION"
+      - "infra/packaging/version.sh"
       - ".github/workflows/integration.yml"
 
 # Avoid duplicate runs on PRs from same-repo branches; cancel an
