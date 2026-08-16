@@ -421,6 +421,12 @@ describe("userTopic", () => {
         // server can only ever answer one list. Deriving the set from
         // `chanmodes_a` here would offer +e and +I queries it cannot serve.
         listModesQueryable: ["b"],
+        // #1302 — and no rank either: this envelope predates `prefix_order`,
+        // so the narrower seeds the EMPTY order rather than inferring one
+        // from the map's key sequence. "rank unknown" degrades the mode
+        // editor to the classic op/halfop pair; a guessed rank would go on
+        // mis-ranking founders exactly as before the field existed.
+        prefixOrder: [],
         // #1255 — same story for the widened facts: this envelope predates
         // them, so the narrower supplies exactly what cic assumed while the
         // server was dropping them at ingress — the RFC 2812 sigil class,

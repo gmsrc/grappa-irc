@@ -197,22 +197,6 @@ export function sanitizeModeParam(value: string): string | null {
   return trimmed;
 }
 
-/**
- * The set of membership sigils that grant channel-mode EDITING on a
- * network, derived from its ISUPPORT PREFIX. Editing is allowed for
- * halfop (`%`) and everything that outranks op (`@`) — founder (`~`),
- * admin/protected (`&`), op — but NOT voice (`+`) or plain.
- *
- * PREFIX is advertised highest-rank-first (e.g. `(qaohv)~&@%+`), so the
- * editor set is every sigil at index ≤ the op sigil's index, PLUS the
- * halfop sigil. Deriving from the network's own order (instead of a
- * hardcoded `@`/`%`) means a founder/admin who does NOT also hold `@`
- * still gets an editable modal on networks that separate those roles —
- * the very PREFIX-rich networks this feature adds support for. The ircd
- * remains the real authority (it rejects an unauthorized MODE); a
- * slightly-permissive gate only avoids wrongly greying out a legit
- * founder.
- */
 // #1302 — the per-USER membership levels PREFIX advertises, named. Kept
 // apart from MODE_DESCRIPTIONS above, which is deliberately channel-mode
 // only (see module doc): a membership mode needs a NAME for the level it
@@ -270,21 +254,47 @@ export function statusmsgDescription(run: string, prefix: Record<string, string>
   return `delivered to ${joinAnd(names)} only`;
 }
 
+/**
+ * The set of membership sigils that grant channel-mode EDITING on a
+ * network, derived from its ISUPPORT PREFIX. Editing is allowed for
+ * halfop (`%`) and everything that outranks op (`@`) — founder (`~`),
+ * admin/protected (`&`), op — but NOT voice (`+`) or plain.
+ *
+ * Rank comes from `prefixOrder`, the mode letters in the order the network
+ * ADVERTISED them, so the editor set is every letter at index ≤ op's, plus
+ * halfop. Deriving from the network's own order (instead of a hardcoded
+ * `@`/`%`) means a founder/admin who does NOT also hold `@` still gets an
+ * editable modal on networks that separate those roles — the very
+ * PREFIX-rich networks this feature adds support for. The ircd remains the
+ * real authority (it rejects an unauthorized MODE); a slightly-permissive
+ * gate only avoids wrongly greying out a legit founder.
+ *
+ * #1302 — this used to read `Object.values(isupport.prefix)` as the rank
+ * order, and its docstring said so. It is not one: the map arrives as a
+ * JSON object keyed alphabetically by mode letter, which on
+ * `PREFIX=(qaohv)~&@%+` puts `o` in the MIDDLE — so a founder who was not
+ * also op fell below the cut and got handed the greyed-out modal this
+ * function exists to prevent. It survived unseen because on Azzurra
+ * `(ohv)` sorts to `h,o,v`, which coincides with rank, and the single case
+ * that would differ is re-admitted by the halfop branch below: the network
+ * grappa runs on is precisely the one that hides the defect.
+ */
 export function editorSigils(isupport: IsupportEntry): Set<string> {
-  const sigils = Object.values(isupport.prefix);
-  const opIdx = sigils.indexOf("@");
+  const opIdx = isupport.prefixOrder.indexOf("o");
   const out = new Set<string>();
   if (opIdx === -1) {
-    // No op sigil advertised (non-standard) — fall back to the classic
-    // op/halfop pair so the gate never opens to everyone.
+    // No op mode advertised (non-standard), or no order published at all (a
+    // server older than the field) — fall back to the classic op/halfop
+    // pair so the gate never opens to everyone. Inferring an order from the
+    // map is the bug above; an unknown rank stays unknown.
     out.add("@");
     out.add("%");
     return out;
   }
   // Everything at or above op rank (index ≤ opIdx in the high-first list).
-  for (let i = 0; i <= opIdx; i++) {
-    const s = sigils[i];
-    if (s !== undefined) out.add(s);
+  for (const letter of isupport.prefixOrder.slice(0, opIdx + 1)) {
+    const sigil = isupport.prefix[letter];
+    if (sigil !== undefined) out.add(sigil);
   }
   // Halfop, if the network has one, also edits.
   if (isupport.prefix.h !== undefined) out.add(isupport.prefix.h);

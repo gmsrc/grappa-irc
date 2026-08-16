@@ -26,6 +26,7 @@ const WIRE_PAYLOAD = {
   chanmodes_d: ["i", "m", "n", "s", "t"],
   list_modes_queryable: ["b", "e", "I"],
   prefix: { o: "@", v: "+" },
+  prefix_order: ["o", "v"],
   chantypes: ["#", "&"],
   casemapping: "ascii" as const,
   maxlist: { b: 100, e: 100, I: 100 },
@@ -71,6 +72,7 @@ describe("isupport store", () => {
     const entry: IsupportEntry = {
       chanmodes: { a: ["b", "e", "I"], b: ["k"], c: ["l"], d: ["i", "m", "n", "s", "t"] },
       prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
+      prefixOrder: ["q", "a", "o", "h", "v"],
       listModesQueryable: ["b", "e", "I"],
       chantypes: ["#", "&"],
       casemapping: "ascii",

@@ -39,6 +39,15 @@ export type IsupportEntry = {
     d: string[];
   };
   prefix: Record<string, string>;
+  // #1302 — the PREFIX mode letters in the order the network ADVERTISED
+  // them, highest rank first. The map above is a lookup table in both
+  // directions and nothing else: it arrives as a JSON object whose key
+  // order is the server runtime's (alphabetical by letter), so rank is
+  // simply not recoverable from it — see `editorSigils`, which used to try.
+  // Empty when the payload carried no order at all (a server predating the
+  // field), which every reader must treat as "rank unknown", never as
+  // "no levels".
+  prefixOrder: string[];
   // #1251 — the type-A (list) modes this network advertises AND the server
   // knows the reply numerics for, in 005 order. The BanlistModal's mode
   // switcher renders exactly this set: a letter the network advertises but
@@ -85,6 +94,7 @@ export const DEFAULT_ISUPPORT: IsupportEntry = {
     d: ["C", "D", "R", "c", "d", "i", "m", "n", "p", "r", "s", "t"],
   },
   prefix: { o: "@", h: "%", v: "+" },
+  prefixOrder: ["o", "h", "v"],
   listModesQueryable: ["b", "e", "I"],
   chantypes: [...DEFAULT_CHANTYPES],
   casemapping: "ascii",
@@ -132,6 +142,7 @@ export function isupportEntryFromWire(payload: {
   chanmodes_d: string[];
   list_modes_queryable: string[];
   prefix: Record<string, string>;
+  prefix_order: string[];
   chantypes: string[];
   casemapping: Casemapping;
   maxlist: Record<string, number>;
@@ -148,6 +159,7 @@ export function isupportEntryFromWire(payload: {
       d: payload.chanmodes_d,
     },
     prefix: payload.prefix,
+    prefixOrder: payload.prefix_order,
     listModesQueryable: payload.list_modes_queryable,
     chantypes: payload.chantypes,
     casemapping: payload.casemapping,

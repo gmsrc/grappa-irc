@@ -91,6 +91,7 @@ describe("availableModes", () => {
     const isupport: IsupportEntry = {
       chanmodes: { a: [], b: [], c: [], d: ["n", "t", "Z"] },
       prefix: {},
+      prefixOrder: [],
       listModesQueryable: [],
       chantypes: DEFAULT_ISUPPORT.chantypes,
       casemapping: DEFAULT_ISUPPORT.casemapping,
@@ -166,9 +167,20 @@ describe("editorSigils", () => {
 
   it("founder/admin prefixes rank above op → they edit too", () => {
     // PREFIX=(qaohv)~&@%+ — founder ~, admin &, op @, halfop %, voice +.
+    //
+    // #1302 — the map is built by JSON.parse of the serialisation MEASURED
+    // on the production node, NOT by a literal written in rank order. Both
+    // spell the same pairs, and that is the trap: an object literal keeps
+    // the order it was TYPED in, so `{q, a, o, h, v}` quietly tested a rank
+    // ordering the client never receives, and this assertion passed for as
+    // long as the defect it describes has existed. The wire delivers the
+    // keys alphabetical by mode letter, which puts `o` in the middle.
     const isupport: IsupportEntry = {
       chanmodes: { a: [], b: [], c: [], d: ["n", "t"] },
-      prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
+      prefix: JSON.parse('{"a":"&","h":"%","o":"@","q":"~","v":"+"}'),
+      // The rank the server now publishes ALONGSIDE that map, which the
+      // map's own key order does not spell.
+      prefixOrder: ["q", "a", "o", "h", "v"],
       listModesQueryable: [],
       chantypes: DEFAULT_ISUPPORT.chantypes,
       casemapping: DEFAULT_ISUPPORT.casemapping,
@@ -190,6 +202,7 @@ describe("editorSigils", () => {
     const isupport: IsupportEntry = {
       chanmodes: { a: [], b: [], c: [], d: [] },
       prefix: { v: "+" },
+      prefixOrder: ["v"],
       listModesQueryable: [],
       chantypes: DEFAULT_ISUPPORT.chantypes,
       casemapping: DEFAULT_ISUPPORT.casemapping,

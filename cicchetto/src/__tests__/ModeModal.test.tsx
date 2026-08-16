@@ -147,9 +147,17 @@ describe("ModeModal", () => {
   it("a founder (~) on a PREFIX-rich network can edit even without @", () => {
     // PREFIX=(qaohv)~&@%+ — a founder who does NOT also hold @ must still
     // get an editable modal (editorSigils ranks ~ above op). #216 review.
+    //
+    // #1302 — the map comes from JSON.parse of the serialisation MEASURED
+    // on the production node, and the rank from the field the server now
+    // publishes beside it. Written as a rank-ordered object literal, as it
+    // was, this test passed while the modal it describes was greying that
+    // founder out: an object literal keeps the order it was typed in, and
+    // the wire's is alphabetical by mode letter.
     seedIsupport(1, {
       ...DEFAULT_ISUPPORT,
-      prefix: { q: "~", a: "&", o: "@", h: "%", v: "+" },
+      prefix: JSON.parse('{"a":"&","h":"%","o":"@","q":"~","v":"+"}'),
+      prefixOrder: ["q", "a", "o", "h", "v"],
     });
     mockModes[KEY] = { modes: [], params: {} };
     mockMembers[KEY] = [{ nick: "vjt-grappa", modes: ["~"] }];
