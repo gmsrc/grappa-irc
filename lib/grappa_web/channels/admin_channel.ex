@@ -34,6 +34,14 @@ defmodule GrappaWeb.AdminChannel do
   carries only live updates. Reuses the admin socket rather than a second
   channel (Option B: two persisted admin surfaces, one operator socket).
 
+  ## Nothing unknown is fatal, in either direction (#1407 W-S7)
+
+  Neither an unrecognised inbound frame nor an unrecognised mailbox
+  message takes the operator's console down: both collapse to a
+  catch-all, and the `handle_info/2` one logs at warning so the message
+  it cannot read stays visible. See that clause for why crashing would
+  surface less, not more.
+
   ## No inbound handlers
 
   Admin events are server-originated only. The single `handle_in/3`
@@ -54,6 +62,8 @@ defmodule GrappaWeb.AdminChannel do
 
   alias Grappa.{AdminEvents, AdminOverview}
   alias Grappa.PubSub.Topic
+
+  require Logger
 
   @impl Phoenix.Channel
   def join("grappa:admin:events", _, socket) do
@@ -93,6 +103,32 @@ defmodule GrappaWeb.AdminChannel do
         socket
       ) do
     push(socket, "session_log_event", payload)
+    {:noreply, socket}
+  end
+
+  # W-S7 (#1407) — the info-side twin of the inbound catch-all below, and
+  # the third instance of the #1338 `unknown-is-never-fatal` family: same
+  # logged shape as `GrappaWeb.SessionRevocationListener` and
+  # `Grappa.IRC.Client`, chosen over inventing a second one.
+  #
+  # The three clauses above are exhaustive only by luck — one hardcoded
+  # event name (`PubSub.broadcast_event/2`) from the one publisher on
+  # `Topic.session_log/0`. A second publisher, a renamed event, or any
+  # stray `send/2` would otherwise kill the console with a
+  # `FunctionClauseError`, which is the exact outcome the `handle_in/3`
+  # catch-all below refuses to allow — this module argued one posture and
+  # implemented the other.
+  #
+  # Not a funnel: the message is logged at warning under the allowlisted
+  # `unexpected:` key, so what this channel cannot read is visible in the
+  # operator's own log rather than swallowed. Crashing would surface it
+  # too, but strictly worse: the push this channel performs is
+  # per-MESSAGE and stateless, so a crash cannot retry the unread message
+  # — it only discards the mailbox behind it, taking live session-log
+  # events down with it, and a repeating publisher then walks the restart
+  # intensity until the operator's console is gone for good.
+  def handle_info(msg, socket) do
+    Logger.warning("unexpected mailbox message", unexpected: inspect(msg))
     {:noreply, socket}
   end
 

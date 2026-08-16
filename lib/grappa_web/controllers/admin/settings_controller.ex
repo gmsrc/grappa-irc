@@ -55,7 +55,10 @@ defmodule GrappaWeb.Admin.SettingsController do
   every key within each is optional — the controller upserts only the keys
   present in the body. Any invalid value (out-of-set host/mode string,
   non-positive integer cap, non-16-bit-group prefix length) collapses to
-  422 `invalid_setting` with the offending dotted key in `field`.
+  422 `invalid_setting` with the offending dotted key in `field`, and so
+  does any key outside the two closed sets above (#1407 W-S3) — a typo is
+  named, never absorbed, and it refuses the WHOLE body rather than
+  applying the keys it did recognise.
 
   On success: 200 with the new full settings view AND fan-out of a
   `server_settings_changed` push on every live `Topic.user(name)`
@@ -77,7 +80,15 @@ defmodule GrappaWeb.Admin.SettingsController do
   alias Grappa.PubSub.Topic
   alias Grappa.ServerSettings.Wire, as: SettingsWire
 
-  require Logger
+  # The two closed key sets. Every entry here MUST have a matching
+  # `apply_upload_key/2` clause (resp. a `resolve_addressing_*` one) —
+  # adding a key to one and not the other is caught by that key's own
+  # per-key test, loudly, never silently.
+  @upload_keys ~w(active_host image_per_file_cap_bytes video_per_file_cap_bytes
+                  document_per_file_cap_bytes audio_per_file_cap_bytes
+                  global_cap_bytes video_max_duration_seconds)
+
+  @addressing_keys ~w(mode static_mapping_prefix)
 
   @doc false
   @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
@@ -131,7 +142,7 @@ defmodule GrappaWeb.Admin.SettingsController do
   # ---- Internal ----------------------------------------------------
 
   defp apply_updates(params) when is_map(params) do
-    with :ok <- apply_subtree(params, "upload", &apply_upload_key/2) do
+    with :ok <- apply_subtree(params, "upload", @upload_keys, &apply_upload_key/2) do
       apply_addressing(Map.get(params, "addressing"))
     end
   end
@@ -141,16 +152,43 @@ defmodule GrappaWeb.Admin.SettingsController do
   # Fold a present subtree through its per-key applier. Absent subtree → :ok
   # (each is independently optional — an empty body updates nothing); a
   # non-map subtree → bad_request (no silent swallow of a malformed shape).
-  defp apply_subtree(params, key, fun) do
+  defp apply_subtree(params, key, allowed, fun) do
     case Map.get(params, key) do
       nil ->
         :ok
 
       subtree when is_map(subtree) ->
-        Enum.reduce_while(subtree, :ok, fn {k, v}, _ -> halt_or_cont(fun.(k, v)) end)
+        with :ok <- reject_unknown_keys(subtree, allowed, key) do
+          Enum.reduce_while(subtree, :ok, fn {k, v}, _ -> halt_or_cont(fun.(k, v)) end)
+        end
 
       _ ->
         {:error, :bad_request}
+    end
+  end
+
+  # W-S3 (#1407) — an unrecognised key is a typo, not a forward-compat
+  # shape: `AdminSettingsTab` sends a fixed literal set, so nothing but a
+  # hand-rolled request can produce one. It used to be logged and dropped
+  # while the action still answered 200 with the full view, so an operator
+  # who typed `image_per_file_cap` watched a save succeed and change
+  # nothing — the "no silent-swallow at boundaries" failure exactly.
+  #
+  # The check runs BEFORE the fold, so a body mixing a good key with a typo
+  # writes nothing: the all-or-nothing posture every sibling admin
+  # controller already takes by validating keys before building attrs.
+  #
+  # The 422 `invalid_setting` envelope is chosen over the siblings' bare
+  # `bad_request` because this door already has a `field` vocabulary and
+  # cic already reads it (`AdminSettingsTab`'s `err.info.field` highlights
+  # the offending input inline). Naming the key IS the fix; a bare 400
+  # would leave the operator exactly as uninformed as the 200 did.
+  # Sorted, so a body carrying several unknown keys names the same one on
+  # every request.
+  defp reject_unknown_keys(subtree, allowed, subtree_name) do
+    case subtree |> Map.keys() |> Enum.reject(&(&1 in allowed)) |> Enum.sort() do
+      [] -> :ok
+      [key | _] -> {:error, {:invalid_setting, subtree_name <> "." <> key}}
     end
   end
 
@@ -197,16 +235,8 @@ defmodule GrappaWeb.Admin.SettingsController do
   defp apply_upload_key("video_max_duration_seconds", _),
     do: {:error, {:invalid_setting, "upload.video_max_duration_seconds"}}
 
-  # Unknown key — ignore but log at warning level. Tolerant of
-  # forward-compat shapes cic might send when an admin opens an
-  # older deploy, while still discoverable when an admin typos
-  # `globalcap_bytes` and wonders why nothing changed
-  # (per `feedback_no_silent_drops_closed` — silent acceptance
-  # absorbs the next class of bug).
-  defp apply_upload_key(k, _) do
-    Logger.warning("admin PUT /settings: unknown upload key", setting_key: k)
-    :ok
-  end
+  # No unknown-key clause: `reject_unknown_keys/3` has already refused
+  # every key outside `@upload_keys` before this fold begins.
 
   # ---- addressing.* — probe-gated unit apply (#543 / #609) ----------
   #
@@ -219,9 +249,8 @@ defmodule GrappaWeb.Admin.SettingsController do
   defp apply_addressing(nil), do: :ok
 
   defp apply_addressing(subtree) when is_map(subtree) do
-    warn_unknown_addressing_keys(subtree)
-
-    with {:ok, mode} <- resolve_addressing_mode(subtree),
+    with :ok <- reject_unknown_keys(subtree, @addressing_keys, "addressing"),
+         {:ok, mode} <- resolve_addressing_mode(subtree),
          {:ok, prefix} <- resolve_addressing_prefix(subtree),
          :ok <- arm_if_static(mode, prefix),
          :ok <- persist_addressing_prefix(subtree),
@@ -298,16 +327,6 @@ defmodule GrappaWeb.Admin.SettingsController do
     do: ServerSettings.put_addressing_mode(:static_mapping_with_reservations)
 
   defp persist_addressing_mode(_), do: :ok
-
-  # Unknown addressing key — ignore but log (tolerant of forward-compat shapes,
-  # discoverable on a typo). Same posture as `apply_upload_key/2`'s catch-all.
-  defp warn_unknown_addressing_keys(subtree) do
-    for {k, _} <- subtree, k not in ["mode", "static_mapping_prefix"] do
-      Logger.warning("admin PUT /settings: unknown addressing key", setting_key: k)
-    end
-
-    :ok
-  end
 
   # Translate per-key return to Enum.reduce_while continuation. `:ok`
   # → continue; `{:error, _}` → halt with the error preserved.
