@@ -44259,3 +44259,69 @@ predate the #372 fold and the live folded family carries `id, kind` at the
 tail instead, which is the deferral DESIGN_NOTES 17317-17332 already
 records. Cheaper is not bounded, and that migration is cold-class, so it
 stays a separate decision with a measurement attached.
+<!-- entry #1404c -->
+
+---
+
+## 2026-08-16 — #1404: the share token moves to the fragment
+
+A share link is a credential, and it was riding the URL path. It now
+rides the fragment. The route did not move: `/share` is still a plain
+path served by the SPA catch-all, and `ShareConsume` still auto-consumes
+on mount — only the token left the path.
+
+### Why the fragment and not a redaction
+
+The fragment is the one part of a URL a browser does not transmit. It is
+absent from the request line a reverse proxy logs verbatim, and absent
+from the `Referer` the landing document sends on its own same-origin
+requests under the `same-origin` referrer policy.
+
+Both redactions that sit nearby were checked and neither reaches a path
+segment: `filter_parameters` keys on a parameter NAME, and the proxy
+config is not ours to edit on every substrate — the m42 jail is fronted
+by a vhost outside this repository, and a self-hoster's proxy is theirs.
+That is what makes this a URL-shape change rather than a logging one: a
+remedy that only works where we own the proxy is not a remedy.
+
+The precedent was already in-house. The WS bearer moved to a subprotocol
+for the same reason, recorded in `socket.ts`; the share link never had
+the treatment applied.
+
+### Scrub before the request, not after a success
+
+`ShareConsume` reads `location.hash` and clears it with `replaceState`
+before it calls the server. The previous order scrubbed the address bar
+only after a SUCCESSFUL consume, which left the credential in the bar and
+in history for every link that failed or was never redeemed — the ones
+most likely to be reopened or forwarded again while still live.
+
+Accepted trade, stated so it is a decision and not a surprise: reloading
+after a failed consume reports `missing_token` rather than re-attempting
+with the real code. A one-shot credential is not worth keeping in
+history to improve the wording of an error the page has already
+rendered. An absent fragment is answered locally and spends no request.
+
+### The finding was three sites of prose, not one
+
+The review named the `ShareTokenController` moduledoc. Sweeping for the
+old shape found two more: `ShareConsume`'s own header comment, which
+described BOTH a token path and a hash router that does not exist, and
+the operator-side mint in `Admin.VisitorsController`, which repeated the
+fragment claim for links an operator hands out.
+
+This is the part worth keeping. The false moduledoc did not merely fail
+to help — an auditor read it, concluded the token never reached a log,
+and cleared the item. Prose asserting a security property the code does
+not provide buys a pass that the code would not have got on its own,
+which is why the controller's paragraph now carries an explicit note
+that it is load-bearing and must move with the client.
+
+### Why the test asserts three properties, not one
+
+A single `toContain(token)` is satisfied by the path form too. The client
+test pins that the token follows `#`, that the URL contains no `/share/`
+segment, and that `new URL(...).pathname` is exactly `/share`. The
+scrub is pinned by sampling `location.hash` INSIDE the mocked request
+rather than after it: "empty afterwards" is precisely what the old
+scrub-on-success produced, so only the ordering distinguishes them.
