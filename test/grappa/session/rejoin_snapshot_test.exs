@@ -19,7 +19,7 @@ defmodule Grappa.Session.RejoinSnapshotTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.IRCServer
+  alias Grappa.{IRCServer, Session}
   alias Grappa.Networks.{Credentials, SessionPlan}
   alias Grappa.PubSub.Topic
 
@@ -81,6 +81,27 @@ defmodule Grappa.Session.RejoinSnapshotTest do
     :ok = await_first_echo_persisted(server, user, pid)
 
     assert Credentials.get_credential!(user, network).last_joined_channels == @snapshot
+
+    :ok = GenServer.stop(pid, :normal, 1_000)
+  end
+
+  # The discriminator between sourcing the departures from the EVENT and
+  # diffing the keyset. `#c` is in the snapshot and NOT live (its JOIN never
+  # came back), so parting it moves no keyset at all: a diff sees nothing
+  # removed, writes nothing, and the channel the operator just left survives
+  # in the row to be re-JOINed on the next reconnect.
+  test "parting a channel we are not live in still drops it from the snapshot" do
+    %{server: server, user: user, network: network, pid: pid} = restoring_session()
+
+    :ok = await_first_echo_persisted(server, user, pid)
+
+    :ok = Session.send_part({:user, user.id}, network.id, "#c", nil)
+
+    # The cast persists BEFORE it puts PART on the wire, so the line is the
+    # write barrier.
+    {:ok, _} = IRCServer.wait_for_line(server, &(&1 == "PART #c\r\n"), 1_000)
+
+    assert Credentials.get_credential!(user, network).last_joined_channels == ~w(#a #b)
 
     :ok = GenServer.stop(pid, :normal, 1_000)
   end
