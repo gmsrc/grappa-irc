@@ -1132,7 +1132,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # `Scrollback.Meta.load/1` is lenient by design so that a historical row with
   # a since-removed key still reads instead of crashing the fetch. Validating
   # keys here would drop exactly those rows at the client instead.
-  defp schema_ir({:partial_record, _, [_keys, value]}, mod),
+  defp schema_ir({:partial_record, _, [_, value]}, mod),
     do: {:obj, [{"r", schema_ir(value, mod)}]}
 
   defp schema_ir({:%{}, _, fields}, mod) do
