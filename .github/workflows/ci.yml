@@ -11,10 +11,6 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  ELIXIR_VERSION: "1.19.5"
-  OTP_VERSION: "28.5"
-
 jobs:
   test:
     name: test + lint + audit
@@ -33,10 +29,17 @@ jobs:
           fetch-depth: 0
 
       - name: Setup BEAM
+        id: beam
         uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          # #1408 D-S10 — the pin lives in .tool-versions and nowhere else.
+          # `version-type: strict` is mandatory with version-file, not a
+          # style choice: setup-beam throws before reading the file without
+          # it. The asdf spellings resolve as-is — `1.19.5-otp-28` has its
+          # `-otp-N` suffix stripped for the lookup and reused as the OTP
+          # constraint, and `28.5` matches the builds listing's `OTP-28.5`.
+          version-file: .tool-versions
+          version-type: strict
 
       - name: Cache deps + build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -44,9 +47,9 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+            ${{ runner.os }}-mix-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
       - name: Install dependencies
         run: |
@@ -284,10 +287,17 @@ jobs:
           submodules: recursive
 
       - name: Setup BEAM
+        id: beam
         uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
         with:
-          elixir-version: ${{ env.ELIXIR_VERSION }}
-          otp-version: ${{ env.OTP_VERSION }}
+          # #1408 D-S10 — the pin lives in .tool-versions and nowhere else.
+          # `version-type: strict` is mandatory with version-file, not a
+          # style choice: setup-beam throws before reading the file without
+          # it. The asdf spellings resolve as-is — `1.19.5-otp-28` has its
+          # `-otp-N` suffix stripped for the lookup and reused as the OTP
+          # constraint, and `28.5` matches the builds listing's `OTP-28.5`.
+          version-file: .tool-versions
+          version-type: strict
 
       - name: Cache deps + build + PLTs
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -296,9 +306,9 @@ jobs:
             deps
             _build
             priv/plts
-          key: ${{ runner.os }}-plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-${{ hashFiles('**/mix.lock') }}-v1
+          key: ${{ runner.os }}-plt-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}-v1
           restore-keys: |
-            ${{ runner.os }}-plt-${{ env.OTP_VERSION }}-${{ env.ELIXIR_VERSION }}-
+            ${{ runner.os }}-plt-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
 
       - name: Install deps + compile
         run: |

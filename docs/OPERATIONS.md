@@ -2578,9 +2578,16 @@ DESIGN_NOTES 2026-07-31, "#503 unit C".
 earlier multi-stage debian build used
 `hexpm/elixir:VSN-erlang-VSN-debian-VSN` for tighter tuple pinning, but
 `hexpm/elixir` does NOT publish alpine variants for Elixir 1.19 / OTP 28,
-so the official image is the upstream-supported alpine path. Elixir and
-OTP stay pinned by the tag; the alpine version floats with whatever the
-Docker library publishes for it.
+so the official image is the upstream-supported alpine path. The tag pins
+the Elixir MINOR line and the OTP major; the alpine version floats with
+whatever the Docker library publishes for it, **and so does the Elixir
+patch** — `1.19` is not `1.19.5`, which is what `.tool-versions` names.
+This paragraph used to say "Elixir and OTP stay pinned by the tag",
+which reads like an exact pin and is not one (#1408 D-S9/D-S10). The
+divergence is bounded, not eliminated:
+`test/infra/toolchain_pin_test.bats` fails if the tag leaves the
+`.tool-versions` minor line or changes OTP major, and lets a patch bump
+pass — see § "The toolchain pin is the repo's pin, never the distro's".
 
 **Do not add a deps layer to the toolchain image.** It is toolchain-ONLY
 by design (#364 docker S1, described above): every runtime shape mounts
@@ -3624,6 +3631,16 @@ governs every substrate that builds Grappa from source:
   already in asdf's native format, so the pin CI runs is the pin
   installed here, with no second hand-maintained pin to drift. asdf over
   raw kerl for exactly that reason — kerl would need its own pin.
+  **"reading the same file" was aspirational until #1408 D-S10.** Both
+  workflows carried their own `ELIXIR_VERSION` / `OTP_VERSION` literals,
+  so CI ran a hand-maintained pin that merely happened to agree; the
+  three `erlef/setup-beam` steps now pass `version-file: .tool-versions`
+  and the cache keys read the versions back off the step's outputs
+  instead of off the deleted `env:` block. `version-type: strict` rides
+  along because setup-beam refuses `version-file` without it. What keeps
+  the sentence true is `test/infra/toolchain_pin_test.bats`, which fails
+  on any setup-beam step that does not read the file and on any workflow
+  that re-transcribes a version the file already pins.
 - **Wrong shape.** A distro that SPLITS OTP into per-application
   packages leaves you with a valid-looking Erlang that is missing
   modules the release loads at runtime. Arch is the live case
