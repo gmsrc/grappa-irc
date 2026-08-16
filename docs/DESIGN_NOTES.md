@@ -43953,12 +43953,16 @@ deploys are both routine, so it is the client most able to be arbitrarily
 stale against the running BEAM — and it was the one client the server could
 never refuse. The 426 was written for it and could not reach it.
 
-`socketEndpoint` now appends `?client_proto=` from an exported constant. Query
-param rather than subprotocol because the version is public discovery data,
-also served unauth at `GET /api/config`: the #95/#202 rule that keeps things
-off the URL is about the bearer, which is a secret. In the endpoint rather
-than the Socket's `params` because `params` is the same query string by a
-longer route, and one function should answer for the whole URL.
+cic now declares the version from an exported constant, via the Socket's
+`params`. Query param rather than subprotocol because the version is public
+discovery data, also served unauth at `GET /api/config`: the #95/#202 rule
+that keeps things off the URL is about the bearer, which is a secret.
+
+`params` rather than the endpoint string is not a stylistic pick — see the
+subsection below. This first shipped as a `?client_proto=` appended inside
+`socketEndpoint`, on the reasoning that `params` was "the same query string by
+a longer route" and that one function should answer for the whole URL. That
+reasoning was wrong about the route, and it broke every WebSocket in the app.
 
 **Arming the refusal couples two numbers that were independent.** Today
 `version/0` and `min_version/0` are both 1 and cic declares 1, so nothing
@@ -44010,15 +44014,58 @@ decryptor — is real. It is a push-decryption concern that rides in
 `/api/config` by convenience, not part of the version seam. Named here, not
 fixed here.
 
+### The hop this entry named as unmeasured was the bug
+
+The section below used to end by declaring one hop argued rather than
+measured: phoenix.js composing a URL that now already carried a query. The
+argument offered for it was `Ajax.appendParams` switching its separator to `&`
+on `url.match(/\?/)`. That function does do exactly that, and it was the wrong
+function to reason about.
+
+`Socket`'s constructor glues the transport on by string concatenation,
+`this.endPoint = ${endPoint}/websocket` (`socket.js:191`), and it runs BEFORE
+`endPointURL()` appends anything. So a query baked into the endpoint argument
+lands on the wrong side of the join. Measured on the real class:
+
+    passed  wss://host/socket?client_proto=1
+    dialled wss://host/socket?client_proto=1/websocket&vsn=2.0.0
+    path    /socket          client_proto=1/websocket
+
+The mount is `socket "/socket"` in `endpoint.ex`, so Phoenix serves the
+upgrade at `/socket/websocket`. The dialled path was `/socket`, which reaches
+no WS route, and `/websocket` had been swallowed into a param VALUE. Every
+WebSocket in the application failed. CI measured 92 passed / 288 failed: the
+survivors were `admin-*.spec.ts` (pure REST) plus the three specs that mount
+the SPA without opening a session, and the failures were uniform at ~6s — one
+cause wearing 288 costumes, not a spread.
+
+Two things are worth keeping. First, the placement rule, which is now a
+property of phoenix and not a preference: `socketEndpoint` must return a bare
+origin + path, and anything belonging in the query goes through `params`,
+the only hook `appendParams` reaches after the transport is attached.
+
+Second, the shape of the miss. Every assertion shipped in the first cut
+stopped at the OUTPUT of `socketEndpoint`, and the one that claimed to reach
+"the real Socket constructor" read a MOCK's recorded argument — this file
+replaces the `phoenix` export wholesale, so no test in it can observe what
+phoenix does with what it is handed. Ten mutants were killed against a seam
+that ended one function too early. A test that stops at the boundary of a
+dependency measures the call, never the composition, and here the composition
+was the entire contract. The witness that closes it is
+`socketEndpointUrl.test.ts`, a separate FILE because `vi.mock` is file-scoped:
+it extends the genuine `Socket` instead of replacing it and asserts the path
+and the param value off the real `endPointURL()`. Both of its assertions
+failed before the fix, each naming one facet — `/socket` for the path,
+`1/websocket` for the value.
+
 ### What this does not establish
 
-No e2e ran and no browser was observed. The chain is pinned as far as the
-`Socket` constructor by unit test; the last hop — phoenix.js appending its own
-`vsn` to a URL that now already carries a query — is argued from
-`phoenix.mjs`'s `Ajax.appendParams`, which switches the separator to `&` when
-`url.match(/\?/)`, and not measured against a running server. The 426 has
-never fired against cicchetto and cannot today, both numbers being 1; the
-refusal is proven against synthetic below-floor clients only
-(`user_socket_test.exs`, `issue447-protocol-handshake.spec.ts`). Every
-assertion added here was bought with a mutant — ten of them, each killed, with
-the kills attributed per assertion.
+No e2e ran and no browser was observed; no lane was held for one. The chain is
+now pinned through phoenix's own composition, in-process, but the URL has not
+been dialled against a running BEAM — what is proven is the path cic asks for,
+not the upgrade it gets. The 426 has never fired against cicchetto and cannot
+today, both numbers being 1; the refusal is proven against synthetic
+below-floor clients only (`user_socket_test.exs`,
+`issue447-protocol-handshake.spec.ts`), and that spec hand-composes
+`/socket/websocket` itself, so it witnesses the server contract and never the
+client's composition.

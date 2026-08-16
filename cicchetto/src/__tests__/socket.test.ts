@@ -121,20 +121,23 @@ describe("socket singleton", () => {
     // #95: authToken carries the bearer via the Sec-WebSocket-Protocol
     // subprotocol; the token is deliberately NOT passed via `params`
     // (phoenix appends params to the URL query — that would re-leak it).
-    // #1379: the URL also carries `?client_proto=` — the protocol version is
-    // public discovery data, unlike the bearer this test is about.
+    // #1379: the endpoint stays a bare origin+path. Anything that belongs in
+    // the query rides `params`, because phoenix concatenates `/websocket`
+    // onto this string before appending params — see socketEndpointUrl.test.ts.
     expect(h.socketCtor).toHaveBeenCalledWith(
-      "ws://localhost:3000/socket?client_proto=1",
+      "ws://localhost:3000/socket",
       expect.objectContaining({ authToken: "tok-1" }),
     );
     const opts = h.socketCtor.mock.calls[0]?.[1] as {
       authToken: string;
-      params?: unknown;
+      params?: Record<string, unknown>;
     };
     // authToken is the live token captured at construction (#95).
     expect(opts.authToken).toBe("tok-1");
-    // No `params` — the token must not ride the URL query string.
-    expect(opts.params).toBeUndefined();
+    // The token must not ride the URL query string. `params` is no longer
+    // empty (#1379 puts the public protocol version there), so the invariant
+    // is about the BEARER specifically, not about params being absent.
+    expect(Object.values(opts.params ?? {})).not.toContain("tok-1");
   });
 
   it("disconnects when the token signal goes null", async () => {
@@ -200,10 +203,10 @@ describe("socket singleton", () => {
     // (#95) — and no token in the URL (no `params`).
     const opts2 = h.socketCtor.mock.calls[1]?.[1] as {
       authToken: string;
-      params?: unknown;
+      params?: Record<string, unknown>;
     };
     expect(opts2.authToken).toBe("tok-B");
-    expect(opts2.params).toBeUndefined();
+    expect(Object.values(opts2.params ?? {})).not.toContain("tok-B");
   });
 
   // #364 bucket B — the phoenix Socket auto-reconnect backoff loop keeps a
@@ -289,28 +292,28 @@ describe("socketEndpoint (#193 — force wss on https origin)", () => {
   it("returns a wss:// absolute endpoint on an https origin", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     expect(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org" })).toBe(
-      "wss://irc.sniffo.org/socket?client_proto=1",
+      "wss://irc.sniffo.org/socket",
     );
   });
 
   it("returns wss:// even with a non-default https port (host carries the port)", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     expect(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org:8443" })).toBe(
-      "wss://irc.sniffo.org:8443/socket?client_proto=1",
+      "wss://irc.sniffo.org:8443/socket",
     );
   });
 
   it("returns ws:// only on a genuinely plaintext http origin (dev/LAN)", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     expect(socketEndpoint({ protocol: "http:", host: "localhost:5173" })).toBe(
-      "ws://localhost:5173/socket?client_proto=1",
+      "ws://localhost:5173/socket",
     );
   });
 
   it("reads the ambient location when no arg is given (jsdom → http://localhost:3000)", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     // jsdom serves the doc from http://localhost:3000/ by default.
-    expect(socketEndpoint()).toBe("ws://localhost:3000/socket?client_proto=1");
+    expect(socketEndpoint()).toBe("ws://localhost:3000/socket");
   });
 });
 
@@ -322,17 +325,26 @@ describe("socketEndpoint (#193 — force wss on https origin)", () => {
 // These assertions are about the DECLARATION, deliberately separate from the
 // #193 scheme tests above: those pin whole URLs, so they redden for either
 // reason and cannot say which. Each one below fails for exactly one edit.
-describe("socketEndpoint declares the client protocol version (#1379)", () => {
-  it("carries a client_proto query param on an absolute endpoint", async () => {
-    const { socketEndpoint } = await import("../lib/socket");
-    const url = new URL(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org" }));
-    expect(url.searchParams.get("client_proto")).not.toBeNull();
+//
+// The declaration rides the Socket's `params`, NOT the endpoint string, so
+// what this file can witness is the constructor ARGUMENT — its phoenix mock
+// stops there by construction. That the argument survives phoenix's own
+// composition onto a dialable URL is a different claim needing the real
+// class, and it lives in `socketEndpointUrl.test.ts`.
+describe("cic declares the client protocol version to the socket (#1379)", () => {
+  it("hands the version to the Socket as a param, where phoenix appends it post-transport", async () => {
+    localStorage.setItem("grappa-token", "tok-proto");
+    const { CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
+    const opts = h.socketCtor.mock.calls[0]?.[1] as { params?: Record<string, unknown> };
+    expect(opts.params?.client_proto).toBe(CLIENT_PROTOCOL_VERSION);
   });
 
-  it("declares the exported constant, not a hand-typed literal that can drift", async () => {
-    const { socketEndpoint, CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
-    const url = new URL(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org" }));
-    expect(url.searchParams.get("client_proto")).toBe(String(CLIENT_PROTOCOL_VERSION));
+  it("keeps the endpoint string free of a query, which phoenix would mis-join", async () => {
+    // Not a style rule: the constructor concatenates `/websocket` onto this
+    // string, so a `?` here silently moves the transport into a param value
+    // and the dialled path stops being one the server routes.
+    const { socketEndpoint } = await import("../lib/socket");
+    expect(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org" })).not.toContain("?");
   });
 
   it("declares an integer at or above the server floor of 1", async () => {
@@ -345,28 +357,18 @@ describe("socketEndpoint declares the client protocol version (#1379)", () => {
     expect(CLIENT_PROTOCOL_VERSION).toBeGreaterThanOrEqual(1);
   });
 
-  it("still declares it on the no-DOM relative endpoint (no ambient location)", async () => {
-    // The version is not location-derived, so the `!l` fallback must not drop
-    // it. Reaching that branch needs `location` genuinely absent, which jsdom
-    // never is — hence the stub, taken AFTER the import so module scope still
-    // evaluates against the real one.
-    const { socketEndpoint, CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
+  it("keeps the no-DOM relative endpoint a bare path too (no ambient location)", async () => {
+    // The `!l` fallback is a second return and must obey the same no-query
+    // rule as the absolute one. Reaching that branch needs `location`
+    // genuinely absent, which jsdom never is — hence the stub, taken AFTER
+    // the import so module scope still evaluates against the real one.
+    const { socketEndpoint } = await import("../lib/socket");
     vi.stubGlobal("location", undefined);
     try {
-      expect(socketEndpoint()).toBe(`/socket?client_proto=${CLIENT_PROTOCOL_VERSION}`);
+      expect(socketEndpoint()).toBe("/socket");
     } finally {
       vi.unstubAllGlobals();
     }
-  });
-
-  it("reaches the real Socket constructor, not just the helper", async () => {
-    // socketEndpoint is only a contract if getSocket actually calls it: the
-    // endpoint the constructor receives is what phoenix puts on the wire.
-    localStorage.setItem("grappa-token", "tok-proto");
-    const { CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
-    const endpoint = h.socketCtor.mock.calls[0]?.[0] as string;
-    const url = new URL(endpoint);
-    expect(url.searchParams.get("client_proto")).toBe(String(CLIENT_PROTOCOL_VERSION));
   });
 });
 

@@ -101,21 +101,19 @@ export const CLIENT_PROTOCOL_VERSION = 1;
 // it) is an m42 nginx HOST-config change, out of scope for this fix —
 // noted for the orchestrator. This client change stands on its own.
 //
-// #1379 — the endpoint also carries `?client_proto=`. Query param, not
-// subprotocol: the version is public discovery data (also served unauth at
-// `GET /api/config`), so the #95/#202 "keep it off the URL" rule does not
-// reach it — that rule is about the bearer, which is a secret and keeps
-// riding `Sec-WebSocket-Protocol` alone. It goes here rather than in the
-// Socket's `params` because `params` is the same query string by a longer
-// route, and putting it here keeps ONE function answerable for the whole URL.
-// phoenix.js appends its own `vsn` with `Ajax.appendParams`, which switches to
-// `&` when the URL already has a `?`, so the two compose.
+// This value must stay a bare ORIGIN + PATH with no query string. phoenix.js's
+// Socket constructor appends the transport by string concatenation —
+// `this.endPoint = `${endPoint}/websocket`` — before `endPointURL()` appends
+// any params, so a `?` here lands on the wrong side of that join: the dialled
+// path collapses back to `/socket` (which the `socket "/socket"` mount does
+// not serve) and `/websocket` is swallowed into a param value. Anything that
+// belongs in the query goes through the Socket's `params` (see `getSocket`),
+// which is the only hook `Ajax.appendParams` reaches AFTER the transport.
 export function socketEndpoint(loc?: Location | { protocol: string; host: string }): string {
-  const query = `?client_proto=${CLIENT_PROTOCOL_VERSION}`;
   const l = loc ?? (typeof location !== "undefined" ? location : undefined);
-  if (!l) return `/socket${query}`;
+  if (!l) return "/socket";
   const scheme = l.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${l.host}/socket${query}`;
+  return `${scheme}//${l.host}/socket`;
 }
 
 // Module-level reference to the joined user-level channel. Set by
@@ -149,6 +147,19 @@ function getSocket(): Socket {
       // captures the current bearer. Do NOT switch rotation to a
       // reconnect: that would replay the stale ctor-time `authToken`.
       authToken: token() ?? "",
+      // #1379 — the protocol declaration the 426 gate reads
+      // (`UserSocket.check_protocol_version/1`). It rides `params`, i.e. the
+      // query string, precisely where the bearer above must NOT: the version
+      // is public discovery data (also served unauth at `GET /api/config`),
+      // so the #95/#202 off-the-URL rule — which is about the secret bearer —
+      // does not reach it. Two orthogonal channels, no collision.
+      //
+      // `params` rather than the endpoint string because phoenix glues
+      // `/websocket` onto the endpoint by concatenation and only params are
+      // appended after that (see `socketEndpoint`). Unlike `authToken`, this
+      // is a constant, so its re-evaluation on every handshake is a no-op and
+      // the ctor-capture caveat above does not apply.
+      params: { client_proto: CLIENT_PROTOCOL_VERSION },
     });
     // SocketHealth wiring — single install at construction time so the
     // banner reflects every transition, including silent retry loops
