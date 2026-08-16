@@ -90,6 +90,10 @@ export type AccountsAdminWireT = {
   live_session_count: number;
 };
 
+export type AccountsAdminWireIndexPayload = {
+  users: AccountsAdminWireT[];
+};
+
 // === Grappa.Accounts.Wire ===
 
 export type AccountsWireUserJson = {
@@ -550,6 +554,10 @@ export type LiveIntrospectionAdminWireT = {
   live_state: LiveIntrospectionAdminWireLiveStateJson;
 };
 
+export type LiveIntrospectionAdminWireIndexPayload = {
+  sessions: LiveIntrospectionAdminWireT[];
+};
+
 // === Grappa.Networks.AdminWire ===
 
 export type NetworksAdminWireT = {
@@ -600,6 +608,10 @@ export type NetworksCredentialsAdminWireT = {
   live_state: NetworksCredentialsAdminWireLiveStateJson | null;
 };
 
+export type NetworksCredentialsAdminWireIndexPayload = {
+  credentials: NetworksCredentialsAdminWireT[];
+};
+
 export const NETWORKS_CREDENTIALS_ADMIN_WIRE_SESSION_ACTION = [
   "left_alone",
   "stopped",
@@ -634,6 +646,10 @@ export type NetworksFeaturedChannelsAdminWireT = {
   updated_at: string;
 };
 
+export type NetworksFeaturedChannelsAdminWireIndexPayload = {
+  featured_channels: NetworksFeaturedChannelsAdminWireT[];
+};
+
 // === Grappa.Networks.FeaturedChannels.Wire ===
 
 export type NetworksFeaturedChannelsWireLink = {
@@ -658,6 +674,10 @@ export type NetworksServersAdminWireT = {
   source_address: string | null;
   inserted_at: string;
   updated_at: string;
+};
+
+export type NetworksServersAdminWireIndexPayload = {
+  servers: NetworksServersAdminWireT[];
 };
 
 // === Grappa.Networks.Wire ===
@@ -1454,6 +1474,10 @@ export type VisitorsAdminWireT = {
   inserted_at: string;
   last_seen_at: string | null;
   networks: VisitorsAdminWireNetworkJson[];
+};
+
+export type VisitorsAdminWireIndexPayload = {
+  visitors: VisitorsAdminWireT[];
 };
 
 // === Grappa.Visitors.Wire ===
