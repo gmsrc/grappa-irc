@@ -158,12 +158,19 @@ defmodule GrappaWeb.Admin.SettingsController do
         :ok
 
       subtree when is_map(subtree) ->
-        with :ok <- reject_unknown_keys(subtree, allowed, key) do
-          Enum.reduce_while(subtree, :ok, fn {k, v}, _ -> halt_or_cont(fun.(k, v)) end)
-        end
+        apply_known_keys(subtree, allowed, key, fun)
 
       _ ->
         {:error, :bad_request}
+    end
+  end
+
+  # Gate then fold, in that order — see `reject_unknown_keys/3` for why the
+  # gate cannot move after the fold. Its own function so neither the guard
+  # nor the fold lambda nests inside the shape `case` above.
+  defp apply_known_keys(subtree, allowed, key, fun) do
+    with :ok <- reject_unknown_keys(subtree, allowed, key) do
+      Enum.reduce_while(subtree, :ok, fn {k, v}, _ -> halt_or_cont(fun.(k, v)) end)
     end
   end
 
