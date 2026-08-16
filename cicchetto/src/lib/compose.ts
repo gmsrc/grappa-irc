@@ -871,6 +871,34 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       return ch;
     };
 
+    // #1396 — the network twin of requireChannel: a SLUG resolves to the live
+    // network id, or to the inline error the operator reads. It carries the
+    // one message 35 arms used to spell out for themselves. (A 36th arm
+    // resolves a network id and is NOT routed here — bare /query's close path
+    // asks about a different network; see the comment there.)
+    //
+    // Three properties, each of which a "resolve it once at the top" rewrite
+    // would quietly drop, and each pinned by a test that fails on the
+    // corresponding mutant:
+    //
+    //   * The slug is a PARAMETER, never `networkSlug` closed over. Two arms
+    //     resolve a different one — /recover takes `cmd.network ?? networkSlug`
+    //     and bare /query the SELECTED window's, which can diverge from the
+    //     submitting one when a submit is queued across a window switch.
+    //   * Called FROM the arm, so resolution stays LAZY: 14 arms never ask,
+    //     because the REST verbs address the network by slug, and resolving
+    //     eagerly would reject submissions that succeed today.
+    //   * Called at the arm's own guard position, so the ORDER holds: 13 arms
+    //     check `requireChannel` first, and when both would fail the operator
+    //     must still see the channel error.
+    //
+    // `subject` opens the message and is the bare verb at every site it serves.
+    const requireNetworkId = (slug: string, subject: string): number | { error: string } => {
+      const id = networkIdBySlug(slug);
+      if (id === undefined) return { error: `/${subject}: network not found` };
+      return id;
+    };
+
     // #122 + #132 + #137 — bare /whois (and /w alias) context-default
     // resolver, the nick twin of requireChannel. The rule collapses to:
     //   * query window → the query partner's nick (#122).
@@ -1024,8 +1052,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
             result = { ok: true };
             break;
           }
-          const ctcpNetworkId = networkIdBySlug(networkSlug);
-          if (ctcpNetworkId === undefined) return { error: "/ctcp: network not found" };
+          const ctcpNetworkId = requireNetworkId(networkSlug, "ctcp");
+          if (typeof ctcpNetworkId !== "number") return ctcpNetworkId;
           // Everything else is a control-surface probe and goes through the
           // #1192 seam, which owns the #640 source-window echo and the #600
           // register-before-send ordering.
@@ -1056,8 +1084,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // belong to the seam, and did not survive being held by hand once a
         // third caller appeared.
         case "ping": {
-          const pingNetworkId = networkIdBySlug(networkSlug);
-          if (pingNetworkId === undefined) return { error: "/ping: network not found" };
+          const pingNetworkId = requireNetworkId(networkSlug, "ping");
+          if (typeof pingNetworkId !== "number") return pingNetworkId;
           const sentAtMs = Date.now();
           await sendCtcpQuery({
             networkSlug,
@@ -1174,8 +1202,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
               error:
                 "/topic -delete requires a channel — switch to one or use /topic #chan -delete",
             };
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/topic -delete: network not found" };
+          const networkId = requireNetworkId(networkSlug, "topic -delete");
+          if (typeof networkId !== "number") return networkId;
           // S21: AWAIT the verb ack (#154 no-silent-drops). A WS-down / server
           // {:error,_} now rejects into the shared catch → friendlyChannelError
           // inline alert, instead of painting a green ✓ on a dropped frame.
@@ -1205,8 +1233,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // services query window would just sit empty. The wire frame
           // still ships (operator's IDENTIFY reaches NickServ); only
           // the optimistic UI-state mutations are skipped.
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/msg: network not found" };
+          const networkId = requireNetworkId(networkSlug, "msg");
+          if (typeof networkId !== "number") return networkId;
           if (isServicesSender(cmd.target)) {
             // #666 — resumable + paced; residue keyed on the source window
             // `key`, because a services target opens no query window to move
@@ -1311,6 +1339,14 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           if (cmd.target === null) {
             const sel = selectedChannel();
             if (sel?.kind === "query") {
+              // #1396 — the one guard NOT routed through `requireNetworkId`.
+              // It is not the same guard: every other site asks "is the
+              // network this operator is typing in live?", this one asks it of
+              // a DIFFERENT network, and its copy has always said so. The
+              // shared message is `/<subject>: network not found`, which
+              // cannot spell "selected window's network" without an extra
+              // colon — so forcing it through would change operator-visible
+              // copy to buy uniformity, which is the wrong trade in a refactor.
               const selNetId = networkIdBySlug(sel.networkSlug);
               if (selNetId === undefined)
                 return { error: "/query: selected window's network not found" };
@@ -1322,8 +1358,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
               error: "/query <nick> required (bare /query closes the current query window only)",
             };
           }
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/query: network not found" };
+          const networkId = requireNetworkId(networkSlug, "query");
+          if (typeof networkId !== "number") return networkId;
           if (isServicesSender(cmd.target)) {
             return {
               error: `/query: ${cmd.target} is a services nick; responses land in the server window — use /msg ${cmd.target} <command>`,
@@ -1417,8 +1453,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "op": {
           const chanOrErr = requireChannel("op");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/op: network not found" };
+          const networkId = requireNetworkId(networkSlug, "op");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelOp(networkId, chanOrErr, cmd.nicks);
           result = { ok: true };
           break;
@@ -1426,8 +1462,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "deop": {
           const chanOrErr = requireChannel("deop");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/deop: network not found" };
+          const networkId = requireNetworkId(networkSlug, "deop");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelDeop(networkId, chanOrErr, cmd.nicks);
           result = { ok: true };
           break;
@@ -1435,8 +1471,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "voice": {
           const chanOrErr = requireChannel("voice");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/voice: network not found" };
+          const networkId = requireNetworkId(networkSlug, "voice");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelVoice(networkId, chanOrErr, cmd.nicks);
           result = { ok: true };
           break;
@@ -1444,8 +1480,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "devoice": {
           const chanOrErr = requireChannel("devoice");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/devoice: network not found" };
+          const networkId = requireNetworkId(networkSlug, "devoice");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelDevoice(networkId, chanOrErr, cmd.nicks);
           result = { ok: true };
           break;
@@ -1453,8 +1489,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "kick": {
           const chanOrErr = requireChannel("kick");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/kick: network not found" };
+          const networkId = requireNetworkId(networkSlug, "kick");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelKick(networkId, chanOrErr, cmd.nick, cmd.reason);
           result = { ok: true };
           break;
@@ -1462,8 +1498,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "ban": {
           const chanOrErr = requireChannel("ban");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/ban: network not found" };
+          const networkId = requireNetworkId(networkSlug, "ban");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelBan(networkId, chanOrErr, cmd.mask);
           result = { ok: true };
           break;
@@ -1478,8 +1514,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // surfaced.
           const chanOrErr = requireChannel("kb");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/kb: network not found" };
+          const networkId = requireNetworkId(networkSlug, "kb");
+          if (typeof networkId !== "number") return networkId;
 
           let banError: string | null = null;
           try {
@@ -1521,8 +1557,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // push so a WS-down / server {:error,_} surfaces as an inline compose
         // alert, never a silent green ✓ (the #154 no-silent-drop lesson).
         case "kill": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/kill: network not found" };
+          const networkId = requireNetworkId(networkSlug, "kill");
+          if (typeof networkId !== "number") return networkId;
           const line = cmd.reason === "" ? `KILL ${cmd.nick}` : `KILL ${cmd.nick} :${cmd.reason}`;
           await pushRaw(networkId, line);
           result = { ok: true };
@@ -1531,8 +1567,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "unban": {
           const chanOrErr = requireChannel("unban");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/unban: network not found" };
+          const networkId = requireNetworkId(networkSlug, "unban");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelUnban(networkId, chanOrErr, cmd.mask);
           result = { ok: true };
           break;
@@ -1548,8 +1584,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // every channel-scoped verb uses).
           const chanOrErr = cmd.channel ?? requireChannel("banlist");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/banlist: network not found" };
+          const networkId = requireNetworkId(networkSlug, "banlist");
+          if (typeof networkId !== "number") return networkId;
           // #1251 — an explicitly typed letter this network cannot answer is
           // an ERROR, not a silent fallback to bans: the operator asked for a
           // specific list and would otherwise read the ban list as the
@@ -1581,8 +1617,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
             if (typeof chanOrErr !== "string") return chanOrErr;
             chan = chanOrErr;
           }
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/invite: network not found" };
+          const networkId = requireNetworkId(networkSlug, "invite");
+          if (typeof networkId !== "number") return networkId;
           // S6 (#364): await the verb-ack so a server {:error,_} / WS-down
           // surfaces inline (shared catch → friendlyChannelError), not a
           // false green ✓. Mirror of kick/ban.
@@ -1592,8 +1628,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         }
         case "umode": {
           // /umode — user-mode on own nick, no channel context required.
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/umode: network not found" };
+          const networkId = requireNetworkId(networkSlug, "umode");
+          if (typeof networkId !== "number") return networkId;
           await pushChannelUmode(networkId, cmd.modes);
           result = { ok: true };
           break;
@@ -1630,8 +1666,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // /mode <#chan> <modes> [params] — execute directly, raw
           // verbatim, target explicit in args. No modal, no channel-window
           // requirement (#216: mode-args present → apply).
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/mode: network not found" };
+          const networkId = requireNetworkId(networkSlug, "mode");
+          if (typeof networkId !== "number") return networkId;
           // #536/#1251 — a bare list letter with NO mask is a QUERY, not a
           // mutation: open the list modal instead of putting a raw MODE on
           // the wire whose reply rows nothing is primed to collect.
@@ -1663,8 +1699,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // modal; requires a channel window.
           const chanOrErr = requireChannel("mode");
           if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/mode: network not found" };
+          const networkId = requireNetworkId(networkSlug, "mode");
+          if (typeof networkId !== "number") return networkId;
           // #536/#1251 — same list-QUERY interception as the explicit-channel
           // arm above; `/mode +b` and `/mode #chan +b` must behave alike.
           const listMode = listModeQueryLetter(cmd.modes, cmd.params, networkId);
@@ -1700,8 +1736,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // requireChannel resolver with /names); errors only outside one.
           const target = cmd.target ?? requireChannel("who");
           if (typeof target !== "string") return target;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/who: network not found" };
+          const networkId = requireNetworkId(networkSlug, "who");
+          if (typeof networkId !== "number") return networkId;
           await pushWho(networkId, target); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
@@ -1716,8 +1752,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // channel (shares the requireChannel resolver with /who).
           const target = cmd.target ?? requireChannel("names");
           if (typeof target !== "string") return target;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/names: network not found" };
+          const networkId = requireNetworkId(networkSlug, "names");
+          if (typeof networkId !== "number") return networkId;
           await pushNames(networkId, target); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
@@ -1744,8 +1780,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // focus change + no scrollback rows (mirrors /who + /names). An empty
           // bundle (restricted/oper-only network) still opens the modal to the
           // "hides topology" state. `cmd.pattern` is the optional server mask.
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/links: network not found" };
+          const networkId = requireNetworkId(networkSlug, "links");
+          if (typeof networkId !== "number") return networkId;
           await pushLinks(networkId, cmd.pattern); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
@@ -1761,8 +1797,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // shared friendlyError catch.
         case "recover": {
           const targetSlug = cmd.network ?? networkSlug;
-          const networkId = networkIdBySlug(targetSlug);
-          if (networkId === undefined) return { error: "/recover: network not found" };
+          const networkId = requireNetworkId(targetSlug, "recover");
+          if (typeof networkId !== "number") return networkId;
           try {
             await pushRecover(networkId);
           } catch (e) {
@@ -1783,8 +1819,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // the parser, so a routed request silently answered from the local
         // server and any mask never reached the wire at all).
         case "lusers": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/lusers: network not found" };
+          const networkId = requireNetworkId(networkSlug, "lusers");
+          if (typeof networkId !== "number") return networkId;
           // #248 — mark the request solicited BEFORE pushing so the
           // incoming bundle surfaces the card. The store's gate drops
           // any unsolicited bundle (the Bahamut connect-welcome
@@ -1800,22 +1836,22 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // burst drains a typed `server_reply` event that userTopic.ts routes
         // into the serverReplyModal store (ServerReplyModal renders it).
         case "info": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/info: network not found" };
+          const networkId = requireNetworkId(networkSlug, "info");
+          if (typeof networkId !== "number") return networkId;
           await pushInfo(networkId); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
         }
         case "version": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/version: network not found" };
+          const networkId = requireNetworkId(networkSlug, "version");
+          if (typeof networkId !== "number") return networkId;
           await pushVersion(networkId); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
         }
         case "motd": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/motd: network not found" };
+          const networkId = requireNetworkId(networkSlug, "motd");
+          if (typeof networkId !== "number") return networkId;
           // #374 — thread the optional target server through so grappa emits
           // `MOTD <target>` upstream (or bare MOTD when null). A 402
           // ERR_NOSUCHSERVER for an unknown target surfaces via the same
@@ -1827,8 +1863,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // #992 — /admin [<target>]. Same door as /motd; the reply lands in
         // the same server_reply modal under the `admin` source.
         case "admin": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/admin: network not found" };
+          const networkId = requireNetworkId(networkSlug, "admin");
+          if (typeof networkId !== "number") return networkId;
           await pushAdmin(networkId, cmd.target); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
@@ -1847,8 +1883,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // {:error,_} surfaces as an inline compose error instead of a silent
         // green ✓ (the #154 no-silent-drop lesson).
         case "stats": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/stats: network not found" };
+          const networkId = requireNetworkId(networkSlug, "stats");
+          if (typeof networkId !== "number") return networkId;
           // STATS [query] [server] — omit trailing nulls. IRC STATS is a
           // 2-arg frame; the parser guarantees target is only set when query
           // is, so filtering nulls preserves positional order.
@@ -1860,8 +1896,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "rehash": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/rehash: network not found" };
+          const networkId = requireNetworkId(networkSlug, "rehash");
+          if (typeof networkId !== "number") return networkId;
           // REHASH [option] — omit a null option (bare /rehash → "REHASH",
           // the default full-config reload). #375: mirror the /stats null
           // filter so the option (MOTD/DNS/GC/…) rides the raw frame instead
@@ -1886,8 +1922,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           // query window → partner; every other network-scoped window → self.
           const nick = cmd.nick ?? resolveBareWhoisNick("whois");
           if (typeof nick !== "string") return nick;
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/whois: network not found" };
+          const networkId = requireNetworkId(networkSlug, "whois");
+          if (typeof networkId !== "number") return networkId;
           // #198 — cmd.server is set only for the two-arg `/whois <server>
           // <nick>` form; null for single-arg + bare. The bouncer emits
           // `WHOIS <server> <nick>` upstream when present, plain `WHOIS
@@ -1905,8 +1941,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // (handled by userTopic.ts → setWhowasBundle), or as a
         // not_found bundle on 406 ERR_WASNOSUCHNICK.
         case "whowas": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/whowas: network not found" };
+          const networkId = requireNetworkId(networkSlug, "whowas");
+          if (typeof networkId !== "number") return networkId;
           await pushWhowas(networkId, cmd.nick); // S6 (#364): await verb-ack
           result = { ok: true };
           break;
@@ -1939,8 +1975,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // reading watchByNetwork() here would race. Removal is the settings
         // × (bare /notify opens it). Per-network: the active window's network.
         case "notify": {
-          if (networkIdBySlug(networkSlug) === undefined)
-            return { error: "/notify: network not found" };
+          // The id is not used — this arm addresses the network by SLUG over
+          // REST — but the network must still exist, so the check is kept and
+          // the value deliberately discarded.
+          const notifyNet = requireNetworkId(networkSlug, "notify");
+          if (typeof notifyNet !== "number") return notifyNet;
           await postNotifyAdd(t, networkSlug, cmd.nicks);
           result = { ok: `notify: watching ${cmd.nicks.join(", ")}` };
           break;
@@ -1960,8 +1999,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // so disconnected/error replies surface as inline compose-box
         // alerts (no silent green ✓ on a dropped escape-hatch frame).
         case "quote": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/quote: network not found" };
+          const networkId = requireNetworkId(networkSlug, "quote");
+          if (typeof networkId !== "number") return networkId;
           await pushRaw(networkId, cmd.line);
           result = { ok: true };
           break;
@@ -1976,8 +2015,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // the server-side validator rejects (CLAUDE.md
         // `feedback_no_silent_drops_closed`).
         case "oper": {
-          const networkId = networkIdBySlug(networkSlug);
-          if (networkId === undefined) return { error: "/oper: network not found" };
+          const networkId = requireNetworkId(networkSlug, "oper");
+          if (typeof networkId !== "number") return networkId;
           await pushOper(networkId, cmd.name, cmd.password);
           result = { ok: true };
           break;
