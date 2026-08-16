@@ -1,5 +1,11 @@
 // #1247 — an ops-only NOTICE (`NOTICE @#chan`) must READ as ops-only.
 //
+// #1302 changed HOW it reads: the visible row carries the SIGIL, and the
+// word moved to the accessible name, derived per network from `PREFIX=`.
+// Both are asserted here — the name is what a screen reader is given, so a
+// spec that checked only the glyph would let the whole point of the badge
+// regress silently.
+//
 // #218 fixed the routing half: the row lands in the channel window. It did
 // NOT record WHICH level delivered it — `strip_statusmsg_target/2` peeled the
 // sigil to route and dropped it, so neither the scrollback row nor the PubSub
@@ -71,10 +77,15 @@ test("#1247 — an ops-only NOTICE is badged on arrival AND after a reload", asy
 
     peer.notice(`@${channel}`, body);
 
-    // LIVE: the badge off the broadcast.
+    // LIVE: the badge off the broadcast. The sigil is what the row shows;
+    // the name is derived from the PREFIX this network really advertised,
+    // so this assertion also proves the 005 reached the badge — on a client
+    // holding no capability table it would read "delivered to @ only".
     const liveRow = scrollbackLine(page, "notice", body);
     await expect(liveRow).toBeVisible({ timeout: 15_000 });
-    await expect(liveRow.getByTestId("statusmsg-badge")).toHaveText("ops-only");
+    const liveBadge = liveRow.getByTestId("statusmsg-badge");
+    await expect(liveBadge).toHaveText("@");
+    await expect(liveBadge).toHaveAccessibleName("delivered to ops only");
 
     // RELOADED: the badge off the persisted row. Pre-fix BOTH of these fail;
     // with the level on the broadcast only, this one alone fails.
@@ -84,7 +95,14 @@ test("#1247 — an ops-only NOTICE is badged on arrival AND after a reload", asy
 
     const reloadedRow = scrollbackLine(page, "notice", body);
     await expect(reloadedRow).toBeVisible({ timeout: 15_000 });
-    await expect(reloadedRow.getByTestId("statusmsg-badge")).toHaveText("ops-only");
+    const reloadedBadge = reloadedRow.getByTestId("statusmsg-badge");
+    await expect(reloadedBadge).toHaveText("@");
+    // The name has to survive the reload too: it is derived from the
+    // ISUPPORT table, which after a reload arrives by a DIFFERENT door (the
+    // cold subscribe snapshot, not the live 005 edge). A badge that named
+    // the level only while the live table was warm would pass the line
+    // above and still be broken for anyone who refreshes.
+    await expect(reloadedBadge).toHaveAccessibleName("delivered to ops only");
   } finally {
     await peer.disconnect("issue1247 done");
     // `/join` persists the channel into vjt's autojoin set; PART restores
