@@ -189,9 +189,22 @@ defmodule Grappa.Session.EventRouter do
   @typedoc """
   Network-wide WHOIS-userhost cache. Keyed by **lowercased** nick (RFC 2812
   §2.2 nick comparisons are case-insensitive). Updated on JOIN/311/352
-  (population) and evicted on QUIT/PART/KICK/NICK (lifecycle events). Cache
-  is bounded by unique nicks across currently-joined channels — typically
-  <500 entries for normal usage. No LRU or cap in this version.
+  (population) and evicted on QUIT/PART/KICK/NICK (lifecycle events).
+
+  Population and eviction do NOT cover the same set of nicks, and that gap
+  is why the cache carries an explicit ceiling (`userhost_cache_cap/0`).
+  Population is unconditional at all three sites — a 311 or 352 for someone
+  we share no channel with lands here like any other. Eviction is entirely
+  membership-driven, and IRC never delivers a QUIT for a user we do not
+  share a channel with, so those entries have NO lifecycle trigger: absent a
+  ceiling they live for the process lifetime of an always-on session, and a
+  masked WHO answers with as many of them as the network has users.
+
+  At the ceiling the cache keeps at most half the cap, and only entries
+  whose nick still shares a channel with us — the ones eviction can still
+  reach. Dropping the rest is free: this is a best-effort ban-mask helper
+  and a miss falls back to WHOIS, which is authoritative (see
+  `Grappa.Session`'s `:send_ban` derivation).
   """
   @type userhost_cache :: %{(nick :: String.t()) => userhost_entry()}
 
@@ -557,8 +570,11 @@ defmodule Grappa.Session.EventRouter do
     userhost_cache =
       case msg.prefix do
         {:nick, nick, user, host} when is_binary(user) and is_binary(host) ->
+          # Against the members map the JOIN just produced, not the one
+          # before it: the joining nick is resident from this moment, and a
+          # prune reading the stale map would treat them as a stranger.
           nick_key = normalize_nick(nick, casemapping(state))
-          Map.put(Map.get(state, :userhost_cache, %{}), nick_key, %{user: user, host: host})
+          cache_put(%{state | members: members}, nick_key, %{user: user, host: host})
 
         _ ->
           Map.get(state, :userhost_cache, %{})
@@ -1202,7 +1218,7 @@ defmodule Grappa.Session.EventRouter do
        )
        when is_binary(target) and is_binary(user) and is_binary(host) do
     nick_key = normalize_nick(target, casemapping(state))
-    cache = Map.put(Map.get(state, :userhost_cache, %{}), nick_key, %{user: user, host: host})
+    cache = cache_put(state, nick_key, %{user: user, host: host})
     realname = whois_trailing(rest)
 
     state =
@@ -1694,7 +1710,7 @@ defmodule Grappa.Session.EventRouter do
        when is_binary(target) and is_binary(user) and is_binary(host) and
               is_binary(channel) and is_binary(server) and is_binary(flags) do
     nick_key = normalize_nick(target, casemapping(state))
-    cache = Map.put(Map.get(state, :userhost_cache, %{}), nick_key, %{user: user, host: host})
+    cache = cache_put(state, nick_key, %{user: user, host: host})
 
     state_with_cache = %{state | userhost_cache: cache}
 
@@ -2724,6 +2740,72 @@ defmodule Grappa.Session.EventRouter do
   defp apply_kick_effect(:absent, state, _, _) do
     cache = Map.get(state, :userhost_cache, %{})
     {state.members, Map.get(state, :topics, %{}), Map.get(state, :channel_modes, %{}), cache}
+  end
+
+  # The ceiling on `userhost_cache`. Chosen well above any membership a
+  # session accumulates by joining rooms, and far below a network's user
+  # list, which is what a masked WHO would otherwise pour in here.
+  @userhost_cache_cap 2_000
+
+  @doc """
+  The `userhost_cache` ceiling. Public so a test can drive the real bound
+  instead of restating the number and drifting from it.
+  """
+  @spec userhost_cache_cap() :: pos_integer()
+  def userhost_cache_cap, do: @userhost_cache_cap
+
+  # The ONLY door into `userhost_cache`. Every population site goes through
+  # here so the ceiling cannot be reintroduced-around by a fourth site.
+  #
+  # An overwrite of a key already present cannot grow the map, so it never
+  # prunes — refreshing an entry must not cost the operator their cache.
+  @spec cache_put(state(), String.t(), userhost_entry()) :: userhost_cache()
+  defp cache_put(state, nick_key, entry) do
+    cache = Map.get(state, :userhost_cache, %{})
+
+    cache =
+      if map_size(cache) >= @userhost_cache_cap and not is_map_key(cache, nick_key) do
+        prune_userhost_cache(cache, state)
+      else
+        cache
+      end
+
+    Map.put(cache, nick_key, entry)
+  end
+
+  # Keeps the entries lifecycle eviction can still reach (the nick shares a
+  # channel with us), and at most half the cap of them, so every prune frees
+  # at least half the cap. Without that second bound a session whose
+  # membership alone exceeds the cap would prune on EVERY inbound row, which
+  # turns the ceiling into the flood amplifier it exists to prevent.
+  #
+  # Which half survives is map order — arbitrary, and deliberately so: an LRU
+  # would need an access-order structure alongside the map, maintained by
+  # every one of the QUIT/PART/KICK/NICK eviction paths, and a drifted
+  # shadow index is a worse defect than an arbitrary victim in a
+  # best-effort cache whose miss costs one WHOIS.
+  @spec prune_userhost_cache(userhost_cache(), state()) :: userhost_cache()
+  defp prune_userhost_cache(cache, state) do
+    resident = resident_member_keys(state)
+
+    cache
+    |> Enum.filter(fn {nick_key, _entry} -> MapSet.member?(resident, nick_key) end)
+    |> Enum.take(div(@userhost_cache_cap, 2))
+    |> Map.new()
+  end
+
+  # The members map is keyed by RAW nick (the key/display split); the cache
+  # is keyed by the fold. Fold here rather than comparing raw, or a peer
+  # whose case differs between JOIN and WHO reads as a non-member and gets
+  # evicted while still in the room.
+  @spec resident_member_keys(state()) :: MapSet.t(String.t())
+  defp resident_member_keys(state) do
+    casemapping = casemapping(state)
+
+    for {_channel, channel_members} <- Map.get(state, :members, %{}),
+        {nick, _modes} <- channel_members,
+        into: MapSet.new(),
+        do: normalize_nick(nick, casemapping)
   end
 
   @spec evict_cache_if_no_overlap(

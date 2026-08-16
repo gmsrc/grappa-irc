@@ -44324,3 +44324,51 @@ segment, and that `new URL(...).pathname` is exactly `/share`. The
 scrub is pinned by sampling `location.hash` INSIDE the mocked request
 rather than after it: "empty afterwards" is precisely what the old
 scrub-on-success produced, so only the ordering distinguishes them.
+## 2026-08-16 — #1404: ceilings for the stores a stranger fills
+
+Two more from the 2026-08-15 review, and they are the same defect twice.
+Stated at the level of the control, as the tracking issue asks.
+
+### The rule both share
+
+A store whose eviction is lifecycle-driven must also bound the entries the
+lifecycle can never reach. Neither store was missing an eviction; both
+evictions were correct for the entries they were written for. What was
+missing is that population and eviction covered DIFFERENT sets, and the
+difference was the part nobody chose — it was the residue between two
+rules, each locally right.
+
+That is the shape to look for in the next store: not "does it evict", but
+"does the set it evicts contain the set it admits".
+
+### The WHOIS-userhost cache
+
+It is populated from three doors and evicted on membership events, so an
+entry that arrives for someone we share no channel with is exactly the kind
+no membership event will ever name. The typedoc claimed a bound — "unique
+nicks across currently-joined channels" — that only ever described one of
+the three doors.
+
+The cache now has an explicit ceiling and ONE door (`cache_put/3`) that all
+three population sites pass through, so a fourth site cannot reintroduce the
+gap by simply not knowing about it. At the ceiling the cache keeps the
+entries membership eviction can still reach, and at most half the cap of
+them. That second bound is not tidiness: a session whose membership alone
+exceeded the cap would otherwise re-prune on every inbound row, and a
+ceiling that scans on every row is a better amplifier than the growth it
+replaced. Refreshing a key already present never prunes — an overwrite
+cannot grow a map, and spending the cache to re-learn a fact it already
+holds would be pure loss.
+
+**Which half survives is map order, deliberately.** An LRU wants an
+access-order structure beside the map, maintained by each of the eviction
+paths; a shadow index that drifts out of step with its map is a worse defect
+than an arbitrary victim in a cache that is best-effort by construction. The
+miss costs one WHOIS, and WHOIS was always the authoritative answer — the
+cache only ever saved the round trip.
+
+**Rejected: gating population on membership.** It would close the gap
+exactly, and it would also delete a feature: ban-mask derivation
+legitimately wants the answer for someone in no channel of ours. The ceiling
+keeps that use and bounds the abuse of it; the gate would have traded one
+for the other.

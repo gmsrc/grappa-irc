@@ -43,6 +43,24 @@ defmodule Grappa.Session.EventRouterTest do
     %Message{command: command, params: params, prefix: prefix, tags: %{}}
   end
 
+  # SEC-3 — a cache full of nicks we share no channel with: exactly the
+  # population a masked WHO produces, and the one no lifecycle event evicts.
+  defp stranger_cache(count) do
+    Map.new(1..count, fn i -> {"stranger#{i}", %{user: "u#{i}", host: "h#{i}"}} end)
+  end
+
+  defp whoreply(nick, user, host) do
+    msg(
+      {:numeric, 352},
+      ["vjt", "#italia", user, host, "irc.test.org", nick, "H", "0 Realname"],
+      {:server, "irc.test.org"}
+    )
+  end
+
+  defp whoisuser(nick, user, host) do
+    msg({:numeric, 311}, ["vjt", nick, user, host, "*", "Realname"], {:server, "irc.test.org"})
+  end
+
   # #388 — the solanum/OFTC shape. Those ircds ACK `account-notify`, and
   # since vjt's ruling of 2026-08-11 that ACK is what makes the services
   # ACCOUNT count as proof of identity rather than mere display. Every
@@ -3751,6 +3769,104 @@ defmodule Grappa.Session.EventRouterTest do
       # Stored under downcased key
       assert new_state.userhost_cache["alice"] == %{user: "alice_u", host: "alice.host"}
       refute Map.has_key?(new_state.userhost_cache, "Alice")
+    end
+  end
+
+  describe "route/2 — SEC-3 userhost_cache ceiling" do
+    test "352 for a stranger cannot grow the cache past the cap" do
+      cap = EventRouter.userhost_cache_cap()
+      state = base_state(%{userhost_cache: stranger_cache(cap)})
+
+      {:cont, new_state, _} = EventRouter.route(whoreply("newcomer", "n_u", "n.host"), state)
+
+      assert map_size(new_state.userhost_cache) <= cap
+      assert new_state.userhost_cache["newcomer"] == %{user: "n_u", host: "n.host"}
+    end
+
+    test "311 for a stranger cannot grow the cache past the cap" do
+      cap = EventRouter.userhost_cache_cap()
+      state = base_state(%{userhost_cache: stranger_cache(cap)})
+
+      {:cont, new_state, _} = EventRouter.route(whoisuser("newcomer", "n_u", "n.host"), state)
+
+      assert map_size(new_state.userhost_cache) <= cap
+      assert new_state.userhost_cache["newcomer"] == %{user: "n_u", host: "n.host"}
+    end
+
+    test "a JOIN prefix cannot grow the cache past the cap" do
+      cap = EventRouter.userhost_cache_cap()
+      state = base_state(%{userhost_cache: stranger_cache(cap)})
+      m = msg(:join, ["#italia"], {:nick, "newcomer", "n_u", "n.host"})
+
+      {:cont, new_state, _} = EventRouter.route(m, state)
+
+      assert map_size(new_state.userhost_cache) <= cap
+      assert new_state.userhost_cache["newcomer"] == %{user: "n_u", host: "n.host"}
+    end
+
+    test "the prune keeps a nick still sharing a channel and drops the strangers" do
+      cap = EventRouter.userhost_cache_cap()
+
+      state =
+        base_state(%{
+          members: %{"#italia" => %{"alice" => []}},
+          userhost_cache:
+            Map.put(stranger_cache(cap - 1), "alice", %{user: "alice_u", host: "alice.host"})
+        })
+
+      {:cont, new_state, _} = EventRouter.route(whoreply("newcomer", "n_u", "n.host"), state)
+
+      # Alice is still in the room, so her QUIT will still evict her — she is
+      # not the leak, and the ceiling must not spend her to make room.
+      assert new_state.userhost_cache["alice"] == %{user: "alice_u", host: "alice.host"}
+      assert new_state.userhost_cache["newcomer"] == %{user: "n_u", host: "n.host"}
+      refute Map.has_key?(new_state.userhost_cache, "stranger1")
+    end
+
+    test "the prune folds the members map before deciding who is resident" do
+      cap = EventRouter.userhost_cache_cap()
+
+      state =
+        base_state(%{
+          # Raw-cased in the members map (the key/display split), folded in
+          # the cache: comparing the two unfolded would evict a live member.
+          members: %{"#italia" => %{"Alice" => []}},
+          userhost_cache:
+            Map.put(stranger_cache(cap - 1), "alice", %{user: "alice_u", host: "alice.host"})
+        })
+
+      {:cont, new_state, _} = EventRouter.route(whoreply("newcomer", "n_u", "n.host"), state)
+
+      assert new_state.userhost_cache["alice"] == %{user: "alice_u", host: "alice.host"}
+    end
+
+    test "refreshing an entry at the ceiling does not spend the cache" do
+      cap = EventRouter.userhost_cache_cap()
+      state = base_state(%{userhost_cache: stranger_cache(cap)})
+
+      {:cont, new_state, _} = EventRouter.route(whoreply("stranger1", "fresh_u", "fresh.host"), state)
+
+      assert map_size(new_state.userhost_cache) == cap
+      assert new_state.userhost_cache["stranger1"] == %{user: "fresh_u", host: "fresh.host"}
+    end
+
+    test "every prune frees at least half the cap, so the next rows do not re-prune" do
+      cap = EventRouter.userhost_cache_cap()
+      # Membership alone above the ceiling: every entry is resident, so a
+      # residency filter on its own would leave the cache full and prune
+      # again on the very next row.
+      residents = Map.new(1..cap, fn i -> {"member#{i}", []} end)
+
+      state =
+        base_state(%{
+          members: %{"#italia" => residents},
+          userhost_cache:
+            Map.new(1..cap, fn i -> {"member#{i}", %{user: "u#{i}", host: "h#{i}"}} end)
+        })
+
+      {:cont, new_state, _} = EventRouter.route(whoreply("newcomer", "n_u", "n.host"), state)
+
+      assert map_size(new_state.userhost_cache) <= div(cap, 2) + 1
     end
   end
 
