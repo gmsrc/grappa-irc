@@ -2766,14 +2766,14 @@ defmodule Grappa.Session.EventRouter do
   defp cache_put(state, nick_key, entry) do
     cache = Map.get(state, :userhost_cache, %{})
 
-    cache =
+    capped =
       if map_size(cache) >= @userhost_cache_cap and not is_map_key(cache, nick_key) do
         prune_userhost_cache(cache, state)
       else
         cache
       end
 
-    Map.put(cache, nick_key, entry)
+    Map.put(capped, nick_key, entry)
   end
 
   # Keeps the entries lifecycle eviction can still reach (the nick shares a
@@ -2792,7 +2792,7 @@ defmodule Grappa.Session.EventRouter do
     resident = resident_member_keys(state)
 
     cache
-    |> Enum.filter(fn {nick_key, _entry} -> MapSet.member?(resident, nick_key) end)
+    |> Enum.filter(fn {nick_key, _} -> MapSet.member?(resident, nick_key) end)
     |> Enum.take(div(@userhost_cache_cap, 2))
     |> Map.new()
   end
@@ -2805,8 +2805,8 @@ defmodule Grappa.Session.EventRouter do
   defp resident_member_keys(state) do
     casemapping = casemapping(state)
 
-    for {_channel, channel_members} <- Map.get(state, :members, %{}),
-        {nick, _modes} <- channel_members,
+    for {_, channel_members} <- Map.get(state, :members, %{}),
+        {nick, _} <- channel_members,
         into: MapSet.new(),
         do: normalize_nick(nick, casemapping)
   end
