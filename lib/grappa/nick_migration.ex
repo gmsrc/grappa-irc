@@ -158,22 +158,30 @@ defmodule Grappa.NickMigration do
       when is_integer(network_id) and is_binary(network_slug) and is_binary(old_nick) and
              is_binary(new_nick) do
     if QueryWindows.exists?(subject, network_id, old_nick) do
-      migrate(fn ->
-        mute = UserSettings.rename_muted_target!(subject, network_slug, old_nick, new_nick)
-
-        case QueryWindows.rename(subject, network_id, old_nick, new_nick) do
-          {:ok, :renamed} ->
-            {:ok, rows} = Scrollback.rename_dm_peer(subject, network_id, old_nick, new_nick)
-            :ok = ReadCursor.rename_dm_peer(subject, network_id, old_nick, new_nick)
-            %{window: :renamed, rows: rows, mute: mute}
-
-          {:ok, :noop} ->
-            %{window: :noop, rows: 0, mute: mute}
-        end
-      end)
+      windowed_peer_renamed(subject, network_id, network_slug, old_nick, new_nick)
     else
       windowless_peer_renamed(subject, network_slug, old_nick, new_nick)
     end
+  end
+
+  # The migration path proper, unchanged by the #1378 gate that now guards it:
+  # same transaction, same retry, same order across the four stores.
+  @spec windowed_peer_renamed(Subject.t(), integer(), String.t(), String.t(), String.t()) ::
+          {:ok, peer_result()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  defp windowed_peer_renamed(subject, network_id, network_slug, old_nick, new_nick) do
+    migrate(fn ->
+      mute = UserSettings.rename_muted_target!(subject, network_slug, old_nick, new_nick)
+
+      case QueryWindows.rename(subject, network_id, old_nick, new_nick) do
+        {:ok, :renamed} ->
+          {:ok, rows} = Scrollback.rename_dm_peer(subject, network_id, old_nick, new_nick)
+          :ok = ReadCursor.rename_dm_peer(subject, network_id, old_nick, new_nick)
+          %{window: :renamed, rows: rows, mute: mute}
+
+        {:ok, :noop} ->
+          %{window: :noop, rows: 0, mute: mute}
+      end
+    end)
   end
 
   # #1378 — a peer we never queried is the OVERWHELMING case: IRC delivers a
