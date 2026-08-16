@@ -2534,8 +2534,24 @@ on an intentional bump:
 docker buildx imagetools inspect oven/bun:1 --format '{{.Manifest.Digest}}'
 ```
 
-`test/infra/base_image_digest_pin_test.bats` fails the build if any real
-image reference in a tracked build file loses its `@sha256:`.
+`test/infra/base_image_digest_pin_test.bats` fails the build if a real
+image reference in a tracked build file loses its `@sha256:` — for the
+families it covers, and only those. The pattern is `oven/bun:|nginx:alpine`,
+and the suite asserts that this sentence quotes it verbatim (#1408 D-S9),
+so widening the gate forces the claim to move with it.
+
+**Everything else in the tree is unpinned on purpose, and the reasons are
+listed in that file's header, next to the pattern.** The short version:
+locally built images have no bytes to pin; `ghcr.io/vjt/*` tags come from
+a shell variable; `alpine:3.24` is a deliberate FLOOR proved by
+`assert-abi-lockstep.sh` (below); the e2e-only third parties are test
+fixtures no operator ever pulls; and the Elixir toolchain base is pinned
+by TAG rather than digest — a weaker pin than it looks, gated separately
+by `test/infra/toolchain_pin_test.bats` (§ "The toolchain pin is the
+repo's pin, never the distro's"). This paragraph used to claim the suite
+covered "any real image reference", which was the review finding: an
+over-claimed gate is worse than a narrow one, because a narrow gate at
+least tells the truth about what it will catch.
 
 ## The two images: Dockerfile (toolchain) vs Dockerfile.release
 

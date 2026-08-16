@@ -23,10 +23,40 @@
 
 REPO_ROOT="$BATS_TEST_DIRNAME/../.."
 
+# The families this gate covers, as ONE string — the regex below and the
+# runbook's description of it both read from here (#1408 D-S9).
+#
+# It is deliberately NOT every image reference in the tree, and the last
+# test in this file is what stops the runbook from claiming otherwise.
+# What is left out, and why:
+#
+#   - `elixir:1.19-otp-28-alpine` (Dockerfile, Dockerfile.release) — the
+#     TAG carries the pin. It floats the alpine minor by design and the
+#     Elixir PATCH as a side effect, which is the toolchain-carrier
+#     problem, gated by test/infra/toolchain_pin_test.bats, not by a
+#     digest.
+#   - `alpine:3.24` (Dockerfile.release, Dockerfile.shottino) — an
+#     argued FLOOR, not a mirror of the build base; a digest would
+#     freeze it and stop security patches flowing. Proved instead by
+#     infra/docker/assert-abi-lockstep.sh.
+#   - locally built images (`grappa:latest`, `grappa:e2e`,
+#     `grappa-shottino:latest`, `grappa-e2e-push-catcher:dev`) — never
+#     pulled, so there are no bytes to pin.
+#   - own-org tags resolved from a variable (`ghcr.io/vjt/bahamut`,
+#     `ghcr.io/vjt/services`, `ghcr.io/vjt/grappa`) — a literal digest
+#     cannot express `${BAHAMUT_TAG:-main}`.
+#   - e2e-only third parties (`debian:trixie`, `node:22-alpine`,
+#     `alpine:3.20`, `axllent/mailpit`, the playwright runner base) —
+#     test-fixture images that never reach an operator.
+#
+# Adding a family here REQUIRES amending the runbook line the last test
+# reads; that is the whole point of the pin.
+PINNED_FAMILIES='oven/bun:|nginx:alpine'
+
 # Every reference to a pinned family in tracked build files, minus comments
 # and the docs/test prose trees. git grep -n → `path:line:content`.
 matched_refs() {
-    git -C "$REPO_ROOT" grep -nE 'oven/bun:|nginx:alpine' -- \
+    git -C "$REPO_ROOT" grep -nE "$PINNED_FAMILIES" -- \
         '*.sh' '*.yaml' '*.yml' '*Dockerfile*' ':!docs/**' ':!test/**' 2>/dev/null \
         | while IFS= read -r line; do
             content="${line#*:*:}"                        # strip `path:line:`
@@ -125,6 +155,29 @@ $(matched_refs | grep -F -- "$family@sha256:" | sed 's/^/    /')
     [ -z "$bad" ] || {
         echo "malformed digest(s) — expected sha256:<64 lowercase hex>:" >&2
         printf '%s\n' "$bad" >&2
+        return 1
+    }
+}
+
+@test "the runbook quotes this gate's family pattern verbatim (#1408)" {
+    # D-S9: the runbook used to describe this suite as failing "if any real
+    # image reference in a tracked build file loses its @sha256:". It covers
+    # two families. Ten-odd references sit outside them — the Elixir
+    # toolchain base among them — each for a reason recorded above, and none
+    # of them guarded by this file.
+    #
+    # An over-claimed gate is worse than a narrow one: the narrow gate at
+    # least tells the truth about what it will catch. So the runbook now
+    # carries the pattern ITSELF, byte-for-byte, and this is the pin that
+    # keeps the two equal. Widen PINNED_FAMILIES and the sentence describing
+    # it must move in the same commit.
+    local runbook="$REPO_ROOT/docs/OPERATIONS.md"
+
+    grep -qF -- "$PINNED_FAMILIES" "$runbook" || {
+        printf 'docs/OPERATIONS.md does not quote this gate'"'"'s pattern.\n' >&2
+        printf 'expected the literal string: %s\n' "$PINNED_FAMILIES" >&2
+        printf 'nearby runbook text:\n' >&2
+        grep -n 'base_image_digest_pin_test' "$runbook" >&2 || true
         return 1
     }
 }
