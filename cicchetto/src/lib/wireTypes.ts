@@ -61,7 +61,34 @@ export const SCROLLBACK_MESSAGE_KIND = [
 ] as const;
 export type ScrollbackMessageKind = (typeof SCROLLBACK_MESSAGE_KIND)[number];
 
-export type ScrollbackMetaT = Record<string, unknown>;
+export const SCROLLBACK_META_TKEY = [
+  "target",
+  "new_nick",
+  "modes",
+  "args",
+  "numeric",
+  "severity",
+  "who",
+  "who_target",
+  "names",
+  "names_target",
+  "raw_verb",
+  "raw_sender",
+  "raw_params",
+  "sender_user",
+  "sender_host",
+  "sender_prefix",
+  "sender_kind",
+  "ctcp_verb",
+  "ctcp_args",
+  "ctcp_target",
+  "notice_target",
+  "statusmsg",
+  "nick_fallback",
+] as const;
+export type ScrollbackMetaTKey = (typeof SCROLLBACK_META_TKEY)[number];
+
+export type ScrollbackMetaT = Partial<Record<ScrollbackMetaTKey, unknown>>;
 
 export type SessionISupportCasemapping = IRCIdentifierCasemapping;
 
