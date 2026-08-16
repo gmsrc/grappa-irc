@@ -180,7 +180,7 @@ export async function loginWithRecoveryCode(identifier: string, code: string): P
 // request: the consume endpoint already verified the one-shot signed
 // token + minted a fresh accounts_sessions row for the SAME subject
 // (#1306 — a user or a visitor; the token itself carries which).
-// Callers (the `/share/:token` SPA route) need a write path that lands
+// Callers (the `/share` SPA route) need a write path that lands
 // on the same localStorage keys without re-running the credential
 // dance. Without an explicit helper, the consume route would either
 // reach for the module-private SUBJECT_KEY or duplicate the JSON write

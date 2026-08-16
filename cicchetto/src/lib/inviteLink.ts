@@ -19,7 +19,7 @@ import { createToastQueue } from "./toasts";
 // path-prefix collision with the SPA routes)"*. The first shipment read
 // `/<network>/<channel>` from `location.pathname` instead, which put every
 // invite in the same namespace as every present and future client route —
-// `/login`, `/share/:token`, and whatever comes next — and needed a
+// `/login`, `/share`, and whatever comes next — and needed a
 // reserved-segment denylist to keep them apart. A query param has no such
 // namespace to share, so the denylist is gone with it.
 //

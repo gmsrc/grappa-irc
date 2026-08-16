@@ -1,14 +1,21 @@
 import { render, screen, waitFor } from "@solidjs/testing-library";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// #1404 — the token arrives in the fragment, so there is no `useParams` to
+// mock any more: the component reads `window.location.hash` and jsdom gives
+// us a real one. Mocking a param accessor here would have re-created the
+// path-shaped world in the test while production had left it.
 const routerHolder = vi.hoisted(() => ({
   navigate: vi.fn(),
-  params: { token: "signed-payload" } as { token: string },
 }));
 vi.mock("@solidjs/router", () => ({
   useNavigate: () => routerHolder.navigate,
-  useParams: () => routerHolder.params,
 }));
+
+// Put a token in the address bar the way a followed link would.
+const landOn = (hash: string) => {
+  window.history.replaceState(null, "", `/share${hash}`);
+};
 
 const apiHolder = vi.hoisted(() => ({
   consumeShareToken: vi.fn(),
@@ -34,7 +41,7 @@ import ShareConsume from "../ShareConsume";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  routerHolder.params = { token: "signed-payload" };
+  landOn("#signed-payload");
 });
 
 describe("ShareConsume", () => {
@@ -96,5 +103,63 @@ describe("ShareConsume", () => {
     screen.getByTestId("share-consume-go-login").click();
 
     expect(routerHolder.navigate).toHaveBeenCalledWith("/login", { replace: true });
+  });
+
+  // #1404 — the fragment keeps the token off the wire; these three keep it
+  // out of the address bar and out of history, which is the other half.
+  describe("the token does not linger in the URL", () => {
+    it("is already gone from the bar by the time the request goes out", async () => {
+      // Pre-state: the bar really does carry the token before we render.
+      // Without this the assertions below would also pass on a component
+      // that never saw a fragment at all.
+      expect(window.location.hash).toBe("#signed-payload");
+
+      // Sampled INSIDE the call rather than after it: "empty afterwards" is
+      // what scrubbing on success also produced, and that left every failed
+      // or unredeemed link sitting in the bar. The property is ordering.
+      let hashDuringRequest: string | null = null;
+      apiHolder.consumeShareToken.mockImplementation(async (token: string) => {
+        hashDuringRequest = window.location.hash;
+        return {
+          token: `bearer-for-${token}`,
+          subject: { kind: "visitor", id: "v1", registered: false },
+        };
+      });
+
+      render(() => <ShareConsume />);
+
+      await waitFor(() => {
+        expect(apiHolder.consumeShareToken).toHaveBeenCalledWith("signed-payload");
+      });
+
+      expect(hashDuringRequest).toBe("");
+      expect(window.location.pathname).toBe("/share");
+    });
+
+    it("is gone after a REFUSED consume too, not only a successful one", async () => {
+      apiHolder.consumeShareToken.mockRejectedValue(new Error("share_token_consumed"));
+
+      render(() => <ShareConsume />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("share-consume-error").textContent).toBe("share_token_consumed");
+      });
+
+      // The link that failed is the one most likely to be reopened or
+      // forwarded again while it is still live.
+      expect(window.location.hash).toBe("");
+    });
+
+    it("answers missing_token locally when there is no fragment, spending no request", async () => {
+      landOn("");
+
+      render(() => <ShareConsume />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId("share-consume-error").textContent).toBe("missing_token");
+      });
+
+      expect(apiHolder.consumeShareToken).not.toHaveBeenCalled();
+    });
   });
 });

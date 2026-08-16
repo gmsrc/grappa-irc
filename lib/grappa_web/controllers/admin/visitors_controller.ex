@@ -98,8 +98,10 @@ defmodule GrappaWeb.Admin.VisitorsController do
   @doc """
   Mint a share link for a visitor who can no longer authenticate as
   themselves (#982). Returns `200` + `{token, expires_at}`; wrapping it
-  into `https://<host>/#/share/<token>` stays the client's job, as on
-  the visitor-side mint.
+  into `https://<host>/share#<token>` stays the client's job, as on
+  the visitor-side mint. The token belongs in the FRAGMENT and not in
+  the path (#1404) — see `ShareTokenController`'s moduledoc for why;
+  an operator-minted link is logged by the same proxies as any other.
 
   Refuses an incognito visitor with 403 (#363) and an unknown id with
   404, the same 404 the `DELETE` verb returns.

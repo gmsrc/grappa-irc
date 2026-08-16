@@ -52,9 +52,15 @@ describe("ShareSessionModal (#392)", () => {
     expect(qr.querySelector("svg")).not.toBeNull();
     expect(qr.className).toContain("qr-frame");
 
-    // The link the user sends to themselves.
+    // The link the user sends to themselves. #1404 — the token is in the
+    // FRAGMENT. Asserted as three separate properties rather than one
+    // `toContain`, because "the URL happens to have the token somewhere in
+    // it" is exactly what the path form also satisfied: the token must sit
+    // after the `#`, and the path must carry no token segment at all.
     const url = (await screen.findByTestId("share-url")) as HTMLInputElement;
-    expect(url.value).toContain("/share/SHARETOK");
+    expect(url.value).toContain("/share#SHARETOK");
+    expect(url.value).not.toContain("/share/");
+    expect(new URL(url.value).pathname).toBe("/share");
 
     // #462 — the dialog's own title is the third rendering of the shared
     // name, so it comes from the constant like the other two.
@@ -122,7 +128,7 @@ describe("ShareSessionModal (#392)", () => {
     mintShareToken.mockResolvedValue({ token: "FRESH", expires_at: futureIso() });
     openShareModal();
     const url = (await screen.findByTestId("share-url")) as HTMLInputElement;
-    expect(url.value).toContain("/share/FRESH");
+    expect(url.value).toContain("/share#FRESH");
     expect(url.value).not.toContain("LATE");
   });
 });

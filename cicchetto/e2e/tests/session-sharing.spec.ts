@@ -136,12 +136,13 @@ for (const shareClass of SHARE_CLASSES) {
       await expect(urlInput).not.toHaveValue("", { timeout: 10_000 });
 
       const shareUrl = await urlInput.inputValue();
-      expect(shareUrl).toMatch(/\/share\//);
+      expect(shareUrl).toMatch(/\/share#/);
 
-      // Device B navigates to the share URL. Plain path (NOT hash) —
-      // `@solidjs/router` v0.16 uses path-mode by default; the SPA
-      // fallback serves any unknown path so `/share/<token>` reaches
-      // the ShareConsume route.
+      // Device B navigates to the share URL. The ROUTE is a plain path
+      // (`@solidjs/router` v0.16 is path-mode, and the SPA fallback
+      // serves it); only the TOKEN is in the fragment (#1404), which
+      // `goto` carries across because the browser keeps it client-side —
+      // the same reason it never reaches a proxy log.
       const sharePath = shareUrl.replace(/^https?:\/\/[^/]+/, "");
       await ctxB.addInitScript(() => {
         localStorage.setItem("cic.installChoice", "browser");

@@ -386,8 +386,12 @@ render(
             the link works even when the destination device has no
             existing bearer. The route auto-consumes the one-shot
             signed token and navigates into Shell once localStorage
-            is populated. */}
-        <Route path="/share/:token" component={ShareConsume} />
+            is populated.
+            No `:token` segment (#1404): the token rides the FRAGMENT,
+            which the browser keeps to itself, so it never reaches the
+            request line a proxy logs. `ShareConsume` reads it from
+            `location.hash`. */}
+        <Route path="/share" component={ShareConsume} />
         {/* #717 — the boundary wraps Shell ONLY, inside RequireAuth. A boot
             fetch that rejects puts its resource in `errored` state and every
             read re-throws (CrtSplash's `!user()` predicate among them); with

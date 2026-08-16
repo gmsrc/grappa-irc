@@ -17,7 +17,7 @@
 // `?go=` is a query param on `/`, deliberately: vjt asked for it in those
 // words so an invite could never collide with a client route. The first
 // shipment used `/<network>/<channel>` instead and had to keep a denylist of
-// reserved first segments to stay out of `/share/:token`'s way. Nothing here
+// reserved first segments to stay out of `/share`'s way. Nothing here
 // depends on the path any more, which is the property that made the denylist
 // unnecessary.
 

@@ -51,11 +51,12 @@ test.describe("#392 — home restyle + session-share modal", () => {
       await page.getByTestId("share-session-entry").click();
 
       await expect(page.getByTestId("share-modal")).toBeVisible();
-      // The QR renders as an inline <svg> built from the minted /share/ URL.
+      // The QR renders as an inline <svg> built from the minted
+      // /share#<token> URL (#1404 — the token is in the fragment).
       await expect(page.getByTestId("share-qr").locator("svg")).toBeVisible({ timeout: 10_000 });
       const url = page.getByTestId("share-url");
       await expect(url).not.toHaveValue("", { timeout: 10_000 });
-      expect(await url.inputValue()).toMatch(/\/share\//);
+      expect(await url.inputValue()).toMatch(/\/share#/);
     } finally {
       await reapVisitors(admin.token, visitor.id);
     }

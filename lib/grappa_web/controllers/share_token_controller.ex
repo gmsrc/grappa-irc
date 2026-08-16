@@ -4,13 +4,36 @@ defmodule GrappaWeb.ShareTokenController do
 
     * `POST /me/share-token` — mints a Phoenix-signed, short-TTL token
       bound to the caller's own tagged subject. cic wraps the token in
-      a shareable URL (`https://<host>/#/share/<token>`) so the caller
+      a shareable URL (`https://<host>/share#<token>`) so the caller
       can forward it to another device of their own.
     * `POST /auth/share/consume` — unauthenticated. Body `{token}`.
       Verifies signature + TTL, checks the one-shot ETS ledger
       (`Grappa.ShareTokens`), confirms the subject row still exists,
       and mints a fresh `accounts_sessions` row for the SAME subject.
       Returns `{token, subject}` mirroring the login wire.
+
+  ## Why the token rides the fragment (#1404)
+
+  The fragment is the only part of a URL a browser does not transmit. It
+  stays out of the request line — which a reverse proxy logs verbatim,
+  `infra/snippets/log-format.conf` logging `$request` — and out of the
+  `Referer` the landing document would otherwise send on its own
+  same-origin requests under the `same-origin` referrer policy. Neither
+  redaction that exists nearby reaches a path segment:
+  `filter_parameters` keys on a parameter NAME, and the proxy config is
+  not ours to edit on every substrate (the m42 jail is fronted by a
+  vhost outside this repository). Moving the credential is the only
+  remedy that holds wherever grappa is deployed.
+
+  Same move the WS bearer already made when it went to a subprotocol
+  rather than `?token=`; the share link had simply never had the
+  treatment applied.
+
+  **This paragraph is load-bearing — keep it in step with the client.**
+  It described a fragment before the client used one, and a reader
+  auditing this surface believed the moduledoc over the code. Prose that
+  claims a property the implementation does not provide does not merely
+  fail to help; it actively buys a pass.
 
   ## Who may mint (#1306)
 

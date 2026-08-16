@@ -44,7 +44,7 @@ async function seedVisitor(page: import("@playwright/test").Page, visitor: Visit
 }
 
 // Open Settings → tap the share entry → the share MODAL opens
-// (#392), waiting for the mint to resolve into a /share/ URL.
+// (#392), waiting for the mint to resolve into a /share#<token> URL.
 async function openShareModalFromSettings(page: import("@playwright/test").Page) {
   await openSettingsDrawer(page);
   await expect(page.getByRole("dialog", { name: /settings/i })).toBeVisible();
@@ -83,7 +83,7 @@ test.describe("#335 — visitor identity card + share section + native share", (
     }
   });
 
-  test("native share invokes navigator.share with the /share/ URL", async ({ page }) => {
+  test("native share invokes navigator.share with the /share# URL", async ({ page }) => {
     const admin = getSeededAdmin();
     const visitor = await mintVisitor(`n335-${Date.now()}`);
     try {
@@ -113,7 +113,8 @@ test.describe("#335 — visitor identity card + share section + native share", (
       );
       expect(payload).not.toBeNull();
       expect(payload?.url).toBe(shareUrl);
-      expect(payload?.url).toMatch(/\/share\//);
+      // #1404 — the token rides the fragment, so the path is bare `/share`.
+      expect(payload?.url).toMatch(/\/share#/);
     } finally {
       await reapVisitors(admin.token, visitor.id);
     }
