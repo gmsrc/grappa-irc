@@ -27,10 +27,9 @@ defmodule Grappa.Themes.BackgroundImage do
 
   Returns `{:ok, slug}` or a tagged `{:error, reason}`; never raises.
   """
-  alias Grappa.ServerSettings
+  alias Grappa.{ServerSettings, Uploads}
   alias Grappa.Sys.HardenedCmd
   alias Grappa.Themes.ImageFetcher
-  alias Grappa.Uploads
 
   require Logger
 

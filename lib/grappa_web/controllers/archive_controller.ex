@@ -52,9 +52,9 @@ defmodule GrappaWeb.ArchiveController do
   import GrappaWeb.Validation, only: [validate_target_name: 1]
 
   alias Grappa.Accounts.User
-  alias Grappa.RateLimit.TokenBucket
   alias Grappa.{PubSub, QueryWindows, Scrollback, Session}
   alias Grappa.PubSub.Topic
+  alias Grappa.RateLimit.TokenBucket
   alias Grappa.Scrollback.Wire
   alias Grappa.Visitors.Visitor
   alias GrappaWeb.Subject
