@@ -121,8 +121,10 @@ describe("socket singleton", () => {
     // #95: authToken carries the bearer via the Sec-WebSocket-Protocol
     // subprotocol; the token is deliberately NOT passed via `params`
     // (phoenix appends params to the URL query — that would re-leak it).
+    // #1379: the URL also carries `?client_proto=` — the protocol version is
+    // public discovery data, unlike the bearer this test is about.
     expect(h.socketCtor).toHaveBeenCalledWith(
-      "ws://localhost:3000/socket",
+      "ws://localhost:3000/socket?client_proto=1",
       expect.objectContaining({ authToken: "tok-1" }),
     );
     const opts = h.socketCtor.mock.calls[0]?.[1] as {
@@ -287,28 +289,166 @@ describe("socketEndpoint (#193 — force wss on https origin)", () => {
   it("returns a wss:// absolute endpoint on an https origin", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     expect(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org" })).toBe(
-      "wss://irc.sniffo.org/socket",
+      "wss://irc.sniffo.org/socket?client_proto=1",
     );
   });
 
   it("returns wss:// even with a non-default https port (host carries the port)", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     expect(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org:8443" })).toBe(
-      "wss://irc.sniffo.org:8443/socket",
+      "wss://irc.sniffo.org:8443/socket?client_proto=1",
     );
   });
 
   it("returns ws:// only on a genuinely plaintext http origin (dev/LAN)", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     expect(socketEndpoint({ protocol: "http:", host: "localhost:5173" })).toBe(
-      "ws://localhost:5173/socket",
+      "ws://localhost:5173/socket?client_proto=1",
     );
   });
 
   it("reads the ambient location when no arg is given (jsdom → http://localhost:3000)", async () => {
     const { socketEndpoint } = await import("../lib/socket");
     // jsdom serves the doc from http://localhost:3000/ by default.
-    expect(socketEndpoint()).toBe("ws://localhost:3000/socket");
+    expect(socketEndpoint()).toBe("ws://localhost:3000/socket?client_proto=1");
+  });
+});
+
+// #1379 — cic declares the protocol version it speaks so the server's 426
+// refusal can fire against it. Before this, a grep for `client_proto` over all
+// of `cicchetto/` returned one prose comment: the socket connected with no
+// declaration and was treated as CURRENT however stale the bundle was.
+//
+// These assertions are about the DECLARATION, deliberately separate from the
+// #193 scheme tests above: those pin whole URLs, so they redden for either
+// reason and cannot say which. Each one below fails for exactly one edit.
+describe("socketEndpoint declares the client protocol version (#1379)", () => {
+  it("carries a client_proto query param on an absolute endpoint", async () => {
+    const { socketEndpoint } = await import("../lib/socket");
+    const url = new URL(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org" }));
+    expect(url.searchParams.get("client_proto")).not.toBeNull();
+  });
+
+  it("declares the exported constant, not a hand-typed literal that can drift", async () => {
+    const { socketEndpoint, CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
+    const url = new URL(socketEndpoint({ protocol: "https:", host: "irc.sniffo.org" }));
+    expect(url.searchParams.get("client_proto")).toBe(String(CLIENT_PROTOCOL_VERSION));
+  });
+
+  it("declares an integer at or above the server floor of 1", async () => {
+    // The floor itself is `Grappa.Protocol.min_version/0` and is pinned
+    // against this constant server-side (`test/grappa/protocol_test.exs`) —
+    // this side only guarantees the value is a usable protocol number, so a
+    // typo'd `0`, `NaN` or `1.5` cannot reach the wire.
+    const { CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
+    expect(Number.isInteger(CLIENT_PROTOCOL_VERSION)).toBe(true);
+    expect(CLIENT_PROTOCOL_VERSION).toBeGreaterThanOrEqual(1);
+  });
+
+  it("still declares it on the no-DOM relative endpoint (no ambient location)", async () => {
+    // The version is not location-derived, so the `!l` fallback must not drop
+    // it. Reaching that branch needs `location` genuinely absent, which jsdom
+    // never is — hence the stub, taken AFTER the import so module scope still
+    // evaluates against the real one.
+    const { socketEndpoint, CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
+    vi.stubGlobal("location", undefined);
+    try {
+      expect(socketEndpoint()).toBe(`/socket?client_proto=${CLIENT_PROTOCOL_VERSION}`);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("reaches the real Socket constructor, not just the helper", async () => {
+    // socketEndpoint is only a contract if getSocket actually calls it: the
+    // endpoint the constructor receives is what phoenix puts on the wire.
+    localStorage.setItem("grappa-token", "tok-proto");
+    const { CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
+    const endpoint = h.socketCtor.mock.calls[0]?.[0] as string;
+    const url = new URL(endpoint);
+    expect(url.searchParams.get("client_proto")).toBe(String(CLIENT_PROTOCOL_VERSION));
+  });
+});
+
+// #1379 — the user-topic join reply carries the server's `protocol_version`
+// and cic dropped it on the floor. It is a diagnostic, not a gate: a
+// difference is legal under the additive-only rule, so the only correct
+// response is to make it visible to whoever is reading a console.
+describe("joinUser consumes the join reply's protocol_version (#1379)", () => {
+  async function joinAndReply(reply: unknown): Promise<MockInstance> {
+    localStorage.setItem("grappa-token", "tok-proto-reply");
+    const socket = await import("../lib/socket");
+    socket.joinUser("alice");
+    const okCb = h.mockJoinPush.receive.mock.calls.find(([ev]) => ev === "ok")?.[1] as (
+      r: unknown,
+    ) => void;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    okCb(reply);
+    return warn;
+  }
+
+  it("warns when the server speaks a different protocol than this bundle", async () => {
+    const warn = await joinAndReply({ protocol_version: 99 });
+    try {
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("99");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent when the server speaks the same protocol — the normal case", async () => {
+    const { CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
+    const warn = await joinAndReply({ protocol_version: CLIENT_PROTOCOL_VERSION });
+    try {
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("stays silent when the reply omits protocol_version (unknown-is-never-fatal)", async () => {
+    // A server too old to publish the field, or any future reply shape that
+    // drops it, must not produce a mismatch warning naming `undefined`.
+    const warn = await joinAndReply({});
+    try {
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns once per bundle load, not once per phoenix auto-rejoin", async () => {
+    // joinUser's "ok" hook re-fires on every reconnect; a PWA reconnects on
+    // every network blip, so an un-latched warn is a console flood.
+    const warn = await joinAndReply({ protocol_version: 99 });
+    try {
+      const okCb = h.mockJoinPush.receive.mock.calls.find(([ev]) => ev === "ok")?.[1] as (
+        r: unknown,
+      ) => void;
+      okCb({ protocol_version: 99 });
+      okCb({ protocol_version: 99 });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("still runs the caller's onJoinOk — the check must not swallow the reply", async () => {
+    localStorage.setItem("grappa-token", "tok-proto-passthrough");
+    const socket = await import("../lib/socket");
+    const onJoinOk = vi.fn();
+    socket.joinUser("alice", onJoinOk);
+    const okCb = h.mockJoinPush.receive.mock.calls.find(([ev]) => ev === "ok")?.[1] as (
+      r: unknown,
+    ) => void;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      okCb({ protocol_version: 99 });
+      expect(onJoinOk).toHaveBeenCalledWith({ protocol_version: 99 });
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

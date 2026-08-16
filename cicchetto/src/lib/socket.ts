@@ -56,6 +56,26 @@ import {
 
 let _socket: Socket | null = null;
 
+// #447/#1379 — the wire protocol version cicchetto speaks, declared to the
+// server on the WS upgrade so the handshake can refuse a bundle that is too
+// old (426 Upgrade Required, `UserSocket.check_protocol_version/1`).
+//
+// Declaring is opt-in on the client side and cic had opted OUT by omission: a
+// socket with no `client_proto` is treated as CURRENT whatever the bundle
+// actually is. That default is wrong for cic specifically — it is a
+// service-worker-cached PWA, i.e. the client most able to be arbitrarily stale
+// against a freshly deployed BEAM, and `--cic`-only vs server-only deploys are
+// routine here. The refusal exists for exactly this client; declaring arms it.
+//
+// The number is the CONTRACT version (`Grappa.Protocol.version/0`), NOT the
+// software release in `<meta cicchetto-version>`. Bump it only when cic is
+// changed to speak a new protocol the additive-only rule cannot express — a
+// new event kind or field is free and never moves it. `Grappa.Protocol`'s
+// floor and this constant are pinned against each other server-side in
+// `test/grappa/protocol_test.exs`; raising `min_version/0` past this number
+// means every un-updated cic bundle is refused, so the two move together.
+export const CLIENT_PROTOCOL_VERSION = 1;
+
 // #193 — force the correct WS scheme from the page origin, absolutely.
 //
 // Passing the relative `"/socket"` to phoenix.js makes phoenix derive
@@ -80,11 +100,22 @@ let _socket: Socket | null = null;
 // The server-side `:80` mitigation (proxy the upgrade instead of 301'ing
 // it) is an m42 nginx HOST-config change, out of scope for this fix —
 // noted for the orchestrator. This client change stands on its own.
+//
+// #1379 — the endpoint also carries `?client_proto=`. Query param, not
+// subprotocol: the version is public discovery data (also served unauth at
+// `GET /api/config`), so the #95/#202 "keep it off the URL" rule does not
+// reach it — that rule is about the bearer, which is a secret and keeps
+// riding `Sec-WebSocket-Protocol` alone. It goes here rather than in the
+// Socket's `params` because `params` is the same query string by a longer
+// route, and putting it here keeps ONE function answerable for the whole URL.
+// phoenix.js appends its own `vsn` with `Ajax.appendParams`, which switches to
+// `&` when the URL already has a `?`, so the two compose.
 export function socketEndpoint(loc?: Location | { protocol: string; host: string }): string {
+  const query = `?client_proto=${CLIENT_PROTOCOL_VERSION}`;
   const l = loc ?? (typeof location !== "undefined" ? location : undefined);
-  if (!l) return "/socket";
+  if (!l) return `/socket${query}`;
   const scheme = l.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${l.host}/socket`;
+  return `${scheme}//${l.host}/socket${query}`;
 }
 
 // Module-level reference to the joined user-level channel. Set by
@@ -321,6 +352,35 @@ if (typeof window !== "undefined") {
   }
 }
 
+// #447/#1379 — the user topic is the first topic cic joins, so its join reply
+// is the initial WS payload and carries `protocol_version`: the contract
+// version the SERVER speaks. cic received it and dropped it.
+//
+// What it is good for is diagnosis, and only diagnosis. A difference is NOT an
+// error by the additive-only rule — a newer server sends a client nothing it
+// must understand, and a newer client tolerates an older server — so there is
+// nothing here to gate on and no UX to raise. The floor is the only actionable
+// number and it is enforced one layer down, at the handshake. What a
+// difference DOES tell whoever is reading a console is that the bundle and the
+// BEAM were built against different contracts, which on a service-worker
+// cached PWA is the single most likely explanation for otherwise-inexplicable
+// behaviour, and is invisible from every other signal.
+//
+// Logged once per bundle load, not once per join: joinUser's "ok" hook
+// re-fires on every phoenix auto-rejoin, and a PWA re-joins on every network
+// blip.
+let _serverProtocolLogged = false;
+
+function noteServerProtocol(reply: unknown): void {
+  const server = (reply as { protocol_version?: unknown } | null | undefined)?.protocol_version;
+  if (typeof server !== "number" || server === CLIENT_PROTOCOL_VERSION) return;
+  if (_serverProtocolLogged) return;
+  _serverProtocolLogged = true;
+  console.warn(
+    `[grappa] protocol mismatch: this bundle speaks ${CLIENT_PROTOCOL_VERSION}, the server speaks ${server}`,
+  );
+}
+
 // joinUser + joinChannel mirror Topic.user/1 + Topic.channel/3 from the
 // server. `joinNetwork` (per-(user, network) shape) is reserved
 // infrastructure on the server side but has no cicchetto consumer yet —
@@ -331,6 +391,7 @@ export function joinUser(userName: string, onJoinOk?: (reply: unknown) => void):
   const ch = getSocket().channel(topic);
   ch.join()
     .receive("ok", (reply: unknown) => {
+      noteServerProtocol(reply);
       if (onJoinOk) onJoinOk(reply);
       // #182 — report the current PWA visibility right after the join
       // (and on every auto-rejoin, since phoenix re-fires this "ok" hook
