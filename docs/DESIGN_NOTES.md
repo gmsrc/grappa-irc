@@ -44154,3 +44154,96 @@ key-name assertion would keep passing after the keys moved under a nested
 struct while the guard had stopped covering them. Written this way, the
 regrouping breaks the test loudly. Two mutants pin it: a pass-through
 callback, and one key dropped from the list, which fails naming that key.
+<!-- entry #1404b -->
+
+---
+
+## 2026-08-16 — #1404: three metering doors
+
+Hardening from the 2026-08-15 review, second batch. Same terms as the
+first: what is metered now, and why each door meters the way it does.
+
+### The operator console spends the same budget as every other scope
+
+`:request_budget` now sits on the `/admin` scope, after `:authn`, which is
+what assigns the subject and session id the budget keys on. `:admin_authn`
+answers WHO may call and was standing alone; it is not a rate, and a scope
+that answers only the first question is unmetered no matter how narrow the
+answer.
+
+The plug's own moduledoc had claimed the opposite — "on every
+authenticated resource scope" — which is the part worth recording. A
+reader auditing coverage found a sentence asserting the audit's result.
+The prose now enumerates what is deliberately outside (the two
+`Mix.env() in [:dev, :test]` scopes, which exist so a spec can provision
+its own subject) and says where a read of unusual COST belongs instead: a
+bound at its own door, not a coarse token here.
+
+Writes only, still. A metered GET would make the console's own dashboard
+poll a flood, and the test pins that direction too.
+
+**Driven, not read.** `Phoenix.Router.__routes__/0` does not expose a
+route's `pipe_through`, so no structural assertion about the scope exists,
+and grepping the router would pin the DECLARATION rather than witness the
+plug running. The test drives a real admin write until the budget refuses
+it, with `sever_after` set above the refusals it provokes — crossing it
+would revoke the bearer and turn the 429 under test into a 401, a
+different control answering.
+
+### A theme background spends the quota its own prose cited
+
+`ImageFetcher.Req` justified having no in-flight byte ceiling by citing
+"~5 theme ops/user/day". `create` and `copy` consumed that quota;
+`store_background/2`, the door that reaches the fetcher, did not. The
+repair is to make the sentence true rather than to invent a second number,
+so the gate is the SAME `:theme_create` bucket.
+
+It is consumed BEFORE the fetch. What is being rationed is a remote GET
+plus a re-encode, so charging only for successes would leave failures
+running free — a subject who spends a slot on a broken URL has spent one
+of five. The stored PNG additionally consumes the global storage cap every
+other write to that store consumes, checked beside `Uploads.create/3`
+because the byte count only exists after the re-encode.
+
+**Deliberately not done: an `expires_at` on these rows.** A background is
+referenced by a live theme payload, so an expiry would delete the image
+out from under a theme still in use. Unswept AND unbounded was the
+combination that did not hold; unswept and bounded is a design choice, and
+the comment now says which of the two it is.
+
+### The archive listing has a bucket of its own
+
+`GET /networks/:slug/archive` is the one authenticated read that answers
+from a whole `(subject, network)` partition instead of a page: there is no
+`limit` to negotiate, so its cost tracks the partition rather than the
+request. It takes one token from a per-`(subject, network)` bucket before
+it builds anything; an empty bucket answers 429 with a `retry-after` and
+runs no query.
+
+The limiter is the shared `RateLimit.TokenBucket` under a distinct bucket
+atom — a listing can never spend a send token, and the two ceilings stay
+independently tunable. `retry-after` is derived from this bucket's own
+refill, the one-pair shape the auto-reply budget arrived at in the first
+batch: an operator who retunes moves one pair, not two that drift.
+
+**The numbers come from the client's shape, not from taste.** cic refetches
+this list once per PART (`archive_changed`) in every open tab, so the burst
+allowance has to clear a hand-driven run of parts fanned out across
+several tabs; only the sustained refill is a real ceiling. A bucket tight
+enough to be interesting would have refused ordinary use, and cic keeps
+the previous entries on a failed load rather than retrying, so the refusal
+would have been silent.
+
+**What this does not do**, recorded so the next reader does not have to
+re-derive it: it bounds how OFTEN the aggregate runs, not what one run
+costs. Two candidates for the second half were considered and left open. A
+scan ceiling (a row cap, or a `server_time` floor) is the only remedy that
+is a bound by construction, but it changes a user-visible list — a target
+whose most recent row falls outside the window stops appearing, and
+`row_count` becomes window-relative — so it is a product decision, not a
+hardening one. An index that carries `server_time` alongside the folded
+archive key would make one run cheaper; the two `messages_archive_*_idx`
+predate the #372 fold and the live folded family carries `id, kind` at the
+tail instead, which is the deferral DESIGN_NOTES 17317-17332 already
+records. Cheaper is not bounded, and that migration is cold-class, so it
+stays a separate decision with a measurement attached.
