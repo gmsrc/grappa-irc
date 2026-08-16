@@ -44705,3 +44705,111 @@ collects EVERY `defstruct` in it, so an entry beside its parent inherits the
 parent's cold-deploy check with no second `@state_helpers` registration.
 Separate files would have cost three files and six registry lines for
 identical coverage.
+<!-- entry #1438 -->
+
+---
+
+## 2026-08-16 — #1438: swipe up or down to dismiss the media viewer
+
+vjt asked for the media viewer to close on a vertical swipe, the modal
+following the finger, videos behaving like images.
+
+### The issue's premise was wrong, and it changed the design
+
+#1438 lists under "Not established" that *"the only swipe implementation
+in the tree is local to `ComposeBox.tsx:423`"*. Measured on `1552312d`
+and re-validated identical on `9808cb51`, that is false: `lib/swipe.ts`
+is a DOM-free geometry toolkit (travel floor, direction, velocity) that
+`lib/touchGesture.ts` already composes for the edge drawers and
+`lib/messageGestures.ts` for the reply swipe — the latter already doing
+follow-the-finger with a `translateX` and a snap-back class.
+
+Taken at its word the issue would have bought a fourth gesture engine,
+which is four answers to "what counts as a swipe". `lib/mediaViewerGesture.ts`
+composes the existing two instead, and the only NEW geometry is
+`verticalClaim` in `touchGesture.ts` — the exact mirror of
+`horizontalClaim`, same slop, same angle gate, axes swapped.
+
+### The binder reports progress; the caller owns the paint
+
+`bindEdgeGesture` deliberately does not report progress: #1041 ruled a
+follow-the-finger panel out of scope there, and progress is precisely
+the channel that ruling avoided. Here the follow IS the feature, so
+`bindDismissGesture` hands the caller a running delta and writes no
+transform of its own. The reason is not symmetry — the modal and the
+backdrop move together, and a binder that knew about both would be a
+binder that knew about the viewer.
+
+The claim is LATE and VERTICAL-dominant, so a horizontal drag is
+released whole. That is what leaves a `<video>` scrubber usable, and it
+keeps a future left/right binding on this surface possible.
+
+Commit is distance OR velocity: `DISMISS_COMMIT_FRACTION` of the
+viewport, or `isFastSwipe`. The fraction is INJECTED rather than a pixel
+constant — jsdom has no layout, and the same gesture has to feel the
+same on a phone and a tablet.
+
+### The zoom gate is published, not lifted
+
+A zoomed image owns the one-finger drag as a PAN, so the viewer must
+stand down while the image is off its fit baseline. The scale lives in
+`ZoomableImage`'s private `transform()` signal and #213 keeps it
+element-scoped on purpose, so it is PUBLISHED upward as one bit rather
+than hoisted: lifting the transform would move an image's pan geometry
+into a component that also renders `<audio>`. Published synchronously
+with every mutation, through a single writer, rather than through an
+effect — the reader is a touchstart handler, and a frame of lag there is
+a dismiss that fires on a pan.
+
+Video and audio never publish a scale, which is exactly right: they are
+always dismissible, which is the issue's third constraint.
+
+### The listener sits on the container, and so does touch-action
+
+The dismisser binds to the modal BODY, not the media element, or it
+would not cover videos. `touch-action` follows it for a different
+reason: the UA intersects the property down the ancestor chain, so ONE
+declaration on `.media-viewer-modal` covers every media kind and leaves
+no per-element copy to forget when a fourth one lands.
+
+Measured before writing it: `.media-viewer-modal`, `.media-viewer-body`
+and `.media-viewer-media` declared no `touch-action` at all — only
+`.media-viewer-media--zoomable` did, for the #213 pinch. `none` rather
+than `.scrollback`'s fail-open `pan-y`: nothing inside the viewer
+scrolls, and `pan-y` is the very axis the gesture takes.
+
+The modal is centered by `transform: translate(-50%, -50%)`, and an
+inline transform replaces that declaration WHOLESALE. The per-frame
+paint therefore re-states the centering; a bare `translateY` would jump
+the modal by half its own height on the first claimed move. Both the
+jsdom spec and the e2e measure that specific difference.
+
+The backdrop's opacity is written inline per frame and cleared on
+release, with no transition of its own. It is a previous SIBLING of the
+modal, unreachable from the dragging class without a `:has()` selector
+this codebase uses nowhere, and an overlay re-darkening in one frame is
+not a motion the eye follows.
+
+### What is proven, and what is owed
+
+Twelve unit tests pin the binder's decision table against a bare
+element; seven more pin the wiring, and six mutants establish that each
+of those bites — five of the six killing exactly one assertion. Three
+source-level assertions pin the stylesheet, and the FIRST version of
+that rule described `touch-action` in prose without declaring it, which
+is what the new spec caught. Three e2e tests assert the visible outcome:
+the dialog goes away, and mid-drag the browser's own computed matrix
+says the modal moved by the finger's travel and by nothing else.
+
+None of that is the feel. A synthetic touch drives no compositor and
+Playwright's webkit is not iOS Safari, so the follow is asserted as a
+transform the browser resolved, never as motion anyone saw.
+`DISMISS_COMMIT_FRACTION = 0.15` is a defensible default, not a measured
+optimum — the same standing `swipe.ts` already claims for its velocity
+threshold. Device verification is owed, and stated as owed.
+
+One thing is not covered at all: that a `<video>`'s native controls
+survive the gesture. The argument is that a vertical claim never takes a
+scrubber drag (horizontal) nor a tap under the slop — but the controls
+live in the UA shadow DOM, `closest()` cannot see them, and no
+assertion in this change reaches them.
