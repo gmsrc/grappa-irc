@@ -14,13 +14,14 @@ import LusersCard from "./LusersCard";
 import { isContentKind, ownNickForNetwork, type ScrollbackMessage } from "./lib/api";
 import { acceptInvite, confirmJoinChannel } from "./lib/channelJoin";
 import { channelKey, decodeChannelKey } from "./lib/channelKey";
+import { statusmsgDescription } from "./lib/channelModes";
 import { type TopicJoinLine, topicByChannel, topicJoinLine } from "./lib/channelTopic";
 import { isChannelName } from "./lib/chantypes";
 import { stripCtcpAction } from "./lib/ctcpAction";
 import { isDocumentVisible } from "./lib/documentVisibility";
 import { highlightPatterns } from "./lib/highlightList";
 import { type InviteAckEntry, inviteAckBySlug } from "./lib/inviteAck";
-import { chantypesForNetwork } from "./lib/isupport";
+import { chantypesForNetwork, prefixForNetwork } from "./lib/isupport";
 import { membersByChannel } from "./lib/members";
 import { matchesWatchlist } from "./lib/mentionMatch";
 import {
@@ -634,22 +635,52 @@ const renderNumeric = (raw: NumericEvent): JSX.Element => {
 // (#218). A `@#chan` notice reaches channel ops ONLY; rendered like any other
 // notice it reads as a broadcast everyone saw, which is the reported symptom.
 //
-// The sigil set is per-network and open-ended (ISUPPORT `STATUSMSG=`; bahamut
-// advertises `@+`, others `@%+`), so only the two levels the issue names get a
-// word. An unnamed one renders as its own sigil rather than falling back to no
-// badge — "unknown level" and "everyone" must not look alike.
-const STATUSMSG_LABEL: Record<string, string> = { "@": "ops-only", "+": "voice-only" };
-
+// #1302 — the row shows the SIGILS, always. The sigil set is per-network and
+// open-ended (ISUPPORT `STATUSMSG=`; bahamut advertises `@+`, others `@%+`,
+// UnrealIRCd-style networks `~&@%+`), so a hardcoded word table could only
+// ever name a couple of them: it left a halfop row rendering a bare `%` beside
+// two worded ones — three rows, two vocabularies, which two operators reported
+// as noise. Sigils everywhere means ONE vocabulary on every network, and `@`
+// already says "ops only" to anyone reading IRC.
+//
+// The words survive out of sight, in the `title` AND the accessible name. That
+// is not a hover convenience: this badge carried NEITHER before, so a bare
+// sigil would reach a screen reader as an `@` character and nothing else. The
+// copy is derived per network by mapping each sigil back through `PREFIX=`
+// (see `statusmsgDescription`), never hardcoded.
+//
+// `meta.statusmsg` is the whole peeled RUN (`@+`, not `@`) per #1303 — such a
+// target reaches the union of the levels — so every sigil renders and every
+// level is named. Do not rewrite this as if it were one character.
+//
 // Row-level, not per-kind: a STATUSMSG target is legal on PRIVMSG as well as
 // NOTICE, and the level describes who the line REACHED — a property of the
 // row, not of one render arm.
-const statusmsgBadge = (meta: ScrollbackMessage["meta"]): JSX.Element | null => {
-  const level = meta?.statusmsg;
-  if (typeof level !== "string" || level === "") return null;
+const statusmsgBadge = (
+  meta: ScrollbackMessage["meta"],
+  networkSlug: string,
+): JSX.Element | null => {
+  const run = meta?.statusmsg;
+  if (typeof run !== "string" || run === "") return null;
+  const description = statusmsgDescription(
+    run,
+    prefixForNetwork(networkIdBySlug(networkSlug) ?? null),
+  );
   return (
     <>
-      <span class="scrollback-statusmsg" data-testid="statusmsg-badge">
-        {STATUSMSG_LABEL[level] ?? level}
+      <span
+        class="scrollback-statusmsg"
+        data-testid="statusmsg-badge"
+        // A bare <span> is role=generic, which is name-PROHIBITED: an
+        // `aria-label` on it computes to no accessible name at all, and the
+        // sigil would still reach a screen reader as an `@` character. The
+        // sigil run is a glyph standing for a phrase, so `role="img"` is the
+        // role that both admits a name and makes it REPLACE the glyph.
+        role="img"
+        title={description}
+        aria-label={description}
+      >
+        {run}
       </span>{" "}
     </>
   );
@@ -1039,7 +1070,7 @@ const ScrollbackLine: Component<{
       data-msg-id={props.msg.id}
     >
       <span class="scrollback-time">{formatTime(props.msg.server_time)}</span>{" "}
-      {statusmsgBadge(props.msg.meta)}
+      {statusmsgBadge(props.msg.meta, props.networkSlug)}
       {renderBody(props.msg, handlers)}
     </div>
   );

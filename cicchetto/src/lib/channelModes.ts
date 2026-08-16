@@ -213,6 +213,63 @@ export function sanitizeModeParam(value: string): string | null {
  * slightly-permissive gate only avoids wrongly greying out a legit
  * founder.
  */
+// #1302 — the per-USER membership levels PREFIX advertises, named. Kept
+// apart from MODE_DESCRIPTIONS above, which is deliberately channel-mode
+// only (see module doc): a membership mode needs a NAME for the level it
+// grants, not a helpfile paragraph about a channel-wide toggle.
+//
+// The letters are the conventional ones (`q` founder, `a` admin/protected,
+// `o` ops, `h` halfop, `v` voice); the SIGILS are not listed here on
+// purpose. A sigil is per-network and is resolved through the network's own
+// PREFIX map — hardcoding `~&@%+` anywhere is the exact duplication of the
+// 005 this issue exists to delete.
+const MEMBERSHIP_MODE_NAMES: Record<string, string> = {
+  q: "founder",
+  a: "admin",
+  o: "ops",
+  h: "halfop",
+  v: "voice",
+};
+
+/**
+ * Names the membership level a sigil stands for on THIS network, by reverse
+ * lookup through its PREFIX map. Two degradations, both deliberate: a letter
+ * nobody named renders as `mode +<letter>` (the same generic shape
+ * `modeDescription` uses), and a sigil the network never advertised renders
+ * as itself — cic knows nothing about it and must not invent a level.
+ *
+ * A reverse lookup on PREFIX is safe; reading RANK out of it is NOT — the
+ * map crosses the wire alphabetical by mode letter (see `editorSigils`).
+ */
+function membershipLevelName(sigil: string, prefix: Record<string, string>): string {
+  const letter = Object.keys(prefix).find((l) => prefix[l] === sigil);
+  if (letter === undefined) return sigil;
+  return MEMBERSHIP_MODE_NAMES[letter] ?? `mode +${letter}`;
+}
+
+function joinAnd(parts: string[]): string {
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`;
+}
+
+/**
+ * The out-of-sight description for a STATUSMSG badge (#1302): what the row's
+ * visible sigils MEAN on this network. The visible row shows the sigils
+ * themselves — one vocabulary on every network, nothing to maintain per
+ * sigil — so this string is the whole of the badge's `title` and its
+ * accessible name, which is all a screen reader would otherwise get from a
+ * bare `@`.
+ *
+ * `run` is the WHOLE peeled STATUSMSG run (`@+`, not `@`) per #1303: such a
+ * target reaches the union of the levels, so every one of them is named.
+ * "only" is the load-bearing word — it says the row did NOT reach the whole
+ * channel, which is the fact the badge exists to carry.
+ */
+export function statusmsgDescription(run: string, prefix: Record<string, string>): string {
+  const names = [...run].map((sigil) => membershipLevelName(sigil, prefix));
+  return `delivered to ${joinAnd(names)} only`;
+}
+
 export function editorSigils(isupport: IsupportEntry): Set<string> {
   const sigils = Object.values(isupport.prefix);
   const opIdx = sigils.indexOf("@");

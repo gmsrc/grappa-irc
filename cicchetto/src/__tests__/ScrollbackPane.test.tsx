@@ -300,6 +300,11 @@ import { type ChannelKey, channelKey } from "../lib/channelKey";
 // entry so ScrollbackPane derives the #237 on-JOIN topic-join line; the #325
 // block proves that line survives the #222 presence-hide filter.
 import { seedTopic } from "../lib/channelTopic";
+// #1302 — the REAL ISUPPORT store (not mocked): the badge derives its level
+// names from the network's own PREFIX, so what these tests seed here IS the
+// input the derivation reads. Network id 1 is what the mocked
+// `networkIdBySlug` above answers for every slug.
+import { DEFAULT_ISUPPORT, seedIsupport } from "../lib/isupport";
 // #222 — the REAL presence-filter module (not mocked). Its per-channel pref
 // signal drives the rows() render filter; these imports let the wiring test
 // seed/clear explicit prefs. `channelKey` is mocked above to `${slug} ${name}`
@@ -355,6 +360,18 @@ const fixture: ScrollbackMessage[] = [
   },
 ];
 
+// #1302 — the #130 flicker gate hides the scrollback container (visibility,
+// NOT display) until the activation scroll has settled, and an accessible name
+// does not compute inside a hidden subtree: every name assertion below would
+// read an empty string for a jsdom render artefact rather than for anything
+// the badge did. Waiting the gate out establishes the durable state in which
+// the name is the badge's own.
+const waitForScrollbackVisible = async (): Promise<void> => {
+  await waitFor(() => {
+    expect(screen.getByTestId("scrollback")).not.toHaveStyle({ visibility: "hidden" });
+  });
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   setScrollback({});
@@ -365,6 +382,9 @@ beforeEach(() => {
   mockMembersByChannel.mockReturnValue({});
   // Reset the C5.0 auto-focus shown-set between tests (test seam, see ScrollbackPane.tsx).
   resetAutoFocusedJoinsForTest();
+  // #1302 — the ISUPPORT store is a module singleton, so a network seeded by
+  // one test would leak into the next. Reseed the bahamut default.
+  seedIsupport(1, DEFAULT_ISUPPORT);
   mockSetSelectedChannel.mockClear();
 });
 
@@ -533,12 +553,19 @@ describe("ScrollbackPane", () => {
     expect(lines[1]?.textContent ?? "").not.toContain("→");
   });
 
-  it("badges an ops-only row from meta.statusmsg and leaves a plain one alone — #1247", () => {
+  it("badges a statusmsg row with its SIGIL and names the level out of sight — #1302", async () => {
     // #1247 — an ops-only NOTICE (`NOTICE @#chan`) is delivered to channel ops
     // only. #218 routes it to the channel window; without a badge it is
     // indistinguishable from the plain channel notice sitting next to it, so
     // the second row here is the control: the discriminator must be the badge,
     // not "it is a notice".
+    //
+    // #1302 — the VISIBLE row now carries the sigil, never a word: a
+    // two-entry word table gave a `%` row a bare sigil next to two worded
+    // ones, three rows with two vocabularies. The word survives in the title
+    // and the accessible name, which this badge did not carry AT ALL before —
+    // so a bare sigil would otherwise have reached a screen reader as an `@`
+    // character and nothing else.
     const notices: ScrollbackMessage[] = [
       {
         id: 1,
@@ -563,11 +590,13 @@ describe("ScrollbackPane", () => {
     ];
     setScrollback({ "freenode #grappa": notices });
     render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    await waitForScrollbackVisible();
     const lines = screen.getAllByTestId("scrollback-line");
 
-    expect(within(lines[0] as HTMLElement).getByTestId("statusmsg-badge")).toHaveTextContent(
-      "ops-only",
-    );
+    const badge = within(lines[0] as HTMLElement).getByTestId("statusmsg-badge");
+    expect(badge.textContent).toBe("@");
+    expect(badge).toHaveAttribute("title", "delivered to ops only");
+    expect(badge).toHaveAccessibleName("delivered to ops only");
     // The body still renders — the badge annotates the row, it does not
     // replace it.
     expect(lines[0]).toHaveTextContent("-carol- rehash in 5");
@@ -575,11 +604,13 @@ describe("ScrollbackPane", () => {
     expect(within(lines[1] as HTMLElement).queryByTestId("statusmsg-badge")).toBeNull();
   });
 
-  it("badges a voice-only row and an unnamed level by its raw sigil — #1247", () => {
-    // `+` is the other level bahamut advertises by default. A network
-    // advertising `STATUSMSG=@%+` can deliver a `%` too, and the sigil set is
-    // per-network and open-ended: an unnamed level renders as itself rather
-    // than silently dropping to "no badge", which would read as "everyone".
+  it("renders EVERY sigil of a multi-level run and names every level — #1302", async () => {
+    // #1303 made `meta.statusmsg` the whole peeled RUN (`@+`, not `@`): a
+    // STATUSMSG target reaches the UNION of the levels, so a badge written as
+    // if the field were one character would silently drop a level from both
+    // the row and the description. The `%` row is the other half of the
+    // report: halfop used to render as a bare sigil with NO description at
+    // all, and it is a NAMED level like any other now.
     const notices: ScrollbackMessage[] = [
       {
         id: 1,
@@ -589,7 +620,7 @@ describe("ScrollbackPane", () => {
         kind: "notice",
         sender: "carol",
         body: "voiced folks",
-        meta: { statusmsg: "+" },
+        meta: { statusmsg: "@+" },
       },
       {
         id: 2,
@@ -604,14 +635,96 @@ describe("ScrollbackPane", () => {
     ];
     setScrollback({ "freenode #grappa": notices });
     render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    await waitForScrollbackVisible();
     const lines = screen.getAllByTestId("scrollback-line");
 
-    expect(within(lines[0] as HTMLElement).getByTestId("statusmsg-badge")).toHaveTextContent(
-      "voice-only",
-    );
+    const run = within(lines[0] as HTMLElement).getByTestId("statusmsg-badge");
+    expect(run.textContent).toBe("@+");
+    expect(run).toHaveAccessibleName("delivered to ops and voice only");
+
     // A PRIVMSG can bear a STATUSMSG target too — the badge is a property of
     // the row, not of the notice arm.
-    expect(within(lines[1] as HTMLElement).getByTestId("statusmsg-badge")).toHaveTextContent("%");
+    const halfop = within(lines[1] as HTMLElement).getByTestId("statusmsg-badge");
+    expect(halfop.textContent).toBe("%");
+    expect(halfop).toHaveAccessibleName("delivered to halfop only");
+  });
+
+  it("derives the level names from the network's OWN advertised PREFIX — #1302", async () => {
+    // The whole point of deleting the hardcoded word table: on a network
+    // advertising `PREFIX=(qaohv)~&@%+` a founder-only message must be named
+    // "founder", which no two-entry constant can do.
+    //
+    // The map is built by JSON.parse of the serialisation MEASURED on the
+    // production node, not by a hand-written literal in rank order: the
+    // server's `Map.new/1` crosses the wire alphabetical by mode letter, and
+    // a fixture written `{q, a, o, h, v}` would quietly test an order the
+    // client never receives.
+    seedIsupport(1, {
+      ...DEFAULT_ISUPPORT,
+      prefix: JSON.parse('{"a":"&","h":"%","o":"@","q":"~","v":"+"}'),
+    });
+    const notices: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 1,
+        kind: "notice",
+        sender: "carol",
+        body: "founders only",
+        meta: { statusmsg: "~" },
+      },
+      {
+        id: 2,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 2,
+        kind: "notice",
+        sender: "carol",
+        body: "ops too",
+        meta: { statusmsg: "@" },
+      },
+    ];
+    setScrollback({ "freenode #grappa": notices });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    await waitForScrollbackVisible();
+    const lines = screen.getAllByTestId("scrollback-line");
+
+    const founder = within(lines[0] as HTMLElement).getByTestId("statusmsg-badge");
+    expect(founder.textContent).toBe("~");
+    expect(founder).toHaveAccessibleName("delivered to founder only");
+
+    // Control: the level every network has still resolves on the rich map.
+    expect(within(lines[1] as HTMLElement).getByTestId("statusmsg-badge")).toHaveAccessibleName(
+      "delivered to ops only",
+    );
+  });
+
+  it("falls back to the bare sigil when the network never advertised it — #1302", async () => {
+    // The control for the test above, differing in ONE variable: the same `~`
+    // row on the bahamut default (`PREFIX=(ohv)@%+`), where `~` maps to no
+    // mode letter at all. There is no name to derive and cic must not invent
+    // one — the description degrades to the sigil, which is still strictly
+    // more than the nothing this badge carried before.
+    const notices: ScrollbackMessage[] = [
+      {
+        id: 1,
+        network: "freenode",
+        channel: "#grappa",
+        server_time: 1,
+        kind: "notice",
+        sender: "carol",
+        body: "founders only",
+        meta: { statusmsg: "~" },
+      },
+    ];
+    setScrollback({ "freenode #grappa": notices });
+    render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+    await waitForScrollbackVisible();
+    const badge = screen.getByTestId("statusmsg-badge");
+
+    expect(badge.textContent).toBe("~");
+    expect(badge).toHaveAccessibleName("delivered to ~ only");
   });
 
   it("renders a /notice echo to a CHANNEL recipient — #1225", () => {

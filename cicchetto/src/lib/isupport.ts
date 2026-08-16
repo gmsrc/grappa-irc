@@ -170,6 +170,20 @@ export function chantypesForNetwork(networkId: number | null): readonly string[]
 }
 
 /**
+ * The membership letter→sigil map this network advertised (`PREFIX=`), or the
+ * bahamut/Azzurra default for an unseeded network / a null id. Sibling of
+ * `chantypesForNetwork` — a per-fact accessor so a caller that needs one 005
+ * fact does not carry the whole entry around.
+ *
+ * Safe for sigil↔letter lookups in EITHER direction. NOT safe as an order:
+ * the map crosses the wire alphabetical by mode letter (see `editorSigils`).
+ */
+export function prefixForNetwork(networkId: number | null): Record<string, string> {
+  if (networkId === null) return DEFAULT_ISUPPORT.prefix;
+  return isupportForNetwork(networkId).prefix;
+}
+
+/**
  * The per-frame body budget base this network published (#1108), or `null`
  * when none has arrived — an unseeded network, a parked session, or a server
  * older than the field. Callers must treat `null` as "say nothing": the
