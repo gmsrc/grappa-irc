@@ -2751,7 +2751,10 @@ defmodule Grappa.Session.EventRouter do
   The `userhost_cache` ceiling. Public so a test can drive the real bound
   instead of restating the number and drifting from it.
   """
-  @spec userhost_cache_cap() :: pos_integer()
+  # `unquote(@userhost_cache_cap)` pins the spec to the compile-time
+  # singleton, which is what the success typing is; `pos_integer()` is a
+  # `:underspecs` supertype of it and fails the gate.
+  @spec userhost_cache_cap() :: unquote(@userhost_cache_cap)
   def userhost_cache_cap, do: @userhost_cache_cap
 
   # The ONLY door into `userhost_cache`. Every population site goes through

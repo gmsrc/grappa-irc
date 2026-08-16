@@ -360,7 +360,10 @@ defmodule Grappa.Session.WindowState do
   The ceiling on concurrently `:invited` windows. Public so a caller — and a
   test — reads the number instead of restating it.
   """
-  @spec invited_cap() :: pos_integer()
+  # `unquote(@invited_cap)` pins the spec to the compile-time singleton,
+  # which is what the success typing is; `pos_integer()` is a `:underspecs`
+  # supertype of it and fails the gate.
+  @spec invited_cap() :: unquote(@invited_cap)
   def invited_cap, do: @invited_cap
 
   @doc """
