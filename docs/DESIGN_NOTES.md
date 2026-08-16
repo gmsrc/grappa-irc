@@ -45456,3 +45456,82 @@ exist: it has been a 69-line consumer since #1384 and the six raw
 from `_lib.sh` is not in the file either. A review pinned to a base
 (`575e203a`) that has since moved is a set of claims to re-locate, not a
 map to follow.
+<!-- entry #1302 -->
+
+---
+
+## 2026-08-17 — #1302: STATUSMSG badge shows sigils; PREFIX rank comes from the advertised order
+
+Two operators reported the STATUSMSG badge as noise. It worded exactly
+two levels (`@` → "ops-only", `+` → "voice-only") and rendered every
+other sigil bare, so a network with a halfop level showed three rows in
+two vocabularies, and every PREFIX richer than bahamut fared worse. A
+two-entry constant cannot name a set that is per-network and
+open-ended.
+
+**Ruling (vjt): the row shows the SIGILS, always.** One vocabulary on
+every network and nothing to maintain per sigil. `@` already says "ops
+only" to anyone reading IRC. The words move to the `title` and the
+accessible name, derived by mapping each sigil back to its mode letter
+through the network's own `PREFIX=` — never hardcoded. The badge
+carried neither attribute before, so a bare sigil would otherwise reach
+a screen reader as an `@` character and nothing else. `meta.statusmsg`
+is the whole peeled run per #1303, so every sigil renders and every
+level is named.
+
+### Rank is not in the map, and never was
+
+The constraint that made this issue interesting: **`isupport.prefix`
+cannot be read as a rank order.** `parse_prefix/1` closed on
+`Map.new/1`, and the map crosses the cic wire as a JSON object whose
+key order is the runtime's — alphabetical by mode letter for a small
+map. Measured on the production node, `(qaohv)~&@%+` serialises
+`{"a":"&","h":"%","o":"@","q":"~","v":"+"}`.
+
+`editorSigils` in cic read `Object.values(prefix)` AS that ranking and
+said so in its docstring, cutting the mode-editor set at
+`indexOf("@")`. With `o` sitting in the middle of the alphabetical
+sequence, a founder (`~`, mode `q`) who is not also op fell below the
+cut and got the greyed-out modal the function exists to prevent. **It
+survived because of where we run it:** on Azzurra `(ohv)` sorts to
+`h,o,v`, which coincides with rank, and the one case that would differ
+is re-admitted by the halfop branch. The network grappa runs on is
+precisely the one that hides the defect.
+
+So the rank had to be published: `prefix_order`, the mode letters
+highest-rank-first, additive and snake_case, riding BESIDE the map
+rather than reshaping it — `prefix` is a published field and the
+additive-only contract cannot express repurposing one, and a lookup
+wants a map while a rank wants a list. Both projections come out of the
+same zip in the same parse, so they cannot disagree about which letters
+exist. A second hardcoded `~&@%+` was refused outright: reproducing by
+hand what the 005 already says is the class #1402 is closing.
+
+An absent `prefix_order` (a server older than the field) narrows to the
+EMPTY list, and `editorSigils` degrades to the classic op/halfop pair.
+Rank unknown stays unknown; inferring it from the map's key order is
+the defect itself.
+
+### Two green tests were asserting the defect
+
+`channelModes`' founder case and `ModeModal`'s founder-without-`@` case
+both described the RIGHT behaviour and passed for as long as the bug
+existed, because their fixtures were object literals written in rank
+order — and an object literal preserves the order it was typed in,
+which is not the order the wire delivers. Both are rebuilt from
+`JSON.parse` of the measured production serialisation. **A fixture that
+spells a wire shape by hand is testing the author's mental model of the
+wire, not the wire.**
+
+### Retracted mid-flight
+
+The first pass claimed a bare `<span>` is name-prohibited (role=generic)
+and therefore that `aria-label` on it computes to no accessible name. A
+mutant that dropped `role="img"` SURVIVED: our toolchain
+(dom-accessibility-api) does not implement the prohibition and names the
+span either way. The empty accessible names observed while building came
+entirely from the #130 flicker gate hiding the scrollback container in
+jsdom. `role="img"` stays — ARIA does prohibit the name there, so no AT
+owes us the reading — but that is the spec, not a measurement, and the
+tests now pin the spec-legal SHAPE with a byRole query instead of
+pretending the name assertion proves it.
