@@ -79,10 +79,6 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       assert GenWireTypes.render_type({:map, [], []}) == "Record<string, unknown>"
     end
 
-    test "renders user_type reference as camelCased alias name" do
-      assert GenWireTypes.render_type({:user_type, [], [:my_payload]}) == "MyPayload"
-    end
-
     test "renders remote_type cross-module reference as ModName + typeName" do
       # e.g. Grappa.Networks.Wire.connection_state_event → NetworksWireConnectionStateEvent
       mod = Grappa.Networks.Wire
@@ -296,6 +292,30 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       assert err.message =~ "cyclic enum reference"
       assert err.message =~ "enum_a"
       assert err.message =~ "enum_b"
+    end
+  end
+
+  # #1406 3b — the EXTERNAL type path renders one alias at a time and keeps no
+  # sibling registry, so a same-module `user_type` ref has nothing to resolve
+  # against. It used to fall back to `camelize/1` and emit an identifier
+  # NOTHING declares, while the runtime emitter computed a DIFFERENT name for
+  # the same type and imported it. The generator exited 0 and the breakage
+  # surfaced in the client compiler as TS2304 + TS2724 with no named culprit.
+  # A codegen hole must be a codegen error, like the unmapped Erlang remote
+  # type and the cyclic enum reference already are.
+  describe "external types referencing a same-module type (#1406 3b)" do
+    test "raise names the external module and the type it cannot resolve" do
+      err =
+        assert_raise RuntimeError, fn ->
+          GenWireTypes.render_external_type_for_test(
+            Grappa.WireExternalRefFixture,
+            :t,
+            "WireExternalRefFixtureT"
+          )
+        end
+
+      assert err.message =~ "Grappa.WireExternalRefFixture.t/0"
+      assert err.message =~ "variant/0"
     end
   end
 

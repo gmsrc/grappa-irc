@@ -1352,6 +1352,12 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   def render_module_for_test(mod), do: render_module(mod)
 
   @doc false
+  @spec render_external_type_for_test(module(), atom(), String.t()) :: String.t()
+  def render_external_type_for_test(mod, type_name, alias_name) do
+    render_external_type(mod, type_name, alias_name)
+  end
+
+  @doc false
   @spec generate_for_test([module()]) :: String.t()
   def generate_for_test(mods) do
     mods
