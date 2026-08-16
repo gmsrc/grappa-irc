@@ -43636,3 +43636,58 @@ files, and the jail never sources this one. It says `# shellcheck shell=bash`,
 which is also how `scripts/posix-parse.sh` derives its set — the gate reads
 the declared dialect, so the exclusion is a property of the file rather than
 an exception list.
+<!-- entry #1385 -->
+
+---
+
+## 2026-08-16 — #1385: the rejoin snapshot takes a change, not a replacement
+
+`network_credentials.last_joined_channels` is the set a reconnecting session
+plans its JOINs from. `Session.Server` used to write it ABSOLUTELY, from
+`Map.keys(state.members)`, on every membership mutation. After a reconnect
+that map starts EMPTY and grows one self-JOIN echo at a time, so for the
+whole restore window the value written is a strict PREFIX of the channels
+the subject is actually in.
+
+On 2026-08-16 a cold restart put that window under a second drop wave
+(`Read/Dead Error`) and the prefix became the truth: `vjt` came back with 7
+of 11 channels, `morph` with 2 of 10, and both rows stayed truncated,
+because the next reconnect planned from the truncated row, joined fewer
+channels, and re-persisted the truncation. `morph`'s row only healed when a
+human re-joined by hand.
+
+The defect is not WHEN the write happens, it is WHAT is written. Gating the
+write on "the restore is complete" was rejected: it needs a completion
+signal that a channel stuck in `in_flight_joins` (a 477 into the ChanServ
+invite retry) may never give, and a session that stops persisting entirely
+is worse than the bug. Instead the row now takes a CHANGE:
+
+    row := (row ∪ live keyset) − the channels this change removed
+
+An absent channel is merely not back yet; only a departure removes. The
+snapshot therefore still shrinks on a real `/part` or KICK — the product
+constraint that rules out any "it never shrinks" fix, because a voluntary
+part must not come back on the next rejoin. The union (rather than a pure
+delta) also keeps the write self-healing: `persist_last_joined/5` swallows
+a failed write, and the next mutation unions the live keyset back in, which
+a delta would have lost for good.
+
+**The departures are sourced from the EVENT, never from a diff of the
+previous and current keyset.** A keyset that empties for a reason other
+than leaving reads, under a diff, as "left everything" — the same defect
+with the whole row as blast radius instead of a suffix. That scenario is
+not reachable today (an upstream drop stops the session rather than
+clearing the members map in place), and the diff form indeed survived 1753
+tests unchanged. It is still the wrong shape, and it has a reachable defect
+of its own: parting a channel that is in the snapshot but not in the live
+keyset moves no keyset, so the diff form writes nothing and the channel the
+operator just dismissed is re-JOINed on the next reconnect. That path is
+what pins the event form in the suite.
+
+**Accepted cost, deliberately not engineered around:** a channel left from
+ANOTHER client while grappa is disconnected is not observable, so the row
+keeps it and the next reconnect re-JOINs it. One channel too many beats one
+lost for good. Do not build machinery on top of this.
+
+Repair of the rows already truncated in production is a separate,
+operator-owned decision — this change stops the loss, it does not undo it.
