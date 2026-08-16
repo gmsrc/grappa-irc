@@ -44813,3 +44813,104 @@ survive the gesture. The argument is that a vertical claim never takes a
 scrubber drag (horizontal) nor a tap under the slop — but the controls
 live in the UA shadow DOM, `closest()` cannot see them, and no
 assertion in this change reaches them.
+<!-- entry #1406 -->
+
+---
+
+## 2026-08-16 — #1406: the Session arm pins are walked, and the "live drift" is a deliberate widening
+
+X-S1 of the 2026-08-15 review reported that 16 of the 37 `WireSessionEvent`
+arms carry no drift pin and that one, `isupport_changed.frame_budget_base`,
+has already drifted. The count is right. The drift is not, and the fix the
+issue prescribes — drop the `| null`, the "stale" comment and the `?? null`
+in `narrowIsupportChanged` — would have deleted a documented degradation
+contract.
+
+### Measured: there is no undocumented drift, there is a widening CLASS
+
+A derived walk over all 37 generated arms, comparing each against cic's copy
+on each topic union, names exactly three divergences. Every one of them is a
+deliberate client widening with a comment already explaining itself:
+
+* `isupport_changed.frame_budget_base` (#1108) — `number | null` against a
+  generated `number`. Absent means a server predating the field, and the
+  realistic case is a cic-only bundle deploy. `narrowIsupportChanged`
+  degrades to `null` rather than rejecting the envelope, which would take
+  the whole ISUPPORT capability table, and with it the `/mode` toggles,
+  down with it. It sits beside four sibling fallbacks in the same narrower
+  (`list_modes_queryable ?? ["b"]`, `chantypes ?? [...]`, the casemapping
+  degrade, `maxlist ?? {}`) — hardening one of five would have been
+  incoherent as well as wrong.
+* `recover_progress.reason` and `recover_result.reason` (#581) — a nullable
+  string against the four-token `SessionWireRecoverReason`, kept wide on
+  purpose so an additive server token can never drop a TERMINAL recovery
+  result; `RecoverModal.reasonCopy` maps what it knows and falls back.
+  #1338 X-S14 widened `web_session_severed.code` citing this exact posture,
+  so hardening these two reverses a standing ruling.
+
+The generated type describes the server we ship; a widened field describes
+the set of servers cic must survive. Those are different quantifiers, which
+is why the `| null` comment reads false only if you assume it is talking
+about this server. The general rule the three share is the additive-only
+wire (#447) reaching the type layer: **a value that only selects COPY must
+never be allowed to drop its event when the server adds to its vocabulary**,
+and the type that receives it has to be wide enough to say so.
+
+Note also which two arms actually diverge undeclared: `recover_*`, which the
+issue lists as merely unpinned. `isupport_changed`, the one it names, is the
+best-documented of the three.
+
+### The gate: walk the population, declare the widened FIELD
+
+The real defect X-S1 found is not any arm, it is that the pin population was
+transcribed. `wireTypesAssert.ts` asks for a line per type, so an arm is
+guarded only when somebody remembers — and sixteen times nobody did. The
+walk maps every generated arm kind to `never` when cic's copy matches and to
+the kind itself when it does not; a generated arm cic declares on NEITHER
+topic fails separately, a class no hand pin can express because there is
+nothing yet to write the pin about. It runs per topic union, so the four
+dual-topic arms are pinned on both sides and thereby to each other.
+
+The three widenings are declared with the FIELD they widen, not merely
+exempted. The walk still compares every other field of those arms exactly,
+and still requires the widened field to accept everything the generated type
+admits, so the exemption cannot quietly grow into a hole — and a kind added
+without naming its field does not type-check. That is the difference between
+an exemption list and a bounded one.
+
+Two TypeScript mechanics the shape depends on, both found the hard way:
+
+* `Equal<A & B, Flat>` is always false. An intersection keeps its operands
+  and `Equal` compares type identity, so the arms declared as
+  `({ kind: "whois_bundle" } & WhoisBundle)` all read as drift until a
+  homomorphic `Flatten<T> = { [K in keyof T]: T[K] }` collapses them. Without
+  it the exemption list swallows the mechanism.
+* The empty-set check must be a MAPPED TYPE, not `Equal<T, never>` and not a
+  tuple. `Assert<Equal<T, never>>` prints an anonymous `false`; a tuple
+  prints the alias reference unexpanded (`DriftedIn<WireUserEvent>`, measured
+  twice). `{ [K in T & string]: Message }` prints
+  `{ recover_progress: "…"; }` — the offending kinds, by name.
+
+### Seventeen pins removed, five of which could never have failed
+
+Every pin naming a `WireSessionEvent` arm is gone: the walk re-derives the
+same relation for the whole population. Leaving them would have been worse
+than redundant, since a hand pin beside a walked arm invites the eighteenth
+and restores the belief that the population is a list.
+
+Five of the removed pins were vacuous by construction: `WhoisBundle`,
+`WhowasBundle`, `NamesReply`, `WhoReply` and `LinksReply` are all declared
+`Omit<SessionWire…Payload, "kind">`, so `Equal<WhoisBundle, Omit<…, "kind">>`
+was an identity. Measured, not inferred — a mutant adding a field to the
+generated whois payload produced errors in six consumers and NOTHING in the
+assert file, because the alias had already moved with it.
+
+### What this does not reach
+
+The walk covers the 37 `Session.Wire` arms. Thirteen more cic kinds come
+from other Wire modules that emit no union — those keep their hand pins, and
+giving them the same treatment means teaching codegen to emit a union per
+module, which is a codegen change and not this one. The four MEDIUMs of the
+same issue (X-S4 open-map keys, X-S8 `window_state`, X-S9 theme vocabularies,
+X-S10 the `/me` and `/auth/login` discriminators) are all server-side and
+untouched here.
