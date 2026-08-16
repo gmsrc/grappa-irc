@@ -9,6 +9,7 @@ import {
   editorSigils,
   modeDescription,
   sanitizeModeParam,
+  statusmsgDescription,
 } from "../lib/channelModes";
 import { DEFAULT_ISUPPORT, type IsupportEntry } from "../lib/isupport";
 
@@ -122,6 +123,36 @@ describe("sanitizeModeParam (#240)", () => {
     // split into two MODE args and set garbage. Reject at the boundary.
     expect(sanitizeModeParam("two words")).toBeNull();
     expect(sanitizeModeParam("a\tb")).toBeNull();
+  });
+});
+
+describe("statusmsgDescription", () => {
+  // The sigils are resolved through the network's own PREFIX in BOTH tests
+  // below, and the two maps disagree about what `%` means — which is the
+  // point: no sigil carries a meaning of its own here.
+  const BAHAMUT = DEFAULT_ISUPPORT.prefix;
+
+  it("names a level through the network's PREFIX", () => {
+    expect(statusmsgDescription("@", BAHAMUT)).toBe("delivered to ops only");
+    expect(statusmsgDescription("%", BAHAMUT)).toBe("delivered to halfop only");
+  });
+
+  it("names EVERY level of a multi-sigil run — #1303", () => {
+    // `meta.statusmsg` carries the whole peeled run because such a target
+    // reaches the union of the levels; a description that named only the
+    // first would understate who read the row.
+    expect(statusmsgDescription("@+", BAHAMUT)).toBe("delivered to ops and voice only");
+    expect(statusmsgDescription("@%+", BAHAMUT)).toBe("delivered to ops, halfop and voice only");
+  });
+
+  it("degrades to the mode letter, then to the sigil, and invents nothing", () => {
+    // A letter nobody named: cic knows a level EXISTS (the network advertised
+    // the pairing) but has no copy for it, so it says which mode it is —
+    // strictly more than the sigil, and honest about what it does not know.
+    expect(statusmsgDescription("!", { y: "!" })).toBe("delivered to mode +y only");
+    // A sigil the network never advertised at all: there is no letter to
+    // name, and guessing one would be inventing a level.
+    expect(statusmsgDescription("~", BAHAMUT)).toBe("delivered to ~ only");
   });
 });
 
