@@ -196,8 +196,7 @@ defmodule Grappa.Session.ISupportTest do
       # Same posture as the map: an unbalanced token is ignored rather than
       # blanking the table, so a misbehaving server cannot strip rank.
       isupport =
-        ISupport.default()
-        |> then(&ISupport.merge_isupport(["grappa-test", "PREFIX=(qaohv)~&@"], &1))
+        ISupport.merge_isupport(["grappa-test", "PREFIX=(qaohv)~&@"], ISupport.default())
 
       assert ISupport.prefix_order(isupport) == ISupport.default_prefix_order()
     end

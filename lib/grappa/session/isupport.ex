@@ -515,7 +515,7 @@ defmodule Grappa.Session.ISupport do
   # reason `STATUSMSG=` below uses it.
   defp merge_token("PREFIX=" <> rest, acc) do
     case parse_prefix(rest) do
-      {:ok, {prefix, order}} -> %{acc | prefix: prefix} |> Map.put(:prefix_order, order)
+      {:ok, {prefix, order}} -> Map.put(%{acc | prefix: prefix}, :prefix_order, order)
       :error -> acc
     end
   end
