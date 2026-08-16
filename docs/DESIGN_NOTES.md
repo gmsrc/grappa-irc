@@ -43804,7 +43804,7 @@ it waits on.
 Two consequences fall out. Code reached only from inside an open transaction
 needs a NON-retrying seam that RAISES, because the raise is what aborts the
 transaction and hands the retry to the enclosing engine — that is the `!`
-family (`persist!/1`, `get_or_init!/1`, `put_upload_ttl_seconds!/2`,
+family (`get_or_init!/1`, `put_upload_ttl_seconds!/2`,
 `rename_muted_target!/4`). And a set of writes that must land together needs
 one owner: `Grappa.NickMigration` is now the home of the nick-rename set, a
 TOP-LEVEL boundary rather than a supervised child, so `Session` can span four
@@ -43848,3 +43848,61 @@ degraded response. And P-S8's count was wrong in three different ways at once �
 prose said five, four were named, the file:line list held six; seven are fixed,
 including `update_visitor_last_joined_channels/3`, which the review never
 mentions and which is session-driven exactly like its user-side twin.
+
+### Two gates, one predicate: do not take the write lock to migrate nothing
+
+A peer NICK fans out to every session sharing a channel, and almost none of
+them hold a window or a mute for that peer. Both stores are now probed before
+anything opens a transaction for them: `QueryWindows.exists?/3` for the window,
+`muted_prefs/2` for the mute. Neither probe is a second formulation of its
+store's question — each IS the question the write then asks, shared with it, so
+the cheap path and the authoritative path cannot drift onto different notions
+of "nothing to migrate". Neither probe is trusted for the write either: the
+transaction re-reads, and only that read decides what is written. A store that
+appears between probe and frame is equally invisible to a `SELECT` taken inside
+the transaction, so nothing is made less atomic; at worst a transaction opens
+that turns out to have nothing in it, which is the cost being removed
+everywhere else.
+
+The mute still migrates UNCONDITIONALLY (#1340): the probe decides whether a
+TRANSACTION is needed, never whether the MIGRATION is. With no window the mute
+is the only store that can move, and an unmuted key has nothing to move at all,
+so here the two questions coincide.
+
+The bang variants deliberately do not probe. They run inside the caller's open
+transaction, where the lock is already held, so a probe would cost a read and
+buy nothing.
+
+### The venue limitation — a green on a workstation is not an acquittal
+
+That the lock is taken to migrate nothing is measured, deterministically, by
+`NickMigrationTest` off Ecto's per-query telemetry. **That removing it cures
+any end-to-end red is NOT measured, and the attempt to measure it locally
+failed.**
+
+The signature originally chased — `fault=busy_locked`, a dropped scrollback row
+under the #336 never-crash contract, a rename landing tens of seconds behind
+its assertion window — appeared only while an unrelated ExUnit suite happened
+to be running from ANOTHER worktree on the same host. On a quiet host the
+unfixed tree passed 10/10 with zero occurrences of all three signatures. Under
+a deliberately generated load it passed 10/10 again, with zero, even though
+that load was HEAVIER by loadavg: band 4.86–9.12 against a 3.2–4.7 floor.
+
+The likely reason is worth recording, because it will mislead the next person
+the same way: **loadavg measures the CPU run queue, not contention on SQLite's
+single writer.** The generated load was more pressure of a different kind —
+different `_build`, different mix container, different disk access pattern.
+Nothing here rules the defect out; it says this venue cannot show it, and that
+a green measured here must not be read as an acquittal.
+
+Five arms were run and three discarded, recorded so the two surviving greens
+are not mistaken for the whole attempt: one where a neighbour's suite ran
+during the unfixed arm and its heavy phase fell outside the comparison arm's
+window (a time-varying neighbour on sequential arms can manufacture a
+differential from nothing); its comparison arm, for the same reason; and a
+first controlled-load attempt whose generator ran from the tree under
+measurement, so the load differed between arms by construction.
+
+The venue that does reproduce is a contended CI runner, and what it has
+established is about #1375 rather than about the probe — see the re-land note
+in that entry above.
