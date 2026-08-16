@@ -188,10 +188,16 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
     test "warns when a map degrades to Record<string, unknown> with atom keys in it" do
       warning =
         ExUnit.CaptureIO.capture_io(:stderr, fn ->
-          GenWireTypes.render_module_for_test(Grappa.WireFixture)
+          send(self(), {:rendered, GenWireTypes.render_module_for_test(Grappa.WireFixtureDegraded)})
         end)
 
+      assert_received {:rendered, rendered}
       assert warning =~ "atom-keyed map in Wire typespec"
+
+      # The degraded render drops the VALUE type with the keys: taking the
+      # named field's `String.t()` and applying it to every key would claim
+      # something the typespec never said.
+      assert rendered =~ ~s(export type WireFixtureDegradedMixedKeyPayload = Record<string, unknown>;)
     end
 
     # Pins the real production deliverable: Cic.Wire's `version` is

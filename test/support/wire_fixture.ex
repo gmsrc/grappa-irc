@@ -34,12 +34,4 @@ defmodule Grappa.WireFixture do
   @type union_keyed_payload :: %{
           optional(:alpha | :beta) => term()
         }
-
-  # The residual shape the codegen still cannot express: a union-keyed
-  # association MIXED with a named key. It stays an open map on purpose,
-  # but it must not stay SILENT about it.
-  @type mixed_key_payload :: %{
-          required(:named) => String.t(),
-          optional(:alpha | :beta) => term()
-        }
 end
