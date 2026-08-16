@@ -18,12 +18,14 @@ defmodule GrappaWeb.AdminChannelTest do
   """
   use GrappaWeb.ChannelCase, async: false
 
+  import ExUnit.CaptureLog
   import Grappa.AuthFixtures
 
   alias Grappa.{AdminEvents, AdminOverview, Repo, SessionLog}
   alias Grappa.AdminEvents.Wire
   alias Grappa.PubSub.Topic
   alias GrappaWeb.UserSocket
+  alias Phoenix.Socket.Broadcast
 
   setup do
     # AdminEvents is the global singleton — reset buffer per-test so
@@ -243,6 +245,53 @@ defmodule GrappaWeb.AdminChannelTest do
 
       ref = push(socket, "anything", %{})
       assert_reply ref, :ok
+    end
+  end
+
+  # W-S7 (#1407) — the info side of the same posture the inbound catch-all
+  # above already takes. The barrier in both tests is mailbox ORDER: the
+  # `push` is enqueued after the stray message, so a reply can only come
+  # back if the stray one was handled without killing the channel pid.
+  describe "unhandled info catch-all" do
+    test "a stray send is logged and leaves the operator console alive" do
+      admin = user_fixture(is_admin: true)
+      raw = build_socket(admin.name, {:user, admin.id}, is_admin: true)
+
+      {:ok, _, socket} = subscribe_and_join(raw, "grappa:admin:events", %{})
+      assert_push "snapshot", _
+
+      log =
+        capture_log(fn ->
+          send(socket.channel_pid, :no_clause_matches_this)
+
+          ref = push(socket, "ping", %{})
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "unhandled message"
+    end
+
+    test "a broadcast the channel has no clause for is logged and not fatal" do
+      admin = user_fixture(is_admin: true)
+      raw = build_socket(admin.name, {:user, admin.id}, is_admin: true)
+
+      {:ok, _, socket} = subscribe_and_join(raw, "grappa:admin:events", %{})
+      assert_push "snapshot", _
+
+      log =
+        capture_log(fn ->
+          send(socket.channel_pid, %Broadcast{
+            topic: Topic.session_log(),
+            event: "an_event_name_added_later",
+            payload: %{}
+          })
+
+          ref = push(socket, "ping", %{})
+          assert_reply ref, :ok
+        end)
+
+      assert log =~ "unhandled broadcast"
+      assert log =~ "an_event_name_added_later"
     end
   end
 

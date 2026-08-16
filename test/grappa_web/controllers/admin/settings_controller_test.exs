@@ -149,13 +149,39 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
       assert %{"settings" => _} = json_response(conn, 200)
     end
 
-    test "ignores unknown keys", %{conn: conn, session: session} do
+    # W-S3 (#1407) — an unknown key is a typo, not a no-op. It names the
+    # offending dotted key in the SAME 422 shape a bad VALUE gets, because
+    # that is the shape `AdminSettingsTab` already highlights inline.
+    test "422 invalid_setting names an unknown upload key", %{conn: conn, session: session} do
       conn =
         conn
         |> put_bearer(session.id)
-        |> put("/admin/settings", %{"upload" => %{"unknown_key" => "foo"}})
+        |> put("/admin/settings", %{"upload" => %{"image_per_file_cap" => 1_048_576}})
 
-      assert %{"settings" => _} = json_response(conn, 200)
+      assert %{
+               "error" => "invalid_setting",
+               "field" => "upload.image_per_file_cap"
+             } = json_response(conn, 422)
+    end
+
+    # The key check runs BEFORE the per-key applier, so a body that mixes a
+    # good key with a typo writes NOTHING — the sibling admin controllers'
+    # all-or-nothing posture, not a half-applied save.
+    test "an unknown upload key rejects the whole body, valid siblings included", %{
+      conn: conn,
+      session: session
+    } do
+      before = ServerSettings.public_view().upload.image_per_file_cap_bytes
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "upload" => %{"image_per_file_cap_bytes" => before + 4096, "globalcap_bytes" => 1}
+        })
+
+      assert %{"error" => "invalid_setting"} = json_response(conn, 422)
+      assert ServerSettings.public_view().upload.image_per_file_cap_bytes == before
     end
   end
 
@@ -401,6 +427,25 @@ defmodule GrappaWeb.Admin.SettingsControllerTest do
                "error" => "invalid_setting",
                "field" => "addressing.static_mapping_prefix"
              }
+    end
+
+    # W-S3 (#1407) — the addressing subtree used to log the typo and apply the
+    # rest; the probe never even ran for a body that named nothing it knows.
+    test "422 invalid_setting names an unknown addressing key — nothing is persisted",
+         %{conn: conn, session: session} do
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put("/admin/settings", %{
+          "addressing" => %{"static_prefix" => "2a03:4000:20:2d3:cb::/80"}
+        })
+
+      assert json_response(conn, 422) == %{
+               "error" => "invalid_setting",
+               "field" => "addressing.static_prefix"
+             }
+
+      assert ServerSettings.static_mapping_prefix() == nil
     end
 
     test "applies upload AND addressing subtrees in one request", %{conn: conn, session: session} do
