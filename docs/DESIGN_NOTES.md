@@ -44324,6 +44324,10 @@ segment, and that `new URL(...).pathname` is exactly `/share`. The
 scrub is pinned by sampling `location.hash` INSIDE the mocked request
 rather than after it: "empty afterwards" is precisely what the old
 scrub-on-success produced, so only the ordering distinguishes them.
+<!-- entry #1404d -->
+
+---
+
 ## 2026-08-16 — #1404: ceilings for the stores a stranger fills
 
 Two more from the 2026-08-15 review, and they are the same defect twice.

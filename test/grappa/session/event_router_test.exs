@@ -3810,8 +3810,7 @@ defmodule Grappa.Session.EventRouterTest do
       state =
         base_state(%{
           members: %{"#italia" => %{"alice" => []}},
-          userhost_cache:
-            Map.put(stranger_cache(cap - 1), "alice", %{user: "alice_u", host: "alice.host"})
+          userhost_cache: Map.put(stranger_cache(cap - 1), "alice", %{user: "alice_u", host: "alice.host"})
         })
 
       {:cont, new_state, _} = EventRouter.route(whoreply("newcomer", "n_u", "n.host"), state)
@@ -3831,8 +3830,7 @@ defmodule Grappa.Session.EventRouterTest do
           # Raw-cased in the members map (the key/display split), folded in
           # the cache: comparing the two unfolded would evict a live member.
           members: %{"#italia" => %{"Alice" => []}},
-          userhost_cache:
-            Map.put(stranger_cache(cap - 1), "alice", %{user: "alice_u", host: "alice.host"})
+          userhost_cache: Map.put(stranger_cache(cap - 1), "alice", %{user: "alice_u", host: "alice.host"})
         })
 
       {:cont, new_state, _} = EventRouter.route(whoreply("newcomer", "n_u", "n.host"), state)
@@ -3860,8 +3858,7 @@ defmodule Grappa.Session.EventRouterTest do
       state =
         base_state(%{
           members: %{"#italia" => residents},
-          userhost_cache:
-            Map.new(1..cap, fn i -> {"member#{i}", %{user: "u#{i}", host: "h#{i}"}} end)
+          userhost_cache: Map.new(1..cap, fn i -> {"member#{i}", %{user: "u#{i}", host: "h#{i}"}} end)
         })
 
       {:cont, new_state, _} = EventRouter.route(whoreply("newcomer", "n_u", "n.host"), state)
