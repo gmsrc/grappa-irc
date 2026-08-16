@@ -12144,6 +12144,32 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   display: flex;
   flex-direction: column;
   z-index: 1101;
+  /* #1438 — a vertical drag dismisses the viewer, so the whole touch stream
+     belongs to our JS, exactly as .media-viewer-media--zoomable already claims
+     it for the pinch. Declared on the CONTAINER because the UA intersects
+     touch-action down the ancestor chain: one declaration covers the <video>
+     too, and there is no per-media copy to forget. Without it iOS reads the
+     drag as its own overscroll and hauls the browser chrome in behind the
+     modal. `none` rather than .scrollback's fail-open `pan-y` — nothing here
+     scrolls (.media-viewer-body is overflow:hidden), and pan-y is the very
+     axis we take.
+     The transition is the SPRING BACK for a drag that did not commit; the
+     inline transform the component writes per frame overrides this rule's
+     centering, which is why the component re-states it. */
+  touch-action: none;
+  transition: transform 0.18s ease-out;
+}
+
+/* Worn for exactly as long as the finger drives the modal (DRAGGING_CLASS in
+   lib/mediaViewerGesture.ts). Killing the transition is what makes the modal
+   TRACK the finger instead of easing 180ms behind it — the same device as
+   .scrollback-line-swiping. The backdrop's opacity is written inline per frame
+   and cleared on release, and deliberately carries no transition of its own:
+   it is a previous SIBLING, unreachable from this class without a :has()
+   selector the codebase uses nowhere, and an overlay re-darkening in one frame
+   is not a motion the eye follows. */
+.media-viewer-modal--dragging {
+  transition: none;
 }
 
 .media-viewer-header {
