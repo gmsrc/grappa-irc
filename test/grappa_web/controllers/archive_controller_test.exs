@@ -29,6 +29,15 @@ defmodule GrappaWeb.ArchiveControllerTest do
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback
 
+  # #1404 — read the SAME config keys `GrappaWeb.ArchiveController` reads,
+  # rather than an accessor on the controller: an accessor returning a
+  # compile-time constant cannot carry an honest `@spec` under Dialyzer's
+  # `:underspecs`, and a literal here would pin the test to a number the
+  # operator is meant to retune.
+  @archive_capacity Application.compile_env(:grappa, [:archive_read, :capacity])
+  @archive_refill_per_sec Application.compile_env(:grappa, [:archive_read, :refill_per_sec])
+  @archive_retry_after max(1, ceil(1.0 / @archive_refill_per_sec))
+
   setup %{conn: conn} do
     vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
     session = session_fixture(vjt)
@@ -149,6 +158,63 @@ defmodule GrappaWeb.ArchiveControllerTest do
         |> get("/networks/#{net.slug}/archive")
 
       assert json_response(conn, 404) == %{"error" => "not_found"}
+    end
+  end
+
+  describe "GET /networks/:network_id/archive is metered" do
+    test "the listing is refused once the subject's archive bucket is spent",
+         %{conn: conn, vjt: vjt} do
+      net = net_with_credential(vjt)
+
+      # Pre-state: the door is open before the bucket is spent. Without
+      # this the 429 below could just as well mean the route is broken.
+      assert conn |> get("/networks/#{net.slug}/archive") |> Map.fetch!(:status) == 200
+
+      answers = for _ <- 1..@archive_capacity, do: get(conn, "/networks/#{net.slug}/archive")
+      refused = Enum.find(answers, &(&1.status != 200))
+
+      assert refused,
+             "the archive listing spent no token: #{@archive_capacity + 1} calls all passed"
+
+      assert refused.status == 429
+      assert json_response(refused, 429) == %{"error" => "rate_limited"}
+
+      # The hint must come from THIS bucket's refill, not from the coarse
+      # budget's much faster one — pacing a client against the wrong
+      # bucket re-429s it on the very next call.
+      assert Plug.Conn.get_resp_header(refused, "retry-after") == [
+               Integer.to_string(@archive_retry_after)
+             ]
+    end
+
+    test "the bucket keys on (subject, network) — a spent network does not refuse another",
+         %{conn: conn, vjt: vjt} do
+      spent = net_with_credential(vjt)
+      other = net_with_credential(vjt)
+
+      for _ <- 1..(@archive_capacity + 1), do: get(conn, "/networks/#{spent.slug}/archive")
+
+      assert conn |> get("/networks/#{spent.slug}/archive") |> Map.fetch!(:status) == 429,
+             "the first network's bucket was expected to be empty by now"
+
+      assert conn |> get("/networks/#{other.slug}/archive") |> Map.fetch!(:status) == 200,
+             "a second network shared the first one's bucket"
+    end
+
+    test "the DELETE takes no archive token — it is a write, already metered upstream",
+         %{conn: conn, vjt: vjt} do
+      net = net_with_credential(vjt)
+      :ok = seed_archive_rows(vjt, net)
+
+      for _ <- 1..(@archive_capacity + 1), do: get(conn, "/networks/#{net.slug}/archive")
+
+      assert conn |> get("/networks/#{net.slug}/archive") |> Map.fetch!(:status) == 429,
+             "the listing bucket was expected to be empty by now"
+
+      target = URI.encode_www_form("#a")
+
+      assert conn |> delete("/networks/#{net.slug}/archive/#{target}") |> Map.fetch!(:status) ==
+               204
     end
   end
 

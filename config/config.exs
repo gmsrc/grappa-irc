@@ -174,6 +174,28 @@ config :grappa, :send_throttle,
 # deliberately NOT read there: it describes a connection the ircd meters
 # loosely, which says nothing about courtesy answers.
 
+# #1404 — the archive listing door. `GET /networks/:slug/archive` is the
+# one authenticated READ that answers from the whole `(subject, network)`
+# partition instead of a page, so it is metered per `(subject, network)`
+# like the send door rather than riding the coarse `:request_budget`
+# (which meters writes on purpose). Same shared `TokenBucket`, distinct
+# bucket atom. Read via `Application.compile_env/3` in
+# `GrappaWeb.ArchiveController`; the 429's `retry-after` is derived from
+# `refill_per_sec` there, so this pair is the only knob.
+#
+# The numbers come from the client's shape, not from taste: cic refetches
+# the list once per PART (`archive_changed`) in every open tab, plus once
+# per modal open.
+#
+#   * capacity — burst allowance. 20 covers a hand-driven run of parts
+#     fanned out across several tabs without ever refusing one.
+#   * refill_per_sec — sustained ceiling once the burst is spent. One
+#     listing per 5s is far above any human cadence and far below what a
+#     scripted caller would want.
+config :grappa, :archive_read,
+  capacity: 20,
+  refill_per_sec: 0.2
+
 # GH #630 — coarse per-subject INBOUND request budget spanning EVERY WS
 # `handle_in` verb AND every REST write (POST/PUT/PATCH/DELETE). This is
 # the shared OUTER gate that a flooder cannot dodge by switching surface;

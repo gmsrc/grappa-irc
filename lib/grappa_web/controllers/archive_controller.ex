@@ -34,6 +34,13 @@ defmodule GrappaWeb.ArchiveController do
   `subject_where/2` partitions on `visitor_id` for `{:visitor, _}`
   subjects (per-subject iso mirror of the user path).
 
+  The listing is METERED — one token per call from a per-`(subject,
+  network)` bucket of its own (#1404), because it is an aggregate over
+  the partition rather than a paged read and the coarse request budget
+  meters writes by design. An empty bucket answers 429 `rate_limited`
+  with a `retry-after` and runs no query. The DELETE is a write and is
+  already covered by the coarse budget, so it takes no archive token.
+
   Iso boundary: `Plugs.ResolveNetwork` collapses unknown-slug /
   not-your-network to 404 BEFORE this action runs. `:no_session` is
   not surfaced to the wire — an absent session simply means an empty
@@ -45,11 +52,45 @@ defmodule GrappaWeb.ArchiveController do
   import GrappaWeb.Validation, only: [validate_target_name: 1]
 
   alias Grappa.Accounts.User
+  alias Grappa.RateLimit.TokenBucket
   alias Grappa.{PubSub, QueryWindows, Scrollback, Session}
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback.Wire
   alias Grappa.Visitors.Visitor
   alias GrappaWeb.Subject
+
+  # #1404 — the archive listing is the one authenticated READ that is a
+  # per-network aggregate rather than a paged fetch: it answers from the
+  # whole `(subject, network)` partition, so its cost tracks the partition
+  # and not a `limit` param. The coarse `:request_budget` plug deliberately
+  # lets reads through (paging and snapshots are legitimate high-volume
+  # traffic), and its moduledoc says where a read of unusual cost belongs
+  # instead — a bound of its own, at the door that knows the cost. This is
+  # that bound: one token per listing from a per-`(subject, network)`
+  # bucket, the same shared limiter the send door uses (#340), a distinct
+  # bucket atom so a listing can never spend a send token.
+  #
+  # The numbers are set by the CLIENT's own shape, not by taste: cic
+  # refetches this list on every `archive_changed` (one per PART) in every
+  # open tab, so a hand-driven burst of parts across a few tabs must pass
+  # untouched. Capacity covers that burst; the refill is the sustained
+  # ceiling. Boot-time config per CLAUDE.md (`Application.get_env` at
+  # runtime is banned).
+  @archive_read_bucket :archive_read
+  @archive_read_capacity Application.compile_env(:grappa, [:archive_read, :capacity], 20)
+  @archive_read_refill_per_sec Application.compile_env(
+                                 :grappa,
+                                 [:archive_read, :refill_per_sec],
+                                 0.2
+                               )
+
+  # Seconds until one token refills — the client-facing hint on the 429,
+  # derived from THIS bucket's refill so cic paces against the bucket that
+  # actually refused it. One knob pair, not two that drift. `ceil` so the
+  # client never under-waits and re-trips instantly; `max(1, _)` guards a
+  # sub-second config from flooring to 0. HTTP Retry-After is integer
+  # seconds (RFC 7231 §7.1.3).
+  @archive_read_retry_after_seconds max(1, ceil(1.0 / @archive_read_refill_per_sec))
 
   @doc """
   `GET /networks/:network_id/archive` — returns the archived target
@@ -57,17 +98,40 @@ defmodule GrappaWeb.ArchiveController do
 
   Wire shape per entry: `%{target, kind, last_activity, row_count}`
   where `kind` is the wire string `"channel" | "query"`.
+
+  Metered: one token per call from the per-`(subject, network)`
+  `#{@archive_read_bucket}` bucket. An empty bucket answers 429
+  `rate_limited` with a `retry-after` hint and runs no query.
   """
-  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t()
+  @spec index(Plug.Conn.t(), map()) :: Plug.Conn.t() | {:error, {:rate_limited, pos_integer()}}
   def index(conn, _) do
     subject = conn.assigns.current_subject
     network = conn.assigns.network
     session_subject = Subject.to_session(subject)
 
-    active_keyset = build_active_keyset(subject, session_subject, network.id)
+    with :ok <- take_archive_token(session_subject, network.id) do
+      active_keyset = build_active_keyset(subject, session_subject, network.id)
 
-    entries = Scrollback.list_archive(session_subject, network.id, active_keyset)
-    render(conn, :index, archive: entries)
+      entries = Scrollback.list_archive(session_subject, network.id, active_keyset)
+      render(conn, :index, archive: entries)
+    end
+  end
+
+  # The token is taken BEFORE the keyset is built, so a refused listing
+  # costs no query at all — a bound that still pays for the work it
+  # refuses is not a bound.
+  @spec take_archive_token(Session.subject(), integer()) ::
+          :ok | {:error, {:rate_limited, pos_integer()}}
+  defp take_archive_token(session_subject, network_id) do
+    case TokenBucket.take(
+           @archive_read_bucket,
+           {session_subject, network_id},
+           @archive_read_capacity,
+           @archive_read_refill_per_sec
+         ) do
+      :ok -> :ok
+      {:error, :rate_limited} -> {:error, {:rate_limited, @archive_read_retry_after_seconds}}
+    end
   end
 
   @doc """

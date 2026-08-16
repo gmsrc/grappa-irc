@@ -238,6 +238,17 @@ config :grappa, :send_throttle,
   oper_capacity: 6,
   oper_refill_per_sec: 0.25
 
+# #1404 — the archive-listing bucket, small enough that a test can empty
+# it in a handful of calls. Safe to shrink globally: the bucket keys on
+# `(subject, network)` and every archive spec builds its own subject, so
+# no other test can spend these tokens. The refill is slower than the
+# ordinary send pair (0.2 = one token per 5s) so a token cannot trickle
+# back mid-test and turn an expected 429 into a wall-clock race — the
+# same reason #480 slowed the oper pair down rather than up.
+config :grappa, :archive_read,
+  capacity: 3,
+  refill_per_sec: 0.2
+
 # GH #630 — the request budget is effectively OFF by default in test:
 # it now meters EVERY WS handle_in verb AND every REST write, so a low
 # global capacity would 429/sever unrelated controller + channel tests
