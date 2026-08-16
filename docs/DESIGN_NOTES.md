@@ -43906,3 +43906,119 @@ measurement, so the load differed between arms by construction.
 The venue that does reproduce is a contended CI runner, and what it has
 established is about #1375 rather than about the probe — see the re-land note
 in that entry above.
+<!-- entry #1379 -->
+
+---
+
+## 2026-08-16 — #1379: a refusal nobody could trigger, and a finding that had already fixed itself
+
+Bucket J of the 2026-08-15 codebase review — the two HIGH cross-surface
+findings. One was closed before it was ever assigned, which is worth recording
+as a mechanism rather than an anecdote; the other was real, and the fix it
+gets here is deliberately smaller than the one the review proposed.
+
+### X-S3 was already landed, four and a half hours after the review named it
+
+The finding — that the carrier topic for `joined` / `join_failed` / `kicked`
+was published wrong in CLAUDE.md, in `server.ex` and in `api.ts`, the last of
+them naming a `broadcast_window_state_dual/3` that exists nowhere — was true
+when it was written. It stopped being true the same evening: the review landed
+as b09577a1 at 17:47 and 31c452cf (#1354) corrected all four surfaces at
+22:19, including the `CLIENT_PROTOCOL.md` §4 addition the review asked for.
+
+Re-measured on `origin/main` at 92df169a: `broadcast_window_state_dual`
+appears in neither `lib/` nor `cicchetto/src/`; the CLAUDE.md invariant now
+leads with "Every LIVE window-state transition broadcasts on the USER topic";
+both the `join_failed` and `kicked` arms name the user topic, two lines above
+the user-topic call the review said they contradicted; §4 carries the split.
+Nothing to do, so nothing was done.
+
+The mechanism worth keeping: a 147-finding review is a snapshot of a tree that
+keeps moving, and the finding most likely to be already fixed is the one that
+is cheapest to fix. Establishing a documentary claim against the code before
+acting on it is not ceremony — here it was the entire task.
+
+### X-S2: declaring the version is what arms the refusal
+
+#447 built the negotiation seam with a deliberate asymmetry: a client that
+says nothing is treated as CURRENT, so existing clients keep working and
+negotiation is opt-in. cicchetto had never opted in. A grep for
+`protocol_version|client_proto|min_protocol` across all of `cicchetto/`
+returned one hit and it was a prose comment.
+
+Opt-in-by-omission reads as a safe default and is not one here, because the
+default is wrong for precisely the client that most needs the guard.
+cicchetto is a service-worker-cached PWA and `--cic`-only versus server-only
+deploys are both routine, so it is the client most able to be arbitrarily
+stale against the running BEAM — and it was the one client the server could
+never refuse. The 426 was written for it and could not reach it.
+
+`socketEndpoint` now appends `?client_proto=` from an exported constant. Query
+param rather than subprotocol because the version is public discovery data,
+also served unauth at `GET /api/config`: the #95/#202 rule that keeps things
+off the URL is about the bearer, which is a secret. In the endpoint rather
+than the Socket's `params` because `params` is the same query string by a
+longer route, and one function should answer for the whole URL.
+
+**Arming the refusal couples two numbers that were independent.** Today
+`version/0` and `min_version/0` are both 1 and cic declares 1, so nothing
+changes at runtime — which is the argument for shipping it now rather than
+with the first bump. But from here, raising `min_version/0` without shipping a
+cic bundle that declares the new number 426s the reference client at the
+handshake, and a browser cannot read a 426 body: the operator would see an
+endless silent reconnect, not an error. That consequence has to be visible at
+the commit that raises the floor, so `protocol_test.exs` reads cic's constant
+out of `cicchetto/src` (mounted into the Elixir test container) and fails when
+the floor passes it. The absent-constant case FLUNKS rather than returning
+nil: Elixir orders every atom above every integer, so `nil >= min_version()`
+is `true` and the comparison would have passed vacuously on the exact edit it
+guards.
+
+`joinUser` also stops discarding the join reply's `protocol_version`. It is a
+diagnostic and nothing more — a difference is legal under the additive-only
+rule, so there is no gate to add and no UX to raise — but on a SW-cached PWA
+"the bundle and the BEAM were built against different contracts" is invisible
+from every other signal. Logged once per bundle load, since the "ok" hook
+re-fires on every phoenix auto-rejoin.
+
+### The boot-time `/api/config` pre-check was declined, on the server's own argument
+
+The review's third fix was a boot `GET /api/config` so `min_protocol_version`
+is checked before the socket opens. `ConfigController`'s moduledoc has already
+ruled on this: "the WS handshake is the real enforcement point for
+`min_protocol_version` … `/api/config` is only the advisory pre-check."
+cicchetto was missing the enforcement, not the advice, and the declaration
+supplies it.
+
+Measured, the pre-check today would fetch, compare 1 against 1 and do nothing,
+100% of the time — a boot-critical request on the CRT splash's critical path
+whose only outcome is a no-op. New boot-time fetches are not free here: #75's
+`GET /me/theme` silently broke the fake-token freeze specs, because any 401
+clears the token. The mechanism would be heavier than the problem.
+
+It does become the right answer, but on a different commit. The day
+`min_version/0` actually rises is the day an unreadable-426 reconnect loop
+becomes reachable, and turning that into a message needs the floor learned
+over HTTP, where a client CAN read the body. That belongs with the bump,
+together with the decision about what cic should then show — a UX call, and
+not a bugfix's to make.
+
+`push_content_encoding` is a true observation about a different subject.
+Nothing in `service-worker.ts` or `lib/pushPayload.ts` reads it, and the
+consequence — a client unable to distinguish an old server from its own broken
+decryptor — is real. It is a push-decryption concern that rides in
+`/api/config` by convenience, not part of the version seam. Named here, not
+fixed here.
+
+### What this does not establish
+
+No e2e ran and no browser was observed. The chain is pinned as far as the
+`Socket` constructor by unit test; the last hop — phoenix.js appending its own
+`vsn` to a URL that now already carries a query — is argued from
+`phoenix.mjs`'s `Ajax.appendParams`, which switches the separator to `&` when
+`url.match(/\?/)`, and not measured against a running server. The 426 has
+never fired against cicchetto and cannot today, both numbers being 1; the
+refusal is proven against synthetic below-floor clients only
+(`user_socket_test.exs`, `issue447-protocol-handshake.spec.ts`). Every
+assertion added here was bought with a mutant — ten of them, each killed, with
+the kills attributed per assertion.

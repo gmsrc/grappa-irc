@@ -101,11 +101,16 @@ test.describe("#447 protocol handshake + /api/config discovery", () => {
   test("WS handshake with NO client_proto → treated as current (403 auth-fail, NOT 426)", async ({
     request,
   }) => {
-    // The zero-behavior-change guarantee for cicchetto + shottino (which
-    // declare no version), proven at the handshake layer: an absent
-    // version is treated as current and falls through to auth (403), so it
-    // never trips the 426 upgrade path. If absent were mis-treated as
-    // too-old, this would be 426.
+    // The absent-is-current guarantee, proven at the handshake layer: an
+    // absent version falls through to auth (403) and never trips the 426
+    // upgrade path. If absent were mis-treated as too-old, this would be 426.
+    //
+    // #1379 narrowed who this covers. It was written for "cicchetto +
+    // shottino, which declare no version"; cicchetto now declares
+    // (`socket.ts` CLIENT_PROTOCOL_VERSION), so the un-declaring clients are
+    // shottino and any third party that skipped the negotiation. The
+    // guarantee is unchanged and still has holders — but it is no longer what
+    // keeps the reference client connecting, which is the point of #1379.
     const res = await request.get(`/socket/websocket?vsn=${PHX_VSN}`);
 
     expect(res.status()).toBe(403);
