@@ -36,7 +36,10 @@
 //   * Add an assert for every api.ts type that has a wireTypes.ts
 //     counterpart. When server-side adds a new Wire module + type,
 //     the codegen emits it; if a cic consumer needs the new shape,
-//     add the assert + the api.ts mirror.
+//     add the assert + the api.ts mirror. EXCEPT for arms of
+//     `WireSessionEvent`: #1406 walks that population instead, so a new
+//     Session arm needs no line here and gets none of the silence that
+//     a forgotten line used to buy.
 //
 //   * If an assert fails (`Type 'true' is not assignable to type
 //     'never'` at the `: true = true` lines), the api.ts mirror has
@@ -51,16 +54,11 @@ import type {
   HomeData,
   HomeNetworkRow,
   LinksEntry,
-  LinksReply,
   MentionsBundleMessage,
-  NamesReply,
   NotifyEntry,
   QueryWindowEntry,
   ScrollbackMessage,
-  WhoisBundle,
-  WhoReply,
   WhoUser,
-  WhowasBundle,
   WireChannelEvent,
   WireUserEvent,
 } from "./api";
@@ -84,29 +82,12 @@ import type {
   ScrollbackWireEvent,
   ScrollbackWireT,
   ServerSettingsWireChangedPayload,
-  SessionWireAwayConfirmedPayload,
   SessionWireChannelModesWire,
-  SessionWireConnectionProgressPayload,
-  SessionWireJoinedPayload,
-  SessionWireJoinFailedPayload,
-  SessionWireKickedPayload,
-  SessionWireLinksBundlePayload,
   SessionWireLinksEntry,
-  SessionWireLusersBundlePayload,
   SessionWireMember,
   SessionWireMentionsBundleMessage,
-  SessionWireNamesReplyPayload,
-  SessionWirePresenceChangedPayload,
-  SessionWirePresenceErrorPayload,
-  SessionWirePresenceSnapshotPayload,
   SessionWireTopicEntryWire,
-  SessionWireWhoisBundlePayload,
-  SessionWireWhoReplyPayload,
   SessionWireWhoUser,
-  SessionWireWhowasBundlePayload,
-  SessionWireWindowInviteDeclinedPayload,
-  SessionWireWindowInvitedPayload,
-  SessionWireWindowPendingPayload,
   UserSettingsWireAutoAwayDebounceChangedPayload,
   WindowCountsWireEvent,
   WireSessionEvent,
@@ -165,50 +146,19 @@ export type _Assert_HomeData = Assert<Equal<HomeData, NetworksWireHomeData>>;
 export type _Assert_CredentialJson = Assert<Equal<CredentialJson, NetworksWireCredentialJson>>;
 
 // === cross-surface S7 (2026-07-19 review) — the biggest boundary payloads ===
-// The assert list above stated the rule "per-arm PAYLOADS that have a flat
-// counterpart are pinned below", but the LARGEST payloads on the wire had
-// no pin: WhoisBundle (28 fields — it has already grown three times, P-0a +
-// #221 + #367 oper_text),
-// WhowasBundle, LusersBundle, the NamesReply/WhoReply envelopes, and the
-// #247 presence arms. A server-side field add/rename in any of these
-// regenerates wireTypes.ts cleanly and would leave the api.ts hand mirror +
-// its runtime narrower (userTopic.ts) silently stale — dropping every such
-// bundle at runtime with only console noise. These pins make that drift a
-// `tsc` error instead.
+// S7 pinned the largest payloads on the wire — WhoisBundle (28 fields, grown
+// three times: P-0a, #221, #367 oper_text), WhowasBundle, LusersBundle, the
+// NamesReply/WhoReply envelopes, the #238 LINKS bundle and the #247 presence
+// arms — because a server-side field add or rename regenerates wireTypes.ts
+// cleanly and would leave the api.ts mirror plus its runtime narrower
+// silently stale, dropping every such bundle with only console noise.
 //
-// Standalone hand-rolled types (the shape cic actually reuses in its stores)
-// are pinned against `Omit<SessionWireXPayload, "kind">`; the union-inline
-// arms (no standalone type) are pinned via `Extract<WireUserEvent, {kind}>`
-// against the full generated payload (kind included).
-export type _Assert_WhoisBundle = Assert<
-  Equal<WhoisBundle, Omit<SessionWireWhoisBundlePayload, "kind">>
->;
-export type _Assert_WhowasBundle = Assert<
-  Equal<WhowasBundle, Omit<SessionWireWhowasBundlePayload, "kind">>
->;
-export type _Assert_NamesReply = Assert<
-  Equal<NamesReply, Omit<SessionWireNamesReplyPayload, "kind">>
->;
-export type _Assert_WhoReply = Assert<Equal<WhoReply, Omit<SessionWireWhoReplyPayload, "kind">>>;
-export type _Assert_LusersBundle = Assert<
-  Equal<Extract<WireUserEvent, { kind: "lusers_bundle" }>, SessionWireLusersBundlePayload>
->;
-// #238 — LINKS topology bundle. `LinksEntry` pinned like `WhoUser`; the
-// `LinksReply` envelope pinned like `WhoReply` (Omit kind — the union arm
-// adds `kind: "links_bundle"`).
+// #1406 removed those pins: all of them named `WireSessionEvent` arms, and
+// the walk at the bottom of this file re-derives exactly the same relation
+// for the whole 37-arm population. What survives here is the ELEMENT type
+// nested inside an arm, which the walk covers only through its container
+// and which cic also reuses standalone in its stores.
 export type _Assert_LinksEntry = Assert<Equal<LinksEntry, SessionWireLinksEntry>>;
-export type _Assert_LinksReply = Assert<
-  Equal<LinksReply, Omit<SessionWireLinksBundlePayload, "kind">>
->;
-export type _Assert_PresenceChanged = Assert<
-  Equal<Extract<WireUserEvent, { kind: "presence_changed" }>, SessionWirePresenceChangedPayload>
->;
-export type _Assert_PresenceError = Assert<
-  Equal<Extract<WireUserEvent, { kind: "presence_error" }>, SessionWirePresenceErrorPayload>
->;
-export type _Assert_PresenceSnapshot = Assert<
-  Equal<Extract<WireUserEvent, { kind: "presence_snapshot" }>, SessionWirePresenceSnapshotPayload>
->;
 
 // === cross-surface S1 (2026-07-19 review) — envelope discriminator pins ===
 // The envelope `kind` (and Session `state`) discriminators of ~10 Wire
@@ -221,8 +171,9 @@ export type _Assert_PresenceSnapshot = Assert<
 // emits `kind: "literal"`); these pins tie cic's hand-rolled union arms
 // to the generated literal payloads so a future rename is a `tsc` error.
 // Each `Extract<Union, {kind}>` also revalidates the arm's full field
-// shape (kind + body) against the generated type — the same guarantee as
-// the S7 pins above.
+// shape (kind + body) against the generated type. These arms come from
+// other Wire modules, so no generated union covers them and the #1406 walk
+// cannot reach them — they stay hand-pinned.
 export type _Assert_ScrollbackMessageEvent = Assert<
   Equal<Extract<WireChannelEvent, { kind: "message" }>, ScrollbackWireEvent>
 >;
@@ -269,39 +220,6 @@ export type _Assert_ConnectionStateChanged = Assert<
 // `kind` discriminator only — that is the rename gap S1 closes.
 export type _Assert_BundleHashKind = Assert<
   Equal<Extract<WireUserEvent, { kind: "bundle_hash" }>["kind"], CicWireBundleHashPayload["kind"]>
->;
-
-// Session window-state arms — the `state` discriminator was `String.t()`
-// too; now a literal atom union. Pin each arm (kind + state + body).
-export type _Assert_Joined = Assert<
-  Equal<Extract<WireChannelEvent, { kind: "joined" }>, SessionWireJoinedPayload>
->;
-export type _Assert_JoinFailed = Assert<
-  Equal<Extract<WireChannelEvent, { kind: "join_failed" }>, SessionWireJoinFailedPayload>
->;
-export type _Assert_Kicked = Assert<
-  Equal<Extract<WireChannelEvent, { kind: "kicked" }>, SessionWireKickedPayload>
->;
-export type _Assert_WindowPending = Assert<
-  Equal<Extract<WireUserEvent, { kind: "window_pending" }>, SessionWireWindowPendingPayload>
->;
-export type _Assert_WindowInvited = Assert<
-  Equal<Extract<WireUserEvent, { kind: "window_invited" }>, SessionWireWindowInvitedPayload>
->;
-export type _Assert_WindowInviteDeclined = Assert<
-  Equal<
-    Extract<WireUserEvent, { kind: "window_invite_declined" }>,
-    SessionWireWindowInviteDeclinedPayload
-  >
->;
-export type _Assert_AwayConfirmed = Assert<
-  Equal<Extract<WireUserEvent, { kind: "away_confirmed" }>, SessionWireAwayConfirmedPayload>
->;
-export type _Assert_ConnectionProgress = Assert<
-  Equal<
-    Extract<WireUserEvent, { kind: "connection_progress" }>,
-    SessionWireConnectionProgressPayload
-  >
 >;
 
 // === #1406 — the Session arm population is WALKED, not listed ===
