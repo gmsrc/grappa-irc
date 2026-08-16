@@ -1,5 +1,6 @@
 import { type Component, createSignal, Match, onCleanup, Show, Switch } from "solid-js";
 import { closeMediaViewer, type MediaViewerState, mediaViewerState } from "./lib/mediaViewer";
+import { bindDismissGesture } from "./lib/mediaViewerGesture";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import {
   applyPan,
@@ -71,10 +72,28 @@ const touchPoint = (t: Touch): Point => ({ x: t.clientX, y: t.clientY });
 // preventDefault would silently no-op (DESIGN_NOTES 2026-06-24 / 2026-07-12).
 // The pure geometry lives in lib/pinchZoom.ts; this owns only the DOM wiring +
 // gesture state.
-const ZoomableImage: Component<{ href: string; onLoad: () => void; onError: () => void }> = (
-  props,
-) => {
+//
+// #1438 — the zoom level is PUBLISHED upward (`onScale`) instead of the
+// transform being lifted into the modal. The dismiss gesture needs one bit
+// ("is this image zoomed?") to stand down, and the transform is deliberately
+// element-scoped: hoisting it would put the image's pan geometry in a
+// component that also owns a <video>. Published synchronously with every
+// mutation rather than through an effect, because the reader is a touchstart
+// handler and a frame of lag there is a dismiss that fires on a pan.
+const ZoomableImage: Component<{
+  href: string;
+  onLoad: () => void;
+  onError: () => void;
+  onScale: (scale: number) => void;
+}> = (props) => {
   const [transform, setTransform] = createSignal<Transform>(IDENTITY);
+
+  // The ONE writer: signal + publication cannot drift apart if there is no
+  // other way to move the transform.
+  const apply = (next: Transform): void => {
+    setTransform(next);
+    props.onScale(next.scale);
+  };
 
   // Non-reactive gesture state, mutated across the touchstart→move→end span.
   let gestureStart: Transform = IDENTITY; // transform when the current gesture began
@@ -105,7 +124,7 @@ const ZoomableImage: Component<{ href: string; onLoad: () => void; onError: () =
     // Double-tap toggles fit⇄2x. Second tap within the window → toggle and
     // arm nothing (don't treat the toggle tap as a pan start).
     if (e.timeStamp - lastTapAt < DOUBLE_TAP_MS) {
-      setTransform(toggleZoom(transform()));
+      apply(toggleZoom(transform()));
       lastTapAt = 0;
       startPan = null;
       return;
@@ -123,9 +142,7 @@ const ZoomableImage: Component<{ href: string; onLoad: () => void; onError: () =
       const a = e.touches[0];
       const b = e.touches[1];
       if (a && b) {
-        setTransform(
-          applyPinch(gestureStart, startDistance, distance(touchPoint(a), touchPoint(b)), vp),
-        );
+        apply(applyPinch(gestureStart, startDistance, distance(touchPoint(a), touchPoint(b)), vp));
       }
       return;
     }
@@ -134,7 +151,7 @@ const ZoomableImage: Component<{ href: string; onLoad: () => void; onError: () =
       const t0 = e.touches[0];
       if (t0) {
         const delta = { x: t0.clientX - startPan.x, y: t0.clientY - startPan.y };
-        setTransform(applyPan(gestureStart, delta, vp));
+        apply(applyPan(gestureStart, delta, vp));
       }
     }
   };
@@ -194,7 +211,9 @@ const ZoomableImage: Component<{ href: string; onLoad: () => void; onError: () =
 // 404 can't spin forever. The failed media element is unmounted —
 // a broken <img> would render its alt text (the raw URL) under the
 // failure line.
-const MediaViewerBody: Component<{ state: MediaViewerState }> = (props) => {
+const MediaViewerBody: Component<{ state: MediaViewerState; onScale: (scale: number) => void }> = (
+  props,
+) => {
   const [status, setStatus] = createSignal<MediaLoadStatus>("loading");
   // Transitions only leave "loading" (review fix): a transient
   // mid-playback error must not unmount a ready element, and a suspend
@@ -222,7 +241,12 @@ const MediaViewerBody: Component<{ state: MediaViewerState }> = (props) => {
         fallback={
           <Switch>
             <Match when={props.state.kind === "image"}>
-              <ZoomableImage href={props.state.href} onLoad={ready} onError={failed} />
+              <ZoomableImage
+                href={props.state.href}
+                onLoad={ready}
+                onError={failed}
+                onScale={props.onScale}
+              />
             </Match>
             <Match when={props.state.kind === "video"}>
               {/* playsinline: without it iOS hands the element to the
@@ -262,6 +286,112 @@ const MediaViewerBody: Component<{ state: MediaViewerState }> = (props) => {
   );
 };
 
+// #1438 — the modal is centered by a CSS `transform: translate(-50%, -50%)`,
+// and an inline transform REPLACES that declaration wholesale. The drag offset
+// therefore has to re-state the centering, or the modal jumps by half its own
+// size the instant a finger claims it.
+const draggedTransform = (dy: number): string =>
+  `translate(-50%, -50%) translateY(${dy}px)`;
+
+// The backdrop thins out with the pull and is fully clear at one viewport of
+// travel. Deliberately NOT keyed to DISMISS_COMMIT_FRACTION: a ramp that hit
+// zero at the commit point would black-flash back to full on every drag that
+// crosses the line and springs back anyway, and a second threshold is a second
+// thing to keep in step.
+const backdropOpacity = (dy: number, viewportHeight: number): number =>
+  viewportHeight <= 0 ? 1 : Math.max(0, 1 - Math.abs(dy) / viewportHeight);
+
+// Everything that must be FRESH per open lives here, not in the parent: the
+// keyed <Show> remounts this subtree for every viewer state, which is what
+// gives each open a zero zoom level and an untouched drag offset — the same
+// reason MediaViewerBody is its own component.
+const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
+  // Plain mutable, not a signal: nothing RENDERS from the zoom level. It is
+  // read once per touchstart by a DOM callback, and a signal here would only
+  // advertise a reactivity that does not exist.
+  let scale = MIN_SCALE;
+  let backdrop: HTMLButtonElement | undefined;
+
+  const paint = (el: HTMLElement, dy: number): void => {
+    el.style.transform = draggedTransform(dy);
+    if (backdrop !== undefined) {
+      backdrop.style.opacity = String(backdropOpacity(dy, window.innerHeight));
+    }
+  };
+
+  const unpaint = (el: HTMLElement): void => {
+    el.style.removeProperty("transform");
+    backdrop?.style.removeProperty("opacity");
+  };
+
+  const bindDismiss = (el: HTMLDivElement): void => {
+    const dispose = bindDismissGesture(el, {
+      viewportHeight: () => window.innerHeight,
+      // A zoomed image owns the one-finger drag as a PAN (#213), so the viewer
+      // stands down until the image is back at fit. Video and audio never
+      // publish a scale, which is exactly right: they are always dismissible.
+      canDismiss: () => scale <= MIN_SCALE,
+      onProgress: (dy) => {
+        paint(el, dy);
+      },
+      // Through the shared close verb, never a bare state poke: #1121 and #535
+      // both closed on that path doing more than clearing the signal.
+      onCommit: closeMediaViewer,
+      onRelease: () => {
+        unpaint(el);
+      },
+    });
+    onCleanup(dispose);
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        ref={backdrop}
+        class="media-viewer-backdrop"
+        aria-label="Close media viewer backdrop"
+        onClick={closeMediaViewer}
+      />
+      <div
+        ref={bindDismiss}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Media viewer"
+        class="media-viewer-modal"
+      >
+        <div class="media-viewer-header">
+          <a
+            href={props.state.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="media-viewer-open-external"
+            onClick={(e) => {
+              maybeEscapePwaClick(e, props.state.href);
+            }}
+          >
+            open in browser
+          </a>
+          <button
+            type="button"
+            class="media-viewer-close"
+            aria-label="Close media viewer"
+            onClick={closeMediaViewer}
+          >
+            ✕
+          </button>
+        </div>
+        <MediaViewerBody
+          state={props.state}
+          onScale={(next) => {
+            scale = next;
+          }}
+        />
+      </div>
+    </>
+  );
+};
+
 const MediaViewerModal: Component = () => {
   // UX-6 bucket A — refcounted overlay scroll-lock (shared
   // createOverlayLock wiring, extracted from the ArchiveModal/
@@ -272,40 +402,7 @@ const MediaViewerModal: Component = () => {
 
   return (
     <Show when={mediaViewerState()} keyed>
-      {(state) => (
-        <>
-          <button
-            type="button"
-            class="media-viewer-backdrop"
-            aria-label="Close media viewer backdrop"
-            onClick={closeMediaViewer}
-          />
-          <div role="dialog" aria-modal="true" aria-label="Media viewer" class="media-viewer-modal">
-            <div class="media-viewer-header">
-              <a
-                href={state.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="media-viewer-open-external"
-                onClick={(e) => {
-                  maybeEscapePwaClick(e, state.href);
-                }}
-              >
-                open in browser
-              </a>
-              <button
-                type="button"
-                class="media-viewer-close"
-                aria-label="Close media viewer"
-                onClick={closeMediaViewer}
-              >
-                ✕
-              </button>
-            </div>
-            <MediaViewerBody state={state} />
-          </div>
-        </>
-      )}
+      {(state) => <MediaViewerDialog state={state} />}
     </Show>
   );
 };

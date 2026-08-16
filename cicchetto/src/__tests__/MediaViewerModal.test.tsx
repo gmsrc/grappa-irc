@@ -9,6 +9,7 @@ import {
 } from "../lib/overlayScrollLock";
 import MediaViewerModal from "../MediaViewerModal";
 import { resetPlatformStubs, stubIosStandalone } from "./helpers/platformStubs";
+import { fireTouchAt } from "./helpers/touchEvents";
 
 // `maybeEscapePwaClick` is mocked at the module boundary: its escaping
 // branch calls window.location.assign, which jsdom makes unforgeable
@@ -257,5 +258,116 @@ describe("MediaViewerModal — loading state", () => {
     video?.dispatchEvent(new Event("suspend"));
     expect(screen.getByText(/failed to load/i)).not.toBeNull();
     expect(container.querySelector("video")).toBeNull();
+  });
+});
+
+// #1438 — swipe up or down to dismiss. The binder's decision table (which
+// drags commit, which spring back, what it refuses to claim) is pinned in
+// mediaViewerGesture.test.ts against a bare element; what is asserted HERE is
+// the wiring only this component can get wrong: the listener sits on the modal
+// BODY so a video is as dismissible as an image, the paint re-states the CSS
+// centering the inline transform overwrites, the backdrop thins with the pull,
+// and a zoomed image keeps its pan.
+//
+// What these do NOT prove: the follow itself. A synthetic touch in jsdom moves
+// no compositor, so this pins the transform STRING the component writes, not
+// that anything tracked a finger. That half is on-device (see the module).
+describe("MediaViewerModal — swipe to dismiss (#1438)", () => {
+  const SLOW_MS = 2_000; // well under the flick threshold, so distance decides
+  const X = 160;
+  const Y0 = 300;
+
+  const dialogIn = (container: HTMLElement): HTMLElement => {
+    const el = container.querySelector<HTMLElement>(".media-viewer-modal");
+    if (el === null) throw new Error("no media viewer dialog rendered");
+    return el;
+  };
+
+  const backdropIn = (container: HTMLElement): HTMLElement => {
+    const el = container.querySelector<HTMLElement>(".media-viewer-backdrop");
+    if (el === null) throw new Error("no media viewer backdrop rendered");
+    return el;
+  };
+
+  // Touch DOWN and drag to `dy`, finger still on the glass — the mid-drag paint
+  // is only observable before the release puts everything back.
+  const dragTo = (target: HTMLElement, dy: number): void => {
+    fireTouchAt(target, "touchstart", 0, { clientX: X, clientY: Y0 });
+    fireTouchAt(target, "touchmove", SLOW_MS / 2, { clientX: X, clientY: Y0 + dy });
+  };
+
+  const dragAndLift = (target: HTMLElement, dy: number): void => {
+    dragTo(target, dy);
+    fireTouchAt(target, "touchend", SLOW_MS, { clientX: X, clientY: Y0 + dy });
+  };
+
+  it("a long downward drag on the image closes the viewer through the shared close verb", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    dragAndLift(dialogIn(container), 400);
+    expect(mediaViewerState()).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("a long upward drag on a VIDEO closes it too — the listener is on the modal, not the image", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(VIDEO_URL, "video");
+    dragAndLift(dialogIn(container), -400);
+    expect(mediaViewerState()).toBeNull();
+  });
+
+  it("translates the modal by the drag distance while the finger is down", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    const dialog = dialogIn(container);
+    dragTo(dialog, 50);
+    expect(dialog.style.transform).toContain("translateY(50px)");
+  });
+
+  it("keeps the CSS centering in the dragged transform (an inline transform replaces the rule)", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    const dialog = dialogIn(container);
+    dragTo(dialog, 50);
+    expect(dialog.style.transform).toContain("translate(-50%, -50%)");
+  });
+
+  it("thins the backdrop as the pull grows", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    const dialog = dialogIn(container);
+    const backdrop = backdropIn(container);
+    dragTo(dialog, 50);
+    const near = Number(backdrop.style.opacity);
+    fireTouchAt(dialog, "touchmove", SLOW_MS, { clientX: X, clientY: Y0 + 300 });
+    const far = Number(backdrop.style.opacity);
+    expect(near).toBeLessThan(1);
+    expect(far).toBeLessThan(near);
+    expect(far).toBeGreaterThanOrEqual(0);
+  });
+
+  it("a short slow drag springs the modal and the backdrop back to rest", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    const dialog = dialogIn(container);
+    const backdrop = backdropIn(container);
+    dragAndLift(dialog, 50);
+    expect(mediaViewerState()).not.toBeNull();
+    expect(dialog.style.transform).toBe("");
+    expect(backdrop.style.opacity).toBe("");
+  });
+
+  it("a zoomed image keeps its pan — the dismiss stands down until it is back at fit", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    const img = container.querySelector<HTMLElement>("img");
+    if (img === null) throw new Error("no image rendered");
+    // Double-tap zoom (#213), the same two touchstarts the viewer reads: it is
+    // the published scale, not a test seam, that stands the dismiss down.
+    fireTouchAt(img, "touchstart", 1_000, { clientX: X, clientY: Y0 });
+    fireTouchAt(img, "touchend", 1_020, { clientX: X, clientY: Y0 });
+    fireTouchAt(img, "touchstart", 1_100, { clientX: X, clientY: Y0 });
+    dragAndLift(dialogIn(container), 400);
+    expect(mediaViewerState()).not.toBeNull();
   });
 });
