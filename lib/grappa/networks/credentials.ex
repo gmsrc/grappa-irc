@@ -182,22 +182,27 @@ defmodule Grappa.Networks.Credentials do
   path). `{:error, :not_found}` when the credential was unbound.
   """
   @spec remove_visitor_last_joined_channel(Ecto.UUID.t(), pos_integer(), String.t()) ::
-          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t()}
+          {:ok, Credential.t()} | {:error, :not_found | Ecto.Changeset.t() | :db_unavailable}
   def remove_visitor_last_joined_channel(visitor_id, network_id, channel_name)
       when is_binary(visitor_id) and is_integer(network_id) and is_binary(channel_name) do
     canonical = Grappa.IRC.Identifier.canonical_target(channel_name)
 
-    case get_visitor_credential(visitor_id, network_id) do
-      {:ok, cred} ->
-        kept = Enum.reject(cred.last_joined_channels, &(&1 == canonical))
+    # #1374 P-S8 — web-reachable (`DELETE /networks/:slug/channels/:id`), so
+    # the terminal is the 503 door, not a drop: the operator asked for this
+    # write and must learn it did not happen.
+    Repo.BusyRetry.run(fn ->
+      case get_visitor_credential(visitor_id, network_id) do
+        {:ok, cred} ->
+          kept = Enum.reject(cred.last_joined_channels, &(&1 == canonical))
 
-        cred
-        |> Credential.last_joined_channels_changeset(kept)
-        |> Repo.update()
+          cred
+          |> Credential.last_joined_channels_changeset(kept)
+          |> Repo.update()
 
-      {:error, :not_found} ->
-        {:error, :not_found}
-    end
+        {:error, :not_found} ->
+          {:error, :not_found}
+      end
+    end)
   end
 
   @doc """
@@ -208,7 +213,7 @@ defmodule Grappa.Networks.Credentials do
   autojoin list. Returns `{:ok, credential}` or `{:error, changeset}`.
   """
   @spec remove_autojoin_channel(User.t(), Network.t(), String.t()) ::
-          {:ok, Credential.t()} | {:error, Ecto.Changeset.t()} | {:error, :not_found}
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t() | :not_found | :db_unavailable}
   def remove_autojoin_channel(%User{} = user, %Network{} = network, channel_name)
       when is_binary(channel_name) do
     # UX-4 bucket A — canonicalise so a REST DELETE with `#Chan` in the
@@ -216,17 +221,21 @@ defmodule Grappa.Networks.Credentials do
     # Credential.changeset/2 writer normalises to).
     channel_name = Grappa.IRC.Identifier.canonical_target(channel_name)
 
-    case get_credential(user, network) do
-      {:ok, cred} ->
-        new_autojoin = Enum.reject(cred.autojoin_channels, &(&1 == channel_name))
+    # #1374 P-S8 — the user twin of `remove_visitor_last_joined_channel/3`,
+    # same web-reachable 503 door.
+    Repo.BusyRetry.run(fn ->
+      case get_credential(user, network) do
+        {:ok, cred} ->
+          new_autojoin = Enum.reject(cred.autojoin_channels, &(&1 == channel_name))
 
-        cred
-        |> Credential.changeset(%{autojoin_channels: new_autojoin})
-        |> Repo.update()
+          cred
+          |> Credential.changeset(%{autojoin_channels: new_autojoin})
+          |> Repo.update()
 
-      {:error, :not_found} ->
-        {:error, :not_found}
-    end
+        {:error, :not_found} ->
+          {:error, :not_found}
+      end
+    end)
   end
 
   @doc """
@@ -260,7 +269,7 @@ defmodule Grappa.Networks.Credentials do
   belt-and-braces guard, not the primary enforcement point.
   """
   @spec update_last_joined_channels(Ecto.UUID.t(), pos_integer(), [String.t()]) ::
-          :ok | {:error, :not_found | Ecto.Changeset.t()}
+          :ok | {:error, :not_found | Ecto.Changeset.t() | :db_unavailable}
   def update_last_joined_channels(user_id, network_id, channels)
       when is_binary(user_id) and is_integer(network_id) and is_list(channels) do
     case Repo.get_by(Credential, user_id: user_id, network_id: network_id) do
@@ -301,7 +310,7 @@ defmodule Grappa.Networks.Credentials do
   re-JOINs it. One channel too many beats one lost for good.
   """
   @spec merge_last_joined_channels(Ecto.UUID.t(), pos_integer(), [String.t()], [String.t()]) ::
-          :ok | {:error, :not_found | Ecto.Changeset.t()}
+          :ok | {:error, :not_found | Ecto.Changeset.t() | :db_unavailable}
   def merge_last_joined_channels(user_id, network_id, joined, departed)
       when is_binary(user_id) and is_integer(network_id) and is_list(joined) and
              is_list(departed) do
@@ -333,14 +342,30 @@ defmodule Grappa.Networks.Credentials do
   # `Visitor.last_joined_channels_changeset/2`. Single Repo writer for the
   # column — both subject kinds and both verbs (set + merge) land here, so
   # the cap is enforced once.
+  #
+  # #1374 P-S8 — the WRITE rides `BusyRetry.run/1`. This fires on EVERY
+  # self-JOIN / self-PART / self-KICK, and bootstrap spawning N sessions x M
+  # autojoin channels is the correlated write burst. The call site
+  # (`Session.Server.maybe_persist_last_joined/2`) already logs a RETURNED
+  # `{:error, _}` and carries on, but a transient busy RAISED, and the raise
+  # escaped the persister closure into the GenServer. Background-DROP posture
+  # (#590): the next membership change overwrites the snapshot, so a lost one
+  # only costs the next restart its rejoin list. #1385 made this the single
+  # writer, so the retry lands here ONCE and covers both subject kinds and
+  # both verbs — where #1374 originally had to repeat it per public setter.
   @spec write_last_joined_channels(Credential.t(), [String.t()]) ::
-          :ok | {:error, Ecto.Changeset.t()}
+          :ok | {:error, Ecto.Changeset.t() | :db_unavailable}
   defp write_last_joined_channels(%Credential{} = cred, channels) do
     capped = Enum.take(channels, Credential.last_joined_channels_max())
 
-    case cred |> Credential.last_joined_channels_changeset(capped) |> Repo.update() do
+    write =
+      Repo.BusyRetry.run(fn ->
+        cred |> Credential.last_joined_channels_changeset(capped) |> Repo.update()
+      end)
+
+    case write do
       {:ok, _} -> :ok
-      {:error, changeset} -> {:error, changeset}
+      {:error, _} = err -> err
     end
   end
 
@@ -361,18 +386,25 @@ defmodule Grappa.Networks.Credentials do
   to boot `:present`.
   """
   @spec update_away(Ecto.UUID.t(), pos_integer(), String.t() | nil, DateTime.t() | nil) ::
-          :ok | {:error, :not_found | Ecto.Changeset.t()}
+          :ok | {:error, :not_found | Ecto.Changeset.t() | :db_unavailable}
   def update_away(user_id, network_id, reason, since)
       when is_binary(user_id) and is_integer(network_id) do
-    case Repo.get_by(Credential, user_id: user_id, network_id: network_id) do
-      nil ->
-        {:error, :not_found}
-
-      %Credential{} = cred ->
-        case Repo.update(Credential.away_changeset(cred, reason, since)) do
-          {:ok, _} -> :ok
-          {:error, changeset} -> {:error, changeset}
+    # #1374 P-S8 — twin of `update_last_joined_channels/3`, same posture: it
+    # fires on every away transition (including the auto-away debounce, which
+    # a WS reconnect storm drives for every session at once), and its call
+    # site (`Session.Server.call_away_persister/3`) already logs a returned
+    # error and continues. Only the RAISE was unhandled.
+    persisted =
+      Repo.BusyRetry.run(fn ->
+        case Repo.get_by(Credential, user_id: user_id, network_id: network_id) do
+          nil -> {:error, :not_found}
+          %Credential{} = cred -> Repo.update(Credential.away_changeset(cred, reason, since))
         end
+      end)
+
+    case persisted do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
     end
   end
 
@@ -391,7 +423,7 @@ defmodule Grappa.Networks.Credentials do
   semantics).
   """
   @spec update_visitor_last_joined_channels(Ecto.UUID.t(), pos_integer(), [String.t()]) ::
-          :ok | {:error, :not_found | Ecto.Changeset.t()}
+          :ok | {:error, :not_found | Ecto.Changeset.t() | :db_unavailable}
   def update_visitor_last_joined_channels(visitor_id, network_id, channels)
       when is_binary(visitor_id) and is_integer(network_id) and is_list(channels) do
     case Repo.get_by(Credential, visitor_id: visitor_id, network_id: network_id) do
@@ -412,7 +444,7 @@ defmodule Grappa.Networks.Credentials do
           pos_integer(),
           [String.t()],
           [String.t()]
-        ) :: :ok | {:error, :not_found | Ecto.Changeset.t()}
+        ) :: :ok | {:error, :not_found | Ecto.Changeset.t() | :db_unavailable}
   def merge_visitor_last_joined_channels(visitor_id, network_id, joined, departed)
       when is_binary(visitor_id) and is_integer(network_id) and is_list(joined) and
              is_list(departed) do
