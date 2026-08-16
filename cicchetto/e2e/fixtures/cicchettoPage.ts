@@ -1121,9 +1121,36 @@ export async function closeSettings(page: Page): Promise<void> {
 // which is timing-flaky on WebKit. `.click()` fires the synthetic
 // click directly via DevTools — same end-state effect, no synthesis
 // race. Verified across UX-6-A scroll spec + UX-4-Z journey spec.
+// #1336 (#1155) — the wait is `not.toBeInViewport` on the drawer ITSELF, not
+// `.shell-members.open` count→0. Same idiom, same reason, as `closeSettings`
+// above: the drawer stays MOUNTED and closing only strips `.open`, which
+// STARTS a 200ms `transform: translateX(100%)` slide (`default.css` ~:7469),
+// so the class is gone at the slide's BEGINNING and the panel keeps covering
+// the tap point for the rest of it.
+//
+// Measured on `ux-5-bt-narrow-chrome-compression.spec.ts:124`
+// (webkit-iphone-15, run 31325751959 attempt 2 — the same sha passed on
+// attempt 1, `workers: 1`, `retries: 0`): class gone at 18:17:56.09, the next
+// tap dispatched at 18:17:56.297 at (355, 31) — inside the drawer's 288px box
+// on a 393px viewport — and 10 ms later the SERVER logged
+// `HANDLED open_query_window target_nick="m9b-grappa"`. The touch aimed at the
+// topic-bar hamburger was received by a members row, which opens a query and
+// switches focus; a DM window has no members drawer, so the assertion waited
+// out its 5 s on a `.shell-members.open` that could never exist again. The
+// barrier and the hazard are the same order of magnitude — ~196 ms of driver
+// latency against a 200 ms animation — so the margin is zero by construction.
+//
+// Playwright cannot see this on its own: its "visible, enabled and stable"
+// check runs on the TARGET's box, and the hamburger never moves. The thing
+// moving is the drawer on top of it.
+//
+// Every caller is a mobile `@webkit` spec, which is what makes the viewport
+// test meaningful: on desktop `.shell-members` is the permanent rail and never
+// leaves the viewport. That is not a new constraint — the backdrop this clicks
+// exists only on mobile.
 export async function closeMembersDrawer(page: Page): Promise<void> {
   await page.locator(".shell-drawer-backdrop.open").click({ position: { x: 20, y: 200 } });
-  await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
+  await expect(page.locator(".shell-members")).not.toBeInViewport({ timeout: 5_000 });
 }
 
 // #473 — reach the grouped ArchiveModal (viewport-aware), the SINGLE archive
