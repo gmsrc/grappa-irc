@@ -109,6 +109,7 @@ import type {
   SessionWireWindowPendingPayload,
   UserSettingsWireAutoAwayDebounceChangedPayload,
   WindowCountsWireEvent,
+  WireSessionEvent,
 } from "./wireTypes";
 
 // Bi-directional subtype assert helper. `Equal<A, B>` is `true` when
@@ -300,5 +301,143 @@ export type _Assert_ConnectionProgress = Assert<
   Equal<
     Extract<WireUserEvent, { kind: "connection_progress" }>,
     SessionWireConnectionProgressPayload
+  >
+>;
+
+// === #1406 — the Session arm population is WALKED, not listed ===
+// Every pin above names its arm by hand, so a new server arm lands with no
+// pin unless a human remembers to write one. That is not a lapse, it is the
+// shape of the mechanism: the maintenance note at the top of this file asks
+// for a line per type, and 16 of the 37 `WireSessionEvent` arms never got
+// one. Codegen already emits the exhaustive union, so the population can be
+// quantified over instead of transcribed — and then a new server arm is
+// covered the moment codegen emits it, and the pins for the arms it covers
+// stop being a list anybody has to maintain.
+//
+// Two failures are checked separately, because they fail differently:
+//
+//   * `_Assert_NoUndeclaredArm` — a generated arm cic declares on NEITHER
+//     topic. No hand pin can catch this class at all: there is nothing yet
+//     to write the pin about.
+//   * `_Assert_No{User,Channel}ArmDrift` — a generated arm whose cic copy
+//     has a different shape. Walked per union rather than over their union,
+//     so the four dual-topic arms (`joined`, `join_failed`, `kicked`,
+//     `isupport_changed`) are pinned to the generated payload on BOTH
+//     topics, which pins the two copies to each other as a side effect.
+
+// `Flatten` first: many cic arms are declared as an INTERSECTION with the
+// standalone type their stores reuse (`({ kind: "whois_bundle" } &
+// WhoisBundle)`), and an intersection is never `Equal` to the flat object
+// it is equivalent to — `Equal` compares type identity and `A & B` keeps
+// both operands. The homomorphic mapped type collapses it into one object,
+// preserving optional and readonly modifiers. Without it the walk reports
+// every intersection-declared arm as drift and the exemptions below would
+// have to swallow the mechanism whole.
+type Flatten<T> = { [K in keyof T]: T[K] };
+
+// The empty-set check is spelled as a MAPPED TYPE rather than
+// `Equal<T, never>` so the tsc error NAMES the offending arms — it prints
+// `Type '{ recover_progress: "…"; }' does not satisfy the constraint
+// 'true'` — instead of the anonymous `Type 'false' is not assignable to
+// type 'true'` the pins above produce. A tuple `[Message, T]` does NOT
+// work: tsc prints the unexpanded alias reference inside it.
+type NoArms<Message extends string, T> = [T] extends [never]
+  ? true
+  : { [K in T & string]: Message };
+
+// Arms whose cic copy diverges from the generated payload ON PURPOSE, each
+// mapped to the ONE field it widens. This is not an exemption list with a
+// hole in it: `_Assert_NoWidening{User,Channel}Overrun` below re-checks
+// every OTHER field of these arms exactly, and checks that the widened
+// field is a genuine SUPERSET of what the server can send. Adding a kind
+// here without naming its field does not type-check.
+//
+// All three entries are the same posture, and it is the additive-only wire
+// rule (#447) reaching the type layer: a value that only SELECTS COPY must
+// not be allowed to drop its event when the server adds to its vocabulary.
+//
+//   * `isupport_changed.frame_budget_base` (#1108) — absent means a server
+//     predating the field, the realistic case being a cic-only bundle
+//     deploy. `narrowIsupportChanged` degrades to `null` rather than
+//     rejecting the envelope, which would take the whole capability table
+//     (and with it the /mode toggles) down.
+//   * `recover_progress.reason` / `recover_result.reason` (#581) — kept a
+//     nullable string, deliberately NOT hardened to the token union, so an
+//     additive server reason can never drop a terminal recovery result;
+//     `RecoverModal.reasonCopy` maps the known tokens and falls back.
+//     #1338 X-S14 widened `web_session_severed.code` citing exactly this
+//     posture, so hardening these two would reverse a standing ruling.
+//
+// The generated type describes the server we ship; a widened field
+// describes the set of servers cic must survive. That is why these are not
+// drift — and why the widening still has to be bounded.
+type DeliberatelyWidened = {
+  isupport_changed: "frame_budget_base";
+  recover_progress: "reason";
+  recover_result: "reason";
+};
+
+type WidenedArm = keyof DeliberatelyWidened & WireSessionEvent["kind"];
+type WalkedArm = Exclude<WireSessionEvent["kind"], WidenedArm>;
+
+type GeneratedArm<K extends WireSessionEvent["kind"]> = Extract<WireSessionEvent, { kind: K }>;
+
+// Index by a key tsc can prove is present. A bare `T[DeliberatelyWidened[K]]`
+// is rejected inside the generic walk; `Extract<F, keyof T>` is assignable to
+// `keyof T`, and the `extends keyof` guard at the call site keeps the absent
+// case from resolving to `never` and passing vacuously.
+type At<T, F> = T[Extract<F, keyof T>];
+
+type DriftedIn<U extends { kind: string }> = {
+  [K in WalkedArm]: K extends U["kind"]
+    ? Equal<Flatten<Extract<U, { kind: K }>>, Flatten<GeneratedArm<K>>> extends true
+      ? never
+      : K
+    : never;
+}[WalkedArm];
+
+// A widened arm overruns its exemption when anything OTHER than the named
+// field differs, or when the named field stops covering every value the
+// generated type admits (`[Gen] extends [Cic]` — cic must accept at least
+// what the server can send; a server-side retype of the field lands here).
+type WideningOverrunIn<U extends { kind: string }> = {
+  [K in WidenedArm]: K extends U["kind"]
+    ? Equal<
+        Flatten<Omit<Extract<U, { kind: K }>, DeliberatelyWidened[K]>>,
+        Flatten<Omit<GeneratedArm<K>, DeliberatelyWidened[K]>>
+      > extends true
+      ? DeliberatelyWidened[K] extends keyof GeneratedArm<K>
+        ? [At<GeneratedArm<K>, DeliberatelyWidened[K]>] extends [
+            At<Extract<U, { kind: K }>, DeliberatelyWidened[K]>,
+          ]
+          ? never
+          : K
+        : K
+      : K
+    : never;
+}[WidenedArm];
+
+export type _Assert_NoUndeclaredArm = Assert<
+  NoArms<
+    "generated Session arms cic declares on neither topic",
+    Exclude<WireSessionEvent["kind"], WireUserEvent["kind"] | WireChannelEvent["kind"]>
+  >
+>;
+export type _Assert_NoUserArmDrift = Assert<
+  NoArms<"user-topic arms whose cic copy differs from codegen", DriftedIn<WireUserEvent>>
+>;
+export type _Assert_NoChannelArmDrift = Assert<
+  NoArms<"channel-topic arms whose cic copy differs from codegen", DriftedIn<WireChannelEvent>>
+>;
+export type _Assert_NoWideningOverrunUser = Assert<
+  NoArms<
+    "user-topic arms widening more than their declared field",
+    WideningOverrunIn<WireUserEvent>
+  >
+>;
+export type _Assert_NoWideningOverrunChannel = Assert<
+  NoArms<
+    "channel-topic arms widening more than their declared field",
+    WideningOverrunIn<WireChannelEvent>
   >
 >;
