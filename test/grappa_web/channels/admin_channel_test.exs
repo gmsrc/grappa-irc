@@ -268,7 +268,8 @@ defmodule GrappaWeb.AdminChannelTest do
           assert_reply ref, :ok
         end)
 
-      assert log =~ "unhandled message"
+      assert log =~ "unexpected mailbox message"
+      assert log =~ "no_clause_matches_this"
     end
 
     test "a broadcast the channel has no clause for is logged and not fatal" do
@@ -290,7 +291,7 @@ defmodule GrappaWeb.AdminChannelTest do
           assert_reply ref, :ok
         end)
 
-      assert log =~ "unhandled broadcast"
+      assert log =~ "unexpected mailbox message"
       assert log =~ "an_event_name_added_later"
     end
   end
