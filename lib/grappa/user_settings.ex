@@ -663,19 +663,57 @@ defmodule Grappa.UserSettings do
           {:ok, :renamed | :noop} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def rename_muted_target({_, _} = subject, network_slug, old_target, new_target)
       when is_binary(network_slug) and is_binary(old_target) and is_binary(new_target) do
+    case rekey_pair(network_slug, old_target, new_target) do
+      nil ->
+        {:ok, :noop}
+
+      {old_key, new_key} ->
+        # Same `data` blob, same lost-update hazard as the setters (#1375), so
+        # the same frame — but NOT `update_data/2`: a rename must never CREATE
+        # the row, and it reports which of the two things it did.
+        write_transaction(fn ->
+          rekey_muted_target(fetch_existing_or_nil(subject), old_key, new_key)
+        end)
+    end
+  end
+
+  @doc """
+  In-transaction variant of `rename_muted_target/4` (#1374 P-S2).
+
+  Identical migration, one difference that is the whole contract: NO frame.
+  It is reached only from inside a `Repo.BusyRetry.run(fn ->
+  Repo.immediate_transaction(…) end)` — `Grappa.NickMigration`, which owns
+  the nick-rename set — where the enclosing engine already holds both halves
+  and retries the WHOLE transaction. A nested retry there would sleep while
+  holding the open transaction's connection, extending the very contention it
+  waits on; a nested `immediate_transaction/1` would collapse to a savepoint
+  and buy nothing.
+
+  It returns the bare outcome, not `{:ok, outcome}`: in a transaction a
+  changeset rejection is `Repo.rollback/1` (see `write_data!/2`), so there is
+  no error arm left for a tuple to carry. The caller sees the rejection as
+  its own `Repo.immediate_transaction/1` returning `{:error, changeset}`.
+
+  Mirrors the `Grappa.Accounts` revoke family's caller-facing/in-transaction
+  split (`accounts.ex`, "The family contract (#636)").
+  """
+  @spec rename_muted_target!(Subject.t(), String.t(), String.t(), String.t()) :: :renamed | :noop
+  def rename_muted_target!({_, _} = subject, network_slug, old_target, new_target)
+      when is_binary(network_slug) and is_binary(old_target) and is_binary(new_target) do
+    case rekey_pair(network_slug, old_target, new_target) do
+      nil -> :noop
+      {old_key, new_key} -> rekey_muted_target(fetch_existing_or_nil(subject), old_key, new_key)
+    end
+  end
+
+  # `nil` when the two spellings fold to ONE key — a casing change, not a
+  # rename, so there is no key to migrate and no reason to reach the DB.
+  @spec rekey_pair(String.t(), String.t(), String.t()) :: {String.t(), String.t()} | nil
+  defp rekey_pair(network_slug, old_target, new_target) do
     old_key = Identifier.channel_key(network_slug, old_target)
     new_key = Identifier.channel_key(network_slug, new_target)
 
-    if old_key == new_key do
-      {:ok, :noop}
-    else
-      # Same `data` blob, same lost-update hazard as the setters (#1375), so
-      # the same frame — but NOT `update_data/2`: a rename must never CREATE
-      # the row, and it reports which of the two things it did.
-      write_transaction(fn ->
-        rekey_muted_target(fetch_existing_or_nil(subject), old_key, new_key)
-      end)
-    end
+    if old_key == new_key, do: nil, else: {old_key, new_key}
   end
 
   @spec rekey_muted_target(Settings.t() | nil, String.t(), String.t()) :: :renamed | :noop
