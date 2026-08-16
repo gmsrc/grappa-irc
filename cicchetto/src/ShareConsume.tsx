@@ -46,11 +46,7 @@ import { installSharedSession } from "./lib/auth";
 const takeTokenFromFragment = (): string => {
   const raw = window.location.hash.replace(/^#/, "");
   if (raw !== "") {
-    window.history.replaceState(
-      null,
-      "",
-      `${window.location.pathname}${window.location.search}`,
-    );
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
   }
   try {
     return decodeURIComponent(raw);
