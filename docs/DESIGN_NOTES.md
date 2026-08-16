@@ -44914,3 +44914,131 @@ module, which is a codegen change and not this one. The four MEDIUMs of the
 same issue (X-S4 open-map keys, X-S8 `window_state`, X-S9 theme vocabularies,
 X-S10 the `/me` and `/auth/login` discriminators) are all server-side and
 untouched here.
+<!-- entry #1408 -->
+
+---
+
+## 2026-08-16 — #1408: three runbook claims that named gates not covering them
+
+Bucket G of the 2026-08-15 review, three MEDIUMs sharing one defect
+class: a document claims a gate, and the gate does not cover what the
+claim says. The interesting part of the work was not writing the gates.
+It was deciding, per finding, whether to move the gate up to the prose
+or the prose down to the gate — and one of the three sub-claims did not
+survive being measured at all.
+
+### D-S8 — the integration filter did not cover what the suite boots
+
+`integration.yml`'s header states its own rule: the root `Dockerfile`
+and `compose.yaml` are in scope because "they define the images the
+suite boots". Three files the rule covers were never listed, so a change
+confined to them ran no end-to-end anything, and a workflow that does
+not trigger is indistinguishable from one that passes.
+
+Measured against `cicchetto/e2e/compose.yaml` rather than taken from the
+review's hand-list. Two services build `grappa:e2e` with
+`context: ../..`, which puts `.dockerignore` in scope — not because
+anything is `COPY`ed (the toolchain image has no `COPY`; the runtime
+bind-mounts the repo) but because a bad exclude breaks the CONTEXT
+TRANSFER, which is precisely why that file's trailing entries
+(`.worktrees/`, the e2e cert dir) were added. The cic build container
+mounts only `../../cicchetto` and so cannot read the version;
+`scripts/integration.sh` runs `infra/packaging/version.sh` over the
+repo-root `VERSION` and exports `GRAPPA_VERSION`, which an empty value
+makes vite fail loud on. Both carriers are now listed.
+
+**`bin/start.sh` was refused, against the review's list.** The review
+justified it as "the image `CMD`, `Dockerfile:53`; already docker-COLD
+in `preflight.ex:442`". Both halves are true and neither is relevant
+here: both services that build from the repo root override `command:`,
+and the string appears nowhere under `cicchetto/e2e` nor in the two
+orchestration scripts. The suite never executes it. The lesson
+generalises past this one entry — `Preflight.docker_image?/1` reads like
+the list this filter wants, and it is NOT: preflight answers "does the
+deployed container need a COLD restart", the filter answers "can this
+break the e2e suite". Deriving one from the other would have imported
+`bin/start.sh` and `bin/grappa` on an argument that does not hold.
+
+The gate derives each expectation from the artefact that creates the
+dependency, so moving the dependency moves the expectation. It also
+pins the two `paths:` blocks as byte-identical: GitHub Actions does not
+expand YAML anchors, so the 15-line duplication the review wanted
+factored out cannot be factored out, and a gate is the only thing that
+can keep the copies equal.
+
+### D-S9 — the digest-pin runbook over-claimed its own gate's scope
+
+The runbook said `base_image_digest_pin_test.bats` "fails the build if
+any real image reference in a tracked build file loses its `@sha256:`".
+The suite greps two families. Counted on this tree, ten-odd references
+sit outside them.
+
+Neither branch of the review's fix menu is right on its own. Pinning
+`elixir:1.19-otp-28-alpine` by digest needs a registry round-trip to
+mint and freezes a base that is deliberately allowed to move; widening
+the grep any further would demand a digest for `alpine:3.24`, which is
+an argued FLOOR whose entire purpose is to keep floating so security
+patches flow (`assert-abi-lockstep.sh` is what proves the ABI contract
+instead). So the gate's scope stays and the LIE goes: the runbook now
+quotes the gate's pattern byte-for-byte, and a fourth assertion fails
+unless it does. Widen `PINNED_FAMILIES` and the sentence must move in
+the same commit. Every uncovered family is enumerated with its reason in
+the test header — where a reader about to widen the pattern is actually
+standing, rather than in a doc they may never open.
+
+An over-claimed gate is worse than a narrow one. A narrow gate at least
+tells the truth about what it will catch.
+
+### D-S10 — "CI reads the same file" was aspirational
+
+`OPERATIONS.md` argues that a distro's Erlang packaging cannot be
+trusted, that `install_toolchain.sh` therefore runs a bare
+`asdf install` against `.tool-versions`, and that this leaves "no second
+hand-maintained pin to drift" — naming CI as `erlef/setup-beam`,
+"reading the same file". CI was not reading it. Both workflows carried
+their own `ELIXIR_VERSION` / `OTP_VERSION` literals that merely happened
+to agree.
+
+All three setup-beam steps now pass `version-file: .tool-versions`.
+**The review's proposed fix stops one line short:** `version-type:
+strict` is mandatory with `version-file` — setup-beam throws
+`you have to set version-type=strict if you're using version-file`
+before it reads anything. The review recorded the format question as
+untried; it was settled here by reading the action's source at the
+pinned sha rather than by a CI round-trip. `1.19.5-otp-28` has its
+`-otp-N` suffix stripped for the Elixir lookup and reused as the OTP
+constraint (`getElixirVersion`), and `28.5` matches the ubuntu builds
+listing's `OTP-28.5` key after `maybeRemoveOTPPrefix`. What that does
+NOT establish is the listing's contents at run time; the first CI run on
+this branch is the remaining evidence.
+
+The deleted `env:` blocks also fed four cache keys. Those now read the
+versions back off the setup-beam step's outputs, which is a strictly
+better key: it names what was installed rather than what someone typed.
+
+The Dockerfile stays a fourth carrier by necessity — an image tag is not
+an asdf version string — so the gate asserts AGREEMENT, and only as far
+as a tag reaches. `elixir:1.19-otp-28-alpine` pins the minor line and
+the OTP major and floats the Elixir PATCH, which `.tool-versions` names
+exactly. **That is a second thing the runbook got wrong**, in the
+opposite direction from D-S9: it claimed "Elixir and OTP stay pinned by
+the tag", which reads as an exact pin. The gate now fails on a minor or
+OTP-major divergence and deliberately lets a patch bump pass, and the
+runbook says so.
+
+### What is proven, and what is not
+
+Eleven bats assertions across three suites, each red before it was
+green. Nine mutants, each killing exactly one assertion after two were
+rewritten: the first `M4` widened the family pattern to `debian:trixie`
+and took down the pin assertion as collateral, and the first `M6`
+reintroduced a real version literal and so tripped the
+re-transcription check as well. An impure mutant proves less than it
+appears to, because it cannot say WHICH assertion did the work.
+
+Not established: nothing here was run in CI, and the workflow changes
+are the kind that only CI can falsify. The YAML was parsed and the three
+setup-beam call sites read back from the parse tree, which proves the
+files are well-formed and wired, not that the runner resolves the
+versions. `scripts/shellcheck.sh` was not run and did not need to be —
+no shell script changed.
