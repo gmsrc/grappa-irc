@@ -4232,3 +4232,155 @@ describe("subscribe — own nick after a rename (#1340 C-S1)", () => {
     expect(rail.railWhoisFor("freenode", "zelda2")).toBeUndefined();
   });
 });
+
+// #1341 — the DM-listener must RELEASE the own-nick topic it holds when the
+// own nick moves, and must release only what it took.
+//
+// The loops in `subscribe.ts` dedup on `joined.has(key)`, and the DM-listener's
+// key is the own nick. A rename therefore mints a NEW key while the retired one
+// stays in `joined` with a live Channel on it. That is not a duplicate-delivery
+// bug — `Persistor.persist_and_broadcast` derives the topic from the row's
+// single `channel` value, so a row still reaches exactly one topic. It is a
+// SHADOW: when a peer later takes the retired nick, our own outbound `/msg`
+// echo is broadcast on that peer's topic (`server.ex` persists the outbound row
+// with `channel: <folded target>`), the retired subscription is still sitting on
+// it, and `ensureQueryTopicJoined` short-circuits on `joined.has(key)` so the
+// correct channel handler is never installed. The DM-listener handler re-keys on
+// the SENDER, so the line we sent to that peer surfaces in our own self window.
+//
+// The release is gated on OWNERSHIP, never on the key: a query window opened
+// while we wore a different nick can legitimately hold the very key we are
+// retiring (second test), and tearing it down would sever a live conversation.
+describe("subscribe — the DM listener releases its own-nick topic on a rename (#1341)", () => {
+  const boot = async (ownNick: string, peers: () => string[]) => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const api = await import("../lib/api");
+    vi.mocked(api.listNetworks).mockResolvedValue([
+      { id: 1, slug: "freenode", nick: ownNick, inserted_at: "x", updated_at: "y" },
+    ]);
+    const qw = await import("../lib/queryWindows");
+    vi.mocked(qw.queryWindowsByNetwork).mockImplementation(() => ({
+      1: peers().map((targetNick) => ({ targetNick, openedAt: "2026-08-16T00:00:00Z" })),
+    }));
+    await usePerTopicChannels();
+    const store = await loadStores();
+    const socket = await import("../lib/socket");
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalled();
+    });
+    return { store, socket };
+  };
+
+  // Deliver a row the way the socket does: to EVERY live Channel sitting on
+  // that topic. A Channel that was `.leave()`d is off the socket and gets
+  // nothing. Returns the scrollback buckets the row landed in — the routing
+  // outcome, which is what the operator sees.
+  const deliverOnTopic = async (
+    socket: typeof import("../lib/socket"),
+    topic: string,
+    row: { id: number; sender: string },
+  ) => {
+    const calls = vi.mocked(socket.joinChannel).mock.calls;
+    const payload = {
+      kind: "message",
+      message: {
+        id: row.id,
+        network: "freenode",
+        channel: topic,
+        server_time: row.id,
+        kind: "privmsg",
+        sender: row.sender,
+        body: "body",
+        meta: {},
+      },
+    };
+    calls.forEach((call, i) => {
+      if (call[2] !== topic) return;
+      const mock = perTopicChannels[i];
+      if (mock === undefined || mock.left) return;
+      for (const on of mock.on.mock.calls) {
+        if (on[0] === "event") (on[1] as (p: unknown) => void)(payload);
+      }
+    });
+    const scrollback = await import("../lib/scrollback");
+    return Object.entries(scrollback.scrollbackByChannel())
+      .filter(([, rows]) => (rows as { id: number }[]).some((r) => r.id === row.id))
+      .map(([key]) => key)
+      .sort();
+  };
+
+  it("our outbound echo to a peer who took our retired nick lands in that peer's window", async () => {
+    const [peers, setPeers] = createSignal<string[]>([]);
+    const { store, socket } = await boot("alice", peers);
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "alice",
+        expect.any(Function),
+      );
+    });
+
+    store.mutateNetworkNick(1, "zelda");
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "zelda",
+        expect.any(Function),
+      );
+    });
+
+    // A peer takes the nick we just retired and we `/msg` them: the server
+    // opens the query window and broadcasts our echo on that peer's topic.
+    // Barrier: the query-windows loop has re-run against the new list. True in
+    // both worlds — the loop runs either way, it is what it does with the key
+    // that differs — so the routing assertion below is what fails, not this.
+    const qw = await import("../lib/queryWindows");
+    const readsBefore = vi.mocked(qw.queryWindowsByNetwork).mock.calls.length;
+    setPeers(["alice"]);
+    await vi.waitFor(() => {
+      expect(vi.mocked(qw.queryWindowsByNetwork).mock.calls.length).toBeGreaterThan(readsBefore);
+    });
+
+    const landed = await deliverOnTopic(socket, "alice", { id: 1341, sender: "zelda" });
+    expect(landed).toEqual([channelKey("freenode", "alice")]);
+  });
+
+  it("a query window holding the key we are retiring keeps its subscription", async () => {
+    // We are `bob` and hold an open query with the peer `alice`, so the key
+    // `freenode alice` belongs to the query loop, not to us. We then take the
+    // nick `alice` and rename away from it — the retired own-nick key is now
+    // one we never joined. Releasing by key would sever that conversation.
+    const [peers] = createSignal<string[]>(["alice"]);
+    const { store, socket } = await boot("bob", peers);
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "alice",
+        expect.any(Function),
+      );
+    });
+
+    store.mutateNetworkNick(1, "alice");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    store.mutateNetworkNick(1, "zelda");
+    await vi.waitFor(() => {
+      expect(socket.joinChannel).toHaveBeenCalledWith(
+        "alice",
+        "freenode",
+        "zelda",
+        expect.any(Function),
+      );
+    });
+
+    const landed = await deliverOnTopic(socket, "alice", { id: 1342, sender: "carol" });
+    expect(landed).toEqual([channelKey("freenode", "alice")]);
+  });
+});

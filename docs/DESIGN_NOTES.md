@@ -43271,3 +43271,46 @@ against a path it asserts absent beforehand, rather than reasoning about it.
 pending counts it OBSERVED, never "no pending migrations, nothing to do" — a
 pending count of zero is the silent regime's own signature, so a fast path
 that reports the absence of work would be reporting the defect as health.
+<!-- entry #1341 -->
+
+---
+
+## 2026-08-16 — #1341: the DM listener releases the own-nick topic it took, gated on ownership
+
+CLAUDE.md's rename-migration set (#373 for a peer, #948 for our own nick) says a
+new nick-keyed store must join that set or a rename strands its old-nick rows.
+cic's WS subscription map is such a store and was not in it: the DM-listener
+topic is keyed on the own nick, so `own_nick_changed` minted a new key and left
+the retired one in `joined` with a live Channel on it.
+
+Measured before the fix rather than assumed. The hold is one topic per DISTINCT
+nick the session ever wore — four, five, six, seven keys at zero, one, two,
+three renames, and a rename BACK to a nick already held adds none. It is NOT
+duplicate delivery: `Persistor.persist_and_broadcast` derives the topic from the
+row's single `channel`, so a row reaches exactly one topic, and `joined` admits
+one subscription per topic. The user-visible failure is a SHADOW. Once a peer
+takes the retired nick, our outbound `/msg` to them is broadcast on that peer's
+topic (the outbound row persists with `channel: <folded target>`),
+`ensureQueryTopicJoined` short-circuits on `joined.has(key)` and never installs
+the channel handler, and the retired DM-listener handler re-keys on the sender —
+so the line we sent surfaces in our own self window. That is what the pin
+asserts; the key count is diagnostics.
+
+The release is gated on OWNERSHIP, never on the key, and that came from a
+measurement too. With an open query at `alice` while we wore `bob`, taking
+`alice` and then renaming away leaves a retired own-nick key that the query loop
+holds and the DM listener never joined; leaving by key would sever a live
+conversation. `dmListenerKeys` records, per network, what THIS loop joined —
+`joined` is keyed by topic and carries no record of who took it, so the
+provenance was missing state, not duplicated state.
+
+**Not established.** All of it is vitest against the socket mock; the two
+broadcast shapes were pinned by reading the server's broadcast sites, not
+observed on a real stack. Whether the retired subscriptions survive a phoenix.js
+auto-rejoin is unmeasured. The handler probe discriminates by which scrollback
+bucket a row lands in, not by inspecting closure identity. And the mirror defect
+is UNCOVERED on purpose: renaming INTO a nick that already has an open query
+window leaves the DM listener with no subscription at all, so every inbound DM
+collapses into the self window. Its root is a guard that suppresses the install
+regardless of who holds the key, not a hold never released, and closing it needs
+a precedence rule between two loops that nobody has specified — filed as #1365.

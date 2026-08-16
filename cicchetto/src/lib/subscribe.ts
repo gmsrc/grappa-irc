@@ -147,6 +147,11 @@ moduleRoot(() => {
   // per query topic, so subscribe-before-send awaits the SAME ack the loop
   // drives (no double-join). Cleared on identity rotation alongside `joined`.
   const queryJoinAcks = new Map<ChannelKey, Promise<void>>();
+  // #1341 — per-network provenance for the DM-listener loop: the own-nick key
+  // THIS loop joined. `joined` is keyed by topic with no record of who took it,
+  // so without this the retiring loop cannot tell its own subscription from a
+  // query window that happens to sit on the same key.
+  const dmListenerKeys = new Map<string, ChannelKey>();
 
   createEffect(
     on(token, (t, prev) => {
@@ -154,6 +159,7 @@ moduleRoot(() => {
         for (const ch of joined.values()) ch.leave();
         joined.clear();
         queryJoinAcks.clear();
+        dmListenerKeys.clear();
       }
     }),
   );
@@ -1090,6 +1096,17 @@ moduleRoot(() => {
   // The pre-fix fallback to `displayNick(u)` (= user.name) silently
   // subscribed to the WRONG topic when account-name differed from the
   // IRC nick — see api.ts moduledoc + cic H3.
+  //
+  // #1341 — the key moves with the nick, so a rename mints a new one and the
+  // retired key would stay in `joined` with a live Channel on it. That is not
+  // duplicate delivery (a row carries one `channel`, so it reaches one topic)
+  // but a SHADOW: once a peer takes the retired nick, our outbound echo to them
+  // is broadcast on that key, `ensureQueryTopicJoined` short-circuits on
+  // `joined.has(key)` and never installs the channel handler, and this handler
+  // re-keys on the sender — so the line lands in our own self window.
+  // `dmListenerKeys` records what THIS loop joined, per network, so the release
+  // is gated on ownership: a query window opened while we wore another nick can
+  // legitimately hold the key we are retiring, and leaving by key would sever it.
   createEffect(() => {
     const t = token();
     const u = user();
@@ -1101,6 +1118,12 @@ moduleRoot(() => {
       const ownNick = ownNickForNetwork(net, u);
       if (!ownNick) continue;
       const key = channelKey(net.slug, ownNick);
+      const held = dmListenerKeys.get(net.slug);
+      if (held !== undefined && held !== key) {
+        joined.get(held)?.leave();
+        joined.delete(held);
+        dmListenerKeys.delete(net.slug);
+      }
       if (joined.has(key)) continue;
       const phx = joinChannel(userName, net.slug, ownNick, (reply) => {
         applyJoinReplyAndSeed(net.slug, ownNick, reply);
@@ -1144,6 +1167,7 @@ moduleRoot(() => {
       });
       installDmListenerHandler(phx, net.slug, net.id, ownNick);
       joined.set(key, phx);
+      dmListenerKeys.set(net.slug, key);
     }
   });
 
