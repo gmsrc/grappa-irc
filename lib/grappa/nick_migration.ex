@@ -195,16 +195,14 @@ defmodule Grappa.NickMigration do
   #
   # With no window, the mute is the ONLY store that can move, so this path
   # takes the caller-facing `rename_muted_target/4` and skips the four-store
-  # transaction. It does NOT skip a transaction altogether, and saying so
-  # would be the log-honesty failure CLAUDE.md names: #1375 put a
-  # `BEGIN IMMEDIATE` inside that setter, because one `Repo.update` of the
-  # `data` blob is a read-modify-write pair that silently drops a concurrent
-  # writer's key. So what this gate removes is the transaction spanning
-  # `QueryWindows.rename/4` plus two `update_all`s — a much shorter hold of
-  # the RESERVED lock, not no hold. Whether the residue still reproduces the
-  # #458 profile is NOT established by the measurement quoted above, which
-  # was taken before #1375 landed. The migration path proper is untouched —
-  # same transaction, same retry, same order.
+  # transaction. That setter has a `BEGIN IMMEDIATE` of its own since #1375 —
+  # one `Repo.update` of the `data` blob is a read-modify-write pair that
+  # silently drops a concurrent writer's key — so for a while this gate only
+  # made the lock hold SHORTER. It carries its own probe now, on the same
+  # discipline as the one here: with nothing muted under the old key it opens
+  # no transaction either, and a peer nobody muted costs two indexed reads and
+  # no lock. The migration path proper is untouched — same transaction, same
+  # retry, same order.
   #
   # The probe is a READ taken outside any transaction, and that is safe in
   # the only direction that matters. If it sees a window that is gone by the

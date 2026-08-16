@@ -665,17 +665,21 @@ defmodule Grappa.UserSettings do
           {:ok, :renamed | :noop} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def rename_muted_target({_, _} = subject, network_slug, old_target, new_target)
       when is_binary(network_slug) and is_binary(old_target) and is_binary(new_target) do
-    case rekey_pair(network_slug, old_target, new_target) do
-      nil ->
-        {:ok, :noop}
-
-      {old_key, new_key} ->
-        # Same `data` blob, same lost-update hazard as the setters (#1375), so
-        # the same frame — but NOT `update_data/2`: a rename must never CREATE
-        # the row, and it reports which of the two things it did.
-        write_transaction(fn ->
-          rekey_muted_target(fetch_existing_or_nil(subject), old_key, new_key)
-        end)
+    # Two ways to have nothing to migrate, one answer: the spellings fold to one
+    # key, or the old key is not muted. Only past both does this take a frame —
+    # #1378, do not take SQLite's single write lock to migrate nothing.
+    with {old_key, new_key} <- rekey_pair(network_slug, old_target, new_target),
+         true <- muted_key?(subject, old_key) do
+      # Same `data` blob, same lost-update hazard as the setters (#1375), so the
+      # same frame — but NOT `update_data/2`: a rename must never CREATE the
+      # row, and it reports which of the two things it did. The probe's read is
+      # NOT trusted for the write: `rekey_muted_target/3` re-reads inside the
+      # transaction and is the only thing that decides what gets written.
+      write_transaction(fn ->
+        rekey_muted_target(fetch_existing_or_nil(subject), old_key, new_key)
+      end)
+    else
+      _ -> {:ok, :noop}
     end
   end
 
@@ -719,17 +723,12 @@ defmodule Grappa.UserSettings do
   end
 
   @spec rekey_muted_target(Settings.t() | nil, String.t(), String.t()) :: :renamed | :noop
-  defp rekey_muted_target(nil, _, _), do: :noop
-
-  defp rekey_muted_target(%Settings{} = settings, old_key, new_key) do
-    prefs = Map.get(settings.data, @notification_prefs_key, %{})
-    muted = if is_map(prefs), do: Map.get(prefs, "muted_targets", %{}), else: %{}
-
-    case is_map(muted) and Map.has_key?(muted, old_key) do
-      false ->
+  defp rekey_muted_target(settings, old_key, new_key) do
+    case muted_prefs(settings, old_key) do
+      nil ->
         :noop
 
-      true ->
+      {prefs, muted} ->
         {entry, without_old} = Map.pop(muted, old_key)
         # put_new, not put: the destination's own entry wins the collision.
         next_muted = Map.put_new(without_old, new_key, entry)
@@ -739,6 +738,33 @@ defmodule Grappa.UserSettings do
         :renamed
     end
   end
+
+  # The ONE "is this key muted?" question. `rename_muted_target/4`'s probe asks
+  # it OUTSIDE the transaction to decide whether to open one; `rekey_muted_target/3`
+  # asks it again INSIDE to decide what to write. Sharing the predicate is what
+  # makes the probe safe — #1378's discipline for `QueryWindows.exists?/3`, that
+  # the cheap question be BY CONSTRUCTION the question the write then asks, so
+  # the two cannot drift onto different notions of "nothing to migrate".
+  #
+  # Returns the two maps the rewrite needs, because deciding and locating are
+  # the same traversal; `nil` IS the answer "no".
+  @spec muted_prefs(Settings.t() | nil, String.t()) :: {map(), map()} | nil
+  defp muted_prefs(nil, _), do: nil
+
+  defp muted_prefs(%Settings{} = settings, key) do
+    prefs = Map.get(settings.data, @notification_prefs_key, %{})
+    muted = if is_map(prefs), do: Map.get(prefs, "muted_targets", %{}), else: %{}
+
+    if is_map(muted) and Map.has_key?(muted, key), do: {prefs, muted}, else: nil
+  end
+
+  # The probe. Costs one indexed SELECT on the write path, which is the price
+  # of not taking the write lock in the common case — a peer NICK fans out to
+  # every session sharing a channel and almost none of them mute that peer.
+  # Deliberately NOT used by `rename_muted_target!/4`: inside a transaction the
+  # lock is already held, so the probe there would buy nothing and cost a read.
+  @spec muted_key?(Subject.t(), String.t()) :: boolean()
+  defp muted_key?(subject, key), do: muted_prefs(fetch_existing_or_nil(subject), key) != nil
 
   # ---------------------------------------------------------------------------
   # upload_ttl_seconds accessors (UX-4 bucket M, 2026-05-19)
