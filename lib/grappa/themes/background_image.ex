@@ -27,6 +27,7 @@ defmodule Grappa.Themes.BackgroundImage do
 
   Returns `{:ok, slug}` or a tagged `{:error, reason}`; never raises.
   """
+  alias Grappa.ServerSettings
   alias Grappa.Sys.HardenedCmd
   alias Grappa.Themes.ImageFetcher
   alias Grappa.Uploads
@@ -43,7 +44,13 @@ defmodule Grappa.Themes.BackgroundImage do
   @fetcher_key {__MODULE__, :image_fetcher}
 
   @type source :: {:upload, Plug.Upload.t()} | {:url, String.t()}
-  @type error :: :not_raster | :too_large | :ssrf_blocked | :fetch_failed | :image_reencode_failed
+  @type error ::
+          :not_raster
+          | :too_large
+          | :ssrf_blocked
+          | :fetch_failed
+          | :image_reencode_failed
+          | :insufficient_storage
 
   @doc """
   Reads the injected `image_fetcher` from `config :grappa, :themes` once and
@@ -197,9 +204,28 @@ defmodule Grappa.Themes.BackgroundImage do
 
   defp store(subject, png) do
     # `expires_at` omitted → NULL → the Uploads Reaper never sweeps theme
-    # backgrounds. mime forced to image/png (we just produced it).
+    # backgrounds, and that stays deliberate: a background is referenced by a
+    # live theme payload, so an expiry would delete the image out from under
+    # a theme the subject is still using. What was missing is the OTHER half —
+    # the global storage cap `UploadsController` consumes on every other write
+    # to the same store. Unswept and unbounded is the combination that does
+    # not hold; unswept and bounded is a design choice.
+    #
+    # Checked here rather than in the context door because the byte count only
+    # exists after the re-encode: what lands on disk is this PNG, not whatever
+    # was fetched.
     attrs = %{subject: subject, mime: "image/png"}
 
+    with :ok <-
+           Uploads.check_global_cap(
+             byte_size(png),
+             ServerSettings.get_upload_global_cap_bytes()
+           ) do
+      insert(attrs, png)
+    end
+  end
+
+  defp insert(attrs, png) do
     case Uploads.create(png, attrs, storage_root: Uploads.storage_root()) do
       {:ok, %Uploads.Upload{slug: slug}} ->
         {:ok, slug}

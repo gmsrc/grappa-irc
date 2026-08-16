@@ -345,11 +345,21 @@ defmodule Grappa.Themes do
   return the uploads slug for storing in a theme payload's `background.image_id`.
   The context is the door — controllers call this, never the sub-module. Takes
   the bare-id subject tuple (`Grappa.Uploads` scope shape).
+
+  Consumes the SAME `#{@quota_bucket}` daily quota `create/3` and `copy/3` do,
+  and consumes it BEFORE the fetch rather than after. That order is the whole
+  point: the resource being rationed is the fetch itself — a remote GET plus an
+  ffmpeg re-encode, whose cost `ImageFetcher` bounds only after buffering — so
+  charging only for successes would leave failures running free, which is the
+  cheaper flood to mount. A subject who burns a slot on a broken URL has spent
+  one of five, which is the intended shape of a burst bound.
   """
   @spec store_background(Subject.t(), BackgroundImage.source()) ::
-          {:ok, String.t()} | {:error, BackgroundImage.error()}
+          {:ok, String.t()} | {:error, BackgroundImage.error() | :rate_limited}
   def store_background(subject, source) do
-    BackgroundImage.process_and_store(subject, source)
+    with :ok <- consume_quota(subject) do
+      BackgroundImage.process_and_store(subject, source)
+    end
   end
 
   @doc """
@@ -481,11 +491,15 @@ defmodule Grappa.Themes do
   defp authorize(_, %Theme{}), do: {:error, :forbidden}
 
   # Daily creation quota — applies to BOTH subjects (~5/day burst bound).
-  defp check_quota({:user, %User{id: id}}),
-    do: DailyQuota.check_and_record(@quota_bucket, {:user, id}, @daily_quota)
+  # The struct-shaped clauses exist because `create`/`copy` hold the loaded
+  # subject; they narrow to the bare-id `Grappa.Subject.t()` the quota is
+  # actually keyed by, which is the shape `store_background/2` already has.
+  defp check_quota({:user, %User{id: id}}), do: consume_quota({:user, id})
+  defp check_quota({:visitor, %Visitor{id: id}}), do: consume_quota({:visitor, id})
 
-  defp check_quota({:visitor, %Visitor{id: id}}),
-    do: DailyQuota.check_and_record(@quota_bucket, {:visitor, id}, @daily_quota)
+  @spec consume_quota(Subject.t()) :: :ok | {:error, :rate_limited}
+  defp consume_quota(subject),
+    do: DailyQuota.check_and_record(@quota_bucket, subject, @daily_quota)
 
   # Total owned-theme cap — VISITORS only (users are unchanged: no lifetime
   # cap). Pure count, no side effect — runs before the quota so a capped

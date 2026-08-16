@@ -24,8 +24,17 @@ defmodule Grappa.Themes.ImageFetcher.Req do
   is bounded by `@receive_timeout_ms`. A hostile server omitting `content-length`
   and streaming indefinitely is capped by that timeout rather than a hard
   in-flight byte ceiling — acceptable because this path is authenticated and
-  rate-limited (~5 theme ops/user/day), and the bytes are immediately re-encoded
-  through a wall-clock-bounded ffmpeg pass downstream.
+  rate-limited, and the bytes are immediately re-encoded through a
+  wall-clock-bounded ffmpeg pass downstream.
+
+  **Which rate limit, named rather than assumed.** The `~5 ops/user/day`
+  figure this paragraph leans on is `Grappa.Themes`' `:theme_create` daily
+  quota, and it reaches here only because `Themes.store_background/2`
+  consumes that quota BEFORE calling the fetcher (#1404). It used to be
+  spent by `create`/`copy` alone, so the sentence described a bound that was
+  not on this path at all. If a future caller reaches this module without
+  passing through that door, this justification stops holding and the
+  in-flight ceiling becomes the thing to build.
   """
   @behaviour Grappa.Themes.ImageFetcher
 

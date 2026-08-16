@@ -6,6 +6,9 @@ defmodule Grappa.ThemesTest do
 
   alias Grappa.{Networks, Repo, Themes, Themes.Theme, Themes.TokenModel, Themes.Wire, Uploads, Visitors.Visitor}
 
+  # Read from the same key `Grappa.Themes` reads, never retyped.
+  @daily_quota Application.compile_env(:grappa, [:themes, :daily_quota], 5)
+
   defp valid_payload do
     %{
       "colors" => Map.new(TokenModel.color_keys(), fn k -> {k, "#123456"} end),
@@ -572,6 +575,52 @@ defmodule Grappa.ThemesTest do
       upload = %Plug.Upload{path: path, content_type: "text/plain", filename: "x.txt"}
 
       assert {:error, :not_raster} = Themes.store_background({:user, user.id}, {:upload, upload})
+    end
+
+    # #1404 — the fetcher's own moduledoc justifies having no in-flight byte
+    # ceiling by citing "~5 theme ops/user/day". That quota was spent by
+    # `create`/`copy` only, so the sentence described a bound that was not on
+    # this path. The assertion is that the door is now metered by the SAME
+    # bucket, which is what makes the justification true.
+    test "consumes the theme daily quota, so a burst is refused" do
+      user = user_fixture()
+      path = Path.join(System.tmp_dir!(), "themetest-" <> Uploads.mint_slug())
+      File.write!(path, bytes(:gps_png))
+      on_exit(fn -> File.rm(path) end)
+      upload = %Plug.Upload{path: path, content_type: "image/png", filename: "bg.png"}
+
+      results =
+        for _ <- 1..(@daily_quota + 1) do
+          Themes.store_background({:user, user.id}, {:upload, upload})
+        end
+
+      # Pre-state: the door opens at all. Without it, an all-refused result
+      # would read as "metered" when it actually means "broken".
+      assert match?({:ok, _}, hd(results))
+      assert {:error, :rate_limited} = List.last(results)
+    end
+
+    # A REFUSED fetch still burns a slot, and that is the intended order: the
+    # resource being rationed is the fetch, so charging only for successes
+    # would leave failures free to run — the cheaper flood of the two.
+    test "a failed source still spends its slot" do
+      user = user_fixture()
+      path = Path.join(System.tmp_dir!(), "themetest-" <> Uploads.mint_slug())
+      File.write!(path, "hi")
+      on_exit(fn -> File.rm(path) end)
+      bad = %Plug.Upload{path: path, content_type: "text/plain", filename: "x.txt"}
+
+      for _ <- 1..@daily_quota do
+        assert {:error, :not_raster} = Themes.store_background({:user, user.id}, {:upload, bad})
+      end
+
+      good_path = Path.join(System.tmp_dir!(), "themetest-" <> Uploads.mint_slug())
+      File.write!(good_path, bytes(:gps_png))
+      on_exit(fn -> File.rm(good_path) end)
+      good = %Plug.Upload{path: good_path, content_type: "image/png", filename: "bg.png"}
+
+      assert {:error, :rate_limited} =
+               Themes.store_background({:user, user.id}, {:upload, good})
     end
   end
 
