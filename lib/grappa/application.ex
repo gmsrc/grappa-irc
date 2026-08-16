@@ -27,6 +27,10 @@ defmodule Grappa.Application do
       Grappa.Uploads,
       Grappa.Uploads.Reaper,
       Grappa.Vault,
+      # #1404 — start/2 calls Vhosts.boot/1 to seed the deployment's
+      # source-mapping key, the same boot-time DI-seam shape as the
+      # SourceAlias.Config and Themes seams above.
+      Grappa.Vhosts,
       Grappa.Accounts.Reaper,
       Grappa.Visitors.Reaper,
       # #364 J/cross-module-S2: start/2 calls WindowCounts.PushSource.boot/0
