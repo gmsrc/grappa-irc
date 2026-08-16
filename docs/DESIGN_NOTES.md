@@ -43746,15 +43746,46 @@ contract (#524: a deferred transaction's read→write upgrade raises a
 `SQLITE_BUSY` that `busy_timeout` does not cover), not on anything this branch
 measured.
 
-### Accepted cost
+### Accepted cost — and the knob, turned the same day (#1374)
 
-`rename_muted_target/4` now opens a write transaction even when it turns out to
+`rename_muted_target/4` opens a write transaction even when it turns out to
 have nothing to migrate, and it is called once per peer NICK change per live
 session. The alternative — decide on a read taken OUTSIDE the transaction and
-re-read inside when there is work — buys back a sub-millisecond, WAL-frame-free
-lock acquisition at the price of a second SELECT on the write path and a
-duplicated "is this key muted?" predicate. Not taken; if nick-change churn ever
-shows up in the #357 write-latency counters, that is the knob.
+re-read inside when there is work — was declined here at "a sub-millisecond,
+WAL-frame-free lock acquisition", against the price of a second SELECT on the
+write path and a duplicated "is this key muted?" predicate, with the condition
+stated: *if nick-change churn ever shows up, that is the knob*.
+
+**The knob has been turned, and the paragraph above is superseded rather than
+merely qualified.** What the evidence refutes is the QUANTITY, not the
+reasoning. Per-call cost is the wrong unit here: one NICK fans out to every
+session sharing a channel, every one of them reaches this setter, and they
+queue for the same single writer — so the regime is concurrent, and the price
+of one acquisition does not describe it. The duplicated-predicate half of the
+objection is answered by not duplicating: `muted_prefs/2` is now the ONE "is
+this key muted?" question, shared between the probe outside the transaction and
+the rewrite inside it, which is also what keeps the two from drifting onto
+different notions of "nothing to migrate". The second-SELECT half stands and is
+paid deliberately: when the key IS muted the row is read twice.
+
+Two things are established, and they are not the same thing.
+
+**That the lock is taken to migrate nothing.** Measured, not argued:
+`NickMigrationTest` counts transaction-control statements off Ecto's per-query
+telemetry and reports `["begin"]` for a rename of a peer with no query window
+and no mute. That is a defect in its own terms and is the whole of what
+justifies the probe.
+
+**That this commit, as it first landed, turned CI red.** Historical fact, on
+the only venue that reproduces: on `83d90cb1` the `integration` job went red
+four runs out of four, three of them on `issue458-presence-page-yield`; its
+parent was green four runs in a row; and reverting this commit (#1414) restored
+green. The revert is why the commit above is a re-land rather than an original
+landing.
+
+**What is NOT established is that the probe cures that red.** It is not
+measured, and local reproduction argues against being able to measure it here:
+see the venue limitation in the #1374 entry below.
 <!-- entry #1374 -->
 
 ---
