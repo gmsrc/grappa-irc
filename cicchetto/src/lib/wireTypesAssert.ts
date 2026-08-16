@@ -55,9 +55,11 @@ import type {
   HomeNetworkRow,
   LinksEntry,
   MentionsBundleMessage,
+  MeResponse,
   NotifyEntry,
   QueryWindowEntry,
   ScrollbackMessage,
+  Subject,
   WhoUser,
   WireChannelEvent,
   WireUserEvent,
@@ -65,8 +67,10 @@ import type {
 import type { ModesEntry, TopicEntry } from "./channelTopic";
 import type { MemberEntry } from "./memberTypes";
 import type {
+  AuthJSONSubjectWire,
   ChannelDirectoryWireEntry,
   CicWireBundleHashPayload,
+  MeJSONMeJson,
   NetworksFeaturedChannelsWireLink,
   NetworksWireConnectionStateEvent,
   NetworksWireCredentialJson,
@@ -359,3 +363,16 @@ export type _Assert_NoWideningOverrunChannel = Assert<
     WideningOverrunIn<WireChannelEvent>
   >
 >;
+
+// === #1406 X-S10 — the subject discriminator, both doors ===
+// `GET /me` and `POST /auth/login` carried `kind` as a bare string on the
+// server until X-S10; the literals lived here by hand with nothing tying
+// them to the source. Now that both are closed sets the codegen can see,
+// pin them — but pin the DISCRIMINATOR ONLY. cic's `MeResponse` and
+// `Subject` deliberately mark the post-#363/#126 fields optional so a
+// subject persisted in localStorage before those fields landed still
+// validates, and `MeResponse` carries envelopes the tests mock away, so a
+// full-shape `Equal` cannot hold on either. The `kind` set is the part that
+// must never drift silently — the same posture as `_Assert_BundleHashKind`.
+export type _Assert_MeResponseKind = Assert<Equal<MeResponse["kind"], MeJSONMeJson["kind"]>>;
+export type _Assert_LoginSubjectKind = Assert<Equal<Subject["kind"], AuthJSONSubjectWire["kind"]>>;
