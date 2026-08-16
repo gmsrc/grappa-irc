@@ -50,6 +50,12 @@ defmodule Grappa.Themes do
       Grappa.Networks,
       Grappa.RateLimit,
       Grappa.Repo,
+      # The global storage cap is a `ServerSettings` value, and
+      # `Uploads.check_global_cap/2` takes it as an ARGUMENT so `Uploads`
+      # stays off a `ServerSettings` dep. That puts the read on the calling
+      # context — the same split `Networks.SessionPlan` already makes when it
+      # reads the addressing settings for `Vhosts.effective_source/3`.
+      Grappa.ServerSettings,
       Grappa.Subject,
       Grappa.Sys.HardenedCmd,
       Grappa.Uploads,
