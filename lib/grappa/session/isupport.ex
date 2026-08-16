@@ -124,6 +124,7 @@ defmodule Grappa.Session.ISupport do
   @type t :: %{
           chanmodes: chanmodes(),
           prefix: prefix(),
+          prefix_order: [String.t()],
           statusmsg: [String.t()],
           monitor: presence_limit() | nil,
           watch: presence_limit() | nil,
@@ -154,6 +155,12 @@ defmodule Grappa.Session.ISupport do
   # dialyzer-transparent (MapSet is opaque — a composite type embedding it
   # trips `contract_with_opaque` on the literal `default/0` return).
   @default_prefix %{"o" => "@", "h" => "%", "v" => "+"}
+
+  # #1302 — the SAME token's mode letters, in the order PREFIX advertised
+  # them: highest rank first. `@default_prefix` is a map and a map has no
+  # order, so rank is a second projection of one parse rather than a fact
+  # anyone can recover from the table beside it.
+  @default_prefix_order ["o", "h", "v"]
   @default_chanmodes %{
     a: ["b", "e", "I"],
     b: ["k"],
@@ -202,6 +209,7 @@ defmodule Grappa.Session.ISupport do
     %{
       chanmodes: @default_chanmodes,
       prefix: @default_prefix,
+      prefix_order: @default_prefix_order,
       statusmsg: @default_statusmsg,
       # #247 — no presence mechanism ADVERTISED pre-005. This table only
       # records what 005 said; the arm policy (advertised pick, else an
@@ -291,6 +299,37 @@ defmodule Grappa.Session.ISupport do
   def user_prefix(%{prefix: prefix}, mode) when is_binary(mode) do
     Map.fetch(prefix, mode)
   end
+
+  @doc """
+  The membership mode letters this network advertised, HIGHEST RANK FIRST —
+  the order `PREFIX=(qaohv)~&@%+` states and `prefix` cannot hold.
+
+  This is the only place rank may be read from. The sibling map is a lookup
+  table in both directions and nothing more: it is built with `Map.new/1`
+  and crosses the cic wire as a JSON object, whose key order is the
+  runtime's (alphabetical by letter, for a small map) rather than the
+  ircd's. Those two coincide on bahamut/Azzurra — `(ohv)` sorts to `h,o,v`,
+  and the only pair that would differ is re-admitted by the halfop branch
+  in cic's `editorSigils` — which is why reading rank out of the map
+  survived undetected on the network grappa runs on, and mis-ranked
+  founders everywhere else.
+
+  Read via `Map.get` for the same hot-reload safety as `statusmsg/1`: a
+  live `Session.Server` state seeded before this field existed and read
+  after the module is reloaded degrades to the bahamut order instead of
+  raising.
+  """
+  @spec prefix_order(t()) :: [String.t()]
+  def prefix_order(isupport) when is_map(isupport),
+    do: Map.get(isupport, :prefix_order, @default_prefix_order)
+
+  @doc """
+  The pre-005 default PREFIX rank order (bahamut/Azzurra `(ohv)`). Exposed
+  so callers and tests reference the seed through production code rather
+  than duplicating the literal.
+  """
+  @spec default_prefix_order() :: [String.t()]
+  def default_prefix_order, do: @default_prefix_order
 
   @doc """
   The advertised STATUSMSG membership sigils for this network — the set a
@@ -470,9 +509,13 @@ defmodule Grappa.Session.ISupport do
     end
   end
 
+  # #1302 — one parse writes BOTH projections. `Map.put` for the order (not
+  # the update syntax used for the map) because `acc` may be a table that
+  # predates the `:prefix_order` field during a hot-reload window, the same
+  # reason `STATUSMSG=` below uses it.
   defp merge_token("PREFIX=" <> rest, acc) do
     case parse_prefix(rest) do
-      {:ok, prefix} -> %{acc | prefix: prefix}
+      {:ok, {prefix, order}} -> %{acc | prefix: prefix} |> Map.put(:prefix_order, order)
       :error -> acc
     end
   end
@@ -656,14 +699,18 @@ defmodule Grappa.Session.ISupport do
   # PREFIX=(modes)sigils — parenthesised mode letters paired positionally
   # with the sigils that follow. `(ohv)@%+` → %{"o"=>"@","h"=>"%","v"=>"+"}.
   # The two runs MUST be equal length or the token is malformed.
-  @spec parse_prefix(String.t()) :: {:ok, prefix()} | :error
+  # #1302 — returns the lookup MAP and the advertised ORDER of the same
+  # letters. `Map.new/1` destroys that order and nothing downstream can
+  # reconstruct it, so the zip is kept: two projections, one parse, no way
+  # for them to disagree about which letters exist.
+  @spec parse_prefix(String.t()) :: {:ok, {prefix(), [String.t()]}} | :error
   defp parse_prefix(rest) do
     with ["", tail] <- String.split(rest, "(", parts: 2),
          [modes, sigils] <- String.split(tail, ")", parts: 2),
          mode_list = String.graphemes(modes),
          sigil_list = String.graphemes(sigils),
          true <- mode_list != [] and length(mode_list) == length(sigil_list) do
-      {:ok, mode_list |> Enum.zip(sigil_list) |> Map.new()}
+      {:ok, {mode_list |> Enum.zip(sigil_list) |> Map.new(), mode_list}}
     else
       _ -> :error
     end

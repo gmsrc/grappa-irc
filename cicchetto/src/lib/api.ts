@@ -737,6 +737,12 @@ export type WireChannelEvent =
       // deploy) → `["b"]`, the capability that server does have.
       list_modes_queryable: string[];
       prefix: Record<string, string>;
+      // #1302 — the PREFIX letters in ADVERTISED rank order, highest first.
+      // The map beside it is a lookup table only: it arrives as a JSON
+      // object keyed alphabetically by letter, so rank is not derivable
+      // from it. Absent (a server predating the field) → `[]`, meaning
+      // "rank unknown", never "no levels".
+      prefix_order: string[];
       // #1255 — the per-network facts cic used to open-code as constants.
       // Absent means a server predating the widening (a cic-only bundle
       // deploy again), so each falls back to what cic assumed before it:
@@ -1068,6 +1074,12 @@ export type WireUserEvent =
       // deploy) → `["b"]`, the capability that server does have.
       list_modes_queryable: string[];
       prefix: Record<string, string>;
+      // #1302 — the PREFIX letters in ADVERTISED rank order, highest first.
+      // The map beside it is a lookup table only: it arrives as a JSON
+      // object keyed alphabetically by letter, so rank is not derivable
+      // from it. Absent (a server predating the field) → `[]`, meaning
+      // "rank unknown", never "no levels".
+      prefix_order: string[];
       // #1255 — the per-network facts cic used to open-code as constants.
       // Absent means a server predating the widening (a cic-only bundle
       // deploy again), so each falls back to what cic assumed before it:

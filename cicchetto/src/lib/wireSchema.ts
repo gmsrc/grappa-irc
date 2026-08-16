@@ -1004,6 +1004,7 @@ export const S_SessionWireIsupportChangedPayload = {
     chanmodes_d: { a: "s" },
     list_modes_queryable: { a: "s" },
     prefix: { r: "s" },
+    prefix_order: { a: "s" },
     chantypes: { a: "s" },
     casemapping: S_SessionISupportCasemapping,
     maxlist: { r: "i" },

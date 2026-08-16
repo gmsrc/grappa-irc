@@ -158,6 +158,65 @@ defmodule Grappa.Session.ISupportTest do
       assert ISupport.user_prefix(isupport, "q") == {:ok, "~"}
       assert ISupport.user_prefix(isupport, "v") == {:ok, "+"}
     end
+
+    # #1302 — PREFIX advertises its letters highest-rank-first, and that
+    # ORDER is a fact of its own: `Map.new/1` throws it away, so a consumer
+    # holding only the map cannot tell a founder from a voice. The order is
+    # captured from the same parse that builds the map — one zip, two
+    # projections — so the two cannot drift apart.
+    test "captures the ADVERTISED rank order, which the map itself cannot carry" do
+      isupport =
+        ISupport.merge_isupport(["grappa-test", "PREFIX=(qaohv)~&@%+"], ISupport.default())
+
+      assert ISupport.prefix_order(isupport) == ["q", "a", "o", "h", "v"]
+
+      # The map from the SAME token still resolves every letter — a lookup
+      # was never the broken part...
+      assert ISupport.user_prefix(isupport, "q") == {:ok, "~"}
+      assert ISupport.user_prefix(isupport, "v") == {:ok, "+"}
+
+      # ...but its own key order is NOT the advertised one, which is the
+      # whole reason the order has to travel separately.
+      refute Map.keys(isupport.prefix) == ["q", "a", "o", "h", "v"]
+    end
+
+    test "a re-advertised PREFIX replaces the rank order too" do
+      # The order must follow the same last-wins rule as the map beside it:
+      # a table left holding line 1's order and line 2's map would rank
+      # letters that are no longer in it.
+      isupport =
+        ISupport.default()
+        |> then(&ISupport.merge_isupport(["grappa-test", "PREFIX=(ov)@+"], &1))
+        |> then(&ISupport.merge_isupport(["grappa-test", "PREFIX=(qaohv)~&@%+"], &1))
+
+      assert ISupport.prefix_order(isupport) == ["q", "a", "o", "h", "v"]
+    end
+
+    test "a malformed PREFIX leaves the previous rank order standing" do
+      # Same posture as the map: an unbalanced token is ignored rather than
+      # blanking the table, so a misbehaving server cannot strip rank.
+      isupport =
+        ISupport.default()
+        |> then(&ISupport.merge_isupport(["grappa-test", "PREFIX=(qaohv)~&@"], &1))
+
+      assert ISupport.prefix_order(isupport) == ISupport.default_prefix_order()
+    end
+  end
+
+  describe "prefix_order/1" do
+    test "pre-005 default is the bahamut/Azzurra order" do
+      assert ISupport.prefix_order(ISupport.default()) == ["o", "h", "v"]
+      assert ISupport.default_prefix_order() == ["o", "h", "v"]
+    end
+
+    test "a table predating the field reads the default instead of raising" do
+      # Hot-reload safety, exactly as `statusmsg/1` has it: a live
+      # Session.Server state seeded before this field exists and read after
+      # the new module is loaded must degrade, not KeyError.
+      legacy = Map.delete(ISupport.default(), :prefix_order)
+
+      assert ISupport.prefix_order(legacy) == ISupport.default_prefix_order()
+    end
   end
 
   describe "takes_param?/3 type-C sign sensitivity" do

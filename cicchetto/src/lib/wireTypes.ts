@@ -1003,6 +1003,7 @@ export type SessionWireIsupportChangedPayload = {
   chanmodes_d: string[];
   list_modes_queryable: string[];
   prefix: Record<string, string>;
+  prefix_order: string[];
   chantypes: string[];
   casemapping: SessionISupportCasemapping;
   maxlist: Record<string, number>;

@@ -98,6 +98,29 @@ defmodule Grappa.Session.WireTest do
       assert payload.prefix == %{"o" => "@", "h" => "%", "v" => "+"}
     end
 
+    # #1302 — the map is a LOOKUP table and nothing more. It reaches the
+    # client as a JSON object whose key order is the runtime's, not the
+    # ircd's, so a client reading rank out of it mis-ranks every network
+    # whose advertised order disagrees with that — which is every network
+    # richer than bahamut. The order is published as its own field.
+    test "publishes prefix_order, the rank the serialised map destroys" do
+      isupport =
+        ISupport.merge_isupport(["s", "PREFIX=(qaohv)~&@%+"], ISupport.default())
+
+      payload = Wire.isupport_changed(7, isupport, 512)
+
+      assert payload.prefix_order == ["q", "a", "o", "h", "v"]
+
+      # The measurement this field exists for, re-exhibited on the encoder
+      # that actually ships it: the map does NOT serialise in rank order, so
+      # `Object.values(prefix)` is not a ranking anywhere.
+      assert Jason.encode!(payload.prefix) ==
+               ~s({"a":"&","h":"%","o":"@","q":"~","v":"+"})
+
+      # And the field survives encoding in the advertised order.
+      assert Jason.encode!(payload.prefix_order) == ~s(["q","a","o","h","v"])
+    end
+
     # #1251 — the queryable set is PUBLISHED, not left for the client to
     # derive: it is `chanmodes_a` minus the letters grappa knows no reply
     # numerics for. The difference between the two lists is the quiet

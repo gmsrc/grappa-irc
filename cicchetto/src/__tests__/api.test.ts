@@ -169,6 +169,7 @@ describe("WireChannelEvent canonical union (H3)", () => {
         chanmodes_d: ["n", "t", "s"],
         list_modes_queryable: ["b", "e", "I"],
         prefix: { o: "@", h: "%", v: "+" },
+        prefix_order: ["o", "h", "v"],
         chantypes: ["#", "&"],
         casemapping: "ascii",
         maxlist: { b: 100 },

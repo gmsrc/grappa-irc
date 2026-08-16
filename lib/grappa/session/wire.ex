@@ -167,6 +167,7 @@ defmodule Grappa.Session.Wire do
           chanmodes_d: [String.t()],
           list_modes_queryable: [String.t()],
           prefix: %{String.t() => String.t()},
+          prefix_order: [String.t()],
           chantypes: [String.t()],
           casemapping: ISupport.casemapping(),
           maxlist: %{String.t() => integer()},
@@ -948,6 +949,17 @@ defmodule Grappa.Session.Wire do
   does not rewrite process state — publishes the seed instead of crashing
   the fan-out.
 
+  `prefix_order` (#1302) is the PREFIX letters highest-rank-first. It rides
+  BESIDE the map rather than reshaping it, because the map is a published
+  field and repurposing one is not something the additive-only contract can
+  express — and because a lookup wants a map while a rank wants a list.
+  Publishing it is not a convenience: `prefix` reaches the client as a JSON
+  object whose key order is the runtime's, not the ircd's, so rank is
+  simply absent from the client's copy and cannot be derived there. A
+  client that read `Object.values(prefix)` as the ranking mis-ranked every
+  network whose advertised order disagrees — which is every network richer
+  than the one grappa runs on.
+
   What does NOT cross: `ISupport.raw/1`, the verbatim token archive. That
   is a Phase 6 listener-facade input; a bag of IRC tokens on this wire
   would be IRC protocol re-entering the web client through the window
@@ -965,6 +977,7 @@ defmodule Grappa.Session.Wire do
       chanmodes_d: Enum.sort(cm.d),
       list_modes_queryable: ListModes.queryable(isupport),
       prefix: prefix,
+      prefix_order: ISupport.prefix_order(isupport),
       chantypes: ISupport.chantypes(isupport),
       casemapping: ISupport.casemapping(isupport),
       maxlist: ISupport.maxlist(isupport),

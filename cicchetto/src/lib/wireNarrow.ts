@@ -254,6 +254,12 @@ export function narrowIsupportChanged(
     // queries that server cannot answer.
     list_modes_queryable: narrowStringArray(r.list_modes_queryable) ?? ["b"],
     prefix,
+    // #1302 — absent means a server predating the field. The empty list is
+    // the honest answer: rank is UNKNOWN, and `editorSigils` degrades to the
+    // classic op/halfop pair, which is exactly what it computed while the
+    // order was being dropped. Falling back to the map's key order instead
+    // would reinstate the very mis-ranking this field exists to end.
+    prefix_order: narrowStringArray(r.prefix_order) ?? [],
     // #1255 — same posture as the two fallbacks around it: absent means a
     // server predating the widening, and the fallback is exactly what cic
     // assumed while the fact was being dropped at ingress — the RFC 2812
