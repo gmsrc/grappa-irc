@@ -357,16 +357,18 @@ defmodule Grappa.UserSettings do
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
   def get_or_init({_, _} = subject) do
     # #523 — ride out a transient SQLITE_BUSY on the row init; sustained
-    # saturation degrades to `{:error, :db_unavailable}` → a clean 503 (#518).
+    # saturation degrades to `{:error, :db_unavailable}` → a clean 503 (#518)
+    # at every PUT /me/settings setter (they all init through here first).
     do_get_or_init(subject, fn op -> Repo.BusyRetry.run(op) end)
   end
 
   # In-transaction twin of `get_or_init/1` (#1375): the row init as the first
-  # statement of `update_data/2`'s transaction. NO retry of its own — the
-  # enclosing `BusyRetry.run/1` retries the WHOLE transaction, and a nested
-  # retry would sleep holding the open transaction's connection, extending the
-  # very contention it waits on. The bang is that contract: a transient busy
-  # RAISES through to the enclosing budget instead of becoming a return value.
+  # statement of `update_data!/2`, which runs inside a transaction whichever
+  # door it came through. NO retry of its own — the enclosing `BusyRetry.run/1`
+  # retries the WHOLE transaction, and a nested retry would sleep holding the
+  # open transaction's connection, extending the very contention it waits on.
+  # The bang is that contract: a transient busy RAISES through to the enclosing
+  # budget instead of becoming a return value.
   @spec get_or_init!(Subject.t()) :: {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
   defp get_or_init!(subject), do: do_get_or_init(subject, fn op -> op.() end)
 
@@ -784,6 +786,30 @@ defmodule Grappa.UserSettings do
   def put_upload_ttl_seconds({_, _} = subject, seconds) do
     with :ok <- validate_upload_ttl_seconds(seconds, subject) do
       update_data(subject, &put_or_delete(&1, @upload_ttl_seconds_key, seconds))
+    end
+  end
+
+  @doc """
+  In-transaction variant of `put_upload_ttl_seconds/2` (#1374 P-S7).
+
+  Same write, MINUS the frame. `Grappa.Visitors.create_anon/4` seeds the
+  incognito TTL as the third statement of an already-open
+  `Repo.BusyRetry.run(fn -> Repo.immediate_transaction(…) end)`, so it must
+  bring neither half of its own: the retrying spelling ran TWO more retry
+  loops inside that transaction, each sleeping on the connection it holds —
+  extending the very contention it waits on — and each turning the busy into
+  a return value where the transaction needed the raise. See the family
+  contract on `rename_muted_target!/4`.
+
+  Keeps the `{:ok, _}` wrapper its twin has, unlike `rename_muted_target!/4`:
+  the error arm here is REACHABLE without a rollback, because
+  `validate_upload_ttl_seconds/2` rejects before the DB is touched at all.
+  """
+  @spec put_upload_ttl_seconds!(Subject.t(), pos_integer() | nil) ::
+          {:ok, Settings.t()} | {:error, Ecto.Changeset.t()}
+  def put_upload_ttl_seconds!({_, _} = subject, seconds) do
+    with :ok <- validate_upload_ttl_seconds(seconds, subject) do
+      {:ok, update_data!(subject, &put_or_delete(&1, @upload_ttl_seconds_key, seconds))}
     end
   end
 
@@ -1342,13 +1368,19 @@ defmodule Grappa.UserSettings do
   # from a snapshot taken before it.
   @spec update_data(Subject.t(), (map() -> map())) ::
           {:ok, Settings.t()} | {:error, Ecto.Changeset.t() | :db_unavailable}
-  defp update_data(subject, fun) do
-    write_transaction(fn ->
-      case get_or_init!(subject) do
-        {:ok, settings} -> write_data!(settings, fun.(settings.data))
-        {:error, cs} -> Repo.rollback(cs)
-      end
-    end)
+  defp update_data(subject, fun), do: write_transaction(fn -> update_data!(subject, fun) end)
+
+  # The write path MINUS the frame, for a caller already inside one (#1374
+  # P-S7: `Grappa.Visitors.create_anon/4`). Splitting it here rather than
+  # giving the `!` seam its own body is what keeps the two doors honest — a
+  # future key added to `update_data/2` cannot be missing from the seam,
+  # because there is only the one body to add it to.
+  @spec update_data!(Subject.t(), (map() -> map())) :: Settings.t()
+  defp update_data!(subject, fun) do
+    case get_or_init!(subject) do
+      {:ok, settings} -> write_data!(settings, fun.(settings.data))
+      {:error, cs} -> Repo.rollback(cs)
+    end
   end
 
   # The retry goes OUTSIDE the transaction and the transaction INSIDE it — the
