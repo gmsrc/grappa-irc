@@ -141,8 +141,7 @@ for (const shareClass of SHARE_CLASSES) {
       // Device B navigates to the share URL. The ROUTE is a plain path
       // (`@solidjs/router` v0.16 is path-mode, and the SPA fallback
       // serves it); only the TOKEN is in the fragment (#1404), which
-      // `goto` carries across because the browser keeps it client-side —
-      // the same reason it never reaches a proxy log.
+      // `goto` carries across because the browser keeps it client-side.
       const sharePath = shareUrl.replace(/^https?:\/\/[^/]+/, "");
       await ctxB.addInitScript(() => {
         localStorage.setItem("cic.installChoice", "browser");

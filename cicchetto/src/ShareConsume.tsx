@@ -29,23 +29,20 @@ import { installSharedSession } from "./lib/auth";
 // one-tap-to-second-device flow. Whoever opened the link already chose
 // to; we just complete the loop.
 //
-// #1404 — the token arrives in the FRAGMENT, not a path segment. A
-// fragment is the one part of a URL the browser keeps to itself: it is
-// absent from the request line every reverse proxy logs verbatim, and
-// absent from the `Referer` this document sends on its own same-origin
-// requests. Same move `socket.ts` made when the WS bearer went to a
-// subprotocol.
+// #1404 — the token arrives in the FRAGMENT, not a path segment. The
+// link IS a credential, so it travels in the one part of a URL the
+// browser keeps to itself: a fragment is not transmitted with the
+// request and is not carried in `Referer`. Same move `socket.ts` made
+// when the WS bearer went to a subprotocol.
 
 // Read the token out of the fragment and remove it from the address bar
-// and from history in the same breath, BEFORE the network call. Scrubbing
-// after a successful consume — which is what this did while the token
-// rode the path — leaves the credential in the bar and in history on
-// every link that failed or was never redeemed, which is precisely the
-// link most likely to be re-opened or shared again while it is still
-// live. The trade, taken deliberately: a reload after a failed consume
-// no longer re-attempts with the real code, it reports `missing_token`.
-// A one-shot credential is not worth keeping around to improve the
-// wording of an error the page has already rendered.
+// and from history in the same breath, BEFORE the network call — so the
+// credential is present for the length of a mount rather than for the
+// lifetime of the tab, on every link alike and not only on the ones that
+// redeem successfully. The trade, taken deliberately: a reload after a
+// failed consume no longer re-attempts with the real code, it reports
+// `missing_token`. A one-shot credential is not worth keeping around to
+// improve the wording of an error the page has already rendered.
 const takeTokenFromFragment = (): string => {
   const raw = window.location.hash.replace(/^#/, "");
   if (raw !== "") {

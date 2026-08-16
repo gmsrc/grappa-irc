@@ -80,12 +80,11 @@ const ShareSessionModal: Component = () => {
       // prevents. The once-mounted modal must guard this manually (the
       // #335 sub-page got it free by unmounting on close).
       if (!shareModalOpen()) return;
-      // The token rides the FRAGMENT, never the path (#1404). A fragment is
-      // the only part of a URL a browser does not transmit: it stays out of
-      // the request line every reverse proxy logs verbatim, and out of the
-      // `Referer` the landing document sends on its own same-origin requests.
-      // Same reasoning that moved the WS bearer to a subprotocol in
-      // `socket.ts` — this link never got that treatment until now.
+      // The token rides the FRAGMENT, never the path (#1404). The link IS a
+      // credential, and a fragment is the one part of a URL the browser
+      // keeps to itself: not transmitted with the request, not carried in
+      // `Referer`. Same reasoning that moved the WS bearer to a subprotocol
+      // in `socket.ts` — this link never got that treatment until now.
       //
       // `/share` stays a plain path route (@solidjs/router v0.16 is
       // path-mode) and the SPA catch-all serves it on every substrate; only

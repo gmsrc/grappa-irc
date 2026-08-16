@@ -14,16 +14,15 @@ defmodule GrappaWeb.ShareTokenController do
 
   ## Why the token rides the fragment (#1404)
 
-  The fragment is the only part of a URL a browser does not transmit. It
-  stays out of the request line — which a reverse proxy logs verbatim,
-  `infra/snippets/log-format.conf` logging `$request` — and out of the
-  `Referer` the landing document would otherwise send on its own
-  same-origin requests under the `same-origin` referrer policy. Neither
-  redaction that exists nearby reaches a path segment:
-  `filter_parameters` keys on a parameter NAME, and the proxy config is
-  not ours to edit on every substrate (the m42 jail is fronted by a
-  vhost outside this repository). Moving the credential is the only
-  remedy that holds wherever grappa is deployed.
+  A share link IS a credential, so it belongs in the one part of a URL
+  the browser keeps to itself: the fragment is not transmitted with the
+  request, and it is not carried in `Referer`.
+
+  Carrying it there rather than redacting it downstream, because the
+  redactions available to us key on parameter NAMES, and on several
+  substrates the serving configuration is not ours to edit at all. A
+  remedy that holds only where we own the whole path is not a remedy for
+  a self-hoster.
 
   Same move the WS bearer already made when it went to a subprotocol
   rather than `?token=`; the share link had simply never had the

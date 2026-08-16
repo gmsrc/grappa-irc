@@ -145,8 +145,8 @@ describe("ShareConsume", () => {
         expect(screen.getByTestId("share-consume-error").textContent).toBe("share_token_consumed");
       });
 
-      // The link that failed is the one most likely to be reopened or
-      // forwarded again while it is still live.
+      // The scrub is unconditional: a consume that fails clears the
+      // fragment exactly like one that succeeds.
       expect(window.location.hash).toBe("");
     });
 

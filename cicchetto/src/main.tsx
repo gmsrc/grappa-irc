@@ -388,9 +388,8 @@ render(
             signed token and navigates into Shell once localStorage
             is populated.
             No `:token` segment (#1404): the token rides the FRAGMENT,
-            which the browser keeps to itself, so it never reaches the
-            request line a proxy logs. `ShareConsume` reads it from
-            `location.hash`. */}
+            which the browser keeps to itself and does not transmit.
+            `ShareConsume` reads it from `location.hash`. */}
         <Route path="/share" component={ShareConsume} />
         {/* #717 — the boundary wraps Shell ONLY, inside RequireAuth. A boot
             fetch that rejects puts its resource in `errored` state and every

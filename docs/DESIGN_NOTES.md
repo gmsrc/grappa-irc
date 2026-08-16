@@ -44272,17 +44272,16 @@ on mount — only the token left the path.
 
 ### Why the fragment and not a redaction
 
-The fragment is the one part of a URL a browser does not transmit. It is
-absent from the request line a reverse proxy logs verbatim, and absent
-from the `Referer` the landing document sends on its own same-origin
-requests under the `same-origin` referrer policy.
+The fragment is the one part of a URL a browser keeps to itself: it is
+not transmitted with the request, and it is not carried in `Referer`.
+That is the property a credential needs from the URL that carries it.
 
-Both redactions that sit nearby were checked and neither reaches a path
-segment: `filter_parameters` keys on a parameter NAME, and the proxy
-config is not ours to edit on every substrate — the m42 jail is fronted
-by a vhost outside this repository, and a self-hoster's proxy is theirs.
-That is what makes this a URL-shape change rather than a logging one: a
-remedy that only works where we own the proxy is not a remedy.
+The redactions that sit nearby were checked and neither one applies to
+this shape: they key on parameter NAMES, and on several substrates the
+serving configuration is not ours to edit at all — a self-hoster's is
+theirs. That is what makes this a URL-shape change rather than a
+redaction one: a remedy that holds only where we own the whole path is
+not a remedy for a self-hoster.
 
 The precedent was already in-house. The WS bearer moved to a subprotocol
 for the same reason, recorded in `socket.ts`; the share link never had
@@ -44291,10 +44290,10 @@ the treatment applied.
 ### Scrub before the request, not after a success
 
 `ShareConsume` reads `location.hash` and clears it with `replaceState`
-before it calls the server. The previous order scrubbed the address bar
-only after a SUCCESSFUL consume, which left the credential in the bar and
-in history for every link that failed or was never redeemed — the ones
-most likely to be reopened or forwarded again while still live.
+before it calls the server, so the credential is present for the length
+of a mount rather than for the lifetime of the tab. The ordering is the
+substance: scrubbing on success would be conditional on the outcome, and
+the scrub has to hold for every link alike.
 
 Accepted trade, stated so it is a decision and not a surprise: reloading
 after a failed consume reports `missing_token` rather than re-attempting
@@ -44311,8 +44310,8 @@ the operator-side mint in `Admin.VisitorsController`, which repeated the
 fragment claim for links an operator hands out.
 
 This is the part worth keeping. The false moduledoc did not merely fail
-to help — an auditor read it, concluded the token never reached a log,
-and cleared the item. Prose asserting a security property the code does
+to help — an auditor read it, concluded the property already held, and
+cleared the item. Prose asserting a security property the code does
 not provide buys a pass that the code would not have got on its own,
 which is why the controller's paragraph now carries an explicit note
 that it is load-bearing and must move with the client.
