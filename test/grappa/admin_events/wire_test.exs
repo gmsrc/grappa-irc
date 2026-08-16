@@ -101,6 +101,12 @@ defmodule Grappa.AdminEvents.WireTest do
       assert event.scope == :ip_account
     end
 
+    test "the share-link redeem door is in the closed set (#1387)" do
+      event = Wire.login_throttled(:share_token_consume, :ip, "203.0.113.7", 10, 900_000)
+      assert event.door == :share_token_consume
+      assert event.scope == :ip
+    end
+
     test "refuses a door outside the closed set" do
       assert_raise FunctionClauseError, fn ->
         Wire.login_throttled(:not_a_door, :ip, "203.0.113.7", 10, 900_000)

@@ -44406,3 +44406,40 @@ accept. Refusals are logged per occurrence: the volume is bounded by
 whatever rate upstream lets a sender INVITE at, and it rotates, whereas the
 alternative is an operator who never learns that invitations are being
 turned away.
+<!-- entry #1387 -->
+
+---
+
+## 2026-08-16 — #1387: the share-link redeem door joins the house credential policy
+
+`POST /auth/share/consume` is unauthenticated by design — the signed one-shot
+link IS the credential — and it was the last credential-adjacent door standing
+outside the per-source-address failure window the rest of them share. It now
+runs that window, with the house numbers adopted unchanged: ten failures per
+address per fifteen minutes, the same values its siblings carry. A freshly
+invented number would have been the only thing left on this door to justify.
+
+The window is read before the link is, so a shut door answers 429 identically
+whatever the body held, and costs the server no verification work. That is the
+same placement the sibling doors use — ahead of the expensive compare rather
+than after it.
+
+**Only a link this server cannot have issued loads the window.** Every other
+refusal here describes a link that WAS ours: already redeemed, run out, or
+outliving the identity behind it. Those are the shapes an honest holder
+produces — the second click, the client retrying its own request — and
+charging them would shut the door on precisely the person it exists for while
+bounding nothing an attacker could have reproduced. A well-formed link the
+signature does not vouch for is the same case as a malformed one and needs no
+separate rule.
+
+The crossing failure carries the sibling doors' exactly-once operator signal,
+naming this door and the per-address key that shut; the refusals that follow
+stay silent, so a spray cannot flood the admin ring with its own rejections.
+`:share_token_consume` therefore joins the `login_throttled` door enum — an
+additive widening the client already tolerates by construction, since a build
+that predates a door value keeps the alert and drops only the attribution.
+
+Out of scope by ruling: `:passkey_login_options` charges on success as well as
+failure, because the abuse it bounds is ceremony allocation rather than
+guessing. It stays exactly as it is.

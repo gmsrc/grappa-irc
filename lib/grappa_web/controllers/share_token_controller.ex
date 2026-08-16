@@ -82,7 +82,9 @@ defmodule GrappaWeb.ShareTokenController do
     * `:share_token_expired` → 410 Gone
     * `:share_token_consumed` → 410 Gone
 
-  Reused: `:client_token_scope` → 403 (#1353 — the mint takes a full
+  Reused: `:too_many_attempts` → 429 (#1387 — the redeem door under the
+  house per-address failure window, answering exactly as the other
+  credential doors do), `:client_token_scope` → 403 (#1353 — the mint takes a full
   session; the route's `:full_session` pipeline and
   `GrappaWeb.ShareToken.mint/2` answer with the same atom, so one body
   covers both), `:forbidden` (an incognito visitor trying to mint — #363),
@@ -95,8 +97,18 @@ defmodule GrappaWeb.ShareTokenController do
   alias Grappa.{Accounts, AdminEvents, ShareTokens, Visitors}
   alias Grappa.Accounts.User
   alias Grappa.AdminEvents.Wire, as: EventsWire
+  alias Grappa.RateLimit.FailureWindow
   alias Grappa.Visitors.Visitor
   alias GrappaWeb.{AuthJSON, RemoteIP, ShareToken, Subject}
+
+  # #1387 — the redeem door runs the house credential policy: a FAILURE
+  # window per source address, the same shape and the same numbers its
+  # sibling doors run. It is the last credential-adjacent door that stood
+  # outside that policy, and the values are adopted unchanged precisely
+  # so there is nothing here left to justify separately.
+  @throttle_bucket :share_token_consume
+  @throttle_max_failures 10
+  @throttle_window_ms :timer.minutes(15)
 
   @doc """
   `POST /me/share-token` — self-mint for the calling subject.
@@ -197,6 +209,8 @@ defmodule GrappaWeb.ShareTokenController do
   `POST /auth/share/consume` — unauthenticated, body `{token}`.
 
   Flow (claim-then-release, #593):
+    0. The house failure window for the source address (#1387) → 429
+       once it is shut, ahead of every step below.
     1. Validate body shape (token present + binary) → 400 otherwise.
     2. `ShareToken.verify/1` → 401 on bad signature or on a payload
        that is not a known subject tag, 410 on TTL elapsed. The
@@ -226,6 +240,7 @@ defmodule GrappaWeb.ShareTokenController do
           Plug.Conn.t()
           | {:error,
              :bad_request
+             | :too_many_attempts
              | :unauthorized
              | :share_token_expired
              | :share_token_consumed
@@ -233,7 +248,10 @@ defmodule GrappaWeb.ShareTokenController do
              | :db_unavailable
              | Ecto.Changeset.t()}
   def consume(conn, %{"token" => token}) when is_binary(token) and token != "" do
-    with {:ok, subject} <- ShareToken.verify(token),
+    ip = format_ip(conn)
+
+    with :ok <- check_window(ip),
+         {:ok, subject} <- verify_token(token, ip),
          :ok <- mark_consumed(token) do
       # The one-shot claim is now HELD by this request (mark_consumed
       # returned :ok — we won any race). #593 — every failure past this
@@ -242,11 +260,12 @@ defmodule GrappaWeb.ShareTokenController do
       # #518) leaves the link usable instead of silently dead.
       mint_session(conn, token, subject)
     else
-      # Pre-consume rejects (bad signature / expired / lost the one-shot
-      # race → :share_token_consumed). NOTHING to release here: either no
-      # claim was taken, or the claim belongs to the WINNING request —
-      # releasing it would resurrect a token that already minted a
-      # session (dead-link → double-redemption, a worse bug).
+      # Pre-consume rejects (window shut / bad signature / expired / lost
+      # the one-shot race → :share_token_consumed). NOTHING to release
+      # here: either no claim was taken, or the claim belongs to the
+      # WINNING request — releasing it would resurrect a token that
+      # already minted a session (dead-link → double-redemption, a
+      # worse bug).
       {:error, reason} -> reject(reason)
     end
   end
@@ -292,12 +311,69 @@ defmodule GrappaWeb.ShareTokenController do
     end
   end
 
-  # The closed set of rejection reasons — pre-consume (bad sig / expired /
-  # lost the one-shot race) and post-consume (visitor reaped / saturated
-  # mint / mint changeset). Typed over a bare `atom()` per CLAUDE.md's
-  # closed-set rule.
+  # #1387 — the window is read BEFORE anything else this action does, so
+  # a shut door costs the server no signature work and the caller no
+  # further information: the answer is the same 429 whatever was in the
+  # body. Its sibling doors place the check the same way, ahead of the
+  # expensive compare rather than after it.
+  @spec check_window(String.t() | nil) :: :ok | {:error, :too_many_attempts}
+  defp check_window(ip) do
+    case FailureWindow.check(@throttle_bucket, ip, @throttle_max_failures) do
+      :ok -> :ok
+      {:error, :limited} -> {:error, :too_many_attempts}
+    end
+  end
+
+  # The ONE charging site (#1387). `ShareToken.verify/1` answers
+  # `:unauthorized` for a signature that does not hold and for a payload
+  # this branch cannot route — one condition, not two, since neither can
+  # have come from a link this server issued. That is the shape worth
+  # bounding, and it is the only outcome of this action a caller can
+  # reach by trying.
+  #
+  # Every other refusal describes a link that WAS ours — already
+  # redeemed, run out, or outliving the identity behind it. Those are
+  # the shapes an honest holder produces on their own second click, and
+  # charging them would shut the door on precisely the person it exists
+  # for while costing an attacker nothing they could have reproduced.
+  @spec verify_token(String.t(), String.t() | nil) ::
+          {:ok, ShareToken.subject()} | {:error, :unauthorized | :share_token_expired}
+  defp verify_token(token, ip) do
+    case ShareToken.verify(token) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, :share_token_expired} = err ->
+        err
+
+      {:error, :unauthorized} = err ->
+        :ok = charge_window(ip)
+        err
+    end
+  end
+
+  # Record the failure and, on the crossing one ONLY, tell the operator
+  # which door and which key shut — the sibling doors' exactly-once
+  # signal. Emitting on every subsequent refusal would let a spray flood
+  # the admin ring with its own rejections.
+  @spec charge_window(String.t() | nil) :: :ok
+  defp charge_window(ip) do
+    count = FailureWindow.record_failure(@throttle_bucket, ip, @throttle_window_ms)
+
+    if count == @throttle_max_failures do
+      AdminEvents.record(EventsWire.login_throttled(@throttle_bucket, :ip, ip, count, @throttle_window_ms))
+    end
+
+    :ok
+  end
+
+  # The closed set of rejection reasons — the shut window, pre-consume
+  # (bad sig / expired / lost the one-shot race) and post-consume
+  # (visitor reaped / saturated mint / mint changeset). Typed over a bare
+  # `atom()` per CLAUDE.md's closed-set rule.
   @typep reject_reason ::
-           :unauthorized
+           :too_many_attempts
+           | :unauthorized
            | :share_token_expired
            | :share_token_consumed
            | :not_found

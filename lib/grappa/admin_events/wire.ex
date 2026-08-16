@@ -417,13 +417,15 @@ defmodule Grappa.AdminEvents.Wire do
           | :totp_login
           | :passkey_recovery
           | :passkey_login_options
+          | :share_token_consume
 
   @login_throttle_doors [
     :mode1_login,
     :visitor_login,
     :totp_login,
     :passkey_recovery,
-    :passkey_login_options
+    :passkey_login_options,
+    :share_token_consume
   ]
 
   @typedoc """
@@ -443,7 +445,7 @@ defmodule Grappa.AdminEvents.Wire do
   rejections.
 
   `door` + `scope` + `source_ip` together name the exact
-  `FailureWindow` row that crossed; without them seven windows would
+  `FailureWindow` row that crossed; without them eight windows would
   render as one indistinguishable line. Both are `optional` and a client
   MUST tolerate their absence: the ring is mirrored to disk and reloaded
   at boot (#215 Option B), so after this upgrade the Events tab still

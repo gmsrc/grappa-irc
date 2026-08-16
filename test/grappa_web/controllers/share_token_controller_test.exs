@@ -23,6 +23,11 @@ defmodule GrappaWeb.ShareTokenControllerTest do
     * subject row deleted between mint and consume → 404 not_found
     * missing token param → 400 bad_request
 
+  Consume side, house failure window (#1387):
+    * past the per-IP limit → 429, before the link is read
+    * a spent / expired / orphaned link → never loads the window
+    * the crossing → one `:login_throttled` naming this door
+
   Wire shape (mint):
     %{token: "<signed>", expires_at: "<ISO8601 UTC>"}
 
@@ -40,6 +45,8 @@ defmodule GrappaWeb.ShareTokenControllerTest do
   import Grappa.AuthFixtures
 
   alias Grappa.{Accounts, ShareTokens}
+  alias Grappa.PubSub.Topic
+  alias Grappa.RateLimit.FailureWindow
   alias Grappa.Repo.BusyRetry
   alias GrappaWeb.ShareToken
 
@@ -412,6 +419,127 @@ defmodule GrappaWeb.ShareTokenControllerTest do
       assert Phoenix.ConnTest.build_conn()
              |> post("/auth/share/consume", %{"token" => token})
              |> json_response(410) == %{"error" => "share_token_consumed"}
+    end
+  end
+
+  # ----- consume-throttle helpers (#1387) — module level; ExUnit forbids
+  # defp inside describe. Each test below gets its OWN source address:
+  # the window is per-IP, so a distinct address isolates one test's
+  # counter from the sibling describes (all on 127.0.0.1) and from any
+  # file sharing the process-wide ETS table.
+  defp with_ip(conn, d), do: %{conn | remote_ip: {10, 67, 0, d}}
+
+  defp consume_invalid(conn, d) do
+    conn |> with_ip(d) |> post("/auth/share/consume", %{"token" => "not-a-signed-token"})
+  end
+
+  defp consume(conn, d, token) do
+    conn |> with_ip(d) |> post("/auth/share/consume", %{"token" => token})
+  end
+
+  defp minted_for_new_visitor do
+    visitor = visitor_fixture()
+    {:ok, {token, _}} = ShareToken.mint({:visitor, visitor.id}, :web)
+    {visitor, token}
+  end
+
+  describe "POST /auth/share/consume — house failure window (#1387)" do
+    # Clear only THIS door's rows for the addresses used below. Wiping
+    # the whole table (the sibling files' idiom) would reach into a
+    # concurrently running file's window, and this file is `async: true`.
+    setup do
+      for d <- 1..6, do: :ok = FailureWindow.clear(:share_token_consume, "10.67.0.#{d}")
+      :ok
+    end
+
+    test "past the limit the address is refused before the link is even read", %{conn: conn} do
+      {_, token} = minted_for_new_visitor()
+
+      for _ <- 1..10 do
+        assert json_response(consume_invalid(conn, 1), 401) == %{"error" => "unauthorized"}
+      end
+
+      # The check precedes verification: a GENUINE link presented from the
+      # same address is refused without being read.
+      assert json_response(consume(conn, 1, token), 429) == %{"error" => "too_many_attempts"}
+
+      # And the refusal did not spend it — the window is a property of the
+      # address, never of the link, so another address still redeems.
+      assert Phoenix.ConnTest.build_conn()
+             |> consume(2, token)
+             |> json_response(200)
+    end
+
+    test "a spent link retried from the same address never loads the window", %{conn: conn} do
+      # The honest double click, and the PWA that retries its own request.
+      # Charging that shape locks out precisely the legitimate holder.
+      {_, token} = minted_for_new_visitor()
+      assert json_response(consume(conn, 3, token), 200)
+
+      for _ <- 1..12 do
+        assert json_response(consume(conn, 3, token), 410) == %{"error" => "share_token_consumed"}
+      end
+
+      # Nothing was charged: the address still has its whole window, so an
+      # unreadable token gets a first-failure answer rather than a refusal.
+      assert json_response(consume_invalid(conn, 3), 401) == %{"error" => "unauthorized"}
+    end
+
+    test "a link that has run out never loads the window", %{conn: conn} do
+      visitor = visitor_fixture()
+
+      token =
+        Phoenix.Token.sign(GrappaWeb.Endpoint, @salt, {:visitor, visitor.id},
+          signed_at: System.system_time(:second) - @max_age_seconds - 60
+        )
+
+      for _ <- 1..12 do
+        assert json_response(consume(conn, 4, token), 410) == %{"error" => "share_token_expired"}
+      end
+
+      assert json_response(consume_invalid(conn, 4), 401) == %{"error" => "unauthorized"}
+    end
+
+    test "a link whose subject is gone never loads the window", %{conn: conn} do
+      # The signature held, so the holder is not guessing at anything: the
+      # row went away underneath a real link. That is the reaper's timing,
+      # not the caller's conduct.
+      {visitor, token} = minted_for_new_visitor()
+      :ok = Grappa.Visitors.delete(visitor.id)
+
+      for _ <- 1..12 do
+        assert json_response(consume(conn, 5, token), 404) == %{"error" => "not_found"}
+      end
+
+      assert json_response(consume_invalid(conn, 5), 401) == %{"error" => "unauthorized"}
+    end
+
+    test "crossing the limit names this door to the operator, exactly once", %{conn: conn} do
+      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.admin_events())
+
+      for _ <- 1..10, do: consume_invalid(conn, 6)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: "grappa:admin:events",
+                       payload: %{
+                         kind: :login_throttled,
+                         door: :share_token_consume,
+                         scope: :ip,
+                         source_ip: "10.67.0.6",
+                         failures: 10
+                       }
+                     },
+                     500
+
+      # The rejections that follow must not re-emit, or a spray floods the
+      # admin stream with its own refusals. Matched on THIS door so a
+      # concurrent file's throttle can't answer for it.
+      _ = consume_invalid(conn, 6)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       payload: %{kind: :login_throttled, door: :share_token_consume}
+                     },
+                     200
     end
   end
 

@@ -219,7 +219,7 @@ function renderEvent(ev: WireAdminEvent): string {
       return `${ev.user_name} unbound from ${ev.network_slug}${actorSuffix(ev.actor_user_name)}`;
     case "login_throttled":
       // S6 — a credential door's brute-force gate tripped for this source
-      // IP. Seven windows across five doors share this event, so the door
+      // IP. Eight windows across six doors share this event, so the door
       // and the key that crossed are what make it actionable: the fine key
       // says one account is being hammered from that address, the ceiling
       // says the address is spraying across accounts. Both are additive —

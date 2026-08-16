@@ -417,6 +417,7 @@ export const ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_DOOR = [
   "totp_login",
   "passkey_recovery",
   "passkey_login_options",
+  "share_token_consume",
 ] as const;
 export type AdminEventsWireLoginThrottleDoor =
   (typeof ADMIN_EVENTS_WIRE_LOGIN_THROTTLE_DOOR)[number];
