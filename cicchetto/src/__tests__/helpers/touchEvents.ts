@@ -21,6 +21,30 @@ export function fireTouch(el: HTMLElement, type: string, ...points: TouchPoint[]
   return ev;
 }
 
+// Same, with a chosen `timeStamp` — for gestures whose decision reads the clock
+// (#1438's velocity gate). It has to be its own function rather than a caller
+// stamping the returned event: `fireTouch` DISPATCHES before it returns, so a
+// `defineProperty` afterwards lands too late and every listener still sees
+// jsdom's 0. A gesture graded on velocity would then read every drag as
+// instantaneous, and its "slow drag does nothing" arm would pass against an
+// implementation with no velocity gate at all.
+export function fireTouchAt(
+  el: HTMLElement,
+  type: string,
+  timeStamp: number,
+  ...points: TouchPoint[]
+): Event {
+  const ev = new Event(type, { bubbles: true, cancelable: true });
+  const list = points as unknown as TouchList;
+  Object.defineProperty(ev, "touches", {
+    value: type === "touchend" ? ([] as unknown as TouchList) : list,
+  });
+  Object.defineProperty(ev, "changedTouches", { value: list });
+  Object.defineProperty(ev, "timeStamp", { value: timeStamp });
+  el.dispatchEvent(ev);
+  return ev;
+}
+
 // One full edge swipe: start → two moves → end. The intermediate moves are what
 // let the directive claim mid-drag (it claims late, never on touchstart).
 export function swipeHorizontally(el: HTMLElement, fromX: number, toX: number, y: number): void {

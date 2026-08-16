@@ -60,6 +60,29 @@ export const horizontalClaim = (
   return ax >= ay * k;
 };
 
+// The mirror of `horizontalClaim`, for gestures whose axis is the other one
+// (#1438's swipe-to-dismiss). Same shape, same slop, same angle gate, axes
+// swapped: claim ONLY once the drag clears the slop AND is vertical-dominant
+// past `k`. A horizontal-dominant or ambiguous drag returns false, so the
+// caller never preventDefaults it and whatever owns the horizontal axis keeps
+// it — which is how the dismiss gesture leaves a `<video>` scrubber alone, and
+// how a future left/right binding on the same surface stays available.
+//
+// It lives here rather than in the media viewer for the reason this module
+// exists: the angle gate is one decision, and a second copy is the drift that
+// makes two gestures on one surface disagree about what counts as vertical.
+export const verticalClaim = (
+  start: Point,
+  current: Point,
+  k: number = ANGLE_GATE_K,
+  slopPx: number = DRAG_SLOP_PX,
+): boolean => {
+  const ax = Math.abs(current.x - start.x);
+  const ay = Math.abs(current.y - start.y);
+  if (ay <= slopPx) return false; // under the slop — still undecided
+  return ay >= ax * k;
+};
+
 // Parameters for the two edge → open-drawer gestures. `viewportWidth` is
 // injected (not read off the element) so the geometry is testable in jsdom,
 // which has no layout; the call site passes `() => window.innerWidth`.

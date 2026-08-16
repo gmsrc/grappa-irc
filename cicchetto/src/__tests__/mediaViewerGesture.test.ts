@@ -5,7 +5,7 @@ import {
   DISMISS_COMMIT_FRACTION,
   DRAGGING_CLASS,
 } from "../lib/mediaViewerGesture";
-import { fireTouch } from "./helpers/touchEvents";
+import { fireTouch, fireTouchAt } from "./helpers/touchEvents";
 
 // #1438 — a vertical drag on the media viewer dismisses it, and the modal
 // follows the finger on the way. Composed from `lib/swipe.ts` (the #123
@@ -69,19 +69,15 @@ function dragVertically(
   dy: number,
   elapsedMs: number,
 ): { moves: Event[]; end: Event } {
-  const at = (e: Event, ms: number): Event => {
-    Object.defineProperty(e, "timeStamp", { value: ms });
-    return e;
-  };
-  at(fireTouch(target, "touchstart", { clientX: X, clientY: START_Y }), 0);
+  fireTouchAt(target, "touchstart", 0, { clientX: X, clientY: START_Y });
   const moves = [
-    at(fireTouch(target, "touchmove", { clientX: X, clientY: START_Y + dy / 3 }), elapsedMs / 3),
-    at(
-      fireTouch(target, "touchmove", { clientX: X, clientY: START_Y + (dy * 2) / 3 }),
-      (elapsedMs * 2) / 3,
-    ),
+    fireTouchAt(target, "touchmove", elapsedMs / 3, { clientX: X, clientY: START_Y + dy / 3 }),
+    fireTouchAt(target, "touchmove", (elapsedMs * 2) / 3, {
+      clientX: X,
+      clientY: START_Y + (dy * 2) / 3,
+    }),
   ];
-  const end = at(fireTouch(target, "touchend", { clientX: X, clientY: START_Y + dy }), elapsedMs);
+  const end = fireTouchAt(target, "touchend", elapsedMs, { clientX: X, clientY: START_Y + dy });
   return { moves, end };
 }
 
