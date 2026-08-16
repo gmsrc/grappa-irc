@@ -45535,3 +45535,94 @@ jsdom. `role="img"` stays — ARIA does prohibit the name there, so no AT
 owes us the reading — but that is the spec, not a measurement, and the
 tests now pin the spec-legal SHAPE with a byRole query instead of
 pretending the name assertion proves it.
+<!-- entry #1406 X-S10 -->
+
+---
+
+## 2026-08-17 — #1406 X-S10: a codegen that guessed module names, and guessed identifiers
+
+Slice 3b of #1406 closes the last two `kind: String.t()` doors in `lib/`
+(`GET /me`, `POST /auth/login`) and, on the way, fixes two places where the
+wire codegen answered a question by GUESSING.
+
+### The briefed fix did not work, and the measurement is the point
+
+The plan said "widen `@extra_globs`", mirroring what #411 did for
+`GrappaWeb.ErrorTokens`. Measured: it delivers **zero coverage while looking
+widened**. `module_from_path/1` derives the module from the PATH, camelizing
+each segment, so `lib/grappa_web/controllers/me_json.ex` yields
+`GrappaWeb.Controllers.MeJson` — wrong on two counts, the `controllers/`
+segment and the `JSON`/`Json` casing. That module fails `Code.ensure_loaded?`,
+becomes `nil`, and is dropped by the `Enum.reject(&is_nil/1)` in
+`wire_modules/0` **in silence**. With both controller paths added to
+`@extra_globs`, `mix grappa.gen_wire_types` exits **0** and
+`cicchetto/src/lib/wireTypes.ts` is **byte-identical** — no marker, no diff,
+no warning. `error_tokens.ex` only ever worked because it sits directly under
+`grappa_web/` and camelizes exactly; the glob mechanism was never general.
+
+So `@extra_globs` becomes `@extra_modules`, a list of MODULES. There is no
+path→name guess left to get wrong. The `// Source:` header is now derived
+from `@wire_glob` + `@extra_modules` rather than being the same string typed
+by hand in two places.
+
+**The wider hazard is still standing and is deliberately left alone:** the
+`nil`-reject also swallows a glob-matched file whose module fails to load.
+Inside `lib/grappa/**` the derivation is reliable, so nothing is lost today —
+but the silence is the same silence, and the day that stops holding it will
+look exactly like this did.
+
+### A codegen hole is now a codegen error
+
+The EXTERNAL type path renders one alias at a time and never sets
+`:wire_current_module`, so `do_render/1`'s `user_type` clause had nothing to
+resolve a SAME-module reference against and fell back to `camelize/1`. The
+two emitters then disagreed: the typedef emitted `Variant` while the runtime
+schema computed `THEMES_BUILTIN_BACKGROUNDS_VARIANT` and imported that, so
+neither artefact declared what the other referenced. The generator exited 0
+and the breakage surfaced in the CLIENT compiler as `TS2304` + `TS2724` with
+no named culprit.
+
+Teaching the external path to resolve siblings is refused by
+`format_external_typedef/2`'s own contract (one alias at a time, no sibling
+registry). So the clause raises instead, naming module and type — the posture
+the unmapped Erlang remote type and the cyclic enum reference already take.
+`render_external_type/3` records `{mod, type_name}` in a second process key,
+consistent with the `:wire_current_module` / `:wire_external_refs` /
+`:wire_schema_deps` the module already uses.
+
+The old test asserting the guess (`render_type({:user_type, [], [:my_payload]})
+== "MyPayload"`) was DELETED, not adapted: it encoded the defect as contract.
+The clause's positive direction stays covered by the WireFixture test.
+
+### The wire does not move a byte, and that was bought before the change
+
+`kind` becomes `:user` / `:visitor` — atoms in the typespec AND at runtime.
+Jason encodes an atom as its string, so the JSON is unchanged. That is not an
+argument, it is a pin: `subject_kind_json_pin_test` was written and shown
+GREEN before any production line changed, and is still green after. It
+compares the DECODED structure (key order is not contract) plus a byte-exact
+encode of the discriminator alone.
+
+`incognito` joins both visitor arms. Both renderers have emitted it since
+#363 while neither typespec declared it — invisible to codegen that was a
+stale comment; as a codegen SOURCE it would generate a type that denies a
+field the server sends on every request.
+
+Both unions are split into NAMED arms (`user_me_json` / `visitor_me_json`,
+`user_subject_wire` / `visitor_subject_wire`) with the union kept as `A | B`
+of aliases. Reason: the committed `wireTypes.ts` contains **zero** `} | {`
+object unions, so emitting one would be unbroken ground for biome on a file
+no human may hand-correct, while `A | B` is a shape the generator already
+produces. cic pins the discriminator only (`_Assert_MeResponseKind`,
+`_Assert_LoginSubjectKind`) because `MeResponse` and `Subject` carry
+deliberate optionals a full `Equal` cannot survive.
+
+### Gate note, not a finding of this slice
+
+`bun run check` is RED on `origin/main` independently of this work:
+dependabot `8f252497` (2026-08-16) moved `@biomejs/biome` to 2.5.8 while
+`biome.json`'s `$schema` still declares 2.5.6, which biome 2.5.8 reports as
+an error on a full-project scan. The three cic files this slice touches
+produce zero diagnostics, and both `tsc` passes are green — but biome
+short-circuits `tsc` in the `check` script, so anyone reading a red there is
+NOT reading a type failure.
