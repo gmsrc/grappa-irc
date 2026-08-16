@@ -148,12 +148,21 @@ defmodule Grappa.NickMigrationTest do
       new_key = Identifier.channel_key(net.slug, "newnick")
 
       prefs = UserSettings.default_notification_prefs()
-      {:ok, _} = UserSettings.put_notification_prefs(subject, %{prefs | muted_targets: %{old_key => %{}}})
+
+      {:ok, _} =
+        UserSettings.put_notification_prefs(subject, %{
+          prefs
+          | muted_targets: %{old_key => %{"until" => nil}}
+        })
 
       assert {:ok, %{window: :noop, mute: :renamed}} =
                NickMigration.peer_renamed(subject, net.id, net.slug, "oldnick", "newnick")
 
-      muted = UserSettings.get_notification_prefs(subject)["muted_targets"]
+      # `get_notification_prefs/1` closes over ATOM keys — `merge_with_defaults/1`
+      # rebuilds the map rather than returning the stored blob — so reaching for
+      # the string key here silently reads `nil` off a map that does have the
+      # mute. Asked with the string key, this assertion could only ever crash.
+      muted = UserSettings.get_notification_prefs(subject).muted_targets
       assert Map.has_key?(muted, new_key)
       refute Map.has_key?(muted, old_key)
     end
