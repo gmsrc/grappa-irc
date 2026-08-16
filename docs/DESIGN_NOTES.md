@@ -43691,3 +43691,67 @@ lost for good. Do not build machinery on top of this.
 
 Repair of the rows already truncated in production is a separate,
 operator-owned decision — this change stops the loss, it does not undo it.
+<!-- entry #1375 -->
+
+---
+
+## 2026-08-16 — #1375: one write path for the settings blob, and what a one-connection harness can prove about a race
+
+`user_settings.data` is a single JSON column, so a setter that reads the blob,
+merges its key and writes it back necessarily writes the WHOLE column. Nine
+setters spelled that read-modify-write pair by hand, plus
+`rename_muted_target/4`, so two writers touching completely DIFFERENT keys both
+read the same snapshot, both write a full replacement, and the second commit
+drops the first's key — with `{:ok, _}` on both sides and nothing in the logs.
+
+The durable rule is the one the module now states in its moduledoc: **there is
+exactly ONE writer, `update_data/2`, and it holds the read and the write in a
+single `Repo.immediate_transaction/1`.** A new setter that spells its own pair
+reintroduces the defect for its own key. The nesting is #1374's — retry
+OUTSIDE, transaction INSIDE — which is why the row init inside it is the
+non-retrying `get_or_init!/1`: a retry loop opened inside an open transaction
+sleeps on the connection it holds.
+
+### The interleave was reproduced, not argued
+
+Ecto's per-query telemetry (`[:grappa, :repo, :query]`, the event
+`Grappa.DbLatency` already folds) runs its handlers SYNCHRONOUSLY in the
+process that issued the query. A handler that blocks on the writer's
+`user_settings` SELECT therefore suspends it exactly between its read and its
+write, with no seam in production code and no sleep-and-hope — the second
+writer is signalled from inside that window.
+`test/grappa/user_settings_concurrency_test.exs` drives the pair the issue
+names as reachable in production (`put_last_client_prefix64/2` fires from
+`Vhosts.record_client_source/2` on every client connect, in the socket's own
+process and its own connection of the ten, while a settings-drawer PUT runs in
+another). Unfixed, the key written in the window comes back `nil`.
+
+### What the harness substitutes, and what it therefore cannot buy
+
+In production the serialisation comes from SQLite's file-level write lock: the
+second `BEGIN IMMEDIATE` waits out `busy_timeout` and its read then sees the
+first writer's commit. The Sandbox has ONE connection (`config/test.exs`,
+`pool_size: 1`), so in the test the second writer blocks on the checkout the
+open transaction holds. Same serialisation, different lock.
+
+So these tests prove the read and the write are ONE transaction — removing the
+transaction kills exactly one assertion in each of them — and they do NOT prove
+the `:immediate` spelling of it. That was measured, not assumed: with
+`Repo.transaction/1` in place of `Repo.immediate_transaction/1` both tests stay
+green, because nested under the Sandbox every mode is a `SAVEPOINT` (the same
+blind spot #1374 records for its own conversions, and the reason its gate on
+the spelling is a static AST walk rather than an ExUnit oracle). The
+`:immediate` spelling here rests on `Repo.immediate_transaction/1`'s own
+contract (#524: a deferred transaction's read→write upgrade raises a
+`SQLITE_BUSY` that `busy_timeout` does not cover), not on anything this branch
+measured.
+
+### Accepted cost
+
+`rename_muted_target/4` now opens a write transaction even when it turns out to
+have nothing to migrate, and it is called once per peer NICK change per live
+session. The alternative — decide on a read taken OUTSIDE the transaction and
+re-read inside when there is work — buys back a sub-millisecond, WAL-frame-free
+lock acquisition at the price of a second SELECT on the write path and a
+duplicated "is this key muted?" predicate. Not taken; if nick-change churn ever
+shows up in the #357 write-latency counters, that is the knob.
