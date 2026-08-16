@@ -45042,3 +45042,83 @@ setup-beam call sites read back from the parse tree, which proves the
 files are well-formed and wired, not that the runner resolves the
 versions. `scripts/shellcheck.sh` was not run and did not need to be —
 no shell script changed.
+<!-- entry #1406 X-S4 -->
+
+---
+
+## 2026-08-16 — #1406 X-S4: the codegen dropped a map's key names, and said nothing
+
+`Grappa.Scrollback.Meta.t/0` is the most carefully bounded map on the wire —
+23 atom keys the server enforces at `cast/1` and `dump/1`, with a moduledoc
+arguing the closed set at length. cic mirrored it as
+`Record<string, unknown>` and reached its fields through ad-hoc `typeof`
+guards.
+
+### The defect is the silence, not the fallback
+
+`atom_keyed_field?/1` matches a map field keyed by a SINGLE atom. `Meta.t/0`
+is ONE association keyed by a UNION of atoms, so it failed the all-atom-keyed
+test and took the open-map branch. That branch is correct for
+`%{String.t() => T}` and wrong here, and nothing distinguished the two: the
+codegen's moduledoc flags `Record<string, unknown>` as "defeats codegen
+purpose" and `do_render/1` warns for bare `map()`, but the union-keyed road
+to the same output passed without a word.
+
+So the fix is not only the new shape. Any map whose keys are atom-derived and
+which STILL cannot be expressed now warns, and the warning is the general
+rule: `Record<string, unknown>` is reachable by several roads and every one
+of them has to say so.
+
+### A second thing the fall-through was doing
+
+The open-map branch took the FIRST field's key and value AST and applied them
+to the whole map. For a mixed shape — a named key beside a union-keyed
+association — that rendered `Record<string, string>` off the named field
+alone: not a loss of precision but a claim about every value that the
+typespec never made. The degraded branch now drops the value type together
+with the keys, so the honest `unknown` is what survives.
+
+### `Partial`, and why the runtime does NOT check the keys
+
+The keys come from an `optional(...)` association, so `Partial` is the
+accurate quantifier. The type pins which keys cic may READ; it does not claim
+the server sends no others, and TS object types are not exact, so it cannot
+be read as claiming that.
+
+That distinction is load-bearing rather than pedantic. `Meta.load/1` is
+deliberately LENIENT — a row written before a key left the allowlist still
+round-trips as a string rather than crashing the fetch — so the set of keys
+that can ARRIVE is wider than the set the allowlist defines. A runtime key
+check in `wireSchema.ts` would therefore reject exactly the historical rows
+the server goes out of its way to keep readable, turning a server-side
+leniency into a client-side drop. The runtime twin stays a record of
+`unknown`; only the compile-time type narrows.
+
+### The key set is named, not inlined
+
+Inlined, 23 quoted keys blow past biome's `lineWidth: 100`, and biome
+reformats them into a nested `Partial<\n  Record<\n    | "a"` shape — measured,
+not predicted. This emitter hand-matches biome's output in three places
+already so the `--check` drift gate stays green; adding a fourth wrapper for
+a nested generic would be the most fragile of them. Lifting the keys into the
+same `as const` array plus derived type that #411 D6b gives every atom union
+keeps the typedef one short line and sidesteps the matching entirely — and
+the key set becomes available at RUNTIME, like every other closed set on the
+wire.
+
+### Proven end to end, and what is not done
+
+Removing `:ctcp_verb` from `Meta.t/0` and regenerating turns 13 cic sites
+red. That is the chain — Elixir typespec → codegen → `wireTypes.ts` → call
+site — and before this change removing that key was invisible to every one of
+them.
+
+Known residual, pre-existing and not introduced here: a partial record NESTED
+inside another type renders inline, and a long one would out-run the same
+line-width matching the named form avoids. There is no such typespec today.
+
+The other three MEDIUMs of #1406 (X-S8 `window_state`, X-S9 the theme
+vocabularies, X-S10 the `/me` and `/auth/login` discriminators) are untouched.
+They are one class — a closed set that never reaches codegen, either because
+its module sits outside the glob or because no `*wire.ex` re-exports it — and
+that class is a different change from teaching the renderer a new shape.
