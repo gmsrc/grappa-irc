@@ -87,8 +87,7 @@ async function dragOnModal(
     (el, opts) => {
       // The vertical component of the computed matrix — what the browser
       // actually resolved, not the inline string we wrote.
-      const verticalOffset = (): number =>
-        new DOMMatrixReadOnly(getComputedStyle(el).transform).f;
+      const verticalOffset = (): number => new DOMMatrixReadOnly(getComputedStyle(el).transform).f;
       const at = (y: number): Touch =>
         new Touch({ identifier: 1, target: el, clientX: 200, clientY: y });
       const fire = (type: string, touch: Touch): void => {

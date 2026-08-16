@@ -290,8 +290,7 @@ const MediaViewerBody: Component<{ state: MediaViewerState; onScale: (scale: num
 // and an inline transform REPLACES that declaration wholesale. The drag offset
 // therefore has to re-state the centering, or the modal jumps by half its own
 // size the instant a finger claims it.
-const draggedTransform = (dy: number): string =>
-  `translate(-50%, -50%) translateY(${dy}px)`;
+const draggedTransform = (dy: number): string => `translate(-50%, -50%) translateY(${dy}px)`;
 
 // The backdrop thins out with the pull and is fully clear at one viewport of
 // travel. Deliberately NOT keyed to DISMISS_COMMIT_FRACTION: a ramp that hit
