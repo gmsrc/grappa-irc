@@ -44539,3 +44539,96 @@ and cannot be read in jsdom either. What is established is that WE draw
 nothing before this change and something after it. Whether the reporter
 now sees an acknowledgement in time is a device verification, still
 owed — and stated as owed rather than parked.
+<!-- entry #1407 -->
+
+---
+
+## 2026-08-16 — #1407: two admin boundaries that argued against their own code
+
+Bucket E of the 2026-08-15 review carried two MEDIUMs of one shape: a
+boundary whose behaviour contradicts the prose sitting on top of it.
+Both were still live on `origin/main` at `1552312d`.
+
+### `PUT /admin/settings` answered 200 to a typo
+
+The moduledoc promised that anything invalid collapses to 422
+`invalid_setting` naming the offending dotted key. That covered bad
+VALUES. A bad KEY was logged at warning and the action returned 200 with
+the full settings view, indistinguishable from a save that did
+something. An operator who typed `image_per_file_cap` for
+`image_per_file_cap_bytes` watched the save succeed and change nothing.
+
+The fix rejects any key outside the two closed sets, and it does so
+BEFORE the per-key fold rather than inside it. That ordering is the
+half of this that is easy to skip: the red measured a body mixing a good
+key with a typo writing the good one (image cap at before+4096) and then
+dropping the typo, and the sibling admin controllers are all-or-nothing
+precisely because they validate keys before they build attrs.
+
+The envelope departs from those siblings on purpose. Every one of them
+answers a bare `{:error, :bad_request}` for an unknown key; this door
+answers 422 `invalid_setting` with the dotted key in `field`. The
+siblings answer `bad_request` because they have no field vocabulary to
+answer with — this one does, and cic already consumes it:
+`AdminSettingsTab` reads `err.info.field` and highlights the offending
+input inline. Naming the key IS the repair; a bare 400 leaves the
+operator exactly as uninformed as the 200 did, which is the complaint.
+"Same problem, same solution" is satisfied at the level that matters
+(no door silently accepts an unknown key); the wire token is where the
+two doors' vocabularies legitimately differ.
+
+The forward-compat tolerance the old comment claimed does not survive
+contact with the client either: `AdminSettingsTab` sends a fixed literal
+of the seven known upload keys and no addressing subtree at all, so no
+cic build can produce an unknown key — only a hand-rolled request can,
+and that is the operator this change is for.
+
+### `AdminChannel` had no `handle_info/2` catch-all, one screen below the comment explaining why it must
+
+Phoenix dispatches `handle_info/2` whenever a channel exports it, and
+this one's three clauses matched `:after_join`, `:overview_tick`, and a
+single hardcoded event name on `Topic.session_log/0`. Anything else —
+a second publisher, a renamed event, a stray `send/2` — killed the
+operator console with a `FunctionClauseError`, which is the exact
+outcome the `handle_in/3` catch-all sitting below it refuses to allow
+for inbound frames. The review derived that crash from Phoenix's
+dispatch rule without executing it; the red executes it.
+
+The catch-all is not invented here. `SessionRevocationListener` (#1338
+M-S2, already on main although its issue is still open) and
+`IRC.Client` both log `Logger.warning("unexpected mailbox message",
+unexpected: inspect(msg))`, so this is the third member of one family
+rather than a second dialect, and the `unexpected:` metadata key is
+already allowlisted for exactly this use.
+
+It is not a funnel. The message is logged, so what the channel cannot
+read stays visible in the operator's own log. Crashing surfaces it too,
+but strictly worse, and for the same two reasons #1338 wrote down: the
+push this channel performs is per-message and stateless, so a crash
+cannot retry the unread message, only discard the live session-log
+events queued behind it; and a second publisher is a repeating
+condition, so crashing per message walks the restart intensity until the
+console is gone for good.
+
+### What the mutants bought, and what they did not
+
+Six mutants, each killed. Removing the catch-all kills both channel
+tests through the crash; MUTING it — same clause, no log line — kills
+both again, which is what separates "the console survived" from "and the
+operator can see what it survived". Dropping the subtree prefix from the
+`field` string kills the two naming tests and leaves the third alive.
+Removing the addressing check alone kills the addressing test alone.
+
+The ordering thesis needed two attempts. Moving the key check after the
+fold kills the mixed-body test, but through a `FunctionClauseError` in
+`apply_upload_key/2` (the permissive clause is gone), so it proves the
+order matters without isolating what it costs. The sixth mutant restores
+a permissive clause alongside the reordering: the door still answers
+422, and exactly one assertion dies —
+`image_per_file_cap_bytes` reading 10489856 against an expected 10485760.
+That is the partial write, measured.
+
+Not established: whether any second publisher on `Topic.session_log/0`
+is coming. The re-grep the review asked for still shows one
+(`session_log.ex`), so this change buys resilience against a future that
+has not arrived, not a fix for an outage that happened.
