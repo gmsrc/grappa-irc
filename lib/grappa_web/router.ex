@@ -125,8 +125,13 @@ defmodule GrappaWeb.Router do
   # :admin_authn`, so it's reachable over the public surface AND gated
   # on `current_subject = {:user, %User{is_admin: true}}`. Controllers
   # live under `GrappaWeb.Admin.*` namespace.
+  # `:request_budget` belongs here for the same reason it is on every other
+  # authenticated scope, and the `is_admin` gate above is not a substitute:
+  # it answers WHO may call, never HOW OFTEN. It sits after `:authn`, which
+  # is what assigns the `current_subject` + `current_session_id` the budget
+  # keys on.
   scope "/admin", GrappaWeb.Admin do
-    pipe_through [:api, :authn, :admin_authn]
+    pipe_through [:api, :authn, :admin_authn, :request_budget]
 
     get "/me", MeController, :index
     # #1075 — scalar projection for the operator top bar (#1073): session

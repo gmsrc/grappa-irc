@@ -2,10 +2,18 @@ defmodule GrappaWeb.Plugs.RequestBudget do
   @moduledoc """
   GH #630 — the REST door of the coarse per-subject inbound request
   budget. Mounted downstream of `:authn` (needs `current_subject` +
-  `current_session_id`) on every authenticated resource scope; it meters
-  only WRITE methods (`POST`/`PUT`/`PATCH`/`DELETE`) — GET reads (scrollback
-  pagination, snapshots) are legitimate high-volume traffic and are not the
-  flood vector, so they pass through untouched.
+  `current_session_id`) on every authenticated resource scope the release
+  ships, the operator console included — `:admin_authn` answers who may
+  call, never how often, so it is not a substitute for this. The two
+  `Mix.env() in [:dev, :test]` scopes in the router are deliberately
+  outside: they exist to let a spec provision its own subject, and metering
+  them would make the suite's own setup a flood.
+
+  It meters only WRITE methods (`POST`/`PUT`/`PATCH`/`DELETE`) — GET reads
+  (scrollback pagination, snapshots) are legitimate high-volume traffic and
+  are not the flood vector, so they pass through untouched. A read whose
+  COST does not fit that description needs its own bound at the context,
+  not a coarse token here.
 
   It calls `GrappaWeb.RequestBudget.guard/3` — the SAME decision + sever
   code path the WS `handle_in` guard uses (one feature, one code path, both
