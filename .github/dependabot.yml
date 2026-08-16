@@ -44,6 +44,11 @@ updates:
       - hex
 
   # ── GitHub Actions
+  #    Every `uses:` in .github/workflows is pinned to a commit SHA with a
+  #    `# vX.Y.Z` comment (#1404). This ecosystem is the update path for those
+  #    pins: it rewrites the SHA and the comment together, weekly, so pinning
+  #    does not decay into running an unpatched action forever.
+  #    `test/infra/actions_sha_pin_test.bats` is the guard on the other side.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
