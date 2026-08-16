@@ -343,20 +343,26 @@ defmodule Grappa.Session.Server do
 
   @typedoc """
   CP22 cluster B (channel-client-polish #14, B-restart) — opaque
-  callback that persists the current `Map.keys(state.members)` snapshot
-  so a graceful or crash restart can rehydrate the channel list at boot.
+  callback that persists a channels-list CHANGE so a graceful or crash
+  restart can rehydrate the channel list at boot. First argument is the
+  current `Map.keys(state.members)` keyset, second the channels THIS
+  change removed from it.
 
   Boundary-clean: Session.Server cannot reference `Grappa.Networks`
   directly (the cycle is banned — Networks already deps Session for
   stop_session calls on /disconnect). The callback wraps a closure
   that knows the (user_id, network_id) pair and forwards to
-  `Grappa.Networks.Credentials.update_last_joined_channels/3`.
+  `Grappa.Networks.Credentials.merge_last_joined_channels/4`.
   Returns `:ok` on success or `{:error, reason}`; Session.Server logs
-  failures but does not retry — the next channels-list mutation
-  overwrites, and a missing snapshot only forces the next restart to
-  fall back to operator autojoin.
+  failures but does not retry — the next channels-list mutation unions
+  the live keyset back in, and a missing snapshot only forces the next
+  restart to fall back to operator autojoin.
+
+  #1385 — the two arguments exist because the keyset ALONE cannot tell
+  "not restored yet" from "left": both read as absent. The departures
+  therefore travel separately, sourced from the event that caused them.
   """
-  @type last_joined_persister :: ([String.t()] -> :ok | {:error, term()})
+  @type last_joined_persister :: ([String.t()], [String.t()] -> :ok | {:error, term()})
 
   @typedoc """
   GH #581 — opaque reader the visitor `SessionPlan` injects so
@@ -2912,7 +2918,11 @@ defmodule Grappa.Session.Server do
     # snapshot went stale: a visitor's parted channel kept surfacing in
     # `GET /channels` (its autojoin source IS this snapshot) and both subjects
     # rejoined the parted channel on the next reconnect.
-    maybe_persist_last_joined(prev, state)
+    #
+    # #1385 — the operator's own `/part` IS the departure event for this path
+    # (there is no upstream echo to wait for, and `cleanup_local` above may
+    # not even have moved the keyset), so the channel travels as `departed`.
+    maybe_persist_last_joined(prev, state, [key])
 
     case Client.send_part(state.client, channel, reason) do
       :ok ->
@@ -3726,7 +3736,7 @@ defmodule Grappa.Session.Server do
         # AWAY confirmation) still flow.
         {:cont, next_state, effects} = EventRouter.route(msg, persist_state)
         final_state = effects |> apply_effects(next_state) |> prune_seeded_channels()
-        maybe_broadcast_channels_changed(state, final_state)
+        maybe_broadcast_channels_changed(state, final_state, departed_channels(effects, state))
         on_own_nick_change(state, final_state)
         {:noreply, final_state}
     end
@@ -5024,7 +5034,7 @@ defmodule Grappa.Session.Server do
   defp delegate(msg, state) do
     {:cont, derived_state, effects} = EventRouter.route(msg, state)
     next_state = effects |> apply_effects(derived_state) |> prune_seeded_channels()
-    maybe_broadcast_channels_changed(state, next_state)
+    maybe_broadcast_channels_changed(state, next_state, departed_channels(effects, state))
     on_own_nick_change(state, next_state)
     # #623 — a self-NICK arrives as a :nick command → this delegate path (never
     # the numeric path). Feed the recover FSM `:nick_observed` when our nick
@@ -5046,13 +5056,33 @@ defmodule Grappa.Session.Server do
     %{state | seeded_channels: MapSet.intersection(state.seeded_channels, member_keys)}
   end
 
-  @spec maybe_broadcast_channels_changed(t(), t()) :: :ok
-  defp maybe_broadcast_channels_changed(prev, next) do
+  @spec maybe_broadcast_channels_changed(t(), t(), [String.t()]) :: :ok
+  defp maybe_broadcast_channels_changed(prev, next, departed) do
     if channels_keyset(prev) != channels_keyset(next) do
       broadcast_channels_changed(next)
     end
 
-    maybe_persist_last_joined(prev, next)
+    maybe_persist_last_joined(prev, next, departed)
+  end
+
+  # #1385 — the departures this batch of effects carries, folded to the
+  # members-map key space. `:parted` and `:kicked` are emitted by EventRouter
+  # ONLY for ourselves (a peer's PART/KICK is a scrollback row and leaves the
+  # keyset alone), so they ARE the leave set.
+  #
+  # This is deliberately sourced from the EVENTS and not from a diff of the
+  # previous and current keyset. A diff reads any keyset that empties as
+  # "left everything" — today a drop stops the session instead of clearing
+  # the map in place, so the two agree, but the day one does not the diff
+  # form deletes the entire snapshot. That is #1385 with a bigger blast
+  # radius, and the shape that prevents it costs nothing.
+  @spec departed_channels([EventRouter.effect()], t()) :: [String.t()]
+  defp departed_channels(effects, state) do
+    Enum.flat_map(effects, fn
+      {:parted, channel} -> [fold_key(state, channel)]
+      {:kicked, channel, _, _} -> [fold_key(state, channel)]
+      _ -> []
+    end)
   end
 
   # CP22 cluster B (channel-client-polish #14, B-restart) — persist the
@@ -5061,19 +5091,32 @@ defmodule Grappa.Session.Server do
   # restart rehydrates the right window list. The keyset is the only field
   # that affects rejoin; one Repo write per channels-list mutation (a typical
   # session sees a handful per hour). Failure logged but NOT fatal
-  # (`persist_last_joined/4`): the next mutation overwrites, and a missing
-  # snapshot only forces the next restart to fall back to operator autojoin.
+  # (`persist_last_joined/5`): the next mutation unions the live keyset back
+  # in, and a missing snapshot only forces the next restart to fall back to
+  # operator autojoin.
   #
   # #87 (2026-06-26) — SINGLE persister call site, shared with the explicit
   # `handle_cast({:send_part, _})` leave path. Both the organic
   # membership-change path and the eager-PART path converge here, so the
   # snapshot stays consistent regardless of which one fired.
-  @spec maybe_persist_last_joined(t(), t()) :: :ok
-  defp maybe_persist_last_joined(prev, next) do
+  #
+  # #1385 — the WRITE is a merge on the far side (row ∪ keyset − departed),
+  # so what travels is the change, not a replacement. `departed` alone is
+  # enough to fire it: the eager-PART of a channel we were never live in
+  # does not move the keyset, but it IS a leave and must reach the row.
+  @spec maybe_persist_last_joined(t(), t(), [String.t()]) :: :ok
+  defp maybe_persist_last_joined(prev, next, departed) do
     next_keys = channels_keyset(next)
 
-    if channels_keyset(prev) != next_keys do
-      :ok = persist_last_joined(prev.subject, prev.network_id, next_keys, prev.last_joined_persister)
+    if departed != [] or channels_keyset(prev) != next_keys do
+      :ok =
+        persist_last_joined(
+          prev.subject,
+          prev.network_id,
+          next_keys,
+          departed,
+          prev.last_joined_persister
+        )
     end
 
     :ok
@@ -5113,12 +5156,18 @@ defmodule Grappa.Session.Server do
     :ok = Broadcaster.to_user(state, Wire.archive_changed_payload(state.network_slug))
   end
 
-  @spec persist_last_joined(Grappa.Session.subject(), pos_integer(), [String.t()], last_joined_persister() | nil) :: :ok
-  defp persist_last_joined(_, _, _, nil), do: :ok
+  @spec persist_last_joined(
+          Grappa.Session.subject(),
+          pos_integer(),
+          [String.t()],
+          [String.t()],
+          last_joined_persister() | nil
+        ) :: :ok
+  defp persist_last_joined(_, _, _, _, nil), do: :ok
 
-  defp persist_last_joined(_, _, channels, fun)
-       when is_function(fun, 1) do
-    case fun.(channels) do
+  defp persist_last_joined(_, _, channels, departed, fun)
+       when is_function(fun, 2) do
+    case fun.(channels, departed) do
       :ok ->
         :ok
 

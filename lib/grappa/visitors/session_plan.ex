@@ -230,12 +230,15 @@ defmodule Grappa.Visitors.SessionPlan do
       # session's `network.id` so an accreted network-B session persists to
       # B's credential. A concurrent unbind between snapshot write and Repo
       # round-trip surfaces as `{:error, :not_found}` inside
-      # `update_last_joined_channels/3`, which `Session.Server`'s logger
+      # `merge_last_joined_channels/4`, which `Session.Server`'s logger
       # swallows non-fatally. The read side (`base_plan` +
       # `resolve/2`) already reads `cred.last_joined_channels` per-network,
-      # so write + read are now symmetric per-network.
-      last_joined_persister: fn channels ->
-        Visitors.update_last_joined_channels(visitor.id, network.id, channels)
+      # so write + read are now symmetric per-network. #1385 — the write
+      # MERGES the change into the row instead of overwriting it, and the
+      # visitor has no `autojoin_channels` to fall back on, so a truncated
+      # write here loses the whole rejoin source.
+      last_joined_persister: fn channels, departed ->
+        Visitors.merge_last_joined_channels(visitor.id, network.id, channels, departed)
       end,
       # #581 — the "recover my identity" secret SOURCE. Session.Server cannot
       # statically alias Networks/Visitors (Boundary cycle — Visitors deps

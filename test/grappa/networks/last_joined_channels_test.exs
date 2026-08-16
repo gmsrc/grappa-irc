@@ -159,6 +159,105 @@ defmodule Grappa.Networks.LastJoinedChannelsTest do
     end
   end
 
+  # GH #1385 — the writer `Session.Server` actually uses. The setter above
+  # stays as the seed/reset primitive; a SESSION reaching for it is the
+  # defect this describe exists to prevent, because the live keyset is a
+  # strict prefix of the truth for the whole restore window.
+  describe "Credentials.merge_last_joined_channels/4" do
+    test "a live keyset short of the snapshot leaves the snapshot whole" do
+      {_, _, cred} = setup_credential()
+      :ok = Credentials.update_last_joined_channels(cred.user_id, cred.network_id, ~w(#a #b #c))
+
+      assert :ok =
+               Credentials.merge_last_joined_channels(
+                 cred.user_id,
+                 cred.network_id,
+                 ["#a"],
+                 []
+               )
+
+      assert reload(cred).last_joined_channels == ~w(#a #b #c)
+    end
+
+    test "an EMPTY live keyset does not empty the snapshot" do
+      {_, _, cred} = setup_credential()
+      :ok = Credentials.update_last_joined_channels(cred.user_id, cred.network_id, ~w(#a #b))
+
+      assert :ok = Credentials.merge_last_joined_channels(cred.user_id, cred.network_id, [], [])
+
+      assert reload(cred).last_joined_channels == ~w(#a #b)
+    end
+
+    test "a departure shrinks the snapshot" do
+      {_, _, cred} = setup_credential()
+      :ok = Credentials.update_last_joined_channels(cred.user_id, cred.network_id, ~w(#a #b))
+
+      assert :ok =
+               Credentials.merge_last_joined_channels(
+                 cred.user_id,
+                 cred.network_id,
+                 ["#b"],
+                 ["#a"]
+               )
+
+      assert reload(cred).last_joined_channels == ["#b"]
+    end
+
+    test "a departure from a channel we were not live in still shrinks it" do
+      {_, _, cred} = setup_credential()
+      :ok = Credentials.update_last_joined_channels(cred.user_id, cred.network_id, ~w(#a #stale))
+
+      assert :ok =
+               Credentials.merge_last_joined_channels(
+                 cred.user_id,
+                 cred.network_id,
+                 ["#a"],
+                 ["#stale"]
+               )
+
+      assert reload(cred).last_joined_channels == ["#a"]
+    end
+
+    test "a channel joined for the first time is appended ahead of the stale tail" do
+      {_, _, cred} = setup_credential()
+      :ok = Credentials.update_last_joined_channels(cred.user_id, cred.network_id, ["#old"])
+
+      assert :ok =
+               Credentials.merge_last_joined_channels(
+                 cred.user_id,
+                 cred.network_id,
+                 ~w(#new #old),
+                 []
+               )
+
+      assert reload(cred).last_joined_channels == ~w(#new #old)
+    end
+
+    test "on overflow the cap drops the not-yet-rejoined tail, not the live keyset" do
+      {_, _, cred} = setup_credential()
+      stale = for n <- 1..200, do: "#stale-" <> String.pad_leading(Integer.to_string(n), 3, "0")
+      :ok = Credentials.update_last_joined_channels(cred.user_id, cred.network_id, stale)
+
+      assert :ok =
+               Credentials.merge_last_joined_channels(
+                 cred.user_id,
+                 cred.network_id,
+                 ["#live"],
+                 []
+               )
+
+      merged = reload(cred).last_joined_channels
+      assert length(merged) == 200
+      assert hd(merged) == "#live"
+      refute "#stale-200" in merged
+    end
+
+    test "{:error, :not_found} for unknown (user, network)" do
+      assert {:error, :not_found} =
+               Credentials.merge_last_joined_channels(Ecto.UUID.generate(), 999_999, ["#x"], [])
+    end
+  end
+
   describe "Credential.changeset/2 schema-level cap (H15, REV-D)" do
     # H15: defensive schema-level cap. The context helper
     # `update_last_joined_channels/3` truncates before building the

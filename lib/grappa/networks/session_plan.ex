@@ -139,12 +139,14 @@ defmodule Grappa.Networks.SessionPlan do
         Credentials.commit_registration_password(user.id, cred.network_id, password)
       end,
       # CP22 cluster B (channel-client-polish #14, B-restart) — opaque
-      # closure that forwards `Map.keys(state.members)` snapshots to
-      # the per-credential `last_joined_channels` column. Wraps the
-      # (user_id, network_id) pair so Session.Server stays
-      # boundary-clean (Networks deps Session, not the reverse).
-      last_joined_persister: fn channels ->
-        Credentials.update_last_joined_channels(user.id, cred.network_id, channels)
+      # closure that forwards membership CHANGES (`Map.keys(state.members)`
+      # plus the channels the change removed) to the per-credential
+      # `last_joined_channels` column. Wraps the (user_id, network_id) pair
+      # so Session.Server stays boundary-clean (Networks deps Session, not
+      # the reverse). #1385 turned the write from an overwrite into a merge:
+      # the keyset alone cannot distinguish "not restored yet" from "left".
+      last_joined_persister: fn channels, departed ->
+        Credentials.merge_last_joined_channels(user.id, cred.network_id, channels, departed)
       end,
       # GH #417 — persist/restore the EXPLICIT away across crash / respawn /
       # upstream reconnect (user-only; the visitor plan omits both). The

@@ -263,24 +263,84 @@ defmodule Grappa.Networks.Credentials do
           :ok | {:error, :not_found | Ecto.Changeset.t()}
   def update_last_joined_channels(user_id, network_id, channels)
       when is_binary(user_id) and is_integer(network_id) and is_list(channels) do
-    capped = Enum.take(channels, Credential.last_joined_channels_max())
+    case Repo.get_by(Credential, user_id: user_id, network_id: network_id) do
+      nil -> {:error, :not_found}
+      %Credential{} = cred -> write_last_joined_channels(cred, channels)
+    end
+  end
 
+  @doc """
+  GH #1385 — apply a live membership CHANGE to the rejoin snapshot rather
+  than overwriting it: the row becomes `(row ∪ joined) − departed`, capped.
+  `joined` is the session's CURRENT channel keyset, `departed` the channels
+  THIS change removed from it (self-PART / self-KICK / eager `/part`).
+
+  This is the writer `Session.Server` uses; `update_last_joined_channels/3`
+  above is the absolute setter, and a session must never reach for it. The
+  reason is the whole of #1385: after a reconnect the live keyset starts
+  EMPTY and grows one self-JOIN echo at a time, so an absolute write during
+  the restore window persists a PREFIX of the truth — and a drop inside that
+  window (measured in production on 2026-08-16, `vjt` 11 channels → 7,
+  `morph` 10 → 2) freezes the prefix as the new snapshot, which the next
+  reconnect then re-restores and re-persists. Nothing recovers the tail.
+
+  The union is what makes the restore window harmless: a channel we have not
+  re-joined YET is merely absent, and absence is not a departure. Growth
+  still works (the live keyset unions in), and the snapshot still SHRINKS on
+  a real leave, because that leave arrives as `departed`.
+
+  `departed` MUST come from the event that removed the channel, never from a
+  diff of the previous and current keyset: a keyset that empties for any
+  reason other than leaving (a future in-process connection reset — a drop
+  currently stops the session instead) reads, under a diff, as "left
+  everything", which is #1385 again through another door and losing the
+  whole row instead of a suffix.
+
+  Known accepted cost: a channel left from ANOTHER client while grappa is
+  disconnected is not observable, so the row keeps it and the next reconnect
+  re-JOINs it. One channel too many beats one lost for good.
+  """
+  @spec merge_last_joined_channels(Ecto.UUID.t(), pos_integer(), [String.t()], [String.t()]) ::
+          :ok | {:error, :not_found | Ecto.Changeset.t()}
+  def merge_last_joined_channels(user_id, network_id, joined, departed)
+      when is_binary(user_id) and is_integer(network_id) and is_list(joined) and
+             is_list(departed) do
     case Repo.get_by(Credential, user_id: user_id, network_id: network_id) do
       nil ->
         {:error, :not_found}
 
       %Credential{} = cred ->
-        # S34: narrow changeset — this fires on every self-JOIN/PART/KICK,
-        # so it must not drag the wide `changeset/2`'s unrelated validators
-        # (`validate_password_for_auth_method`, `put_encrypted_password`,
-        # the `unique_constraint`) onto the hot path. Twin of the visitor
-        # side's `Visitor.last_joined_channels_changeset/2`.
-        changeset = Credential.last_joined_channels_changeset(cred, capped)
+        write_last_joined_channels(cred, merge_snapshot(cred, joined, departed))
+    end
+  end
 
-        case Repo.update(changeset) do
-          {:ok, _} -> :ok
-          {:error, changeset} -> {:error, changeset}
-        end
+  # The stored row is the rejoin plan, so the LIVE keyset leads and the rows
+  # we have not re-joined yet trail it: on overflow the cap then drops the
+  # stale tail rather than a channel we are actually sitting in.
+  @spec merge_snapshot(Credential.t(), [String.t()], [String.t()]) :: [String.t()]
+  defp merge_snapshot(%Credential{last_joined_channels: stored}, joined, departed) do
+    gone = MapSet.new(departed)
+
+    (joined ++ stored)
+    |> Enum.uniq()
+    |> Enum.reject(&MapSet.member?(gone, &1))
+  end
+
+  # S34: narrow changeset — this fires on every self-JOIN/PART/KICK, so it
+  # must not drag the wide `changeset/2`'s unrelated validators
+  # (`validate_password_for_auth_method`, `put_encrypted_password`, the
+  # `unique_constraint`) onto the hot path. Twin of the visitor side's
+  # `Visitor.last_joined_channels_changeset/2`. Single Repo writer for the
+  # column — both subject kinds and both verbs (set + merge) land here, so
+  # the cap is enforced once.
+  @spec write_last_joined_channels(Credential.t(), [String.t()]) ::
+          :ok | {:error, Ecto.Changeset.t()}
+  defp write_last_joined_channels(%Credential{} = cred, channels) do
+    capped = Enum.take(channels, Credential.last_joined_channels_max())
+
+    case cred |> Credential.last_joined_channels_changeset(capped) |> Repo.update() do
+      {:ok, _} -> :ok
+      {:error, changeset} -> {:error, changeset}
     end
   end
 
@@ -334,19 +394,34 @@ defmodule Grappa.Networks.Credentials do
           :ok | {:error, :not_found | Ecto.Changeset.t()}
   def update_visitor_last_joined_channels(visitor_id, network_id, channels)
       when is_binary(visitor_id) and is_integer(network_id) and is_list(channels) do
-    capped = Enum.take(channels, Credential.last_joined_channels_max())
+    case Repo.get_by(Credential, visitor_id: visitor_id, network_id: network_id) do
+      nil -> {:error, :not_found}
+      %Credential{} = cred -> write_last_joined_channels(cred, channels)
+    end
+  end
 
+  @doc """
+  GH #1385 — visitor twin of `merge_last_joined_channels/4`, keyed on
+  `(visitor_id, network_id)`. Same verb, same reasons, and the visitor needs
+  it MORE: with no operator-bound `autojoin_channels` to merge against, the
+  snapshot is the visitor's ENTIRE rejoin source, so a truncated write is
+  the whole loss with nothing to fall back on.
+  """
+  @spec merge_visitor_last_joined_channels(
+          Ecto.UUID.t(),
+          pos_integer(),
+          [String.t()],
+          [String.t()]
+        ) :: :ok | {:error, :not_found | Ecto.Changeset.t()}
+  def merge_visitor_last_joined_channels(visitor_id, network_id, joined, departed)
+      when is_binary(visitor_id) and is_integer(network_id) and is_list(joined) and
+             is_list(departed) do
     case Repo.get_by(Credential, visitor_id: visitor_id, network_id: network_id) do
       nil ->
         {:error, :not_found}
 
       %Credential{} = cred ->
-        changeset = Credential.last_joined_channels_changeset(cred, capped)
-
-        case Repo.update(changeset) do
-          {:ok, _} -> :ok
-          {:error, changeset} -> {:error, changeset}
-        end
+        write_last_joined_channels(cred, merge_snapshot(cred, joined, departed))
     end
   end
 

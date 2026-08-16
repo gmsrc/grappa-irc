@@ -942,6 +942,22 @@ defmodule Grappa.Visitors do
   end
 
   @doc """
+  GH #1385 — the visitor session's rejoin-snapshot writer: applies a
+  membership CHANGE (`joined` keyset, `departed` channels) instead of
+  overwriting, so a drop inside the restore window cannot freeze the
+  partial keyset as the whole snapshot. Delegates to
+  `Credentials.merge_visitor_last_joined_channels/4`; the reasoning lives
+  there.
+  """
+  @spec merge_last_joined_channels(Ecto.UUID.t(), pos_integer(), [String.t()], [String.t()]) ::
+          :ok | {:error, :not_found | Ecto.Changeset.t()}
+  def merge_last_joined_channels(visitor_id, network_id, joined, departed)
+      when is_binary(visitor_id) and is_integer(network_id) and is_list(joined) and
+             is_list(departed) do
+    Credentials.merge_visitor_last_joined_channels(visitor_id, network_id, joined, departed)
+  end
+
+  @doc """
   #211 phase 4c — PER-NETWORK visitor "dismiss channel": remove
   `channel_name` from the `(visitor_id, network_id)` Credential's
   `last_joined_channels` rejoin list.
