@@ -59,6 +59,10 @@ export type DismissGestureParams = {
   onRelease: () => void;
 };
 
+// The ONE place "single finger only" is spelled: undefined for a pinch, which
+// is the image's gesture and not ours. Every arm reads it, so there is no
+// second copy of the predicate to drift — and mutating it is what a spec
+// asserting the pinch is ignored actually has to kill.
 function soleTouch(e: TouchEvent): Touch | undefined {
   const list = e.touches.length > 0 ? e.touches : e.changedTouches;
   return list.length === 1 ? list[0] : undefined;
@@ -77,7 +81,6 @@ export function bindDismissGesture(el: HTMLElement, params: DismissGestureParams
 
   const onStart = (e: TouchEvent): void => {
     disarm();
-    if (e.touches.length !== 1) return; // a pinch is the image's, not ours
     const t = soleTouch(e);
     if (t === undefined) return;
     if (!params.canDismiss()) return;
@@ -86,7 +89,7 @@ export function bindDismissGesture(el: HTMLElement, params: DismissGestureParams
   };
 
   const onMove = (e: TouchEvent): void => {
-    if (start === null || e.touches.length !== 1) return;
+    if (start === null) return;
     const t = soleTouch(e);
     if (t === undefined) return;
     const current = { x: t.clientX, y: t.clientY };
