@@ -43572,3 +43572,67 @@ window. And the open question from #1353 stays open: *why* a pool connection
 that did not serve the `CREATE INDEX` plans differently — schema cache or
 transaction visibility — is still unmeasured, and `pool_size: 1` remains a
 remedy whose mechanism nobody has characterised.
+<!-- entry #1384 -->
+
+---
+
+## 2026-08-16 — #1384: the Docker substrate gets one hook set, not two
+
+`infra/lib/deploy_common.sh` is the substrate-independent deploy algorithm;
+each substrate hands it a `substrate_*` hook set. The jail and the systemd
+host have one each. The Docker source substrate had TWO — fourteen functions
+in `scripts/deploy.sh` (operator, on a checkout, personal compose override,
+worktree/branch guard) and fourteen more inside `infra/docker/deploy.sh`'s
+`cmd_update` (standalone box: secrets, install/stop verbs, ownership guard).
+Review D-S2 counted seven divergences between them.
+
+**What made it a defect rather than untidiness was #1377, one day earlier.**
+That change established the `.env` + `MIX_ENV` preconditions on both PATHS of
+the operator door and structurally could not reach the twin — which had
+arrived at the same precondition by an unrelated mechanism, `set_env MIX_ENV
+prod` writing the value into `.env` at install time. A box installed by that
+driver was covered; a hand-installed one was not, because `cmd_update` checks
+only that `.env` EXISTS. compose then interpolates `${MIX_ENV:-dev}`,
+`DATABASE_PATH` follows it, and the update seeded the box's dev database while
+the live container served the prod one. Two implementations of one
+precondition: neither wrong on its own, and the divergence is the bug.
+
+**The entry points stay two; the hooks become one.** They serve different
+audiences and guard different things, so `infra/lib/deploy_docker.sh` holds
+the thirteen hooks and each door keeps what is genuinely its own: the compose
+invocation (only the operator door reads `compose.override.yaml`), the done
+banner (one of the two is bats-pinned), and the seed retry hint, which has to
+name the door the operator actually invoked.
+
+Three divergences resolved toward the safer side and are behaviour changes:
+the standalone door now migrates through `mix grappa.migrate`, gaining the
+#1348 duplicate-version audit it never had; both doors diagnose a
+non-fast-forward pull instead of dying on a bare non-zero; and the reload
+stopped probing `ps -q grappa` first — the operator door got that probe from
+`_lib.sh`'s `in_container`, while the standalone door detects a down box
+earlier and FORCES COLD, so unifying on the probe would have written the
+weaker of the two answers into both doors.
+
+**Four of the seven were deliberately left divergent, which is the part worth
+recording.** `assert_box_ownership` and `require_main_checkout` guard
+different failure modes for different audiences; `migrate_publish_env` is
+`.env` authorship and only one driver owns `.env`; `--no-pull` is a flag
+surface, and the shared hook already honours `NO_PULL` for whoever sets it.
+The seventh — "empty-array expansion" — is not a defect in either direction:
+`"$@"` and `${libargs[@]+"${libargs[@]}"}` are both correct, one for a
+pass-through and one for a built array. A drift count is a starting point,
+not a verdict.
+
+**A third `substrate_*` set survives inside `infra/docker/deploy.sh` and must
+not be folded in.** Nine of its members are `{ :; }`: a checkout-less host
+running the published image has no source to pull, build, reload or bundle
+from. That is a different substrate wearing the same interface, and merging
+it would be one data model with a type flag rather than shared behaviour.
+
+`deploy_docker.sh` is the first file under `infra/lib/` that is NOT POSIX sh.
+It takes the compose invocation as a bash array because both callers already
+have one; the POSIX rule exists so the jail's `/bin/sh` can source these
+files, and the jail never sources this one. It says `# shellcheck shell=bash`,
+which is also how `scripts/posix-parse.sh` derives its set — the gate reads
+the declared dialect, so the exclusion is a property of the file rather than
+an exception list.

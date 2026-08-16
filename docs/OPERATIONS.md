@@ -2826,6 +2826,19 @@ can run them. Consumers keep their own shebangs and may use bashisms in
 their own hooks. This section is the WHY behind those files; the files
 themselves say only what they do (#1159).
 
+**A fourth file, `deploy_docker.sh`, is deliberately NOT POSIX (#1384).**
+It holds the Docker substrate's thirteen `substrate_*` hooks, shared by
+the two entry points onto that substrate — `scripts/deploy.sh` and
+`infra/docker/deploy.sh update` — and it takes the compose invocation as
+a bash ARRAY, because that is what both callers already have (the
+operator door's carries the host's `compose.override.yaml`). The POSIX
+rule exists so the jail's `/bin/sh` can source these files; the jail
+never sources this one, and nothing else on a Docker box runs `sh`. It
+declares `# shellcheck shell=bash`, which is also how
+`scripts/posix-parse.sh` derives its set — the gate reads the declared
+dialect, so the file is excluded by saying what it is rather than by an
+exception list someone has to maintain.
+
 **That claim is gated, and over a DERIVED set (#1377).**
 `scripts/posix-parse.sh` runs `dash -n` over every file under `bin/`,
 `infra/` and `scripts/` whose first line declares the sh dialect — a
