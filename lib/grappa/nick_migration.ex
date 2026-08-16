@@ -57,6 +57,16 @@ defmodule Grappa.NickMigration do
       re-attempt could broadcast twice; inside the transaction it could
       announce a rename that then rolled back.
 
+  **And NEITHER is entered when there is nothing to migrate (#1378).**
+  `peer_renamed/5` probes `QueryWindows.exists?/3` first: with no window the
+  mute is the only store that can move, and this four-store transaction is
+  skipped (the mute setter keeps one of its own — see
+  `windowless_peer_renamed/4`). That is not an optimisation — an unconditional
+  `BEGIN IMMEDIATE` took SQLite's single write lock once per session per peer
+  rename to do nothing, and under channel fan-out the sessions raced each
+  other into `busy_locked`. See `windowless_peer_renamed/4` for the race
+  argument and for why `own_renamed/5` keeps its unconditional transaction.
+
   Terminal on budget exhaustion is `{:error, :db_unavailable}`, which the
   session logs and DROPs (#590 background posture) — a rename is not worth
   disconnecting a user over, and the old-nick state it leaves behind is
@@ -147,19 +157,69 @@ defmodule Grappa.NickMigration do
   def peer_renamed({_, _} = subject, network_id, network_slug, old_nick, new_nick)
       when is_integer(network_id) and is_binary(network_slug) and is_binary(old_nick) and
              is_binary(new_nick) do
-    migrate(fn ->
-      mute = UserSettings.rename_muted_target!(subject, network_slug, old_nick, new_nick)
+    if QueryWindows.exists?(subject, network_id, old_nick) do
+      migrate(fn ->
+        mute = UserSettings.rename_muted_target!(subject, network_slug, old_nick, new_nick)
 
-      case QueryWindows.rename(subject, network_id, old_nick, new_nick) do
-        {:ok, :renamed} ->
-          {:ok, rows} = Scrollback.rename_dm_peer(subject, network_id, old_nick, new_nick)
-          :ok = ReadCursor.rename_dm_peer(subject, network_id, old_nick, new_nick)
-          %{window: :renamed, rows: rows, mute: mute}
+        case QueryWindows.rename(subject, network_id, old_nick, new_nick) do
+          {:ok, :renamed} ->
+            {:ok, rows} = Scrollback.rename_dm_peer(subject, network_id, old_nick, new_nick)
+            :ok = ReadCursor.rename_dm_peer(subject, network_id, old_nick, new_nick)
+            %{window: :renamed, rows: rows, mute: mute}
 
-        {:ok, :noop} ->
-          %{window: :noop, rows: 0, mute: mute}
-      end
-    end)
+          {:ok, :noop} ->
+            %{window: :noop, rows: 0, mute: mute}
+        end
+      end)
+    else
+      windowless_peer_renamed(subject, network_slug, old_nick, new_nick)
+    end
+  end
+
+  # #1378 — a peer we never queried is the OVERWHELMING case: IRC delivers a
+  # NICK for every channel-sharing peer, so one rename fans out to every
+  # session in the channel, and almost none of them hold a window for it.
+  # Without the gate above each of those opened `BEGIN IMMEDIATE`, taking the
+  # RESERVED lock on SQLite's single writer to migrate nothing — measured on
+  # the #458 e2e as four sessions racing per rename, `busy_locked` for the
+  # full 1500ms budget, a dropped scrollback row and a session stalled ~33s
+  # behind its inbound stream.
+  #
+  # With no window, the mute is the ONLY store that can move, so this path
+  # takes the caller-facing `rename_muted_target/4` and skips the four-store
+  # transaction. It does NOT skip a transaction altogether, and saying so
+  # would be the log-honesty failure CLAUDE.md names: #1375 put a
+  # `BEGIN IMMEDIATE` inside that setter, because one `Repo.update` of the
+  # `data` blob is a read-modify-write pair that silently drops a concurrent
+  # writer's key. So what this gate removes is the transaction spanning
+  # `QueryWindows.rename/4` plus two `update_all`s — a much shorter hold of
+  # the RESERVED lock, not no hold. Whether the residue still reproduces the
+  # #458 profile is NOT established by the measurement quoted above, which
+  # was taken before #1375 landed. The migration path proper is untouched —
+  # same transaction, same retry, same order.
+  #
+  # The probe is a READ taken outside any transaction, and that is safe in
+  # the only direction that matters. If it sees a window that is gone by the
+  # time the transaction runs, we opened one transaction too many — the cost
+  # we used to pay unconditionally. It cannot skip a migration that was
+  # needed: a window CREATED after the probe is equally invisible to a
+  # `rename/4` running inside the transaction, whose own `SELECT` would have
+  # missed it just the same, so the stranded-window window is not widened by
+  # a microsecond. The transaction buys atomicity across the four stores, not
+  # mutual exclusion against a window opened later.
+  #
+  # `own_renamed/5` deliberately keeps its unconditional transaction: its
+  # first step (`Scrollback.rename_own_nick/4`) is an `update_all` whose
+  # row count cannot be known without running it, so a probe there would
+  # cost what it saves — and our own nick moves once per `/nick`, not once
+  # per peer per session.
+  @spec windowless_peer_renamed(Subject.t(), String.t(), String.t(), String.t()) ::
+          {:ok, peer_result()} | {:error, Ecto.Changeset.t() | :db_unavailable}
+  defp windowless_peer_renamed(subject, network_slug, old_nick, new_nick) do
+    case UserSettings.rename_muted_target(subject, network_slug, old_nick, new_nick) do
+      {:ok, mute} -> {:ok, %{window: :noop, rows: 0, mute: mute}}
+      {:error, _} = err -> err
+    end
   end
 
   @doc """

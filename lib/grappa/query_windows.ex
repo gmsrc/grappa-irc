@@ -282,14 +282,40 @@ defmodule Grappa.QueryWindows do
     end
   end
 
+  @doc """
+  Does `subject` hold a DM window whose `target_nick` folds to `nick`?
+
+  The read half of `rename/4`'s own gate, exposed because a caller needs to
+  know whether a rename has anything to move BEFORE paying for the machinery
+  that would move it — `Grappa.NickMigration.peer_renamed/5` opens a write
+  transaction only when this answers true (#1378).
+
+  Folds `nick` like every other nick KEY (#121/#537), so the caller passes
+  the RAW nick off the wire.
+  """
+  @spec exists?(Subject.t(), integer(), String.t()) :: boolean()
+  def exists?({_, _} = subject, network_id, nick)
+      when is_integer(network_id) and is_binary(nick) do
+    subject
+    |> window_query(network_id, Identifier.canonical_target(nick))
+    |> Repo.exists?()
+  end
+
+  # The one folded-nick window predicate. `rename/4`'s two gates and
+  # `exists?/3` all derive from it, so the probe a caller makes is BY
+  # CONSTRUCTION the same question the rename then asks.
+  @spec window_query(Subject.t(), integer(), String.t()) :: Ecto.Query.t()
+  defp window_query(subject, network_id, folded_nick) do
+    Window
+    |> Subject.subject_where(subject)
+    |> where([w], w.network_id == ^network_id)
+    |> where([w], Identifier.nick_fold(w.target_nick) == ^folded_nick)
+  end
+
   @spec do_rename(Subject.t(), integer(), String.t(), String.t(), String.t()) ::
           {:ok, :renamed | :noop}
   defp do_rename(subject, network_id, folded_old, folded_new, new_nick) do
-    old_query =
-      Window
-      |> Subject.subject_where(subject)
-      |> where([w], w.network_id == ^network_id)
-      |> where([w], Identifier.nick_fold(w.target_nick) == ^folded_old)
+    old_query = window_query(subject, network_id, folded_old)
 
     if Repo.exists?(old_query) do
       if new_window_exists?(subject, network_id, folded_new) do
@@ -325,10 +351,8 @@ defmodule Grappa.QueryWindows do
 
   @spec new_window_exists?(Subject.t(), integer(), String.t()) :: boolean()
   defp new_window_exists?(subject, network_id, folded_new) do
-    Window
-    |> Subject.subject_where(subject)
-    |> where([w], w.network_id == ^network_id)
-    |> where([w], Identifier.nick_fold(w.target_nick) == ^folded_new)
+    subject
+    |> window_query(network_id, folded_new)
     |> Repo.exists?()
   end
 
