@@ -236,6 +236,24 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     end
   end
 
+  # X-S4 (#1406) — a top-level partial record lifts its KEY SET into the same
+  # `as const` array + derived type every atom union already gets (#411 D6b),
+  # then references it. Two reasons, and only the second is cosmetic. The key
+  # set becomes available at RUNTIME, like every other closed set on the wire.
+  # And the reference keeps the typedef one short line: inlined, 23 quoted keys
+  # blow past `lineWidth: 100` and biome reformats them into a nested
+  # `Partial<\n  Record<\n    | "a"` shape this emitter would then have to
+  # reproduce by hand to stay drift-free. Naming the keys sidesteps the whole
+  # hand-matching problem instead of adding a fourth wrapper to match.
+  defp format_plain_typedef(alias_name, {:partial_record, _, [keys, value_ast]}) do
+    key_ts_name = alias_name <> "Key"
+    arms = Enum.map(keys, &~s("#{&1}"))
+
+    emit_enum(key_ts_name, arms) <>
+      "\n\nexport type #{alias_name} = " <>
+      "Partial<Record<#{key_ts_name}, #{do_render(value_ast)}>>;"
+  end
+
   defp format_plain_typedef(alias_name, stripped) do
     body = do_render(stripped)
     sep = if String.starts_with?(body, "\n"), do: "", else: " "
@@ -567,14 +585,66 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   defp strip_map([]), do: {:map, [], []}
 
   defp strip_map(fields) do
-    if Enum.all?(fields, &atom_keyed_field?/1) do
-      {:%{}, [], Enum.map(fields, &strip_atom_keyed_field/1)}
+    cond do
+      Enum.all?(fields, &atom_keyed_field?/1) ->
+        {:%{}, [], Enum.map(fields, &strip_atom_keyed_field/1)}
+
+      match?([_], fields) and partial_record_field?(hd(fields)) ->
+        [{:type, _, :map_field_assoc, [{:type, _, :union, members}, value_ast]}] = fields
+        {:partial_record, [], [Enum.map(members, &literal_key/1), strip_typespec_metadata(value_ast)]}
+
+      true ->
+        degrade_to_open_map(fields)
+    end
+  end
+
+  # X-S4 (#1406) — one association whose key is a UNION of atom literals: the
+  # allowlisted-bag shape (`Grappa.Scrollback.Meta.t/0`). `atom_keyed_field?/1`
+  # only recognises a SINGLE atom key, so this fell to the open-map branch and
+  # rendered `Record<string, unknown>` with the key names gone.
+  defp partial_record_field?({:type, _, :map_field_assoc, [{:type, _, :union, members}, _]}),
+    do: Enum.all?(members, &match?({:atom, _, _}, &1))
+
+  defp partial_record_field?(_), do: false
+
+  # The residual: a map shape with atom-derived keys that no TS type expresses
+  # (a named key MIXED with a union-keyed association, say). It still degrades
+  # to an open map — but it must not degrade SILENTLY, which was the actual
+  # X-S4 defect: `Record<string, unknown>` was reachable by two roads and only
+  # the bare-`map()` one said so.
+  #
+  # The VALUE type is dropped along with the keys. The old branch kept the
+  # FIRST field's value type and applied it to every key, so a mixed map of
+  # `required(:named) => String.t()` plus `optional(:a | :b) => term()`
+  # rendered `Record<string, string>` — not a loss of precision but a claim
+  # about values the typespec never made.
+  defp degrade_to_open_map(fields) do
+    if Enum.any?(fields, &atom_keyed_in_part?/1) do
+      IO.warn(
+        "atom-keyed map in Wire typespec that codegen cannot express — falling " <>
+          "back to Record<string, unknown>, dropping the key names"
+      )
+
+      [{_, _, _, [key_ast, _]} | _] = fields
+      {:open_map, [], [strip_typespec_metadata(key_ast), {:term, [], []}]}
     else
-      [first | _] = fields
-      {_, _, _, [key_ast, value_ast]} = first
+      [{_, _, _, [key_ast, value_ast]} | _] = fields
       {:open_map, [], [strip_typespec_metadata(key_ast), strip_typespec_metadata(value_ast)]}
     end
   end
+
+  defp atom_keyed_in_part?({:type, _, kind, [key_ast, _]})
+       when kind in [:map_field_assoc, :map_field_exact],
+       do: mentions_atom_literal?(key_ast)
+
+  defp atom_keyed_in_part?(_), do: false
+
+  defp mentions_atom_literal?({:atom, _, _}), do: true
+
+  defp mentions_atom_literal?({:type, _, :union, members}),
+    do: Enum.any?(members, &mentions_atom_literal?/1)
+
+  defp mentions_atom_literal?(_), do: false
 
   # `optional(:k) => T` carries `:map_field_assoc`; `required(:k) => T`
   # (and the `k: T` shorthand) carries `:map_field_exact`. Preserve the
@@ -677,6 +747,17 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   end
 
   defp do_render([t]), do: "#{do_render(t)}[]"
+
+  # X-S4 (#1406) — `Partial<`, not a bare `Record<>`: the keys come from an
+  # `optional(...)` association, so every one of them may be absent. The type
+  # pins which keys cic may READ; it does not claim the server sends no others,
+  # and TS object types are not exact, so it cannot be read as claiming that.
+  # That matters because `Scrollback.Meta.load/1` is deliberately lenient and a
+  # historical row can still carry a key the allowlist has since dropped.
+  defp do_render({:partial_record, _, [keys, value_ast]}) do
+    rendered_keys = Enum.map_join(keys, " | ", &~s("#{&1}"))
+    "Partial<Record<#{rendered_keys}, #{do_render(value_ast)}>>"
+  end
 
   defp do_render({:open_map, _, [_, value_ast]}) do
     # JSON object maps always have string keys on the wire (Jason
@@ -1043,6 +1124,16 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   defp schema_ir([inner], mod), do: {:obj, [{"a", schema_ir(inner, mod)}]}
 
   defp schema_ir({:open_map, _, [_, value]}, mod), do: {:obj, [{"r", schema_ir(value, mod)}]}
+
+  # X-S4 (#1406) — the RUNTIME twin of a partial record stays a plain record of
+  # the value type, key names deliberately NOT enforced. The compile-time type
+  # says which keys cic may read; a runtime key check would say which keys the
+  # server may send, and that is a different and wrong claim —
+  # `Scrollback.Meta.load/1` is lenient by design so that a historical row with
+  # a since-removed key still reads instead of crashing the fetch. Validating
+  # keys here would drop exactly those rows at the client instead.
+  defp schema_ir({:partial_record, _, [_keys, value]}, mod),
+    do: {:obj, [{"r", schema_ir(value, mod)}]}
 
   defp schema_ir({:%{}, _, fields}, mod) do
     props =

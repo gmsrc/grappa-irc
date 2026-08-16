@@ -158,6 +158,42 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
       refute output =~ ~s(  sometimes: string;)
     end
 
+    # X-S4 (#1406) — `atom_keyed_field?/1` matches a map field whose key is a
+    # SINGLE atom, so a key that is a UNION of atoms failed the all-atom-keyed
+    # test and dropped to the open-map branch: `Record<string, unknown>`, key
+    # names gone. Worse than the bare-`map()` fallback it lands on, because
+    # bare `map()` at least warns. The keys are a closed set the server
+    # enforces, so they belong in the type.
+    test "renders a union-of-atoms map key as a Partial Record of those keys" do
+      output = GenWireTypes.render_module_for_test(Grappa.WireFixture)
+
+      assert output =~
+               ~s(export const WIRE_FIXTURE_UNION_KEYED_PAYLOAD_KEY = ["alpha", "beta"] as const;)
+
+      assert output =~
+               "export type WireFixtureUnionKeyedPayloadKey = " <>
+                 "(typeof WIRE_FIXTURE_UNION_KEYED_PAYLOAD_KEY)[number];"
+
+      assert output =~
+               ~s(export type WireFixtureUnionKeyedPayload = Partial<Record<WireFixtureUnionKeyedPayloadKey, unknown>>;)
+
+      refute output =~ ~s(export type WireFixtureUnionKeyedPayload = Record<string, unknown>;)
+    end
+
+    # The residual: a union-keyed association mixed with a named key has no
+    # TS shape the codegen can emit, so it still degrades to an open map —
+    # but the degradation must be LOUD. Silence is the actual defect X-S4
+    # reported; `Record<string, unknown>` reached by two different roads, one
+    # of which said nothing.
+    test "warns when a map degrades to Record<string, unknown> with atom keys in it" do
+      warning =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          GenWireTypes.render_module_for_test(Grappa.WireFixture)
+        end)
+
+      assert warning =~ "atom-keyed map in Wire typespec"
+    end
+
     # Pins the real production deliverable: Cic.Wire's `version` is
     # `optional(:version) => String.t()`, so the generated
     # CicWireBundleHashPayload must carry `version?: string`.
