@@ -108,8 +108,19 @@ test("notification_prefs whitelist: messages in allow-list push, messages elsewh
     // Negative path FIRST — peer talks in OTHER, no mention. No push
     // expected because: channel_messages_all=false, channel_mentions=false,
     // channel_messages_only doesn't include #b5-other.
-    peer.privmsg(OTHER_CHANNEL, "small talk in other");
-    await assertNoPushDelivery(SUB_ID, 1_500);
+    const otherBody = "small talk in other";
+    peer.privmsg(OTHER_CHANNEL, otherBody);
+    await assertNoPushDelivery(
+      SUB_ID,
+      {
+        token: vjt.token,
+        networkSlug: NETWORK_SLUG,
+        window: OTHER_CHANNEL,
+        sender: peer.nick,
+        body: otherBody,
+      },
+      1_500,
+    );
 
     // Positive path — peer talks in ALLOW, no mention. Push expected
     // because channel_messages_only includes #b5-allow.

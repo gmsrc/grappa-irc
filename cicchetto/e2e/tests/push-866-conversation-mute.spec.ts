@@ -106,8 +106,19 @@ test("a muted channel swallows even a direct mention, while its unmuted sibling 
     await setPageVisibility(page, false);
 
     // Negative arm — a MENTION in the muted channel. Pre-#866 this pushed.
-    peer.privmsg(MUTED_CHANNEL, `${specNick()}: you will not hear this`);
-    await assertNoPushDelivery(SUB_ID, 1_500);
+    const mutedBody = `${specNick()}: you will not hear this`;
+    peer.privmsg(MUTED_CHANNEL, mutedBody);
+    await assertNoPushDelivery(
+      SUB_ID,
+      {
+        token: vjt.token,
+        networkSlug: NETWORK_SLUG,
+        window: MUTED_CHANNEL,
+        sender: peer.nick,
+        body: mutedBody,
+      },
+      1_500,
+    );
 
     // Positive arm — the same mention shape in the unmuted sibling. This is
     // what keeps the negative arm from passing because push broke outright.

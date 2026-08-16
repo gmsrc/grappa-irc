@@ -36,7 +36,7 @@ import { loginAs, selectChannel } from "../fixtures/cicchettoPage";
 import { partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import {
-  assertNoPushDelivery,
+  assertNoPushDeliveryOnUnusedId,
   awaitPushDelivery,
   enablePushFromSettings,
   expectRfc8291Delivery,
@@ -116,12 +116,17 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
     // path includes the per-spec id we minted.
     // (verified by push-catcher partitioning by id; recurrence here
     // would only show up as zero deliveries on the WRONG id, which
-    // is a stronger negative caught by assertNoPushDelivery below.)
+    // is a stronger negative caught by the unused-id check below.)
 
     // Negative cross-check: a never-used id sees zero deliveries —
     // proves push-catcher partitioning + Sender targeting (no
     // accidental fan-out to all known endpoints).
-    await assertNoPushDelivery("channel-mention-unrelated");
+    //
+    // #1336 — deliberately NOT the barriered `assertNoPushDelivery`. There is
+    // no stimulus to prove for an id nobody ever sent to; its positive control
+    // is the real delivery on SUB_ID above, which a fan-out bug would have
+    // duplicated here.
+    await assertNoPushDeliveryOnUnusedId("channel-mention-unrelated");
   } finally {
     await peer.disconnect("B5 channel-mention done");
     await partChannel(vjt.token, NETWORK_SLUG, TARGET_CHANNEL).catch(() => {});

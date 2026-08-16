@@ -69,8 +69,15 @@ test("server delivers push once the window is blurred though still on-screen, su
     // matches #182's visible case). setPageFocus blocks until WSPresence
     // acked present=true, so the DM can't race the focus update.
     await setPageFocus(page, true);
-    peer.privmsg(specNick(), "you are looking at the app — no toast please");
-    await assertNoPushDelivery(SUB_ID);
+    const focusedBody = "you are looking at the app — no toast please";
+    peer.privmsg(specNick(), focusedBody);
+    await assertNoPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: peer.nick,
+      sender: peer.nick,
+      body: focusedBody,
+    });
 
     // Phase 2 — visible but BLURRED (still on-screen, keyboard focus lost).
     // #192: presence is now false → the server MUST deliver. Pre-fix this
@@ -86,8 +93,15 @@ test("server delivers push once the window is blurred though still on-screen, su
     // Phase 3 — REFOCUS (still visible) → suppression restored.
     await resetPushCatcher();
     await setPageFocus(page, true);
-    peer.privmsg(specNick(), "back in focus — suppress again");
-    await assertNoPushDelivery(SUB_ID);
+    const refocusedBody = "back in focus — suppress again";
+    peer.privmsg(specNick(), refocusedBody);
+    await assertNoPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: peer.nick,
+      sender: peer.nick,
+      body: refocusedBody,
+    });
   } finally {
     await peer.disconnect("#192 focus-suppression done");
   }

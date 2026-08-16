@@ -130,8 +130,19 @@ test("a one-hour snooze picked from the rail silences the channel and says how l
 
     // Negative arm — a MENTION inside the snoozed hour. The server compares the
     // integer this client wrote against its own clock and holds the push.
-    peer.privmsg(SNOOZED_CHANNEL, `${specNick()}: not for the next hour`);
-    await assertNoPushDelivery(SUB_ID, 1_500);
+    const snoozedBody = `${specNick()}: not for the next hour`;
+    peer.privmsg(SNOOZED_CHANNEL, snoozedBody);
+    await assertNoPushDelivery(
+      SUB_ID,
+      {
+        token: vjt.token,
+        networkSlug: NETWORK_SLUG,
+        window: SNOOZED_CHANNEL,
+        sender: peer.nick,
+        body: snoozedBody,
+      },
+      1_500,
+    );
 
     // Positive arm — the same shape in the unmuted sibling, so the negative arm
     // cannot be passing because push broke outright.

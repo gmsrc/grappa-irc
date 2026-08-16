@@ -66,8 +66,15 @@ test("server suppresses push while a device reports visible, delivers once hidde
     // whole fan-out; push-catcher sees nothing. setPageVisibility blocks
     // until WSPresence has acked visible=true, so the DM can't race it.
     await setPageVisibility(page, true);
-    peer.privmsg(specNick(), "you are looking at the app — no toast please");
-    await assertNoPushDelivery(SUB_ID);
+    const visibleBody = "you are looking at the app — no toast please";
+    peer.privmsg(specNick(), visibleBody);
+    await assertNoPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: peer.nick,
+      sender: peer.nick,
+      body: visibleBody,
+    });
 
     // Phase 2 — device HIDDEN (backgrounded). The server MUST now deliver.
     await resetPushCatcher();

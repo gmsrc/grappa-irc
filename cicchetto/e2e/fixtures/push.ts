@@ -36,6 +36,8 @@
 
 import { type BrowserContext, expect, type Page } from "@playwright/test";
 import { openSettingsSection } from "./cicchettoPage";
+import { assertMessagePersisted } from "./grappaApi";
+import { assertNoPushAfterStimulus } from "./pushAbsence";
 
 const PUSH_CATCHER_URL = process.env.E2E_PUSH_CATCHER_URL ?? "http://push-catcher:3000";
 
@@ -318,17 +320,88 @@ export async function awaitPushDelivery(
 }
 
 /**
- * Asserts NO deliveries have landed for `id` by the end of `windowMs`.
- * Used by dedup + prefs-whitelist specs where the absence of a push
- * is the contract (focused-window suppress; unmatched channel skip).
+ * The message whose push must NOT arrive — and the proof it reached
+ * grappa in the first place.
+ *
+ * `window` is the REST scrollback segment the row is readable under:
+ * the channel name for a channel message, the PEER's nick for a peer
+ * DM (the CP14-B3 aggregation shape — probing our own nick hits the
+ * own-nick narrowing path and misses peer-originated DMs).
+ */
+export type PushStimulus = {
+  token: string;
+  networkSlug: string;
+  window: string;
+  sender: string;
+  body: string;
+};
+
+/**
+ * Asserts NO deliveries have landed for `id` by the end of `windowMs`,
+ * AFTER proving that the message whose push is forbidden actually
+ * reached grappa. Used by the suppress/mute specs where the absence of
+ * a push is the contract (focused-window suppress; unmatched channel
+ * skip; muted conversation).
+ *
+ * The stimulus is a REQUIRED argument, not a convention: #1152 measured
+ * a peer DM that never arrived at all (a ghost-nick collision sent it to
+ * a name nobody was registered under), and on an absence assertion that
+ * is a silent pass — no message, no trigger, no push, contract
+ * "satisfied" without the suppression ever being exercised. Making the
+ * proof part of the signature is what stops the next spec author from
+ * omitting it. Rationale + the unit-tested core: `pushAbsence.ts`.
  *
  * windowMs is intentionally short (default 1.5s) — Sender's hot path
  * is fire-and-forget but the eval+POST round-trip is sub-100ms when
  * it does fire, so a 1.5s window catches everything that *would*
  * have fired without dragging the suite. Pass a higher window only
- * if a real regression demonstrates a slower path.
+ * if a real regression demonstrates a slower path. It is now clocked
+ * from the delivery proof rather than from the call, so it can no
+ * longer expire before the push it forbids could have fired.
  */
-export async function assertNoPushDelivery(id: string, windowMs = 1_500): Promise<void> {
+export async function assertNoPushDelivery(
+  id: string,
+  stimulus: PushStimulus,
+  windowMs = 1_500,
+): Promise<void> {
+  await assertNoPushAfterStimulus(
+    {
+      stimulusDelivered: () =>
+        assertMessagePersisted({
+          token: stimulus.token,
+          networkSlug: stimulus.networkSlug,
+          channel: stimulus.window,
+          sender: stimulus.sender,
+          body: stimulus.body,
+        }),
+      deliveryCount: async () => {
+        const res = await fetch(`${PUSH_CATCHER_URL}/received/${encodeURIComponent(id)}`);
+        if (!res.ok) return 0;
+        return ((await res.json()) as CatcherResponse).deliveries.length;
+      },
+    },
+    {
+      id,
+      stimulus: `<${stimulus.sender}> "${stimulus.body}" → ${stimulus.window}`,
+      windowMs,
+      pollMs: 100,
+    },
+  );
+}
+
+/**
+ * Asserts an id NOBODY ever sent to stays empty — the push-catcher
+ * partitioning check, not a suppression check.
+ *
+ * Deliberately NOT the same door as `assertNoPushDelivery`: there is no
+ * stimulus to prove here, because the whole point is that no message was
+ * ever addressed to this id. Its positive control is the real delivery
+ * the same test already awaited on the id under test — a Sender that
+ * fanned out to every known endpoint would land on both. Uniforming this
+ * onto the barriered signature would mean inventing a stimulus that does
+ * not exist, which is how an honest assertion becomes a decorative one.
+ */
+export async function assertNoPushDeliveryOnUnusedId(id: string, windowMs = 1_500): Promise<void> {
   const deadline = Date.now() + windowMs;
   while (Date.now() < deadline) {
     const res = await fetch(`${PUSH_CATCHER_URL}/received/${encodeURIComponent(id)}`);
@@ -336,7 +409,7 @@ export async function assertNoPushDelivery(id: string, windowMs = 1_500): Promis
       const body = (await res.json()) as CatcherResponse;
       if (body.deliveries.length > 0) {
         throw new Error(
-          `assertNoPushDelivery: expected zero, saw ${body.deliveries.length} for id=${id}`,
+          `assertNoPushDeliveryOnUnusedId: expected zero, saw ${body.deliveries.length} for id=${id}`,
         );
       }
     }

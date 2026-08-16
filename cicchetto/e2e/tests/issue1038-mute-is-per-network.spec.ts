@@ -200,8 +200,19 @@ test("a mute made on one network leaves the same channel on the other still push
     await setPageVisibility(page, false);
 
     // Arm 1 — a MENTION on the MUTED network. Silent.
-    peerA.privmsg(SHARED_CHANNEL, `${OWN_NICK}: you will not hear this one`);
-    await assertNoPushDelivery(SUB_ID, 1_500);
+    const mutedBody = `${OWN_NICK}: you will not hear this one`;
+    peerA.privmsg(SHARED_CHANNEL, mutedBody);
+    await assertNoPushDelivery(
+      SUB_ID,
+      {
+        token: user.token,
+        networkSlug: MUTE1038_NETWORK_A,
+        window: SHARED_CHANNEL,
+        sender: peerA.nick,
+        body: mutedBody,
+      },
+      1_500,
+    );
 
     // Arm 2 — the identical mention, same channel NAME, other network. This is
     // the assertion the pre-#1038 key fails: with a network-blind mute the
