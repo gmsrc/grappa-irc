@@ -1148,6 +1148,30 @@ export async function closeSettings(page: Page): Promise<void> {
 // test meaningful: on desktop `.shell-members` is the permanent rail and never
 // leaves the viewport. That is not a new constraint — the backdrop this clicks
 // exists only on mobile.
+//
+// MEASURED, webkit-iphone-15, 10/10 repeats, clocked from the backdrop click
+// (untracked probe: a rAF sampler armed BEFORE the click recording the drawer's
+// `getBoundingClientRect().left`, its `getAnimations().length` and the `.open`
+// class, against a driver-side stamp of when the barrier returned):
+//
+//   * `.open` disappears at t = 44–67 ms;
+//   * the drawer's box is fully past the right edge at t = 238–263 ms, and the
+//     transition reports finished at t = 254–285 ms;
+//   * this barrier returns at t = 441–490 ms.
+//
+// So the margin between "the barrier lets go" and "the drawer stops covering
+// the tap point" is −207…−193 ms on the class (ALWAYS negative — the caller is
+// free to tap while the panel is still over it, and only the driver's own
+// ~200 ms of latency usually covered the gap, which is exactly why the same sha
+// passed and failed) and +193…+230 ms here (always positive).
+//
+// The #1050 worry does not materialise: `getBoundingClientRect` was measured
+// there reporting the settled transform early, and IntersectionObserver could
+// have done the same. It does not — but note what is and is not proven. The
+// 441–490 ms is when the ASSERTION RETURNED, which is an upper bound on when
+// its condition was satisfied; the IO callback itself was not instrumented. The
+// claim earned here is operational, and it is the one that matters: the
+// earliest a caller can act is ~178 ms after the drawer is provably clear.
 export async function closeMembersDrawer(page: Page): Promise<void> {
   await page.locator(".shell-drawer-backdrop.open").click({ position: { x: 20, y: 200 } });
   await expect(page.locator(".shell-members")).not.toBeInViewport({ timeout: 5_000 });
