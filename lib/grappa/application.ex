@@ -107,6 +107,24 @@ defmodule Grappa.Application do
     # manager computes it once the Repo is up (it needs the DB prefix).
     :ok = Grappa.Net.SourceAlias.Config.boot()
 
+    # #1404 — derive the source-mapping MAC key from the deployment's
+    # `secret_key_base` into `:persistent_term`, so mode-2's outbound
+    # address is a keyed function of the client prefix rather than a
+    # constant-tagged hash anyone can recompute. Same boot-time
+    # `Application.get_env` boundary as the seams above; reads the endpoint
+    # config because that is where `config/runtime.exs` already puts the
+    # secret, rather than introducing a second place it lives.
+    #
+    # Ordering: before `SourceAliasManager` (which reconciles the alias set
+    # against derived addresses) and before any session can egress, both of
+    # which start with the supervision tree below. `SourceMapping.derive/2`
+    # raises without this, deliberately — there is no safe default for a key.
+    :ok =
+      :grappa
+      |> Application.get_env(GrappaWeb.Endpoint, [])
+      |> Keyword.fetch!(:secret_key_base)
+      |> Grappa.Vhosts.boot()
+
     # Outbound v6 source-address pool. Initialize an EMPTY pool at boot;
     # `Grappa.Bootstrap` installs the DB-curated `in_pool` vhosts via
     # `apply_pool/1` before spawning any session (#228 — DB-driven, no

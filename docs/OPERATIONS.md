@@ -1844,6 +1844,31 @@ source per untrusted client `/64`, inside the configured derivation
 `/80` (`addressing.static_mapping_prefix`), and binds it for the
 session lifetime.
 
+> ⚠️ **The derivation is keyed to YOUR deployment, and the key is
+> `SECRET_KEY_BASE` (#1404).** The derived address is what the IRC
+> network publishes as the user's host, so it must not be a value a
+> stranger can recompute from a guessed client address. It is now
+> `HMAC-SHA256` under a subkey derived from `SECRET_KEY_BASE` at boot;
+> two deployments derive different addresses for the same subscriber.
+> No new secret to manage — but two consequences you need before you
+> hit them:
+>
+> * **Upgrading to the release carrying #1404 renumbers a mode-2
+>   deployment ONCE.** Every subject moves to one new stable address at
+>   its next connect. Nothing is lost: derived addresses are computed on
+>   demand and never stored, so this is the same event as renumbering
+>   the prefix, which this mode already supports —
+>   `Grappa.Net.SourceAliasManager` reconciles the alias set at boot.
+>   Expect a burst of alias churn on the first start, and expect users
+>   to see a new host. If your ircd, your channel bans or your oper
+>   tooling reference the old hosts, they need updating in the same
+>   window.
+> * **Rotating `SECRET_KEY_BASE` renumbers a mode-2 deployment again**,
+>   for the same reason. On the default `pool_with_reservations` mode
+>   neither of these applies: nothing is derived.
+>
+> Deployments on the default mode can ignore this note entirely.
+
 > **Addresses in this section, and why they are not interchangeable.**
 > Anything shown as a **template you would adapt** uses the RFC 3849
 > documentation prefix `2001:db8::/32` — never routable, so a

@@ -90,6 +90,19 @@ defmodule Grappa.Vhosts do
 
   require Logger
 
+  @doc """
+  #1404 — seed the deployment's source-mapping MAC key from
+  `secret_key_base`. Called once from `Grappa.Application.start/2`.
+
+  Lives on the context rather than being reached through to
+  `SourceMapping` directly: that module is internal to this boundary and
+  is not exported, and the boot seam is public API like every other verb
+  here. See `SourceMapping`'s moduledoc for why the derivation is keyed
+  and why the key has no default.
+  """
+  @spec boot(String.t()) :: :ok
+  defdelegate boot(secret_key_base), to: SourceMapping
+
   # ---------------------------------------------------------------------------
   # Inventory CRUD
   # ---------------------------------------------------------------------------
