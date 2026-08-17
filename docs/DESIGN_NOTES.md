@@ -46271,3 +46271,97 @@ store and no suite needs to know it exists.
 
 _Shipping note: bundle-only, and nothing about the server or the wire moves —
 the emitted const is read, never rewritten._
+<!-- entry #1406 X-S1 -->
+
+---
+
+## 2026-08-17 — #1406 X-S1: the pins were each correct; nothing said they were all of them
+
+X-S1 reads "16 of the 37 generated union arms are transcribed by hand with no
+drift pin". That describes a tree that no longer exists: the earlier #1406
+slice already replaced the per-arm pins for the whole `WireSessionEvent`
+population with a walk. What survived it is not a missing pin. It is a missing
+census.
+
+Counted at `0a5c32b0` over the two hand-rolled unions in `api.ts`:
+`WireUserEvent` declares 42 arms and `WireChannelEvent` 11, four of them
+dual-declared, so 49 distinct kinds. The Session walk reaches 37. Eleven of
+the remaining twelve carried a hand-written `_Assert_*`. One did not —
+`web_session_severed`, declared since #630, widened since #1338 X-S14, never
+pinned. It was found by subtracting sets, and that is the finding: each of the
+eleven asserts was correct, and not one of them had anything to say about the
+twelfth. A list nobody is forced to finish is the same defect whether it holds
+16 gaps or one.
+
+So the slice adds the assert whose subject is the other asserts.
+`_Assert_NoUnpinnedHandArm` compares the kinds cic declares against the kinds
+something in `wireTypesAssert.ts` reaches, and fails naming the arm. On this
+tree it named `web_session_severed` and nothing else.
+
+### Why the leftover arms are a MAP, and not one more generated union
+
+The obvious move — point cic's user union at a generated one — is
+arithmetically wrong, and the reason generalises. Codegen groups emitted types
+by Elixir MODULE; cic dispatches by TOPIC; and no module declares which topic
+it emits on, so no generated union expresses the cross-module fan-in that the
+user topic is. The twelve leftovers come from eight-plus `Grappa.*.Wire`
+modules for exactly that reason. Until the codegen gains a topic axis, the
+counterpart of a cross-module arm cannot be derived and must be named.
+
+Naming it as DATA rather than as an assert is what makes the census possible
+at all: `walked ∪ registered` is only a set if "registered" is a type-level
+set, and an exported `_Assert_*` alias is not one. That is the whole reason
+the eleven asserts became eleven registry entries instead of staying put.
+
+Resolution is `Extract<WireSessionEvent | CrossModuleArm[PinnedArm], {kind:K}>`
+— one distributive conditional over both sources — because the walks index
+into the result and tsc refuses to index a nested `K extends …`. The registry
+stores the TYPE and not merely the kind for a concrete reason: two generated
+types carry `kind: "web_session_severed"`, the admin-topic one with five
+fields and the user-topic one with one, so a union assembled by kind picks
+between them arbitrarily.
+
+A registry needs its own gate, so the two ways it rots are separate asserts.
+`_Assert_NoStrayPin` rejects a key cic no longer declares, and a key the
+Session walk already covers — that second case would resolve to two
+candidates and make every comparison fail obscurely rather than name the
+overlap. `_Assert_NoUnresolvedPin` rejects an entry whose generated type no
+longer carries the kind it is filed under, which is where a server-side
+discriminator rename lands; it subsumes `_Assert_BundleHashKind`, whose only
+content was that same rename check.
+
+### Two things the shape forced, rather than the design choosing them
+
+`bundle_hash` is not a widening but a CONVERSION: cic's `version: string |
+null` against the wire's `version?: string`, and `undefined` is not a member
+of `string | null`. Filing it as a widened field would make it overrun its own
+exemption, correctly. It is declared discriminator-only instead, and the
+distinction is worth keeping — a widening is a superset the client tolerates,
+a conversion is a shape the client rewrites.
+
+The widening registry was scoped `keyof DeliberatelyWidened &
+WireSessionEvent["kind"]`, so the ONE arm whose widening had been argued in
+prose was the one arm that could not be declared in types. Widening the scope
+to the walked population is what lets `web_session_severed.code` be both
+exempted and BOUNDED: every other field of the arm is still compared exactly,
+and the generated literal must still be a subset of what cic accepts.
+
+### What was measured
+
+The completeness assert was watched fail before it was allowed to pass: one
+`error TS2344` naming `web_session_severed`, on a tree whose baseline was
+clean. Five mutants, five killed — registry entry removed (the census assert),
+a key shadowing a Session arm (stray), the exemption pointing at the wrong
+field (widening overrun), a cic field retyped (drift, which is the proof the
+walk really replaced the eleven deleted pins), and the exemption removed
+entirely (drift again, the proof the widened arm is compared rather than
+skipped).
+
+### What it does not do
+
+It does not remove the hand-maintained line. A new cross-module arm still
+needs a registry entry; the change is that forgetting one is now a `tsc`
+error naming the arm instead of silence. Deriving the entry needs the topic
+axis in the codegen, which stays open. Nor does it touch a narrower: no
+runtime behaviour moves, and the 1.150-odd lines of hand narrowing that the
+rest of #1406 is about are untouched here.
