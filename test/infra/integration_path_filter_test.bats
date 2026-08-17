@@ -185,20 +185,24 @@ assert_listed() {
     # Limit, stated rather than papered over: a trace observes the branch
     # this host takes. A producer that reads a different file per platform
     # would need every platform traced, and this sees one.
+    # The invocation as a human reads it, with no space dangling when the
+    # orchestration passes no argument — an empty one would misreport WHAT ran.
+    local shown="$producer${args:+ $args}"
+
     local trace rc=0
     # shellcheck disable=SC2086  # $args is the argument LIST — splitting is the point
     trace="$(cd "$REPO_ROOT" && sh -x "$REPO_ROOT/$producer" $args 2>&1 >/dev/null)" || rc=$?
     [ "$rc" -eq 0 ] || {
-        printf 'the e2e invocation `%s %s` failed (rc=%s) — cannot derive its reads:\n%s\n' \
-            "$producer" "$args" "$rc" "$trace" >&2
+        printf 'the e2e invocation `%s` failed (rc=%s) — cannot derive its reads:\n%s\n' \
+            "$shown" "$rc" "$trace" >&2
         return 1
     }
 
     local sources
     sources="$(printf '%s\n' "$trace" | files_named_in_trace)"
     [ -n "$sources" ] || {
-        printf 'tracing `%s %s` named no file under %s — the derivation is broken:\n%s\n' \
-            "$producer" "$args" "$REPO_ROOT" "$trace" >&2
+        printf 'tracing `%s` named no file under %s — the derivation is broken:\n%s\n' \
+            "$shown" "$REPO_ROOT" "$trace" >&2
         return 1
     }
 
@@ -206,6 +210,6 @@ assert_listed() {
     while IFS= read -r source_file; do
         [ -n "$source_file" ] || continue
         assert_listed "$paths" "$source_file" \
-            "the e2e stack's own \`$producer $args\` run reads it to produce GRAPPA_VERSION"
+            "the e2e stack's own \`$shown\` run reads it to produce GRAPPA_VERSION"
     done <<<"$sources"
 }
