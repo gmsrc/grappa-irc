@@ -47788,3 +47788,59 @@ that hand-build a state-shaped map.
 Unlike slices 1–4, this one touches no production file, so it does not move the
 `@type t` of a module in `HotReload.LongLivedModules`. It is the first #1390
 slice that is **not** a COLD deploy.
+<!-- entry #1400-themes -->
+
+---
+
+## 2026-08-18 — #1400: the themes envelopes, and where the codegen's `user_type` hole actually is
+
+Five more REST doors stop casting. `Grappa.Themes.Wire` published `t/0` alone, so
+the three listings (`GET /themes`, `GET /me/themes`, `GET /themes/unpublished`)
+and the day/night pair (`GET`/`PUT /me/theme`) were the residual hand-written
+envelopes in `themesApi.ts`. Naming `index_payload/0` and `active_pair/0` at the
+wire boundary — each with the producing function the controllers now call, the
+shape every other `index_payload` in the tree already has — turns them into
+generated shapes under the `--check` drift gate instead of a client-side mirror.
+
+### The predicted risk was real in kind and false in place
+
+The moduledoc records that `Grappa.Themes.BuiltinBackgrounds.t/0` cannot be
+emitted because it carries a same-module `user_type` the generator cannot
+resolve, and `active_pair/0` carries `t() | nil` in both slots — the same
+construct. It emits fine, and the reason is worth writing down because the
+comment reads as a general limit and is not one: `unresolvable_user_type!/1`
+fires only on the EXTERNAL-type path, which renders one alias at a time with no
+sibling registry. A type declared INSIDE a `*wire.ex` module is rendered by
+`render_typedef/2`, which publishes the module in the process dictionary first,
+so the reference resolves. `NetworksWireConnectionInfo | null` was already on the
+tree as the precedent. The rule: the hole is a property of WHERE the type lives,
+not of what it references. Moving `BuiltinBackgrounds.t/0` into a `*wire.ex`
+home would close it — which is what the moduledoc's "fix the SOURCE" already
+says, and what keeps `GET /themes/backgrounds` cast for now.
+
+### Two doors stay cast, for two different reasons
+
+`GET /themes/backgrounds` is blocked on the emitter, above. `POST
+/themes/background` is not blocked on anything except a producer: its response
+is built inline as `%{image_id: slug}` in the controller, so declaring a type
+for it without moving the construction into `Wire` would add exactly the
+un-produced twin this issue exists to remove.
+
+### A tolerance kept, and named as one
+
+`getActiveThemePair` coerced a bare `null` body to the empty pair. That body is
+not reachable from this server — `MeThemeController.show` answers `pair_wire/2`,
+which always emits both keys — so the tolerance only ever served a test stub. It
+is carried forward anyway, as `narrowActiveThemePairOrEmpty`, a wrapper named as
+policy per the house pattern rather than an `if` inside the shared narrower:
+retiring it is a behaviour change, not a cast removal. Stated plainly so nobody
+over-reads the conversion: that door is fail-loud for every shape EXCEPT `null`.
+
+### The swallow-on-failure door, identified and left alone
+
+`serverSettings.ts`'s `loadServerSettings` is the last `serverSettings` cast and
+wraps its fetch in `try {} catch {}` behind an `if (!res.ok) return`. A
+`WireShapeError` thrown there lands in that catch: it would satisfy the LETTER
+of fail-loud while producing ZERO observable noise. Converting it is therefore a
+decision about that door's ERROR POSTURE, not part of a cast sweep, and it is
+left for vjt to rule.
