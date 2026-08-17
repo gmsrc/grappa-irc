@@ -1917,7 +1917,7 @@ defmodule Grappa.Session.Server do
   #      isn't connected yet (pre-001, parked, or mid-reconnect). Reject
   #      with `{:error, :not_connected}` BEFORE touching the DB or arming a
   #      timer; there's nothing to send `LIST` to.
-  #   2. `directory_refresh: nil` (client present) — the happy path. Put
+  #   2. `run: nil` (client present) — the happy path. Put
   #      `LIST` on the wire FIRST (so a transport error short-circuits with
   #      no DB churn), then nuke the prior snapshot, arm the watchdog, and
   #      record the in-flight tracker. The streamed 321/322/323 capture is
@@ -3217,9 +3217,9 @@ defmodule Grappa.Session.Server do
 
   # Channel directory (#84) refresh watchdog (merged C4). Armed by
   # `handle_call(:refresh_directory, ...)`; fires if 323 RPL_LISTEND never
-  # arrives within `directory_refresh_timeout_ms`. Two clauses:
+  # arrives within the ingest's `timeout_ms`. Two clauses:
   #
-  #   * `directory_refresh: nil` — the refresh already finalised (323
+  #   * `run: nil` — the refresh already finalised (323
   #     cleared the tracker in C3) and `cancel_and_drain/2` either didn't
   #     run or this is a stale duplicate. No-op; never crash on a benign
   #     late timer. Mirrors the `:ghost_timeout` fallback above.
@@ -3440,11 +3440,11 @@ defmodule Grappa.Session.Server do
   # refresh is in-flight. 321 RPL_LISTSTART (header, ignored), 322 RPL_LIST
   # (one channel row → batched ingest + throttled progress ping), 323
   # RPL_LISTEND (finalise the snapshot, cancel the watchdog, emit
-  # `directory_complete`). The `%{directory_refresh: %{}}` head is
-  # load-bearing: it matches ONLY when a refresh is in flight (the tracker
-  # is a map). A `nil` tracker fails the map pattern, so the numerics fall
+  # `directory_complete`). The `%DirectoryIngest{run: %Run{}}` head is
+  # load-bearing: it matches ONLY when a refresh is in flight. A `nil` run
+  # fails the struct pattern, so the numerics fall
   # through to the generic handler below — same shape-match discrimination
-  # the C4 watchdog uses (`%{directory_refresh: nil}` vs catch-all),
+  # the C4 watchdog uses (`run: nil` vs catch-all),
   # sidestepping a `not is_nil/1` guard. While in-flight the dedicated
   # handler CONSUMES them — they are NOT persisted (the snapshot is the
   # durable record, the pings are the live signal).

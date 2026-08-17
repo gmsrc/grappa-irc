@@ -296,7 +296,7 @@ defmodule Grappa.Session.NumericRouter do
   #     an assertion on its true wire shape.
   #
   # Reachable because these are normally consumed by `Session.Server`'s
-  # `%{directory_refresh: %{}}` clause, whose tracker the `#84` watchdog
+  # `%DirectoryIngest{run: %Run{}}` clause, whose run the `#84` watchdog
   # NILS on `:directory_refresh_timeout` — every late frame then falls
   # through to the generic numeric path. `/quote LIST` never arms the
   # tracker at all.
