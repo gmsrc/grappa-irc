@@ -377,6 +377,12 @@ config :logger, :console,
     # #523/#518 — BusyRetry tags the transient fault kind (:queue_timeout |
     # :busy_locked) on the warning it logs as a saturating write degrades to 503.
     :fault,
+    # #1394 — which outbound path dropped a line at the `send_outbound/3`
+    # door (`:ghost_recovery | :event_router_reply`). One warning serves both
+    # callers so the message stays a single greppable string; without this
+    # key the operator cannot tell a NickServ IDENTIFY that never went out
+    # from a lost CTCP reply, which are not the same incident.
+    :origin,
     :pid,
     :unexpected,
     # Bootstrap summary: how many credentials we enumerated and how
