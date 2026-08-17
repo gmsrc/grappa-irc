@@ -156,22 +156,9 @@ defmodule Grappa.Scrollback.MetaTest do
     end
   end
 
-  describe "known_keys/0 ↔ Logger metadata allowlist (architecture review A18)" do
-    test "every Meta @known_keys atom is present in the Logger :metadata allowlist" do
-      missing = Meta.known_keys() -- logger_metadata_keys()
-
-      assert missing == [],
-             "Meta.@known_keys not in Logger metadata allowlist: " <>
-               "#{inspect(missing)} — extend config/config.exs :metadata list"
-    end
-
-    defp logger_metadata_keys do
-      # Elixir 1.15+ uses :default_formatter; fall back to legacy :console.
-      modern = Application.get_env(:logger, :default_formatter, [])[:metadata] || []
-
-      if modern == [],
-        do: Application.get_env(:logger, :console, [])[:metadata] || [],
-        else: modern
-    end
-  end
+  # The `known_keys/0 ↔ Logger metadata allowlist` pin moved to
+  # `Grappa.LoggerMetadataAllowlistTest` (#1403), which now owns BOTH
+  # directions. It left here because 85 of the 108 allowlisted atoms have
+  # nothing to do with scrollback meta, and because keeping the forward gate
+  # in this file is how the missing reverse one went unnoticed.
 end
