@@ -16,6 +16,17 @@
 # would be a second copy of the filter, drifting the same way the filter
 # drifts from itself.
 #
+# The rule the version check enforces, stated once: A FILE BELONGS IN THE
+# FILTER WHEN THE E2E STACK READS IT. Read is meant literally and is measured
+# literally — the invocation `scripts/integration.sh` makes is re-run under a
+# shell trace and the files it names are the requirement. That phrasing is
+# load-bearing since #1447 gave the producer a second component: a file the
+# producer can read for SOME argument is not a suite input, only the files it
+# reads for the argument the suite passes are. The rule is never softened into
+# an exclusion list — an exception named after a file is the drift this suite
+# was written to catch, so the ONLY way a path leaves the requirement is by
+# ceasing to be read.
+#
 # NOT derived from `Grappa.Deploy.Preflight.docker_image?/1`, though it
 # reads like the same list: preflight answers "does the deployed container
 # need a COLD restart", this filter answers "can this change break the e2e
@@ -47,6 +58,25 @@ paths_for() {
         }
         inpaths { inpaths = 0 }
     ' "$WORKFLOW"
+}
+
+# The repo-rooted regular files named anywhere in a `sh -x` trace, read from
+# stdin. Deliberately an OVER-approximation of "reads": a path the run merely
+# names, but never opens, still earns a filter entry. The failure this gate
+# exists to prevent is a MISSING entry, so erring towards more is the safe
+# direction — an over-wide filter runs a suite that did not need to run, an
+# under-wide one lets a breaking change through without running it at all.
+files_named_in_trace() {
+    local token
+    tr ' ' '\n' | while IFS= read -r token; do
+        token="${token%\'}"
+        token="${token#\'}"
+        case "$token" in
+        "$REPO_ROOT"/*)
+            if [ -f "$token" ]; then printf '%s\n' "${token#"$REPO_ROOT"/}"; fi
+            ;;
+        esac
+    done | sort -u
 }
 
 # Fail unless `$2` is an exact entry of the filter list in `$1`.
@@ -120,30 +150,55 @@ assert_listed() {
         return 1
     }
 
-    local producer
-    producer="$(grep -oE '\$SRC_ROOT/[A-Za-z0-9._/-]+/version\.sh' \
-                    "$REPO_ROOT/scripts/integration.sh" \
-                | sed -E 's|^\$SRC_ROOT/||' | sort -u)"
-    [ "$(printf '%s\n' "$producer" | grep -c .)" -eq 1 ] || {
-        printf 'expected exactly one version producer in scripts/integration.sh, got:\n%s\n' \
-            "$producer" >&2
+    # The producer AND the arguments the orchestration hands it, captured as
+    # ONE invocation: since #1447 the producer answers a different component
+    # per argument, so its path alone no longer says which files get read.
+    local invocation
+    invocation="$(grep -oE '"\$SRC_ROOT/[A-Za-z0-9._/-]+/version\.sh"[^)]*' \
+                      "$REPO_ROOT/scripts/integration.sh" | sort -u)"
+    [ "$(printf '%s\n' "$invocation" | grep -c .)" -eq 1 ] || {
+        printf 'expected exactly one version invocation in scripts/integration.sh, got:\n%s\n' \
+            "$invocation" >&2
         return 1
     }
+
+    local producer args
+    producer="$(printf '%s' "$invocation" | sed -E 's|^"\$SRC_ROOT/||; s|".*$||')"
+    args="$(printf '%s' "$invocation" | sed -E 's|^"[^"]*"||; s|^ +||' | tr -d '"')"
 
     local paths
     paths="$(paths_for push)"
     assert_listed "$paths" "$producer" \
         "scripts/integration.sh runs it to export GRAPPA_VERSION"
 
-    # ...and whatever THAT script reads, which is the version's single source
-    # of truth. Derived, not transcribed: if the producer ever grows a second
-    # input, the second input is required here too.
+    # ...and whatever THAT INVOCATION reads. The rule is a property, never a
+    # list and never an exclusion: a file belongs in the filter when the e2e
+    # stack's own run of the producer touches it — the same reason `VERSION`
+    # is in there. So the read set is OBSERVED rather than parsed out of the
+    # producer's source: the very invocation above is re-run under a shell
+    # trace, with the same argument, and the repo-rooted files it names are
+    # required. A producer that grows a second input for THIS component grows
+    # the requirement with it; one that reads a file only for some OTHER
+    # component the e2e stack never asks for was never a suite input, and
+    # naming it here would assert a dependency that does not exist.
+    #
+    # Limit, stated rather than papered over: a trace observes the branch
+    # this host takes. A producer that reads a different file per platform
+    # would need every platform traced, and this sees one.
+    local trace rc=0
+    # shellcheck disable=SC2086  # $args is the argument LIST — splitting is the point
+    trace="$(cd "$REPO_ROOT" && sh -x "$REPO_ROOT/$producer" $args 2>&1 >/dev/null)" || rc=$?
+    [ "$rc" -eq 0 ] || {
+        printf 'the e2e invocation `%s %s` failed (rc=%s) — cannot derive its reads:\n%s\n' \
+            "$producer" "$args" "$rc" "$trace" >&2
+        return 1
+    }
+
     local sources
-    sources="$(grep -oE '\$\{REPO_ROOT\}/[A-Za-z0-9._/-]+' "$REPO_ROOT/$producer" \
-               | sed -E 's|^\$\{REPO_ROOT\}/||' | sort -u)"
+    sources="$(printf '%s\n' "$trace" | files_named_in_trace)"
     [ -n "$sources" ] || {
-        printf '%s reads no ${REPO_ROOT}-rooted file — the derivation is broken\n' \
-            "$producer" >&2
+        printf 'tracing `%s %s` named no file under %s — the derivation is broken:\n%s\n' \
+            "$producer" "$args" "$REPO_ROOT" "$trace" >&2
         return 1
     }
 
@@ -151,6 +206,6 @@ assert_listed() {
     while IFS= read -r source_file; do
         [ -n "$source_file" ] || continue
         assert_listed "$paths" "$source_file" \
-            "$producer reads it to produce GRAPPA_VERSION"
+            "the e2e stack's own \`$producer $args\` run reads it to produce GRAPPA_VERSION"
     done <<<"$sources"
 }
