@@ -1241,3 +1241,179 @@ describe("converted REST doors fail loud on a shape mismatch (#1400)", () => {
     await expect(api.adminCreateVhost("t", { address: "1.2.3.4" })).resolves.toEqual(vhost);
   });
 });
+
+// ── #1400 slice 1 — the doors whose schema was ALREADY generated ───
+//
+// Nine casts sat on shapes the codegen had already emitted, envelope
+// included: five `*IndexPayload` types byte-identical to the `{ key: T[] }`
+// written by hand in `api.ts`, the archive index, and three bare arrays of an
+// aliased element. Nothing had to be emitted for these — only wired.
+//
+// Each door gets exactly one absence test, removing ONE named required field
+// from an otherwise complete row, so a green cannot come from a fixture that
+// was malformed in several ways at once. The two additive cases at the end
+// hold the other half of the contract (#447): an undeclared key is dropped,
+// never fatal.
+
+const VISITOR_ROW = {
+  id: "3f1b9c1e-0000-4000-8000-000000000001",
+  expires_at: "2026-08-18T10:00:00Z",
+  identified: true,
+  ip: "203.0.113.7",
+  session_ip: "203.0.113.7",
+  inserted_at: "2026-08-17T09:00:00Z",
+  last_seen_at: "2026-08-17T11:30:00Z",
+  networks: [
+    {
+      network_slug: "azzurra",
+      network_id: 1,
+      nick: "ospite",
+      connection_state: "connected",
+      live_state: null,
+    },
+  ],
+};
+
+const SESSION_ROW = {
+  subject_kind: "user",
+  subject_id: "3f1b9c1e-0000-4000-8000-000000000002",
+  subject_label: "vjt",
+  last_seen_at: "2026-08-17T11:30:00Z",
+  network_id: 1,
+  live_state: {
+    nick: "vjt",
+    alive: true,
+    pid_inspect: "#PID<0.812.0>",
+    mailbox_len: 0,
+    memory_bytes: 148_312,
+    joined_channels: ["#italia"],
+    peer_address: "203.0.113.9",
+    peer_port: 6697,
+    peer_name: null,
+    introspection_degraded: [],
+  },
+};
+
+const CHANNEL_ROW = { name: "#italia", joined: true, source: "autojoin" };
+
+const MESSAGE_ROW = {
+  id: 4321,
+  network: "azzurra",
+  channel: "#italia",
+  server_time: 1_700_000_000,
+  kind: "privmsg",
+  sender: "vjt",
+  body: "ciao",
+  meta: {},
+};
+
+const ARCHIVE_ROW = {
+  target: "#italia",
+  kind: "channel",
+  last_activity: 1_700_000_000,
+  row_count: 942,
+};
+
+const USER_ROW = {
+  id: "3f1b9c1e-0000-4000-8000-000000000003",
+  name: "vjt",
+  is_admin: true,
+  inserted_at: "2026-08-01T09:00:00Z",
+  updated_at: "2026-08-17T09:00:00Z",
+  live_session_count: 2,
+};
+
+const SERVER_ROW = {
+  id: 7,
+  network_id: 1,
+  host: "irc.azzurra.org",
+  port: 6697,
+  tls: true,
+  priority: 0,
+  enabled: true,
+  source_address: null,
+  inserted_at: "2026-08-01T09:00:00Z",
+  updated_at: "2026-08-17T09:00:00Z",
+};
+
+const FEATURED_ROW = {
+  id: 11,
+  network_id: 1,
+  name: "#italia",
+  description: "il canale",
+  position: 0,
+  enabled: true,
+  inserted_at: "2026-08-01T09:00:00Z",
+  updated_at: "2026-08-17T09:00:00Z",
+};
+
+// One removal per case. `delete` on a copy rather than a rest-destructure so
+// the dropped key is named at the call site and reads as the mutation it is.
+function without(row: Record<string, unknown>, key: string): Record<string, unknown> {
+  const copy = { ...row };
+  delete copy[key];
+  return copy;
+}
+
+describe("#1400 slice 1 — the nine class-A doors reject an incomplete row", () => {
+  it("adminListVisitors rejects a visitor missing `identified`", async () => {
+    stubFetch(200, { visitors: [without(VISITOR_ROW, "identified")] });
+    await expect(api.adminListVisitors("t")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("adminListSessions rejects a session missing `subject_id`", async () => {
+    stubFetch(200, { sessions: [without(SESSION_ROW, "subject_id")] });
+    await expect(api.adminListSessions("t")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("listChannels rejects a channel missing `joined`", async () => {
+    stubFetch(200, [without(CHANNEL_ROW, "joined")]);
+    await expect(api.listChannels("t", "azzurra")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("listMessages rejects a row missing `server_time`", async () => {
+    stubFetch(200, [without(MESSAGE_ROW, "server_time")]);
+    await expect(api.listMessages("t", "azzurra", "#italia")).rejects.toBeInstanceOf(
+      WireShapeError,
+    );
+  });
+
+  it("listMessagesAfter rejects a row missing `kind`", async () => {
+    stubFetch(200, [without(MESSAGE_ROW, "kind")]);
+    await expect(api.listMessagesAfter("t", "azzurra", "#italia", 1)).rejects.toBeInstanceOf(
+      WireShapeError,
+    );
+  });
+
+  it("listArchive rejects an entry missing `row_count`", async () => {
+    stubFetch(200, { archive: [without(ARCHIVE_ROW, "row_count")] });
+    await expect(api.listArchive("t", "azzurra")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("adminListUsers rejects a user missing `is_admin`", async () => {
+    stubFetch(200, { users: [without(USER_ROW, "is_admin")] });
+    await expect(api.adminListUsers("t")).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("adminListServers rejects a server missing `tls`", async () => {
+    stubFetch(200, { servers: [without(SERVER_ROW, "tls")] });
+    await expect(api.adminListServers("t", 1)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  it("adminListFeaturedChannels rejects a channel missing `position`", async () => {
+    stubFetch(200, { featured_channels: [without(FEATURED_ROW, "position")] });
+    await expect(api.adminListFeaturedChannels("t", 1)).rejects.toBeInstanceOf(WireShapeError);
+  });
+});
+
+describe("#1400 slice 1 — an undeclared key is dropped, never fatal (#447)", () => {
+  it("tolerates a key the ENVELOPE schema does not declare", async () => {
+    stubFetch(200, { users: [USER_ROW], total: 1 });
+    await expect(api.adminListUsers("t")).resolves.toEqual([USER_ROW]);
+  });
+
+  it("tolerates a key the ELEMENT schema does not declare, and drops it", async () => {
+    stubFetch(200, [{ ...CHANNEL_ROW, topic: "benvenuti" }]);
+    await expect(api.listChannels("t", "azzurra")).resolves.toEqual([CHANNEL_ROW]);
+  });
+});

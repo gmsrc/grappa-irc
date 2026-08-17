@@ -47516,3 +47516,96 @@ _Not established: how many of the remaining 105 atoms are actually logged. The
 scan proves absence, never disuse, so the count of dead entries is a floor and
 not a measurement. The 39-arm `do_handle_in` door and the per-verb table that
 #1403's HIGH proposes are untouched by this work._
+<!-- entry #1400 slice 1 -->
+
+---
+
+## 2026-08-17 — #1400 slice 1: the envelope was not missing, it was already emitted
+
+#1400 records 83 `(await res.json()) as X` casts at the REST edge. Recounted
+from the blobs at `origin/main` `236dd328` they are **59**: the first tranche
+converted 24 doors (`341d6b0c`), and the difference is exactly those. Nothing
+new has been cast since.
+
+The body names the blocker: "the REST envelope types are hand-written mirrors
+in `api.ts` … that makes the first step **emitting the missing envelope
+schemas**, not rewiring call sites." That is true of most of the remaining 59
+and **false of nine of them**, and the nine are what this slice converts.
+
+Five of the hand-written envelopes have a generated twin that is byte-identical
+to them:
+
+| `api.ts` | generated | runtime schema |
+|---|---|---|
+| `AdminUsersResponse = { users: AdminUser[] }` | `AccountsAdminWireIndexPayload` | `S_AccountsAdminWireIndexPayload` |
+| `AdminVisitorsResponse` | `VisitorsAdminWireIndexPayload` | present |
+| `AdminSessionsResponse` | `LiveIntrospectionAdminWireIndexPayload` | present |
+| `AdminServersResponse` | `NetworksServersAdminWireIndexPayload` | present |
+| `AdminFeaturedChannelsResponse` | `NetworksFeaturedChannelsAdminWireIndexPayload` | present |
+
+plus the archive door, whose cast was an INLINE literal
+(`as { archive: ArchiveEntry[] }`) equal to the emitted
+`ScrollbackWireArchiveWireIndex`, and three bare-array doors whose element is a
+plain alias of a generated type. So `api.ts` was carrying a second copy of a
+shape that already existed, with the runtime schema already sitting beside it.
+The nine are wiring, not emission.
+
+The hand-written twins are DELETED rather than pinned against their generated
+counterpart. A pin would be a third artefact to keep true; an absent type
+cannot drift at all, which is the #410 posture applied to an envelope.
+
+### How the triage found them, and why the count is a ceiling
+
+The archive door was found by accident — it is an inline literal, so no type
+NAME connects it to `ScrollbackWireArchiveWireIndex`, and a search over the
+declared envelope types could not see it. Which means the same could be true of
+the shapes this slice leaves behind: the remaining classification rests on a
+by-NAME probe over the 183 emitted `S_*` consts, not a shape comparison. **The
+"needs a server-side `@type` first" population is an upper bound, not a
+measurement.** Anyone taking the next tranche should compare shapes.
+
+### Two shapes deliberately left in the cast
+
+`AdminNetwork` and `AdminCredential` INTERSECT extra fields onto their
+generated type — `circuit_state` and `live_counts` on one, `session_action` and
+`session_error` on the other. Those are not cic enrichments: the comment beside
+`session_error` says the server "has always sent it; nothing declared it here".
+
+That matters because `validate` implements the additive-only rule (#447) as a
+DROP, not a passthrough — `walkObject` builds a fresh object from the declared
+fields and ignores every other key. So converting those four doors would not
+fail; it would silently strip four fields the admin panes render, and pass
+`tsc` doing it. They need the server-side declaration first, and until then the
+cast is the more honest of the two wrongs.
+
+### What was measured
+
+**The red first, and read rather than asserted.** Ten of the eleven new cases
+failed before the conversion, each one naming the defect: nine
+`promise resolved "[ { …(N) } ]" instead of rejecting` — the cast handing back
+a row one required field short — and one
+`expected [ { name: '#italia', …(3) } ] to deeply equal [ … (2) ]`, the cast
+carrying an undeclared key through instead of dropping it. Each case removes
+exactly ONE named field from an otherwise complete row, so a green cannot come
+from a fixture that was broken several ways at once.
+
+**The eleventh case was green before and after, deliberately.** An undeclared
+key on the ENVELOPE (`{ users: [...], total: 1 }`) survives a cast trivially,
+so it discriminates nothing on the old code. It is a regression guard, not a
+mutant: it holds the conversion to the additive rule if someone later reaches
+for a stricter walk.
+
+**The reconstruction is shape-preserving for these nine.** Same check the first
+tranche recorded for its twelve: every element type here is a plain alias of
+its generated counterpart, so no consumer can NAME a field the schema omits,
+and none of the eleven call sites behind them casts around that (the one `as`
+that appears is an `as const` on a tuple in `networks.ts`).
+
+### What this does not establish
+
+It does not touch the residue vjt owns — whether a REQUIRED field absent
+because the bundle is newer than its server should fail loud or degrade to
+`undefined`. This slice inherits the standing behaviour, which is the one the
+first tranche shipped on 24 doors. Nor does it convert anything whose schema
+had to be emitted: the classes that need a server-side `@type` are untouched,
+and the count of them is the ceiling described above.

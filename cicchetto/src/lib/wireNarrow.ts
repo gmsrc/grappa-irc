@@ -12,14 +12,20 @@ import type { MemberEntry } from "./memberTypes";
 // `wireTypes.ts` mirrors at compile time, emitted as data so the boundary can
 // enforce them after tsc has erased the types.
 import {
+  S_AccountsAdminWireIndexPayload,
   S_AccountsAdminWireT,
   S_AdminEventsWireEvent,
   S_AdminOverviewWireT,
   S_ChannelDirectoryWireIndexPayload,
+  S_LiveIntrospectionAdminWireIndexPayload,
+  S_NetworksFeaturedChannelsAdminWireIndexPayload,
   S_NetworksFeaturedChannelsAdminWireT,
   S_NetworksFeaturedChannelsWireIndexPayload,
+  S_NetworksServersAdminWireIndexPayload,
   S_NetworksServersAdminWireT,
+  S_NetworksWireChannelJson,
   S_NetworksWireCredentialJson,
+  S_ScrollbackWireArchiveWireIndex,
   S_ScrollbackWireT,
   S_SessionLogWireListResult,
   S_SessionLogWireSessionsResult,
@@ -27,15 +33,22 @@ import {
   S_ThemesWireT,
   S_VhostsAdminWireGrantJson,
   S_VhostsAdminWireVhostJson,
+  S_VisitorsAdminWireIndexPayload,
 } from "./wireSchema";
 import type {
+  AccountsAdminWireIndexPayload,
   AccountsAdminWireT,
   AdminOverviewWireT,
   ChannelDirectoryWireIndexPayload,
+  LiveIntrospectionAdminWireIndexPayload,
+  NetworksFeaturedChannelsAdminWireIndexPayload,
   NetworksFeaturedChannelsAdminWireT,
   NetworksFeaturedChannelsWireIndexPayload,
+  NetworksServersAdminWireIndexPayload,
   NetworksServersAdminWireT,
+  NetworksWireChannelJson,
   NetworksWireCredentialJson,
+  ScrollbackWireArchiveWireIndex,
   ScrollbackWireT,
   SessionISupportCasemapping,
   SessionLogWireListResult,
@@ -44,6 +57,7 @@ import type {
   ThemesWireT,
   VhostsAdminWireGrantJson,
   VhostsAdminWireVhostJson,
+  VisitorsAdminWireIndexPayload,
   WindowCountsSeverity,
 } from "./wireTypes";
 // #410 — the runtime allowlists derive from the codegen-emitted `as const`
@@ -838,4 +852,79 @@ export function narrowFeaturedChannelsResponse(
 /** `GET /networks/:slug/directory`. */
 export function narrowDirectoryPageResponse(raw: unknown): ChannelDirectoryWireIndexPayload {
   return narrowRest(S_ChannelDirectoryWireIndexPayload, raw, "channel directory page");
+}
+
+// ── #1400 slice 1 — the doors whose envelope was already generated ──
+//
+// The first tranche converted the doors whose response IS a single generated
+// shape. These are the LIST doors, and #1400's body reads them as blocked:
+// "the REST envelope types are hand-written mirrors in `api.ts` … that makes
+// the first step emitting the missing envelope schemas". Measured at
+// `236dd328`, that is true of most of the remaining casts and false of these
+// nine: the codegen already emits five `*IndexPayload` types byte-identical
+// to the `{ key: T[] }` written by hand in `api.ts`, plus the archive index —
+// so `api.ts` was carrying a second copy of a shape that already existed,
+// with a runtime schema already sitting beside it. Nothing is emitted here.
+// The hand-written twins are deleted rather than pinned: an alias cannot
+// drift, and a deleted type cannot either.
+//
+// The three bare-array doors take an inline `{ a: … }` node. That introduces
+// no field NAME on this side — the array-ness is the wire's, and the element
+// schema is the generated one — so it is not a mirror creeping back in.
+//
+// Same reconstruction caveat as the tranche above, and re-measured for these
+// nine before landing: every element type here is a plain alias of its
+// generated counterpart (`AdminUser = AccountsAdminWireT` and so on), so no
+// consumer can even NAME a field the schema omits, and none of the eleven
+// call sites behind them casts its way around that. Two shapes deliberately
+// stay out of this slice for the opposite reason — `AdminNetwork` and
+// `AdminCredential` INTERSECT extra fields onto their generated type
+// (`circuit_state`, `live_counts`, `session_action`, `session_error`), which
+// the server sends and the typespec does not declare, so validating them here
+// would silently drop the four. They need the server-side declaration first.
+
+/** `GET /admin/visitors`. */
+export function narrowAdminVisitorsResponse(raw: unknown): VisitorsAdminWireIndexPayload {
+  return narrowRest(S_VisitorsAdminWireIndexPayload, raw, "visitor list");
+}
+
+/** `GET /admin/sessions`. */
+export function narrowAdminSessionsResponse(raw: unknown): LiveIntrospectionAdminWireIndexPayload {
+  return narrowRest(S_LiveIntrospectionAdminWireIndexPayload, raw, "live session list");
+}
+
+/** `GET /admin/users`. */
+export function narrowAdminUsersResponse(raw: unknown): AccountsAdminWireIndexPayload {
+  return narrowRest(S_AccountsAdminWireIndexPayload, raw, "user list");
+}
+
+/** `GET /admin/networks/:id/servers`. */
+export function narrowAdminServersResponse(raw: unknown): NetworksServersAdminWireIndexPayload {
+  return narrowRest(S_NetworksServersAdminWireIndexPayload, raw, "server list");
+}
+
+/** `GET /admin/networks/:id/featured_channels`. */
+export function narrowAdminFeaturedChannelsResponse(
+  raw: unknown,
+): NetworksFeaturedChannelsAdminWireIndexPayload {
+  return narrowRest(
+    S_NetworksFeaturedChannelsAdminWireIndexPayload,
+    raw,
+    "admin featured channel list",
+  );
+}
+
+/** `GET /networks/:slug/archive`. */
+export function narrowArchiveResponse(raw: unknown): ScrollbackWireArchiveWireIndex {
+  return narrowRest(S_ScrollbackWireArchiveWireIndex, raw, "archive index");
+}
+
+/** `GET /networks/:slug/channels`. */
+export function narrowChannelListResponse(raw: unknown): NetworksWireChannelJson[] {
+  return narrowRest({ a: S_NetworksWireChannelJson }, raw, "channel list");
+}
+
+/** `GET /networks/:slug/channels/:name/messages`, both the `before` and `after` pages. */
+export function narrowMessagePageResponse(raw: unknown): ScrollbackWireT[] {
+  return narrowRest({ a: S_ScrollbackWireT }, raw, "message page");
 }

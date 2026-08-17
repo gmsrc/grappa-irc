@@ -20,13 +20,21 @@ import type { MemberEntry } from "./memberTypes";
 // schema constants stay in one place and the failure mode stays in one place.
 import {
   narrowAdminFeaturedChannelResponse,
+  narrowAdminFeaturedChannelsResponse,
   narrowAdminServerResponse,
+  narrowAdminServersResponse,
+  narrowAdminSessionsResponse,
   narrowAdminUserResponse,
+  narrowAdminUsersResponse,
   narrowAdminVhostGrantResponse,
   narrowAdminVhostResponse,
+  narrowAdminVisitorsResponse,
+  narrowArchiveResponse,
+  narrowChannelListResponse,
   narrowCredentialResponse,
   narrowDirectoryPageResponse,
   narrowFeaturedChannelsResponse,
+  narrowMessagePageResponse,
   narrowMessageResponse,
   narrowSessionLogListResponse,
   narrowSessionLogSessionsResponse,
@@ -1835,13 +1843,10 @@ export type AdminVisitorNetwork = VisitorsAdminWireNetworkJson;
 // server-side from the credentials (any network holds a NickServ secret).
 export type AdminVisitor = VisitorsAdminWireT;
 
-export type AdminVisitorsResponse = { visitors: AdminVisitor[] };
-
 export async function adminListVisitors(token: string): Promise<AdminVisitor[]> {
   const res = await fetch("/admin/visitors", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
-  const body = (await res.json()) as AdminVisitorsResponse;
-  return body.visitors;
+  return narrowAdminVisitorsResponse(await res.json()).visitors;
 }
 
 export async function adminDeleteVisitor(token: string, id: string): Promise<void> {
@@ -1871,8 +1876,6 @@ export type AdminSessionLiveState = AdminLiveState;
 
 export type AdminSession = LiveIntrospectionAdminWireT;
 
-export type AdminSessionsResponse = { sessions: AdminSession[] };
-
 // Composite session id constructor — single source for the wire
 // shape. Mirrors the server-side parse_session_id/1 in
 // `lib/grappa_web/controllers/admin/sessions_controller.ex`.
@@ -1892,8 +1895,7 @@ export function adminVisitorSessionId(v: AdminVisitor, net: AdminVisitorNetwork)
 export async function adminListSessions(token: string): Promise<AdminSession[]> {
   const res = await fetch("/admin/sessions", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
-  const body = (await res.json()) as AdminSessionsResponse;
-  return body.sessions;
+  return narrowAdminSessionsResponse(await res.json()).sessions;
 }
 
 export async function adminDisconnectSession(token: string, id: string): Promise<void> {
@@ -2304,7 +2306,7 @@ export async function listChannels(token: string, networkSlug: string): Promise<
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as ChannelEntry[];
+  return narrowChannelListResponse(await res.json());
 }
 
 // Mirror of `GrappaWeb.DirectoryController.index/2`. The response IS the
@@ -2358,7 +2360,7 @@ export async function listMessages(
     { headers: buildHeaders(token) },
   );
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as ScrollbackMessage[];
+  return narrowMessagePageResponse(await res.json());
 }
 
 // Sole consumer (today): the WS-reconnect refresh flow in
@@ -2386,7 +2388,7 @@ export async function listMessagesAfter(
     { headers: buildHeaders(token) },
   );
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as ScrollbackMessage[];
+  return narrowMessagePageResponse(await res.json());
 }
 
 // #693 — the gap probe. Mirror of `GrappaWeb.MessagesController.count/2`:
@@ -2601,8 +2603,7 @@ export async function listArchive(token: string, networkSlug: string): Promise<A
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
-  const body = (await res.json()) as { archive: ArchiveEntry[] };
-  return body.archive;
+  return narrowArchiveResponse(await res.json()).archive;
 }
 
 // UX-1 (2026-05-17) — mirror of `GrappaWeb.ArchiveController.delete/2`.
@@ -2825,13 +2826,10 @@ export async function putPerform(
 
 export type AdminUser = AccountsAdminWireT;
 
-export type AdminUsersResponse = { users: AdminUser[] };
-
 export async function adminListUsers(token: string): Promise<AdminUser[]> {
   const res = await fetch("/admin/users", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
-  const body = (await res.json()) as AdminUsersResponse;
-  return body.users;
+  return narrowAdminUsersResponse(await res.json()).users;
 }
 
 export type AdminUserCreate = {
@@ -2935,15 +2933,12 @@ export type AdminServerUpdate = Partial<AdminServerCreate>;
 
 export type AdminServerDeleteResponse = { network_session_count: number };
 
-export type AdminServersResponse = { servers: AdminServer[] };
-
 export async function adminListServers(token: string, networkId: number): Promise<AdminServer[]> {
   const res = await fetch(`/admin/networks/${encodeURIComponent(String(networkId))}/servers`, {
     headers: buildHeaders(token),
   });
   if (!res.ok) throw await readError(res);
-  const body = (await res.json()) as AdminServersResponse;
-  return body.servers;
+  return narrowAdminServersResponse(await res.json()).servers;
 }
 
 export async function adminAddServer(
@@ -3017,8 +3012,6 @@ export type AdminFeaturedChannelCreate = {
 
 export type AdminFeaturedChannelUpdate = Partial<AdminFeaturedChannelCreate>;
 
-export type AdminFeaturedChannelsResponse = { featured_channels: AdminFeaturedChannel[] };
-
 // Public on-display read consumed by HomePane. `networkSlug` resolves
 // via the :resolve_network plug (cross-user iso); 404 for a network the
 // subject isn't on.
@@ -3042,7 +3035,7 @@ export async function adminListFeaturedChannels(
     { headers: buildHeaders(token) },
   );
   if (!res.ok) throw await readError(res);
-  return ((await res.json()) as AdminFeaturedChannelsResponse).featured_channels;
+  return narrowAdminFeaturedChannelsResponse(await res.json()).featured_channels;
 }
 
 export async function adminAddFeaturedChannel(
