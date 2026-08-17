@@ -1911,6 +1911,32 @@ describe("selection store", () => {
       ).toBe(true);
     });
 
+    // Found by a SURVIVING mutant, not by design: dropping the fold from
+    // `isActiveSelection` left every assertion above green, because the arm
+    // that exercises the predicate hands it an already-folded name. The
+    // predicate folds its ARGUMENT, so the case that bites is the mirror of
+    // the one above — a caller spelling the name the way it renders it.
+    it("recognises a re-tap spelled with the display casing", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      const selection = await import("../lib/selection");
+
+      selection.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#grappa",
+        kind: "channel",
+      });
+
+      expect(
+        selection.isActiveSelection({
+          networkSlug: "freenode",
+          channelName: "#Grappa",
+          kind: "channel",
+        }),
+      ).toBe(true);
+    });
+
     it("leaves a query target RAW — it is a display name and a wire target", async () => {
       localStorage.setItem("grappa-token", "tok");
       const api = await import("../lib/api");
