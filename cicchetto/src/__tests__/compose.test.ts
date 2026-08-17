@@ -105,6 +105,39 @@ vi.mock("../lib/socket", () => ({
   // mock otherwise leaves `pushRecover` undefined, the arm throws, and a
   // correct network rejection becomes indistinguishable from a wrong one.
   pushRecover: vi.fn().mockResolvedValue(undefined),
+  // #1396 — /admin (#992) and /oper. Imported by compose.ts but absent from
+  // this factory until now, which is the whole reason those two arms were on
+  // the characterization table's `unprotected` list: the call was
+  // `undefined(...)`, it threw, and the catch flattened every possible
+  // argument list into one `{error: "send failed"}` row. Same shape as
+  // pushRecover above.
+  pushAdmin: vi.fn().mockResolvedValue(undefined),
+  pushOper: vi.fn().mockResolvedValue(undefined),
+}));
+
+// #1396 — /alias + /unalias round-trip through this store. Unmocked, addAlias
+// reaches the real read-modify-write, which calls the (unmocked) userSettings
+// fetch and throws under jsdom — so both arms recorded `{error: "send failed"}`
+// and no effect at all. `aliases` is read by EVERY submit (the expander runs
+// before the verb resolves), so it lands in the table's ambient set rather
+// than in any one arm's signature.
+vi.mock("../lib/aliasList", () => ({
+  aliases: vi.fn(() => ({})),
+  addAlias: vi.fn().mockResolvedValue(undefined),
+  delAlias: vi.fn().mockResolvedValue(undefined),
+  editAlias: vi.fn().mockResolvedValue(undefined),
+  refreshAliases: vi.fn().mockResolvedValue({}),
+}));
+
+// #1396 — /notify, /watch, /hilight and friends deep-link into a settings
+// sub-page. The real module just bumps a signal: nothing throws, so the arm
+// reported `{ok: true}` with no trace, which is a silent success no mutant
+// could reach. Mocked here so the requested SECTION becomes observable.
+vi.mock("../lib/settingsNav", () => ({
+  requestOpenSettings: vi.fn(),
+  requestSettingsPage: vi.fn(),
+  consumePendingSettingsPage: vi.fn(() => null),
+  settingsOpenTick: vi.fn(() => 0),
 }));
 
 // #248 — compose marks a /lusers request solicited so the incoming
@@ -4876,9 +4909,19 @@ const DISPATCH_CASE_LABELS = [
   "whowas",
 ] as const;
 
+// The window every row below is submitted FROM. Named once and shared by both
+// table runs AND by the "target != context" assert, so the rule can never
+// police a context the runs do not actually use.
+const TABLE_NETWORK = "freenode";
+const TABLE_CHANNEL = "#a";
+
 // One draft per arm. The `kind` column is a CLAIM the first test checks
 // against the parser — a draft whose syntax drifts stops naming its arm
 // loudly instead of silently exercising a neighbour.
+//
+// #1396 — every row that takes a target aims OFF this window: `#other`, not
+// `#a`; `libera`, not `freenode`. See the "target != context" test below for
+// why that is a rule and not a preference.
 const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string }> = [
   { kind: "privmsg", draft: "hello" },
   { kind: "me", draft: "/me waves" },
@@ -4891,7 +4934,7 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string
   { kind: "ping", draft: "/ping bob" },
   { kind: "join", draft: "/join #b" },
   { kind: "part", draft: "/part #other" },
-  { kind: "invite", draft: "/invite bob #a" },
+  { kind: "invite", draft: "/invite bob #other" },
   { kind: "kick", draft: "/kick bob" },
   { kind: "kb", draft: "/kb bob" },
   { kind: "ban", draft: "/ban bob" },
@@ -4930,10 +4973,10 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string
   { kind: "kill", draft: "/kill bob spam" },
   { kind: "rehash", draft: "/rehash" },
   { kind: "quote", draft: "/quote PING :x" },
-  { kind: "connect", draft: "/connect freenode" },
-  { kind: "disconnect", draft: "/disconnect" },
+  { kind: "connect", draft: "/connect libera" },
+  { kind: "disconnect", draft: "/disconnect libera" },
   { kind: "quit", draft: "/quit bye" },
-  { kind: "recover", draft: "/recover" },
+  { kind: "recover", draft: "/recover libera" },
   { kind: "alias-define", draft: "/alias hi /msg bob $*" },
   { kind: "unalias", draft: "/unalias hi" },
   { kind: "open-settings", draft: "/watch" },
@@ -4945,6 +4988,7 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string
 // walking these for mock functions that recorded a call, so a new seam added
 // to an arm shows up as a new line rather than as silence.
 const MOCKED_SEAM_MODULES = [
+  "../lib/aliasList",
   "../lib/api",
   "../lib/banlistModal",
   "../lib/channelDirectory",
@@ -4956,6 +5000,7 @@ const MOCKED_SEAM_MODULES = [
   "../lib/scrollback",
   "../lib/selection",
   "../lib/serviceModal",
+  "../lib/settingsNav",
   "../lib/socket",
   "../lib/umodeModal",
   "../lib/windowState",
@@ -5040,17 +5085,37 @@ describe("#1396 — dispatch characterization over every arm", () => {
     `);
   });
 
+  // "target != context". Several arms choose between an argument the operator
+  // typed and a value read from the active window — `invite` picks
+  // `cmd.channel` or `requireChannel()`, `disconnect` and `recover` pick
+  // `cmd.network ?? networkSlug`. Aim a row at the window it is submitted
+  // from and BOTH branches produce the same value, so the pinned effect stops
+  // telling the two apart and the branch is bought by nothing.
+  //
+  // Blanket, and deliberately without an allowlist: the day a row genuinely
+  // wants to target its own window, it needs a second fixture window, not an
+  // exemption here. Two axes only — channel and network. The nick axis is NOT
+  // guarded, because the own-nick this file runs with is inherited from an
+  // earlier describe rather than declared here (see the mock-isolation note in
+  // the referto); a rule cannot police a context the table does not own.
+  it("no draft aims at the window it is submitted from", () => {
+    const offenders = DISPATCH_DRAFTS.filter((r) =>
+      r.draft.split(/\s+/).some((t) => t === TABLE_CHANNEL || t === TABLE_NETWORK),
+    ).map((r) => `${r.kind}: ${r.draft}`);
+    expect(offenders).toEqual([]);
+  });
+
   it("each arm's observable effects are pinned", async () => {
     localStorage.setItem("grappa-token", "tok");
     const table: Record<string, { result: unknown; effects: string[] }> = {};
     for (const row of DISPATCH_DRAFTS) {
       vi.clearAllMocks();
       const compose = await import("../lib/compose");
-      const k = channelKey("freenode", "#a");
+      const k = channelKey(TABLE_NETWORK, TABLE_CHANNEL);
       compose.setDraft(k, row.draft);
       let result: unknown;
       try {
-        result = await compose.submit(k, "freenode", "#a");
+        result = await compose.submit(k, TABLE_NETWORK, TABLE_CHANNEL);
       } catch (e) {
         result = `THREW ${String(e)}`;
       }
@@ -5064,23 +5129,28 @@ describe("#1396 — dispatch characterization over every arm", () => {
       {
         "admin": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
+            "socket.pushAdmin(1, null)",
           ],
           "result": {
-            "error": "send failed",
+            "ok": true,
           },
         },
         "alias-define": {
           "effects": [
+            "aliasList.addAlias("hi", "msg bob $*")",
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
           ],
           "result": {
-            "error": "send failed",
+            "ok": "alias: /hi → msg bob $*",
           },
         },
         "ame": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "windowState.windowStateByChannel()",
           ],
@@ -5090,6 +5160,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "amsg": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "windowState.windowStateByChannel()",
           ],
@@ -5099,6 +5170,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "away": {
           "effects": [
+            "aliasList.aliases()",
             "mentionsWindow.clearMentionsBundle("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushAwaySet("freenode", "brb")",
@@ -5109,6 +5181,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "ban": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5121,6 +5194,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "banlist": {
           "effects": [
+            "aliasList.aliases()",
             "banlistModal.openBanlistModal("freenode", "#a", "b")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5134,7 +5208,8 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "connect": {
           "effects": [
-            "api.patchNetwork("tok", "freenode", {"connection_state":"connected"})",
+            "aliasList.aliases()",
+            "api.patchNetwork("tok", "libera", {"connection_state":"connected"})",
             "networks.networkIdBySlug("freenode")",
           ],
           "result": {
@@ -5143,6 +5218,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "ctcp": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "scrollback.sendMessage("freenode", "#a", "\\u0001VERSION\\u0001", {"kind":"ctcp","target":"bob"})",
@@ -5153,6 +5229,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "deop": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5165,6 +5242,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "devoice": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5177,7 +5255,8 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "disconnect": {
           "effects": [
-            "api.patchNetwork("tok", "freenode", {"connection_state":"parked"})",
+            "aliasList.aliases()",
+            "api.patchNetwork("tok", "libera", {"connection_state":"parked"})",
             "networks.networkIdBySlug("freenode")",
           ],
           "result": {
@@ -5186,6 +5265,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "error": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
           ],
           "result": {
@@ -5194,6 +5274,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "info": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushInfo(1)",
@@ -5204,9 +5285,10 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "invite": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "socket.pushChannelInvite(1, "#a", "bob")",
+            "socket.pushChannelInvite(1, "#other", "bob")",
           ],
           "result": {
             "ok": true,
@@ -5214,6 +5296,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "join": {
           "effects": [
+            "aliasList.aliases()",
             "api.postJoin("tok", "freenode", "#b", null)",
             "networks.networkIdBySlug("freenode")",
             "selection.setSelectedChannel({"networkSlug":"freenode","channelName":"#b","kind":"channel"})",
@@ -5224,6 +5307,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "kb": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5237,6 +5321,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "kick": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5249,6 +5334,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "kill": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushRaw(1, "KILL bob :spam")",
@@ -5259,6 +5345,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "links": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushLinks(1, null)",
@@ -5269,6 +5356,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "list": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "selection.setSelectedChannel({"networkSlug":"freenode","channelName":"$list","kind":"list"})",
           ],
@@ -5278,6 +5366,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "lusers": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushLusers(1, null, null)",
@@ -5288,6 +5377,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "me": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "scrollback.sendMessage("freenode", "#a", "\\u0001ACTION waves\\u0001")",
           ],
@@ -5297,6 +5387,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "mode": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushChannelMode(1, "#other", "+m", [])",
@@ -5307,6 +5398,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "mode-apply-current": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5319,6 +5411,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "mode-view": {
           "effects": [
+            "aliasList.aliases()",
             "modeModal.openModeModal("freenode", "#other")",
             "networks.networkIdBySlug("freenode")",
           ],
@@ -5328,6 +5421,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "motd": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushMotd(1, null)",
@@ -5338,6 +5432,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "msg": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "queryWindows.canonicalQueryNick(1, "bob")",
@@ -5351,6 +5446,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "names": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5363,6 +5459,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "nick": {
           "effects": [
+            "aliasList.aliases()",
             "api.postNick("tok", "freenode", "bob")",
             "networks.networkIdBySlug("freenode")",
           ],
@@ -5372,6 +5469,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "notice": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "scrollback.sendMessage("freenode", "#a", "hi", {"kind":"notice","target":"bob"})",
           ],
@@ -5381,6 +5479,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "notify": {
           "effects": [
+            "aliasList.aliases()",
             "api.postNotifyAdd("tok", "freenode", ["bob"])",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5391,6 +5490,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "op": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5403,7 +5503,9 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "open-settings": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
+            "settingsNav.requestOpenSettings("watchlists")",
           ],
           "result": {
             "ok": true,
@@ -5411,15 +5513,18 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "oper": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
+            "socket.pushOper(1, "root", "secret")",
           ],
           "result": {
-            "error": "send failed",
+            "ok": true,
           },
         },
         "part": {
           "effects": [
+            "aliasList.aliases()",
             "api.postPart("tok", "freenode", "#other", null)",
             "networks.networkIdBySlug("freenode")",
           ],
@@ -5429,6 +5534,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "ping": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "scrollback.sendMessage("freenode", "#a", "\\u0001PING <epoch-ms>\\u0001", {"kind":"ctcp","target":"bob"})",
@@ -5439,6 +5545,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "privmsg": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "scrollback.sendMessage("freenode", "#a", "hello")",
           ],
@@ -5448,6 +5555,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "query": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "queryWindows.canonicalQueryNick(1, "bob")",
@@ -5460,6 +5568,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "quit": {
           "effects": [
+            "aliasList.aliases()",
             "api.patchNetwork("tok", "freenode", {"connection_state":"parked","reason":"bye"})",
             "api.patchNetwork("tok", "libera", {"connection_state":"parked","reason":"bye"})",
             "networks.networkIdBySlug("freenode")",
@@ -5471,6 +5580,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "quote": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushRaw(1, "PING :x")",
@@ -5481,9 +5591,10 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "recover": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
-            "networks.networkIdBySlug("freenode")",
-            "socket.pushRecover(1)",
+            "networks.networkIdBySlug("libera")",
+            "socket.pushRecover(2)",
           ],
           "result": {
             "ok": true,
@@ -5491,6 +5602,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "rehash": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushRaw(1, "REHASH")",
@@ -5501,6 +5613,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "service-modal": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "scrollback.sendMessage("freenode", "NickServ", "help")",
             "serviceModal.openServiceModal("freenode", "NickServ")",
@@ -5511,6 +5624,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "stats": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushRaw(1, "STATS m")",
@@ -5521,6 +5635,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "topic-clear": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5533,6 +5648,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "topic-set": {
           "effects": [
+            "aliasList.aliases()",
             "api.postTopic("tok", "freenode", "#a", "new topic")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5544,6 +5660,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "topic-show": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "selection.selectedChannel()",
@@ -5554,6 +5671,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "umode": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushChannelUmode(1, "+i")",
@@ -5564,6 +5682,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "umode-target-view": {
           "effects": [
+            "aliasList.aliases()",
             "api.ownNickForNetwork({"kind":"user","id":1,"slug":"freenode","inserted_at":"","updated_at":""}, {"kind":"user","name":"vjt"})",
             "networks.networkBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5575,6 +5694,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "umode-view": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "umodeModal.openUmodeModal("freenode")",
           ],
@@ -5584,14 +5704,17 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "unalias": {
           "effects": [
+            "aliasList.aliases()",
+            "aliasList.delAlias("hi")",
             "networks.networkIdBySlug("freenode")",
           ],
           "result": {
-            "error": "send failed",
+            "ok": "alias: removed /hi",
           },
         },
         "unban": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5604,6 +5727,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "version": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushVersion(1)",
@@ -5614,6 +5738,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "voice": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
@@ -5626,6 +5751,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "watchlist": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "socket.pushWatchlistAdd("badger")",
           ],
@@ -5635,6 +5761,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "who": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushWho(1, "#other")",
@@ -5645,6 +5772,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "whois": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushWhois(1, "bob", null)",
@@ -5655,6 +5783,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "whowas": {
           "effects": [
+            "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
             "socket.pushWhowas(1, "bob")",
@@ -5686,10 +5815,10 @@ describe("#1396 — dispatch characterization over every arm", () => {
     for (const row of DISPATCH_DRAFTS) {
       vi.clearAllMocks();
       const compose = await import("../lib/compose");
-      const k = channelKey("freenode", "#a");
+      const k = channelKey(TABLE_NETWORK, TABLE_CHANNEL);
       compose.setDraft(k, row.draft);
       try {
-        await compose.submit(k, "freenode", "#a");
+        await compose.submit(k, TABLE_NETWORK, TABLE_CHANNEL);
       } catch {
         // A throw is itself an outcome; the effects recorded up to it are
         // what the net can see, and the row above keeps the thrown value.
@@ -5721,6 +5850,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
     }).toMatchInlineSnapshot(`
       {
         "ambient": [
+          "aliasList.aliases()",
           "networks.networkIdBySlug("freenode")",
         ],
         "arms": 59,
@@ -5731,11 +5861,6 @@ describe("#1396 — dispatch characterization over every arm", () => {
           ],
         ],
         "unprotected": [
-          "admin",
-          "oper",
-          "alias-define",
-          "unalias",
-          "open-settings",
           "error",
         ],
       }
