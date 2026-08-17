@@ -7690,7 +7690,12 @@ defmodule Grappa.Session.ServerTest do
       [_, after_head] =
         String.split(source, "defp apply_effects([{:reply, line} | rest], state) do", parts: 2)
 
-      [arm, _] = String.split(after_head, "\n  defp ", parts: 2)
+      # Cut at the function's own `end` (two-space indent), not at the next
+      # `defp`: the latter would drag the FOLLOWING arm's comment block into
+      # the window, and a comment that merely names `Client.send_line/2`
+      # would then fail the refute for no reason. A nested `case ... end`
+      # inside the arm is indented four, so it cannot be mistaken for it.
+      [arm, _] = String.split(after_head, "\n  end\n", parts: 2)
 
       assert arm =~ "send_outbound(",
              "the {:reply, _} arm must send through send_outbound/3, the one sniff-then-send door"
