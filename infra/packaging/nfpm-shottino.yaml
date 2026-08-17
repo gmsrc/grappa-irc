@@ -1,0 +1,109 @@
+# nfpm config — builds the STANDALONE shottino .deb / .rpm from the staging
+# tree assembled by build.sh. Sibling of nfpm.yaml (the bouncer), rendered by
+# the same single nfpm binary into either format.
+#
+# WHY A SECOND PACKAGE (GH #1447). The bouncer package carries a self-contained
+# ERTS and the built SPA: 37.0 MB of .deb at v1.2.0, essentially all of it
+# runtime the terminal client does not use. It also enables a systemd unit. A
+# machine that wants only the client should take neither. The client is one C
+# binary against ncursesw + OpenSSL, so the split costs a second yaml and buys
+# a client-only host its whole disk back.
+#
+# The FORMAT is a flag, the PAYLOAD is not: the binary links the BUILD host's
+# glibc/ncursesw/libssl, so the .deb and the .rpm are still two builds on two
+# distros — the same constraint that governs the ERTS payload next door.
+#
+# ${SHOTTINO_VERSION} / ${GRAPPA_PKG_ARCH} are expanded from the environment
+# build.sh exports.
+
+name: shottino
+arch: ${GRAPPA_PKG_ARCH}
+platform: linux
+# The CLIENT's own version line (frontends/shottino/version.h), NOT the grappa
+# tag — vjt's ruling, 2026-08-16. Two artifacts, two cadences: `shottino
+# --version` and the package version agree, which they could not if the package
+# were stamped with the bouncer's release number. Derived by
+# `version.sh shottino`, so the header stays the single source.
+version: ${SHOTTINO_VERSION}
+section: net
+priority: optional
+maintainer: "Marcello Barnaba <vjt@users.noreply.github.com>"
+vendor: "Marcello Barnaba"
+homepage: "https://github.com/vjt/grappa-irc"
+license: "MIT"
+description: |
+  Terminal client for a grappa IRC bouncer — an irssi-shaped ncurses UI over
+  the same REST + Phoenix Channels API the web frontend uses. Talks to a
+  grappa server over the network; it does NOT need one installed locally.
+  Install the `grappa` package if you want to run the bouncer itself.
+
+# Takes /usr/bin/shottino over from the bouncer package, which shipped it up
+# to (but not including) 1.3.0 — vjt's ruling, 2026-08-17. Without this, dpkg
+# refuses the install against any grappa that still owns the path:
+# "trying to overwrite '/usr/bin/shottino', which is also in package grappa".
+#
+# The boundary is HISTORICAL and FIXED — the first release that stops shipping
+# the file — so it is written as a constant. It must NOT become
+# `${GRAPPA_VERSION}`: at 1.4.0 that would claim every grappa older than 1.4.0
+# shipped the file, which is false for 1.3.0, and a false statement in package
+# metadata is worse than an inconvenient one. Two further reasons, measured in
+# nfpm v2.43.0 (the version build.sh pins) rather than assumed:
+#
+#   * `deb.breaks` is NOT env-expanded. nfpm expands ${VARS} in depends /
+#     replaces / recommends / provides / suggests / conflicts (nfpm.go:214-227)
+#     and the Deb struct's `breaks` (nfpm.go:438) is absent from that list — an
+#     interpolation would land in the control file verbatim.
+#   * `replaces` covers BOTH formats: nfpm emits Debian's `Replaces:` and maps
+#     the same list to RPM's `Obsoletes:` (rpm/rpm.go: `Obsoletes: replaces`).
+#
+# `breaks` is deb-only, hence the top-level `deb:` block rather than an entry
+# under `overrides:`.
+replaces:
+  - grappa (<< 1.3.0)
+
+deb:
+  breaks:
+    - grappa (<< 1.3.0)
+
+# Runtime deps are per-format (disjoint package names across distro families).
+# NOT the bouncer's list: no ERTS here, so libncurses6 (the NARROW build ERTS
+# wants), libstdc++6, libgcc-s1 and the maintainer-script tools (passwd /
+# shadow-utils / util-linux / the openssl CLI) all stay out.
+#
+# The set is what `configure` probes and what the binary actually calls:
+#   ncursesw  — `check_pkg ncursesw`; the WIDE build, because the client is
+#               UTF-8 end to end. On Debian that is libncursesw6, a DIFFERENT
+#               package from libncurses6; Fedora folds both SONAMEs into
+#               ncurses-libs.
+#   openssl   — `check_pkg openssl`; libssl.so.3 + libcrypto.so.3.
+#   CA store  — shottino.c calls SSL_CTX_set_default_verify_paths() then
+#               SSL_CTX_set_verify(SSL_VERIFY_PEER), so it reads the system
+#               trust store. ca-certificates is a real dependency here, not one
+#               copied over from the server package.
+#
+# libssl3t64 | libssl3: Debian's 64-bit time_t transition renamed the OpenSSL
+# runtime package on Ubuntu 24.04 (noble) and forward WITHOUT a
+# `Provides: libssl3`, so a hard-coded `libssl3` is UNINSTALLABLE there. Same
+# libssl.so.3 SONAME either way. Kept byte-identical to the bouncer's entry.
+overrides:
+  deb:
+    depends:
+      - libncursesw6
+      - libssl3t64 | libssl3
+      - ca-certificates
+  rpm:
+    depends:
+      - ncurses-libs
+      - openssl-libs
+      - ca-certificates
+
+contents:
+  - src: ./staging-shottino/usr/bin/shottino
+    dst: /usr/bin/shottino
+    file_info:
+      mode: 0755
+
+# NO `scripts:` block, deliberately. The bouncer's postinstall creates a system
+# user, generates secrets and `systemctl enable`s a unit; a terminal client
+# must do none of that. Installing this package puts one binary on PATH and
+# changes nothing else about the machine — which is the whole point of #1447.

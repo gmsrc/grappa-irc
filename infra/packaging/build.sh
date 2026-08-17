@@ -16,11 +16,14 @@
 #   GRAPPA_PKG_FORMAT deb | rpm — the nfpm output format (default: deb).
 #                     Build each format on its OWN distro: the bundled ERTS
 #                     + shottino link the build host's glibc/libssl.
-#   OUT_DIR           where the package lands (default: <repo>/dist)
+#   OUT_DIR           where the BOUNCER package lands (default: <repo>/dist)
+#   SHOTTINO_OUT_DIR  where the STANDALONE CLIENT package lands
+#                     (default: <repo>/dist-shottino). Deliberately NOT
+#                     OUT_DIR — see the client-package section below.
 #   NFPM_BIN          path to nfpm (default: on PATH, else downloaded pinned)
 #   SKIP_RELEASE=1    reuse an existing _build/prod/rel/grappa
 #   SKIP_CIC=1        reuse an existing staged cicchetto-dist
-#   SKIP_SHOTTINO=1   skip the terminal-client build
+#   SKIP_SHOTTINO=1   skip the terminal-client build AND its package
 
 set -euo pipefail
 
@@ -30,7 +33,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PKG_DIR="${SCRIPT_DIR}"
 STAGING="${PKG_DIR}/staging"
+SHOTTINO_STAGING="${PKG_DIR}/staging-shottino"
 OUT_DIR="${OUT_DIR:-${REPO_ROOT}/dist}"
+# The standalone client package lands OUTSIDE OUT_DIR, and that is the whole
+# mechanism keeping #1447 slice A unpublished. The release workflow's upload
+# steps are PATH-scoped globs (`path: dist/*.deb`, `path: dist/*.rpm`), so a
+# package written elsewhere is never uploaded, never downloaded by `publish`,
+# and never attached. `release_assets.sh found` matches by NAME AT ANY DEPTH,
+# so once a file reaches the artifact bundle it WILL be attached — the
+# directory split is the only gate, and it lives here.
+#
+# It matters because slice A leaves the bouncer package shipping
+# /usr/bin/shottino: until slice B drops it, both packages own that path and
+# publishing the pair would ship two artifacts that cannot be co-installed.
+SHOTTINO_OUT_DIR="${SHOTTINO_OUT_DIR:-${REPO_ROOT}/dist-shottino}"
 
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31mxx\033[0m  %s\n' "$*" >&2; exit 1; }
@@ -42,6 +58,14 @@ if [ -z "${GRAPPA_VERSION:-}" ]; then
 	GRAPPA_VERSION="$("${SCRIPT_DIR}/version.sh")" || die "could not read the VERSION file — set GRAPPA_VERSION"
 fi
 export GRAPPA_VERSION
+
+# The client keeps its OWN version line (frontends/shottino/version.h) — two
+# artifacts, two cadences (#1447). Same script, different component, so the
+# "which file carries which number" answer stays in one place.
+if [ -z "${SHOTTINO_VERSION:-}" ]; then
+	SHOTTINO_VERSION="$("${SCRIPT_DIR}/version.sh" shottino)" || die "could not read frontends/shottino/version.h — set SHOTTINO_VERSION"
+fi
+export SHOTTINO_VERSION
 
 # ── Architecture ───────────────────────────────────────────────────────────
 if [ -z "${GRAPPA_PKG_ARCH:-}" ]; then
@@ -138,10 +162,21 @@ if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
 	)
 	mkdir -p "${STAGING}/usr/bin"
 	install -m 0755 "${REPO_ROOT}/frontends/shottino/shottino" "${SHOTTINO_BIN}"
+	# The SAME binary also stages for the standalone package. Two staging trees
+	# rather than one shared with the bouncer, so slice B can drop the bouncer's
+	# copy by deleting its `contents:` entry and this line, and nothing else.
+	mkdir -p "${SHOTTINO_STAGING}/usr/bin"
+	install -m 0755 "${REPO_ROOT}/frontends/shottino/shottino" "${SHOTTINO_STAGING}/usr/bin/shottino"
 	# Prove the staged artifact RUNS before packaging it. `--help` needs no
 	# server, terminal or config, so it exercises the dynamic links for real.
 	"${SHOTTINO_BIN}" --help >/dev/null 2>&1 || die "staged shottino does not run (link error?)"
 	[ -x "${SHOTTINO_BIN}" ] || die "shottino missing at ${SHOTTINO_BIN}"
+	# The measured size of the shipped binary, on the build host that produced
+	# it. `wc -c` because BSD stat and GNU stat disagree on flags and this
+	# script runs on both. Printed rather than written down anywhere: a number
+	# in prose goes stale silently, a number in the build log is always the one
+	# from that build.
+	say "shottino binary: $(wc -c <"${SHOTTINO_BIN}" | tr -d ' ') bytes ($(uname -s) $(uname -m))"
 	# Put config.mk back now that the compile is done, and drop the trap so
 	# it cannot fire twice.
 	restore_config_mk
@@ -177,3 +212,18 @@ say "nfpm package (${GRAPPA_PKG_FORMAT}) → ${OUT_DIR}"
 
 say "done — package(s) in ${OUT_DIR}:"
 ls -la "${OUT_DIR}"/*."${GRAPPA_PKG_FORMAT}"
+
+# ── nfpm, the standalone client ────────────────────────────────────────────
+# Second config, same binary, same format flag — a second package is a second
+# yaml, not a new toolchain. Skipped in lockstep with the client BUILD: without
+# a staged binary there is nothing to package.
+if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
+	mkdir -p "${SHOTTINO_OUT_DIR}"
+	say "nfpm package shottino ${SHOTTINO_VERSION} (${GRAPPA_PKG_FORMAT}) → ${SHOTTINO_OUT_DIR}"
+	(
+		cd "${PKG_DIR}"
+		"${nfpm_bin}" package -f nfpm-shottino.yaml -p "${GRAPPA_PKG_FORMAT}" -t "${SHOTTINO_OUT_DIR}"
+	)
+	say "done — client package(s) in ${SHOTTINO_OUT_DIR}:"
+	ls -la "${SHOTTINO_OUT_DIR}"/*."${GRAPPA_PKG_FORMAT}"
+fi
