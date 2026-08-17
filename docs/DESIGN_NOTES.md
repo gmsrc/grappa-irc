@@ -47609,3 +47609,94 @@ because the bundle is newer than its server should fail loud or degrade to
 first tranche shipped on 24 doors. Nor does it convert anything whose schema
 had to be emitted: the classes that need a server-side `@type` are untouched,
 and the count of them is the ceiling described above.
+<!-- entry #1336 slices 1-2 -->
+
+---
+
+## 2026-08-17 — #1336 slices 1-2: "the apparatus was on" is not "the stimulus was delivered"
+
+Retrospective entry. PR #1339 (2026-08-15, #1080) and PR #1370 (2026-08-16,
+#1117 + #1152 + #1155) landed without one, so the reusable part of both lived
+only in issue comments and fixture headers. The two later slices got entries
+(`#1336`, `#1336 S2`); these two are the ones they build on.
+
+### Slice 1 — a gate satisfied by the pre-existing state is not a gate
+
+`issue168-scroll-authority` drove its "operator pages up" step as
+`expect.poll(async () => { await page.mouse.wheel(0, -4000); return
+distanceToBottom(page) }).toBeGreaterThan(50)`. Measured: the cold-mount marker
+already leaves the pane 339 px above the tail, so the predicate held BEFORE the
+gesture and the poll returned on its first evaluation — with the wheel not yet
+applied (`page.mouse.wheel()` resolves before the scroll lands; the pane read the
+same `scrollTop=1078` either side of the call and moved ~250 ms later). The
+gesture then landed inside the NEXT step's window, after the send, where
+`onScroll` disarms the follow intent on any `scrollTop` decrease — programmatic
+ones included — and `tailFollowWhenSettled` yields the moment it does. The pane
+freezes where the late scroll left it, and a frozen pane's distance-to-bottom is
+invariant to later content growth, which is why #1080 and #1079 reported the same
+number twice on two trees.
+
+`fixtures/scrollGesture.ts` is the cure: hover, wheel, then wait for the pane to
+MOVE and then HOLD, rejecting when it did neither. It is Playwright-free by
+construction (the caller adapts a `Page`) for the reason `whoisWait.ts` already
+gives here — the instrument a claim is judged by has to be provable itself — and
+it was bought by an in-situ positive control, not by inspection: removing the
+`hover()` turns the spec red with `wheel(-4000) never moved the pane (scrollTop
+stayed 1078)`, and 1078 is the marker position, i.e. exactly the state the old
+idiom passed on.
+
+### Slice 2 — the same disease in the absence direction
+
+Seven specs in the push/mute family assert that NO push arrives, and every one of
+their stimuli was a bare fire-and-forget `peer.privmsg(...)`. Measured on #1152:
+on run 31324253590 the peer's DM went to a nick nobody was registered under — a
+7 ms teardown/reconnect left bahamut holding the ghost and grappa's #604
+reconcile correctly adopted `vjt-grappa_` — and the peer's nick appears ZERO
+times in that run's 240 MB log, a log carrying 135 902 message INSERTs, so the
+instrument was sound and the absence was real.
+
+The finding is what that single event does to the two assertion shapes. On the
+POSITIVE spec it is a loud 5 s `awaitPushDelivery` timeout. On the six negative
+ones it is a silent green: no message, no trigger, no push, contract "satisfied"
+without the suppression ever being exercised. **That is the difference between
+"the apparatus was on" and "the stimulus was delivered"** — each of those specs
+proved the first, through a real delivery elsewhere in the same test, and none
+proved the second. The positive spec was the accidental positive control that
+revealed the class.
+
+So the proof is now part of the SIGNATURE, not of the convention:
+`assertNoPushDelivery` takes a `PushStimulus`, proves the row reached grappa
+before opening the window, clocks the window FROM that proof rather than from the
+call, and quotes the stimulus when it fails. A convention the next author can
+omit would have left the hole open.
+
+`assertNoPushDeliveryOnUnusedId` deliberately keeps a DIFFERENT door: there is no
+stimulus to prove when the whole point is that nobody ever sent to that id, and
+uniforming it onto the barriered signature would mean inventing a stimulus that
+does not exist — which is how an honest assertion becomes a decorative one.
+
+### #1155, in the same PR: wait for the thing, not for its class
+
+The drawer-close barrier awaited a CLASS drop that clears ~200 ms before the
+panel stops taking taps; it now waits for `.shell-members` to leave the viewport.
+No new idiom was invented for it: `cicchettoPage.ts` already resolved the same
+problem three times (`closeSettings`, `openMembersDrawer`, `openAdminConsole`),
+and the conversion follows one of those rather than adding a fourth shape.
+
+### What these two slices do NOT close
+
+**The positive half is still unbarriered.** Nine `awaitPushDelivery(SUB_ID)` call
+sites open a 5 s window on a stimulus nothing proves was delivered, so the very
+event #1152 measured still produces an error message that accuses the push
+pipeline. The probe that would close it already exists — `assertMessagePersisted`,
+which is what `assertNoPushDelivery` uses for `stimulusDelivered`.
+
+**Outside the push family the class is clean, measured.** Of 116 `.privmsg(` call
+sites across 71 spec files, 18 are followed within twelve lines by an absence
+oracle or a sleep; all 18 prove their stimulus — 16 by asserting the body arrives,
+2 through a positive outcome downstream that fails loudly if it did not. The
+concentration was the push family. Worth recording for whoever re-runs that
+census: an automatic discriminator (look for the message body in a positive
+assertion nearby) flagged 7 of them as unproven and all 7 were false alarms — the
+proof was a badge count, a loop variable, or an outcome, none of which names the
+body.
