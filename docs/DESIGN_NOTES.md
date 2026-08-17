@@ -45810,3 +45810,110 @@ matters. It is gone as a side effect of the fix, and no test asserts
 it — `default.css` was not touched.
 
 _Deploy: **--cic HOT, client-only.** No server, schema or wire change._
+<!-- entry #1396 -->
+
+---
+
+## 2026-08-17 — #1396 (bucket G, A9): the channel key folds at the selection boundary
+
+First slice of bucket G, and deliberately NOT the dispatch move. Slice 1
+of that (the `requireNetworkId` collapse) landed as PR #1418 on
+2026-08-16; slice 2 moves 59 switch arms and buys no red, only
+characterization. This slice was chosen by the opposite criterion: the
+part of bucket G where a real assertion could go from red to green.
+
+### What A9 actually is, here
+
+The review calls it "the shared-verb rule is already fraying: four
+spellings of the join verb, two of which differ on whether the channel
+is folded". Measured on `60657249`, the four doors that open a channel
+window are `DirectoryPane`, `compose.ts` `/join`, `lib/channelJoin.ts`
+and `HomePane`'s featured-link tap. The first three call
+`canonicalChannel` before `setSelectedChannel`. The fourth does not —
+and it is correct anyway, because `Networks.FeaturedChannel`
+canonicalises at write (`featured_channel.ex:69`), so the raw name it
+forwards has already been folded by the server.
+
+That is the finding, stated honestly: **the client's correctness rests
+on a server storage detail rather than on the client's own rule.** The
+defect is that the invariant is not IMPOSED, not that it is violated —
+the same shape as #1394's outbound door.
+
+### The store was already paying for it
+
+Two places, both measurable before the change:
+
+1. `sameSelection` compares `channelName` byte-wise, so two spellings of
+   one channel were two different selections. The #243 re-tap predicate
+   and the idempotent setter share that compare, so both answered
+   "different window" for a casing.
+2. `stillLive` carries a defensive decode-through-the-key, and its
+   comment names the reason: *"a stray non-canonical
+   setSelectedChannel would otherwise stale-fire this check"*. The
+   codebase had already anticipated the stray and chosen to survive it
+   per-consumer.
+
+Folding at the setter makes the stray impossible rather than
+survivable, and it puts the fold where CLAUDE.md puts every other one:
+at the KEY boundary, once. The per-caller `canonicalChannel` calls stay
+— after this they are belt-and-braces, not a second pattern, because
+the boundary is authoritative.
+
+### Why ONLY `kind: "channel"`
+
+A channel has no display column — the folded key IS the display (option
+B) — so folding on the way in loses nothing. The other kinds must not:
+
+- **`query`** — the name is a peer NICK, and its raw casing is display
+  AND WIRE. `compose.ts`'s `resolveBareWhoisNick` returns
+  `sel.channelName` straight into a WHOIS frame, so folding it would
+  fold a wire builder, which the key/display/wire split forbids. Query
+  focus sites already fold their own KEY via `canonicalQueryNick`
+  before calling. This was the fork put to vjt and ruled on: only KEYs
+  fold, never a wire builder.
+- **the synthetic kinds** (`$server`, `$list`, `$home`, `$admin`) — not
+  identifiers. They are fold-invariant today, which is precisely why
+  folding them would be a silent no-op that stops being one the day a
+  synthetic name gains a capital.
+
+### A mutant found a production edit with no assert behind it
+
+Three mutants, and the third earned its keep by SURVIVING: removing the
+fold from `isActiveSelection` left the entire suite green, because every
+existing arm hands that predicate an already-folded name. The fold was
+right — the predicate and the setter must not disagree about what one
+window is — but nothing observed it. The arm that bites is the mirror of
+the setter's: a caller spelling the channel the way it renders it, which
+is exactly what a sidebar re-tap does. Written after the survival, and
+it is what kills M3 now, alone.
+
+The other two: no fold at all (kills the two positive arms plus a
+pre-existing `followQueryNick` arm), and folding EVERY kind (kills only
+the query arm and two pre-existing `followQueryNick` arms — the
+wire-safety guard, which passes on the base and exists solely to be
+killed by over-folding).
+
+One pre-existing arm was re-spelled, not weakened: `followQueryNick`'s
+same-named-CHANNEL case sets up a channel window called `Guest87449` and
+asserts the tuple is untouched. It still asserts that; the expectation
+reads the folded name now, with a comment saying which side folded it.
+
+### Not established
+
+The slice as proposed also moved `HomePane` onto the shared focus verb.
+**Dropped after the boundary fold, deliberately:** with the fold at the
+setter, HomePane's raw call is correct by construction, and the only
+remaining difference is which helper it spells. A test for that would
+assert a call sequence, not an outcome — and with `lib/selection`
+mocked in `HomePane.test.tsx` the outcome is not even observable there.
+HomePane cannot be merged into `channelJoin.performJoin` either: it
+surfaces join errors inline, where that verb console-warns. So the
+fourth spelling survives this slice, as a spelling and no longer as a
+hazard.
+
+Also not established: no e2e, no browser. The mixed-case channel focus
+is unreachable from the live server today (both the featured table and
+the channel list are folded upstream), so what is measured is the
+boundary, not a user-visible regression.
+
+_Deploy: **--cic HOT, client-only.** No server, schema or wire change._
