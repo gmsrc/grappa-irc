@@ -46526,3 +46526,84 @@ how pins disappear one at a time.
 
 _Not measured here: nothing in this entry claims a verdict for the full
 suite or the type gates; those are a separate run._
+<!-- entry #1390 slice 3 -->
+
+---
+
+## 2026-08-17 — #1390 slice 3: the last two 005 tokens come home, and the three choices that forced
+
+`MODES=` and `LINELEN=` were the only ISUPPORT tokens with a SECOND parser.
+`Session.Server` scanned them out of a 005 with a pair of `reduce_while`
+helpers into two loose integers on state, while `ISupport.merge_isupport/2`
+folded the other fifteen. They were also being parsed a second time by that
+very module: `archive_token/2` writes EVERY advertised token into `raw`, so
+`"MODES=4"` produced both a scanner result and a `raw` entry. The `raw`
+typedoc's promise — "one 005, two readers, no second parse" — described a
+state of affairs the file 3,400 lines away contradicted.
+
+They are typed fields now, on the `put_limit/3` the #1255 length limits
+already share, with `@negatable` entries and accessors that default through
+`Map.get/3`. Two loose keys leave the state map; the parse becomes one.
+
+### Unlike the length limits, these two seed a number
+
+`nicklen`/`channellen`/`topiclen` default to `nil` because nothing enforces
+them and seeding a number would start rejecting input the ircd accepts.
+`MODES`/`LINELEN` cannot do that: `ModeChunker` must pick a chunk size and
+`LineSplit` a frame budget on the first outbound line, long before a 005
+arrives. 3 (IRCv3 / RFC 2812 §3.2.3) and 512 (RFC 2812) are the same values
+`Session.Server` seeded, moved rather than invented.
+
+### Three behaviour changes, because there was no single behaviour to keep
+
+The tiebreak was least surprise. Each is bought by its own named red rather
+than riding along on "the parse is unified", and each is recorded here so a
+later reader finds the choice instead of deducing it from a diff:
+
+1. **A token repeated within ONE 005 line now honours the LAST occurrence.**
+   The scanners `:halt`ed on the first parseable hit. A repeated token is
+   draft-brocklesby-irc-isupport-03 §2's way to CORRECT a value, so ignoring
+   the correction is the worse surprise — and `raw`, the archive the Phase 6
+   facade will read, already honoured the last one. Across LINES both rules
+   already agreed, which is why this went unnoticed.
+2. **A malformed `MODES=` no longer resets to 3.** `parse_modes_token/2`
+   answered `{:cont, 3}` on a failed parse: it discarded an advertised value
+   and substituted the hardcoded default, tightening the limit. Its LINELEN
+   twin answered `{:cont, current}` on the same input. Two twins diverging on
+   one input is a slip, not a contract; an unreadable token must not produce
+   an arbitrary narrower limit.
+3. **`-MODES` / `-LINELEN` revoke.** `"-MODES"` never matched
+   `"MODES=" <> rest`, so a §2 negation was silently dropped and the value
+   survived until reconnect. `@negatable` already documents that a parsed
+   token missing from it is a visible omission rather than a silent one.
+
+### What deliberately did not move
+
+`Session.Wire.isupport_changed/3` keeps its arity and its payload — which
+publishes neither number, only the derived `frame_budget_base` — and the
+`:session_snapshot` reply keeps its own `linelen:` key. Both are client
+contract, and collapsing them would be a wire change for no behavioural
+gain. `LineSplit` and `ModeChunker` keep taking the value as a parameter:
+they were already pure and already outside the session. The other tokens
+sitting in `raw` (`NETWORK`, `TARGMAX`, …) stay untyped — the rule for this
+slice is that a token comes home when it has a second parser, not when it
+could be enriched, and those have no consumer.
+
+`Session.Server.default_modes_per_chunk/0` was deleted: public, zero callers,
+and a second home for a constant `ISupport.default/0` now holds.
+
+### The #1108 disjunct, and why removing it is not a leap
+
+The broadcast gate read `isupport != prev_isupport or linelen != state.linelen`
+because a 005 advertising ONLY `LINELEN` had to reach cic, which sizes its
+"this will split" warning off it. The second disjunct is gone — not merely
+because the field moved inside the table it is compared against, but because
+`archive_token/2` had already made it redundant: any 005 that changes a
+LINELEN or a MODES has moved `raw`, and therefore the table. That reasoning
+is in the code comment rather than left to be re-derived, since #1108 exists
+because this gate was got wrong once.
+
+_Not measured here: whether an ircd in the wild repeats `MODES=` within one
+line or sends `-MODES`. The slice is justified by the internal divergence,
+not by a field frequency nobody has counted; the three changes state what
+happens in those cases, not how often they occur._
