@@ -33,8 +33,10 @@ defmodule Grappa.Session.RecoverProgressTest do
 
   # One FSM hop: returns the state reached and what the modal is told about
   # the transition into it.
+  # The verdict and the outbound lines are the host's business, not this
+  # projection's — hence the bare `_`, the naming strategy Credo infers here.
   defp hop(fsm, input) do
-    {_verdict, next, _lines} = RecoverIdentity.step(fsm, input)
+    {_, next, _} = RecoverIdentity.step(fsm, input)
     {next, RecoverProgress.steps(fsm.phase, next)}
   end
 
