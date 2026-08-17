@@ -84,7 +84,7 @@ defmodule Grappa.Session do
     exports: [Backoff, NSInterceptor, Server, Wire]
 
   alias Grappa.IRC.{AuthFSM, CTCP, Identifier}
-  alias Grappa.Session.{FloodAllowance, ISupport, Server}
+  alias Grappa.Session.{Deps, FloodAllowance, ISupport, Server}
 
   require Logger
 
@@ -213,23 +213,23 @@ defmodule Grappa.Session do
           optional(:managed_source_alias) => String.t() | nil,
           optional(:notify_pid) => pid(),
           optional(:notify_ref) => reference(),
-          optional(:visitor_committer) => Server.visitor_committer(),
-          optional(:visitor_password_rotator) => Server.visitor_password_rotator(),
-          optional(:visitor_nick_persister) => Server.visitor_nick_persister(),
-          optional(:credential_failer) => Server.credential_failer(),
-          optional(:credential_committer) => Server.credential_committer(),
-          optional(:registration_committer) => Server.registration_committer(),
-          optional(:last_joined_persister) => Server.last_joined_persister(),
+          optional(:visitor_committer) => Deps.visitor_committer(),
+          optional(:visitor_password_rotator) => Deps.visitor_password_rotator(),
+          optional(:visitor_nick_persister) => Deps.visitor_nick_persister(),
+          optional(:credential_failer) => Deps.credential_failer(),
+          optional(:credential_committer) => Deps.credential_committer(),
+          optional(:registration_committer) => Deps.registration_committer(),
+          optional(:last_joined_persister) => Deps.last_joined_persister(),
           # #581 — visitor-only /recover secret reader (the visitor plan injects
           # it; user plans omit it). Twin of the `init_opts` entry in
           # `Grappa.Session.Server` — MUST stay in sync (a build_plan map with a
           # key absent here fails `resolve/2`'s `{:ok, start_opts()}` spec →
           # dialyzer `missing_range` cascade across every resolve consumer).
-          optional(:recover_source) => Server.recover_source(),
+          optional(:recover_source) => Deps.recover_source(),
           # GH #417 — persist/restore the EXPLICIT away across crash/reconnect
           # (user-only; the visitor plan omits both). Kept in sync with the
           # `Grappa.Session.Server.start_opts/0` twin.
-          optional(:away_persister) => Server.away_persister(),
+          optional(:away_persister) => Deps.away_persister(),
           optional(:restored_away) => Server.restored_away(),
           optional(:refresh_plan) => Server.refresh_plan_check(),
           # GH #189 — on-connect perform list + its `$oper_pass` secret,
