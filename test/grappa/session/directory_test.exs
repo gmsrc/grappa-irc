@@ -102,7 +102,7 @@ defmodule Grappa.Session.DirectoryTest do
     assert network_slug == network.slug
     # `:sys.get_state` serializes AFTER the timeout handler returns, so the
     # in-flight tracker is guaranteed cleared by the time we read it.
-    assert :sys.get_state(pid).directory_refresh == nil
+    assert :sys.get_state(pid).directory.run == nil
   end
 
   # #910 — the timeout above is exactly what makes the LIST family's routing
