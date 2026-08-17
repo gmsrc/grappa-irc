@@ -6630,7 +6630,6 @@ defmodule Grappa.Session.Server do
     :ok = ChannelDirectory.ingest(state.subject, state.network_id, rows)
   end
 
-
   # mIRC sort: ops (@) → voiced (+) → plain (no prefix). Within tier,
   # alphabetical by nick (caller `Enum.sort_by` does the secondary).
   defp member_sort_tier(modes) do
