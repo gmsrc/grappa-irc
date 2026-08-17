@@ -580,11 +580,16 @@ config :logger, :console,
     # the curve fed off.
     :delay_ms,
     :failure_count,
-    # T31 admission — rides admission rejection / circuit transition log
-    # lines so operator can grep cap-exceeded events.
-    :cap_kind,
-    :cap_value,
-    :cap_observed,
+    # T31 admission. The block used to open with `:cap_kind`, `:cap_value`
+    # and `:cap_observed`; #1403's reverse gate found the three occur in no
+    # file under `lib/` at all, and they are gone. There is in fact no
+    # `Logger.` call anywhere in `lib/grappa/admission/`, so the two below
+    # are almost certainly dead as metadata too — they survive the gate on
+    # non-Logger occurrences (`circuit_state` inside the ETS table name
+    # `:admission_network_circuit_state`, `retry_after_seconds` as a field
+    # of `NetworkCircuit.AdminWire`), which is exactly the lower bound that
+    # gate documents about itself. Left in place because nothing PROVED
+    # them dead; prove it and drop them.
     :circuit_state,
     :retry_after_seconds,
     # IRC outbound verb (cluster #10 S10): identifies which
