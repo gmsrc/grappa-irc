@@ -37,6 +37,7 @@ defmodule Grappa.Session.ServerTest do
   alias Grappa.Session.{
     AwayState,
     Backoff,
+    Deps,
     GhostRecovery,
     ISupport,
     RecoverIdentity,
@@ -229,6 +230,47 @@ defmodule Grappa.Session.ServerTest do
     end
 
     %{server: server, pid: pid, network: network, subject: subject, label: label}
+  end
+
+  # #1390 slice 1 — the ten injected callbacks are ONE typed field, not ten
+  # top-level state keys. They are dependencies, not state: nothing in the
+  # session's lifetime writes them, and grouping them is behaviour-free, so
+  # no existing test can tell the two shapes apart. These two pins can.
+  #
+  # Split in two on purpose: forgetting to ADD the bundle and forgetting to
+  # REMOVE the ten loose keys are different mistakes, and each must kill
+  # exactly one assertion.
+  @di_keys ~w[visitor_committer visitor_password_rotator visitor_nick_persister
+              credential_failer credential_committer registration_committer
+              last_joined_persister recover_source away_persister
+              query_window_open?]a
+
+  describe "injected dependency bundle (#1390)" do
+    test "a live session carries the callbacks in one Deps struct" do
+      {_server, port} = start_server()
+      {user, network, _cred} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      assert %Deps{} = :sys.get_state(pid).deps
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the ten callback names are gone from the top level of state" do
+      {_server, port} = start_server()
+      {user, network, _cred} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      state = :sys.get_state(pid)
+      # Assert the pre-state is observable at all: if `start_session_for/2`
+      # ever stops returning a live session this test must fail loudly rather
+      # than pass on an empty map.
+      assert is_map(state) and map_size(state) > 10
+
+      assert Enum.filter(@di_keys, &Map.has_key?(state, &1)) == []
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
   end
 
   describe "DB-driven init (sub-task 2g)" do
@@ -13064,16 +13106,22 @@ defmodule Grappa.Session.ServerTest do
                      1_000
     end
 
-    test "hot-reload safety: a live proc predating the :recover_source field survives" do
+    test "hot-reload safety: a live proc predating the :deps bundle survives" do
       # #229/#581 hot-reload contract. A plain hot reload does NOT rewrite live
-      # process state, so a Session.Server spawned before the #581
-      # `:recover_source` field existed keeps its old keyless map. `handle_call`
-      # reads it via `Map.get` (never `state.recover_source`), so a /recover on
-      # a stale proc must degrade to `:nothing_to_recover`, never KeyError-crash.
+      # process state, so a Session.Server spawned before the field existed
+      # keeps its old keyless map. `handle_call` reads it via `Map.get` (never
+      # dot-access), so a /recover on a stale proc must degrade to
+      # `:nothing_to_recover`, never KeyError-crash.
+      #
+      # #1390 moved the reader into the `:deps` bundle, so the stale shape this
+      # models is now a proc with no `:deps` key at all. Deleting the OLD
+      # top-level `:recover_source` would be a no-op against today's state and
+      # the test would pass while exercising nothing — the assertion below is
+      # unchanged, only the key that simulates the stale proc moved.
       %{pid: pid, subject: subject, network: network} = start_recover_visitor("s3cret")
 
-      # Simulate the stale-proc shape: strip :recover_source from live state.
-      _ = :sys.replace_state(pid, fn state -> Map.delete(state, :recover_source) end)
+      # Simulate the stale-proc shape: strip :deps from live state.
+      _ = :sys.replace_state(pid, fn state -> Map.delete(state, :deps) end)
 
       assert {:error, :nothing_to_recover} = Session.recover_identity(subject, network.id)
 
