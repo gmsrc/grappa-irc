@@ -121,6 +121,7 @@ defmodule Grappa.Session.Server do
     Persistor,
     Presence,
     RecoverIdentity,
+    RecoverProgress,
     WhoisAccum,
     WhowasAccum,
     WindowState
@@ -4591,7 +4592,7 @@ defmodule Grappa.Session.Server do
   # consumer must never fail the recovery. Returns state unchanged.
   @spec broadcast_recover_events(t(), RecoverIdentity.phase(), RecoverIdentity.t()) :: t()
   defp broadcast_recover_events(state, old_phase, next) do
-    Enum.each(recover_progress_steps(old_phase, next), fn {step, status, reason} ->
+    Enum.each(RecoverProgress.steps(old_phase, next), fn {step, status, reason} ->
       _ =
         Broadcaster.to_user(
           state,
@@ -4618,74 +4619,6 @@ defmodule Grappa.Session.Server do
 
     state
   end
-
-  # #581 — map an FSM transition (old phase → next state) to the progress
-  # step(s) the modal renders. Order mirrors the source-verified sequence:
-  # NICK + IDENTIFY go out together, `+r` is the success (`:register`),
-  # and a held nick detours through the reclaim verb. `verb` (`:recover |
-  # :release`) doubles as its own step atom.
-  @spec recover_progress_steps(RecoverIdentity.phase(), RecoverIdentity.t()) ::
-          [{SessionWire.recover_step(), SessionWire.recover_status(), SessionWire.recover_reason() | nil}]
-  defp recover_progress_steps(:idle, %{phase: :awaiting_r}),
-    do: [{:nick, :running, nil}, {:identify, :running, nil}]
-
-  defp recover_progress_steps(:awaiting_r, %{phase: :awaiting_verb_settle, verb: verb}),
-    do: [{:nick, :failed, nil}, {verb, :running, nil}]
-
-  # #623 — the verb settled; the re-NICK goes out ALONE. Only the nick step
-  # runs now — the identify step waits for `:nick_observed` (the sequencing
-  # barrier), so the modal never shows identify running before the nick lands.
-  defp recover_progress_steps(:awaiting_verb_settle, %{phase: :awaiting_nick, verb: verb}),
-    do: [{verb, :ok, nil}, {:nick, :running, nil}]
-
-  # #623 — the re-NICK was observed on-nick; the sameNick IDENTIFY goes out now.
-  defp recover_progress_steps(:awaiting_nick, %{phase: :awaiting_final_r}),
-    do: [{:nick, :ok, nil}, {:identify, :running, nil}]
-
-  defp recover_progress_steps(_, %{phase: :succeeded}),
-    do: [{:nick, :ok, nil}, {:identify, :ok, nil}, {:register, :ok, nil}]
-
-  # #623 pt3 — RECONCILE every in-flight step on terminal :failed (not just one)
-  # so the modal never strands a step at :running (the trace "hang"), keyed on
-  # the phase we failed OUT of.
-  defp recover_progress_steps(old, %{phase: :failed, reason: reason, verb: verb}),
-    do: recover_terminal_steps(old, verb, reason)
-
-  # #623 — the retry (`:awaiting_nick` → `:awaiting_verb_settle`) and every
-  # other transition are SILENT: no visible retry churn.
-  defp recover_progress_steps(_, _), do: []
-
-  # #623 pt3 — the reconciled terminal step list, keyed on the phase we failed
-  # OUT of. Every step still :running at that phase is flipped to its terminal
-  # status, and the two reclaim legs stay DISTINCT + trace-diagnosable:
-  #   * `:awaiting_r` — a clean NICK but `+r` never came → the IDENTIFY failed
-  #     (`:wrong_password`); the nick itself landed clean (`:ok`).
-  #   * `:awaiting_verb_settle` — the reclaim verb went unanswered → the verb
-  #     failed (`:services_declined`).
-  #   * `:awaiting_nick` — leg (a): the re-NICK never landed → the nick failed
-  #     (`:nick_unavailable`); the identify step never started.
-  #   * `:awaiting_final_r` — leg (b): the re-NICK landed but `+r` never
-  #     confirmed → the identify failed (`:identify_unconfirmed`); the nick is
-  #     already `:ok`.
-  @spec recover_terminal_steps(
-          RecoverIdentity.phase(),
-          RecoverIdentity.verb(),
-          RecoverIdentity.reason()
-        ) :: [{SessionWire.recover_step(), SessionWire.recover_status(), SessionWire.recover_reason() | nil}]
-  defp recover_terminal_steps(:awaiting_r, _, reason),
-    do: [{:nick, :ok, nil}, {:identify, :failed, reason}]
-
-  defp recover_terminal_steps(:awaiting_verb_settle, verb, reason) when verb in [:recover, :release],
-    do: [{verb, :failed, reason}]
-
-  defp recover_terminal_steps(:awaiting_nick, _, reason),
-    do: [{:nick, :failed, reason}]
-
-  defp recover_terminal_steps(:awaiting_final_r, _, reason),
-    do: [{:nick, :ok, nil}, {:identify, :failed, reason}]
-
-  defp recover_terminal_steps(_, _, reason),
-    do: [{:nick, :failed, reason}]
 
   # Build the IRC.Client opts map from the pre-resolved primitive
   # plan. Nick-fallback + Cloak password decryption already happened

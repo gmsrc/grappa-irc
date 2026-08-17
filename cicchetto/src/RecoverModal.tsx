@@ -28,8 +28,9 @@ import { dismissRecover, recoverState } from "./lib/recoverProgress";
 const STEP_LABEL: Record<RecoverStep, string> = {
   identify: "Identifying to services",
   // review-#4: on the recover (re-identify) path the server emits `register`
-  // as the FINAL "+r confirmed" step (recover_progress_steps/:succeeded), NOT
-  // a fresh registration — so "Identity confirmed", not "Registering your nick".
+  // as the FINAL "+r confirmed" step (RecoverProgress.steps/2, the :succeeded
+  // clause), NOT a fresh registration — so "Identity confirmed", not
+  // "Registering your nick".
   register: "Identity confirmed",
   nick: "Reclaiming your nick",
   recover: "Recovering your nick",
