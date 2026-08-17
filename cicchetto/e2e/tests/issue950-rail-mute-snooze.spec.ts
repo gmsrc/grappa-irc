@@ -146,8 +146,15 @@ test("a one-hour snooze picked from the rail silences the channel and says how l
 
     // Positive arm — the same shape in the unmuted sibling, so the negative arm
     // cannot be passing because push broke outright.
-    peer.privmsg(LOUD_CHANNEL, `${specNick()}: but you will hear this`);
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const loudBody = `${specNick()}: but you will hear this`;
+    peer.privmsg(LOUD_CHANNEL, loudBody);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: LOUD_CHANNEL,
+      sender: peer.nick,
+      body: loudBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
   } finally {
     await peer.disconnect("#950 snooze done");

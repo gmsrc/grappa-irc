@@ -79,9 +79,16 @@ test("server suppresses push while a device reports visible, delivers once hidde
     // Phase 2 — device HIDDEN (backgrounded). The server MUST now deliver.
     await resetPushCatcher();
     await setPageVisibility(page, false);
-    peer.privmsg(specNick(), "now you backgrounded it — deliver this one");
+    const hiddenBody = "now you backgrounded it — deliver this one";
+    peer.privmsg(specNick(), hiddenBody);
 
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: peer.nick,
+      sender: peer.nick,
+      body: hiddenBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
     expectRfc8291Delivery(deliveries[0]);
   } finally {

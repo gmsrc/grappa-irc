@@ -105,9 +105,16 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
 
     // Peer mentions the operator. Mentions.mentioned?/3 matches
     // the bare nick at a word boundary.
-    peer.privmsg(TARGET_CHANNEL, `${specNick()}: are you there?`);
+    const mentionBody = `${specNick()}: are you there?`;
+    peer.privmsg(TARGET_CHANNEL, mentionBody);
 
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: TARGET_CHANNEL,
+      sender: peer.nick,
+      body: mentionBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
 
     // #1290 — the wire contract; see `expectRfc8291Delivery`.

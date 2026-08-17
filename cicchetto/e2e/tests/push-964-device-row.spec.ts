@@ -79,8 +79,16 @@ test("device row shows the activity instant + marks the device you are on", asyn
   try {
     // Background the device: a VISIBLE one suppresses the push at source.
     await setPageVisibility(page, false);
-    peer.privmsg(specNick(), "hi from n964-dmer");
-    expect((await awaitPushDelivery(SUB_ID)).length).toBeGreaterThanOrEqual(1);
+    const dmBody = "hi from n964-dmer";
+    peer.privmsg(specNick(), dmBody);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: peer.nick,
+      sender: peer.nick,
+      body: dmBody,
+    });
+    expect(deliveries.length).toBeGreaterThanOrEqual(1);
     // Barrier: Sender bumps the row AFTER the vendor 200, so the catcher
     // seeing a delivery does not yet mean the DB write has landed.
     await awaitDeviceLastUsed(vjt.token);

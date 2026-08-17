@@ -63,9 +63,16 @@ test("DM while push-enabled fires Sender → push-catcher receives a POST", asyn
     // PRIVMSG straight to the operator's nick — no JOIN needed.
     // Server-side this hits Session.Server's :persist arm with
     // `channel = own_nick`; Triggers' dm? predicate matches.
-    peer.privmsg(specNick(), "hi from b5-dmer");
+    const dmBody = "hi from b5-dmer";
+    peer.privmsg(specNick(), dmBody);
 
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: peer.nick,
+      sender: peer.nick,
+      body: dmBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
 
     // #1290 — the wire contract, asserted in one place for all five

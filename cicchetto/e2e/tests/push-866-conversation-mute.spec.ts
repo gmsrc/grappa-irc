@@ -122,8 +122,15 @@ test("a muted channel swallows even a direct mention, while its unmuted sibling 
 
     // Positive arm — the same mention shape in the unmuted sibling. This is
     // what keeps the negative arm from passing because push broke outright.
-    peer.privmsg(LOUD_CHANNEL, `${specNick()}: but you will hear this`);
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const loudBody = `${specNick()}: but you will hear this`;
+    peer.privmsg(LOUD_CHANNEL, loudBody);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: LOUD_CHANNEL,
+      sender: peer.nick,
+      body: loudBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
   } finally {
     await peer.disconnect("#866 mute done");

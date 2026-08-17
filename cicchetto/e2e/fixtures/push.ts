@@ -292,9 +292,25 @@ export type CaughtDelivery = {
 type CatcherResponse = { id: string; deliveries: CaughtDelivery[] };
 
 /**
- * Polls `/received/<id>` until at least one delivery has landed for
- * the subscription, or the timeout elapses. Mirrors
- * grappaApi.assertMessagePersisted's poll-with-timeout shape.
+ * Waits for at least one delivery on the subscription — AFTER proving that
+ * the message whose push is expected actually reached grappa.
+ *
+ * The stimulus is a REQUIRED argument for the same reason it is one on
+ * `assertNoPushDelivery`, and #1152 is the measurement that says so. A peer
+ * DM went to a nick nobody was registered under (a 7ms teardown/reconnect
+ * left bahamut holding the ghost, and grappa's #604 reconcile correctly
+ * adopted `vjt-grappa_`); nothing was ever pushed because nothing ever
+ * arrived, and this wait spent five seconds watching a catcher for something
+ * nobody sent. It then reported `timeout after 5000ms`, which accuses the
+ * push pipeline for a failure that happened before the pipeline was reached.
+ * Measured on that run: the peer's nick appears ZERO times in a 240MB log
+ * carrying 135 902 message INSERTs.
+ *
+ * Two things change. The failure now names WHICH half broke — a stimulus
+ * that never landed and a pipeline that never delivered are different
+ * errors. And the delivery window is clocked from the delivery PROOF rather
+ * than from the call, so a slow stimulus transit no longer eats the budget
+ * the pipeline is being judged on.
  *
  * Sender's fan-out is fire-and-forget via `Task.async_stream`, so
  * the spec MUST poll rather than assume synchronous delivery. 5s
@@ -303,8 +319,28 @@ type CatcherResponse = { id: string; deliveries: CaughtDelivery[] };
  */
 export async function awaitPushDelivery(
   id: string,
+  stimulus: PushStimulus,
   opts: { timeoutMs?: number; intervalMs?: number } = {},
 ): Promise<CaughtDelivery[]> {
+  const quoted = `<${stimulus.sender}> ${JSON.stringify(stimulus.body)} → ${stimulus.window}`;
+
+  try {
+    await assertMessagePersisted({
+      token: stimulus.token,
+      networkSlug: stimulus.networkSlug,
+      channel: stimulus.window,
+      sender: stimulus.sender,
+      body: stimulus.body,
+    });
+  } catch (cause) {
+    throw new Error(
+      `awaitPushDelivery: the stimulus never reached grappa, so a missing push for ` +
+        `id=${id} says nothing about the push pipeline — ${quoted}\n  cause: ${
+          cause instanceof Error ? cause.message : String(cause)
+        }`,
+    );
+  }
+
   const timeoutMs = opts.timeoutMs ?? 5_000;
   const intervalMs = opts.intervalMs ?? 100;
   const deadline = Date.now() + timeoutMs;
@@ -316,7 +352,10 @@ export async function awaitPushDelivery(
     }
     await sleep(intervalMs);
   }
-  throw new Error(`awaitPushDelivery: timeout after ${timeoutMs}ms — id=${id}`);
+  throw new Error(
+    `awaitPushDelivery: the stimulus reached grappa but no delivery landed for id=${id} ` +
+      `within ${timeoutMs}ms of the proof — ${quoted}`,
+  );
 }
 
 /**

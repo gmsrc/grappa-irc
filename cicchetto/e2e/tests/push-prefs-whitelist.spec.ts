@@ -124,8 +124,15 @@ test("notification_prefs whitelist: messages in allow-list push, messages elsewh
 
     // Positive path — peer talks in ALLOW, no mention. Push expected
     // because channel_messages_only includes #b5-allow.
-    peer.privmsg(ALLOW_CHANNEL, "small talk in allow");
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const allowBody = "small talk in allow";
+    peer.privmsg(ALLOW_CHANNEL, allowBody);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: ALLOW_CHANNEL,
+      sender: peer.nick,
+      body: allowBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
     expectRfc8291Delivery(deliveries[0]);
   } finally {

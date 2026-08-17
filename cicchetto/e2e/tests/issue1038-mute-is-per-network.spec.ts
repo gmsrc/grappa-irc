@@ -218,8 +218,15 @@ test("a mute made on one network leaves the same channel on the other still push
     // the assertion the pre-#1038 key fails: with a network-blind mute the
     // entry made on A silences B too and nothing arrives. It also keeps arm 1
     // honest — without it, arm 1 would pass if push were broken outright.
-    peerB.privmsg(SHARED_CHANNEL, `${OWN_NICK}: but you will hear this one`);
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const loudBody = `${OWN_NICK}: but you will hear this one`;
+    peerB.privmsg(SHARED_CHANNEL, loudBody);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: user.token,
+      networkSlug: MUTE1038_NETWORK_B,
+      window: SHARED_CHANNEL,
+      sender: peerB.nick,
+      body: loudBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
   } finally {
     await peerA.disconnect("#1038 done");

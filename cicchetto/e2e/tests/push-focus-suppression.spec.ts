@@ -84,9 +84,16 @@ test("server delivers push once the window is blurred though still on-screen, su
     // stayed suppressed because visibilityState alone reported "visible".
     await resetPushCatcher();
     await setPageFocus(page, false);
-    peer.privmsg(specNick(), "you clicked another app — deliver this one");
+    const blurredBody = "you clicked another app — deliver this one";
+    peer.privmsg(specNick(), blurredBody);
 
-    const deliveries = await awaitPushDelivery(SUB_ID);
+    const deliveries = await awaitPushDelivery(SUB_ID, {
+      token: vjt.token,
+      networkSlug: NETWORK_SLUG,
+      window: peer.nick,
+      sender: peer.nick,
+      body: blurredBody,
+    });
     expect(deliveries.length).toBeGreaterThanOrEqual(1);
     expectRfc8291Delivery(deliveries[0]);
 
