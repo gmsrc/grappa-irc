@@ -1922,8 +1922,8 @@ defmodule Grappa.Session.Server do
   #      no DB churn), then nuke the prior snapshot, arm the watchdog, and
   #      record the in-flight tracker. The streamed 321/322/323 capture is
   #      Task C3; the watchdog handler is `:directory_refresh_timeout` below.
-  #   3. catch-all (`directory_refresh` non-nil) — a refresh is already
-  #      streaming. The tracker's presence IS the guard; reply
+  #   3. catch-all (`run` non-nil) — a refresh is already
+  #      streaming. The run's presence IS the guard; reply
   #      `{:error, :already_refreshing}` and leave the in-flight run untouched.
   def handle_call(:refresh_directory, _, %{directory: %DirectoryIngest{run: nil}, client: nil} = state) do
     {:reply, {:error, :not_connected}, state}
