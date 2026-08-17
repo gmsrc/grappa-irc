@@ -47441,3 +47441,78 @@ empty `deps:`. The same move here cannot be scoped to `Network` alone —
 is the four-schema cluster, priced at roughly fifteen files and atomic. That is a
 purchase, not a slice, and it is deliberately left to #1398 rather than smuggled in
 behind a gate.
+<!-- entry #1403 -->
+
+---
+
+## 2026-08-17 — #1403: the Logger allowlist gets its missing direction, and it is a lower bound on purpose
+
+`config/config.exs` carries a 318-line `:metadata` allowlist — 108 atoms, 44%
+of the file. One test pinned it, in one direction: `Meta.known_keys() --
+allowlist == []`, so every scrollback meta key must be listed. Nothing pinned
+the other way, and four entries carried a hand-written apology for being
+present-but-unlogged, which is the allowlist admitting in prose what no gate
+was checking.
+
+The reverse gate now exists, and the first thing it did was name three atoms
+nobody had apologised for: `:cap_kind`, `:cap_value` and `:cap_observed`
+occurred in **no file under `lib/` at all**. Not unlogged — absent. The
+comment above them said they rode "admission rejection / circuit transition
+log lines"; there is no `Logger.` call anywhere in `lib/grappa/admission/`, so
+that line was never written. They are gone.
+
+### Why the derivation is a substring scan and not an AST walk
+
+The gate asserts something deliberately weak: an allowlisted atom must occur
+as a substring on a non-comment line of some `lib/**/*.ex`. It proves "cannot
+possibly be logged", never "is not logged".
+
+Anything stricter goes red on live keys, and the codebase already contains
+three shapes that would trip it. `Grappa.Log.session_context/2` hands
+`[user: u, network: n]` to `Logger.metadata/1` through a function call, so an
+AST walk of Logger call sites sees a call node and no keys.
+`Grappa.IRC.Client` receives the same pair as a `start_link` option, one hop
+further from any Logger site. And `@known_keys ~w[...]a` is a sigil, which
+`Code.string_to_quoted!/1` renders as a string payload rather than atom nodes
+— an atom walk would be blind to the very 23 keys the forward gate exists to
+protect. A gate whose false-red rate is non-zero on a 108-entry list is a gate
+someone silences.
+
+`Meta.known_keys/0` is subtracted before the check so the two directions
+cannot fight: a key the forward gate REQUIRES must never be reported as an
+orphan by the reverse one. `:request_id` is declared framework-injected —
+`Plug.RequestId` in the endpoint sets it and nothing here does. That entry is
+belt-and-braces today, since two `@moduledoc` mentions would carry the atom
+past the scan anyway; it is there so rewording a moduledoc cannot turn a live
+framework key into an apparent orphan somebody prunes.
+
+### What the lower bound costs, stated rather than hidden
+
+`:circuit_state` and `:retry_after_seconds` are almost certainly dead for the
+same reason as the three that went — same block, same absent log line — and
+the gate cannot say so. They survive on occurrences that have nothing to do
+with logging: `circuit_state` sits inside the ETS table name
+`:admission_network_circuit_state`, and `retry_after_seconds` is a field of
+`NetworkCircuit.AdminWire`. Both were left in place with the evidence written
+next to them. Pruning on a hunch is what filled this list.
+
+Three more entries stay for a different reason. `:who`, `:who_target` and
+`:names_target` are in `@known_keys` and are never written as scrollback meta
+by any code in `lib/`, but `Meta.load/1` reads that same list to atomise keys
+coming back from SQLite, leniently — an unknown key survives as a string.
+Dropping them therefore does not crash anything; it silently changes the shape
+historical rows load with, atom key to string key, all the way to the render.
+That is a separate decision needing evidence from real rows, not a tidy-up.
+
+### Placement
+
+Both directions now live in `test/grappa/logger_metadata_allowlist_test.exs`.
+The forward test moved there unchanged from `Grappa.Scrollback.MetaTest`: 85
+of the 108 allowlisted atoms have nothing to do with scrollback meta, and
+parking the allowlist's only gate inside one Ecto type's test file is a fair
+part of why the missing half stayed missing for as long as it did.
+
+_Not established: how many of the remaining 105 atoms are actually logged. The
+scan proves absence, never disuse, so the count of dead entries is a floor and
+not a measurement. The 39-arm `do_handle_in` door and the per-verb table that
+#1403's HIGH proposes are untouched by this work._
