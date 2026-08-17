@@ -125,9 +125,11 @@ defmodule Grappa.Session.EventRouter do
 
   @typedoc """
   #400 — injected open-query-window predicate `(subject, network_id, nick)
-  -> bool`. Read from `state.query_window_open?` (an `optional(any())`
-  key on the state map above) to decide whether a services-sender arrival
-  re-keys to the service's own query window or the synthetic `$server`.
+  -> bool`. Read from `state.deps.query_window_open?` (#1390 bundled the
+  host's ten injected callbacks into one `Grappa.Session.Deps` struct; before
+  it, this sat loose on the state map) to decide whether a services-sender
+  arrival re-keys to the service's own query window or the synthetic
+  `$server`.
 
   EventRouter is a pure classifier ("No Repo, no Logger"); the fact it
   needs is a DB read (`Grappa.QueryWindows.open?/3`). Rather than alias
@@ -2919,7 +2921,7 @@ defmodule Grappa.Session.EventRouter do
   #
   # The open-window fact is a per-(subject, network) DB read. EventRouter
   # is a pure classifier ("No Repo"), so the lookup is injected as the
-  # opaque `state.query_window_open?` callback (see the type's docstring).
+  # opaque `state.deps.query_window_open?` callback (see the type's docstring).
   # Absent → false → `$server`, which post-#546 is also the correct default
   # for a peer, so the sandbox-free classifier suite needs no DI seam to
   # observe production routing.
@@ -2933,7 +2935,17 @@ defmodule Grappa.Session.EventRouter do
   # discipline 1) and could only ever disagree with itself.
   @spec open_query_or_server(String.t(), state()) :: String.t()
   defp open_query_or_server(sender, state) do
-    open? = Map.get(state, :query_window_open?, fn _, _, _ -> false end)
+    # Deliberately a PLAIN map pattern, not `%Deps{}`: `Deps` already
+    # references this module for the `query_window_open?()` type, and matching
+    # its struct here would close a compile/export cycle. A struct IS a map, so
+    # the production `%Deps{}` matches. The absent arm keeps its `false`
+    # default — NOT the `Deps` default, which is the real DB read and would
+    # cost this module its "No Repo" purity in any test that omits `deps`.
+    open? =
+      case Map.get(state, :deps) do
+        %{query_window_open?: fun} when is_function(fun, 3) -> fun
+        _ -> fn _, _, _ -> false end
+      end
 
     if open?.(state.subject, state.network_id, sender),
       do: sender,

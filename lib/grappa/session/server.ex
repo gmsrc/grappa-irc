@@ -102,6 +102,7 @@ defmodule Grappa.Session.Server do
     AwayState,
     Backoff,
     Broadcaster,
+    Deps,
     EventRouter,
     FloodAllowance,
     GhostRecovery,
@@ -237,169 +238,6 @@ defmodule Grappa.Session.Server do
                         )
 
   @typedoc """
-  Optional opaque callback the visitor-side `SessionPlan` injects into
-  every visitor plan. Invoked by `apply_effects/2` when EventRouter emits
-  `:identity_secret_confirmed` so the confirmed NickServ password AND the nick held
-  at the identify instant land on the credential (#561). The function shape
-  mirrors `Grappa.Visitors.commit_identity/4` (the closure captures
-  `network_id`, so the args are `(visitor_id, password, nick)`). Carried as
-  an opaque function reference (not a module name) to avoid a static
-  `Session → Visitors` boundary alias — Visitors already deps Session
-  via `Visitors.Login`, so a literal alias would close a cycle.
-  """
-  @type visitor_committer ::
-          (Ecto.UUID.t(), String.t(), String.t() ->
-             {:ok, struct()} | {:error, :not_found | Ecto.Changeset.t()})
-
-  @typedoc """
-  #131 — visitor-side SET PASSWD committer the visitor `SessionPlan`
-  injects. The visitor counterpart of `credential_committer`. Invoked from
-  the outbound NickServ-secret capture choke point (NOT the `+r` path) when
-  a well-formed in-session `SET PASSWD` leaves the wire.
-
-  Deliberately NOT `visitor_committer` (`commit_identity/4`): that one
-  promotes anon→permanent (+ binds the identified nick), which is only safe
-  behind the `+r` identity proof. This shape maps to
-  `Grappa.Visitors.rotate_password/2`, which is
-  identity-gated (`{:error, :not_identified}` for an anon row) so an
-  optimistic commit can't pin an unidentified visitor permanent. Same
-  Boundary-cycle-avoiding function-reference indirection as
-  `visitor_committer`.
-  """
-  @type visitor_password_rotator ::
-          (Ecto.UUID.t(), String.t() ->
-             {:ok, struct()} | {:error, :not_found | :not_identified | Ecto.Changeset.t()})
-
-  @typedoc """
-  V9 (visitor-parity cluster, 2026-05-15) — opaque callback the
-  visitor-side `SessionPlan` injects so `apply_effects/2` can rotate
-  `visitors.nick` after EventRouter observes the upstream NICK
-  self-echo. Same Boundary-cycle reasoning as `visitor_committer`:
-  Visitors deps Session via Login, so a static
-  `Session → Grappa.Visitors` alias would close the cycle. The
-  function shape mirrors `Grappa.Visitors.update_nick/3` exactly —
-  including #561's `{:ok, :held_identified}` (the echo persist is a no-op
-  when the credential is identified; its nick is bound at `+r` instead).
-  """
-  @type visitor_nick_persister ::
-          (Ecto.UUID.t(), String.t() ->
-             {:ok, struct() | :held_identified} | {:error, :not_found | Ecto.Changeset.t()})
-
-  @typedoc """
-  Optional opaque callback injected by `Networks.SessionPlan.resolve/1`
-  into every user-session plan. Called from `handle_terminal_failure/2`
-  when a hard upstream error (k-line / permanent SASL) means the session
-  should never be restarted without operator action.
-
-  The closure captures `user_id` + `network_id` and calls
-  `Networks.mark_failed_by_ids/3` — a static Networks alias is avoided
-  here for the same Boundary reason as `visitor_committer` (Networks
-  already deps Session; closing the cycle is banned by `use Boundary`).
-
-  Calling convention: fire inside a supervised `Task.Supervisor.start_child/2`
-  (S37) BEFORE `{:stop, :normal}` so the Server's GenServer exit is truly
-  `:normal` and the `:transient` supervisor doesn't restart. The Task's
-  async execution means `mark_failed_by_ids` runs after the process has
-  exited — `stop_session` inside `mark_failed` finds `whereis → nil` and is
-  a no-op.
-  """
-  @type credential_failer :: (String.t() -> :ok)
-
-  @typedoc """
-  #131 — opaque callback injected by `Networks.SessionPlan.resolve/1`
-  into every USER-session plan. Invoked from the outbound NickServ-secret
-  capture choke point when a well-formed in-session `SET PASSWD` leaves
-  the wire, so the new upstream NickServ password is committed to the
-  bound credential OPTIMISTICALLY (no `+r` rendezvous fires for a password
-  change from an already-identified session).
-
-  User-side mirror of `visitor_committer`: the closure captures
-  `(user_id, network_id)` and forwards to
-  `Grappa.Networks.Credentials.commit_password/3`. The function-reference
-  indirection avoids a static `Session → Grappa.Networks` alias (Networks
-  already deps Session for `stop_session`, so the reverse closes a
-  Boundary cycle). Visitor plans don't carry it (nil); the visitor home
-  is reached via `visitor_committer` instead.
-  """
-  @type credential_committer ::
-          (String.t() ->
-             {:ok, struct()} | {:error, :not_found | Ecto.Changeset.t()})
-
-  @typedoc """
-  #349 — opaque callback injected by `Networks.SessionPlan.resolve/1` into
-  every USER-session plan. Invoked from the `+r` observer (`apply_effects/2`)
-  when a wizard-driven REGISTER is confirmed (a staged
-  `pending_registration_secret` + the services-set `+r`), so the REGISTER
-  password is committed to the bound credential AND its `auth_method` flips to
-  `:nickserv_identify` (the registered nick must auto-identify on every future
-  reconnect, else services enforce it).
-
-  Distinct from `credential_committer` (#131, SET PASSWD — password only, no
-  auth_method change): registration promotes a `--auth none` binding to
-  auto-identify, so it forwards to
-  `Grappa.Networks.Credentials.commit_registration_password/3`. Same
-  function-reference indirection (Networks deps Session; the reverse would
-  close a Boundary cycle) and `(user_id, network_id)` capture as
-  `credential_committer`. Visitor plans don't carry it (nil); the visitor `+r`
-  promotion runs via `visitor_committer` instead.
-  """
-  @type registration_committer ::
-          (String.t() ->
-             {:ok, struct()} | {:error, :not_found | Ecto.Changeset.t()})
-
-  @typedoc """
-  CP22 cluster B (channel-client-polish #14, B-restart) — opaque
-  callback that persists a channels-list CHANGE so a graceful or crash
-  restart can rehydrate the channel list at boot. First argument is the
-  current `Map.keys(state.members)` keyset, second the channels THIS
-  change removed from it.
-
-  Boundary-clean: Session.Server cannot reference `Grappa.Networks`
-  directly (the cycle is banned — Networks already deps Session for
-  stop_session calls on /disconnect). The callback wraps a closure
-  that knows the (user_id, network_id) pair and forwards to
-  `Grappa.Networks.Credentials.merge_last_joined_channels/4`.
-  Returns `:ok` on success or `{:error, reason}`; Session.Server logs
-  failures but does not retry — the next channels-list mutation unions
-  the live keyset back in, and a missing snapshot only forces the next
-  restart to fall back to operator autojoin.
-
-  #1385 — the two arguments exist because the keyset ALONE cannot tell
-  "not restored yet" from "left": both read as absent. The departures
-  therefore travel separately, sourced from the event that caused them.
-  """
-  @type last_joined_persister :: ([String.t()], [String.t()] -> :ok | {:error, term()})
-
-  @typedoc """
-  GH #581 — opaque reader the visitor `SessionPlan` injects so
-  `handle_call(:recover_identity, ...)` can resolve the PERSISTENT recover
-  target (the registered nick + NickServ secret) without a static
-  `Session → Networks/Visitors` alias (Boundary cycle — Visitors deps
-  Session via Login). Reads the LIVE credential each call
-  (`Credentials.get_visitor_credential` + `Credential.recover_secret/1`),
-  NOT `state.pending_password` (one-shot cleared at 001) — so it resolves the
-  SAME source as the `recoverable` button gate
-  (`Credential.has_nickserv_secret?/1`), the review-#1 fix. `nil` on state =
-  no reader injected (user sessions — recover is visitor-only).
-  """
-  @type recover_source ::
-          (-> {:ok, {String.t(), String.t()}} | {:error, :nothing_to_recover})
-
-  @typedoc """
-  GH #417 — opaque closure that persists the EXPLICIT away snapshot to the
-  producing context (Networks), forwarding `(reason, since)` to
-  `Grappa.Networks.Credentials.update_away/4`. `(nil, nil)` clears it on
-  `/back`. Boundary-clean for the same reason as `last_joined_persister`:
-  Networks already deps Session, so the reverse edge cannot be expressed
-  without closing a cycle. Called fire-and-forget from
-  `set_explicit_away_internal/3` + the explicit `unset_explicit_away`
-  handle_call arms; a `{:error, _}` is logged, not retried (the next away
-  transition overwrites). `nil` on state = no persister injected (visitor
-  sessions — away is not persisted for the ephemeral subject).
-  """
-  @type away_persister :: (String.t() | nil, DateTime.t() | nil -> :ok | {:error, term()})
-
-  @typedoc """
   GH #417 — the away snapshot `SessionPlan.resolve/1` read back from the
   credential's `away_reason` / `away_since` columns, threaded into
   `init/1` opts. `{reason, since}` seeds `:away_explicit` (via
@@ -533,19 +371,19 @@ defmodule Grappa.Session.Server do
           optional(:managed_source_alias) => String.t() | nil,
           optional(:notify_pid) => pid(),
           optional(:notify_ref) => reference(),
-          optional(:visitor_committer) => visitor_committer(),
-          optional(:visitor_password_rotator) => visitor_password_rotator(),
-          optional(:visitor_nick_persister) => visitor_nick_persister(),
-          optional(:credential_failer) => credential_failer(),
-          optional(:credential_committer) => credential_committer(),
-          optional(:registration_committer) => registration_committer(),
-          optional(:last_joined_persister) => last_joined_persister(),
+          optional(:visitor_committer) => Deps.visitor_committer(),
+          optional(:visitor_password_rotator) => Deps.visitor_password_rotator(),
+          optional(:visitor_nick_persister) => Deps.visitor_nick_persister(),
+          optional(:credential_failer) => Deps.credential_failer(),
+          optional(:credential_committer) => Deps.credential_committer(),
+          optional(:registration_committer) => Deps.registration_committer(),
+          optional(:last_joined_persister) => Deps.last_joined_persister(),
           # #581 — visitor-only reader for the /recover secret source (user
           # plans omit it; recover is visitor-only).
-          optional(:recover_source) => recover_source(),
+          optional(:recover_source) => Deps.recover_source(),
           # GH #417 — persist/restore the EXPLICIT away across crash/reconnect.
           # User-only (visitor plans omit both).
-          optional(:away_persister) => away_persister(),
+          optional(:away_persister) => Deps.away_persister(),
           optional(:restored_away) => restored_away(),
           optional(:query_window_open?) => EventRouter.query_window_open?(),
           optional(:refresh_plan) => refresh_plan_check(),
@@ -667,19 +505,8 @@ defmodule Grappa.Session.Server do
           # Read at 001 by `run_perform_and_identify/1`. nil when unset.
           perform_list: String.t() | nil,
           oper_pass: String.t() | nil,
-          visitor_committer: visitor_committer() | nil,
-          visitor_password_rotator: visitor_password_rotator() | nil,
-          visitor_nick_persister: visitor_nick_persister() | nil,
-          credential_failer: credential_failer() | nil,
-          credential_committer: credential_committer() | nil,
-          registration_committer: registration_committer() | nil,
-          last_joined_persister: last_joined_persister() | nil,
-          # #581 — visitor-only /recover secret reader (nil for user sessions).
-          recover_source: recover_source() | nil,
-          # GH #417 — persister for the EXPLICIT away snapshot; nil for
-          # visitor sessions (away not persisted for the ephemeral subject).
-          away_persister: away_persister() | nil,
-          query_window_open?: EventRouter.query_window_open?(),
+          # #1390 — the ten injected callbacks, bundled. See `Deps`.
+          deps: Deps.t(),
           ghost_recovery: GhostRecovery.t() | nil,
           ghost_timer: reference() | nil,
           # #676 h14 — the `nick_fallback` advisory built at 001 but held
@@ -1148,7 +975,7 @@ defmodule Grappa.Session.Server do
   # fixtures / a bare Bootstrap plan) → just `:ignore`.
   @spec hold_session(
           :no_client_source | :no_static_prefix | :mode2_disarmed,
-          credential_failer() | nil
+          Deps.credential_failer() | nil
         ) :: :ignore
   defp hold_session(reason, credential_failer) do
     text = "static-mapping: #{hold_reason_text(reason)}"
@@ -1254,25 +1081,7 @@ defmodule Grappa.Session.Server do
       pending_password: pending_password_from_opts(opts),
       perform_list: Map.get(opts, :perform_list),
       oper_pass: Map.get(opts, :oper_pass),
-      visitor_committer: Map.get(opts, :visitor_committer),
-      visitor_password_rotator: Map.get(opts, :visitor_password_rotator),
-      visitor_nick_persister: Map.get(opts, :visitor_nick_persister),
-      credential_failer: Map.get(opts, :credential_failer),
-      credential_committer: Map.get(opts, :credential_committer),
-      registration_committer: Map.get(opts, :registration_committer),
-      last_joined_persister: Map.get(opts, :last_joined_persister),
-      # #581 — visitor-only /recover secret reader (nil for user sessions).
-      recover_source: Map.get(opts, :recover_source),
-      # GH #417 — persister for the EXPLICIT away snapshot (nil for visitors).
-      away_persister: Map.get(opts, :away_persister),
-      # #400 — open-query-window predicate EventRouter consults to re-key a
-      # services-sender NOTICE/PRIVMSG onto the service's own query window
-      # when the operator has one open (else `$server`, today's behaviour).
-      # Production default is the real DB read; Server already deps
-      # QueryWindows (#373 `rename/4`), so injecting the fn reference adds
-      # no new Boundary edge. Tests override via opts with a fake closure —
-      # EventRouter stays a pure, sandbox-free classifier ("No Repo").
-      query_window_open?: Map.get(opts, :query_window_open?, &QueryWindows.open?/3),
+      deps: Deps.from_opts(opts),
       ghost_recovery: nil,
       ghost_timer: nil,
       parked_nick_fallback: nil,
@@ -3860,8 +3669,8 @@ defmodule Grappa.Session.Server do
   @spec handle_terminal_failure(String.t(), t()) :: {:stop, :normal, t()}
   defp handle_terminal_failure(reason, state) when is_binary(reason) do
     _ =
-      if is_function(state.credential_failer, 1) do
-        failer = state.credential_failer
+      if is_function(state.deps.credential_failer, 1) do
+        failer = state.deps.credential_failer
         Task.Supervisor.start_child(Grappa.TaskSupervisor, fn -> failer.(reason) end)
       end
 
@@ -4597,11 +4406,17 @@ defmodule Grappa.Session.Server do
   # the now-stale stored password is repaired by retyping it into
   # the per-network password field (#124, Settings -> General). A cold restart re-inits with the committer wired.
   @spec rotate_stored_password(t(), String.t()) :: {{:ok, term()} | {:error, term()}, keyword()}
-  defp rotate_stored_password(%{subject: {:visitor, visitor_id}, visitor_password_rotator: rotator}, new_password)
+  defp rotate_stored_password(
+         %{subject: {:visitor, visitor_id}, deps: %Deps{visitor_password_rotator: rotator}},
+         new_password
+       )
        when is_function(rotator, 2),
        do: {rotator.(visitor_id, new_password), [visitor_id: visitor_id]}
 
-  defp rotate_stored_password(%{subject: {:user, user_id}, credential_committer: committer}, new_password)
+  defp rotate_stored_password(
+         %{subject: {:user, user_id}, deps: %Deps{credential_committer: committer}},
+         new_password
+       )
        when is_function(committer, 1),
        do: {committer.(new_password), [user: user_id]}
 
@@ -4768,7 +4583,7 @@ defmodule Grappa.Session.Server do
   # practice the reader is always present — the nil clause is pure defense.
   @spec recover_source(t()) :: {:ok, {String.t(), String.t()}} | {:error, :nothing_to_recover}
   defp recover_source(state) do
-    case Map.get(state, :recover_source) do
+    case Map.get(state, :deps, %Deps{}).recover_source do
       fun when is_function(fun, 0) -> fun.()
       _ -> {:error, :nothing_to_recover}
     end
@@ -5102,7 +4917,7 @@ defmodule Grappa.Session.Server do
           t()
         ) :: {:channel, String.t()} | {:query, String.t()} | {:server, nil}
   defp resolve_numeric_query_window({:query, target}, state) when is_binary(target) do
-    open? = Map.get(state, :query_window_open?, &QueryWindows.open?/3)
+    open? = Map.get(state, :deps, %Deps{}).query_window_open?
 
     if open?.(state.subject, state.network_id, target),
       do: {:query, target},
@@ -5208,7 +5023,7 @@ defmodule Grappa.Session.Server do
           prev.network_id,
           next_keys,
           departed,
-          prev.last_joined_persister
+          prev.deps.last_joined_persister
         )
     end
 
@@ -5254,7 +5069,7 @@ defmodule Grappa.Session.Server do
           pos_integer(),
           [String.t()],
           [String.t()],
-          last_joined_persister() | nil
+          Deps.last_joined_persister() | nil
         ) :: :ok
   defp persist_last_joined(_, _, _, _, nil), do: :ok
 
@@ -6183,7 +5998,7 @@ defmodule Grappa.Session.Server do
         _ -> state.nick
       end
 
-    case {state.subject, state.visitor_committer} do
+    case {state.subject, state.deps.visitor_committer} do
       {{:visitor, visitor_id}, committer} when is_function(committer, 3) ->
         case committer.(visitor_id, password, bind_nick) do
           {:ok, _} ->
@@ -6239,7 +6054,7 @@ defmodule Grappa.Session.Server do
   # which is operator-driven and rotated via the user-side path
   # documented in `nick_controller.ex`.
   defp apply_effects([{:visitor_nick_changed, new_nick} | rest], state) do
-    case {state.subject, state.visitor_nick_persister} do
+    case {state.subject, state.deps.visitor_nick_persister} do
       {{:visitor, visitor_id}, persister} when is_function(persister, 2) ->
         case persister.(visitor_id, new_nick) do
           {:ok, :held_identified} ->
@@ -6476,7 +6291,7 @@ defmodule Grappa.Session.Server do
   # apply_effects +r arm stays flat.
   defp commit_user_registration(user_id, password, %{
          pending_registration_secret: secret,
-         registration_committer: committer
+         deps: %Deps{registration_committer: committer}
        })
        when is_binary(secret) and is_function(committer, 1) do
     case committer.(password) do
@@ -7164,9 +6979,9 @@ defmodule Grappa.Session.Server do
   defp persist_away_clear(state), do: call_away_persister(state, nil, nil)
 
   @spec call_away_persister(t(), String.t() | nil, DateTime.t() | nil) :: :ok
-  defp call_away_persister(%{away_persister: nil}, _, _), do: :ok
+  defp call_away_persister(%{deps: %Deps{away_persister: nil}}, _, _), do: :ok
 
-  defp call_away_persister(%{away_persister: fun}, reason, since)
+  defp call_away_persister(%{deps: %Deps{away_persister: fun}}, reason, since)
        when is_function(fun, 2) do
     case fun.(reason, since) do
       :ok ->

@@ -14,6 +14,7 @@ defmodule Grappa.Session.EventRouterTest do
   alias Grappa.IRC.{JoinFailure, Message, Parser}
 
   alias Grappa.Session.{
+    Deps,
     EventRouter,
     GhostRecovery,
     ISupport,
@@ -28,6 +29,12 @@ defmodule Grappa.Session.EventRouterTest do
   @user_id "00000000-0000-0000-0000-000000000001"
   @subject {:user, @user_id}
   @network_id 42
+
+  # #1390 — the host injects its ten callbacks as ONE `Deps` struct now, so a
+  # state that wants a fake predicate carries a REAL `%Deps{}`. Building a bare
+  # map here would let these tests keep passing against a shape production no
+  # longer has, which is the whole thing the bundle is supposed to make visible.
+  defp deps(open?), do: %Deps{query_window_open?: open?}
 
   defp base_state(overrides \\ %{}) do
     Map.merge(
@@ -604,7 +611,7 @@ defmodule Grappa.Session.EventRouterTest do
       # The contrast with the CTCP test above is what this test is for, and
       # #546 sharpened it: give BOTH an open window and they still diverge —
       # framing goes to `$server`, conversation goes to the peer.
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
 
       m = msg(:notice, ["vjt", "just a notice"], {:nick, "alice", "u", "h"})
 
@@ -1002,7 +1009,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "a nick-prefixed NOTICE carries sender_kind = user and its user@host" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
       m = msg(:notice, ["vjt", "hey"], {:nick, "bob", "u", "h"})
 
       assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
@@ -1015,7 +1022,7 @@ defmodule Grappa.Session.EventRouterTest do
     # refuses to report a partial one; the KIND is still known, so it is
     # still reported — the two facts are independent.
     test "a partial prefix still reports the kind, without a half mask" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
       m = msg(:notice, ["vjt", "hey"], {:nick, "bob", nil, "h"})
 
       assert {:cont, _, [{:persist, :notice, attrs}]} = EventRouter.route(m, state)
@@ -1025,7 +1032,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "plain peer NOTICE gets no ctcp meta (additive)" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
 
       m = msg(:notice, ["vjt", "hey are you around?"], {:nick, "bob", "u", "h"})
 
@@ -1048,7 +1055,7 @@ defmodule Grappa.Session.EventRouterTest do
     # WITHOUT this, generalising the nick branch would start dumping raw
     # \x01 rows into open conversations.
     test "#546 CTCP-framed peer NOTICE stays on $server EVEN with an open query window" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
 
       m = msg(:notice, ["vjt", "\x01PING 1706743200000\x01"], {:nick, "bob", "u", "h"})
 
@@ -1106,7 +1113,7 @@ defmodule Grappa.Session.EventRouterTest do
     # Sonic settled on exactly that on #it-opers (2026-07-30). This reverses
     # UX-6-L / #422 Option B's "peer NOTICE opens the window" arm.
     test "#546 peer NOTICE with NO open query window routes to $server" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> false end})
+      state = base_state(%{deps: deps(fn _, _, _ -> false end)})
 
       m =
         msg(
@@ -1137,7 +1144,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "#546 peer NOTICE WITH an open query window routes to the peer's window" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
 
       m =
         msg(
@@ -1163,10 +1170,11 @@ defmodule Grappa.Session.EventRouterTest do
 
       state =
         base_state(%{
-          query_window_open?: fn subject, network_id, nick ->
-            send(parent, {:open_check, subject, network_id, nick})
-            false
-          end
+          deps:
+            deps(fn subject, network_id, nick ->
+              send(parent, {:open_check, subject, network_id, nick})
+              false
+            end)
         })
 
       m = msg(:notice, ["vjt", "yo"], {:nick, "alice", "u", "host.example.com"})
@@ -1178,7 +1186,7 @@ defmodule Grappa.Session.EventRouterTest do
     # #546 must NOT leak into the PRIVMSG door: a DM from a peer still opens
     # the conversation. Only NOTICEs became non-opening.
     test "#546 peer PRIVMSG still lands in the DM window with NO open query window" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> false end})
+      state = base_state(%{deps: deps(fn _, _, _ -> false end)})
 
       m = msg(:privmsg, ["vjt", "you around?"], {:nick, "alice", "u", "host.example.com"})
 
@@ -1207,12 +1215,12 @@ defmodule Grappa.Session.EventRouterTest do
   # by hand — the reply belongs in THAT window, not $server where they'd
   # never see it. The open-window fact is a DB read; EventRouter is a pure
   # classifier ("No Repo"), so the lookup is injected as an opaque
-  # `state.query_window_open?` callback (mirror of `visitor_nick_persister`
+  # `state.deps.query_window_open?` callback (mirror of `visitor_nick_persister`
   # — the SessionPlan.resolve/1 DI seam the Server already carries). Absent
   # (pure tests that don't inject it) → false → today's $server behaviour.
   describe "route/2 — #400 services re-key to an open query window" do
     test "NOTICE from a service with an OPEN query window routes to the service nick" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
 
       m =
         msg(
@@ -1227,7 +1235,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "NOTICE from a service with NO open query window still routes to $server (regression)" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> false end})
+      state = base_state(%{deps: deps(fn _, _, _ -> false end)})
 
       m =
         msg(
@@ -1241,7 +1249,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "PRIVMSG from a service with an OPEN query window routes to the service nick" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
 
       m =
         msg(
@@ -1260,10 +1268,11 @@ defmodule Grappa.Session.EventRouterTest do
 
       state =
         base_state(%{
-          query_window_open?: fn subject, network_id, nick ->
-            send(parent, {:open_check, subject, network_id, nick})
-            true
-          end
+          deps:
+            deps(fn subject, network_id, nick ->
+              send(parent, {:open_check, subject, network_id, nick})
+              true
+            end)
         })
 
       m = msg(:notice, ["vjt", "reply"], {:nick, "SeenServ", "service", "azzurra.chat"})
@@ -1273,7 +1282,7 @@ defmodule Grappa.Session.EventRouterTest do
     end
 
     test "ChanServ bracket-prefixed NOTICE keeps channel precedence even with an open query window (open-Q 3)" do
-      state = base_state(%{query_window_open?: fn _, _, _ -> true end})
+      state = base_state(%{deps: deps(fn _, _, _ -> true end)})
 
       m =
         msg(
