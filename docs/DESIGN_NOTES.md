@@ -46441,3 +46441,88 @@ _Not measured here: whether the slice is behaviour-free beyond the two test
 files it touches. The 847 tests in `server_test.exs` and `event_router_test.exs`
 are green; the rest of the suite and the type gates are a separate run, and
 this entry does not claim their verdict._
+<!-- entry #1390 slice 2 -->
+
+---
+
+## 2026-08-17 — #1390 slice 2: the channel-directory ETL leaves the session
+
+Slice 1 bundled ten injected callbacks into `Session.Deps` — a co-mutation
+group, valuable by key count. This slice is chosen on a different axis, and
+the axis is the point: of the four clusters the issue's proposed direction
+lists, only this one crosses a DOMAIN boundary. Away, identity/recovery and
+auth-handshake all regroup session-domain fields inside the module that
+already owns them; they shrink the state map without moving anything. The
+channel directory is a foreign domain — `Grappa.ChannelDirectory` has been
+its own context all along — running a full ETL inside the hottest process in
+the tree.
+
+The measured footprint outside `server.ex` decided it. `pending_auth` alone
+appears 86 times across `event_router.ex` and `ns_interceptor.ex`, so the
+auth cluster is not the cheap bundle it reads as; `away_state` already has
+its own module. The four directory keys are named outside `server.ex` only
+in comments, in `numeric_router.ex` and `wire.ex` — nothing reads them.
+
+### What moved, and what the shape buys
+
+Four state keys collapse into one `directory` holding a
+`Session.DirectoryIngest`: the three config tunables plus the in-flight
+tracker, with `run == nil` carrying exactly the guard `directory_refresh ==
+nil` used to. Unlike its `*Accum` siblings, which are pure data drained by
+`EventRouter`, this struct also owns the row parse, the batch boundary and
+the throttle window — because that is what the extraction is FOR.
+
+A struct rather than a declared map type, and that choice is measured rather
+than reasoned: #1391's mutant pair established that a struct-field typo is a
+compile error while a bare-map key typo compiles clean, and that declaring a
+map's shape buys neither. The tracker was an anonymous map with
+`buffer: [map()]`.
+
+### The red that buys it
+
+`directory_ingest_test.exs` runs `async: true` on plain `ExUnit.Case`: no
+`DataCase`, no Repo, no `Session.Server`, no fake ircd, 14 cases in 0.09s.
+Its sibling `directory_test.exs` needs all four — 240 lines, `async: false`,
+25 references to `start_server`/`IRCServer` — because before this the parse,
+batch and throttle decisions were reachable only by booting a GenServer.
+
+That is a falsifiable boundary rather than a metric: if a later change
+re-entangles the decisions with the process, the file stops being writable
+that way. The two `server_test.exs` pins were each killed by exactly one
+surgical mutant (a plain map in place of the struct kills the first; one
+re-added legacy key kills the second), so neither is vacuous.
+
+### Two behaviours preserved deliberately, not tidied
+
+Both were named as risks before any code was written, and both look like
+untidiness:
+
+  * the `directory_complete` total is re-read from the DB snapshot with
+    `ttl_ms: 0`, NOT taken from the accumulator's running `count`. The two
+    diverge the moment `ChannelDirectory.ingest/3` dedupes or upserts, so
+    collapsing them would change the number cic renders.
+  * the watchdog calls `abort/1`, which DROPS the buffered rows and never
+    finalises. A truncated refresh therefore leaves the prior snapshot
+    intact and loses everything buffered since the last batch. Flushing on
+    timeout would change the DB on every stalled refresh.
+
+`flush_directory_buffer/2` carried a `:batch | :final` discriminator in its
+`@spec` that BOTH clauses ignored. It is not carried into the new module —
+dead in, dead out — and it is recorded here rather than left to be
+rediscovered as an omission.
+
+### A retraction, because it is a result
+
+The slice's own commitment was that `directory_test.exs` would stay green
+untouched, and that having to edit it would BE the behaviour change. It
+needed one line, and the commitment's dichotomy was wrong: line 105 was
+`assert :sys.get_state(pid).directory_refresh == nil`, a structural pin on
+the NAME of a private field, not an assertion of behaviour. Its behavioural
+twin three lines above — the `assert_receive` of the `directory_failed`
+broadcast — passed throughout. The pin was re-pointed at `.directory.run`,
+in its own commit so a reviewer can tell a moved pin from a softened assert,
+and deliberately not deleted: "the behavioural test already covers it" is
+how pins disappear one at a time.
+
+_Not measured here: nothing in this entry claims a verdict for the full
+suite or the type gates; those are a separate run._
