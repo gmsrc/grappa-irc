@@ -17,6 +17,7 @@ import {
   updateTheme,
   uploadBackground,
 } from "../themesApi";
+import { WireShapeError } from "../wireNarrow";
 
 // themesApi — typed REST client for the #75 themes surface. Mirrors the
 // api.ts buildHeaders/readError pattern and reuses api.ts's `readError`
@@ -304,5 +305,50 @@ describe("themesApi", () => {
     expect(thrown).toBeInstanceOf(ApiError);
     expect((thrown as ApiError).status).toBe(status);
     expect((thrown as ApiError).code).toBe(token);
+  });
+});
+
+// #1400 — the five envelope doors. `narrowThemeResponse` already covered the
+// six doors that return a bare theme; these five return an ENVELOPE around it
+// (`{themes: […]}`, `{light, dark}`) and had no generated shape to validate
+// against until `Grappa.Themes.Wire` named `index_payload/0` + `active_pair/0`.
+// The case each one models is the deploy window — cic ahead of its server —
+// where a required field the response does not carry used to reach a renderer
+// as `undefined` instead of failing where it broke.
+describe("#1400 — the themes envelope doors fail loud on a shape mismatch", () => {
+  function without(row: Record<string, unknown>, key: string): Record<string, unknown> {
+    const { [key]: _dropped, ...rest } = row;
+    return rest;
+  }
+
+  beforeEach(() => {
+    fetchSpy.mockReset();
+    vi.stubGlobal("fetch", fetchSpy);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("listGallery rejects a theme row missing `in_use`", async () => {
+    fetchSpy.mockResolvedValue(ok({ themes: [without(sampleTheme(), "in_use")] }));
+    await expect(listGallery(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("listMine rejects a body with no `themes` key at all", async () => {
+    fetchSpy.mockResolvedValue(ok({}));
+    await expect(listMine(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("listUnpublishedBuiltins rejects a theme row missing `author`", async () => {
+    fetchSpy.mockResolvedValue(ok({ themes: [without(sampleTheme(), "author")] }));
+    await expect(listUnpublishedBuiltins(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("getActiveThemePair rejects a pair whose light slot is missing `mine`", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: without(sampleTheme(), "mine"), dark: null }));
+    await expect(getActiveThemePair(TOKEN)).rejects.toBeInstanceOf(WireShapeError);
+  });
+
+  test("setActiveThemePair rejects a pair with no `dark` slot", async () => {
+    fetchSpy.mockResolvedValue(ok({ light: sampleTheme() }));
+    await expect(setActiveThemePair(TOKEN, 3, null)).rejects.toBeInstanceOf(WireShapeError);
   });
 });

@@ -30,6 +30,8 @@ import {
   S_SessionLogWireListResult,
   S_SessionLogWireSessionsResult,
   S_SessionLogWireT,
+  S_ThemesWireActivePair,
+  S_ThemesWireIndexPayload,
   S_ThemesWireT,
   S_VhostsAdminWireGrantJson,
   S_VhostsAdminWireVhostJson,
@@ -54,6 +56,8 @@ import type {
   SessionLogWireListResult,
   SessionLogWireSessionsResult,
   SessionLogWireT,
+  ThemesWireActivePair,
+  ThemesWireIndexPayload,
   ThemesWireT,
   VhostsAdminWireGrantJson,
   VhostsAdminWireVhostJson,
@@ -927,4 +931,50 @@ export function narrowChannelListResponse(raw: unknown): NetworksWireChannelJson
 /** `GET /networks/:slug/channels/:name/messages`, both the `before` and `after` pages. */
 export function narrowMessagePageResponse(raw: unknown): ScrollbackWireT[] {
   return narrowRest({ a: S_ScrollbackWireT }, raw, "message page");
+}
+
+// ── #1400 — the themes envelopes, emitted for this slice ──
+//
+// Unlike slice 1, these two shapes did NOT already exist: `Grappa.Themes.Wire`
+// published `t/0` alone, so the three listings and the day/night pair were the
+// residual hand-written envelopes in `themesApi.ts`. Naming them at the wire
+// boundary (`index_payload/0`, `active_pair/0`, each with the producing
+// function the controllers now call) is what makes them generated shapes with
+// a `--check` drift gate, instead of a client-side mirror.
+//
+// `active_pair` carries a same-module `t() | nil` in both slots. The moduledoc
+// in `themes/wire.ex` records that `BuiltinBackgrounds.t/0` cannot be emitted
+// for exactly that reason — a `user_type` reference the generator cannot
+// resolve — but that limit belongs to the EXTERNAL-type path, which renders
+// one alias at a time with no sibling registry. A type declared INSIDE a
+// `*wire.ex` module is rendered by `render_typedef/2`, which publishes the
+// module so the reference resolves; `NetworksWireConnectionInfo | null` was
+// already on the tree as the precedent. So `GET /themes/backgrounds` stays
+// cast and these two do not.
+
+/** `GET /themes`, `GET /me/themes`, `GET /themes/unpublished`. */
+export function narrowThemesResponse(raw: unknown): ThemesWireIndexPayload {
+  return narrowRest(S_ThemesWireIndexPayload, raw, "theme list");
+}
+
+/** `PUT /me/theme`. */
+export function narrowActiveThemePairResponse(raw: unknown): ThemesWireActivePair {
+  return narrowRest(S_ThemesWireActivePair, raw, "active theme pair");
+}
+
+/**
+ * `GET /me/theme`, which keeps its pre-existing tolerance for a bare `null`
+ * body — a wrapper named as policy, per the section note above, so the
+ * exception is visible rather than hidden inside the strict narrower the PUT
+ * door shares.
+ *
+ * The tolerance is NOT reachable from this server: `MeThemeController.show`
+ * answers `pair_wire/2`, which always emits both keys, so an unset pair is
+ * `{light: null, dark: null}` and never `null`. It is carried forward
+ * unexamined because retiring it is a behaviour change, not a cast removal.
+ * Consequence worth stating plainly: a `null` body skips validation entirely,
+ * so this door is fail-loud for every shape EXCEPT that one.
+ */
+export function narrowActiveThemePairOrEmpty(raw: unknown): ThemesWireActivePair {
+  return raw === null ? { light: null, dark: null } : narrowActiveThemePairResponse(raw);
 }

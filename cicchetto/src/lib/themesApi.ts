@@ -16,8 +16,18 @@
 
 import { buildHeaders, readError } from "./api";
 import { getOrCreateClientId } from "./clientId";
-import { narrowThemeResponse } from "./wireNarrow";
-import type { ThemesWireBackgroundSize, ThemesWireFontFamily, ThemesWireT } from "./wireTypes";
+import {
+  narrowActiveThemePairOrEmpty,
+  narrowActiveThemePairResponse,
+  narrowThemeResponse,
+  narrowThemesResponse,
+} from "./wireNarrow";
+import type {
+  ThemesWireActivePair,
+  ThemesWireBackgroundSize,
+  ThemesWireFontFamily,
+  ThemesWireT,
+} from "./wireTypes";
 
 // The closed font-family allow-list — #1406 X-S9, DERIVED from
 // `Grappa.Themes.TokenModel.font_families/0` (the same list `sanitize_font/1`
@@ -109,18 +119,16 @@ export type UpdateThemeBody = { name?: string; payload?: TokenPayload };
 // fetches (SSRF-guarded). One pipeline, two entry shapes.
 export type BackgroundSource = { file: File } | { url: string };
 
-type ThemesEnvelope = { themes: ThemesWireT[] };
-
 export async function listGallery(token: string): Promise<ThemesWireT[]> {
   const res = await fetch("/themes", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
-  return ((await res.json()) as ThemesEnvelope).themes;
+  return narrowThemesResponse(await res.json()).themes;
 }
 
 export async function listMine(token: string): Promise<ThemesWireT[]> {
   const res = await fetch("/me/themes", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
-  return ((await res.json()) as ThemesEnvelope).themes;
+  return narrowThemesResponse(await res.json()).themes;
 }
 
 // GET /themes/unpublished — admin-only view of UNPUBLISHED system built-ins
@@ -129,7 +137,7 @@ export async function listMine(token: string): Promise<ThemesWireT[]> {
 export async function listUnpublishedBuiltins(token: string): Promise<ThemesWireT[]> {
   const res = await fetch("/themes/unpublished", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res);
-  return ((await res.json()) as ThemesEnvelope).themes;
+  return narrowThemesResponse(await res.json()).themes;
 }
 
 // GET /themes/backgrounds — the server-owned built-in background catalog the
@@ -211,13 +219,13 @@ export async function copyTheme(token: string, id: number): Promise<ThemesWireT>
 // (or a dangling pointer); a null `dark` resolves to the light theme in both
 // modes (the #75 single pick). cic picks which slot to paint from the OS
 // `prefers-color-scheme` signal — never the server.
-export type ActiveThemePair = {
-  light: ThemesWireT | null;
-  dark: ThemesWireT | null;
-};
+export type ActiveThemePair = ThemesWireActivePair;
 
-// GET /me/theme — the resolved pair. A bare `null` body (no theme set, or a
-// benign test stub) resolves to an empty pair so callers never branch on it.
+// GET /me/theme — the resolved pair. A bare `null` body still resolves to an
+// empty pair so callers never branch on it, but that tolerance now lives in
+// `narrowActiveThemePairOrEmpty` and is documented there as the one shape this
+// door does not validate. An unset pair is `{light: null, dark: null}` on the
+// wire, not `null` — the server has no path that emits the bare value.
 //
 // #502 — ISOLATED from the dead-token handler (`fireDeadTokenHandler: false`):
 // this is a boot-APPLIED cosmetic fetch (`customTheme.mountCustomThemeSync`
@@ -231,8 +239,7 @@ export type ActiveThemePair = {
 export async function getActiveThemePair(token: string): Promise<ActiveThemePair> {
   const res = await fetch("/me/theme", { headers: buildHeaders(token) });
   if (!res.ok) throw await readError(res, false);
-  const body = (await res.json()) as ActiveThemePair | null;
-  return body ?? { light: null, dark: null };
+  return narrowActiveThemePairOrEmpty(await res.json());
 }
 
 // PUT /me/theme — set the full desired pair. `light` is required; `dark` null
@@ -249,7 +256,7 @@ export async function setActiveThemePair(
     body: JSON.stringify({ light, dark }),
   });
   if (!res.ok) throw await readError(res);
-  return (await res.json()) as ActiveThemePair;
+  return narrowActiveThemePairResponse(await res.json());
 }
 
 // POST /themes/background — upload a File (multipart "file") OR ask the
