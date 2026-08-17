@@ -546,33 +546,17 @@ defmodule Grappa.Session.Server do
           # is unavailable and param-derived routing returns {:active, nil}.
           # `nil` until the user issues the first command in this session.
           last_command_window: window_ref() | nil,
-          # S5.1: ISUPPORT MODES=N advertised by the upstream server. Bounds
-          # how many mode changes a single MODE line may carry. Defaults to 3
-          # per IRCv3 spec when the upstream omits MODES= from 005. Updated
-          # when 005 RPL_ISUPPORT arrives with a MODES= token. Kept as a
-          # bounded integer on state (not a generic ISUPPORT map) to stay
-          # minimal — only MODES= is consumed server-side for now.
-          modes_per_chunk: pos_integer(),
-          # BUGHUNT-1 A — max wire-frame size for outbound PRIVMSG auto-
-          # split. Defaults to 512 per RFC 2812 when upstream omits
-          # LINELEN= from 005 RPL_ISUPPORT (Bahamut/InspIRCd/UnrealIRCd
-          # commonly do). Used by `Grappa.IRC.LineSplit` to compute the
-          # body budget = `linelen - LineSplit.relay_frame_overhead(target)`,
-          # which reserves the worst-case relayed `:nick!user@host ` source
-          # prefix the server prepends (#246), not just the client-side
-          # `PRIVMSG <target> :\r\n` framing. Sibling shape to
-          # `modes_per_chunk` — bounded integer on state, not a generic
-          # ISUPPORT map.
-          linelen: pos_integer(),
-          # #216: per-network channel-mode capability table parsed from
-          # 005 RPL_ISUPPORT `CHANMODES=` + `PREFIX=`. Unlike modes_per_chunk
-          # / linelen (bounded ints consumed only server-side), this one is
-          # ALSO broadcast to cic (the `/mode` modal drives its available
-          # toggles from it) AND read by EventRouter's MODE-string walkers
-          # (single source of truth for per-user vs channel modes + param
-          # arity — replaces the former hardcoded event_router constants).
-          # Defaults to `ISupport.default/0` (bahamut/Azzurra values) until
-          # a 005 with the tokens arrives. See `Grappa.Session.ISupport`.
+          # #216: per-network capability table parsed from 005 RPL_ISUPPORT.
+          # Broadcast to cic (the `/mode` modal drives its available toggles
+          # from it) AND read by EventRouter's MODE-string walkers (single
+          # source of truth for per-user vs channel modes + param arity —
+          # replaces the former hardcoded event_router constants). Since
+          # #1390 it also carries `MODES=` and `LINELEN=`, which used to sit
+          # here as two loose integers with a scanner of their own: one 005,
+          # one parse, one merge rule. `ModeChunker` and `LineSplit` read
+          # them through `ISupport.modes/1` / `ISupport.linelen/1`. Defaults
+          # to `ISupport.default/0` (bahamut/Azzurra values) until a 005
+          # arrives. See `Grappa.Session.ISupport`.
           isupport: ISupport.t(),
           # #247: authoritative /notify presence map for this session,
           # keyed by ASCII-folded nick (#121/#525) — `:unknown` until the first
@@ -1071,9 +1055,8 @@ defmodule Grappa.Session.Server do
       # S10 — sibling prime-stamp map for the labels_pending lazy TTL sweep.
       labels_pending_at: %{},
       last_command_window: nil,
-      modes_per_chunk: 3,
-      linelen: 512,
-      # #216: default channel-mode capability table until 005 arrives.
+      # #216: default capability table until 005 arrives — MODES/LINELEN
+      # included since #1390.
       isupport: ISupport.default(),
       # #247: /notify presence map — seeded at the end-of-MOTD arm.
       presence: %{},
@@ -1775,7 +1758,7 @@ defmodule Grappa.Session.Server do
   # S5.2 — Channel-ops verb handlers
   # ---------------------------------------------------------------------------
   # All chunked verbs (/op /deop /voice /devoice /ban /unban) delegate to
-  # ModeChunker.chunk/3 with state.modes_per_chunk (ISUPPORT MODES= value,
+  # ModeChunker.chunk/3 with `ISupport.modes/1` (the ISUPPORT MODES= value,
   # default 3). The chunker splits the param list into N-mode slices and
   # returns one {mode_str, params_slice} per chunk; we send each as a
   # separate MODE line. The mode letter is repeated once per param by the
@@ -2450,8 +2433,10 @@ defmodule Grappa.Session.Server do
   # #1108: the live LINELEN, for the cold WS after-join snapshot — whose
   # sibling `:get_isupport` covers the rest of the same payload. Raw, not a
   # budget: the wire builder owns that projection, so there is exactly one.
+  # Since #1390 the value comes out of the same table `:get_isupport`
+  # returns; the two replies cannot drift because there is one field.
   def handle_call(:get_linelen, _, state) do
-    {:reply, {:ok, state.linelen}, state}
+    {:reply, {:ok, ISupport.linelen(Map.get(state, :isupport, ISupport.default()))}, state}
   end
 
   # #229: returns the per-session umode set. Always succeeds ([] before the
@@ -2530,6 +2515,8 @@ defmodule Grappa.Session.Server do
   # deploy. The COLD restart is what guarantees no pre-#902 struct is left
   # in a live proc for `invited_windows/2` to pattern-match against.
   def handle_call(:session_snapshot, _, state) do
+    isupport = Map.get(state, :isupport, ISupport.default())
+
     {:reply,
      {:ok,
       %{
@@ -2555,8 +2542,13 @@ defmodule Grappa.Session.Server do
         # pair: this is the login hot path, and #482 already measured what a
         # third serial blocking call per network does to user-topic
         # broadcast latency.
-        isupport: Map.get(state, :isupport, ISupport.default()),
-        linelen: state.linelen
+        #
+        # #1390 — `linelen` keeps its own snapshot key even though it now
+        # lives inside the table beside it: the key is the client contract
+        # `GrappaChannel` and `Session.Wire` read, and collapsing it would
+        # be a wire change for zero behavioural gain.
+        isupport: isupport,
+        linelen: ISupport.linelen(isupport)
       }}, state}
   end
 
@@ -3376,42 +3368,31 @@ defmodule Grappa.Session.Server do
     {:noreply, %{state | caps_active: caps_active}}
   end
 
-  # S5.1 — 005 RPL_ISUPPORT: extract MODES=N + LINELEN=N if advertised.
-  # Params are space-separated ISUPPORT tokens (e.g. ["grappa-test",
-  # "MODES=4", "LINELEN=512", "CHANTYPES=#", "are supported ..."]).  We
-  # scan every param for the known prefixes. Defaults (3 modes,
-  # 512-byte linelen) are preserved when the token is absent.
+  # S5.1 / #216 — 005 RPL_ISUPPORT: fold the advertised tokens into the
+  # per-network `isupport` capability table. Params are space-separated
+  # ISUPPORT tokens (e.g. ["grappa-test", "MODES=4", "LINELEN=512",
+  # "CHANTYPES=#", "are supported ..."]).
   #
-  # #1255 — the two scanners below and the ISUPPORT table do NOT share a
-  # merge rule, and this comment used to claim the wrong one for both:
+  # #1390 — there is now ONE parse. `MODES=` and `LINELEN=` used to be
+  # scanned here into two loose integer state fields by a pair of
+  # `reduce_while` scanners that `:halt`ed on the first parseable hit,
+  # while `ISupport.merge_isupport/2` folded every other token
+  # last-wins — two merge rules over one line, held apart by nothing but
+  # a comment (and the same two tokens were ALSO being archived verbatim
+  # in `ISupport.raw/1`, so they were parsed twice). They are typed
+  # fields of the table now, and the three behaviour differences that
+  # unification forced are recorded in DESIGN_NOTES 2026-08-17.
   #
-  #   * `extract_modes_isupport/2` + `extract_linelen_isupport/2` are
-  #     `reduce_while` scanners that `:halt` on the first parseable hit,
-  #     so the FIRST occurrence wins WITHIN one line. Across lines they
-  #     are last-wins like everything else: each call re-scans a fresh
-  #     param list seeded from the current value, so a later line
-  #     carrying the token overwrites what an earlier one set.
-  #   * `ISupport.merge_isupport/2` is a plain reduce whose clauses write
-  #     unconditionally — LAST advertisement wins, which is what
-  #     draft-brocklesby-irc-isupport-03 §2 requires of a re-advertised
-  #     parameter. The "first advertised, ignore later ones to avoid a
-  #     misbehaving server downgrading us mid-session" protection this
-  #     comment used to describe has never existed in either place.
-  #
-  # #216: ALSO fold CHANMODES= + PREFIX= into the per-network
-  # `isupport` capability table. When it changes, broadcast the typed
-  # `isupport_changed` payload on `Topic.user/1` so the cic `/mode`
-  # modal can drive its available toggles from the network's real
-  # capability set (and the EventRouter MODE walkers read the same
-  # table off state). A 005 arrives in several lines during registration;
-  # broadcasting only on an actual change keeps the fan-out minimal.
+  # When the table changes, broadcast the typed `isupport_changed`
+  # payload on `Topic.user/1` so the cic `/mode` modal can drive its
+  # available toggles from the network's real capability set (and the
+  # EventRouter MODE walkers read the same table off state). A 005
+  # arrives in several lines during registration; broadcasting only on an
+  # actual change keeps the fan-out minimal.
   def handle_info(
         {:irc, %Message{command: {:numeric, 5}} = msg},
         state
       ) do
-    modes_per_chunk = extract_modes_isupport(msg.params, state.modes_per_chunk)
-    linelen = extract_linelen_isupport(msg.params, state.linelen)
-
     # `Map.get` default (not `state.isupport`) + `Map.put` write (not a
     # `%{state | isupport: ...}` update, which KeyErrors when the key is
     # absent) so a live proc whose state predates the :isupport field —
@@ -3421,18 +3402,21 @@ defmodule Grappa.Session.Server do
     prev_isupport = Map.get(state, :isupport, ISupport.default())
     isupport = ISupport.merge_isupport(msg.params, prev_isupport)
 
-    # #1108 — LINELEN is in the same broadcast, so a 005 line that advertises
-    # ONLY LINELEN (no CHANMODES/PREFIX) must still reach the client: gating
-    # on the capability table alone would leave every connected cic sizing
-    # its "this will split" warning against the previous frame all session.
-    if isupport != prev_isupport or linelen != state.linelen do
+    # #1108 — a 005 line that advertises ONLY LINELEN (no CHANMODES/PREFIX)
+    # must still reach the client, or every connected cic sizes its "this
+    # will split" warning against the previous frame all session. That case
+    # needed its own disjunct while LINELEN lived outside the table; it does
+    # not now, and not merely because the field moved: `archive_token/2`
+    # writes EVERY advertised token into `ISupport.raw/1`, so any 005 that
+    # changes a LINELEN or a MODES has already moved the table it is
+    # compared against.
+    if isupport != prev_isupport do
       broadcast_window_state(
         state,
-        SessionWire.isupport_changed(state.network_id, isupport, linelen)
+        SessionWire.isupport_changed(state.network_id, isupport, ISupport.linelen(isupport))
       )
     end
 
-    state = %{state | modes_per_chunk: modes_per_chunk, linelen: linelen}
     {:noreply, Map.put(state, :isupport, isupport)}
   end
 
@@ -3732,7 +3716,13 @@ defmodule Grappa.Session.Server do
     # HERE (the facade now passes `target` RAW); the wire + `dm_with`
     # display keep the raw casing. Fold once and thread both forms.
     key = fold_key(state, target)
-    fragments = LineSplit.split_privmsg_body(body, target, state.linelen)
+
+    fragments =
+      LineSplit.split_privmsg_body(
+        body,
+        target,
+        ISupport.linelen(Map.get(state, :isupport, ISupport.default()))
+      )
 
     case persist_and_send_fragments(target, key, fragments, state, nil) do
       {:ok, last_message} ->
@@ -3818,7 +3808,12 @@ defmodule Grappa.Session.Server do
     # long. Reusing the sized-for-PRIVMSG splitter keeps ONE copy of the #246
     # worst-case relay ceilings (and of the fragment-count table `cic`'s
     # preview is pinned to) rather than forking it for a byte.
-    fragments = LineSplit.split_privmsg_body(body, target, state.linelen)
+    fragments =
+      LineSplit.split_privmsg_body(
+        body,
+        target,
+        ISupport.linelen(Map.get(state, :isupport, ISupport.default()))
+      )
 
     case persist_and_send_notice_fragments(key, target, fragments, state, nil) do
       {:ok, last_message} -> {:reply, {:ok, last_message}, state}
@@ -6723,18 +6718,6 @@ defmodule Grappa.Session.Server do
   end
 
   # ---------------------------------------------------------------------------
-  # S5.1 — ISUPPORT MODES= extraction
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  The default max-modes-per-chunk when upstream omits MODES= from ISUPPORT.
-  IRCv3 spec and RFC 2812 §3.2.3 both cite 3 as the de-facto minimum; all
-  major IRCds (bahamut, ircd-seven, UnrealIRCd) default to at least 3.
-  """
-  @spec default_modes_per_chunk() :: 3
-  def default_modes_per_chunk, do: 3
-
-  # ---------------------------------------------------------------------------
   # S5.2 — ops verb private helpers
   # ---------------------------------------------------------------------------
 
@@ -6756,7 +6739,8 @@ defmodule Grappa.Session.Server do
   @spec send_chunked_mode(t(), String.t(), String.t(), [String.t()]) ::
           {:reply, :ok | {:error, atom()}, t()}
   defp send_chunked_mode(state, channel, mode_str, params) do
-    chunks = ModeChunker.chunk(mode_str, params, state.modes_per_chunk)
+    modes = ISupport.modes(Map.get(state, :isupport, ISupport.default()))
+    chunks = ModeChunker.chunk(mode_str, params, modes)
     {:reply, flush_mode_chunks(state.client, channel, chunks), state}
   end
 
@@ -6801,47 +6785,6 @@ defmodule Grappa.Session.Server do
       end
     end
   end
-
-  # Scans 005 RPL_ISUPPORT params for a "MODES=N" token and returns N as
-  # an integer. Returns the current value unchanged when no MODES= is found.
-  # Silently ignores malformed tokens (e.g. "MODES=" with no number) — the
-  # default is always a safe fallback.
-  @spec extract_modes_isupport([String.t()], pos_integer()) :: pos_integer()
-  defp extract_modes_isupport(params, current) when is_list(params) do
-    Enum.reduce_while(params, current, &parse_modes_token/2)
-  end
-
-  @spec parse_modes_token(String.t(), pos_integer()) ::
-          {:cont, pos_integer()} | {:halt, pos_integer()}
-  defp parse_modes_token("MODES=" <> rest, _) do
-    case Integer.parse(rest) do
-      {n, ""} when n > 0 -> {:halt, n}
-      _ -> {:cont, 3}
-    end
-  end
-
-  defp parse_modes_token(_, acc), do: {:cont, acc}
-
-  # BUGHUNT-1 A — Scans 005 RPL_ISUPPORT params for a "LINELEN=N" token
-  # and returns N as an integer. Returns the current value unchanged
-  # when no LINELEN= is found (default 512 per RFC 2812). Silently
-  # ignores malformed tokens (e.g. "LINELEN=0" or "LINELEN=" with no
-  # number) — the prior value is always a safe fallback.
-  @spec extract_linelen_isupport([String.t()], pos_integer()) :: pos_integer()
-  defp extract_linelen_isupport(params, current) when is_list(params) do
-    Enum.reduce_while(params, current, &parse_linelen_token/2)
-  end
-
-  @spec parse_linelen_token(String.t(), pos_integer()) ::
-          {:cont, pos_integer()} | {:halt, pos_integer()}
-  defp parse_linelen_token("LINELEN=" <> rest, current) do
-    case Integer.parse(rest) do
-      {n, ""} when n > 0 -> {:halt, n}
-      _ -> {:cont, current}
-    end
-  end
-
-  defp parse_linelen_token(_, acc), do: {:cont, acc}
 
   # ---------------------------------------------------------------------------
   # S3.2 — away state internal helpers

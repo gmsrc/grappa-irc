@@ -29,9 +29,10 @@ defmodule Grappa.Session.ModeChunker do
 
   ## Default max_per_chunk
 
-  IRCv3 spec says 3 when `MODES=` is absent. Session.Server stores the
-  advertised value (or the default) in `state.modes_per_chunk` and passes it
-  to every `chunk/3` call.
+  IRCv3 spec says 3 when `MODES=` is absent. Since #1390 the advertised
+  value (or that default) is a field of the per-network capability table:
+  `Session.Server` reads it with `Grappa.Session.ISupport.modes/1` and
+  passes it to every `chunk/3` call.
 
   ## Round-trip contract
 

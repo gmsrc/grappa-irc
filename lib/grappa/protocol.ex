@@ -57,7 +57,7 @@ defmodule Grappa.Protocol do
   # `:: 1` (not `pos_integer()`) so the spec matches the success typing of
   # the literal constant under Dialyzer `:underspecs` — the codebase idiom
   # for a constant-returning function (`Grappa.Notify.max_entries/0 :: 64`,
-  # `Session.Server.default_modes_per_chunk/0 :: 3`). A bump edits the spec
+  # `Grappa.IRC.Identifier.max_nick_length/0 :: 30`). A bump edits the spec
   # alongside `@protocol_version`, which is a deliberate, reviewed event
   # per the additive-only rule — the spec doubles as the bump tripwire.
   @spec version() :: 1

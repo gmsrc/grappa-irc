@@ -2,8 +2,10 @@ defmodule Grappa.Session.ISupport do
   @moduledoc """
   Per-network capability table, parsed from the upstream's 005
   RPL_ISUPPORT tokens: `CHANMODES=`, `PREFIX=`, `STATUSMSG=`,
-  `CASEMAPPING=`, `MONITOR=`/`WATCH=`, and — since #1255 — `CHANTYPES=`,
-  `MAXLIST=`, `NICKLEN=`, `CHANNELLEN=` and `TOPICLEN=`.
+  `CASEMAPPING=`, `MONITOR=`/`WATCH=`, since #1255 `CHANTYPES=`,
+  `MAXLIST=`, `NICKLEN=`, `CHANNELLEN=` and `TOPICLEN=`, and — since
+  #1390 — `MODES=` and `LINELEN=`, the last two that `Session.Server`
+  still scanned for itself under a merge rule of their own.
 
   ## Why this exists
 
@@ -134,6 +136,8 @@ defmodule Grappa.Session.ISupport do
           nicklen: pos_integer() | nil,
           channellen: pos_integer() | nil,
           topiclen: pos_integer() | nil,
+          modes: pos_integer(),
+          linelen: pos_integer(),
           raw: raw()
         }
 
@@ -199,6 +203,16 @@ defmodule Grappa.Session.ISupport do
   # #1108 took for the frame budget.
   @default_maxlist %{}
 
+  # #1390 — unlike the length limits above, these two seed a NUMBER rather
+  # than "unadvertised". `ModeChunker` has to pick a chunk size and
+  # `LineSplit` a frame budget on the very first outbound line, long before
+  # any 005 arrives, so "do not enforce" is not a value either can be handed.
+  # 3 is the IRCv3 / RFC 2812 §3.2.3 de-facto minimum every major ircd meets;
+  # 512 is RFC 2812's line limit. Both were the `Session.Server` state
+  # defaults this module took over.
+  @default_modes 3
+  @default_linelen 512
+
   @doc """
   The pre-005 default capability table (bahamut/Azzurra values). Used as
   the initial `Session.Server` state field and as the fallback whenever a
@@ -223,6 +237,8 @@ defmodule Grappa.Session.ISupport do
       nicklen: nil,
       channellen: nil,
       topiclen: nil,
+      modes: @default_modes,
+      linelen: @default_linelen,
       raw: %{}
     }
   end
@@ -447,6 +463,27 @@ defmodule Grappa.Session.ISupport do
   def topiclen(isupport) when is_map(isupport), do: Map.get(isupport, :topiclen)
 
   @doc """
+  The advertised `MODES=` (#1390): how many mode changes one MODE line may
+  carry, which is what `Grappa.Session.ModeChunker` chunks against. Always
+  a number — see `@default_modes` for why this one cannot be `nil`.
+
+  The `Map.get/3` default is the hot-reload contract: a live session's
+  table predates this field, and a plain hot reload does not rewrite
+  process state.
+  """
+  @spec modes(t()) :: pos_integer()
+  def modes(isupport) when is_map(isupport), do: Map.get(isupport, :modes, @default_modes)
+
+  @doc """
+  The advertised `LINELEN=` (#1390), the upstream's max wire-frame size —
+  the number `Grappa.IRC.LineSplit` subtracts the relayed source prefix
+  from to get the body budget. Always a number; see `modes/1` for the
+  hot-reload fallback.
+  """
+  @spec linelen(t()) :: pos_integer()
+  def linelen(isupport) when is_map(isupport), do: Map.get(isupport, :linelen, @default_linelen)
+
+  @doc """
   Every token the upstream advertised, verbatim — see `t:raw/0` for what
   this is for and the two boundaries it must respect. Empty before the
   first 005.
@@ -473,7 +510,9 @@ defmodule Grappa.Session.ISupport do
     "MAXLIST" => :maxlist,
     "NICKLEN" => :nicklen,
     "CHANNELLEN" => :channellen,
-    "TOPICLEN" => :topiclen
+    "TOPICLEN" => :topiclen,
+    "MODES" => :modes,
+    "LINELEN" => :linelen
   }
 
   # #1255 — draft-brocklesby-irc-isupport-03 §2: a token advertised with a
@@ -573,6 +612,14 @@ defmodule Grappa.Session.ISupport do
   defp merge_token("CHANNELLEN=" <> rest, acc), do: put_limit(acc, :channellen, rest)
   defp merge_token("TOPICLEN=" <> rest, acc), do: put_limit(acc, :topiclen, rest)
 
+  # #1390 — the two tokens `Session.Server` used to scan for itself, on the
+  # same `put_limit/3` as the limits above. That shared arm is the point of
+  # the move: a malformed value keeps the prior one instead of substituting a
+  # narrower default, and the write is unconditional, so a token repeated
+  # within one line lands last-wins like every other token here.
+  defp merge_token("MODES=" <> rest, acc), do: put_limit(acc, :modes, rest)
+  defp merge_token("LINELEN=" <> rest, acc), do: put_limit(acc, :linelen, rest)
+
   defp merge_token(_, acc), do: acc
 
   # #1255 — the verbatim archive, written for EVERY advertised token
@@ -614,7 +661,7 @@ defmodule Grappa.Session.ISupport do
   @spec token_name?(String.t()) :: boolean()
   defp token_name?(name), do: Regex.match?(@token_name, name)
 
-  @spec put_limit(t(), :nicklen | :channellen | :topiclen, String.t()) :: t()
+  @spec put_limit(t(), :nicklen | :channellen | :topiclen | :modes | :linelen, String.t()) :: t()
   defp put_limit(acc, key, rest) do
     case Integer.parse(rest) do
       {n, ""} when n > 0 -> Map.put(acc, key, n)
