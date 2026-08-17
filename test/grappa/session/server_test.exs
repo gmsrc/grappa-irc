@@ -3426,7 +3426,10 @@ defmodule Grappa.Session.ServerTest do
       # is safe here: the session is idle between handshake and the next
       # send_privmsg call.
       linelen = 512
-      :sys.replace_state(pid, fn state -> %{state | linelen: linelen} end)
+
+      :sys.replace_state(pid, fn state ->
+        %{state | isupport: Map.put(state.isupport, :linelen, linelen)}
+      end)
 
       budget = linelen - Grappa.IRC.LineSplit.relay_frame_overhead("#sniffo")
       # A body spanning three full budgets → a deterministic ≥ 3 fragments.
