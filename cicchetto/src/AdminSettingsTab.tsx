@@ -3,6 +3,7 @@ import AdminCard from "./admin/AdminCard";
 import AdminField from "./admin/AdminField";
 import { AdminLoading } from "./admin/AdminStatus";
 import AdminToolbar from "./admin/AdminToolbar";
+import { useRefreshSlot } from "./admin/refreshSlot";
 import { type AdminSettingsView, ApiError, adminGetSettings, adminPutSettings } from "./lib/api";
 import { token } from "./lib/auth";
 
@@ -168,27 +169,34 @@ const AdminSettingsTab: Component = () => {
     }
   };
 
+  // #1411 — Settings acquired its refresh AFTER the shared extraction and got
+  // a hand-rolled copy of the button rather than the slot the other fetching
+  // tabs use. The copy carried no `aria-label`, so its accessible name was the
+  // literal text and swapped to "loading…" mid-fetch — a screen reader
+  // announces that as the control being renamed, not as a busy state — and it
+  // never reached the rail's ☰ actions, so the operator's mobile refresh path
+  // failed on this one tab alone. Registration is the fix for both: the shared
+  // button names itself once and sets `aria-busy`, and the slot is what the
+  // rail renders from on a phone.
+  useRefreshSlot({
+    onRefresh: () => {
+      void refresh();
+    },
+    busy: loading,
+    label: "refresh settings",
+    testId: "admin-settings-refresh",
+  });
+
   onMount(() => {
     void refresh();
   });
 
   return (
     <div class="admin-settings-tab" data-testid="admin-settings-tab">
-      <AdminToolbar
-        title="Settings"
-        subtitle="Server-wide upload limits"
-        actions={
-          <button
-            type="button"
-            class="adm-btn adm-refresh-btn"
-            onClick={() => void refresh()}
-            disabled={loading()}
-            data-testid="admin-settings-refresh"
-          >
-            {loading() ? "loading…" : "↻ refresh"}
-          </button>
-        }
-      />
+      {/* The toolbar stays: unlike the tabs whose band was title-plus-refresh
+          and nothing else, its subtitle names the scope of everything below
+          (server-wide, not per-network), which the nav above does not say. */}
+      <AdminToolbar title="Settings" subtitle="Server-wide upload limits" />
 
       <div class="adm-scroll">
         <Show when={error()}>
@@ -199,7 +207,11 @@ const AdminSettingsTab: Component = () => {
 
         <Show when={settings() !== null} fallback={<AdminLoading message="loading settings…" />}>
           <form onSubmit={(e) => void onSave(e)} class="admin-settings-form" noValidate>
-            <AdminCard title="Uploads" subtitle="Applies to every network on this server">
+            <AdminCard
+              hostsRefresh
+              title="Uploads"
+              subtitle="Applies to every network on this server"
+            >
               {/* Two columns per field — label left, control right —
                   instead of the stacked default. The fields are short
                   numbers with long names, so stacking wasted a full row

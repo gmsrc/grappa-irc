@@ -3,8 +3,15 @@ import type { Component, JSX } from "solid-js";
 // Admin redesign Layer 2 — shared page-level toolbar (title + context
 // line + right-aligned actions), absorbing the 8 bespoke
 // `header.admin-X-header` blocks. `AdminRefreshButton` below absorbs
-// the 7 byte-identical copies of the `↻ refresh` button (the 8th,
-// Settings, has no refresh action and is unaffected).
+// the byte-identical copies of the `↻ refresh` button.
+//
+// #1411 — this doc used to except Settings as the one tab with "no refresh
+// action". It grew one after that sentence was written and hand-rolled the
+// button, losing the accessible name and the mobile ☰ placement; the sentence
+// is what let it land. There is no exception now: EVERY tab that re-fetches
+// goes through this component, reached either from the tab's slot
+// registration (`admin/refreshSlot.ts`) or, where the toolbar survives for
+// reasons of its own, directly — see `AdminNetworksTab`.
 
 export type Props = {
   title: string;

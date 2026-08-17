@@ -16,6 +16,7 @@ vi.mock("../lib/api", async () => {
 });
 
 import AdminSettingsTab from "../AdminSettingsTab";
+import { refreshSlot } from "../admin/refreshSlot";
 
 // UX-6-B2 (2026-05-21) — AdminSettingsTab unit suite. Covers:
 //   * GET /admin/settings on mount + form pre-population
@@ -270,10 +271,40 @@ describe("AdminSettingsTab — refresh", () => {
       expect(api.adminGetSettings).toHaveBeenCalledTimes(1);
     });
 
-    fireEvent.click(screen.getByTestId("admin-settings-refresh"));
+    fireEvent.click(await screen.findByTestId("admin-settings-refresh"));
 
     await waitFor(() => {
       expect(api.adminGetSettings).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // #1411 (review K-S5) — Settings was the eighth tab, and the only one whose
+  // refresh stayed a hand-rolled `<button>` after the extraction; the
+  // `AdminToolbar` moduledoc still claimed it had no refresh at all. The copy
+  // cost it the shared button's `aria-label`/`aria-busy` (its accessible name
+  // was the literal text, which swaps to "loading…" mid-fetch, so a screen
+  // reader announces a state change as a control rename) and kept it out of
+  // the slot the rail's ☰ renders from on a phone.
+  it("publishes its refresh through the shared slot", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminGetSettings).mockResolvedValue(DEFAULTS);
+
+    render(() => <AdminSettingsTab />);
+
+    await waitFor(() => {
+      expect(refreshSlot()).not.toBeNull();
+    });
+    expect(refreshSlot()?.testId).toBe("admin-settings-refresh");
+    expect(refreshSlot()?.label).toBe("refresh settings");
+  });
+
+  it("names the button once, so the name does not change mid-fetch", async () => {
+    const api = await import("../lib/api");
+    vi.mocked(api.adminGetSettings).mockResolvedValue(DEFAULTS);
+
+    render(() => <AdminSettingsTab />);
+
+    const button = await screen.findByTestId("admin-settings-refresh");
+    expect(button).toHaveAccessibleName("refresh settings");
   });
 });
