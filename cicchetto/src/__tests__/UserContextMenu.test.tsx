@@ -61,6 +61,11 @@ vi.mock("../lib/selection", () => ({
 // We also need to mock pushWhois — UserContextMenu uses pushWhois from socket.ts.
 // The mock above covers it.
 
+import {
+  __resetForTest,
+  overlayEscapeDepth,
+  runTopmostOverlayEscape,
+} from "../lib/overlayScrollLock";
 import UserContextMenu from "../UserContextMenu";
 
 const baseProps = {
@@ -76,6 +81,7 @@ const baseProps = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockSendCtcpQuery.mockResolvedValue(undefined);
+  __resetForTest();
 });
 
 describe("UserContextMenu", () => {
@@ -256,10 +262,18 @@ describe("UserContextMenu", () => {
       expect(onClose).toHaveBeenCalled();
     });
 
-    it("calls onClose when Escape is pressed", async () => {
+    // #1411 — this used to fire a keydown at `document` and catch the menu's
+    // own private listener. That listener is gone: Escape now arrives through
+    // the ONE shared ESC stack, so the host-level assertion is that the menu
+    // ENROLLED. The full door (real keypress → keybindings → stack, and the
+    // drawer that no longer closes with it) is driven in cardEscape.test.tsx.
+    it("enrols in the shared ESC stack, and dismisses when it is run", async () => {
       const onClose = vi.fn();
       render(() => <UserContextMenu {...baseProps} onClose={onClose} />);
-      fireEvent.keyDown(document, { key: "Escape" });
+
+      expect(overlayEscapeDepth()).toBe(1);
+      expect(runTopmostOverlayEscape()).toBe(true);
+
       expect(onClose).toHaveBeenCalled();
     });
   });

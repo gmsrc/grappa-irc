@@ -1,6 +1,7 @@
 import { render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ConfirmModal from "../ConfirmModal";
+import ContextMenu, { type ContextMenuItem } from "../ContextMenu";
 import LusersCard from "../LusersCard";
 import type { ConnectionInfo, Network, WhoisBundle } from "../lib/api";
 import { type ConfirmRequest, confirmRequest, requestConfirm } from "../lib/confirmDialog";
@@ -13,7 +14,8 @@ import WhoisCard from "../WhoisCard";
 import WhowasCard from "../WhowasCard";
 
 // #1199 — the scrollback cards' Escape contract, in one place because it is
-// one contract across four components (three that enrol, one that must not).
+// one contract across four components (three that enrol, one that must not) —
+// and, since #1411, across the context-menu shell as well.
 //
 // Escape reaches the cards through the SAME door every modal uses: the single
 // window keydown listener in `lib/keybindings` → `runTopmostOverlayEscape` →
@@ -277,5 +279,65 @@ describe("#1199 Escape ordering: a modal over a card", () => {
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(handlers.closeDrawer).not.toHaveBeenCalled();
+  });
+});
+
+// #1411 (review K-S4) — the context-menu shell is the same contract as the
+// cards above: dismissable, covering nothing, therefore an ESC-stack member
+// with no scroll-lock refcount. It was never enumerated among #232's twelve
+// and kept the private `document` keydown listener that #232 ("ONE global
+// listener, the sole ESC authority") and `createOverlayEscape`'s own doc both
+// state cannot exist. The cost is not theoretical: on a phone `MembersPane`
+// IS the members drawer, so one Escape closed the menu through the private
+// listener AND, the shared stack being empty, fell through to `closeDrawer`.
+//
+// The menu mounts only while open — all three hosts gate it behind a `<Show>`
+// (MembersPane, ScrollbackPane, MessageContextMenu) — so its enrolment
+// predicate is the constant `true`, unlike the cards' bundle checks.
+describe("#1411 the context menu closes on Escape through the shared stack", () => {
+  const MENU_ITEMS: ContextMenuItem[] = [{ label: "whois", enabled: true, action: vi.fn() }];
+
+  it("closes the menu without ALSO reaching the drawer fallback", async () => {
+    const onClose = vi.fn();
+    render(() => <ContextMenu items={MENU_ITEMS} position={{ x: 10, y: 10 }} onClose={onClose} />);
+    await flush();
+
+    dispatchEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // The double-close: a private listener closes the menu and leaves the
+    // shared stack empty, so the drawer underneath goes with it.
+    expect(handlers.closeDrawer).not.toHaveBeenCalled();
+  });
+
+  it("holds no scroll-lock refcount while it is up", async () => {
+    render(() => <ContextMenu items={MENU_ITEMS} position={{ x: 10, y: 10 }} onClose={vi.fn()} />);
+    await flush();
+
+    expect(overlayEscapeDepth()).toBe(1);
+    expect(overlayCount()).toBe(0);
+  });
+
+  it("yields to a modal opened over it — the modal closes on the first Escape", async () => {
+    const onClose = vi.fn();
+    render(() => (
+      <>
+        <ContextMenu items={MENU_ITEMS} position={{ x: 10, y: 10 }} onClose={onClose} />
+        <ConfirmModal />
+      </>
+    ));
+    await flush();
+    requestConfirm(leaveChannelRequest(vi.fn()));
+    await flush();
+
+    dispatchEscape();
+    await flush();
+
+    expect(onClose).not.toHaveBeenCalled(); // the menu did NOT jump the queue
+    expect(confirmRequest()).toBeNull();
+
+    dispatchEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

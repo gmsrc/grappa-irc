@@ -1,6 +1,7 @@
-import { type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, on, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { computeMenuPosition } from "./lib/menuPosition";
+import { createOverlayEscape } from "./lib/overlayScrollLock";
 
 // The context-menu SHELL: portal, backdrop, Escape, and the measured
 // flip/clamp placement. Extracted from `UserContextMenu` when #1067 needed a
@@ -62,14 +63,24 @@ export type Props = {
 };
 
 const ContextMenu: Component<Props> = (props) => {
-  const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === "Escape") props.onClose();
-  };
-
-  createEffect(() => {
-    document.addEventListener("keydown", onKeyDown);
-    onCleanup(() => document.removeEventListener("keydown", onKeyDown));
-  });
+  // #1411 — Escape goes through the ONE shared ESC stack (#232), not a private
+  // `document` listener. The private one was a second global ESC authority,
+  // which is the exact thing #232 deleted `MediaViewerModal`'s copy to prevent:
+  // it closed the menu and left the stack empty, so the SAME keypress fell
+  // through `keybindings.ts` to `closeDrawer()` — on a phone, where MembersPane
+  // IS the members drawer, a long-press menu and its drawer went together.
+  // Stack membership also gives the menu LIFO precedence, so a modal opened
+  // over it closes first.
+  //
+  // The ESC-only variant (#1199), not `createOverlayLock`: the menu is a
+  // dismissable surface that holds no scroll-lock refcount today, and taking
+  // one would freeze the scrollback snapshot behind it and arm the iOS
+  // `overlay-open` touch lock. The predicate is the constant `true` because all
+  // three hosts mount this component behind a `<Show>` on their own open state.
+  createOverlayEscape(
+    () => true,
+    () => props.onClose(),
+  );
 
   // #1192 — the drill-down level, held as an INDEX into `props.items` rather
   // than as the submenu object itself. The caller rebuilds its item array on
