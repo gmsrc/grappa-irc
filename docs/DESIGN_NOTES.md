@@ -47065,3 +47065,59 @@ asserts is proven by the first CI run, not here. The committed
 `shottino/.SRCINFO` is hand-written and agrees with its `PKGBUILD` on the
 sentinels; nothing compares the two field by field, and the real regeneration
 is the arch job's `makepkg --printsrcinfo`._
+<!-- entry #1397 -->
+
+---
+
+## 2026-08-17 — #1397: a shared test helper arrives as a qualified call, not as a case-template import
+
+#1397 counts 152 duplicated helper definitions over 102 files and proposes, for
+the server half, to `import Grappa.AuthFixtures` in `DataCase` **and** in
+`ConnCase` and then delete the copies. The first slice took the opposite route —
+hoist onto the module that already owns the domain, call it qualified, touch no
+case template — and the reason is not taste.
+
+**The import is a compile-time collision, and it is unsliceable.** In Elixir a
+local `defp` that collides with an imported function of the same name and arity
+is a compile error, not a shadow. An import in a case template lands in the
+namespace of every file that uses it: `Grappa.DataCase` has 115 users and
+`GrappaWeb.ConnCase` has 61. The files that would break are exactly the ones the
+issue wants to clean — the 14 local `user_fixture`, 7 `network_fixture` and 4
+`visitor_fixture`. So the import and all 25 deletions would have to land in one
+commit, which is precisely the "big-bang" the issue's own slicing plan rules out.
+The issue's proposed "first slice of one file with zero deletions" cannot be the
+import step; that sentence died with its premise.
+
+**The suite already routes around this, measurably.** Of the 123 files importing
+`AuthFixtures`, 110 import it wholesale and **none of those 110 defines a
+colliding local**. The only two files that define a fixture of their own —
+`user_settings_test.exs` and `user_settings_display_prefs_test.exs` — both import
+with a narrowed `only: [visitor_fixture: 0]`, spelled exactly around their local
+`defp user_fixture`. Zero counter-examples in 110 is not proof of the language
+rule, but it is the shape the codebase has already settled into.
+
+**A qualified call has none of that coupling.** `passthrough_handler/0` is an
+argument to `IRCServer.start_link/1`, so every caller already has the module in
+scope; the helper moves with no import anywhere, and a test that still wants a
+handler of its own keeps it without a word. Each family of #1397 then becomes an
+independent, separately reviewable slice — which is the property that makes the
+remaining fifteen helpers tractable at all.
+
+**Corollary for the rest of the bucket:** prefer the module that consumes the
+helper over the case template, every time. `AuthFixtures` is already a module;
+its fixtures can be reached as `AuthFixtures.user_fixture(...)` without the
+template gaining anything. The template import buys keystrokes and costs the
+ability to slice.
+
+**Not established here.** Nothing was compiled or run for this entry. The
+collision is the documented Elixir rule plus the 110-to-0 evidence above, not a
+build we watched fail. The claim that consolidation is behaviour-preserving rests,
+for this slice only, on the nineteen bodies being byte-identical — one sha1 over
+the definition line, nineteen occurrences — and not on a suite run.
+
+**`await_handshake` is explicitly out of this reasoning.** Its 13 copies differ on
+three axes (timeout `1_000` ×11 vs `5_000` ×2, prefix `"USER"` ×12 vs `"USER "`
+×1, alias `IRCServer` ×12 vs `Grappa.IRCServer` ×1), and the timeout is a live
+decision: two files have already found one second insufficient. Consolidating it
+is choosing a barrier value, not removing a duplicate, and it must be bought with
+its own reason.
