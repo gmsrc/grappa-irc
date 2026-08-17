@@ -339,7 +339,7 @@ describe("#1393 — user-topic boundary census", () => {
           {
             "arm": "banlist_bundle",
             "fields": 4,
-            "handAcceptsSchemaRejects": "mode/drop, mode/null, mode/wrong-type",
+            "handAcceptsSchemaRejects": "mode/drop",
             "schema": "S_SessionWireBanlistBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
