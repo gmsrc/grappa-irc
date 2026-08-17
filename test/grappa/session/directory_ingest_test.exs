@@ -14,6 +14,9 @@ defmodule Grappa.Session.DirectoryIngestTest do
   point of it. It is not a mirror of the implementation: it asserts the
   decisions, and two of them are behaviour that a tidy-up would silently
   change (see the `abort/1` test).
+
+  Steps are bound to numbered names (`r0`, `r1`, …) rather than rebound:
+  each assertion then names the exact step it is about.
   """
 
   use ExUnit.Case, async: true
@@ -24,26 +27,26 @@ defmodule Grappa.Session.DirectoryIngestTest do
   # decision boundary, and a config-derived batch size would make the
   # assertions read as coincidence.
   defp ingest(opts) do
-    DirectoryIngest.new(
-      timeout_ms: Keyword.get(opts, :timeout_ms, 60_000),
-      throttle_ms: Keyword.get(opts, :throttle_ms, 1_000),
-      batch: Keyword.get(opts, :batch, 200)
-    )
+    DirectoryIngest.from_opts(%{
+      directory_refresh_timeout_ms: Keyword.get(opts, :timeout_ms, 60_000),
+      directory_progress_throttle_ms: Keyword.get(opts, :throttle_ms, 1_000),
+      directory_ingest_batch: Keyword.get(opts, :batch, 200)
+    })
   end
 
-  defp armed(opts, now) do
-    opts |> ingest() |> DirectoryIngest.start(now, make_ref())
-  end
+  defp armed(opts, now), do: DirectoryIngest.start(ingest(opts), now, make_ref())
+
+  defp row(name), do: %{name: name, topic: nil, user_count: 1}
 
   describe "parse_row/1" do
     test "a full RPL_LIST row yields name, topic and count" do
-      assert {:ok, row} = DirectoryIngest.parse_row(["mynick", "#elixir", "42", "The topic"])
-      assert row == %{name: "#elixir", topic: "The topic", user_count: 42}
+      assert {:ok, parsed} = DirectoryIngest.parse_row(["mynick", "#elixir", "42", "The topic"])
+      assert parsed == %{name: "#elixir", topic: "The topic", user_count: 42}
     end
 
     test "a stripped upstream that omits the trailing topic yields a nil topic" do
-      assert {:ok, row} = DirectoryIngest.parse_row(["mynick", "#elixir", "7"])
-      assert row == %{name: "#elixir", topic: nil, user_count: 7}
+      assert {:ok, parsed} = DirectoryIngest.parse_row(["mynick", "#elixir", "7"])
+      assert parsed == %{name: "#elixir", topic: nil, user_count: 7}
     end
 
     test "a non-numeric user count coerces to 0 rather than crashing the ingest" do
@@ -61,68 +64,68 @@ defmodule Grappa.Session.DirectoryIngestTest do
       idle = ingest([])
       refute DirectoryIngest.in_flight?(idle)
 
-      running = DirectoryIngest.start(idle, 0, make_ref())
-      assert DirectoryIngest.in_flight?(running)
+      assert DirectoryIngest.in_flight?(DirectoryIngest.start(idle, 0, make_ref()))
     end
   end
 
   describe "absorb/3 — the batch boundary" do
     test "rows below the batch size buffer without an ingest action" do
-      run = armed([batch: 3], 0)
+      r0 = armed([batch: 3], 0)
 
-      {run, actions} = DirectoryIngest.absorb(run, row("#a"), 0)
-      assert actions == []
-      {_run, actions} = DirectoryIngest.absorb(run, row("#b"), 0)
-      assert actions == []
+      {r1, first} = DirectoryIngest.absorb(r0, row("#a"), 0)
+      assert first == []
+
+      {_, second} = DirectoryIngest.absorb(r1, row("#b"), 0)
+      assert second == []
     end
 
     test "reaching the batch size emits ONE ingest action carrying wire order" do
-      run = armed([batch: 3], 0)
+      r0 = armed([batch: 3], 0)
 
-      {run, []} = DirectoryIngest.absorb(run, row("#a"), 0)
-      {run, []} = DirectoryIngest.absorb(run, row("#b"), 0)
-      {_run, actions} = DirectoryIngest.absorb(run, row("#c"), 0)
+      {r1, []} = DirectoryIngest.absorb(r0, row("#a"), 0)
+      {r2, []} = DirectoryIngest.absorb(r1, row("#b"), 0)
+      {_, third} = DirectoryIngest.absorb(r2, row("#c"), 0)
 
-      assert [{:ingest, rows}] = actions
+      assert [{:ingest, rows}] = third
       assert Enum.map(rows, & &1.name) == ["#a", "#b", "#c"]
     end
 
     test "the running tally survives a flush — count is total, not buffer depth" do
-      run = armed([batch: 2, throttle_ms: 0], 0)
+      r0 = armed([batch: 2, throttle_ms: 0], 0)
 
-      {run, _} = DirectoryIngest.absorb(run, row("#a"), 0)
-      {run, _} = DirectoryIngest.absorb(run, row("#b"), 0)
-      {_run, actions} = DirectoryIngest.absorb(run, row("#c"), 0)
+      {r1, _} = DirectoryIngest.absorb(r0, row("#a"), 0)
+      {r2, _} = DirectoryIngest.absorb(r1, row("#b"), 0)
+      {_, third} = DirectoryIngest.absorb(r2, row("#c"), 0)
 
-      assert {:progress, 3} in actions
+      assert {:progress, 3} in third
     end
   end
 
   describe "absorb/3 — the progress throttle" do
     test "no progress ping inside the throttle window" do
-      run = armed([throttle_ms: 1_000], 0)
+      r0 = armed([throttle_ms: 1_000], 0)
 
-      {_run, actions} = DirectoryIngest.absorb(run, row("#a"), 999)
+      {_, actions} = DirectoryIngest.absorb(r0, row("#a"), 999)
       refute Enum.any?(actions, &match?({:progress, _}, &1))
     end
 
     test "a ping once the window elapses, and the window then restarts" do
-      run = armed([throttle_ms: 1_000], 0)
+      r0 = armed([throttle_ms: 1_000], 0)
 
-      {run, actions} = DirectoryIngest.absorb(run, row("#a"), 1_000)
-      assert {:progress, 1} in actions
+      {r1, at_1000} = DirectoryIngest.absorb(r0, row("#a"), 1_000)
+      assert {:progress, 1} in at_1000
 
-      {run, actions} = DirectoryIngest.absorb(run, row("#b"), 1_500)
-      refute Enum.any?(actions, &match?({:progress, _}, &1))
+      {r2, at_1500} = DirectoryIngest.absorb(r1, row("#b"), 1_500)
+      refute Enum.any?(at_1500, &match?({:progress, _}, &1))
 
-      {_run, actions} = DirectoryIngest.absorb(run, row("#c"), 2_000)
-      assert {:progress, 3} in actions
+      {_, at_2000} = DirectoryIngest.absorb(r2, row("#c"), 2_000)
+      assert {:progress, 3} in at_2000
     end
 
     test "the flush is ordered BEFORE the progress ping it reports" do
-      run = armed([batch: 1, throttle_ms: 0], 0)
+      r0 = armed([batch: 1, throttle_ms: 0], 0)
 
-      {_run, actions} = DirectoryIngest.absorb(run, row("#a"), 0)
+      {_, actions} = DirectoryIngest.absorb(r0, row("#a"), 0)
 
       assert [{:ingest, _}, {:progress, 1}] = actions
     end
@@ -131,20 +134,18 @@ defmodule Grappa.Session.DirectoryIngestTest do
   describe "finish/1" do
     test "flushes the tail in wire order, hands back the watchdog ref, and clears the run" do
       timer = make_ref()
-      run = DirectoryIngest.start(ingest(batch: 100), 0, timer)
+      r0 = DirectoryIngest.start(ingest(batch: 100), 0, timer)
 
-      {run, []} = DirectoryIngest.absorb(run, row("#a"), 0)
-      {run, []} = DirectoryIngest.absorb(run, row("#b"), 0)
+      {r1, []} = DirectoryIngest.absorb(r0, row("#a"), 0)
+      {r2, []} = DirectoryIngest.absorb(r1, row("#b"), 0)
 
-      assert {cleared, rows, ^timer} = DirectoryIngest.finish(run)
+      assert {cleared, rows, ^timer} = DirectoryIngest.finish(r2)
       assert Enum.map(rows, & &1.name) == ["#a", "#b"]
       refute DirectoryIngest.in_flight?(cleared)
     end
 
     test "an empty buffer flushes nothing — never round-trip an empty insert" do
-      run = armed([], 0)
-
-      assert {cleared, [], _timer} = DirectoryIngest.finish(run)
+      assert {cleared, [], _} = DirectoryIngest.finish(armed([], 0))
       refute DirectoryIngest.in_flight?(cleared)
     end
   end
@@ -156,17 +157,15 @@ defmodule Grappa.Session.DirectoryIngestTest do
       # last batch are lost and `ChannelDirectory.finalize/2` never runs for
       # that refresh. A version that flushed on timeout would change the DB
       # on every truncated refresh. #1390 slice 2 preserves it deliberately.
-      run = armed([batch: 100], 0)
+      r0 = armed([batch: 100], 0)
 
-      {run, []} = DirectoryIngest.absorb(run, row("#a"), 0)
-      {run, []} = DirectoryIngest.absorb(run, row("#b"), 0)
+      {r1, []} = DirectoryIngest.absorb(r0, row("#a"), 0)
+      {r2, []} = DirectoryIngest.absorb(r1, row("#b"), 0)
 
-      cleared = DirectoryIngest.abort(run)
+      cleared = DirectoryIngest.abort(r2)
 
       refute DirectoryIngest.in_flight?(cleared)
       assert {^cleared, [], nil} = DirectoryIngest.finish(cleared)
     end
   end
-
-  defp row(name), do: %{name: name, topic: nil, user_count: 1}
 end

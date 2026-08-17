@@ -107,15 +107,21 @@ defmodule Grappa.Session.DirectoryIngest do
             run: nil
 
   @doc """
-  Build the idle ingest. Tunables are explicit: `Session.Server` resolves
-  config-default-or-opts-override once, at `do_init/1`.
+  Build the idle ingest from `t:Grappa.Session.start_opts/0`, taking the
+  struct's config defaults for anything the caller does not pin.
+
+  Same shape and same opt-key spelling as before the extraction, so a test
+  that pinned `:directory_ingest_batch` keeps working. Mirrors its slice-1
+  sibling `Deps.from_opts/1`.
   """
-  @spec new(keyword()) :: t()
-  def new(opts) do
+  @spec from_opts(map()) :: t()
+  def from_opts(opts) when is_map(opts) do
+    defaults = %__MODULE__{}
+
     %__MODULE__{
-      timeout_ms: Keyword.fetch!(opts, :timeout_ms),
-      throttle_ms: Keyword.fetch!(opts, :throttle_ms),
-      batch: Keyword.fetch!(opts, :batch)
+      timeout_ms: Map.get(opts, :directory_refresh_timeout_ms, defaults.timeout_ms),
+      throttle_ms: Map.get(opts, :directory_progress_throttle_ms, defaults.throttle_ms),
+      batch: Map.get(opts, :directory_ingest_batch, defaults.batch)
     }
   end
 
@@ -187,7 +193,7 @@ defmodule Grappa.Session.DirectoryIngest do
   def finish(%__MODULE__{run: nil} = ingest), do: {ingest, [], nil}
 
   def finish(%__MODULE__{run: %Run{} = run} = ingest) do
-    {rows, _drained} = drain(run)
+    {rows, _} = drain(run)
     {%{ingest | run: nil}, rows, run.timer}
   end
 

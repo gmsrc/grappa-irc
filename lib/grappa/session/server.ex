@@ -1141,7 +1141,7 @@ defmodule Grappa.Session.Server do
       # `config :grappa, Grappa.ChannelDirectory` (the `DirectoryIngest`
       # struct defaults), opts-overridable so tests can pin a short timeout
       # or a small batch. No refresh in flight at boot.
-      directory: directory_ingest(opts),
+      directory: DirectoryIngest.from_opts(opts),
       # #100 sustained-reconnect reset gate — config default, opts-overridable
       # for tests. Timer armed on 001, nil until then.
       connection_stable_ms: Map.get(opts, :connection_stable_ms, @connection_stable_ms),
@@ -6624,24 +6624,12 @@ defmodule Grappa.Session.Server do
 
   # Empty is a no-op — never round-trip an empty insert.
   @spec ingest_directory_rows(t(), [ChannelDirectory.ingest_row()]) :: :ok
-  defp ingest_directory_rows(_state, []), do: :ok
+  defp ingest_directory_rows(_, []), do: :ok
 
   defp ingest_directory_rows(state, rows) do
     :ok = ChannelDirectory.ingest(state.subject, state.network_id, rows)
   end
 
-  # Config default (the struct's) or the test-pinned opt, under the SAME opt
-  # keys the four former state fields used.
-  @spec directory_ingest(map()) :: DirectoryIngest.t()
-  defp directory_ingest(opts) do
-    defaults = %DirectoryIngest{}
-
-    DirectoryIngest.new(
-      timeout_ms: Map.get(opts, :directory_refresh_timeout_ms, defaults.timeout_ms),
-      throttle_ms: Map.get(opts, :directory_progress_throttle_ms, defaults.throttle_ms),
-      batch: Map.get(opts, :directory_ingest_batch, defaults.batch)
-    )
-  end
 
   # mIRC sort: ops (@) → voiced (+) → plain (no prefix). Within tier,
   # alphabetical by nick (caller `Enum.sort_by` does the secondary).
