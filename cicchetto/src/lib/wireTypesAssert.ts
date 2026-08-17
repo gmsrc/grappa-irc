@@ -36,10 +36,11 @@
 //   * Add an assert for every api.ts type that has a wireTypes.ts
 //     counterpart. When server-side adds a new Wire module + type,
 //     the codegen emits it; if a cic consumer needs the new shape,
-//     add the assert + the api.ts mirror. EXCEPT for arms of
-//     `WireSessionEvent`: #1406 walks that population instead, so a new
-//     Session arm needs no line here and gets none of the silence that
-//     a forgotten line used to buy.
+//     add the assert + the api.ts mirror. EXCEPT for UNION ARMS, which
+//     are walked rather than listed (#1406): a `WireSessionEvent` arm
+//     needs nothing at all, and a cross-module arm needs one line in the
+//     `CrossModuleArm` registry naming its generated counterpart. Neither
+//     buys the silence a forgotten assert line used to.
 //
 //   * If an assert fails (`Type 'true' is not assignable to type
 //     'never'` at the `: true = true` lines), the api.ts mirror has
@@ -80,6 +81,7 @@ import type {
   NotifyWireNotifyListPayload,
   QueryWindowsWireWindowsEntry,
   QueryWindowsWireWindowsListPayload,
+  RateLimitWireWebSessionSeveredEvent,
   ReadCursorWireReadCursorSet,
   ScrollbackWireArchiveChangedPayload,
   ScrollbackWireArchivePurgedPayload,
@@ -164,88 +166,77 @@ export type _Assert_CredentialJson = Assert<Equal<CredentialJson, NetworksWireCr
 // and which cic also reuses standalone in its stores.
 export type _Assert_LinksEntry = Assert<Equal<LinksEntry, SessionWireLinksEntry>>;
 
-// === cross-surface S1 (2026-07-19 review) — envelope discriminator pins ===
-// The envelope `kind` (and Session `state`) discriminators of ~10 Wire
-// modules were typed `String.t()` server-side, so codegen emitted
-// `kind: string` and cic restated each literal by hand with zero
-// compile-time gate — a server rename of any discriminator shipped
-// silently past codegen + tsc, then every event of that kind was dropped
-// at the cic narrower with only a console.warn. S1 tightened the
-// typespecs to literal atoms (Dialyzer now pins the builders; codegen
-// emits `kind: "literal"`); these pins tie cic's hand-rolled union arms
-// to the generated literal payloads so a future rename is a `tsc` error.
-// Each `Extract<Union, {kind}>` also revalidates the arm's full field
-// shape (kind + body) against the generated type. These arms come from
-// other Wire modules, so no generated union covers them and the #1406 walk
-// cannot reach them — they stay hand-pinned.
-export type _Assert_ScrollbackMessageEvent = Assert<
-  Equal<Extract<WireChannelEvent, { kind: "message" }>, ScrollbackWireEvent>
->;
-export type _Assert_ReadCursorSet = Assert<
-  Equal<Extract<WireChannelEvent, { kind: "read_cursor_set" }>, ReadCursorWireReadCursorSet>
->;
-export type _Assert_WindowCounts = Assert<
-  Equal<Extract<WireChannelEvent, { kind: "window_counts" }>, WindowCountsWireEvent>
->;
-export type _Assert_NotifyList = Assert<
-  Equal<Extract<WireUserEvent, { kind: "notify_list" }>, NotifyWireNotifyListPayload>
->;
-export type _Assert_QueryWindowsList = Assert<
-  Equal<Extract<WireUserEvent, { kind: "query_windows_list" }>, QueryWindowsWireWindowsListPayload>
->;
-export type _Assert_ArchiveChanged = Assert<
-  Equal<Extract<WireUserEvent, { kind: "archive_changed" }>, ScrollbackWireArchiveChangedPayload>
->;
-export type _Assert_ArchivePurged = Assert<
-  Equal<Extract<WireUserEvent, { kind: "archive_purged" }>, ScrollbackWireArchivePurgedPayload>
->;
-export type _Assert_AutoAwayDebounceChanged = Assert<
-  Equal<
-    Extract<WireUserEvent, { kind: "auto_away_debounce_changed" }>,
-    UserSettingsWireAutoAwayDebounceChangedPayload
-  >
->;
-export type _Assert_ServerSettingsChanged = Assert<
-  Equal<
-    Extract<WireUserEvent, { kind: "server_settings_changed" }>,
-    ServerSettingsWireChangedPayload
-  >
->;
-export type _Assert_ConnectionStateChanged = Assert<
-  Equal<
-    Extract<WireUserEvent, { kind: "connection_state_changed" }>,
-    NetworksWireConnectionStateEvent
-  >
->;
-
-// bundle_hash: cic's arm carries the deliberate post-narrow enrichment
-// `version: string | null` (absent → null) vs the wire's `version?:
-// string` (cross-surface S2), so a full-shape Equal cannot hold. Pin the
-// `kind` discriminator only — that is the rename gap S1 closes.
-export type _Assert_BundleHashKind = Assert<
-  Equal<Extract<WireUserEvent, { kind: "bundle_hash" }>["kind"], CicWireBundleHashPayload["kind"]>
->;
-
-// === #1406 — the Session arm population is WALKED, not listed ===
-// Every pin above names its arm by hand, so a new server arm lands with no
-// pin unless a human remembers to write one. That is not a lapse, it is the
-// shape of the mechanism: the maintenance note at the top of this file asks
-// for a line per type, and 16 of the 37 `WireSessionEvent` arms never got
-// one. Codegen already emits the exhaustive union, so the population can be
-// quantified over instead of transcribed — and then a new server arm is
-// covered the moment codegen emits it, and the pins for the arms it covers
-// stop being a list anybody has to maintain.
+// === #1406 X-S1 — the cross-module arms, as DATA rather than asserts ===
+// cic's two hand-rolled unions fan IN from many `Grappa.*.Wire` modules;
+// the codegen groups by Elixir MODULE and emits one union per module, so
+// the twelve arms below are the ones no generated union collects and the
+// Session walk therefore cannot reach. They used to carry one hand-written
+// `_Assert_*` line each — the same shape #1406 removed for the Session
+// population, and the same silence: nothing said the list was COMPLETE, so
+// a new cross-module arm landed unpinned unless a human remembered.
+// `web_session_severed` is how that failed in practice — declared by hand
+// since #630, widened since #1338 X-S14, never pinned, found by set
+// arithmetic rather than by review.
 //
-// Two failures are checked separately, because they fail differently:
+// Naming the counterpart as DATA is what lets the population be checked:
+// `_Assert_NoUnpinnedHandArm` below can compare cic's declared kinds
+// against `walked ∪ registered` only because "registered" is a type-level
+// set. An exported assert alias is not one.
 //
-//   * `_Assert_NoUndeclaredArm` — a generated arm cic declares on NEITHER
-//     topic. No hand pin can catch this class at all: there is nothing yet
-//     to write the pin about.
-//   * `_Assert_No{User,Channel}ArmDrift` — a generated arm whose cic copy
-//     has a different shape. Walked per union rather than over their union,
-//     so the four dual-topic arms (`joined`, `join_failed`, `kicked`,
+// This is also the S1 (2026-07-19) rename gate, unchanged in substance:
+// each entry resolves by `kind`, so a server-side discriminator rename
+// makes the entry resolve to `never` and `_Assert_NoUnresolvedPin` reddens
+// — where before the rename shipped past codegen + tsc and every event of
+// that kind was dropped at the narrower with a console.warn.
+type CrossModuleArm = {
+  message: ScrollbackWireEvent;
+  read_cursor_set: ReadCursorWireReadCursorSet;
+  window_counts: WindowCountsWireEvent;
+  notify_list: NotifyWireNotifyListPayload;
+  query_windows_list: QueryWindowsWireWindowsListPayload;
+  archive_changed: ScrollbackWireArchiveChangedPayload;
+  archive_purged: ScrollbackWireArchivePurgedPayload;
+  auto_away_debounce_changed: UserSettingsWireAutoAwayDebounceChangedPayload;
+  server_settings_changed: ServerSettingsWireChangedPayload;
+  connection_state_changed: NetworksWireConnectionStateEvent;
+  bundle_hash: CicWireBundleHashPayload;
+  // Two generated types carry `kind: "web_session_severed"` with different
+  // shapes — `AdminEventsWireWebSessionSeveredEvent` (admin topic, five
+  // fields) and this one (user topic, one). Naming the type rather than
+  // resolving by kind alone is what keeps that collision from picking the
+  // wrong counterpart, and it is why the registry is a map and not a union.
+  web_session_severed: RateLimitWireWebSessionSeveredEvent;
+};
+
+// === #1406 — the arm population is WALKED, not listed ===
+// A hand-written pin names its arm, so a new arm lands with no pin unless a
+// human remembers to write one. That is not a lapse, it is the shape of the
+// mechanism: the maintenance note at the top of this file asks for a line
+// per type, and 16 of the 37 `WireSessionEvent` arms never got one. The
+// population can be quantified over instead of transcribed — codegen emits
+// the exhaustive Session union, and `CrossModuleArm` above names the rest —
+// so a new arm is covered the moment it is declared, and the pins stop
+// being a list anybody has to keep complete.
+//
+// Each failure is checked separately, because they fail differently:
+//
+//   * `_Assert_NoUndeclaredArm` — a generated Session arm cic declares on
+//     NEITHER topic. No hand pin can catch this class at all: there is
+//     nothing yet to write the pin about.
+//   * `_Assert_No{User,Channel}ArmDrift` — an arm whose cic copy has a
+//     different shape. Walked per union rather than over their union, so
+//     the four dual-topic arms (`joined`, `join_failed`, `kicked`,
 //     `isupport_changed`) are pinned to the generated payload on BOTH
 //     topics, which pins the two copies to each other as a side effect.
+//   * `_Assert_NoUnpinnedHandArm` — a kind cic declares that NOTHING here
+//     checks: absent from the Session union and absent from the registry.
+//     This is the one that closes X-S1, because it is the only assert whose
+//     subject is the COMPLETENESS of the others rather than a shape.
+//   * `_Assert_NoStrayPin` / `_Assert_NoUnresolvedPin` — the registry's own
+//     two rot modes. A key cic no longer declares (or one the Session walk
+//     already covers, which would silently shadow it) makes its entry
+//     vacuous; an entry whose generated type no longer carries the kind
+//     resolves to `never`, which is how a server-side rename surfaces.
 
 // `Flatten` first: many cic arms are declared as an INTERSECTION with the
 // standalone type their stores reuse (`({ kind: "whois_bundle" } &
@@ -274,7 +265,7 @@ type NoArms<Message extends string, T> = [T] extends [never]
 // field is a genuine SUPERSET of what the server can send. Adding a kind
 // here without naming its field does not type-check.
 //
-// All three entries are the same posture, and it is the additive-only wire
+// All four entries are the same posture, and it is the additive-only wire
 // rule (#447) reaching the type layer: a value that only SELECTS COPY must
 // not be allowed to drop its event when the server adds to its vocabulary.
 //
@@ -287,8 +278,14 @@ type NoArms<Message extends string, T> = [T] extends [never]
 //     nullable string, deliberately NOT hardened to the token union, so an
 //     additive server reason can never drop a terminal recovery result;
 //     `RecoverModal.reasonCopy` maps the known tokens and falls back.
-//     #1338 X-S14 widened `web_session_severed.code` citing exactly this
-//     posture, so hardening these two would reverse a standing ruling.
+//   * `web_session_severed.code` (#1338 X-S14) — widened citing exactly the
+//     two above, which is why hardening any of them would reverse a
+//     standing ruling. The drop-to-login action does not read the code, so
+//     an additive sever reason must not cost the terminal event. It reaches
+//     this registry only since #1406 X-S1: the exemption used to be scoped
+//     to `WireSessionEvent["kind"]`, and this arm is `Grappa.RateLimit.Wire`
+//     — so the ONE arm whose widening was declared in prose could not be
+//     declared in types, and went unchecked in both directions.
 //
 // The generated type describes the server we ship; a widened field
 // describes the set of servers cic must survive. That is why these are not
@@ -297,12 +294,43 @@ type DeliberatelyWidened = {
   isupport_changed: "frame_budget_base";
   recover_progress: "reason";
   recover_result: "reason";
+  web_session_severed: "code";
 };
 
-type WidenedArm = keyof DeliberatelyWidened & WireSessionEvent["kind"];
-type WalkedArm = Exclude<WireSessionEvent["kind"], WidenedArm>;
+// The kinds cic declares by hand, and the kinds something here checks.
+// `KnownArm` is the union of the two sources a counterpart can come from:
+// the exhaustive Session union, and the registry for the arms no generated
+// union collects. Everything below walks `KnownArm`, so extending the
+// registry extends every check at once.
+type HandArm = WireUserEvent["kind"] | WireChannelEvent["kind"];
+type PinnedArm = keyof CrossModuleArm & string;
+type KnownArm = WireSessionEvent["kind"] | PinnedArm;
 
-type GeneratedArm<K extends WireSessionEvent["kind"]> = Extract<WireSessionEvent, { kind: K }>;
+// Arms whose cic copy TRANSFORMS the generated body rather than widening
+// one field of it, so no `Equal` can hold and no widening bound applies —
+// only the discriminator is pinnable. `bundle_hash` carries the deliberate
+// post-narrow enrichment `version: string | null` (absent → null) against
+// the wire's `version?: string` (cross-surface S2): `undefined` is not a
+// member of `string | null`, so this is a conversion, not a superset, and
+// registering it as widened would (correctly) overrun. Its coverage is
+// `_Assert_NoUnresolvedPin`, which is exactly the rename gate the old
+// `_Assert_BundleHashKind` provided.
+type DiscriminatorOnlyArm = "bundle_hash" & KnownArm;
+
+type WidenedArm = keyof DeliberatelyWidened & KnownArm;
+type WalkedArm = Exclude<KnownArm, WidenedArm | DiscriminatorOnlyArm>;
+
+// Resolve an arm to its generated counterpart. `Extract` over the two
+// sources at once keeps this a plain distributive conditional — the shape
+// the walks below already index into — instead of a nested `K extends …`
+// that tsc refuses to index. It is also why the registry may not name a
+// kind the Session union already carries: two candidates would resolve to
+// a union and every comparison would fail obscurely. `_Assert_NoStrayPin`
+// forbids that overlap rather than leaving it to be discovered.
+type GeneratedArm<K extends KnownArm> = Extract<
+  WireSessionEvent | CrossModuleArm[PinnedArm],
+  { kind: K }
+>;
 
 // Index by a key tsc can prove is present. A bare `T[DeliberatelyWidened[K]]`
 // is rejected inside the generic walk; `Extract<F, keyof T>` is assignable to
@@ -361,6 +389,34 @@ export type _Assert_NoWideningOverrunChannel = Assert<
   NoArms<
     "channel-topic arms widening more than their declared field",
     WideningOverrunIn<WireChannelEvent>
+  >
+>;
+
+// The completeness check — the one assert whose subject is the other
+// asserts. Every kind cic declares must be reachable by one of the walks
+// above, which is true exactly when it is a Session arm or a registry key.
+// Without it the registry is a list again, with the same silence: a new
+// cross-module arm would simply be absent from every check and nothing
+// would say so. `web_session_severed` was that arm when this landed.
+export type _Assert_NoUnpinnedHandArm = Assert<
+  NoArms<"cic-declared kinds no assert in this file reaches", Exclude<HandArm, KnownArm>>
+>;
+
+// The registry's two rot modes, kept separate because they mean different
+// things. A stray key is coverage cic no longer needs (or that the Session
+// walk already provides, which would shadow the entry); an unresolved entry
+// is a counterpart that no longer carries the kind it is filed under — a
+// server-side discriminator rename, or a mis-wired entry.
+export type _Assert_NoStrayPin = Assert<
+  NoArms<
+    "registry keys cic does not declare, or that the Session walk already covers",
+    Exclude<PinnedArm, Exclude<HandArm, WireSessionEvent["kind"]>>
+  >
+>;
+export type _Assert_NoUnresolvedPin = Assert<
+  NoArms<
+    "registry entries whose generated type no longer carries the kind",
+    { [K in PinnedArm]: [GeneratedArm<K>] extends [never] ? K : never }[PinnedArm]
   >
 >;
 
