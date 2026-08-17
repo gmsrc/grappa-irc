@@ -81,15 +81,25 @@ defmodule GrappaWeb.MeJSON do
   any client-side count derivation. Mirrors cic `selection.ts`'s
   `ServerWindowCounts` type byte-for-byte.
   """
-  @type unread_counts :: %{
-          String.t() => %{
-            String.t() => %{
-              messages: non_neg_integer(),
-              mentions: non_neg_integer(),
-              events: non_neg_integer(),
-              severity: :mention | :message | :event | :none
-            }
-          }
+  @type unread_counts :: %{String.t() => %{String.t() => window_counts()}}
+
+  @typedoc """
+  The per-channel counts inside `unread_counts`. Named rather than inlined
+  because the codegen renders a long nested `Record<…>` on one line and biome
+  then wants to reformat the GENERATED file, which no human may hand-fix; a
+  named inner type keeps the envelope short and the object literal in the
+  shape every other emitted map already takes.
+
+  Still a longhand re-spelling of `Grappa.WindowCounts.t()` — one shape, three
+  declarations, no reference between them (2026-08-15 architecture review,
+  type-leverage A8 third leg). Naming it here makes the duplication visible;
+  collapsing it is that finding's work, not X-S10's.
+  """
+  @type window_counts :: %{
+          messages: non_neg_integer(),
+          mentions: non_neg_integer(),
+          events: non_neg_integer(),
+          severity: :mention | :message | :event | :none
         }
 
   @typedoc """

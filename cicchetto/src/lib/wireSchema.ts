@@ -1643,19 +1643,18 @@ export const S_ErrorTokensRestErrorToken = {
 // GrappaWeb.MeJSON.read_cursors/0
 export const S_MeJSONReadCursors = { r: { r: "i" } } as const;
 
-// GrappaWeb.MeJSON.unread_counts/0
-export const S_MeJSONUnreadCounts = {
-  r: {
-    r: {
-      o: {
-        messages: "i",
-        mentions: "i",
-        events: "i",
-        severity: { e: ["mention", "message", "event", "none"] },
-      },
-    },
+// GrappaWeb.MeJSON.window_counts/0
+export const S_MeJSONWindowCounts = {
+  o: {
+    messages: "i",
+    mentions: "i",
+    events: "i",
+    severity: { e: ["mention", "message", "event", "none"] },
   },
 } as const;
+
+// GrappaWeb.MeJSON.unread_counts/0
+export const S_MeJSONUnreadCounts = { r: { r: S_MeJSONWindowCounts } } as const;
 
 // GrappaWeb.MeJSON.user_me_json/0
 export const S_MeJSONUserMeJson = {

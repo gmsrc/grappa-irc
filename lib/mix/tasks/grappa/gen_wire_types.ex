@@ -815,6 +815,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # not the fix (`format_external_typedef/2` documents why it renders one
   # alias at a time); a codegen hole must be a codegen ERROR, as the unmapped
   # Erlang remote type and the cyclic enum reference already are.
+  @spec unresolvable_user_type!(atom()) :: no_return()
   defp unresolvable_user_type!(name) do
     {mod, type} = Process.get(:wire_external_typedef)
 

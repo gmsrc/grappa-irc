@@ -1695,16 +1695,14 @@ export type ErrorTokensChannelErrorToken = (typeof ERROR_TOKENS_CHANNEL_ERROR_TO
 
 export type MeJSONReadCursors = Record<string, Record<string, number>>;
 
-export type MeJSONUnreadCounts =
-  | Record<string, Record<string, {
+export type MeJSONUnreadCounts = Record<string, Record<string, MeJSONWindowCounts>>;
+
+export type MeJSONWindowCounts = {
   messages: number;
   mentions: number;
   events: number;
-  severity: "mention"
-  | "message"
-  | "event"
-  | "none";
-}>>;
+  severity: "mention" | "message" | "event" | "none";
+};
 
 export type MeJSONUserMeJson = {
   kind: "user";
