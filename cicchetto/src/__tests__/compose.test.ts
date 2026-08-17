@@ -4889,7 +4889,7 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: string; draft: string }> = [
   { kind: "ctcp", draft: "/ctcp bob VERSION" },
   { kind: "ping", draft: "/ping bob" },
   { kind: "join", draft: "/join #b" },
-  { kind: "part", draft: "/part #a" },
+  { kind: "part", draft: "/part #other" },
   { kind: "invite", draft: "/invite bob #a" },
   { kind: "kick", draft: "/kick bob" },
   { kind: "kb", draft: "/kb bob" },
@@ -4900,8 +4900,8 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: string; draft: string }> = [
   { kind: "deop", draft: "/deop bob" },
   { kind: "voice", draft: "/voice bob" },
   { kind: "devoice", draft: "/devoice bob" },
-  { kind: "mode", draft: "/mode #a +m" },
-  { kind: "mode-view", draft: "/mode #a" },
+  { kind: "mode", draft: "/mode #other +m" },
+  { kind: "mode-view", draft: "/mode #other" },
   { kind: "mode-apply-current", draft: "/mode +s" },
   { kind: "umode", draft: "/umode +i" },
   { kind: "umode-view", draft: "/umode" },
@@ -4915,7 +4915,7 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: string; draft: string }> = [
   { kind: "watchlist", draft: "/hilight badger" },
   { kind: "whois", draft: "/whois bob" },
   { kind: "whowas", draft: "/whowas bob" },
-  { kind: "who", draft: "/who #a" },
+  { kind: "who", draft: "/who #other" },
   { kind: "names", draft: "/names" },
   { kind: "list", draft: "/list" },
   { kind: "links", draft: "/links" },
@@ -5296,7 +5296,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
           "effects": [
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "socket.pushChannelMode(1, "#a", "+m", [])",
+            "socket.pushChannelMode(1, "#other", "+m", [])",
           ],
           "result": {
             "ok": true,
@@ -5316,7 +5316,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "mode-view": {
           "effects": [
-            "modeModal.openModeModal("freenode", "#a")",
+            "modeModal.openModeModal("freenode", "#other")",
             "networks.networkIdBySlug("freenode")",
           ],
           "result": {
@@ -5417,7 +5417,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
         },
         "part": {
           "effects": [
-            "api.postPart("tok", "freenode", "#a", null)",
+            "api.postPart("tok", "freenode", "#other", null)",
             "networks.networkIdBySlug("freenode")",
           ],
           "result": {
@@ -5634,7 +5634,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
           "effects": [
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "socket.pushWho(1, "#a")",
+            "socket.pushWho(1, "#other")",
           ],
           "result": {
             "ok": true,
