@@ -54,8 +54,7 @@ defmodule Grappa.Session.RecoverProgress do
   failure token when it failed.
   """
   @type step_entry ::
-          {SessionWire.recover_step(), SessionWire.recover_status(),
-           SessionWire.recover_reason() | nil}
+          {SessionWire.recover_step(), SessionWire.recover_status(), SessionWire.recover_reason() | nil}
 
   @doc """
   Maps an FSM transition (old phase → next state) to the progress step(s) the
