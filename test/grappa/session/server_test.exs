@@ -74,9 +74,7 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
-  defp passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
-
-  defp start_server(handler \\ passthrough_handler()) do
+  defp start_server(handler \\ IRCServer.passthrough_handler()) do
     {:ok, server} = IRCServer.start_link(handler)
     {server, IRCServer.port(server)}
   end

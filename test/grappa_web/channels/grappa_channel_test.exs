@@ -131,10 +131,8 @@ defmodule GrappaWeb.GrappaChannelTest do
 
   # Shared IRC-fake helpers for after-join snapshot tests.
 
-  defp passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
-
   defp start_irc_server do
-    {:ok, server} = IRCServer.start_link(passthrough_handler())
+    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
     {server, IRCServer.port(server)}
   end
 

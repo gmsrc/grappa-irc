@@ -54,6 +54,22 @@ defmodule Grappa.IRCServer do
   ## API
 
   @doc """
+  The do-nothing handler: buffers every inbound line, replies to none,
+  keeps handler state untouched. The right `start_link/1` argument for
+  a test that cares about what the CLIENT sent, not what the server
+  answers.
+
+  Lifted here from nineteen byte-identical `defp` copies across the
+  suite (#1397). It belongs on this module rather than in a case
+  template because it is an argument to `start_link/1`, so the caller
+  already has `IRCServer` in scope and reaches it as a qualified call —
+  no `import`, and therefore no collision with a test that still keeps
+  a local handler of its own.
+  """
+  @spec passthrough_handler() :: handler()
+  def passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
+
+  @doc """
   Spawns the fake IRC server with `handler` driving inbound-line
   reactions. Initial handler state is `%{}` — equivalent to
   `start_link/2` with `initial_state` of `%{}`. Use `start_link/2`

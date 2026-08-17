@@ -42,10 +42,8 @@ defmodule Grappa.BootstrapTest do
     :ok
   end
 
-  defp passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
-
   defp start_server do
-    {:ok, server} = IRCServer.start_link(passthrough_handler())
+    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
     {server, IRCServer.port(server)}
   end
 

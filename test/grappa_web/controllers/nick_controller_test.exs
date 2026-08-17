@@ -20,8 +20,6 @@ defmodule GrappaWeb.NickControllerTest do
   alias Grappa.{IRCServer, Scrollback, Visitors}
   alias Grappa.Networks.Credentials
 
-  defp passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
-
   # Completes registration (001) so the session is welcomed and inbound
   # numerics traverse the post-registration path (NumericRouter) instead
   # of AuthFSM's registration clauses.
@@ -35,7 +33,7 @@ defmodule GrappaWeb.NickControllerTest do
     end
   end
 
-  defp start_server, do: start_server(passthrough_handler())
+  defp start_server, do: start_server(IRCServer.passthrough_handler())
 
   defp start_server(handler) do
     {:ok, server} = IRCServer.start_link(handler)

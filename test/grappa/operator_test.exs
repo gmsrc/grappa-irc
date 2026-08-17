@@ -28,10 +28,8 @@ defmodule Grappa.OperatorTest do
     :ok
   end
 
-  defp passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
-
   defp start_irc_server do
-    {:ok, server} = Grappa.IRCServer.start_link(passthrough_handler())
+    {:ok, server} = Grappa.IRCServer.start_link(Grappa.IRCServer.passthrough_handler())
     {server, Grappa.IRCServer.port(server)}
   end
 

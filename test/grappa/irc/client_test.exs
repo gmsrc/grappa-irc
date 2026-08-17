@@ -23,11 +23,7 @@ defmodule Grappa.IRC.ClientTest do
   alias Grappa.IRC.{AuthFSM, Client, FakeLag, Message}
   alias Grappa.IRCServer
 
-  # Default handler: ignore everything; tests that need scripted replies
-  # supply their own.
-  defp passthrough_handler, do: fn state, _ -> {:reply, nil, state} end
-
-  defp start_server(handler \\ passthrough_handler()) do
+  defp start_server(handler \\ IRCServer.passthrough_handler()) do
     {:ok, server} = IRCServer.start_link(handler)
     {server, IRCServer.port(server)}
   end
@@ -2097,7 +2093,7 @@ defmodule Grappa.IRC.ClientTest do
     test "start_link/1 still works (no-state delegate to start_link/2)" do
       # The /1 arity is the existing legacy contract — every existing
       # caller in the test suite uses it. S11 must not break it.
-      {:ok, server} = IRCServer.start_link(passthrough_handler())
+      {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
       port = IRCServer.port(server)
       _ = start_client(port)
 
@@ -2115,7 +2111,7 @@ defmodule Grappa.IRC.ClientTest do
     # upstream close from a deadline miss.
 
     test "tcp_closed drains pending waiters with {:error, :tcp_closed}" do
-      {:ok, server} = IRCServer.start_link(passthrough_handler())
+      {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
       port = IRCServer.port(server)
       client = start_client(port)
 
