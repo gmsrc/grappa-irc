@@ -33,21 +33,62 @@ the package.
 
 ### The terminal client
 
-`shottino` (`frontends/shottino`, C + ncurses) ships in the SAME package
-as the bouncer rather than a separate `grappa-shottino`. It is one
-~180 KB binary, and its runtime libraries are already package
-dependencies for the bundled ERTS — the only addition is `libncursesw6`,
-which is NOT the same Debian package as the `libncurses6` ERTS wants
-(shottino links the WIDE build because it is UTF-8 end to end). Splitting
-it into its own package would add a second thing to maintain and buy
-nothing: it is a client for the server you just installed.
+`shottino` (`frontends/shottino`, C + ncurses) has **its own package**,
+built from `nfpm-shottino.yaml` (GH #1447).
 
-Both packages build it from source so it links the build host's
+It used to ship only inside the bouncer package, and the reason written
+here was that splitting it "would add a second thing to maintain and buy
+nothing: it is a client for the server you just installed." **That premise
+was wrong, and the host it is wrong about is the ordinary one:** a machine
+that wants to *talk to* a grappa somewhere else is not the machine running
+it. Today that user has to take a self-contained ERTS and a built SPA —
+37.0 MB of `.deb` at v1.2.0, essentially none of which the client uses —
+and `postinstall.sh` enables a systemd unit they never asked for. The
+client is one C binary against ncursesw and OpenSSL. A second yaml is a
+smaller price than that.
+
+The standalone package is deliberately thin: **one file**, no maintainer
+scripts, no system user, no unit, and none of the bouncer's ERTS-side
+dependencies. It carries the WIDE `libncursesw6` (NOT the `libncurses6`
+ERTS wants — Debian ships them separately; Fedora folds both SONAMEs into
+`ncurses-libs`), OpenSSL, and `ca-certificates`, because the client calls
+`SSL_CTX_set_default_verify_paths()` and verifies with `SSL_VERIFY_PEER`.
+
+It keeps **its own version line** — `frontends/shottino/version.h`, read by
+`version.sh shottino` — rather than the grappa tag. Two artifacts, two
+cadences: `shottino --version` and the package version agree, which they
+could not if the package were stamped with a bouncer release number.
+
+Its metadata takes `/usr/bin/shottino` over from the bouncer with
+`Replaces:` / `Breaks: grappa (<< 1.3.0)` (nfpm maps `replaces` to RPM's
+`Obsoletes`). That boundary is historical — the first release that stops
+shipping the file — so it is written as a constant and must not become
+`${GRAPPA_VERSION}`: at 1.4.0 that would assert grappa 1.3.0 shipped a file
+it did not. `deb.breaks` is also absent from nfpm's env-expansion list, so
+an interpolation there reaches the control file verbatim.
+
+**Where the split stands.** The bouncer package **still ships the client**;
+dropping it from `nfpm.yaml` and from the AUR `PKGBUILD` is the next step.
+Until then both packages own `/usr/bin/shottino` and cannot be
+co-installed, so the standalone one is **built and proven on every
+packaging job but not published**: it is written to `dist-shottino/`, and
+the release workflow's upload steps are path-scoped globs (`path:
+dist/*.deb`), so nothing outside `dist/` reaches the release. That
+directory split is the only gate — `release_assets.sh found` matches by
+name at ANY depth, so a file that reaches the artifact bundle WILL be
+attached — and it is pinned by `test/infra/packaging_shottino_pkg_test.bats`.
+
+Every package builds the client from source so it links the build host's
 ncurses/openssl, the same constraint that governs the ERTS payload.
-`SKIP_SHOTTINO=1` opts the `.deb` build out; without that opt-out a
-failed client build FAILS the package build, because a package that
-silently ships without a binary it advertises is worse than one that
-refuses to build.
+`SKIP_SHOTTINO=1` opts both the build and the client package out; without
+that opt-out a failed client build FAILS the package build, because a
+package that silently ships without a binary it advertises is worse than
+one that refuses to build.
+
+The build **prints the binary's size** (`==> shottino binary: N bytes`)
+instead of recording it here. This paragraph carried "one ~180 KB binary"
+for a long time with nothing behind it; a number in prose goes stale in
+silence, while one in the build log is always that build's, on that host.
 
 `build.sh` snapshots and restores `config.mk` around `./configure`:
 that file is tracked, and leaving it modified makes the tree dirty, which
