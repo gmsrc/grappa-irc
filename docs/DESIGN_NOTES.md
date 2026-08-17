@@ -45645,3 +45645,75 @@ GENERATED artefact looks like someone else's red precisely because no hand
 edited it.** The cheap discriminator that would have caught it in one step:
 biome names the failing file, and `src/lib/wireTypes.ts` was in this
 branch's diff.
+<!-- entry #1394 -->
+
+---
+
+## 2026-08-17 — #1394: one outbound door, bought before the path that needs it exists
+
+`Grappa.Session.Server` now sends an already-assembled wire line through a
+single private `send_outbound/3`: sniff (`capture_outbound_ns_secret/2`),
+then send, then return the threaded state. Its two callers are
+`flush_lines/2` (GhostRecovery / RecoverIdentity) and the
+`apply_effects([{:reply, _} | _], _)` arm.
+
+### The defect was the absence of a signal, not a leak
+
+Nothing was leaking. Both spellings a user has for authenticating already
+cross the capture, one frame up, at their `handle_call`. What was missing
+is that nothing *forced* a new outbound path through the sniff — the
+enforcement mechanism was two comments asking the next author to remember.
+A path that forgets does not fail: it stages nothing, the `+r` rendezvous
+never fires, and the symptom arrives later and elsewhere as a saved
+password that stopped updating.
+
+The `{:reply, _}` arm was the one free-form path already outside the sniff.
+It is also unreachable with a secret today, and that is the reason to fix
+it NOW rather than later: #1390 moves the GhostRecovery / RecoverIdentity
+lines onto this exact grammar, and those lines carry `GHOST <nick> <pwd>`
+and `IDENTIFY <pwd>`. In that order the merge is safe by construction; in
+the reverse order it opens the hole with **no test turning red**, because
+the path does not exist yet to be tested. The arm also discarded the state
+it was handed, so even a capture placed there would have been invisible —
+the door threads.
+
+### The issue's own numbers did not survive recounting
+
+Two, both stated in the PR. The free-form send sites are **17, not 24**
+(counted outside `irc/client.ex`, whose 36 internal calls are the bodies of
+the typed verb helpers). And "24 against 6" mis-frames the shape: the
+capture is not sprinkled across send sites, it sits where the line is
+ASSEMBLED, so the door was already built for every user-driven path and
+the genuinely uncovered free-form arm was **one**.
+
+### What routing the arm through the sniff does NOT open
+
+The arm carries the CTCP PING reply, whose echoed token is chosen by a
+stranger — so sniffing it invites the question of whether an attacker can
+have their own text staged as our NickServ password and committed on the
+next `+r`. Measured: no. Every `NSInterceptor` pattern is anchored at line
+start, and both replies this arm can carry are built as
+`NOTICE <sender> :…`. No prefix of a NOTICE can match `IDENTIFY`, `PASS`,
+`SET PASSWD` or the `PRIVMSG NickServ` family.
+
+### Why the door stops at two callers
+
+The typed verb helpers are left alone deliberately. They assemble the line
+inside `IRC.Client`, where this sniff cannot see it, and their lines
+already cross the capture one frame up. Widening the door to them would
+sniff the same line twice — harmless for `:identify`, whose staging is
+idempotent, but not for `:set_passwd` / `:reset_passwd`, which commit
+on-send. That distinction is the domain boundary, not an exemption.
+
+### The test is a source pin, and the limit is the point
+
+The arm is pinned by asserting the shape of its body in
+`lib/grappa/session/server.ex`. A behavioural oracle for it does not exist
+and cannot be manufactured honestly — by the anchoring argument above, no
+secret reaches the arm from the wire, so there is no state difference to
+observe. The pin is what makes #1390's merge loud. The door's *behaviour*
+is witnessed separately, on the one reachable path, by a ghost-recovery
+test; that witness had to withhold the 001 welcome, because the shared
+fixture's welcome runs `run_perform_and_identify/1`, whose own capture site
+re-stages the same secret and would have left the witness green with the
+sniff removed from the door.
