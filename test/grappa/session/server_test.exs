@@ -247,8 +247,8 @@ defmodule Grappa.Session.ServerTest do
 
   describe "injected dependency bundle (#1390)" do
     test "a live session carries the callbacks in one Deps struct" do
-      {_server, port} = start_server()
-      {user, network, _cred} = setup_user_and_network(port)
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
       assert %Deps{} = :sys.get_state(pid).deps
@@ -257,8 +257,8 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "the ten callback names are gone from the top level of state" do
-      {_server, port} = start_server()
-      {user, network, _cred} = setup_user_and_network(port)
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
       state = :sys.get_state(pid)
