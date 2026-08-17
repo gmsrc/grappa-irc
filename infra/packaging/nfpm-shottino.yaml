@@ -53,14 +53,19 @@ description: |
 #     replaces / recommends / provides / suggests / conflicts (nfpm.go:214-227)
 #     and the Deb struct's `breaks` (nfpm.go:438) is absent from that list — an
 #     interpolation would land in the control file verbatim.
-#   * `replaces` covers BOTH formats: nfpm emits Debian's `Replaces:` and maps
-#     the same list to RPM's `Obsoletes:` (rpm/rpm.go: `Obsoletes: replaces`).
+#   * `breaks` is deb-only, hence the top-level `deb:` block below.
 #
-# `breaks` is deb-only, hence the top-level `deb:` block rather than an entry
-# under `overrides:`.
-replaces:
-  - grappa (<< 1.3.0)
-
+# 🔴 `replaces` reaches BOTH formats but the two SPELL a relation differently,
+# so it is written per-format and must NOT be hoisted to a shared top-level
+# list. nfpm maps `replaces` to RPM's `Obsoletes:` (rpm/rpm.go:289) via
+# rpmpack, whose parser is
+# `([^=<>\s]*)\s*((?:=|>|<)*)\s*(.*)?` (rpmpack/sense.go:24). Feed the Debian
+# spelling `grappa (<< 1.3.0)` to that and group 2 matches EMPTY — `(` is not
+# an operator — so it parses as name `grappa`, version `(<< 1.3.0)`, sense
+# `""`. And `""` is a legal key mapping to SenseAny (sense.go `stringToSense`),
+# so nothing errors: the build stays green and ships an Obsoletes: with a
+# garbage version and no comparison at all. Measured in the two sources, not
+# inferred from the syntax.
 deb:
   breaks:
     - grappa (<< 1.3.0)
@@ -91,11 +96,19 @@ overrides:
       - libncursesw6
       - libssl3t64 | libssl3
       - ca-certificates
+    # Debian relation syntax: parenthesised, `<<` for strictly-less.
+    replaces:
+      - grappa (<< 1.3.0)
   rpm:
     depends:
       - ncurses-libs
       - openssl-libs
       - ca-certificates
+    # RPM relation syntax for the SAME statement: bare, single `<`. Emitted as
+    # `Obsoletes:`. See the comment above the `deb:` block for what happens if
+    # the Debian spelling reaches this list instead.
+    replaces:
+      - grappa < 1.3.0
 
 contents:
   - src: ./staging-shottino/usr/bin/shottino

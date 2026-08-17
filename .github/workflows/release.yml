@@ -236,6 +236,51 @@ jobs:
             echo "::error::shottino --help produced no usage output"; cat /tmp/shottino-help.txt; exit 1; }
           echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
+      # #1447 slice A — the STANDALONE client package. Inspected, NOT
+      # installed: the bouncer package above still owns /usr/bin/shottino, so
+      # `apt-get install` of this one would conflict on the path. That is
+      # exactly what the Breaks: asserted below is for, and exactly why this
+      # package is not published yet.
+      #
+      # The bats suite pins the CONFIG; only this step can prove nfpm accepted
+      # it and rendered what the config asked for.
+      - name: Prove the standalone shottino package is thin and takes the path over
+        run: |
+          deb="$(find dist-shottino -name 'shottino_*.deb' -print -quit)"
+          [ -n "$deb" ] || { echo "::error::no standalone shottino .deb in dist-shottino/"; exit 1; }
+          echo "package: $deb"
+          dpkg-deb -I "$deb"
+
+          # Exactly one regular file, and it is the client. A package that
+          # grew a second payload has stopped being the thin client package.
+          files="$(dpkg-deb -c "$deb" | awk '$1 !~ /^d/ { print $NF }')"
+          echo "contents: $files"
+          [ "$files" = "./usr/bin/shottino" ] || {
+            echo "::error::expected exactly ./usr/bin/shottino, got: $files"; exit 1; }
+
+          # The takeover metadata reached the control file intact — an
+          # unexpanded ${VAR} would show up here verbatim (nfpm does not
+          # expand deb.breaks).
+          dpkg-deb -f "$deb" Breaks | grep -qF 'grappa (<< 1.3.0)' || {
+            echo "::error::Breaks: is not the literal grappa (<< 1.3.0)"
+            dpkg-deb -f "$deb" Breaks; exit 1; }
+          dpkg-deb -f "$deb" Replaces | grep -qF 'grappa (<< 1.3.0)' || {
+            echo "::error::Replaces: is not the literal grappa (<< 1.3.0)"
+            dpkg-deb -f "$deb" Replaces; exit 1; }
+
+          # Its own version line, not the bouncer's.
+          want="$(infra/packaging/version.sh shottino)"
+          got="$(dpkg-deb -f "$deb" Version)"
+          echo "client version: '$got' (want '$want')"
+          [ "$got" = "$want" ] || {
+            echo "::error::client package is stamped '$got', expected '$want'"; exit 1; }
+
+      # NOTE (#1447 slice A): dist-shottino/ is deliberately NOT uploaded.
+      # This glob is path-scoped, which is the only thing keeping the client
+      # package off the release: `publish` attaches by NAME at any depth
+      # (infra/packaging/release_assets.sh), so anything that reaches the
+      # artifact bundle IS attached. Slice B drops /usr/bin/shottino from the
+      # bouncer package and turns publishing on in the same change.
       - name: Upload .deb artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -512,6 +557,37 @@ jobs:
             echo "::error::shottino --help produced no usage output"; cat /tmp/shottino-help.txt; exit 1; }
           echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
+      # #1447 slice A — the STANDALONE client package, inspected not installed
+      # (the bouncer package above still owns /usr/bin/shottino). The deb job
+      # runs the same three proofs through dpkg-deb; here they go through rpm,
+      # where nfpm renders `replaces:` as Obsoletes: and drops deb-only Breaks.
+      - name: Prove the standalone shottino package is thin and takes the path over
+        run: |
+          pkg="$(find dist-shottino -name 'shottino-*.rpm' -print -quit)"
+          [ -n "$pkg" ] || { echo "::error::no standalone shottino .rpm in dist-shottino/"; exit 1; }
+          echo "package: $pkg"
+          rpm -qpi "$pkg"
+
+          files="$(rpm -qpl "$pkg")"
+          echo "contents: $files"
+          [ "$files" = "/usr/bin/shottino" ] || {
+            echo "::error::expected exactly /usr/bin/shottino, got: $files"; exit 1; }
+
+          # nfpm maps `replaces:` to Obsoletes: on rpm (rpm/rpm.go), so this is
+          # the same declaration the .deb spells as Replaces:.
+          rpm -qp --obsoletes "$pkg" | grep -qF 'grappa < 1.3.0' || {
+            echo "::error::Obsoletes: is not the literal grappa < 1.3.0"
+            rpm -qp --obsoletes "$pkg"; exit 1; }
+
+          want="$(infra/packaging/version.sh shottino)"
+          got="$(rpm -qp --queryformat '%{VERSION}' "$pkg")"
+          echo "client version: '$got' (want '$want')"
+          [ "$got" = "$want" ] || {
+            echo "::error::client package is stamped '$got', expected '$want'"; exit 1; }
+
+      # NOTE (#1447 slice A): dist-shottino/ is deliberately NOT uploaded —
+      # see the sibling note in the `deb` job for why the path-scoped glob is
+      # the gate.
       - name: Upload .rpm artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

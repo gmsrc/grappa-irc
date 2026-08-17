@@ -160,31 +160,41 @@ upload_dirs() {
 
 # ── The path takeover, written literally ───────────────────────────────────
 
-@test "#1447 the takeover fields name grappa (<< 1.3.0)" {
+@test "#1447 the takeover names grappa 1.3.0 in each format's own relation syntax" {
     # vjt's ruling, 2026-08-17: the boundary is the first release that stops
     # shipping the file. A historical constant, written as a constant.
-    # `replaces` covers both formats — nfpm maps it to Debian's Replaces: and
-    # to RPM's Obsoletes: (rpm/rpm.go: `Obsoletes: replaces`).
-    grep -qF -- '- grappa (<< 1.3.0)' "$NFPM_CLIENT"
+    #
+    # Deb and RPM SPELL a relation differently and `replaces` reaches both, so
+    # it is written per-format. The Debian spelling is what deb.breaks and
+    # overrides.deb.replaces carry; overrides.rpm.replaces carries the rpm one.
     [ "$(grep -cF -- '- grappa (<< 1.3.0)' "$NFPM_CLIENT")" -eq 2 ]
-    grep -q '^replaces:$' "$NFPM_CLIENT"
+    [ "$(grep -cF -- '- grappa < 1.3.0' "$NFPM_CLIENT")" -eq 1 ]
     grep -q '^  breaks:$' "$NFPM_CLIENT"
 }
 
-@test "#1447 the takeover fields are literal, never interpolated" {
-    # Not a restatement of the constant above — this has its own failure mode.
-    # nfpm v2.43.0 expands ${VARS} in depends/replaces/recommends/provides/
-    # suggests/conflicts (nfpm.go:214-227) and NOT in deb.breaks (the Deb
-    # struct, nfpm.go:438). An interpolation there is written verbatim into the
-    # control file, producing a malformed relationship that nothing else
-    # catches. So: these two fields hold no `$`, ever.
-    takeover="$(awk '
-        /^replaces:/ { f = 1; next }
-        /^  breaks:/ { f = 1; next }
-        f && /^[[:space:]]*-/ { print; next }
-        f { f = 0 }
-    ' "$NFPM_CLIENT")"
+@test "#1447 no Debian-spelled relation is offered to the rpm renderer" {
+    # This is the one that would have shipped silently. nfpm maps `replaces` to
+    # RPM's Obsoletes: (rpm/rpm.go:289) through rpmpack, whose parser is
+    # `([^=<>\s]*)\s*((?:=|>|<)*)\s*(.*)?` (rpmpack/sense.go:24). Given
+    # `grappa (<< 1.3.0)` the operator group matches EMPTY — `(` is not an
+    # operator — so it yields name `grappa`, version `(<< 1.3.0)`, sense `""`;
+    # and `""` is a legal key for SenseAny, so NOTHING errors. Green build,
+    # garbage metadata. Hence: no parenthesised relation under overrides.rpm.
+    rpm_block="$(awk '/^  rpm:/ { f = 1; next } f && /^  [a-z]/ { exit } f' "$NFPM_CLIENT")"
+    [ -n "$rpm_block" ]
+    grep -q 'grappa' <<<"$rpm_block"
+    refute grep -q '((<<|>>))' <<<"$rpm_block"
+    refute grep -qF '(<<' <<<"$rpm_block"
+}
+
+@test "#1447 the takeover relations are literal, never interpolated" {
+    # Not a restatement of the constants above — its own failure mode. nfpm
+    # v2.43.0 expands ${VARS} in depends/replaces/recommends/provides/suggests/
+    # conflicts (nfpm.go:214-227) and NOT in deb.breaks (the Deb struct,
+    # nfpm.go:438), so an interpolation there is written into the control file
+    # verbatim. Every relation naming grappa holds no `$`, ever.
+    takeover="$(grep -E '^[[:space:]]*- grappa[ (]' "$NFPM_CLIENT")"
     [ -n "$takeover" ]
-    [ "$(printf '%s\n' "$takeover" | wc -l)" -eq 2 ]
+    [ "$(printf '%s\n' "$takeover" | wc -l)" -eq 3 ]
     refute grep -q '\$' <<<"$takeover"
 }
