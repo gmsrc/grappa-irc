@@ -7667,6 +7667,87 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #1394 — the outbound door. Every path that puts an ASSEMBLED line on the
+    # wire must cross `capture_outbound_ns_secret/2`; a secret that travels a
+    # path which does not never stages the `+r` rendezvous, and the symptom
+    # arrives later and elsewhere as "my saved password stopped updating".
+    #
+    # This is a SOURCE-shape assertion, and that is a deliberate limit rather
+    # than a shortcut. A behavioural oracle for this arm does not exist and
+    # cannot be manufactured honestly: the only producer of `{:reply, _}` is
+    # the `:auto_reply` expansion, whose two lines are built by
+    # `ctcp_version_reply/…` and `ctcp_ping_reply/4` as `NOTICE <sender> :…`,
+    # while every NSInterceptor pattern is anchored at line start — so no
+    # secret can reach the arm from the wire today (and, by the same
+    # anchoring, no attacker-chosen CTCP PING token can be mis-captured as
+    # one either). What the arm needs is to be WIRED to the door BEFORE #1390
+    # moves the GhostRecovery/RecoverIdentity lines onto it, because at that
+    # moment the hole becomes reachable with no test turning red. The pin is
+    # what makes that moment loud.
+    test "#1394 the EventRouter {:reply, _} arm sends through the outbound door" do
+      source = File.read!("lib/grappa/session/server.ex")
+
+      [_, after_head] =
+        String.split(source, "defp apply_effects([{:reply, line} | rest], state) do", parts: 2)
+
+      [arm, _] = String.split(after_head, "\n  defp ", parts: 2)
+
+      assert arm =~ "send_outbound(",
+             "the {:reply, _} arm must send through send_outbound/3, the one sniff-then-send door"
+
+      refute arm =~ "Client.send_line(",
+             "the {:reply, _} arm must not reach Client.send_line/2 around the door"
+    end
+
+    # #1394 — the ghost-recovery flush is the one outbound path that carries a
+    # NickServ secret without crossing a `handle_call`: GhostRecovery emits
+    # `PRIVMSG NickServ :GHOST <nick> <pwd>` (the interceptor captures the
+    # LAST token, so the GHOST stages too, not just the `:succeeded`
+    # IDENTIFY). It is the door's only behavioural witness, so it is pinned
+    # here rather than left implied by the ghost-recovery describe, which
+    # asserts nothing about capture.
+    #
+    # Attribution is bought by feeding NO 001: the shared `ghost_handler/1`
+    # answers the underscore NICK with a welcome, and that welcome runs
+    # `run_perform_and_identify/1`, whose OWN capture site would re-stage the
+    # same "s3cret" and leave this test green even with the sniff removed
+    # from the door. Withholding the welcome leaves the flush as the only
+    # possible source. The GHOST appearing on the wire is the barrier: the
+    # door sniffs BEFORE it sends, and `:sys.get_state` serialises after the
+    # callback that did both.
+    test "#1394 the ghost-recovery flush crosses the outbound NickServ sniff" do
+      nick = "v1394_#{System.unique_integer([:positive])}"
+      counter = :counters.new(1, [])
+
+      handler = fn state, line ->
+        if String.starts_with?(line, "NICK ") and :counters.get(counter, 1) == 0 do
+          :counters.add(counter, 1, 1)
+          {:reply, ":server 433 * #{nick} :Nickname is already in use.\r\n", state}
+        else
+          {:reply, nil, state}
+        end
+      end
+
+      {server, port} = start_server(handler)
+      {anon_visitor, network} = visitor_with_network(port, nick: nick)
+      {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
+      visitor = Grappa.Repo.reload!(anon_visitor)
+
+      pid = start_visitor_session_for(visitor, network)
+
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :GHOST #{nick} s3cret\r\n"),
+          1_000
+        )
+
+      state = SessionStateHelpers.fetch(pid)
+      assert match?({"s3cret", _deadline}, SessionStateHelpers.pending_auth(state))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     test "second IDENTIFY overwrites first (latest-wins via mailbox FIFO, W8)" do
       {server, port} = start_server()
       {user, network, _} = setup_user_and_network(port)
@@ -12659,8 +12740,14 @@ defmodule Grappa.Session.ServerTest do
       # test inspects the source for the structural invariant instead.
       source = File.read!("lib/grappa/session/server.ex")
 
-      assert source =~ "event-router reply dropped",
-             "apply_effects :reply arm must log on send failure (H11 fire-and-forget pattern)"
+      # #1394 repointed this at the same intention. The arm no longer owns a
+      # log message of its own: it sends through `send_outbound/3`, the one
+      # sniff-then-send door, and the door carries the H11 warning for both
+      # its callers (which one failed rides as `origin:` metadata). What is
+      # pinned is unchanged — this path logs on send failure instead of
+      # crashing on it.
+      assert source =~ "outbound line dropped: send_line failed",
+             "the outbound door must log on send failure (H11 fire-and-forget pattern)"
 
       # And the strict-bind is gone everywhere:
       refute Regex.match?(~r/:ok = .*\.send_/, source),
