@@ -46877,3 +46877,111 @@ because reaching it means fabricating a state the FSM cannot emit. And the
 claim that no OTHER consumer names the moved functions was scoped to `lib` and
 `test` — a comment in `cicchetto/src/RecoverModal.tsx` named one, and was
 found only after the move._
+<!-- entry #1447 slice A -->
+
+---
+
+## 2026-08-17 — #1447 slice A: shottino gets a package, and the README stops arguing against it
+
+A client-only host had no way to install the terminal client without also
+installing a bouncer: one binary package carried the mix release, the built
+SPA and `shottino` together — 37.0 MB of `.deb` at v1.2.0 — and its
+`postinstall.sh` enabled a systemd unit. `nfpm-shottino.yaml` renders the
+client on its own. This slice is the ADDITIVE half: the bouncer package is
+untouched and still ships `/usr/bin/shottino`.
+
+### The cut, and why it is where it is
+
+The whole change is 11-12 files, past the point where one commit is
+reviewable, so it is two slices — cut on the BOUNDARY rather than on cost.
+Slice A only adds; slice B takes the file out of the bouncer package. That
+placement is load-bearing twice over:
+
+* Every decision that presupposes the drop lands in B. `Replaces:` /
+  `Breaks:` exist because a file changed owner, so while `grappa` still
+  ships it there is nothing to declare and nothing to guess. A could
+  therefore start before that question was answered.
+* Neither slice can ship a broken pair. Both packages own
+  `/usr/bin/shottino` until B lands; publishing them together would put two
+  mutually uninstallable artifacts on the same release.
+
+### The only thing keeping this off the release page is a directory
+
+The first reading blamed `release_assets.sh`, whose `found()` matches
+release assets by NAME AT ANY DEPTH (`find "$dir" -type f -name '*.deb'`).
+That is the wrong suspect: it only ever sees what the `publish` job already
+DOWNLOADED. The real gate is one step earlier and is PATH-scoped — the
+upload steps say `path: dist/*.deb` and `path: dist/*.rpm` — so a package
+written to `dist-shottino/` is never uploaded, never downloaded, never
+attached.
+
+Both halves matter and they point the same way: the directory split is
+sufficient, and it is also the ONLY thing there, because once a file enters
+the artifact bundle the name-matching audit will attach it. So the pin
+derives the forbidden directories from the workflow's own upload globs
+rather than naming `dist`.
+
+### Two versions, two cadences
+
+The package is stamped from `frontends/shottino/version.h` (today `0.3.0`),
+not the grappa tag — vjt's ruling, 2026-08-16. `shottino --version` and the
+package version then agree, which they could not if the client inherited a
+bouncer release number it has no relationship to. `version.sh` grew a
+component argument instead of gaining a sibling script: the question it
+answers is "which file carries which version line", and that has one home.
+The no-argument form still means `grappa`, because the FreeBSD jail build
+calls it bare.
+
+### The takeover boundary is a constant, and three reasons say so
+
+`Replaces:` / `Breaks: grappa (<< 1.3.0)` — the number is vjt's, 2026-08-17.
+Deriving it from `${GRAPPA_VERSION}` was considered and rejected on
+SEMANTICS: the field asserts "every grappa older than this shipped the
+file", which is a HISTORICAL fact about one release, so at 1.4.0 the
+interpolation would claim 1.3.0 shipped a file it did not — a false
+statement in package metadata, which is worse than an inconvenient one.
+
+Two further reasons turned up in nfpm v2.43.0's source (the version
+`build.sh` pins) rather than in reasoning about it:
+
+* **`deb.breaks` is not env-expanded at all.** nfpm expands `${VARS}` in
+  depends / replaces / recommends / provides / suggests / conflicts
+  (`nfpm.go:214-227`); `Breaks` lives on the `Deb` struct (`nfpm.go:438`)
+  and is absent from that list, so an interpolation would land in the
+  control file verbatim. The option was never available.
+* **`replaces` already covers both formats.** nfpm emits Debian's
+  `Replaces:` and maps the same list to RPM's `Obsoletes:`
+  (`rpm/rpm.go`: `Obsoletes: replaces`), so the takeover needs one field,
+  not a per-format pair.
+
+A guard was drafted asserting the literal is `<=` the current `VERSION` and
+then discarded before it was written: `VERSION` stays at the PREVIOUS
+release until the cut commit, so that assertion would have read
+`1.3.0 <= 1.2.0` and been red on the day it was authored — the
+interpolation's own defect, wearing a test's clothes. What is pinned
+instead is that the two fields hold no `$`, which has a real failure mode
+behind it and is killed by a mutant that adds a third, interpolated entry.
+
+### The README paragraph was a defect, not a leftover
+
+`infra/packaging/README.md` justified the single package with "splitting it
+into its own package would add a second thing to maintain and buy nothing:
+it is a client for the server you just installed." The client-only host is
+precisely the counterexample, and it is the ordinary case. A document that
+argues against what the repo does misleads the next reader with the
+authority of prose, so it is rewritten in this slice rather than left to be
+tidied later.
+
+The same paragraph claimed "one ~180 KB binary". #1447 records the size as
+NOT measured and nobody measured it since; it could not be measured from
+the host this slice was written on, which produces a Mach-O binary rather
+than the Linux artifact the claim is about. So the number leaves the
+document and the build prints the real one instead — a figure in prose goes
+stale in silence, one in the build log is always that build's, on that host.
+
+_Not established: nothing here was built. No `.deb` or `.rpm` was produced,
+no `dpkg -i` was run, and the size line has never printed. The suite pins
+the CONFIGURATION — that the package is thin, that its version comes from
+the header, that its output directory is outside every upload glob — which
+is what can be held still without a Linux toolchain. Whether nfpm accepts
+these two files is proven by the first CI run, not here._
