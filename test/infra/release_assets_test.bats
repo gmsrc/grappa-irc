@@ -13,6 +13,12 @@
 # Scope: the SET LOGIC (expected vs arrived) + the idempotent partial-release
 # body marker — the bug-prone parts that must not live untested in YAML.
 # Pure filesystem + string logic; no docker, no network, no mix.
+#
+# #1447 slice B — the kinds are matched by the PACKAGE NAME, not by extension
+# alone. From this release the client ships as its own artifact, so a bare
+# `*.deb` would be satisfied by EITHER package: a release that built the
+# bouncer and lost the client would look complete and say nothing. That is the
+# same failure #573 was filed for, one package later.
 
 load ../bats_helpers
 
@@ -33,6 +39,17 @@ seed_complete() {
     : > "$ASSETS/grappa-arch/grappa-0.8.0-1-x86_64.pkg.tar.zst"
     : > "$ASSETS/grappa-arch/PKGBUILD"
     : > "$ASSETS/grappa-arch/.SRCINFO"
+    # The client package, on its own version line (#1447). Named as the real
+    # builders name it: nfpm writes `<name>_<ver>_<arch>.deb` and
+    # `<name>-<ver>-1.<arch>.rpm`, makepkg writes `<name>-<ver>-1-<arch>.pkg.tar.zst`.
+    : > "$ASSETS/grappa-deb/shottino_0.3.0_amd64.deb"
+    : > "$ASSETS/grappa-rpm/shottino-0.3.0-1.x86_64.rpm"
+    : > "$ASSETS/grappa-arch/shottino-0.3.0-1-x86_64.pkg.tar.zst"
+    # The client's AUR recipe, staged under a distinct BASENAME: a release
+    # asset is keyed by basename, so a second file called PKGBUILD would
+    # overwrite the first (the publish fallback uploads with --clobber).
+    : > "$ASSETS/grappa-arch/shottino.PKGBUILD"
+    : > "$ASSETS/grappa-arch/shottino.SRCINFO"
 }
 
 @test "found: a complete nested tree lists every expected asset file" {
@@ -44,7 +61,12 @@ seed_complete() {
     echo "$output" | grep -q 'grappa-0.8.0-1-x86_64.pkg.tar.zst'
     echo "$output" | grep -q '/PKGBUILD$'
     echo "$output" | grep -q '/.SRCINFO$'
-    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 5 ]
+    echo "$output" | grep -q 'shottino_0.3.0_amd64.deb'
+    echo "$output" | grep -q 'shottino-0.3.0-1.x86_64.rpm'
+    echo "$output" | grep -q 'shottino-0.3.0-1-x86_64.pkg.tar.zst'
+    echo "$output" | grep -q '/shottino.PKGBUILD$'
+    echo "$output" | grep -q '/shottino.SRCINFO$'
+    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 10 ]
 }
 
 @test "found: matches by NAME at any depth, not by a path-coupled glob (flat layout)" {
@@ -69,7 +91,32 @@ seed_complete() {
     rm "$ASSETS/grappa-rpm/grappa-0.8.0-1.x86_64.rpm"
     run "$SCRIPT" missing "$ASSETS"
     [ "$status" -eq 0 ]
-    [ "$output" = "RPM package (.rpm)" ]
+    [ "$output" = "RPM package, bouncer (.rpm)" ]
+}
+
+@test "missing: a client package that did not build is named, not absorbed (#1447)" {
+    # The whole reason the kinds are name-scoped. The bouncer's .deb is right
+    # there, so an extension-only `*.deb` pattern would find it, call the kind
+    # satisfied, and publish a release with no client — silently. A release
+    # that loses an artifact it advertises must FAIL LOUDLY.
+    seed_complete
+    rm "$ASSETS/grappa-deb/shottino_0.3.0_amd64.deb"
+    run "$SCRIPT" missing "$ASSETS"
+    [ "$status" -eq 0 ]
+    [ "$output" = "Debian package, client (.deb)" ]
+}
+
+@test "missing: losing the client's whole leg names all three of its packages (#1447)" {
+    seed_complete
+    rm "$ASSETS/grappa-deb/shottino_0.3.0_amd64.deb"
+    rm "$ASSETS/grappa-rpm/shottino-0.3.0-1.x86_64.rpm"
+    rm "$ASSETS/grappa-arch/shottino-0.3.0-1-x86_64.pkg.tar.zst"
+    run "$SCRIPT" missing "$ASSETS"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q 'Debian package, client (.deb)'
+    echo "$output" | grep -q 'RPM package, client (.rpm)'
+    echo "$output" | grep -q 'Arch package, client (.pkg.tar.zst)'
+    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 3 ]
 }
 
 @test "missing: a dead Arch leg names all three of its outputs" {
@@ -77,18 +124,35 @@ seed_complete() {
     rm "$ASSETS/grappa-arch/grappa-0.8.0-1-x86_64.pkg.tar.zst"
     rm "$ASSETS/grappa-arch/PKGBUILD"
     rm "$ASSETS/grappa-arch/.SRCINFO"
+    rm "$ASSETS/grappa-arch/shottino-0.3.0-1-x86_64.pkg.tar.zst"
     run "$SCRIPT" missing "$ASSETS"
     [ "$status" -eq 0 ]
-    echo "$output" | grep -q 'Arch package (.pkg.tar.zst)'
-    echo "$output" | grep -q 'Arch PKGBUILD recipe'
-    echo "$output" | grep -q 'Arch .SRCINFO recipe'
-    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 3 ]
+    echo "$output" | grep -q 'Arch package, bouncer (.pkg.tar.zst)'
+    echo "$output" | grep -q 'Arch package, client (.pkg.tar.zst)'
+    echo "$output" | grep -q 'Arch PKGBUILD recipe, bouncer'
+    echo "$output" | grep -q 'Arch .SRCINFO recipe, bouncer'
+    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 4 ]
 }
 
 @test "missing: an empty assets tree names every expected kind" {
     run "$SCRIPT" missing "$ASSETS"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 5 ]
+    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 10 ]
+}
+
+@test "missing: the client's recipe is its own kind, not the bouncer's (#1447)" {
+    # The two recipes are DIFFERENT files with different sentinels, staged
+    # under different basenames precisely so one cannot stand in for the
+    # other. An expected-kinds table that matched `PKGBUILD` alone would call
+    # the pair complete with the client's recipe missing.
+    seed_complete
+    rm "$ASSETS/grappa-arch/shottino.PKGBUILD"
+    rm "$ASSETS/grappa-arch/shottino.SRCINFO"
+    run "$SCRIPT" missing "$ASSETS"
+    [ "$status" -eq 0 ]
+    echo "$output" | grep -q 'Arch PKGBUILD recipe, client'
+    echo "$output" | grep -q 'Arch .SRCINFO recipe, client'
+    [ "$(echo "$output" | wc -l | tr -d ' ')" -eq 2 ]
 }
 
 @test "notice: a complete set produces no marker block" {
@@ -105,7 +169,7 @@ seed_complete() {
     [ "$status" -eq 0 ]
     echo "$output" | grep -q '<!-- grappa:partial-release:start -->'
     echo "$output" | grep -q '<!-- grappa:partial-release:end -->'
-    echo "$output" | grep -q 'RPM package (.rpm)'
+    echo "$output" | grep -q 'RPM package, bouncer (.rpm)'
 }
 
 @test "apply-body: a partial set prepends the block, and is idempotent" {
@@ -119,7 +183,7 @@ seed_complete() {
     # block present exactly once, changelog preserved
     [ "$(grep -c 'grappa:partial-release:start' "$BATS_TEST_TMPDIR/body2.md")" -eq 1 ]
     grep -q 'a real changelog line' "$BATS_TEST_TMPDIR/body2.md"
-    grep -q 'RPM package (.rpm)' "$BATS_TEST_TMPDIR/body2.md"
+    grep -q 'RPM package, bouncer (.rpm)' "$BATS_TEST_TMPDIR/body2.md"
 
     # Feeding the already-marked body back in must NOT double the block.
     run bash -c "'$SCRIPT' apply-body '$ASSETS' < '$BATS_TEST_TMPDIR/body2.md'"

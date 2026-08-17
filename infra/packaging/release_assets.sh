@@ -27,13 +27,31 @@ set -euo pipefail
 # label per line, TAB-separated. This table IS the contract — a new package
 # kind is added HERE and both the attach glob and the audit follow. Keep it
 # byte-aligned with the bats suite.
+#
+# Patterns are scoped by PACKAGE NAME, not by extension alone (#1447 slice B).
+# Since the terminal client ships as its own artifact, every format produces
+# TWO packages, and a bare `*.deb` is satisfied by either of them: a release
+# whose client leg died would match on the bouncer's file, report a complete
+# set, and publish without the client SILENTLY. That is #573's failure one
+# package later, and the same posture the packaging README states one level
+# down — a package that silently ships without a binary it advertises is worse
+# than one that refuses to build.
+#
+# The names come from the builders, not from taste: nfpm writes
+# `<name>_<ver>_<arch>.deb` and `<name>-<ver>-1.<arch>.rpm`, makepkg writes
+# `<name>-<ver>-1-<arch>.pkg.tar.zst`.
 expected_kinds() {
 	printf '%s\n' \
-		'*.deb	Debian package (.deb)' \
-		'*.rpm	RPM package (.rpm)' \
-		'*.pkg.tar.zst	Arch package (.pkg.tar.zst)' \
-		'PKGBUILD	Arch PKGBUILD recipe' \
-		'.SRCINFO	Arch .SRCINFO recipe'
+		'grappa_*.deb	Debian package, bouncer (.deb)' \
+		'shottino_*.deb	Debian package, client (.deb)' \
+		'grappa-*.rpm	RPM package, bouncer (.rpm)' \
+		'shottino-*.rpm	RPM package, client (.rpm)' \
+		'grappa-*.pkg.tar.zst	Arch package, bouncer (.pkg.tar.zst)' \
+		'shottino-*.pkg.tar.zst	Arch package, client (.pkg.tar.zst)' \
+		'PKGBUILD	Arch PKGBUILD recipe, bouncer' \
+		'.SRCINFO	Arch .SRCINFO recipe, bouncer' \
+		'shottino.PKGBUILD	Arch PKGBUILD recipe, client' \
+		'shottino.SRCINFO	Arch .SRCINFO recipe, client'
 }
 
 # Sentinel markers delimiting the partial-release block inside a release
