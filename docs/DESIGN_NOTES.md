@@ -47700,3 +47700,91 @@ census: an automatic discriminator (look for the message body in a positive
 assertion nearby) flagged 7 of them as unproven and all 7 were false alarms — the
 proof was a badge count, a loop variable, or an outcome, none of which names the
 body.
+<!-- entry #1390 slice 5 -->
+
+---
+
+## 2026-08-17 — #1390 slice 5: the state contract gets a guard, and the guard caught itself first
+
+Slices 1–4 moved things out of `Session.Server`. This one moves nothing. It
+buys the check that the issue's central sentence presupposes: renaming a
+`*_pending` field produces no compile error and no warning, only a `nil` at
+runtime in whichever `apply_effects/2` arm drains it. The module declares its
+state twice — `@type t :: %{...}` and the map its init path builds — both as
+bare maps, so neither the compiler nor Dialyzer has anything to disagree with.
+
+Measured before a line was written: the two sides declare **71 keys each** and
+their set difference is empty in both directions. So the agreement is intact
+and unguarded. That measured pre-state is the whole argument for calling this a
+pin rather than a regression guard — a guard protects behaviour something else
+already covers, and here the mutant is killed by nothing at all today.
+
+### The two mutants, one per side
+
+Each was injected on a committed tree, run, and the failure READ rather than
+predicted. Renaming `pending_auth` to `pendign_auth` in the built map alone:
+
+```
+Built by the init path but MISSING from `@type t` (declare them):
+  [:pendign_auth]
+Declared in `@type t` but never built by the init path (remove
+them, or build them — a declared-only key reads as `nil` forever):
+  [:pending_auth]
+```
+
+The same rename in the typedef alone gives the mirror image. The second mutant
+is not the first one twice: it is what proves the declared side is read from
+the live BEAM, because a stale chunk would answer `pending_auth` on both sides
+and pass green.
+
+### The extraction, and why it is anchored on a return
+
+The declared side comes from the COMPILED typespec via
+`Code.Typespec.fetch_types/1` — the type Dialyzer sees, not a re-parse of the
+source — mirroring `GrappaWeb.ErrorTokensDriftTest`, which already does exactly
+this for the wire error tokens. The built side has no such door: it is a bound
+variable in a 3-tuple return, so it has to be walked out of the AST.
+
+The walk is anchored on the RETURN, not on a function name: the state map is
+the one bound to `state` in the function answering `{:ok, state, {:continue, _}}`.
+There is exactly one.
+
+### A correction to the record, because it is the useful part
+
+The first version of this test anchored on the name `init/1`, and **that was
+wrong**: `Session.Server.init/1` delegates through `init_or_hold/1`, and the
+71-key map is built in `defp do_init/1`. The extractor found zero maps.
+
+It was caught by the test's own guard rather than by review. The `flunk` for
+"not found exactly once" fired and named the shape it expected, instead of
+comparing two empty sets and passing — which is precisely the failure mode the
+guard exists for, and the reason it stays alongside the two anchor keys that
+must survive on both sides. An extractor that quietly finds nothing makes every
+assertion below it vacuously true, forever.
+
+The recon comment on #1390 that preceded this slice needs the same correction.
+It gave one reason why `Grappa.Deploy.Preflight` cannot serve as the oracle
+here — that `init/1` returns `{:ok, state, {:continue, _}}` with `state` a
+bound variable rather than the `{:ok, %{...}}` literal Preflight's clause
+collects. True as far as it goes, and incomplete: the map is not in `init/1` at
+all. So the conclusion holds and is stronger than stated. Preflight sees the
+typedef — enough for its own job, classifying the deploy COLD — and never the
+state map.
+
+### What this does not cover, stated so nobody reads the green as wider
+
+The pin compares KEY NAMES on the two declared sides. It says nothing about the
+values or types behind them (measured today: zero fields seeded `nil` against a
+type that excludes `nil`), nothing about the seven fields still typed `map()`,
+nothing about the 29 tolerant `Map.get(state, :k, default)` reads whose defaults
+are a third place the contract is written, and nothing about the READERS — a
+`state.pendign_auth` anywhere in the module still compiles, warns nothing and
+evaluates to `nil`. It also does not reach `EventRouter`'s own declared
+contract, which is the separate and larger finding, nor the four test files
+that hand-build a state-shaped map.
+
+### Deploy
+
+Unlike slices 1–4, this one touches no production file, so it does not move the
+`@type t` of a module in `HotReload.LongLivedModules`. It is the first #1390
+slice that is **not** a COLD deploy.
