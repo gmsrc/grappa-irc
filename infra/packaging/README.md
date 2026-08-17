@@ -20,7 +20,6 @@ shipped list below.
 | `/usr/lib/grappa/`                     | the mix release (self-contained ERTS + compiled app)       |
 | `/usr/lib/grappa/bin/grappa`           | the release boot script                                    |
 | `/usr/bin/grappa`                      | operator CLI wrapper (sources env, drops to `grappa` user) |
-| `/usr/bin/shottino`                    | terminal client (`frontends/shottino`), built from source  |
 | `/usr/share/grappa/cicchetto-dist/`    | built SPA (`CIC_DIST_ROOT`), served by the BEAM            |
 | `/usr/share/grappa/grappa.env.example` | env template                                               |
 | `/usr/share/grappa/gen-secrets.sh`     | openssl secret generator                                   |
@@ -67,16 +66,39 @@ shipping the file — so it is written as a constant and must not become
 it did not. `deb.breaks` is also absent from nfpm's env-expansion list, so
 an interpolation there reaches the control file verbatim.
 
-**Where the split stands.** The bouncer package **still ships the client**;
-dropping it from `nfpm.yaml` and from the AUR `PKGBUILD` is the next step.
-Until then both packages own `/usr/bin/shottino` and cannot be
-co-installed, so the standalone one is **built and proven on every
-packaging job but not published**: it is written to `dist-shottino/`, and
-the release workflow's upload steps are path-scoped globs (`path:
-dist/*.deb`), so nothing outside `dist/` reaches the release. That
-directory split is the only gate — `release_assets.sh found` matches by
-name at ANY depth, so a file that reaches the artifact bundle WILL be
-attached — and it is pinned by `test/infra/packaging_shottino_pkg_test.bats`.
+**Where the split stands.** Done, in both halves at once. The bouncer
+package no longer ships `/usr/bin/shottino` — it is out of `nfpm.yaml`'s
+`contents:` and out of the AUR bouncer recipe — and the standalone package
+is **published** from `dist-shottino/`, through an upload step of its own
+rather than a glob over a shared directory. The two halves had to land
+together: dropping the file alone takes the client away from everyone who
+has it, and publishing alone ships a pair that cannot be co-installed.
+
+**The upgrade path is `Recommends:`, and it is not decoration.** The file
+leaves the bouncer package in 1.3.0, so without a pointer `apt upgrade`
+would delete `/usr/bin/shottino` from every host that has it today and pull
+nothing back. apt installs Recommends by default and dnf installs weak deps
+by default, so on both the replacement arrives in the same transaction.
+**pacman has no equivalent**, so the Arch recipe uses `optdepends`, which is
+advisory by construction — an Arch user is told where the client went and
+installs it deliberately. That difference is pacman's, not a choice made
+here.
+
+**Two AUR recipes, not one split package.** `aur/PKGBUILD` is the bouncer,
+`aur/shottino/PKGBUILD` the client, and the reason is a constraint rather
+than a preference: `PKGBUILD(5)` § PACKAGE SPLITTING lists the variables a
+`package_*()` function may override and `pkgver` is not among them, so a
+split would stamp the client with the bouncer's number — the exact
+disagreement the own-version-line ruling above forbids. The client recipe
+therefore carries two sentinels: `pkgver=@SHOTTINO_VERSION@` from its own
+carrier, and `_grappaver=@GRAPPA_VERSION@` naming the tag whose tarball
+holds the source. `aur/regen.sh` fills both and regenerates both
+`.SRCINFO`s; `test/grappa/version_single_source_test.exs` pins all of it.
+
+Both halves are pinned by `test/infra/packaging_shottino_pkg_test.bats`,
+and the release audit (`release_assets.sh`) now expects the client's
+packages **by name** — a release that builds the bouncer and loses the
+client fails loudly instead of publishing a set that looks complete.
 
 Every package builds the client from source so it links the build host's
 ncurses/openssl, the same constraint that governs the ERTS payload.

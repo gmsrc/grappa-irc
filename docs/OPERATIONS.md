@@ -4041,8 +4041,9 @@ image (a musl ERTS will not run on a glibc target).
 
 **`GRAPPA_PKG_FORMAT` picks the nfpm output format; it does NOT make the
 payload portable (#438).** The staging tree is format-agnostic, but the
-release bundles ERTS + crypto NIFs — and, since it ships, `shottino` —
-linked against the BUILD host's glibc/libssl. A Debian-built payload is
+release bundles ERTS + crypto NIFs linked against the BUILD host's
+glibc/libssl — and so, separately packaged but built on the same host for
+the same reason, does `shottino`. A Debian-built payload is
 therefore a valid `.deb` and NOT a valid `.rpm`. Build each format on its
 own distro: `release.yml`'s `rpm` job runs in a `fedora:43` container with
 its own Fedora ERTS, the `deb` job on the Ubuntu runner. The Arch recipe
@@ -4061,20 +4062,43 @@ whoever reorders this next. `build.sh` snapshots `config.mk`, installs a
 compile, and restores explicitly afterwards. Deleting either half of that
 trap dance reintroduces the dirty tree.
 
-### shottino ships inside the bouncer package
+### shottino ships as its own package (#1447)
 
-**One package, not a `grappa-shottino` split — considered and rejected.**
-The terminal client is one ~180 KB binary whose runtime libs (`libssl`,
-wide `ncursesw`) are ALREADY in `nfpm.yaml`'s `depends` for the bundled
-ERTS, so shipping it costs a binary and adds no new dependency, while a
-separate package would add something to maintain and buy nothing. It is a
-client for THIS server: installing grappa and getting a way to talk to it
-is the expected shape. The AUR recipe makes the same call for the same
-reason.
+**One package per artifact — reversing the earlier call, on evidence.**
+This section used to argue for shipping the client inside the bouncer:
+its runtime libs were already in `nfpm.yaml`'s `depends`, so it cost a
+binary and no new dependency, and "it is a client for THIS server" made the
+bundle the expected shape. The premise that died is that last one. A
+**client-only host** — a laptop that talks to someone else's bouncer and
+will never run one — had to install the whole server, ERTS included, to get
+a 200-odd KB terminal client. Since 1.3.0 the client is `shottino`, its own
+package, on its own version line (`frontends/shottino/version.h`, so
+`shottino --version` and the package version agree).
 
-It is **built here rather than shipped prebuilt** because it links the
+**The pair must move together, and does.** While both packages owned
+`/usr/bin/shottino` they could not be co-installed, so the standalone one
+was built and proven but withheld from the release (#1447 slice A) until
+the bouncer dropped the file (slice B). The bouncer now carries a
+`Recommends:` (deb) / `recommends` (rpm) on the client, because otherwise
+an upgrade would remove `/usr/bin/shottino` from every host that has it
+today and pull nothing back; both apt and dnf install those by default.
+pacman has no weak dependency that installs by default, so the Arch bouncer
+recipe uses `optdepends` — advisory by construction.
+
+**Arch needs TWO recipes for one decision.** `aur/PKGBUILD` builds the
+bouncer, `aur/shottino/PKGBUILD` the client. Not a split package
+(`pkgname=(grappa shottino)`), because `PKGBUILD(5)` § PACKAGE SPLITTING
+does not list `pkgver` among the variables a `package_*()` may override:
+both halves of a split share one version, which would stamp the client with
+the bouncer's number and break the very agreement the separate package
+exists to keep. The client recipe therefore carries a second sentinel,
+`_grappaver`, naming the tag whose tarball holds the source — one
+repository, one tag, two version lines. `aur/regen.sh` derives both.
+
+The client is **built rather than shipped prebuilt** because it links the
 build host's ncurses/openssl exactly like the ERTS payload — the same
-constraint that makes a build valid for one format only. `SKIP_SHOTTINO=1`
+constraint that makes a build valid for one format only, which is why it is
+built beside the bouncer even though it now ships apart. `SKIP_SHOTTINO=1`
 opts out (mirroring `SKIP_RELEASE` / `SKIP_CIC`); without the opt-out a
 shottino build failure FAILS the whole package build, because a package
 that silently ships without a binary it advertises is worse than one that
@@ -4237,7 +4261,9 @@ crypto NIFs link the user's own Arch libs — no Debian-built payload
 pretending to be portable, and it matches AUR convention
 (rebuild-on-upgrade). Everything else is reused from the shared substrate;
 only the PKGBUILD, `grappa.install` and the sysusers/tmpfiles
-declarations are Arch-specific. It ships shottino in the same package for
+declarations are Arch-specific. Since #1447 the client has its OWN recipe
+next door (`aur/shottino/`, see above); the bouncer recipe keeps only an
+`optdepends` pointer at it. The Arch build otherwise stays a source build for
 the same reason the `.deb` does.
 
 - **`makedepends` names `erlang-headless`, not bare `elixir`.** The
@@ -4263,6 +4289,16 @@ the same reason the `.deb` does.
   with `updpkgsums` and regenerates `.SRCINFO`. Run it from a checkout ON
   the release tag — `updpkgsums` fetches the `vX.Y.Z` tarball, so the tag
   must already exist — and do NOT commit the result.
+- **The client recipe carries TWO sentinels (#1447).**
+  `aur/shottino/PKGBUILD` takes `pkgver=@SHOTTINO_VERSION@` from
+  `frontends/shottino/version.h` and `_grappaver=@GRAPPA_VERSION@` from the
+  repo-root `VERSION`, because its source is the bouncer's tag tarball —
+  the only tag that exists. One `regen.sh` run fills both recipes and
+  regenerates both `.SRCINFO`s. Its release assets are staged as
+  `shottino.PKGBUILD` / `shottino.SRCINFO`: a GitHub release asset is keyed
+  by BASENAME and the publish fallback uploads with `--clobber`, so two
+  files named `PKGBUILD` would leave the release holding one of them with
+  nothing to say which. Rename them back when pushing to the AUR.
 - **BUILD ≠ PUBLISH (#538).** No AUR credentials live in this tree; the
   push to `aur.archlinux.org` stays a human `git push`, and the
   PKGBUILD/.SRCINFO ride out as release assets. Deriving the version is

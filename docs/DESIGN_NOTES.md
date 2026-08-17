@@ -46985,3 +46985,83 @@ the CONFIGURATION — that the package is thin, that its version comes from
 the header, that its output directory is outside every upload glob — which
 is what can be held still without a Linux toolchain. Whether nfpm accepts
 these two files is proven by the first CI run, not here._
+<!-- entry #1447 slice B -->
+
+---
+
+## 2026-08-17 — #1447 slice B: the client leaves the bouncer package, and the pair moves in one step
+
+Slice A gave shottino its own package and deliberately withheld it. This is
+the other half of the same decision: `grappa` stops shipping
+`/usr/bin/shottino`, the takeover relations written in slice A become true,
+and the client package is published.
+
+**Why one slice and not two.** The two halves are not shippable apart.
+Dropping the file alone deletes the client from every host that has it, with
+nothing to install in its place; publishing alone ships two packages that both
+own one path and therefore cannot be co-installed. The boundary is not
+deb-vs-Arch either — a per-channel cut was considered and rejected, because it
+would leave the invariant *"`grappa` does not ship the client"* true on
+deb/rpm and false on Arch, which is the half-migrated state that teaches the
+next reader whichever pattern they happen to open first.
+
+**`Recommends:` is the upgrade path, not a courtesy.** The file leaves the
+package in this release, so without a pointer `apt upgrade` removes
+`/usr/bin/shottino` and pulls nothing back. apt installs Recommends by
+default and dnf installs weak deps by default, so the replacement lands in the
+same transaction. **pacman has no equivalent that installs by default**, so
+the Arch bouncer recipe carries `optdepends` instead — advisory by
+construction, and that asymmetry is pacman's, not a decision taken here.
+
+### Arch needs two recipes, because `pkgver` is not overridable
+
+vjt's ruling is that the standalone package keeps shottino's own version line,
+so that `shottino --version` and the package version agree. A split PKGBUILD
+(`pkgname=('grappa' 'shottino')`) CANNOT honour it: `PKGBUILD(5)` § PACKAGE
+SPLITTING enumerates the fourteen variables a `package_*()` function may
+override — `pkgdesc arch url license groups depends optdepends provides
+conflicts replaces backup options install changelog` — and `pkgver` is not
+among them, so both halves of a split take the pkgbase's single version. The
+client would have been stamped with the bouncer's number, which is precisely
+the disagreement the separate package exists to prevent.
+
+So: a second pkgbase at `infra/packaging/aur/shottino/`. It carries TWO
+sentinels — `pkgver=@SHOTTINO_VERSION@` from `frontends/shottino/version.h`,
+and `_grappaver=@GRAPPA_VERSION@` naming the tag whose tarball holds the
+source, because one repository has only ever one tag. `aur/regen.sh` fills
+both recipes in one run; `version_single_source_test.exs` pins all three
+sentinels.
+
+_Read from the upstream man page during this work, not measured locally:
+`makepkg` does not exist on the authoring host, so the overridable-variable
+list is documentation, not an experiment._
+
+### The release audit had to grow names, or it would have gone quiet
+
+`release_assets.sh` expected kinds by EXTENSION (`*.deb`, `*.rpm`,
+`*.pkg.tar.zst`). With two packages per format that is no longer a
+completeness check: a release whose client leg died would match the bouncer's
+file, report a complete set, and publish without the client — silently, which
+is #573's failure one package later. The kinds are now scoped by package name
+(`grappa_*.deb`, `shottino_*.deb`, …), so a missing client package is a named
+gap in the release body.
+
+The client's AUR recipe ships as `shottino.PKGBUILD` / `shottino.SRCINFO`, and
+the rename is load-bearing: a GitHub release asset is keyed by BASENAME and
+the publish job's fallback uploads with `--clobber`, so two files called
+`PKGBUILD` would leave the release holding one of them with nothing to say
+which one.
+
+**Publication is per-artifact, not per-glob.** The client package keeps its
+own output directory (`dist-shottino/`) and gains its own upload step rather
+than being written into `dist/` where the existing glob would have swept it
+up. In slice A that directory was the gate; here it is the reason a future
+package cannot become published by accident when someone widens a path.
+
+_Not established: nothing was built. No `.deb`, `.rpm` or `.pkg.tar.zst` was
+produced on the authoring host, no `dpkg -i`, `dnf install` or `pacman -U` was
+run, and `makepkg` is absent — so the co-installability the workflow now
+asserts is proven by the first CI run, not here. The committed
+`shottino/.SRCINFO` is hand-written and agrees with its `PKGBUILD` on the
+sentinels; nothing compares the two field by field, and the real regeneration
+is the arch job's `makepkg --printsrcinfo`._

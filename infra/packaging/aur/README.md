@@ -100,6 +100,22 @@ release, a maintainer:
    and pushes there. (`grappa.sysusers` / `grappa.tmpfiles` are **not**
    copied — they ship inside the source tarball and are installed from it by
    `package()`, keeping this repo their single source of truth.)
+4. Publishes the CLIENT recipe too, as a **second AUR package** (#1447):
+   `shottino/PKGBUILD` + `shottino/.SRCINFO` go into the `shottino` AUR repo,
+   not into `grappa`'s. The same `regen.sh` run in step 2 derived both.
+   Off the GitHub release they arrive as **`shottino.PKGBUILD`** and
+   **`shottino.SRCINFO`** — an asset is keyed by basename and two files
+   called `PKGBUILD` would clobber each other, so rename them back to
+   `PKGBUILD`/`.SRCINFO` in that repo.
+
+**Why two recipes and not one split package.** `PKGBUILD(5)` § PACKAGE
+SPLITTING lists what a `package_*()` function may override, and `pkgver` is
+not on that list: a split shares one version across both halves. The client
+keeps its own line (`frontends/shottino/version.h`) so that
+`shottino --version` and the package version agree, and two version lines
+need two pkgbases. Its recipe carries a second sentinel, `_grappaver`, for
+the tag whose tarball holds the source — the client's number never names a
+tag, because there is only ever one.
 
 The committed `PKGBUILD`/`.SRCINFO` are a **template**, turned into the
 concrete publishable recipe by `regen.sh`:
@@ -122,7 +138,11 @@ PKGBUILD, since `regen.sh` only runs at release: a PKGBUILD dep change must be
 copied here too to keep the committed snapshot honest (e.g. #527's
 `erlang-headless`). The guard test
 `test/grappa/version_single_source_test.exs` fails if either carrier stops
-being the `@GRAPPA_VERSION@` sentinel.
+being the `@GRAPPA_VERSION@` sentinel — and, since #1447, if the client
+recipe's `pkgver` stops being `@SHOTTINO_VERSION@` or its `_grappaver` stops
+being `@GRAPPA_VERSION@`. What that guard does NOT do is compare a `PKGBUILD`
+with its `.SRCINFO` field by field: the structural mirroring above stays a
+human discipline, and the only full regeneration is `regen.sh`'s.
 
 ## Version reporting (bare `X.Y.Z`, #419 R3)
 
