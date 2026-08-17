@@ -45717,3 +45717,96 @@ test; that witness had to withhold the 001 welcome, because the shared
 fixture's welcome runs `run_perform_and_identify/1`, whose own capture site
 re-stages the same secret and would have left the witness green with the
 sniff removed from the door.
+<!-- entry #1411 -->
+
+---
+
+## 2026-08-17 — #1411 (review K-S4 + K-S5): two cic invariants each had one member outside them
+
+Both gating MEDIUMs of the 2026-08-15 review, both cicchetto-only, both
+the same shape: a documented invariant with exactly one member outside
+it. They are one entry because the shape is the lesson, not the two
+components.
+
+### Which of the three sources was lying
+
+The issue text, the docs and the code disagreed, so each was measured
+against `origin/main` at `60657249` before anything was written.
+
+**K-S5 — the DOC was wrong.** `AdminToolbar`'s moduledoc excepted
+Settings as the tab with "no refresh action"; `AdminSettingsTab` had
+grown one at `:120`, rendered as a hand-rolled `<button>`. The sentence
+predates the button, and it is what let the copy land unreviewed. Both
+sides corrected: the tab registers with `admin/refreshSlot` like the
+four conforming tabs, and the moduledoc now excepts nothing.
+
+**K-S4 — the CODE was wrong, and the issue's framing of it was
+imprecise.** #232 does not say context menus do not exist; it says
+something stronger and still true — "ONE global listener, the sole ESC
+authority". It simply never enumerated menus among its twelve modals.
+So no doc needed correcting here: the fix is what makes the standing
+claim true. And the claim is asserted in THREE places, not the two the
+issue counts — #232 above, `createOverlayEscape`'s own doc (#1199, which
+names a private `document` keydown listener as "the second global ESC
+listener this stack exists to prevent"), and `cardEscape.test.tsx`'s
+header. Measured: at `60657249` cic carried exactly two global keydown
+listeners, `lib/keybindings.ts:144` (the authority) and
+`ContextMenu.tsx:70` (the outlier).
+
+### K-S4 — the double-close was real, and it is a drawer, not a modal
+
+The two drawers stay deliberately OUT of the ESC stack: they are the
+`closeDrawer` fallback #232 preserved. On a phone `MembersPane` IS the
+members drawer, so a long-press menu over it made one keypress do two
+jobs — the private listener closed the menu, and the same keypress
+reached `keybindings.ts`, found an empty stack, and closed the drawer
+underneath. That is why the outlier cost something rather than merely
+being inconsistent: a second ESC authority is invisible until a
+FIRST-authority fallback sits behind it.
+
+`createOverlayEscape`, not `createOverlayLock`: the menu holds no
+scroll-lock refcount today and taking one would freeze the scrollback
+snapshot behind it and arm the iOS `overlay-open` touch lock — the
+#1199 argument for the inline cards, applying unchanged. The enrolment
+predicate is the constant `true` because all three hosts (MembersPane,
+ScrollbackPane, MessageContextMenu) mount the component behind a
+`<Show>` on their own open state.
+
+### The test that was a mirror
+
+`UserContextMenu.test.tsx` already had "calls onClose when Escape is
+pressed" — and it passed for the wrong reason: it fired `keyDown` at
+`document` with the keybindings listener never installed, so it could
+only ever have been driving the private listener. It is the exact
+betrayal `cardEscape.test.tsx`'s header warns about ("a card that
+registered on a private `document` listener instead would satisfy 'Esc
+dismisses the card' and betray itself only on the ordering arm"), found
+in the wild. The contract now lives in `cardEscape.test.tsx`, driving
+the real door: install, a bubbling KeyboardEvent from an in-document
+target, and an assertion that `closeDrawer` was NOT reached.
+
+### What the tests buy, priced by mutation
+
+Six mutants, all killed, each reverted with `git checkout HEAD --`:
+never enrolling; enrolling via `createOverlayLock` instead (killed ONLY
+by the `overlayCount() === 0` arm); keeping the private listener
+ALONGSIDE the stack (killed by the call-count and ordering arms — the
+mutant that a depth-only assertion would have missed); dropping the slot
+registration; dropping `hostsRefresh` on the card (the registration arm
+SURVIVES it, which is the separation that proves that arm does not
+secretly depend on rendering); and a wrong `label`.
+
+### Held, and not claimed
+
+The review asked for a device reproduction of the double-close before
+and after. **DEVICE-VERIFY HELD** — it rides the pending device batch,
+per the same discipline as #1358. What is measured here is the
+mechanism, in jsdom: `closeDrawer` invoked by the same keypress that
+closed the menu, and not invoked afterwards. Nothing was opened in a
+browser, and no claim is made about the felt behaviour on a phone.
+
+Also not claimed: the third K-S5 consequence, that the CSS class copy
+matters. It is gone as a side effect of the fix, and no test asserts
+it — `default.css` was not touched.
+
+_Deploy: **--cic HOT, client-only.** No server, schema or wire change._
