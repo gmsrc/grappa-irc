@@ -45617,12 +45617,31 @@ produces. cic pins the discriminator only (`_Assert_MeResponseKind`,
 `_Assert_LoginSubjectKind`) because `MeResponse` and `Subject` carry
 deliberate optionals a full `Equal` cannot survive.
 
-### Gate note, not a finding of this slice
+### The generator had never met this shape, and said so in the wrong place
 
-`bun run check` is RED on `origin/main` independently of this work:
-dependabot `8f252497` (2026-08-16) moved `@biomejs/biome` to 2.5.8 while
-`biome.json`'s `$schema` still declares 2.5.6, which biome 2.5.8 reports as
-an error on a full-project scan. The three cic files this slice touches
-produce zero diagnostics, and both `tsc` passes are green — but biome
-short-circuits `tsc` in the `check` script, so anyone reading a red there is
-NOT reading a type failure.
+Emitting `MeJSON` put `unread_counts` through the renderer: a nested
+`Record<…>` long enough to miss the inline branch, whose innermost object
+carries a union. `format_plain_typedef/2` decides "this is a union" by
+testing the RENDERED STRING for `" | "`, so a `Record<…>` got the
+leading-pipe multi-line union shape — and biome reported a `format` error on
+a generated file no human may hand-correct. Fixed at the SOURCE: the
+per-channel counts are now a named `window_counts` type, so the envelope
+renders short and inline.
+
+The string-sniffing test itself is left alone deliberately. An AST check
+(`{:|, _, _}`) is the right test and was measured to fix this case, but with
+the source corrected nothing exercises it, and an unexercised behaviour
+change to the emitter is worse than a recorded one. **The next long
+non-union body whose interior contains a union will hit it again.**
+
+Recorded because the reasoning failed first: this red was initially
+attributed to `origin/main` — dependabot `8f252497` moved `@biomejs/biome`
+to 2.5.8 while `biome.json` still declares schema 2.5.6 — and that
+attribution was WRONG. CI was green on the same commit. The mismatch is an
+INFO, not an error; both sides resolve 2.5.8 (package.json pins it exactly,
+the tracked `bun.lock` names it, and CI's cache is the download cache, not
+`node_modules`), so the version was never the difference. **A red inside a
+GENERATED artefact looks like someone else's red precisely because no hand
+edited it.** The cheap discriminator that would have caught it in one step:
+biome names the failing file, and `src/lib/wireTypes.ts` was in this
+branch's diff.
