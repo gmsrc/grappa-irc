@@ -4480,6 +4480,51 @@ defmodule Grappa.Session.Server do
     end
   end
 
+  # #1394 — the outbound door for an ALREADY-ASSEMBLED wire line: sniff, then
+  # send. The sniff above is a choke point only where something calls it, and
+  # until now what called it was the author of each new send site remembering
+  # to — two comments were the whole enforcement mechanism. A path that
+  # forgets does not fail; it stages nothing, the `+r` rendezvous never fires,
+  # and the symptom surfaces later and elsewhere as a saved password that
+  # stopped updating. Pairing the two here means a future path inherits the
+  # capture by calling the ordinary sender.
+  #
+  # Scope is deliberately the two paths that hand over a RAW assembled line.
+  # The typed verb helpers (`Client.send_privmsg` and friends) are left alone:
+  # they build the line inside `IRC.Client`, so the sniff cannot see it here,
+  # and every user-authored line already crosses the capture one frame up at
+  # its `handle_call`. Widening the door to them would sniff the same line
+  # TWICE — harmless for `:identify` (idempotent staging) but not for
+  # `:set_passwd`/`:reset_passwd`, which commit on-send.
+  #
+  # `origin` is not decoration: the two callers fail in different incidents —
+  # a dropped ghost-recovery line means an IDENTIFY never went out, a dropped
+  # reply means an answer to a stranger was lost — and one message for both
+  # would erase which. It rides as Logger metadata rather than as prose so the
+  # message itself stays one greppable string.
+  #
+  # Fire-and-forget on send failure (REV-E H11): a dead socket must not
+  # MatchError the Session, which a strict `:ok =` bind used to do on both
+  # paths. Supervisor restart owns reconnect. The line is never logged — it
+  # may BE the secret.
+  @spec send_outbound(t(), String.t(), :ghost_recovery | :event_router_reply) :: t()
+  defp send_outbound(state, line, origin) do
+    state = capture_outbound_ns_secret(state, line)
+
+    case Client.send_line(state.client, line) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("outbound line dropped: send_line failed",
+          origin: origin,
+          reason: inspect(reason)
+        )
+    end
+
+    state
+  end
+
   # #540 B1 — if the raw `/quote` line is a WHO command, prime the WHO
   # accumulator so its 352/315 reply drains into a WhoModal, exactly like the
   # structured `:send_who` verb (`who_pending` keyed by the folded target;
@@ -4697,35 +4742,16 @@ defmodule Grappa.Session.Server do
   end
 
   # Lines emitted by GhostRecovery bypass `handle_call({:send_privmsg,
-  # ...})`, so manually run NSInterceptor over each line and stage
-  # `pending_auth` on capture. This is what keeps the +r MODE rendezvous
-  # (Task 15) firing for the `IDENTIFY` GhostRecovery emits on
-  # `:succeeded` — same one-feature-one-code-path discipline as the #189
-  # built-in IDENTIFY at 001 (routed through the choke point by
-  # `run_perform_and_identify/1`).
+  # ...})`, so they reach the wire through the #1394 door, which runs
+  # NSInterceptor over each one and stages `pending_auth` on capture. This is
+  # what keeps the +r MODE rendezvous (Task 15) firing for the `IDENTIFY`
+  # GhostRecovery emits on `:succeeded` — same one-feature-one-code-path
+  # discipline as the #189 built-in IDENTIFY at 001 (routed through the same
+  # choke point by `run_perform_and_identify/1`). A dead socket mid-recovery
+  # is survivable: the next reconnect retries GHOST + IDENTIFY from scratch,
+  # and the staging that already happened is discarded on terminate/2.
   defp flush_lines(state, lines) do
-    Enum.reduce(lines, state, fn line, acc ->
-      acc = capture_outbound_ns_secret(acc, line)
-
-      # REV-E (H11): pre-fix this strict-bound `:ok =` and MatchError'd
-      # on a dead socket mid-recovery (e.g., NickServ ghost dance racing
-      # an upstream RST). Fire-and-forget + Logger: ghost recovery is
-      # already a fragile rendezvous; a dead socket mid-flow means the
-      # next reconnect will retry GHOST + IDENTIFY from scratch. The
-      # `pending_auth` staging that already happened in `acc` is
-      # discarded harmlessly on terminate/2.
-      case Client.send_line(acc.client, line) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning("ghost-recovery flush_lines: send_line failed",
-            reason: inspect(reason)
-          )
-      end
-
-      acc
-    end)
+    Enum.reduce(lines, state, fn line, acc -> send_outbound(acc, line, :ghost_recovery) end)
   end
 
   # #581 — resolve the PERSISTENT recover target (the registered nick + the
@@ -6087,27 +6113,25 @@ defmodule Grappa.Session.Server do
     end
   end
 
+  # EventRouter-emitted outbound (today: the CTCP VERSION / PING NOTICE
+  # replies). #1394 routes it through the outbound door rather than calling
+  # the sender directly — this arm was the one free-form path that reached
+  # the wire without the NickServ sniff. Nothing emits a secret onto it
+  # today, which is precisely why it had to be wired before something does:
+  # #1390 moves the GhostRecovery/RecoverIdentity lines onto this grammar,
+  # and those lines carry `GHOST <nick> <pwd>` and `IDENTIFY <pwd>`. Done in
+  # the other order, that merge opens the hole with no test turning red.
+  #
+  # The door THREADS state, so the recursion continues with what the sniff
+  # staged; the pre-#1394 arm discarded it, which would have made a capture
+  # here invisible even once one was possible.
+  #
+  # REV-E (H11) still holds through the door: a dead socket does not stop the
+  # paired `:persist` effect (EventRouter emits `[{:reply, _}, {:persist, _,
+  # _}]` in the SAME list) from running on the next recursion, so the
+  # user-visible scrollback row lands either way.
   defp apply_effects([{:reply, line} | rest], state) do
-    # REV-E (H11): EventRouter-emitted outbound (e.g., CTCP VERSION NOTICE
-    # reply). Fire-and-forget: a dead socket here means the reply doesn't
-    # land on the wire, but the paired `:persist` effect (emitted in the
-    # SAME effect list — EventRouter.do_route/2 emits `[{:reply, _},
-    # {:persist, _, _}]`) will run on the NEXT recursion regardless of
-    # send_line's outcome, so the user-visible scrollback row lands
-    # either way. Pre-fix this strict-bound `:ok =` and MatchError-
-    # crashed the Session on dead socket, swallowing the persist too.
-    # Supervisor restart owns reconnect.
-    case Client.send_line(state.client, line) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("event-router reply dropped: send_line failed",
-          reason: inspect(reason)
-        )
-    end
-
-    apply_effects(rest, state)
+    apply_effects(rest, send_outbound(state, line, :event_router_reply))
   end
 
   # S3.4: 305 RPL_UNAWAY / 306 RPL_NOWAWAY confirmed by the upstream.
