@@ -4794,3 +4794,946 @@ describe("compose /ame + /amsg confirmation above ten channels (#431)", () => {
     expect(vi.mocked(sb.sendMessage)).not.toHaveBeenCalled();
   });
 });
+
+// #1396 — the characterization net for the 59-arm `dispatchDraft` switch.
+//
+// Bucket G proposes moving that switch out of `compose.ts`. A pure move has
+// no red: behaviour is identical by construction, so no mutant can buy it.
+// What buys a move is a net fixed BEFORE it, and this is that net.
+//
+// The net asserts the OBSERVABLE OUTCOME of a dispatch — which seam the verb
+// reaches and with what arguments, plus what `submit` returns — not a
+// sequence of calls. The return value alone cannot do it: 51 of the arms
+// answer `{ok: true}`, so a table asserting that would be a mirror. The
+// discriminating observable is what LEAVES the module, so each row records
+// every mocked seam the submission touched, serialised and sorted.
+//
+// Two tests, because they fail for different reasons and a single one would
+// let a gap hide: the first reconciles the table against the switch (a draft
+// that stops parsing to its kind, or an arm nobody drives, is a hole in the
+// net rather than a red somewhere else), the second pins the effects.
+
+const DISPATCH_CASE_LABELS = [
+  "admin",
+  "alias-define",
+  "ame",
+  "amsg",
+  "away",
+  "ban",
+  "banlist",
+  "connect",
+  "ctcp",
+  "deop",
+  "devoice",
+  "disconnect",
+  "error",
+  "info",
+  "invite",
+  "join",
+  "kb",
+  "kick",
+  "kill",
+  "links",
+  "list",
+  "lusers",
+  "me",
+  "mode",
+  "mode-apply-current",
+  "mode-view",
+  "motd",
+  "msg",
+  "names",
+  "nick",
+  "notice",
+  "notify",
+  "op",
+  "open-settings",
+  "oper",
+  "part",
+  "ping",
+  "privmsg",
+  "query",
+  "quit",
+  "quote",
+  "recover",
+  "rehash",
+  "service-modal",
+  "stats",
+  "topic-clear",
+  "topic-set",
+  "topic-show",
+  "umode",
+  "umode-target-view",
+  "umode-view",
+  "unalias",
+  "unban",
+  "version",
+  "voice",
+  "watchlist",
+  "who",
+  "whois",
+  "whowas",
+] as const;
+
+// One draft per arm. The `kind` column is a CLAIM the first test checks
+// against the parser — a draft whose syntax drifts stops naming its arm
+// loudly instead of silently exercising a neighbour.
+const DISPATCH_DRAFTS: ReadonlyArray<{ kind: string; draft: string }> = [
+  { kind: "privmsg", draft: "hello" },
+  { kind: "me", draft: "/me waves" },
+  { kind: "msg", draft: "/msg bob hi" },
+  { kind: "notice", draft: "/notice bob hi" },
+  { kind: "query", draft: "/query bob" },
+  { kind: "ame", draft: "/ame waves" },
+  { kind: "amsg", draft: "/amsg hi" },
+  { kind: "ctcp", draft: "/ctcp bob VERSION" },
+  { kind: "ping", draft: "/ping bob" },
+  { kind: "join", draft: "/join #b" },
+  { kind: "part", draft: "/part #a" },
+  { kind: "invite", draft: "/invite bob #a" },
+  { kind: "kick", draft: "/kick bob" },
+  { kind: "kb", draft: "/kb bob" },
+  { kind: "ban", draft: "/ban bob" },
+  { kind: "unban", draft: "/unban bob" },
+  { kind: "banlist", draft: "/banlist" },
+  { kind: "op", draft: "/op bob" },
+  { kind: "deop", draft: "/deop bob" },
+  { kind: "voice", draft: "/voice bob" },
+  { kind: "devoice", draft: "/devoice bob" },
+  { kind: "mode", draft: "/mode #a +m" },
+  { kind: "mode-view", draft: "/mode #a" },
+  { kind: "mode-apply-current", draft: "/mode +s" },
+  { kind: "umode", draft: "/umode +i" },
+  { kind: "umode-view", draft: "/umode" },
+  { kind: "umode-target-view", draft: "/mode bob" },
+  { kind: "topic-set", draft: "/topic new topic" },
+  { kind: "topic-show", draft: "/topic" },
+  { kind: "topic-clear", draft: "/topic -delete" },
+  { kind: "nick", draft: "/nick bob" },
+  { kind: "away", draft: "/away brb" },
+  { kind: "notify", draft: "/notify bob" },
+  { kind: "watchlist", draft: "/hilight badger" },
+  { kind: "whois", draft: "/whois bob" },
+  { kind: "whowas", draft: "/whowas bob" },
+  { kind: "who", draft: "/who #a" },
+  { kind: "names", draft: "/names" },
+  { kind: "list", draft: "/list" },
+  { kind: "links", draft: "/links" },
+  { kind: "lusers", draft: "/lusers" },
+  { kind: "motd", draft: "/motd" },
+  { kind: "info", draft: "/info" },
+  { kind: "version", draft: "/version" },
+  { kind: "stats", draft: "/stats m" },
+  { kind: "admin", draft: "/admin" },
+  { kind: "oper", draft: "/oper root secret" },
+  { kind: "kill", draft: "/kill bob spam" },
+  { kind: "rehash", draft: "/rehash" },
+  { kind: "quote", draft: "/quote PING :x" },
+  { kind: "connect", draft: "/connect freenode" },
+  { kind: "disconnect", draft: "/disconnect" },
+  { kind: "quit", draft: "/quit bye" },
+  { kind: "recover", draft: "/recover" },
+  { kind: "alias-define", draft: "/alias hi /msg bob $*" },
+  { kind: "unalias", draft: "/unalias hi" },
+  { kind: "open-settings", draft: "/watch" },
+  { kind: "service-modal", draft: "/ns" },
+  { kind: "error", draft: "/nosuchverb" },
+];
+
+// Every module the harness above replaces. The effect signature is built by
+// walking these for mock functions that recorded a call, so a new seam added
+// to an arm shows up as a new line rather than as silence.
+const MOCKED_SEAM_MODULES = [
+  "../lib/api",
+  "../lib/banlistModal",
+  "../lib/channelDirectory",
+  "../lib/members",
+  "../lib/mentionsWindow",
+  "../lib/modeModal",
+  "../lib/networks",
+  "../lib/queryWindows",
+  "../lib/scrollback",
+  "../lib/selection",
+  "../lib/serviceModal",
+  "../lib/socket",
+  "../lib/umodeModal",
+  "../lib/windowState",
+] as const;
+
+// Reader-visible, and stable across runs: functions and undefined are
+// rendered by shape rather than identity so a signature never depends on a
+// mock's address.
+const renderArg = (a: unknown): string => {
+  if (typeof a === "function") return "fn";
+  if (a === undefined) return "undefined";
+  try {
+    // An ISO instant is wall-clock, so leaving it in would make this net red
+    // on every run and green only when re-recorded — a snapshot that pins
+    // the clock pins nothing else. The SHAPE is what matters here (an arm
+    // that stops passing a timestamp still shows up), so it collapses to a
+    // token. Caught by a mutant run, not by review.
+    return (JSON.stringify(a) ?? String(a))
+      .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<iso-instant>")
+      // The CTCP PING correlation token is epoch millis inside the body, so
+      // it moves for the same reason and is collapsed the same way.
+      .replace(/\d{13}/g, "<epoch-ms>");
+  } catch {
+    return "unserialisable";
+  }
+};
+
+async function effectSignature(): Promise<string[]> {
+  const out: string[] = [];
+  for (const path of MOCKED_SEAM_MODULES) {
+    const mod: Record<string, unknown> = await import(path);
+    const short = path.replace("../lib/", "");
+    for (const [name, value] of Object.entries(mod)) {
+      if (!vi.isMockFunction(value)) continue;
+      for (const call of value.mock.calls) {
+        out.push(`${short}.${name}(${call.map(renderArg).join(", ")})`);
+      }
+    }
+  }
+  // Sorted: the net pins WHAT left the module, not the order it left in.
+  // Ordering between independent seams is an implementation detail, and
+  // pinning it would make the net fail on a harmless reordering.
+  return out.sort();
+}
+
+describe("#1396 — dispatch characterization over every arm", () => {
+  // The reference is the `case` labels transcribed from the switch, which is
+  // outside the table being checked. Reconciled BOTH ways: an arm no draft
+  // reaches is an unprotected arm, and a draft naming an arm that no longer
+  // exists is a stale row.
+  it("the draft table covers every arm of the switch, and only real arms", async () => {
+    const { parseSlash } = await import("../lib/slashCommands");
+    const labels = new Set<string>(DISPATCH_CASE_LABELS);
+    // Coverage is computed from the kind the parser ACTUALLY returns, never
+    // from the `kind` column: a row is only protection for the arm it really
+    // reaches, so a mislabelled draft must not be able to report an arm as
+    // covered while exercising its neighbour.
+    const reached = DISPATCH_DRAFTS.map((r) => parseSlash(r.draft).kind);
+
+    const misparsed = DISPATCH_DRAFTS.filter((r) => parseSlash(r.draft).kind !== r.kind).map(
+      (r) => `${r.draft} => ${parseSlash(r.draft).kind} (claimed ${r.kind})`,
+    );
+
+    expect({
+      arms: labels.size,
+      rows: reached.length,
+      duplicated: reached.filter((k, i) => reached.indexOf(k) !== i),
+      armsWithNoDraft: [...labels].filter((k) => !reached.includes(k)),
+      draftsNamingNoArm: reached.filter((k) => !labels.has(k)),
+      misparsed,
+    }).toMatchInlineSnapshot(`
+      {
+        "arms": 59,
+        "armsWithNoDraft": [],
+        "draftsNamingNoArm": [],
+        "duplicated": [],
+        "misparsed": [],
+        "rows": 59,
+      }
+    `);
+  });
+
+  it("each arm's observable effects are pinned", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const table: Record<string, { result: unknown; effects: string[] }> = {};
+    for (const row of DISPATCH_DRAFTS) {
+      vi.clearAllMocks();
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, row.draft);
+      let result: unknown;
+      try {
+        result = await compose.submit(k, "freenode", "#a");
+      } catch (e) {
+        result = `THREW ${String(e)}`;
+      }
+      table[row.kind] = { result, effects: await effectSignature() };
+    }
+    // Read the next test before trusting a row here. Six of them record a
+    // LIMIT OF THIS HARNESS rather than the arm's behaviour, and that test
+    // names them; a `{"error": "send failed"}` in this snapshot is very
+    // likely one of those, not a pin worth defending.
+    expect(table).toMatchInlineSnapshot(`
+      {
+        "admin": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "send failed",
+          },
+        },
+        "alias-define": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "send failed",
+          },
+        },
+        "ame": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "windowState.windowStateByChannel()",
+          ],
+          "result": {
+            "ok": "/ame: 11 channels — confirm to send",
+          },
+        },
+        "amsg": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "windowState.windowStateByChannel()",
+          ],
+          "result": {
+            "ok": "/amsg: 11 channels — confirm to send",
+          },
+        },
+        "away": {
+          "effects": [
+            "mentionsWindow.clearMentionsBundle("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushAwaySet("freenode", "brb")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "ban": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelBan(1, "#a", "bob")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "banlist": {
+          "effects": [
+            "banlistModal.openBanlistModal("freenode", "#a", "b")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelBanlist(1, "#a", "b")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "connect": {
+          "effects": [
+            "api.patchNetwork("tok", "freenode", {"connection_state":"connected"})",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "You're already at the session limit for this network from this device. Disconnect first or open from a different device.",
+          },
+        },
+        "ctcp": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "scrollback.sendMessage("freenode", "#a", "\\u0001VERSION\\u0001", {"kind":"ctcp","target":"bob"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "deop": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelDeop(1, "#a", ["bob"])",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "devoice": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelDevoice(1, "#a", ["bob"])",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "disconnect": {
+          "effects": [
+            "api.patchNetwork("tok", "freenode", {"connection_state":"parked"})",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "You're already at the session limit for this network from this device. Disconnect first or open from a different device.",
+          },
+        },
+        "error": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "unknown command: /nosuchverb",
+          },
+        },
+        "info": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushInfo(1)",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "invite": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushChannelInvite(1, "#a", "bob")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "join": {
+          "effects": [
+            "api.postJoin("tok", "freenode", "#b", null)",
+            "networks.networkIdBySlug("freenode")",
+            "selection.setSelectedChannel({"networkSlug":"freenode","channelName":"#b","kind":"channel"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "kb": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelKick(1, "#a", "bob", "")",
+            "socket.resolveUserhost(1, "bob")",
+          ],
+          "result": {
+            "error": "/kb: host unknown for bob — ban not set (run /whois bob first); kicking anyway",
+          },
+        },
+        "kick": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelKick(1, "#a", "bob", "")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "kill": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushRaw(1, "KILL bob :spam")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "links": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushLinks(1, null)",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "list": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "selection.setSelectedChannel({"networkSlug":"freenode","channelName":"$list","kind":"list"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "lusers": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushLusers(1, null, null)",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "me": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "scrollback.sendMessage("freenode", "#a", "\\u0001ACTION waves\\u0001")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "mode": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushChannelMode(1, "#a", "+m", [])",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "mode-apply-current": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelMode(1, "#a", "+s", [])",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "mode-view": {
+          "effects": [
+            "modeModal.openModeModal("freenode", "#a")",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "motd": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushMotd(1, null)",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "msg": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "queryWindows.canonicalQueryNick(1, "bob")",
+            "queryWindows.openQueryWindowState(1, "bob", "<iso-instant>")",
+            "scrollback.sendMessage("freenode", "bob", "hi")",
+            "selection.setSelectedChannel({"networkSlug":"freenode","channelName":"bob","kind":"query"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "names": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushNames(1, "#a")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "nick": {
+          "effects": [
+            "api.postNick("tok", "freenode", "bob")",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "notice": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "scrollback.sendMessage("freenode", "#a", "hi", {"kind":"notice","target":"bob"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "notify": {
+          "effects": [
+            "api.postNotifyAdd("tok", "freenode", ["bob"])",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "ok": "notify: watching bob",
+          },
+        },
+        "op": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelOp(1, "#a", ["bob"])",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "open-settings": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "oper": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "send failed",
+          },
+        },
+        "part": {
+          "effects": [
+            "api.postPart("tok", "freenode", "#a", null)",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "ping": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "scrollback.sendMessage("freenode", "#a", "\\u0001PING <epoch-ms>\\u0001", {"kind":"ctcp","target":"bob"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "privmsg": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "scrollback.sendMessage("freenode", "#a", "hello")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "query": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "queryWindows.canonicalQueryNick(1, "bob")",
+            "queryWindows.openQueryWindowState(1, "bob", "<iso-instant>")",
+            "selection.setSelectedChannel({"networkSlug":"freenode","channelName":"bob","kind":"query"})",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "quit": {
+          "effects": [
+            "api.patchNetwork("tok", "freenode", {"connection_state":"parked","reason":"bye"})",
+            "api.patchNetwork("tok", "libera", {"connection_state":"parked","reason":"bye"})",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networks()",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "quote": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushRaw(1, "PING :x")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "recover": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushRecover(1)",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "rehash": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushRaw(1, "REHASH")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "service-modal": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "scrollback.sendMessage("freenode", "NickServ", "help")",
+            "serviceModal.openServiceModal("freenode", "NickServ")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "stats": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushRaw(1, "STATS m")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "topic-clear": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelTopicClear(1, "#a")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "topic-set": {
+          "effects": [
+            "api.postTopic("tok", "freenode", "#a", "new topic")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "topic-show": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+          ],
+          "result": {
+            "error": "/topic #a (bare) — inline render wired in C3 (TopicBar)",
+          },
+        },
+        "umode": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushChannelUmode(1, "+i")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "umode-target-view": {
+          "effects": [
+            "api.ownNickForNetwork({"kind":"user","id":1,"slug":"freenode","inserted_at":"","updated_at":""}, {"kind":"user","name":"vjt"})",
+            "networks.networkBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.user()",
+          ],
+          "result": {
+            "error": "/mode bob: viewing another user's modes isn't supported — use /mode <#channel> for a channel, or /mode mynick for your own user modes",
+          },
+        },
+        "umode-view": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "umodeModal.openUmodeModal("freenode")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "unalias": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "send failed",
+          },
+        },
+        "unban": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelUnban(1, "#a", "bob")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "version": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushVersion(1)",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "voice": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "selection.selectedChannel()",
+            "socket.pushChannelVoice(1, "#a", ["bob"])",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "watchlist": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushWatchlistAdd("badger")",
+          ],
+          "result": {
+            "ok": "highlight (1): myname",
+          },
+        },
+        "who": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushWho(1, "#a")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "whois": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushWhois(1, "bob", null)",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+        "whowas": {
+          "effects": [
+            "networks.networkIdBySlug("freenode")",
+            "networks.networkIdBySlug("freenode")",
+            "socket.pushWhowas(1, "bob")",
+          ],
+          "result": {
+            "ok": true,
+          },
+        },
+      }
+    `);
+  });
+
+  // The net's own honesty check, and the reason the table above is not
+  // simply declared "59 arms covered".
+  //
+  // Every submission calls `networkIdBySlug`, so a non-empty effect list
+  // proves nothing on its own. What protects an arm is an effect no other
+  // arm produces — subtract the AMBIENT set (the calls common to all 59)
+  // and see what is left. An arm with nothing left is an arm this net would
+  // not notice losing, and a pair with the SAME remainder is a pair a move
+  // could swap without the net objecting.
+  //
+  // Both lists are pinned rather than described, so the day a mock is added
+  // and an arm starts being protected, this test fails and the gain is
+  // recorded instead of passing unnoticed.
+  it("names the arms this net does NOT protect", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sig: Record<string, string[]> = {};
+    for (const row of DISPATCH_DRAFTS) {
+      vi.clearAllMocks();
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, row.draft);
+      try {
+        await compose.submit(k, "freenode", "#a");
+      } catch {
+        // A throw is itself an outcome; the effects recorded up to it are
+        // what the net can see, and the row above keeps the thrown value.
+      }
+      sig[row.kind] = await effectSignature();
+    }
+
+    const all = Object.values(sig);
+    const ambient = all[0].filter((e) => all.every((s) => s.includes(e)));
+    const own = Object.fromEntries(
+      Object.entries(sig).map(([k, v]) => [k, v.filter((e) => !ambient.includes(e))]),
+    );
+
+    const unprotected = Object.keys(own).filter((k) => own[k].length === 0);
+    const bySignature = new Map<string, string[]>();
+    for (const [k, v] of Object.entries(own)) {
+      if (v.length === 0) continue;
+      const key = JSON.stringify(v);
+      bySignature.set(key, [...(bySignature.get(key) ?? []), k]);
+    }
+
+    expect({
+      arms: Object.keys(sig).length,
+      ambient,
+      unprotected,
+      indistinguishablePairs: [...bySignature.values()].filter((g) => g.length > 1),
+    }).toMatchInlineSnapshot(`
+      {
+        "ambient": [
+          "networks.networkIdBySlug("freenode")",
+        ],
+        "arms": 59,
+        "indistinguishablePairs": [
+          [
+            "ame",
+            "amsg",
+          ],
+        ],
+        "unprotected": [
+          "admin",
+          "oper",
+          "alias-define",
+          "unalias",
+          "open-settings",
+          "error",
+        ],
+      }
+    `);
+  });
+});
