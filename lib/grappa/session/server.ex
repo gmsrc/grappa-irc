@@ -103,6 +103,7 @@ defmodule Grappa.Session.Server do
     Backoff,
     Broadcaster,
     Deps,
+    DirectoryIngest,
     EventRouter,
     FloodAllowance,
     GhostRecovery,
@@ -208,19 +209,6 @@ defmodule Grappa.Session.Server do
   # Opts-overridable (`:autojoin_defer_ms`) as a test seam; production inherits
   # this default.
   @autojoin_defer_ms 500
-
-  # Channel directory (#84) refresh tunables — compile-time defaults
-  # sourced from `config :grappa, Grappa.ChannelDirectory`. Injected into
-  # state in `do_init/1` so later tasks (refresh trigger, streamed-322
-  # capture, timeout watchdog) read them from state and tests can override
-  # via start opts. `refresh_timeout_ms` bounds a single LIST refresh
-  # before it's declared failed; `progress_throttle_ms` rate-limits the
-  # `directory_progress` pings; `ingest_batch` is the streamed-322 flush
-  # size.
-  @directory_cfg Application.compile_env(:grappa, Grappa.ChannelDirectory, [])
-  @directory_refresh_timeout_ms Keyword.get(@directory_cfg, :refresh_timeout_ms, 60_000)
-  @directory_progress_throttle_ms Keyword.get(@directory_cfg, :progress_throttle_ms, 1_000)
-  @directory_ingest_batch Keyword.get(@directory_cfg, :ingest_batch, 200)
 
   # #100 — sustained-reconnect reset gate. On 001 RPL_WELCOME we arm a
   # `:connection_stable` timer instead of resetting the Backoff ladder
@@ -756,34 +744,12 @@ defmodule Grappa.Session.Server do
           # ircd answers a non-op `MODE #chan e` with — can't strand the
           # entry). NOT persisted across crashes.
           list_mode_pending: %{{String.t(), ListModes.mode()} => ListModeAccum.t()},
-          # Channel directory (#84) refresh tunables — config-derived at
-          # boot (`config :grappa, Grappa.ChannelDirectory`), opts-overridable
-          # in `do_init/1` so tests can pin them. Read by later tasks: the
-          # refresh trigger / send_list guard (`refresh_timeout_ms` watchdog),
-          # the streamed-322 ingest (`ingest_batch` flush size), and the
-          # `directory_progress` ping emitter (`progress_throttle_ms` rate
-          # limit). Static for the GenServer lifetime; not persisted.
-          directory_refresh_timeout_ms: pos_integer(),
-          directory_progress_throttle_ms: non_neg_integer(),
-          directory_ingest_batch: pos_integer(),
-          # Channel directory (#84) in-flight refresh tracker. `nil` when no
-          # `LIST` is streaming. Set by `handle_call(:refresh_directory, ...)`
-          # the instant the upstream `LIST` is on the wire; cleared on 323
-          # RPL_LISTEND (C3) or the `:directory_refresh_timeout` watchdog (C4).
-          # The presence of this map IS the in-flight guard — a second
-          # `:refresh_directory` while non-nil replies `{:error,
-          # :already_refreshing}`. `buffer` accumulates parsed 322 rows pending
-          # a batch flush (`directory_ingest_batch`); `count` is the running
-          # ingested tally; `last_emit_ms` gates `directory_progress` throttling
-          # (`directory_progress_throttle_ms`); `timer` is the watchdog ref.
-          directory_refresh:
-            nil
-            | %{
-                buffer: [map()],
-                count: non_neg_integer(),
-                last_emit_ms: integer(),
-                timer: reference() | nil
-              },
+          # #1390 slice 2 — the channel directory (#84) `LIST` ingest: the
+          # three config tunables plus the in-flight tracker, in one struct
+          # that owns the parse / batch / throttle decisions. Always present;
+          # `run == nil` IS the in-flight guard the four former fields
+          # expressed with `directory_refresh == nil`. See `DirectoryIngest`.
+          directory: DirectoryIngest.t(),
           # #100 sustained-reconnect reset gate. `connection_stable_ms` is
           # static config for the process lifetime; `connection_stable_timer`
           # is the armed-on-001 ref (nil until 001, nil again once it fires
@@ -1171,15 +1137,11 @@ defmodule Grappa.Session.Server do
       # appends entries; the end numeric emits :list_mode_bundle and clears.
       # Bounded by in-flight queries. NOT persisted across crashes.
       list_mode_pending: %{},
-      # Channel directory (#84) refresh tunables — config default
-      # (`@directory_*` from `config :grappa, Grappa.ChannelDirectory`),
-      # opts-overridable so tests can pin a short timeout / small batch.
-      directory_refresh_timeout_ms: Map.get(opts, :directory_refresh_timeout_ms, @directory_refresh_timeout_ms),
-      directory_progress_throttle_ms: Map.get(opts, :directory_progress_throttle_ms, @directory_progress_throttle_ms),
-      directory_ingest_batch: Map.get(opts, :directory_ingest_batch, @directory_ingest_batch),
-      # Channel directory (#84) — no refresh in flight at boot. Set when the
-      # operator triggers a `LIST` refresh; cleared on 323 / timeout.
-      directory_refresh: nil,
+      # Channel directory (#84) ingest — config defaults from
+      # `config :grappa, Grappa.ChannelDirectory` (the `DirectoryIngest`
+      # struct defaults), opts-overridable so tests can pin a short timeout
+      # or a small batch. No refresh in flight at boot.
+      directory: directory_ingest(opts),
       # #100 sustained-reconnect reset gate — config default, opts-overridable
       # for tests. Timer armed on 001, nil until then.
       connection_stable_ms: Map.get(opts, :connection_stable_ms, @connection_stable_ms),
@@ -1963,18 +1925,18 @@ defmodule Grappa.Session.Server do
   #   3. catch-all (`directory_refresh` non-nil) — a refresh is already
   #      streaming. The tracker's presence IS the guard; reply
   #      `{:error, :already_refreshing}` and leave the in-flight run untouched.
-  def handle_call(:refresh_directory, _, %{directory_refresh: nil, client: nil} = state) do
+  def handle_call(:refresh_directory, _, %{directory: %DirectoryIngest{run: nil}, client: nil} = state) do
     {:reply, {:error, :not_connected}, state}
   end
 
-  def handle_call(:refresh_directory, _, %{directory_refresh: nil} = state) do
+  def handle_call(:refresh_directory, _, %{directory: %DirectoryIngest{run: nil} = ingest} = state) do
     case Client.send_line(state.client, "LIST\r\n") do
       :ok ->
         ChannelDirectory.replace_start(state.subject, state.network_id)
-        timer = Process.send_after(self(), :directory_refresh_timeout, state.directory_refresh_timeout_ms)
+        timer = Process.send_after(self(), :directory_refresh_timeout, ingest.timeout_ms)
         now = System.monotonic_time(:millisecond)
 
-        {:reply, :ok, %{state | directory_refresh: %{buffer: [], count: 0, last_emit_ms: now, timer: timer}}}
+        {:reply, :ok, %{state | directory: DirectoryIngest.start(ingest, now, timer)}}
 
       {:error, _} = err ->
         {:reply, err, state}
@@ -3266,13 +3228,15 @@ defmodule Grappa.Session.Server do
   #     affordance. The prior DB snapshot (if any) stays intact — only the
   #     in-flight state is wiped. `network` is on the Logger allowlist and
   #     already threaded by `Log.set_session_context/2`.
-  def handle_info(:directory_refresh_timeout, %{directory_refresh: nil} = state),
+  def handle_info(:directory_refresh_timeout, %{directory: %DirectoryIngest{run: nil}} = state),
     do: {:noreply, state}
 
-  def handle_info(:directory_refresh_timeout, state) do
+  def handle_info(:directory_refresh_timeout, %{directory: %DirectoryIngest{} = ingest} = state) do
     Logger.warning("directory refresh timed out before RPL_LISTEND", network: state.network_slug)
     broadcast_window_state(state, SessionWire.directory_failed(state.network_slug, "timeout"))
-    {:noreply, %{state | directory_refresh: nil}}
+    # `abort/1`, not `finish/1`: the buffered rows are DROPPED and no
+    # finalisation runs. Preserved deliberately — see `DirectoryIngest`.
+    {:noreply, %{state | directory: DirectoryIngest.abort(ingest)}}
   end
 
   # 465 ERR_YOUREBANNEDCREEP — k-line / g-line. Hard, terminal,
@@ -3497,7 +3461,7 @@ defmodule Grappa.Session.Server do
   # true; do not re-derive it from this clause's fall-through.
   def handle_info(
         {:irc, %Message{command: {:numeric, code}} = msg},
-        %{directory_refresh: %{}} = state
+        %{directory: %DirectoryIngest{run: %DirectoryIngest.Run{}}} = state
       )
       when code in [321, 322, 323] do
     {:noreply, handle_directory_numeric(code, msg, state)}
@@ -6610,99 +6574,73 @@ defmodule Grappa.Session.Server do
   defp handle_directory_numeric(321, _, state), do: state
 
   defp handle_directory_numeric(322, %Message{params: params}, state) do
-    case parse_list_entry(params) do
-      {:ok, row} -> accumulate_directory_row(state, row)
-      :error -> state
+    case DirectoryIngest.parse_row(params) do
+      {:ok, row} ->
+        {ingest, actions} =
+          DirectoryIngest.absorb(state.directory, row, System.monotonic_time(:millisecond))
+
+        Enum.reduce(actions, %{state | directory: ingest}, &perform_directory_action/2)
+
+      :error ->
+        state
     end
   end
 
   defp handle_directory_numeric(323, _, state) do
-    flushed = flush_directory_buffer(state, :final)
-    :ok = ChannelDirectory.finalize(flushed.subject, flushed.network_id)
-    :ok = cancel_and_drain(flushed.directory_refresh.timer, :directory_refresh_timeout)
+    {ingest, tail, timer} = DirectoryIngest.finish(state.directory)
+    finished = %{state | directory: ingest}
 
+    :ok = ingest_directory_rows(finished, tail)
+    :ok = ChannelDirectory.finalize(finished.subject, finished.network_id)
+    :ok = cancel_and_drain(timer, :directory_refresh_timeout)
+
+    # The total is re-read from the snapshot the ingest just wrote, NOT taken
+    # from the accumulator's running count: the two diverge the moment
+    # `ChannelDirectory.ingest/3` dedupes or upserts. Not a tidy-up target.
     broadcast_window_state(
-      flushed,
-      SessionWire.directory_complete(flushed.network_slug, total_directory_rows(flushed))
+      finished,
+      SessionWire.directory_complete(
+        finished.network_slug,
+        ChannelDirectory.list(finished.subject, finished.network_id, ttl_ms: 0).total
+      )
     )
 
-    %{flushed | directory_refresh: nil}
+    finished
   end
 
-  # RPL_LIST params carry the client-nick echo as params[0]:
-  #   `:server 322 <nick> <#channel> <#users> :<topic>` → 4-element list.
-  # The 3-element clause covers a stripped upstream that omits the trailing
-  # topic. A non-binary count is coerced to 0 (defensive — never crash the
-  # ingest on a malformed numeric); a shape we don't recognise is dropped.
-  @spec parse_list_entry([String.t()]) :: {:ok, ChannelDirectory.ingest_row()} | :error
-  defp parse_list_entry([_, channel, count_str, topic]) when is_binary(channel) do
-    {:ok, %{name: channel, topic: topic, user_count: parse_user_count(count_str)}}
+  # `DirectoryIngest` decides; the session performs. Order is the order the
+  # accumulator handed back — the batch write precedes the progress ping it
+  # reports, so a ping never names a count the DB has not been offered.
+  @spec perform_directory_action(DirectoryIngest.action(), t()) :: t()
+  defp perform_directory_action({:ingest, rows}, state) do
+    :ok = ingest_directory_rows(state, rows)
+    state
   end
 
-  defp parse_list_entry([_, channel, count_str]) when is_binary(channel) do
-    {:ok, %{name: channel, topic: nil, user_count: parse_user_count(count_str)}}
+  defp perform_directory_action({:progress, count}, state) do
+    broadcast_window_state(state, SessionWire.directory_progress(state.network_slug, count))
+    state
   end
 
-  defp parse_list_entry(_), do: :error
+  # Empty is a no-op — never round-trip an empty insert.
+  @spec ingest_directory_rows(t(), [ChannelDirectory.ingest_row()]) :: :ok
+  defp ingest_directory_rows(_state, []), do: :ok
 
-  @spec parse_user_count(term()) :: non_neg_integer()
-  defp parse_user_count(count_str) when is_binary(count_str) do
-    case Integer.parse(count_str) do
-      {n, _} -> n
-      :error -> 0
-    end
+  defp ingest_directory_rows(state, rows) do
+    :ok = ChannelDirectory.ingest(state.subject, state.network_id, rows)
   end
 
-  defp parse_user_count(_), do: 0
+  # Config default (the struct's) or the test-pinned opt, under the SAME opt
+  # keys the four former state fields used.
+  @spec directory_ingest(map()) :: DirectoryIngest.t()
+  defp directory_ingest(opts) do
+    defaults = %DirectoryIngest{}
 
-  # Push one parsed row onto the in-flight buffer (newest-first; reversed at
-  # flush time so ingest preserves wire order). Flush on the batch boundary
-  # so the DB write cadence is bounded regardless of LIST size.
-  @spec accumulate_directory_row(t(), ChannelDirectory.ingest_row()) :: t()
-  defp accumulate_directory_row(%{directory_refresh: ref} = state, row) do
-    appended = %{ref | buffer: [row | ref.buffer], count: ref.count + 1}
-    buffered = %{state | directory_refresh: appended}
-
-    flushed =
-      if length(appended.buffer) >= state.directory_ingest_batch do
-        flush_directory_buffer(buffered, :batch)
-      else
-        buffered
-      end
-
-    maybe_emit_progress(flushed)
-  end
-
-  # Bulk-ingest the buffered rows (wire order) and clear the buffer. Empty
-  # buffer is a no-op — never round-trip an empty insert.
-  @spec flush_directory_buffer(t(), :batch | :final) :: t()
-  defp flush_directory_buffer(%{directory_refresh: %{buffer: []}} = state, _), do: state
-
-  defp flush_directory_buffer(%{directory_refresh: ref} = state, _) do
-    :ok = ChannelDirectory.ingest(state.subject, state.network_id, Enum.reverse(ref.buffer))
-    %{state | directory_refresh: %{ref | buffer: []}}
-  end
-
-  # Emit a `directory_progress` ping at most once per
-  # `directory_progress_throttle_ms` (monotonic clock, same source as the
-  # `last_emit_ms` seed in `handle_call(:refresh_directory, ...)`).
-  @spec maybe_emit_progress(t()) :: t()
-  defp maybe_emit_progress(%{directory_refresh: ref} = state) do
-    now = System.monotonic_time(:millisecond)
-
-    if now - ref.last_emit_ms >= state.directory_progress_throttle_ms do
-      broadcast_window_state(state, SessionWire.directory_progress(state.network_slug, ref.count))
-      %{state | directory_refresh: %{ref | last_emit_ms: now}}
-    else
-      state
-    end
-  end
-
-  # Authoritative finalised row count — read back from the snapshot the
-  # ingest just wrote (TTL irrelevant; we only want `.total`).
-  @spec total_directory_rows(t()) :: non_neg_integer()
-  defp total_directory_rows(state) do
-    ChannelDirectory.list(state.subject, state.network_id, ttl_ms: 0).total
+    DirectoryIngest.new(
+      timeout_ms: Map.get(opts, :directory_refresh_timeout_ms, defaults.timeout_ms),
+      throttle_ms: Map.get(opts, :directory_progress_throttle_ms, defaults.throttle_ms),
+      batch: Map.get(opts, :directory_ingest_batch, defaults.batch)
+    )
   end
 
   # mIRC sort: ops (@) → voiced (+) → plain (no prefix). Within tier,
