@@ -38,6 +38,7 @@ defmodule Grappa.Session.ServerTest do
     AwayState,
     Backoff,
     Deps,
+    DirectoryIngest,
     GhostRecovery,
     ISupport,
     RecoverIdentity,
@@ -268,6 +269,40 @@ defmodule Grappa.Session.ServerTest do
       assert is_map(state) and map_size(state) > 10
 
       assert Enum.filter(@di_keys, &Map.has_key?(state, &1)) == []
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
+  # #1390 slice 2 — the channel-directory ETL left the session, so its three
+  # config tunables and its in-flight tracker left the top level of state with
+  # it. Same two-pin split as the `Deps` bundle above, for the same reason:
+  # forgetting to ADD the struct and forgetting to REMOVE the four loose keys
+  # are different mistakes.
+  @directory_keys ~w[directory_refresh_timeout_ms directory_progress_throttle_ms
+                     directory_ingest_batch directory_refresh]a
+
+  describe "channel-directory ingest bundle (#1390)" do
+    test "a live session carries the directory ingest in one struct, idle" do
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      assert %DirectoryIngest{run: nil} = :sys.get_state(pid).directory
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the four directory names are gone from the top level of state" do
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      state = :sys.get_state(pid)
+      # Same pre-state guard as the bundle above: an empty map must not pass.
+      assert is_map(state) and map_size(state) > 10
+
+      assert Enum.filter(@directory_keys, &Map.has_key?(state, &1)) == []
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
