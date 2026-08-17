@@ -46793,3 +46793,87 @@ candidate nobody has instrumented.
 **The post-send decrease seen at throttled rates is not the freeze.** It is
 `1431 → 1415`, the tail-follow overshooting and clamping to `maxScroll`. It
 would have made a tidy story and it is the wrong one.
+<!-- entry #1390 slice 4 -->
+
+---
+
+## 2026-08-17 — #1390 slice 4: the recover projection leaves the session, defect and all
+
+`recover_progress_steps/2` + `recover_terminal_steps/3` were twelve clauses
+of a pure function — FSM transition in, modal step list out — sitting as
+private clauses of a 7,136-line GenServer with a single caller. They are a
+TRANSLATION between two vocabularies that must not learn each other:
+`RecoverIdentity` owns the phases and knows nothing about a modal,
+`Session.Wire` owns the wire types and builds payloads without choosing which
+ones to send. Choosing is now `Grappa.Session.RecoverProgress`.
+
+### Two continuations the issue proposed, and why neither was bought
+
+Measured before proposing, and recorded so the next reader does not repeat
+the search:
+
+* **The parameterised `Session.SubMachine` runner.** The two sub-machines
+  share `{verdict, next, lines}` and little else: `advance_ghost/2` returns
+  `{:noreply, state}` and releases a parked advisory at its terminal;
+  `advance_recover/2` returns state, carries TWO timers, re-arms one on entry
+  to a specific phase, and broadcasts progress on every transition. The 20%
+  that does not fit IS the terminal — the part that matters — so a runner
+  parameterised on `{fsm_module, state_field, timer_fields}` would hand each
+  machine back its own terminal callback. A mechanism heavier than the
+  problem it replaces.
+* **"One FSM, one interpreter."** The divergence is real: `GhostRecovery` is
+  driven by `advance_ghost/2` AND by a hand-rolled `:ghost_timeout` arm that
+  redoes step + flush + release + clear, while its sibling routes all six of
+  its inputs through one function. **But the bug was looked for and is not
+  there.** The hand-rolled arm discards `next` and never reads the phase, and
+  is correct only because `:timeout` on a non-terminal phase is `:failed` by
+  construction and the FSM field is nil at every terminal; the `/recover`
+  entry likewise re-implements start and arms `:recover_timeout` without a
+  cancel, and is safe only because a second `/recover` in flight is refused
+  and the terminal nils FSM and timers together. Four hand-rolled sites, four
+  invariants held elsewhere, zero consequences: a pure refactor, and nothing
+  red buys it.
+
+### The defect this slice MOVES without curing: #1468
+
+#623 pt3 states the rule in its own comment — "RECONCILE every in-flight step
+on terminal `:failed` (not just one) so the modal never strands a step at
+`:running`" — and the leg (b) integration test asserts it in those words.
+Two of the five terminal clauses do not honour it:
+
+```
+:idle --start--> :awaiting_r                    nick:running, identify:running
+      --{:nick_error,433}--> :awaiting_verb_settle   nick:failed, recover:running
+      --settle--> :awaiting_nick                recover:ok,  nick:running
+      --timeout--> :failed                      ONLY nick:failed  ← identify still :running
+```
+
+The `:awaiting_nick` clause carried a comment claiming "the identify step
+never started". No reachable path makes that true: `:awaiting_nick` comes
+only from `:awaiting_verb_settle`, which comes only from `:awaiting_r`, whose
+entry transition starts identify. The `:awaiting_verb_settle` terminal strands
+identify always, and `nick` too on the retry path. Verified on the client, not
+inferred: `recoverProgress.ts` upserts rows by step name and leaves untouched
+rows alone, and `RecoverModal.tsx` keeps the `is-running` class whatever the
+outcome — so the modal ends with identify spinning beside a failed result.
+
+It is carried over UNCURED on purpose. A behaviour change buried inside a move
+is invisible to a reviewer reading the diff as a refactor, and this project
+has decided twice already that the two must not travel together. The two
+characterisation tests assert what the code does today and carry #1468 in
+their names, so the fix cannot land without turning them red — which is the
+point of writing them that way rather than omitting the awkward cases.
+
+### What the extraction buys immediately
+
+The #1468 fix needs an oracle: "no step is left `:running` at a terminal",
+over every reachable transition. As a session test that is a fake ircd, a
+socket and fifteen broadcast round-trips per path. Against a pure function it
+is a property on plain `ExUnit.Case`, `async: true`. The extraction is what
+makes the fix cheap to buy, which is why it went first.
+
+_Not measured here: the projection's unreachable catch-all clause has no test,
+because reaching it means fabricating a state the FSM cannot emit. And the
+claim that no OTHER consumer names the moved functions was scoped to `lib` and
+`test` — a comment in `cicchetto/src/RecoverModal.tsx` named one, and was
+found only after the move._
