@@ -25,10 +25,9 @@ defmodule GrappaWeb.SocketLivenessVsSessionRowTest do
   import Ecto.Query
   import Grappa.AuthFixtures
 
-  alias Grappa.Accounts
+  alias Grappa.{Accounts, Repo}
   alias Grappa.Accounts.{Reaper, Session}
   alias Grappa.PubSub.Topic
-  alias Grappa.Repo
   alias GrappaWeb.{GrappaChannel, UserSocket}
 
   @idle_seconds 7 * 24 * 3600
@@ -39,7 +38,8 @@ defmodule GrappaWeb.SocketLivenessVsSessionRowTest do
   # socket looks identical to time passing on an abandoned one.
   defp age_past_idle_window(session_id) do
     when_seen = DateTime.add(DateTime.utc_now(), -(@idle_seconds + 3600), :second)
-    {1, _} = Repo.update_all(from(s in Session, where: s.id == ^session_id), set: [last_seen_at: when_seen])
+    query = from(s in Session, where: s.id == ^session_id)
+    {1, _} = Repo.update_all(query, set: [last_seen_at: when_seen])
     :ok
   end
 
@@ -59,14 +59,14 @@ defmodule GrappaWeb.SocketLivenessVsSessionRowTest do
 
     # Alive in fact: the socket joins and is served with no further
     # contact with the row it was born from.
-    assert {:ok, _reply, chan} = subscribe_and_join(socket, GrappaChannel, Topic.user(user.name))
+    assert {:ok, _, chan} = subscribe_and_join(socket, GrappaChannel, Topic.user(user.name))
     assert Process.alive?(chan.channel_pid)
   end
 
   test "the reaper's announcement is the only thing that closes that socket" do
     {user, session} = user_and_session()
 
-    assert {:ok, _socket} = connect_socket(session.id)
+    assert {:ok, _} = connect_socket(session.id)
 
     :ok = age_past_idle_window(session.id)
 
