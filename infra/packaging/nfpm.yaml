@@ -22,18 +22,19 @@ vendor: "Marcello Barnaba"
 homepage: "https://github.com/vjt/grappa-irc"
 license: "MIT"
 description: |
-  Always-on IRC bouncer with a REST + Phoenix Channels API, a bundled
-  irssi-shaped web PWA (cicchetto), and a terminal client (shottino).
-  One supervised OTP process per (user, network); sqlite-backed
-  scrollback. Ships a self-contained Erlang/OTP release and self-serves
-  the web frontend, so nginx is recommended for TLS but not required.
-  The terminal client installs as /usr/bin/shottino and talks to the
-  same REST + Channels API as the web frontend.
+  Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled
+  irssi-shaped web PWA (cicchetto). One supervised OTP process per
+  (user, network); sqlite-backed scrollback. Ships a self-contained
+  Erlang/OTP release and self-serves the web frontend, so nginx is
+  recommended for TLS but not required.
+  The terminal client (shottino) is its OWN package since 1.3.0 — install
+  it anywhere, with or without this server (#1447).
 
 # Runtime deps are per-format (disjoint package names across distro
 # families), so they live under `overrides` — NOT top-level `depends`,
-# which nfpm would apply to BOTH formats. The bundled ERTS links these
-# system libs; shottino links the same libssl + the WIDE ncurses.
+# which nfpm would apply to BOTH formats. What they cover is the bundled
+# ERTS and the maintainer scripts; the terminal client declares its own
+# (nfpm-shottino.yaml) since it stopped riding along in 1.3.0.
 #
 # recommends: the media-metadata strip shells out to exiftool/ffmpeg
 # fail-closed (without them uploads 422), and nginx is the recommended
@@ -44,13 +45,13 @@ description: |
 overrides:
   deb:
     depends:
-      # libncursesw6 is for SHOTTINO and is NOT the same Debian package as
-      # libncurses6: the client links libncursesw.so.6 (the WIDE build,
-      # because it is UTF-8 end to end) while ERTS wants the narrow
-      # libncurses6. Debian ships them separately, so depending on only one
-      # leaves the other's consumer with "cannot open shared object file"
-      # at exec time. (Fedora folds both SONAMEs into one ncurses-libs — see
-      # the rpm override.)
+      # libncurses6 is for ERTS, and it is the NARROW build. The WIDE
+      # libncursesw6 used to sit beside it for shottino; it left with the
+      # binary in 1.3.0 (#1447) and is declared by the client's own package
+      # now. Debian ships the two separately, so a dependency kept here for a
+      # file this package no longer contains would be a claim about someone
+      # else's payload. (Fedora folds both SONAMEs into one ncurses-libs, so
+      # the rpm override below keeps its single entry for ERTS.)
       #
       # libssl3t64 | libssl3: Debian's 64-bit time_t transition renamed the
       # OpenSSL runtime package `libssl3` -> `libssl3t64` on Ubuntu 24.04
@@ -62,7 +63,6 @@ overrides:
       # libssl.so.3 SONAME either way.
       - libssl3t64 | libssl3
       - libncurses6
-      - libncursesw6
       - libstdc++6
       - libgcc-s1
       - ca-certificates
@@ -74,18 +74,25 @@ overrides:
       # present) — unlike Fedora, where it is a separate package (see rpm).
       - openssl
     recommends:
+      # shottino: THE UPGRADE PATH, not a suggestion. /usr/bin/shottino left
+      # this package in 1.3.0 (#1447); without this entry `apt upgrade` would
+      # remove the client from every host that has it today and pull nothing
+      # back, because nothing else references the replacement. apt installs
+      # Recommends by default, so the client arrives in the same transaction.
+      - shottino
       - libimage-exiftool-perl
       - ffmpeg
       - nginx
   rpm:
     depends:
       # Fedora/RHEL package names for the SAME SONAMEs the deb depends on.
-      # openssl-libs = libssl.so.3 + libcrypto.so.3; ncurses-libs is ONE
-      # package providing BOTH libncurses.so.6 (ERTS) and libncursesw.so.6
-      # (shottino) — no wide/narrow split like Debian, so a single entry
-      # covers both consumers. shadow-utils provides useradd/groupadd (the
-      # deb's `passwd`); ca-certificates is the system CA trust store the
-      # upstream-TLS verify_peer path reads.
+      # openssl-libs = libssl.so.3 + libcrypto.so.3; ncurses-libs is here for
+      # ERTS's libncurses.so.6. Fedora folds the wide and narrow SONAMEs into
+      # that one package, which is why this side needs no edit now that the
+      # client (libncursesw.so.6) has left — unlike the deb, where the wide
+      # build is a separate package and had to go. shadow-utils provides
+      # useradd/groupadd (the deb's `passwd`); ca-certificates is the system
+      # CA trust store the upstream-TLS verify_peer path reads.
       - openssl-libs
       - ncurses-libs
       - libstdc++
@@ -103,6 +110,10 @@ overrides:
       - openssl
       - util-linux
     recommends:
+      # See the deb override: the client is a weak dep so that a dnf upgrade
+      # brings it back in the same transaction the file leaves this package.
+      # dnf installs weak deps by default (install_weak_deps=True).
+      - shottino
       - perl-Image-ExifTool
       - ffmpeg
       - nginx
@@ -111,14 +122,6 @@ contents:
   # The mix release (self-contained ERTS + compiled app + boot scripts).
   - src: ./staging/usr/lib/grappa
     dst: /usr/lib/grappa
-
-  # shottino — the terminal client (frontends/shottino), compiled by
-  # build.sh into the staging tree. Ships in the SAME package as the
-  # bouncer: its runtime deps are already in `depends` above.
-  - src: ./staging/usr/bin/shottino
-    dst: /usr/bin/shottino
-    file_info:
-      mode: 0755
 
   # The built cicchetto SPA dist (CIC_DIST_ROOT points here). Read-only
   # static assets served by Plug.Static.

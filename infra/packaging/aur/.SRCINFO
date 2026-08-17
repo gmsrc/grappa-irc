@@ -13,6 +13,7 @@ pkgbase = grappa
 	depends = ncurses
 	depends = gcc-libs
 	depends = ca-certificates
+	optdepends = shottino: the terminal client, now its own package (#1447)
 	optdepends = perl-image-exiftool: strip metadata from image uploads (#39)
 	optdepends = ffmpeg: strip metadata from video uploads (#39)
 	optdepends = nginx: TLS + static reverse proxy (recommended, not required)

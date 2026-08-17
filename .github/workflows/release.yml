@@ -199,8 +199,13 @@ jobs:
       - name: Build the .deb
         run: infra/packaging/build.sh
 
-      - name: Install the .deb (postinstall runs openssl secrets + migrate)
-        run: sudo apt-get install -y ./dist/grappa_*.deb
+      # BOTH packages, one transaction — which is itself the proof that #1447
+      # landed whole: while the bouncer still owned /usr/bin/shottino this
+      # command could not have succeeded (dpkg refuses two owners of one
+      # path). The Recommends: cannot be exercised here — the client is not in
+      # any apt repo — so the pair is named explicitly.
+      - name: Install both packages (postinstall runs openssl secrets + migrate)
+        run: sudo apt-get install -y ./dist/grappa_*.deb ./dist-shottino/shottino_*.deb
 
       - name: Prove the packaged migrate applied every migration
         run: |
@@ -228,22 +233,32 @@ jobs:
       # on the INSTALLED artifact, not on the build tree. `--help` exits 0
       # without a server, a terminal or config, so it exercises the real
       # dynamic links (libncursesw, libssl) that the package `depends` on.
-      - name: Prove the packaged shottino installed and runs
+      #
+      # Both directions, because #1447 is a MOVE: the file must be gone from
+      # the bouncer package AND present on the host from the client one. The
+      # first half is asserted on the artifact rather than on the filesystem —
+      # the filesystem has it either way, which is exactly how a failed move
+      # would look green.
+      - name: Prove the client moved packages — out of the bouncer, into its own
         run: |
-          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing from the .deb"; exit 1; }
+          deb="$(find dist -name 'grappa_*.deb' -print -quit)"
+          if dpkg-deb -c "$deb" | grep -q ' ./usr/bin/shottino$'; then
+            echo "::error::the bouncer .deb still ships /usr/bin/shottino"
+            dpkg-deb -c "$deb" | grep shottino; exit 1
+          fi
+          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing after installing both packages"; exit 1; }
+          dpkg -S /usr/bin/shottino | grep -q '^shottino:' || {
+            echo "::error::/usr/bin/shottino is not owned by the shottino package"
+            dpkg -S /usr/bin/shottino; exit 1; }
           /usr/bin/shottino --help > /tmp/shottino-help.txt
           grep -q '^usage: ' /tmp/shottino-help.txt || {
             echo "::error::shottino --help produced no usage output"; cat /tmp/shottino-help.txt; exit 1; }
           echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
-      # #1447 slice A — the STANDALONE client package. Inspected, NOT
-      # installed: the bouncer package above still owns /usr/bin/shottino, so
-      # `apt-get install` of this one would conflict on the path. That is
-      # exactly what the Breaks: asserted below is for, and exactly why this
-      # package is not published yet.
-      #
-      # The bats suite pins the CONFIG; only this step can prove nfpm accepted
-      # it and rendered what the config asked for.
+      # #1447 — the STANDALONE client package, now installed alongside the
+      # bouncer by the step above. This one still reads the ARTIFACT's
+      # metadata: the bats suite pins the CONFIG, and only here can nfpm's
+      # rendering of it be proven.
       - name: Prove the standalone shottino package is thin and takes the path over
         run: |
           deb="$(find dist-shottino -name 'shottino_*.deb' -print -quit)"
@@ -275,17 +290,24 @@ jobs:
           [ "$got" = "$want" ] || {
             echo "::error::client package is stamped '$got', expected '$want'"; exit 1; }
 
-      # NOTE (#1447 slice A): dist-shottino/ is deliberately NOT uploaded.
-      # This glob is path-scoped, which is the only thing keeping the client
-      # package off the release: `publish` attaches by NAME at any depth
-      # (infra/packaging/release_assets.sh), so anything that reaches the
-      # artifact bundle IS attached. Slice B drops /usr/bin/shottino from the
-      # bouncer package and turns publishing on in the same change.
+      # Two packages, two upload steps (#1447 slice B). One glob over a shared
+      # directory would publish whatever landed there next; a step per artifact
+      # keeps publication something a human wrote down. `publish` then attaches
+      # by NAME (infra/packaging/release_assets.sh), and its expected-kind
+      # table requires BOTH — a client package that failed to build fails the
+      # release loudly instead of vanishing from it.
       - name: Upload .deb artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: grappa-deb
           path: dist/*.deb
+          if-no-files-found: error
+
+      - name: Upload the client .deb artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: shottino-deb
+          path: dist-shottino/*.deb
           if-no-files-found: error
 
   arch:
@@ -341,15 +363,16 @@ jobs:
           printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
           chown -R builder:builder .
 
-      - name: regen.sh (derive pkgver from VERSION) + makepkg — build the package
+      - name: regen.sh (derive both pkgvers) + makepkg — build both packages
         run: |
           cd infra/packaging/aur
-          # regen.sh (#538/#652) fills the committed `pkgver=@GRAPPA_VERSION@`
-          # sentinel from the repo-root VERSION file (the single source of truth), then
-          # runs updpkgsums (fetches the now-existing tag tarball, rewrites
-          # sha256sums=('SKIP')) and regenerates .SRCINFO. It is the SAME
-          # derivation path a human uses to publish to the AUR — scripted, so
-          # the version can never be a forgotten manual step.
+          # regen.sh (#538/#652) fills the committed sentinels from their own
+          # carriers — the repo-root VERSION for the bouncer, and since #1447
+          # frontends/shottino/version.h for the client — then runs updpkgsums
+          # (fetches the now-existing tag tarball, rewrites sha256sums=('SKIP'))
+          # and regenerates each .SRCINFO. It is the SAME derivation path a
+          # human uses to publish to the AUR — scripted, so a version can never
+          # be a forgotten manual step. ONE regen.sh run covers both recipes.
           # makepkg then builds the mix release + cicchetto FROM THE TARBALL
           # (no .git → Grappa.Version reports the bare version). No
           # --warnings-as-errors: Elixir 1.20 warns from deps (see PKGBUILD).
@@ -357,20 +380,29 @@ jobs:
           # (the builder has NOPASSWD sudo) rather than aborting the hard dep
           # check — so a future `depends` entry not transitively present still
           # builds. -f overwrites an existing package file.
+          #
+          # TWO makepkg runs, because #1447 made these two pkgbases rather than
+          # one split: PKGBUILD(5) does not let a package_*() override pkgver,
+          # and the client keeps its own version line.
           sudo -u builder bash -euo pipefail -c '
             ./regen.sh
             makepkg -sf --noconfirm
+            cd shottino && makepkg -sf --noconfirm
           '
 
-      - name: namcap the built package (advisory)
+      - name: namcap the built packages (advisory)
         run: |
           cd infra/packaging/aur
-          sudo -u builder namcap ./*.pkg.tar.zst || true
+          sudo -u builder namcap ./*.pkg.tar.zst ./shottino/*.pkg.tar.zst || true
 
-      - name: Install the package (grappa.install runs secrets + migrate)
+      - name: Install both packages (grappa.install runs secrets + migrate)
         run: |
           cd infra/packaging/aur
-          pacman -U --noconfirm ./*.pkg.tar.zst
+          # One transaction, both packages — the Arch-side proof that the pair
+          # is co-installable now that only the client's recipe owns
+          # /usr/bin/shottino. pacman aborts on a file conflict, so this step
+          # could not have passed before #1447 slice B.
+          pacman -U --noconfirm ./*.pkg.tar.zst ./shottino/*.pkg.tar.zst
 
       - name: Prove the packaged migrate applied every migration
         run: |
@@ -394,22 +426,54 @@ jobs:
             exit 1
           fi
 
-      # Mirror of the .deb proof — the Arch package is a SOURCE build, so
-      # this additionally confirms shottino compiled on the Arch toolchain
-      # (a newer gcc than the Debian one) and links that host's libs.
-      - name: Prove the packaged shottino installed and runs
+      # Mirror of the .deb proof, both directions — the Arch packages are a
+      # SOURCE build, so this additionally confirms shottino compiled on the
+      # Arch toolchain (a newer gcc than the Debian one) and links that host's
+      # libs. `pacman -Qo` is the ownership question: which package put the
+      # file there. Asking the filesystem alone would pass either way, and
+      # "either way" is precisely the failure #1447 slice B could ship.
+      - name: Prove the client moved recipes — out of the bouncer, into its own
         run: |
-          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing from the Arch package"; exit 1; }
+          cd infra/packaging/aur
+          if bsdtar -tf ./*.pkg.tar.zst | grep -qx 'usr/bin/shottino'; then
+            echo "::error::the bouncer Arch package still ships usr/bin/shottino"; exit 1
+          fi
+          cd - >/dev/null
+          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing after installing both packages"; exit 1; }
+          pacman -Qo /usr/bin/shottino | grep -q 'shottino ' || {
+            echo "::error::/usr/bin/shottino is not owned by the shottino package"
+            pacman -Qo /usr/bin/shottino; exit 1; }
           /usr/bin/shottino --help | grep -q '^usage: ' || {
             echo "::error::shottino --help produced no usage output"; exit 1; }
           echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
-      - name: Stage Arch artifacts (package + regenerated recipe metadata)
+      # Its own version line, read off the INSTALLED package (#1447). This is
+      # the assertion a split PKGBUILD could not have satisfied: pkgver is
+      # global to a pkgbase, so a split would report the bouncer's number here.
+      - name: Prove the Arch client package carries the client's own version
+        run: |
+          want="$(infra/packaging/version.sh shottino)"
+          got="$(pacman -Q shottino | awk '{print $2}' | cut -d- -f1)"
+          echo "client package version: '$got' (want '$want')"
+          [ "$got" = "$want" ] || {
+            echo "::error::the Arch client package is stamped '$got', expected '$want'"; exit 1; }
+
+      - name: Stage Arch artifacts (packages + regenerated recipe metadata)
         run: |
           mkdir -p arch-out
           cp infra/packaging/aur/*.pkg.tar.zst arch-out/
+          cp infra/packaging/aur/shottino/*.pkg.tar.zst arch-out/
           # The regenerated recipe metadata a human copies into the AUR repo.
+          # The client's copies are RENAMED, and not for tidiness: a release
+          # asset is keyed by BASENAME, and the publish job's fallback uploads
+          # with --clobber — two files called PKGBUILD would leave the release
+          # holding one of them, silently, with no way to tell which. The
+          # expected-kinds table names these two just like the others, so a
+          # rename that drifts is a loud missing kind rather than a quiet
+          # substitution. See aur/README.md for the publish-side rename back.
           cp infra/packaging/aur/PKGBUILD infra/packaging/aur/.SRCINFO arch-out/
+          cp infra/packaging/aur/shottino/PKGBUILD arch-out/shottino.PKGBUILD
+          cp infra/packaging/aur/shottino/.SRCINFO arch-out/shottino.SRCINFO
 
       - name: Upload Arch artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -521,8 +585,13 @@ jobs:
       - name: Build the .rpm (Fedora ERTS via GRAPPA_PKG_FORMAT=rpm)
         run: GRAPPA_PKG_FORMAT=rpm infra/packaging/build.sh
 
-      - name: Install the .rpm (%post runs openssl secrets + migrate)
-        run: dnf install -y --setopt=install_weak_deps=False ./dist/*.rpm
+      # BOTH packages in one transaction — the rpm-side proof that the pair is
+      # co-installable now that only one of them owns /usr/bin/shottino.
+      # install_weak_deps stays FALSE (this asserts the hard dependency set, as
+      # it always has); the client is named explicitly rather than arriving as
+      # the Recommends:, which no repo here could satisfy anyway.
+      - name: Install both packages (%post runs openssl secrets + migrate)
+        run: dnf install -y --setopt=install_weak_deps=False ./dist/*.rpm ./dist-shottino/*.rpm
 
       - name: Prove the packaged migrate applied every migration
         run: |
@@ -546,21 +615,29 @@ jobs:
             exit 1
           fi
 
-      # Same proof discipline as the .deb — assert on the INSTALLED artifact.
+      # Same proof discipline as the .deb, both directions — the file must be
+      # ABSENT from the bouncer's payload and delivered by the client package.
       # Like the arch source build, this also confirms shottino compiled on
       # this toolchain (Fedora's gcc) and links THIS host's ncursesw/openssl.
-      - name: Prove the packaged shottino installed and runs
+      - name: Prove the client moved packages — out of the bouncer, into its own
         run: |
-          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing from the .rpm"; exit 1; }
+          pkg="$(find dist -name 'grappa-*.rpm' -print -quit)"
+          if rpm -qpl "$pkg" | grep -qx '/usr/bin/shottino'; then
+            echo "::error::the bouncer .rpm still ships /usr/bin/shottino"; exit 1
+          fi
+          test -x /usr/bin/shottino || { echo "::error::/usr/bin/shottino missing after installing both packages"; exit 1; }
+          rpm -qf /usr/bin/shottino | grep -q '^shottino-' || {
+            echo "::error::/usr/bin/shottino is not owned by the shottino package"
+            rpm -qf /usr/bin/shottino; exit 1; }
           /usr/bin/shottino --help > /tmp/shottino-help.txt
           grep -q '^usage: ' /tmp/shottino-help.txt || {
             echo "::error::shottino --help produced no usage output"; cat /tmp/shottino-help.txt; exit 1; }
           echo "shottino OK: $(/usr/bin/shottino --help | head -1)"
 
-      # #1447 slice A — the STANDALONE client package, inspected not installed
-      # (the bouncer package above still owns /usr/bin/shottino). The deb job
-      # runs the same three proofs through dpkg-deb; here they go through rpm,
-      # where nfpm renders `replaces:` as Obsoletes: and drops deb-only Breaks.
+      # #1447 — the STANDALONE client package's own metadata, read off the
+      # artifact. The deb job runs the same three proofs through dpkg-deb;
+      # here they go through rpm, where nfpm renders `replaces:` as Obsoletes:
+      # and drops the deb-only Breaks.
       - name: Prove the standalone shottino package is thin and takes the path over
         run: |
           pkg="$(find dist-shottino -name 'shottino-*.rpm' -print -quit)"
@@ -585,14 +662,19 @@ jobs:
           [ "$got" = "$want" ] || {
             echo "::error::client package is stamped '$got', expected '$want'"; exit 1; }
 
-      # NOTE (#1447 slice A): dist-shottino/ is deliberately NOT uploaded —
-      # see the sibling note in the `deb` job for why the path-scoped glob is
-      # the gate.
+      # One upload step per artifact — see the sibling note in the `deb` job.
       - name: Upload .rpm artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: grappa-rpm
           path: dist/*.rpm
+          if-no-files-found: error
+
+      - name: Upload the client .rpm artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: shottino-rpm
+          path: dist-shottino/*.rpm
           if-no-files-found: error
 
   docker:

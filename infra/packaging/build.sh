@@ -18,8 +18,8 @@
 #                     + shottino link the build host's glibc/libssl.
 #   OUT_DIR           where the BOUNCER package lands (default: <repo>/dist)
 #   SHOTTINO_OUT_DIR  where the STANDALONE CLIENT package lands
-#                     (default: <repo>/dist-shottino). Deliberately NOT
-#                     OUT_DIR — see the client-package section below.
+#                     (default: <repo>/dist-shottino). One directory per
+#                     artifact — see the client-package section below.
 #   NFPM_BIN          path to nfpm (default: on PATH, else downloaded pinned)
 #   SKIP_RELEASE=1    reuse an existing _build/prod/rel/grappa
 #   SKIP_CIC=1        reuse an existing staged cicchetto-dist
@@ -35,17 +35,16 @@ PKG_DIR="${SCRIPT_DIR}"
 STAGING="${PKG_DIR}/staging"
 SHOTTINO_STAGING="${PKG_DIR}/staging-shottino"
 OUT_DIR="${OUT_DIR:-${REPO_ROOT}/dist}"
-# The standalone client package lands OUTSIDE OUT_DIR, and that is the whole
-# mechanism keeping #1447 slice A unpublished. The release workflow's upload
-# steps are PATH-scoped globs (`path: dist/*.deb`, `path: dist/*.rpm`), so a
-# package written elsewhere is never uploaded, never downloaded by `publish`,
-# and never attached. `release_assets.sh found` matches by NAME AT ANY DEPTH,
-# so once a file reaches the artifact bundle it WILL be attached — the
-# directory split is the only gate, and it lives here.
+# One directory per artifact. In #1447 slice A this split was a GATE — the
+# workflow's upload steps are PATH-scoped globs, so a package written outside
+# `dist/` could not reach the release while the bouncer still owned
+# /usr/bin/shottino and the two could not be co-installed.
 #
-# It matters because slice A leaves the bouncer package shipping
-# /usr/bin/shottino: until slice B drops it, both packages own that path and
-# publishing the pair would ship two artifacts that cannot be co-installed.
+# Slice B dropped the file from the bouncer, so the pair is co-installable and
+# the client package IS published — from its own upload step, reading this
+# directory. The split stays because it keeps publication EXPLICIT: a new
+# package is published when someone writes its upload step, never because a
+# glob over a shared directory quietly widened.
 SHOTTINO_OUT_DIR="${SHOTTINO_OUT_DIR:-${REPO_ROOT}/dist-shottino}"
 
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
@@ -130,10 +129,13 @@ mkdir -p "${STAGING}/usr/lib/grappa"
 cp -a "${REL_DIR}/." "${STAGING}/usr/lib/grappa/"
 
 # ── shottino (terminal client) ─────────────────────────────────────────────
-# The C client ships in the same package as the bouncer, built here so it
-# links the BUILD host's ncurses/openssl like the ERTS payload does.
-# Unless SKIP_SHOTTINO=1, a build failure FAILS the package build.
-SHOTTINO_BIN="${STAGING}/usr/bin/shottino"
+# The C client ships as its OWN package (#1447), built here rather than
+# elsewhere so it links the BUILD host's ncurses/openssl exactly like the ERTS
+# payload does — same host, same glibc floor, one build per format.
+# Unless SKIP_SHOTTINO=1, a build failure FAILS the package build: a package
+# that silently ships without a binary it advertises is worse than one that
+# refuses to build.
+SHOTTINO_BIN="${SHOTTINO_STAGING}/usr/bin/shottino"
 if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
 	say "building shottino → ${SHOTTINO_BIN}"
 	# ./configure rewrites ${REPO_ROOT}/config.mk, a TRACKED file. Snapshot
@@ -160,13 +162,8 @@ if [ "${SKIP_SHOTTINO:-}" != "1" ]; then
 		make -C frontends/shottino clean
 		make -C frontends/shottino
 	)
-	mkdir -p "${STAGING}/usr/bin"
-	install -m 0755 "${REPO_ROOT}/frontends/shottino/shottino" "${SHOTTINO_BIN}"
-	# The SAME binary also stages for the standalone package. Two staging trees
-	# rather than one shared with the bouncer, so slice B can drop the bouncer's
-	# copy by deleting its `contents:` entry and this line, and nothing else.
 	mkdir -p "${SHOTTINO_STAGING}/usr/bin"
-	install -m 0755 "${REPO_ROOT}/frontends/shottino/shottino" "${SHOTTINO_STAGING}/usr/bin/shottino"
+	install -m 0755 "${REPO_ROOT}/frontends/shottino/shottino" "${SHOTTINO_BIN}"
 	# Prove the staged artifact RUNS before packaging it. `--help` needs no
 	# server, terminal or config, so it exercises the dynamic links for real.
 	"${SHOTTINO_BIN}" --help >/dev/null 2>&1 || die "staged shottino does not run (link error?)"

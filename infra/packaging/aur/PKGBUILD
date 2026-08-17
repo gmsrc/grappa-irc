@@ -25,7 +25,7 @@ pkgname=grappa
 # so an underived build fails loudly instead of shipping `grappa-@GRAPPA_VERSION@`.
 pkgver=@GRAPPA_VERSION@
 pkgrel=1
-pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API, a bundled web PWA (cicchetto) and a terminal client (shottino)"
+pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled web PWA (cicchetto)"
 arch=('x86_64')
 url="https://github.com/vjt/grappa-irc"
 license=('MIT')
@@ -45,7 +45,16 @@ depends=('openssl' 'ncurses' 'gcc-libs' 'ca-certificates')
 makedepends=('elixir' 'erlang-headless' 'bun')
 # Media metadata strip shells out to these fail-closed; nginx fronts
 # TLS/static. All optional — the bouncer boots + self-serves without any.
-optdepends=('perl-image-exiftool: strip metadata from image uploads (#39)'
+#
+# shottino is the Arch stand-in for the .deb/.rpm `Recommends:` (#1447): the
+# terminal client left this package in 1.3.0 and lives in its own recipe
+# (infra/packaging/aur/shottino/) on its own version line. pacman has no weak
+# dependency that installs by default, so this pointer is advisory BY
+# CONSTRUCTION — an Arch user who upgrades and finds /usr/bin/shottino gone
+# gets told where it went, and installs it deliberately. That difference from
+# Debian/Fedora is pacman's, not a decision taken here.
+optdepends=('shottino: the terminal client, now its own package (#1447)'
+            'perl-image-exiftool: strip metadata from image uploads (#39)'
             'ffmpeg: strip metadata from video uploads (#39)'
             'nginx: TLS + static reverse proxy (recommended, not required)')
 install="${pkgname}.install"
@@ -93,16 +102,6 @@ build() {
 	bun install --frozen-lockfile
 	bun run build
 	cd ..
-
-	# shottino — the terminal client (frontends/shottino). Source-built here
-	# like everything else, so it links the user's own ncurses/openssl; its
-	# runtime libs are already in `depends`. The C toolchain and pkgconf come
-	# from base-devel, which makepkg assumes.
-	echo "==> shottino (terminal client)"
-	./configure --prefix=/usr
-	make -C frontends/shottino
-	# `make check` is NOT run here: the suites build with ASan/UBSan, a CI
-	# gate, not something to impose on a user's rebuild.
 }
 
 package() {
@@ -126,10 +125,6 @@ package() {
 	install -Dm755 infra/packaging/grappa-wrapper.sh \
 		"${pkgdir}/usr/bin/grappa"
 
-	# shottino — terminal client for this server, in the same package as
-	# the bouncer (like the .deb).
-	install -Dm755 frontends/shottino/shottino \
-		"${pkgdir}/usr/bin/shottino"
 	install -Dm644 infra/packaging/README.md \
 		"${pkgdir}/usr/share/doc/grappa/README.md"
 

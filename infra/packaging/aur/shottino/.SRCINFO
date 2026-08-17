@@ -1,0 +1,15 @@
+pkgbase = shottino
+	pkgdesc = Terminal client for grappa — an irssi-shaped ncurses UI over its REST + Phoenix Channels API
+	pkgver = @SHOTTINO_VERSION@
+	pkgrel = 1
+	url = https://github.com/vjt/grappa-irc
+	arch = x86_64
+	license = MIT
+	depends = ncurses
+	depends = openssl
+	depends = ca-certificates
+	optdepends = grappa: the bouncer this client talks to, if you run one locally
+	source = shottino-@SHOTTINO_VERSION@.tar.gz::https://github.com/vjt/grappa-irc/archive/refs/tags/v@GRAPPA_VERSION@.tar.gz
+	sha256sums = SKIP
+
+pkgname = shottino

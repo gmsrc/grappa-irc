@@ -16,6 +16,13 @@ defmodule Grappa.VersionSingleSourceTest do
       same `version.sh` at release time, filling the committed
       `@GRAPPA_VERSION@` sentinel (a value `makepkg` REFUSES, so an
       underived build fails loudly instead of shipping `grappa-@…@`);
+    * the Arch CLIENT recipe (#1447, `aur/shottino/`) — a SECOND pkgbase, and
+      therefore a second carrier: `pkgver=@SHOTTINO_VERSION@` derives from
+      `frontends/shottino/version.h` (the client's own line, so
+      `shottino --version` and the package agree), while `_grappaver` stays
+      `@GRAPPA_VERSION@` because the source tarball only exists under the
+      bouncer's tag. Split into two recipes rather than one split package
+      because `PKGBUILD(5)` does not let a `package_*()` override `pkgver`;
     * the cicchetto `<meta cicchetto-version>` — `vite.config.ts` reads
       the `GRAPPA_VERSION` env (cic builds mount only `./cicchetto`, so
       they cannot read the repo root; the build wrappers export it from
@@ -96,6 +103,34 @@ defmodule Grappa.VersionSingleSourceTest do
     test ".SRCINFO pkgver is the @GRAPPA_VERSION@ sentinel (regenerated with PKGBUILD)" do
       pkgver = carrier_value("infra/packaging/aur/.SRCINFO", ~r/pkgver\s*=\s*(\S+)/)
       assert pkgver == "@GRAPPA_VERSION@"
+    end
+
+    test "the Arch client PKGBUILD pkgver is the @SHOTTINO_VERSION@ sentinel (#1447)" do
+      # A DIFFERENT carrier from every other line here: the client's number
+      # lives in frontends/shottino/version.h and moves on its own cadence.
+      # Hard-coding it would be the same drift this suite exists to catch, one
+      # package over — and it would go unnoticed longer, since nothing else in
+      # the tree reads that number.
+      pkgver = carrier_value("infra/packaging/aur/shottino/PKGBUILD", ~r/^pkgver=(.+)$/m)
+      assert pkgver == "@SHOTTINO_VERSION@"
+    end
+
+    test "the Arch client recipe still names the GRAPPA tag as its source (#1447)" do
+      # Not a duplicate of the assertion above — the opposite failure. One
+      # repository, one tag: the tarball exists under the BOUNCER's version, so
+      # a recipe that derived its source from the client's line would fetch a
+      # tag that was never cut. Two sentinels, two carriers, one tarball.
+      grappaver = carrier_value("infra/packaging/aur/shottino/PKGBUILD", ~r/^_grappaver=(.+)$/m)
+      assert grappaver == "@GRAPPA_VERSION@"
+    end
+
+    test "the Arch client .SRCINFO carries both sentinels (regenerated with its PKGBUILD)" do
+      # The committed .SRCINFO is hand-written until the arch job regenerates
+      # it; nothing in this suite compares it to its PKGBUILD field by field,
+      # so this pins the two values a hand-edit gets wrong first.
+      srcinfo = "infra/packaging/aur/shottino/.SRCINFO"
+      assert carrier_value(srcinfo, ~r/pkgver\s*=\s*(\S+)/) == "@SHOTTINO_VERSION@"
+      assert carrier_value(srcinfo, ~r/source\s*=\s*\S*tags\/v(\S+)\.tar\.gz/) == "@GRAPPA_VERSION@"
     end
 
     # The cicchetto carrier — package.json's version neutralised to 0.0.0 (vite

@@ -1,23 +1,23 @@
 #!/usr/bin/env bats
 #
-# Bats suite for GH #1447 slice A — shottino gets its OWN nfpm config, built
-# and proven on every packaging job but NOT published yet.
+# Bats suite for GH #1447 — shottino has its OWN package, and since slice B the
+# bouncer no longer ships the client binary at all.
 #
-# Slice A is deliberately additive: `grappa` still ships /usr/bin/shottino, so
-# the two packages both own that path and CANNOT be co-installed. That makes
-# "the standalone package does not reach the release" the load-bearing property
-# of this slice, and it is the first thing pinned below.
+# Slice A was deliberately additive: `grappa` still shipped /usr/bin/shottino,
+# both packages owned that path, and they could NOT be co-installed — so the
+# standalone package was built, inspected, and kept off the release. Slice B is
+# the other half of that one decision: the bouncer drops the file, the takeover
+# relations become true, and the client package is published.
 #
-# THE HAZARD, MEASURED — and not where the first reading put it.
+# THE ORDER IS THE WHOLE POINT. Dropping the file without publishing the
+# replacement would take the client away from everyone who has it today, and
+# publishing without dropping would ship a pair that cannot be installed
+# together. Neither half is shippable alone, which is why they are one slice.
 #
-# `infra/packaging/release_assets.sh` matches release assets by NAME AT ANY
-# DEPTH (`found()`: `find "$dir" -type f -name '*.deb'`), so it was the obvious
-# suspect. It is not the gatekeeper: it only ever sees what the `publish` job
-# DOWNLOADED. The real gate is one step earlier — the upload globs are
-# PATH-scoped (`path: dist/*.deb`, `path: dist/*.rpm`), so a package written
-# outside `dist/` is never uploaded, never downloaded, and never attached.
-# That is why a separate output directory is the cure, and why this suite
-# derives the forbidden directories FROM the workflow instead of naming `dist`.
+# The upload derivation below survives from slice A with its polarity flipped.
+# Then, a package's absence from every upload directory was the gate; now, the
+# client package's OWN upload step is the property — publication is explicit,
+# never a side effect of a glob widening.
 #
 # The other three properties are the ones that make the package a CLIENT
 # package rather than a second copy of the bouncer: its own version line, one
@@ -37,6 +37,10 @@ setup() {
     BUILD_SH="$PKG_DIR/build.sh"
     WORKFLOW="$REPO_ROOT/.github/workflows/release.yml"
     VERSION_H="$REPO_ROOT/frontends/shottino/version.h"
+    PKGBUILD="$PKG_DIR/aur/PKGBUILD"
+    PKGBUILD_CLIENT="$PKG_DIR/aur/shottino/PKGBUILD"
+    SRCINFO_CLIENT="$PKG_DIR/aur/shottino/.SRCINFO"
+    REGEN="$PKG_DIR/aur/regen.sh"
 }
 
 # The `contents:` block of an nfpm config: from `contents:` to the next
@@ -65,26 +69,137 @@ upload_dirs() {
     ' "$WORKFLOW" | sort -u
 }
 
-# ── The slice's load-bearing property ──────────────────────────────────────
+# ── The pair that must land together ───────────────────────────────────────
 
-@test "#1447 the workflow's upload globs are path-scoped, so a directory can hide from the release" {
+@test "#1447 the workflow's upload globs are path-scoped, so publication is per-directory" {
     # The floor for the test below: if this derivation found nothing, "the
-    # client package is built outside every upload dir" would hold vacuously.
+    # client package's directory is uploaded" would hold vacuously.
     run upload_dirs
     [ "$status" -eq 0 ]
     [ -n "$output" ]
     [ "$(printf '%s\n' "$output" | wc -l)" -ge 2 ]
 }
 
-@test "#1447 the client package is written outside every directory the release uploads" {
+@test "#1447 the bouncer package no longer ships the client binary" {
+    # THE assertion slice A could not make. Until the bouncer stops owning
+    # /usr/bin/shottino, the standalone package's Replaces:/Breaks: describe a
+    # takeover that has not happened and the two cannot be co-installed.
+    run installed_paths "$NFPM_SERVER"
+    [ "$status" -eq 0 ]
+    [ -n "$output" ]
+    refute grep -qx '/usr/bin/shottino' <<<"$output"
+}
+
+@test "#1447 the client package IS published, from its own output directory" {
+    # The converse of slice A's gate, and deliberately not "some glob happens
+    # to reach it": the client's directory has an upload step of its own, so
+    # publishing it stays a decision someone had to write down.
     grep -q 'SHOTTINO_OUT_DIR' "$BUILD_SH"
 
     client_out="$(sed -n 's/^SHOTTINO_OUT_DIR="\${SHOTTINO_OUT_DIR:-\${REPO_ROOT}\/\(.*\)}"$/\1/p' "$BUILD_SH")"
     [ -n "$client_out" ]
 
-    while IFS= read -r dir; do
-        [ "$dir" != "$client_out" ]
-    done < <(upload_dirs)
+    upload_dirs | grep -qxF "$client_out"
+}
+
+@test "#1447 the bouncer recommends the client, per format, or an upgrade removes it" {
+    # NOT cosmetic, and the reason is the upgrade path: the file leaves the
+    # bouncer package in this release, so `apt upgrade` on a host that has
+    # shottino today would delete /usr/bin/shottino and pull nothing back.
+    # A Recommends is installed by default on Debian and by dnf's weak deps on
+    # Fedora, so the replacement arrives in the same transaction. Per format,
+    # because the two override blocks are disjoint (see nfpm.yaml).
+    deb_block="$(awk '/^  deb:/ { f = 1; next } f && /^  [a-z]/ { exit } f' "$NFPM_SERVER")"
+    rpm_block="$(awk '/^  rpm:/ { f = 1; next } f && /^  [a-z]/ { exit } f' "$NFPM_SERVER")"
+    [ -n "$deb_block" ]
+    [ -n "$rpm_block" ]
+
+    grep -qF -- '- shottino' <<<"$deb_block"
+    grep -qF -- '- shottino' <<<"$rpm_block"
+}
+
+# ── The Arch recipe, where the same decision has different mechanics ────────
+
+@test "#1447 the AUR client is a SECOND recipe, and only it installs the binary" {
+    # NOT a split package, and the reason is measured: PKGBUILD(5) § PACKAGE
+    # SPLITTING names the variables a package_*() may override and `pkgver` is
+    # not one of them, so a split would stamp the client with the bouncer's
+    # version — the exact disagreement the own-version-line ruling forbids.
+    # Two version lines, two pkgbases.
+    [ -f "$PKGBUILD_CLIENT" ]
+    grep -qx 'pkgname=shottino' "$PKGBUILD_CLIENT"
+    grep -qF 'usr/bin/shottino' "$PKGBUILD_CLIENT"
+
+    # And the bouncer recipe neither builds nor installs it any more. Read off
+    # the FUNCTION BODIES, not the file: the recipe names shottino in prose
+    # (the optdepends pointer and its why-comment), and a whole-file grep would
+    # be satisfied by that prose while the install line was still there.
+    bouncer_pkg="$(awk '/^package\(\)/ { f = 1 } f { print } f && /^}/ { exit }' "$PKGBUILD")"
+    bouncer_build="$(awk '/^build\(\)/ { f = 1 } f { print } f && /^}/ { exit }' "$PKGBUILD")"
+    [ -n "$bouncer_pkg" ]
+    [ -n "$bouncer_build" ]
+    refute grep -qF 'usr/bin/shottino' <<<"$bouncer_pkg"
+    refute grep -qF 'frontends/shottino' <<<"$bouncer_build"
+}
+
+@test "#1447 the AUR client recipe carries its OWN version sentinel, plus the tag that has the source" {
+    # THE property that forced a second pkgbase. pkgver comes from the client
+    # carrier; _grappaver names the tag that actually exists on GitHub, since
+    # one repository ships both. Sentinels, not numbers: makepkg's pkgver lint
+    # refuses '@', so an underived build fails loudly.
+    grep -qx 'pkgver=@SHOTTINO_VERSION@' "$PKGBUILD_CLIENT"
+    grep -qx '_grappaver=@GRAPPA_VERSION@' "$PKGBUILD_CLIENT"
+    refute grep -qx 'pkgver=@GRAPPA_VERSION@' "$PKGBUILD_CLIENT"
+
+    # The bouncer's own sentinel is untouched by all this.
+    grep -qx 'pkgver=@GRAPPA_VERSION@' "$PKGBUILD"
+}
+
+@test "#1447 the AUR client recipe does not drag the bouncer's build stack onto a client-only host" {
+    # The whole point of #1447: a machine that wants the terminal client must
+    # not need elixir, erlang or bun to get it. Derived from the bouncer's
+    # makedepends rather than re-typed, so a new entry there is checked here.
+    bouncer_makedeps="$(sed -n "s/^makedepends=(\(.*\))$/\1/p" "$PKGBUILD" | tr -d "'" )"
+    [ -n "$bouncer_makedeps" ]
+
+    # Compared against the client's DECLARATIONS, never its prose — the recipe
+    # says in a comment that it wants none of these, and a comment is not a
+    # dependency list. Every `depends=`/`makedepends=` line, sentinel included
+    # so an empty match cannot pass vacuously.
+    client_decls="$(grep -E '^(make)?depends=' "$PKGBUILD_CLIENT" || true)"
+    [ -n "$client_decls" ]
+    for dep in $bouncer_makedeps; do
+        refute grep -qF "$dep" <<<"$client_decls"
+    done
+}
+
+@test "#1447 the AUR bouncer recipe points at the client through optdepends" {
+    # The Arch stand-in for Recommends: pacman has no weak dep that installs by
+    # default, so the pointer is advisory BY CONSTRUCTION — but a user who
+    # upgrades and finds the client gone must be told where it went.
+    optdeps="$(awk '/^optdepends=\(/ { f = 1 } f { print } f && /\)$/ { exit }' "$PKGBUILD")"
+    [ -n "$optdeps" ]
+    grep -qF 'shottino' <<<"$optdeps"
+}
+
+@test "#1447 regen.sh derives BOTH recipes, or the second one publishes a sentinel" {
+    # regen.sh is the ONE path that fills the sentinels. A second recipe it
+    # does not know about would reach makepkg with `pkgver=@SHOTTINO_VERSION@`
+    # — caught by makepkg's lint, but at release time, in CI, on a tag.
+    grep -qF 'version.sh" shottino' "$REGEN"
+    grep -qF 'shottino' "$REGEN"
+    grep -qF '_grappaver=' "$REGEN"
+}
+
+@test "#1447 the client .SRCINFO is committed and agrees with its recipe on the sentinels" {
+    # Coherence NOT proven here beyond the version carriers: .SRCINFO is
+    # regenerated by `makepkg --printsrcinfo`, which does not run on this host.
+    # What IS checkable without makepkg is that the committed copy carries the
+    # same sentinels — the one thing a hand-edit gets wrong first.
+    [ -f "$SRCINFO_CLIENT" ]
+    grep -qE '^\s*pkgver = @SHOTTINO_VERSION@$' "$SRCINFO_CLIENT"
+    grep -qE '^\s*source = .*v@GRAPPA_VERSION@\.tar\.gz$' "$SRCINFO_CLIENT"
+    grep -qx 'pkgname = shottino' "$SRCINFO_CLIENT"
 }
 
 # ── Its own version line, derived from the header ──────────────────────────

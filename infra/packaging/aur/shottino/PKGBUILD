@@ -1,0 +1,77 @@
+# Maintainer: Marcello Barnaba <vjt@users.noreply.github.com>
+#
+# Arch/AUR renderer for shottino, grappa's terminal client (#1447). A SECOND
+# recipe rather than a split of ../PKGBUILD, and the reason is a measured
+# constraint, not taste: PKGBUILD(5) § PACKAGE SPLITTING lists the variables a
+# `package_*()` function may override, and `pkgver` is NOT among them — it is
+# global to the pkgbase. A split would therefore stamp this package with the
+# BOUNCER's version, and vjt's ruling for #1447 is that the standalone package
+# keeps shottino's own line so that `shottino --version` and the package
+# version agree. Two version lines need two pkgbases.
+#
+# The SOURCE is still the grappa tag tarball — one repository, one tag, two
+# recipes — so this file carries TWO sentinels: `pkgver` from
+# frontends/shottino/version.h, and `_grappaver` naming the tag that actually
+# exists on GitHub. `../regen.sh` fills both; both are pinned by
+# test/grappa/version_single_source_test.exs so a hand-edited copy is caught.
+#
+# arch=(x86_64): the client is plain C and has no bun/x86-only toolchain
+# reason to be limited, unlike the bouncer recipe. It stays x86_64 because
+# that is the architecture the release job builds and proves — an arch nobody
+# tests is a claim, not a package.
+#
+# BUILD ≠ PUBLISH: like the bouncer recipe, publishing to the AUR is a human
+# step and no credentials live in this tree. See ../README.md.
+
+pkgname=shottino
+# DERIVED, never hand-edited — and from a DIFFERENT carrier than the bouncer's:
+# frontends/shottino/version.h, read via `infra/packaging/version.sh shottino`.
+# The `@SHOTTINO_VERSION@` sentinel is deliberate: makepkg's pkgver lint refuses
+# '@', so an underived build fails loudly instead of publishing the sentinel.
+pkgver=@SHOTTINO_VERSION@
+pkgrel=1
+# The grappa tag that carries this source. Distinct from pkgver ON PURPOSE:
+# the client's number moves on its own cadence, while the tarball only exists
+# under the bouncer's tag. Filled by ../regen.sh from the repo-root VERSION.
+_grappaver=@GRAPPA_VERSION@
+pkgdesc="Terminal client for grappa — an irssi-shaped ncurses UI over its REST + Phoenix Channels API"
+arch=('x86_64')
+url="https://github.com/vjt/grappa-irc"
+license=('MIT')
+# What the binary links, and nothing else. ncurses is Arch's single wide
+# build (no narrow/wide split like Debian); ca-certificates because the client
+# calls SSL_CTX_set_default_verify_paths + SSL_VERIFY_PEER, so the system CA
+# store is a RUNTIME dependency, not a copied one.
+depends=('ncurses' 'openssl' 'ca-certificates')
+# No makedepends: the C toolchain and pkgconf come from base-devel, which
+# makepkg assumes. Deliberately no elixir/erlang/bun — this package builds one
+# C binary and must not drag the bouncer's build stack onto a client-only host,
+# which is the entire point of #1447.
+optdepends=('grappa: the bouncer this client talks to, if you run one locally')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${_grappaver}.tar.gz")
+# SKIP until the vX.Y.Z tag exists: ../regen.sh replaces this with the real
+# hash via updpkgsums, exactly as it does for the bouncer recipe.
+sha256sums=('SKIP')
+
+# GitHub tag tarballs extract to <repo>-<version>/ — and the version there is
+# the GRAPPA tag, not this package's.
+_srcdir="grappa-irc-${_grappaver}"
+
+build() {
+	cd "${srcdir}/${_srcdir}"
+
+	# configure probes ncursesw + openssl through pkg-config and writes
+	# config.mk, which the Makefile reads. It fails loudly on a missing dep
+	# rather than producing a client with half its features.
+	./configure --prefix=/usr
+	make -C frontends/shottino
+	# `make check` is NOT run here: those suites build with ASan/UBSan — a CI
+	# gate, not something to impose on a user's rebuild.
+}
+
+package() {
+	cd "${srcdir}/${_srcdir}"
+
+	install -Dm755 frontends/shottino/shottino "${pkgdir}/usr/bin/shottino"
+	install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
