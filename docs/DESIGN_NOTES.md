@@ -46365,3 +46365,79 @@ error naming the arm instead of silence. Deriving the entry needs the topic
 axis in the codegen, which stays open. Nor does it touch a narrower: no
 runtime behaviour moves, and the 1.150-odd lines of hand narrowing that the
 rest of #1406 is about are untouched here.
+<!-- entry #1390 -->
+
+---
+
+## 2026-08-17 — #1390 slice 1: the ten injected callbacks become one `Deps` struct
+
+Bucket A of the 2026-08-15 architecture review wants `Session.Server`
+decomposed. This is the first slice, and it was picked first because it is the
+only one whose value does not rest on a theory about types: it is
+behaviour-free, the ten fields are contiguous in the typedef, and it takes a
+closure off the `EventRouter` state contract that had no business being read as
+if it were state.
+
+The ten are dependencies, not state. Nothing in a session's lifetime writes
+them — `init/1` reads them out of the resolved plan and every later touch is a
+call. They now live in `Grappa.Session.Deps`, and `Session.Server`'s top-level
+state goes from **85 keys to 76**.
+
+### What did not change, deliberately
+
+`start_link/1`'s keyword API. All ten option keys are spelled exactly as
+before, so no producer of a session plan moved: `Networks.SessionPlan`,
+`Visitors.SessionPlan`, `Bootstrap` and the rest write into `opts`, and
+`Deps.from_opts/1` is the only thing that had to learn the new shape. That is
+what keeps this slice at six files instead of fifteen.
+
+### Why `EventRouter` matches a plain map and not `%Deps{}`
+
+`Deps` already names `EventRouter.query_window_open?()` for one of its field
+types. Pattern-matching `%Deps{}` inside `EventRouter` would put a compile
+dependency back the other way and close a cycle, so the read there is a plain
+`%{query_window_open?: fun}` map pattern — a struct is a map, so the production
+`%Deps{}` matches it.
+
+The absent-`deps` arm keeps its `false` default and specifically does NOT fall
+back to `%Deps{}`. The struct's own default for that field is
+`&QueryWindows.open?/3`, a real DB read; handing that to `EventRouter` would
+cost the module its "No Repo" purity in every test that builds a state without
+`deps`.
+
+### The tolerant reads are load-bearing, and a test proved it
+
+Two of the twelve read sites were `Map.get(state, key, default)` rather than
+dot-access, tolerating a live process that predates the field across a hot
+reload. Bundling them silently hardened both, and
+`recover_identity (#581) — hot-reload safety` caught it. They are now
+`Map.get(state, :deps, %Deps{})`, which is exactly equivalent: the struct's
+defaults for those two fields (`nil` and `&QueryWindows.open?/3`) are the
+values the two `Map.get` calls were already defaulting to. The other ten sites
+were dot-access or pattern matches before and after, so their failure profile
+is unchanged.
+
+That test needed one update, and it is worth recording why it is not a
+weakening. It simulated the stale process with
+`Map.delete(state, :recover_source)`. After the bundle that top-level key does
+not exist, so the delete became a no-op and the test would have passed while
+exercising nothing at all — the failure mode where a green test is worse than
+no test. It now deletes `:deps`. The assertion is untouched; only the key that
+stands in for the stale shape moved.
+
+### Measurement notes
+
+The state-key count is **85**, not the 84 the review recon reported — and 85 on
+both the recon's commit and this branch's base, so it is a difference of
+counting method, not drift. A first pass said 89 by including the four nested
+keys of `directory_refresh`; the typedef has 85 at top level.
+
+The nine callback `@type` declarations moved into `deps.ex` with their
+typedocs, transplanted mechanically rather than retyped so the prose that
+records which Boundary cycle each closure dodges travels with them.
+`restored_away` is not one of the ten and stays where it was.
+
+_Not measured here: whether the slice is behaviour-free beyond the two test
+files it touches. The 847 tests in `server_test.exs` and `event_router_test.exs`
+are green; the rest of the suite and the type gates are a separate run, and
+this entry does not claim their verdict._
