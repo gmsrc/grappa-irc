@@ -308,6 +308,45 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
+  # #1390 slice 3 — MODES= and LINELEN= were the last two 005 tokens parsed
+  # outside `ISupport`, into two bare integers on state. They now live in the
+  # capability table the same 005 already fills. Same two-pin split as the
+  # bundles above: forgetting to ADD them to the table and forgetting to
+  # REMOVE the two loose keys are different mistakes.
+  @isupport_scanner_keys ~w[modes_per_chunk linelen]a
+
+  describe "ISUPPORT MODES/LINELEN bundle (#1390)" do
+    test "a live session carries both limits inside the capability table" do
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      isupport = :sys.get_state(pid).isupport
+      # The RAW keys, not the accessors: an accessor answers the seed even
+      # when the key is missing (that fallback is its hot-reload contract, and
+      # `isupport_test.exs` pins it), so reading through it would pass on a
+      # table that never learned the fields.
+      assert Map.fetch!(isupport, :modes) == 3
+      assert Map.fetch!(isupport, :linelen) == 512
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "the two scanner names are gone from the top level of state" do
+      {_, port} = start_server()
+      {user, network, _} = setup_user_and_network(port)
+      pid = start_session_for(user, network)
+
+      state = :sys.get_state(pid)
+      # Same pre-state guard as the bundles above: an empty map must not pass.
+      assert is_map(state) and map_size(state) > 10
+
+      assert Enum.filter(@isupport_scanner_keys, &Map.has_key?(state, &1)) == []
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
+
   describe "DB-driven init (sub-task 2g)" do
     test "threads credential password + auth_method to IRC.Client (server_pass branch)" do
       {server, port} = start_server()
@@ -11031,7 +11070,7 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
-    test "/op — multi-nick with modes_per_chunk=3 produces chunked MODE lines", %{
+    test "/op — multi-nick with ISUPPORT MODES=2 produces chunked MODE lines", %{
       server: server,
       user: user,
       network: network,
@@ -11048,6 +11087,38 @@ defmodule Grappa.Session.ServerTest do
 
       assert {:ok, "MODE #test +o carol\r\n"} =
                IRCServer.wait_for_line(server, &(&1 == "MODE #test +o carol\r\n"), 1_000)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # #1390 slice 3 — the observable half of the last-wins change. The unit
+    # test in `isupport_test.exs` buys the RULE and the state pins buy the
+    # WIRING; neither shows a user-visible difference. This one does: under
+    # the `reduce_while` scanner this slice deletes, the line below yielded 4
+    # and grappa emitted ONE `+oooo` line. It is the same repeated-token input
+    # asserted where the operator actually sees it.
+    test "/op — a 005 line repeating MODES chunks by the LAST value (#1390)", %{
+      server: server,
+      user: user,
+      network: network,
+      pid: pid
+    } do
+      IRCServer.feed(server, ":irc.test.org 005 grappa-test MODES=4 MODES=2 :are supported\r\n")
+      flush_server(server)
+
+      assert :ok =
+               Session.send_op({:user, user.id}, network.id, "#test", [
+                 "alice",
+                 "bob",
+                 "carol",
+                 "dave"
+               ])
+
+      assert {:ok, "MODE #test +oo alice bob\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "MODE #test +oo alice bob\r\n"), 1_000)
+
+      assert {:ok, "MODE #test +oo carol dave\r\n"} =
+               IRCServer.wait_for_line(server, &(&1 == "MODE #test +oo carol dave\r\n"), 1_000)
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end

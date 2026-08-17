@@ -519,6 +519,114 @@ defmodule Grappa.Session.ISupportTest do
     end
   end
 
+  # #1390 — MODES= and LINELEN= were the last two 005 tokens carrying a
+  # SECOND parser: `Session.Server` scanned them into two bare integer state
+  # fields while this module archived the very same tokens in `raw`. One 005,
+  # two parses, two merge rules. They come home here, so the typed value is a
+  # fact of the ISUPPORT table rather than a field of the session process.
+  #
+  # Unlike the #1255 length limits they carry a protocol DEFAULT (3 / 512)
+  # instead of `nil`: `ModeChunker` and `LineSplit` need a usable number
+  # before 005 ever arrives, and "advertised as absent" is not a number.
+  describe "MODES + LINELEN (#1390)" do
+    test "default/0 seeds the values every consumer needs pre-005" do
+      d = ISupport.default()
+      assert ISupport.modes(d) == 3
+      assert ISupport.linelen(d) == 512
+    end
+
+    test "merge_isupport/2 parses MODES and LINELEN off a 005 param list" do
+      params = [
+        "grappa-test",
+        "MODES=6",
+        "LINELEN=480",
+        "are supported by this server"
+      ]
+
+      isupport = ISupport.merge_isupport(params, ISupport.default())
+      assert ISupport.modes(isupport) == 6
+      assert ISupport.linelen(isupport) == 480
+    end
+
+    test "the accessors fall back to the seed on a table predating the fields" do
+      # A session hot-reloaded across this change holds an `isupport` map
+      # built before the two keys existed — a plain hot reload does not
+      # rewrite process state. The accessor must answer the protocol default
+      # rather than KeyError. Same contract as the #1255 limits above.
+      pre_1390 = Map.drop(ISupport.default(), [:modes, :linelen])
+      assert ISupport.modes(pre_1390) == 3
+      assert ISupport.linelen(pre_1390) == 512
+    end
+
+    test "merge_isupport/2 ignores a non-positive or non-numeric LINELEN" do
+      # INVARIANCE, not one of the three changes below: the scanner this
+      # replaces already kept the prior value on a malformed LINELEN. The two
+      # cases exercise different guards — `LINELEN=0` the positivity one,
+      # `LINELEN=abc` the parse one — so they fail independently.
+      seeded = ISupport.merge_isupport(["grappa-test", "LINELEN=480"], ISupport.default())
+
+      assert ISupport.linelen(ISupport.merge_isupport(["grappa-test", "LINELEN=0"], seeded)) == 480
+      assert ISupport.linelen(ISupport.merge_isupport(["grappa-test", "LINELEN=x"], seeded)) == 480
+    end
+  end
+
+  # #1390 — three BEHAVIOUR CHANGES, deliberate, not a tidy-up. Unifying the
+  # parse FORCED a choice: the scanner and this module did not agree on the
+  # same input, so there was no single "current behaviour" to preserve. The
+  # tiebreak was least surprise. Each change is bought by its own assertion
+  # here, and each reason is recorded in DESIGN_NOTES rather than left to be
+  # deduced from the diff.
+  describe "MODES + LINELEN — the three behaviour changes (#1390)" do
+    test "a MODES repeated within ONE 005 line honours the LAST occurrence" do
+      # WAS: `extract_modes_isupport/2` was a `reduce_while` that `:halt`ed on
+      # the first parseable hit, so this line yielded 4. A repeated token is
+      # draft-brocklesby §2's way to CORRECT a value; ignoring the correction
+      # is the worse surprise, and `raw` — the archive the Phase 6 facade
+      # reads — already honoured the last one.
+      merged = ISupport.merge_isupport(["grappa-test", "MODES=4", "MODES=6"], ISupport.default())
+      assert ISupport.modes(merged) == 6
+    end
+
+    test "a LINELEN repeated within ONE 005 line honours the LAST occurrence" do
+      # Same change on the twin token, asserted separately: the two clauses
+      # can regress on their own, and the failure should say which.
+      merged =
+        ISupport.merge_isupport(["grappa-test", "LINELEN=512", "LINELEN=480"], ISupport.default())
+
+      assert ISupport.linelen(merged) == 480
+    end
+
+    test "a malformed MODES leaves the advertised value standing" do
+      # WAS: `parse_modes_token/2` answered `{:cont, 3}` on a failed parse —
+      # it dropped the advertised value and substituted the hardcoded default,
+      # tightening the limit. Its LINELEN twin kept the prior value on the
+      # very same input (see the invariance test above): the divergence is the
+      # evidence this was a slip, not a contract. An unreadable token must not
+      # produce an arbitrary narrower limit.
+      seeded = ISupport.merge_isupport(["grappa-test", "MODES=6"], ISupport.default())
+      assert ISupport.modes(ISupport.merge_isupport(["grappa-test", "MODES=x"], seeded)) == 6
+    end
+
+    test "-MODES reverts to the seed instead of being ignored" do
+      # WAS: `"-MODES"` never matched `"MODES=" <> rest`, so a revocation was
+      # silently dropped and the advertised value survived until reconnect.
+      # §2 negation reverts to the behaviour-if-unspecified, which is
+      # `default/0`; `@negatable` records that a parsed token without an entry
+      # there is a visible omission rather than a silent one.
+      advertised = ISupport.merge_isupport(["grappa-test", "MODES=6"], ISupport.default())
+      assert ISupport.modes(advertised) == 6
+      assert ISupport.modes(ISupport.merge_isupport(["grappa-test", "-MODES"], advertised)) == 3
+    end
+
+    test "-LINELEN reverts to the seed instead of being ignored" do
+      advertised = ISupport.merge_isupport(["grappa-test", "LINELEN=480"], ISupport.default())
+      assert ISupport.linelen(advertised) == 480
+
+      assert ISupport.linelen(ISupport.merge_isupport(["grappa-test", "-LINELEN"], advertised)) ==
+               512
+    end
+  end
+
   # #1255 — draft-brocklesby-irc-isupport-03 §2: "-PARAMETER" is "used to
   # negate a previously specified parameter; that is, revert to the
   # behaviour that would occur if the parameter had not been specified".
