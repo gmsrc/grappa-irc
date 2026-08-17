@@ -1855,6 +1855,78 @@ describe("selection store", () => {
     });
   });
 
+  // #1396 (review bucket G, A9) — the channel KEY folds at THIS boundary, not
+  // in each caller. Every join door already folded before calling
+  // (`DirectoryPane`, `compose.ts` `/join`, `channelJoin.ts`) except one, and
+  // the store paid for that asymmetry twice: `sameSelection` compares
+  // `channelName` byte-wise, so two spellings of one channel were two
+  // selections, and `stillLive` carries a defensive decode-through-the-key
+  // whose comment names "a stray non-canonical setSelectedChannel" as the
+  // thing it is defending against. Folding at the setter is what makes the
+  // stray impossible instead of survivable.
+  //
+  // ONLY `kind: "channel"`. A channel has no display column — the folded key
+  // IS the display (CLAUDE.md, option B) — so nothing is lost. A query's name
+  // is a peer NICK, whose raw casing is both display and WIRE: `compose.ts`'s
+  // `resolveBareWhoisNick` returns `sel.channelName` straight into a WHOIS
+  // frame. Folding that would fold a wire builder, which the key/display/wire
+  // split forbids. The last arm here is that boundary, pinned.
+  describe("#1396 — the channel key folds at the selection boundary", () => {
+    it("folds a mixed-case channel name on the way in", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      const selection = await import("../lib/selection");
+
+      selection.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#Grappa",
+        kind: "channel",
+      });
+
+      expect(selection.selectedChannel()?.channelName).toBe("#grappa");
+    });
+
+    it("treats the two spellings of one channel as the SAME selection", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      const selection = await import("../lib/selection");
+
+      selection.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "#Grappa",
+        kind: "channel",
+      });
+
+      // The #243 re-tap predicate and the idempotent setter share
+      // `sameSelection`, so this is both "a re-tap is recognised" and "the
+      // setter does not re-fire the effect for a casing".
+      expect(
+        selection.isActiveSelection({
+          networkSlug: "freenode",
+          channelName: "#grappa",
+          kind: "channel",
+        }),
+      ).toBe(true);
+    });
+
+    it("leaves a query target RAW — it is a display name and a wire target", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValue([]);
+      const selection = await import("../lib/selection");
+
+      selection.setSelectedChannel({
+        networkSlug: "freenode",
+        channelName: "Guest",
+        kind: "query",
+      });
+
+      expect(selection.selectedChannel()?.channelName).toBe("Guest");
+    });
+  });
+
   // #359 — Alt+0 jumps to the status/server window. The verb resolves WHICH
   // network's status window purely from live state (the selection's own
   // network, else the first one in the sidebar's order) — no parallel
@@ -2003,9 +2075,12 @@ describe("selection store", () => {
 
       selection.followQueryNick("azzurra", "Guest87449", "NickTemporaneo");
 
+      // Unchanged by `followQueryNick`, which is what this arm is about. The
+      // lower case is the #1396 boundary fold applied on the way IN, not a
+      // rename: this window is `kind: "channel"`, so its name is a KEY.
       expect(selection.selectedChannel()).toEqual({
         networkSlug: "azzurra",
-        channelName: "Guest87449",
+        channelName: "guest87449",
         kind: "channel",
       });
     });

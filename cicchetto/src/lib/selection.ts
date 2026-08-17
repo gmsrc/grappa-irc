@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { isContentKind, ownNickForNetwork } from "./api";
 import { token } from "./auth";
-import { type ChannelKey, channelKey, decodeChannelKey } from "./channelKey";
+import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
 import { identityScopedStore } from "./identityScopedStore";
 import { saveLastFocused } from "./lastFocusedChannel";
 import { membersByChannel } from "./members";
@@ -97,6 +97,36 @@ const sameSelection = (a: SelectedChannel, b: SelectedChannel): boolean => {
   return a.networkSlug === b.networkSlug && a.channelName === b.channelName && a.kind === b.kind;
 };
 
+// #1396 (review bucket G, A9) — the channel KEY folds HERE, once, instead of
+// in every caller. Four doors open a channel window and each spelled the fold
+// itself; the one that did not (`HomePane`'s featured-link tap) was correct
+// only because the server happens to canonicalise
+// `network_featured_channels` at write. The store paid for that asymmetry
+// twice: `sameSelection` compares byte-wise, so two spellings of one channel
+// were two selections, and `stillLive` below carries a defensive
+// decode-through-the-key whose comment names "a stray non-canonical
+// setSelectedChannel" as its reason. Folding at the boundary is what makes
+// the stray impossible rather than survivable, and it is where CLAUDE.md puts
+// the fold anyway: at the KEY boundary, once.
+//
+// ONLY `kind: "channel"`. A channel has no display column — the folded key IS
+// the display (option B) — so nothing is lost by folding on the way in. The
+// other kinds must NOT fold:
+//
+//   * `query` — the name is a peer NICK, and its raw casing is both display
+//     AND WIRE. `compose.ts`'s `resolveBareWhoisNick` hands `sel.channelName`
+//     straight into a WHOIS frame, so folding here would fold a wire builder,
+//     which the key/display/wire split forbids. Query focus sites already
+//     fold their own KEY via `canonicalQueryNick` before calling.
+//   * the synthetic kinds (`$server`, `$list`, `$home`, `$admin`) — not
+//     identifiers at all. They are fold-invariant today, which is exactly why
+//     folding them would be a silent no-op that stops being one the day a
+//     synthetic name gains a capital.
+const foldChannelKey = (sel: SelectedChannel): SelectedChannel =>
+  sel !== null && sel.kind === "channel"
+    ? { ...sel, channelName: canonicalChannel(sel.channelName) }
+    : sel;
+
 /**
  * Per-channel seed count pair: `messages` (content kinds) + `events`
  * (presence kinds). Hydrated from the server's join reply (`unread_count`
@@ -152,7 +182,8 @@ const exports = identityScopedStore((onIdentityChange) => {
     backTarget = null;
   });
 
-  const setSelectedChannel = (next: SelectedChannel): void => {
+  const setSelectedChannel = (input: SelectedChannel): void => {
+    const next = foldChannelKey(input);
     const cur = untrack(selectedChannel);
     if (sameSelection(cur, next)) return;
     // Entering a transient overlay — the $list directory pane or the #188
@@ -179,8 +210,13 @@ const exports = identityScopedStore((onIdentityChange) => {
   // no-op-transition rule. Untracked: callers are event handlers (a
   // Sidebar / BottomBar tap), not reactive scopes — reading the selection
   // signal here must not subscribe them.
+  //
+  // #1396 — through `foldChannelKey` for the same reason the setter is: the
+  // two must agree on what "the same window" means, and the setter now stores
+  // the folded name. Skipping the fold here would answer "not a re-tap" for a
+  // tap on the very window it just focused.
   const isActiveSelection = (next: SelectedChannel): boolean =>
-    sameSelection(untrack(selectedChannel), next);
+    sameSelection(untrack(selectedChannel), foldChannelKey(next));
 
   // Resolve the window to focus when a window closes or a transient
   // overlay is dismissed: most-recently-used live channel/query (MRU) →
