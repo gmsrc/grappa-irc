@@ -230,8 +230,12 @@ type CrossModuleArm = {
 //     topics, which pins the two copies to each other as a side effect.
 //   * `_Assert_NoUnpinnedHandArm` — a kind cic declares that NOTHING here
 //     checks: absent from the Session union and absent from the registry.
-//     This is the one that closes X-S1, because it is the only assert whose
-//     subject is the COMPLETENESS of the others rather than a shape.
+//     It is the only assert whose subject is the COMPLETENESS of the others
+//     rather than a shape. Read it for exactly what it buys and no more: it
+//     does NOT remove the hand-maintained line — a new cross-module arm
+//     still needs its registry entry — it makes FORGETTING one a `tsc`
+//     error that NAMES the arm instead of silence. Deriving the entry
+//     needs a topic axis in the codegen, which stays open.
 //   * `_Assert_NoStrayPin` / `_Assert_NoUnresolvedPin` — the registry's own
 //     two rot modes. A key cic no longer declares (or one the Session walk
 //     already covers, which would silently shadow it) makes its entry
