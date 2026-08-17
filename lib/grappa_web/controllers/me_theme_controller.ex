@@ -53,7 +53,7 @@ defmodule GrappaWeb.MeThemeController do
 
   # A resolved pair → its wire envelope, each slot a full theme wire or null.
   defp pair_wire(%{light: light, dark: dark}, viewer),
-    do: %{"light" => slot_wire(light, viewer), "dark" => slot_wire(dark, viewer)}
+    do: Wire.active_pair(slot_wire(light, viewer), slot_wire(dark, viewer))
 
   defp slot_wire(nil, _), do: nil
   defp slot_wire(theme, viewer), do: Wire.to_wire(theme, viewer, Themes.count_theme_usage(theme.id))

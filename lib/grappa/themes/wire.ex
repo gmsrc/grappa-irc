@@ -107,6 +107,19 @@ defmodule Grappa.Themes.Wire do
           inserted_at: String.t()
         }
 
+  @typedoc """
+  The listing envelope shared by the three read doors (`GET /themes`,
+  `GET /me/themes`, `GET /themes/unpublished`) — one key, the rendered rows.
+  """
+  @type index_payload :: %{themes: [t()]}
+
+  @typedoc """
+  The resolved day/night pointer pair (#358) returned by `GET /me/theme` and
+  `PUT /me/theme`. Either slot is `nil` when unset (or dangling); a `nil`
+  `dark` means the light theme applies in both modes.
+  """
+  @type active_pair :: %{light: t() | nil, dark: t() | nil}
+
   @doc "The fallback author label for a snapshot-less visitor theme (author model A)."
   @spec guest_author() :: String.t()
   def guest_author, do: @guest_author
@@ -134,6 +147,14 @@ defmodule Grappa.Themes.Wire do
       inserted_at: DateTime.to_iso8601(theme.inserted_at)
     }
   end
+
+  @doc "Wraps the rendered rows as the themes listing envelope."
+  @spec index_payload([t()]) :: index_payload()
+  def index_payload(rows) when is_list(rows), do: %{themes: rows}
+
+  @doc "Wraps two rendered slots (either may be `nil`) as the active-pair envelope."
+  @spec active_pair(t() | nil, t() | nil) :: active_pair()
+  def active_pair(light, dark), do: %{light: light, dark: dark}
 
   # #299 author model A: author prefers the stored publish-time nick snapshot
   # whenever present (so it survives reap + system re-home — a now-system-owned

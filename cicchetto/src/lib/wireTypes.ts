@@ -1478,6 +1478,15 @@ export type ThemesWireT = {
   inserted_at: string;
 };
 
+export type ThemesWireIndexPayload = {
+  themes: ThemesWireT[];
+};
+
+export type ThemesWireActivePair = {
+  light: ThemesWireT | null;
+  dark: ThemesWireT | null;
+};
+
 // === Grappa.UserSettings.Wire ===
 
 export type UserSettingsWireAutoAwayDebounceChangedPayload = {

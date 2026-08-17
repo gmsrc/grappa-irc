@@ -1401,12 +1401,6 @@ export const S_ThemesTokenModelFontFamily = { e: [...THEMES_TOKEN_MODEL_FONT_FAM
 // Grappa.Themes.TokenModel.size_mode/0
 export const S_ThemesTokenModelSizeMode = { e: [...THEMES_TOKEN_MODEL_SIZE_MODE] } as const;
 
-// Grappa.Themes.Wire.background_size/0
-export const S_ThemesWireBackgroundSize = S_ThemesTokenModelSizeMode;
-
-// Grappa.Themes.Wire.font_family/0
-export const S_ThemesWireFontFamily = S_ThemesTokenModelFontFamily;
-
 // Grappa.Themes.Wire.t/0
 export const S_ThemesWireT = {
   o: {
@@ -1422,6 +1416,20 @@ export const S_ThemesWireT = {
     inserted_at: "s",
   },
 } as const;
+
+// Grappa.Themes.Wire.active_pair/0
+export const S_ThemesWireActivePair = {
+  o: { light: { u: [S_ThemesWireT, "z"] }, dark: { u: [S_ThemesWireT, "z"] } },
+} as const;
+
+// Grappa.Themes.Wire.background_size/0
+export const S_ThemesWireBackgroundSize = S_ThemesTokenModelSizeMode;
+
+// Grappa.Themes.Wire.font_family/0
+export const S_ThemesWireFontFamily = S_ThemesTokenModelFontFamily;
+
+// Grappa.Themes.Wire.index_payload/0
+export const S_ThemesWireIndexPayload = { o: { themes: { a: S_ThemesWireT } } } as const;
 
 // Grappa.UserSettings.Wire.auto_away_debounce_changed_payload/0
 export const S_UserSettingsWireAutoAwayDebounceChangedPayload = {
