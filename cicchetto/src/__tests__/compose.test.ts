@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { channelKey } from "../lib/channelKey";
+import type { SlashCommand } from "../lib/slashCommands";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "../lib/windowKinds";
 import { BLANK_BODY_ERROR, serverAcceptsBody } from "./serverBodyPredicate";
 
@@ -4878,7 +4879,7 @@ const DISPATCH_CASE_LABELS = [
 // One draft per arm. The `kind` column is a CLAIM the first test checks
 // against the parser — a draft whose syntax drifts stops naming its arm
 // loudly instead of silently exercising a neighbour.
-const DISPATCH_DRAFTS: ReadonlyArray<{ kind: string; draft: string }> = [
+const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string }> = [
   { kind: "privmsg", draft: "hello" },
   { kind: "me", draft: "/me waves" },
   { kind: "msg", draft: "/msg bob hi" },
@@ -4972,11 +4973,13 @@ const renderArg = (a: unknown): string => {
     // the clock pins nothing else. The SHAPE is what matters here (an arm
     // that stops passing a timestamp still shows up), so it collapses to a
     // token. Caught by a mutant run, not by review.
-    return (JSON.stringify(a) ?? String(a))
-      .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<iso-instant>")
-      // The CTCP PING correlation token is epoch millis inside the body, so
-      // it moves for the same reason and is collapsed the same way.
-      .replace(/\d{13}/g, "<epoch-ms>");
+    return (
+      (JSON.stringify(a) ?? String(a))
+        .replace(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/g, "<iso-instant>")
+        // The CTCP PING correlation token is epoch millis inside the body, so
+        // it moves for the same reason and is collapsed the same way.
+        .replace(/\d{13}/g, "<epoch-ms>")
+    );
   } catch {
     return "unserialisable";
   }
@@ -5007,7 +5010,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
   // exists is a stale row.
   it("the draft table covers every arm of the switch, and only real arms", async () => {
     const { parseSlash } = await import("../lib/slashCommands");
-    const labels = new Set<string>(DISPATCH_CASE_LABELS);
+    const labels = new Set<SlashCommand["kind"]>(DISPATCH_CASE_LABELS);
     // Coverage is computed from the kind the parser ACTUALLY returns, never
     // from the `kind` column: a row is only protection for the arm it really
     // reaches, so a mislabelled draft must not be able to report an arm as
@@ -5695,12 +5698,14 @@ describe("#1396 — dispatch characterization over every arm", () => {
     }
 
     const all = Object.values(sig);
-    const ambient = all[0].filter((e) => all.every((s) => s.includes(e)));
+    // Every arm ran, so `all` is non-empty; the fallback keeps tsc honest
+    // without inventing a branch the loop above cannot reach.
+    const ambient = (all[0] ?? []).filter((e) => all.every((s) => s.includes(e)));
     const own = Object.fromEntries(
       Object.entries(sig).map(([k, v]) => [k, v.filter((e) => !ambient.includes(e))]),
     );
 
-    const unprotected = Object.keys(own).filter((k) => own[k].length === 0);
+    const unprotected = Object.keys(own).filter((k) => (own[k] ?? []).length === 0);
     const bySignature = new Map<string, string[]>();
     for (const [k, v] of Object.entries(own)) {
       if (v.length === 0) continue;
