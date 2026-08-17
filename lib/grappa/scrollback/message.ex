@@ -110,7 +110,14 @@ defmodule Grappa.Scrollback.Message do
     :server_event
   ]
 
-  @body_required_kinds [:privmsg, :notice, :action, :topic]
+  # #1500 — `:notice` is NOT here. A NOTICE with an empty trailing is legal
+  # (RFC 1459 §2.3.1: `:` followed by nothing is a valid, empty last param),
+  # and the empty body is itself the diagnosable event. Requiring a body
+  # dropped the row AND error-logged the drop on every arrival. The other
+  # three stay: an empty PRIVMSG/ACTION/TOPIC has no reported arrival and no
+  # decided semantics, and widening past the measured case is how a rule
+  # stops meaning anything.
+  @body_required_kinds [:privmsg, :action, :topic]
 
   # S17 (2026-07-08 review) / #395 — the human-content kinds and their
   # unread PROJECTION, declared ONCE. Each content kind maps to whether it
@@ -343,6 +350,14 @@ defmodule Grappa.Scrollback.Message do
       :meta,
       :dm_with
     ])
+    # #1500 — re-cast `:body` with `empty_values: []` so an explicit `""`
+    # survives as a real change. `cast/3`'s default `empty_values: [""]` maps
+    # a blank to MISSING, so a NOTICE carrying an empty trailing arrived here
+    # as `nil` — which is why the drop reported `can't be blank` rather than
+    # anything about emptiness. `""` is what the wire carried; `nil` would
+    # assert the row has no body at all, a different fact. Same scoped-re-cast
+    # idiom as `Networks.Credential`, `Networks.Server` and `Vhosts.Vhost`.
+    |> cast(attrs, [:body], empty_values: [])
     |> canonicalize_channel()
     |> validate_required([:network_id, :channel, :server_time, :kind, :sender])
     |> validate_subject_xor()

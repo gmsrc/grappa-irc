@@ -47844,3 +47844,124 @@ wraps its fetch in `try {} catch {}` behind an `if (!res.ok) return`. A
 of fail-loud while producing ZERO observable noise. Converting it is therefore a
 decision about that door's ERROR POSTURE, not part of a cast sweep, and it is
 left for vjt to rule.
+<!-- entry #1500 -->
+
+---
+
+## 2026-08-18 — #1500: the empty body was never rejected, it was deleted before the validator ran
+
+A `$server` NOTICE with an empty trailing was dropped from scrollback and error-logged on
+every arrival — 1440 lines a day on the reporting session, which buries the failures an
+operator needs to see. The path the issue traced holds, re-verified at `8b6ed99d`: a dotted
+sender routes to `$server` (`EventRouter.route_non_channel_notice_non_chanserv/3`), the body
+travels verbatim, and `Message.@body_required_kinds` rejects it. The MECHANISM named in the
+issue is one step off, and the correction is what decides the fix.
+
+### The body never reached the validator
+
+`Message.changeset/2` cast `:body` with no `empty_values` option, so Ecto's default
+`empty_values: [""]` mapped the blank to MISSING and the change never landed. By the time
+`validate_body_for_kind/1` ran, `body` was `nil` — which is why the operator's log said
+`can't be blank` rather than anything about emptiness.
+
+The consequence for the fix is not cosmetic: relaxing `:notice` out of
+`@body_required_kinds` ALONE would have persisted `body: NULL`. The row would arrive, the
+log would go quiet, both halves of the reported symptom would clear — and the stored value
+would still not be what the wire carried.
+
+### Why `""` and not `NULL`
+
+`""` is true. The wire carried an empty trailing, which is an empty string, not an absence.
+`NULL` asserts a different fact — that the row has no body at all, which is what a `:join`
+row means. Storing it would make an empty server notice indistinguishable from a presence
+event.
+
+The client boundary does not rescue the wrong choice, and this is the part worth recording
+because it inverts the intuition: the generated schema declares `body: { u: ["s", "z"] }`,
+string-OR-null, and it must, because the presence kinds legitimately carry no body. So a
+`NULL` body would NOT be rejected by `wireValidate` — it would validate cleanly and arrive
+in a renderer as an absent body. `NULL` is the more dangerous option precisely BECAUSE
+validation passes it: it is the undefined-in-a-renderer shape #1400 exists to remove,
+arriving through the door that is supposed to catch exactly that.
+
+So the fix is two edits: `:notice` leaves `@body_required_kinds`, and `:body` is re-cast
+with `empty_values: []` so an explicit `""` survives as a real change. The scoped re-cast is
+the idiom already carried by `Networks.Credential`, `Networks.Server` and `Vhosts.Vhost` —
+reused rather than reinvented.
+
+### Relaxed for `:notice` only, and the blast radius that says it is safe
+
+`@body_required_kinds` is now `[:privmsg, :action, :topic]`. Before widening the mesh, every
+producer of a `:notice` row was checked for whether it leans on that validation to reject
+something. None does:
+
+* the inbound wire routes (`event_router` DM / channel / `$server` / CTCP arms) are the
+  defect itself — an empty trailing is legal on all of them;
+* the CTCP-PING acknowledgement persists a literal, never-empty body;
+* `join_failed` and the numeric→`$server` rows derive their body from a numeric's trailing,
+  so an empty one is the SAME defect in the same class — relaxing fixes them rather than
+  breaking them;
+* the OUTBOUND echo (`persist_and_send_notice_fragments/5`) looked like the real risk: its
+  `with` persists BEFORE it sends, so today a rejected row also blocks the wire write. But
+  `split_privmsg_body("")` returns `[""]`, not `[]`, so the guard that actually protects
+  that path is upstream at the boundary — `MessagesController.create/2`'s function head,
+  `when is_binary(body) and body != ""`. The changeset was never the load-bearing gate
+  there, and no test asserts a `:notice` rejection (the three `can't be blank` tests are
+  `:privmsg` twice and `:topic`).
+
+`:privmsg` and `:action` stay required: an empty one of those has no reported arrival and no
+decided semantics, and widening past the measured case is how a rule stops meaning anything.
+
+**`:topic` is the known next candidate, it is the SAME defect, and it is still deliberately
+not taken here — for a measured reason, not a scoping one.** `TOPIC #chan :` is how an
+operator CLEARS a topic; it produces `body: ""`, and today the row drops and error-logs
+exactly as the NOTICE did (the `{:topic_changed, …}` effect still fires, so the topic bar
+clears correctly and only the HISTORY is lost). Server-side the extension really would be
+free — the same atom out of the same list, already covered by the same re-cast. The blocker
+is on the client, and it was read rather than assumed:
+
+* `ScrollbackPane.tsx`'s `case "topic"` renders
+  `* {sender} changed topic: <MircBody body={msg.body ?? ""} emphasis />`;
+* `parseMircFormat("")` returns ZERO runs (`flush/0` returns early on `buf.length === 0`),
+  so `<For>` renders nothing;
+* and the pane applies no empty-body filter, so the row does reach that arm.
+
+So an empty `:topic` row would render as `* alice changed topic:` — a label, a colon, and
+nothing. It does not crash and it does not print `undefined`; it simply asserts *changed*
+and then shows a blank, which reads as a truncated render rather than as "the topic was
+cleared". **Persisting a row that misdescribes the event is the same damage moved from the
+log to the scrollback, where it additionally persists.** Making it honest needs a renderer
+arm that says *cleared*, which is a cic change with its own test and its own decision.
+
+So `:topic` keeps its body requirement here, and the whole case — server relaxation plus the
+renderer arm, taken together or not at all — is **out of scope for #1500 and tracked as
+#1505**. Anyone reaching for the one-atom server fix on its own should read that issue
+first: the reason it is not free is on the client, and it is not visible from `message.ex`.
+
+### The oracle
+
+Both halves, in that order, because the order is the discipline: the row must ARRIVE first,
+or `refute log =~ "scrollback insert failed"` is vacuous — it would pass on a session that
+never processed the line. The red was read, not assumed, and it reproduced the operator's
+line verbatim, `error=[body: {"can't be blank", [validation: :required]}]`. The green
+asserts the STORED value (`""`, via `Scrollback.fetch`), not merely the broadcast one.
+
+### The open question stays open
+
+The issue asks where the minute-cadence notice comes from, and does not answer it. Neither
+does this. What the CODE can say: grappa runs its own 60s generator — the `Client` liveness
+watchdog, `@liveness_idle_ms` 60_000, whose cycle is driven by INBOUND silence and is reset
+by ANY inbound line. That is a discriminator, because a wall-clock cadence upstream fires
+regardless of what we do, while a reset-on-inbound timer skips and shifts — and the report
+observes precisely a skip (no line at 18:00:50) and a shift (one at 18:01:20). What the code
+CANNOT say is what the line is: nothing here shows an ircd answering a PING with an empty
+NOTICE, and the reporter's reconnect at 18:00:40 does not line up with the 18:00:20 the
+timer arithmetic wants. The raw IRC line is still missing and the upstream source remains
+UNIDENTIFIED.
+
+One useful consequence of this fix: the line now lands in `$server` instead of being
+dropped, so the instrument for identifying it is the fix itself.
+
+_Not established: that a wrong-typed or empty body was ever observed on any kind other than
+`:notice` in production — the `:topic` case above is derived from the source, not from an
+incident. No claim is made about what the upstream peer is or why it emits on that cadence._

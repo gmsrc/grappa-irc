@@ -2976,6 +2976,56 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #1500 — a NOTICE whose trailing is EMPTY. RFC 1459 §2.3.1 makes `:`
+    # followed by nothing a valid, empty last param, so this is legal input,
+    # not something to reject. A server-shaped (dotted) sender routes it to
+    # `$server` and the body travels verbatim.
+    #
+    # Before this the row was dropped and the drop was error-logged on every
+    # arrival — the reporting session took 1440 of those a day, which buries
+    # the failures an operator actually needs to see.
+    #
+    # BOTH halves are load-bearing, and the order is the same discipline the
+    # #546 test above records: the row must ARRIVE first, or `refute log =~`
+    # is vacuous — it would pass on a session that never processed the line.
+    test "#1500 a server NOTICE with an empty trailing persists and logs no error" do
+      {server, port} = start_server()
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Topic.channel(user.name, network.slug, "$server")
+        )
+
+      pid = start_session_for(user, network)
+      :ok = await_handshake(server)
+
+      log =
+        capture_log(fn ->
+          IRCServer.feed(server, ":irc.example.org NOTICE vjt :\r\n")
+
+          assert_receive %Phoenix.Socket.Broadcast{
+                           event: "event",
+                           payload: %{
+                             kind: :message,
+                             message: %{kind: :notice, channel: "$server", body: ""}
+                           }
+                         },
+                         2_000
+        end)
+
+      # The STORED value, not merely the broadcast one. `""` is what the wire
+      # carried; `nil` would claim the row has no body at all, which is a
+      # different fact about a different kind of row.
+      assert [%{kind: :notice, body: ""}] =
+               Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 10, nil, false)
+
+      refute log =~ "scrollback insert failed"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     # #546 regression the issue called out as the one concrete casualty: the
     # "CTCP VERSION query → grappa X" visibility row. It does NOT ride the
     # NOTICE door at all — it is emitted by the inbound-PRIVMSG CTCP arm,
