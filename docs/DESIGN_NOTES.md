@@ -49509,3 +49509,86 @@ call as #1518.
 The unit suite and `bun run check` are the whole of it. No e2e spec was run.
 The `console.warn` on the detached confirm path is unasserted before and after,
 so the mutant table says nothing about it.
+<!-- entry #1397-e2e-setadminflag -->
+
+---
+
+## 2026-08-18 — #1397 (e2e): one admin-flag verb, and the home a boundary chose
+
+`setAdminFlag` stood five times across five spec files, 69 lines in all. Hashed
+by body it looked drifted — two groups, twelve lines against fifteen — but the
+two collapse to ONE once whitespace and a trailing comma are normalised: the
+whole difference is the formatter wrapping a `headers` object literal. No
+author ever decided anything different here, so consolidating decided nothing
+either. That is the property that made this the slice to take: the census had
+no other e2e helper at one shape, and the runners-up all hide a real choice
+(`adminPatchCaps` types its `caps` parameter three different ways).
+
+The five files are exactly the caller set of `findUserIdByName`, extracted a
+day earlier in the same issue. They already imported from `grappaApi`, so the
+change adds no import statement anywhere.
+
+### The fork: which fixture module gets to hold it
+
+The sibling #1397 slice put `adminLogin` in `fixtures/cicchettoPage.ts`. This
+one goes to `fixtures/grappaApi.ts`, and the divergence is the boundary rather
+than an inconsistency: `adminLogin(page, admin)` takes a `Page` and drives the
+browser, while `setAdminFlag` is a bare `PATCH /admin/users/:id` that never
+touches one. Sorting by what a helper TALKS TO keeps the two modules meaning
+something — REST verbs on one side, page choreography on the other. Sorting by
+the feature a helper happens to serve ("admin things together") would have put
+a `fetch` next to a `page.click`, and the next reader would have had to grep
+both modules to learn which surface a verb speaks to.
+
+The cheap counter-argument is that `grappaApi` is 994 lines and growing, so a
+sixth admin verb should have started an `adminApi.ts`. Rejected here for the
+same reason the boundary was: splitting by SUBJECT (admin vs user) cuts across
+the split by SURFACE (REST vs page) that the fixture graph already has, and two
+overlapping taxonomies is worse than one long file. A split by surface — if
+`grappaApi` ever earns one — would keep every verb in this slice on the same
+side of the cut, so nothing here forecloses it.
+
+Hosting cost nothing structurally, unlike the `findUserIdByName` fork the day
+before: that helper wanted `specUser()` and would have made the leaf import a
+module that imports it, so the name had to become a parameter. This one needs
+only `GRAPPA_BASE_URL`, declared in `grappaApi` itself. The leaf stays a leaf
+(`grep -c '^import'` is still 0) without anyone having to arrange it.
+
+### What this slice does NOT buy
+
+The issue's argument for collapsing `adminLogin` is a latent flake: `loginAs`
+learned a `waitForUserTopicReady` barrier and none of the twenty hand-rolled
+copies reference it, so the duplicates are behaviourally BEHIND the fixture.
+Nothing of the kind is true here. All five copies do the same thing, correctly,
+and there is no barrier they are missing. This slice buys 49 net lines and one
+place to change the verb — it does not buy determinism, and claiming otherwise
+would misread the census.
+
+Two small things changed on the way in. The thrown message takes the
+`grappaApi.<fn>:` prefix its neighbours use and gains the user id, keeping the
+status and body it already carried. And four of the five files imported
+`GRAPPA_BASE_URL` solely to feed the copy being deleted; those imports are
+pruned, which biome would otherwise have failed on.
+
+### What gated it, and what did not
+
+`bun run check` is rc=0, with the same 59 CSS warnings the branch point has and
+none of them naming a touched file. That check is worth spelling out because a
+green over `src` alone would say nothing about this change: it is
+`biome check && tsc --noEmit && tsc --noEmit -p e2e/tsconfig.json`, and the
+third clause is the one that covers `e2e/`.
+
+The wiring was proven by mutation rather than by the green. Giving the exported
+`setAdminFlag` a fourth required parameter lit up **eleven call sites across all
+five files** — which establishes both that the type gate actually reads those
+files and that every call now routes through the shared definition, since a
+surviving local copy would have shadowed the import and stayed silent.
+
+### Limits of this measurement
+
+Static only. No spec was executed for this entry, so the behavioural claim
+rests on the eleven call sites being type-identical to the deleted copies and
+on those copies being one shape — not on a run. The e2e project that matters is
+`webkit-iphone-15`: ten of the eleven tests in these files are `@webkit`, and
+the chromium project's `grepInvert: /@webkit/` would execute a single test and
+report rc=0.
