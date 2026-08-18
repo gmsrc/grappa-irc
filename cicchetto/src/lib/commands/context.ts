@@ -61,6 +61,13 @@ export type CommandContext = {
    * other than `networkSlug`).
    */
   requireNetworkId: (slug: string, subject: string) => number | { error: string };
+  /**
+   * The NICK twin of `requireChannel`, for the arms that take a bare nick:
+   * a query window resolves to the partner, every other network-scoped window
+   * to the operator's own nick on this network. Lives on the record for the
+   * same reason its two siblings do — it closes over the selected window.
+   */
+  resolveBareWhoisNick: (verb: string) => string | { error: string };
 };
 
 /**

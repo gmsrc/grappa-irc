@@ -1,15 +1,6 @@
 import { createEffect, createSignal, on } from "solid-js";
 import { addAlias, aliases, delAlias } from "./aliasList";
-import {
-  ApiError,
-  ownNickForNetwork,
-  patchNetwork,
-  postJoin,
-  postNick,
-  postNotifyAdd,
-  postPart,
-  postTopic,
-} from "./api";
+import { ApiError, ownNickForNetwork, postJoin, postPart, postTopic } from "./api";
 import { token } from "./auth";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
@@ -38,7 +29,28 @@ import {
   unbanCommand,
   voiceCommand,
 } from "./commands/ops";
-import { quitCommand } from "./commands/session";
+import {
+  infoCommand,
+  linksCommand,
+  lusersCommand,
+  motdCommand,
+  namesCommand,
+  quoteCommand,
+  rehashCommand,
+  statsCommand,
+  versionCommand,
+  whoCommand,
+  whoisCommand,
+  whowasCommand,
+} from "./commands/server";
+import {
+  awayCommand,
+  disconnectCommand,
+  nickCommand,
+  notifyCommand,
+  quitCommand,
+  recoverCommand,
+} from "./commands/session";
 import { topicClearCommand, topicShowCommand } from "./commands/topic";
 import { requestConfirm } from "./confirmDialog";
 import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
@@ -48,9 +60,7 @@ import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
 import { identityScopedStore } from "./identityScopedStore";
 import { chantypesForNetwork } from "./isupport";
-import { markLusersRequested } from "./lusersBundle";
 import { membersByChannel } from "./members";
-import { clearMentionsBundle } from "./mentionsWindow";
 import { splitMessageLines } from "./messageLines";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
 import { asciiFold } from "./nickEquals";
@@ -65,23 +75,7 @@ import { openServiceModal } from "./serviceModal";
 import { isServicesSender } from "./servicesSender";
 import { requestOpenSettings } from "./settingsNav";
 import { parseSlash } from "./slashCommands";
-import {
-  pushAdmin,
-  pushAwaySet,
-  pushAwayUnset,
-  pushInfo,
-  pushLinks,
-  pushLusers,
-  pushMotd,
-  pushNames,
-  pushOper,
-  pushRaw,
-  pushRecover,
-  pushVersion,
-  pushWho,
-  pushWhois,
-  pushWhowas,
-} from "./socket";
+import { pushAdmin, pushOper } from "./socket";
 import { closeQueryWindow } from "./windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./windowKinds";
 import { windowStateByChannel } from "./windowState";
@@ -923,6 +917,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       sigils: () => sigilsFor(networkSlug),
       requireChannel,
       requireNetworkId,
+      resolveBareWhoisNick,
     };
 
     let result: SubmitResult;
@@ -1191,8 +1186,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "nick":
-          await postNick(t, networkSlug, cmd.nick);
-          result = { ok: true };
+          result = await nickCommand(cmd, ctx);
           break;
         case "msg": {
           // /msg <target> <text> — open query window, switch focus (user
@@ -1353,16 +1347,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "quit":
           return await quitCommand(cmd, ctx);
         case "disconnect": {
-          // Surgical: park one network. `network` from parser is null
-          // (bare /disconnect) or a named slug. Null → use active-window's
-          // networkSlug (already in scope from submit's args).
-          const targetSlug = cmd.network ?? networkSlug;
-          const disconnBody: { connection_state: "parked"; reason?: string } = {
-            connection_state: "parked",
-          };
-          if (cmd.reason !== null) disconnBody.reason = cmd.reason;
-          await patchNetwork(t, targetSlug, disconnBody);
-          result = { ok: true };
+          result = await disconnectCommand(cmd, ctx);
           break;
         }
         case "connect": {
@@ -1370,38 +1355,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "away": {
-          // S3.4 — explicit away set/unset via the user-level Phoenix Channel.
-          // The channel push reaches GrappaChannel.handle_in("away", ...) which
-          // routes to Session.set_explicit_away / Session.unset_explicit_away.
-          // networkSlug from submit args is the active window's network.
-          if (cmd.action === "set") {
-            // #268 — clear this network's stale mentions bundle HERE, on the
-            // user's own GOING-away action, NOT on the `away_confirmed:"away"`
-            // echo. The clear MUST be causally ordered with the away lifecycle:
-            // the return-from-away `mentions_bundle` is broadcast SYNCHRONOUSLY
-            // by grappa on the un-away command, but `away_confirmed` is emitted
-            // only on the upstream 305/306 numeric echo (event_router.ex) — a
-            // different-latency channel. Under bahamut fake-lag a going-away's
-            // delayed 306 could arrive AFTER a subsequent return's bundle and
-            // clobber it (the "0 messages in 0 channels" bug). Triggering the
-            // clear on the compose action makes it ordered with the user's own
-            // commands, so a fresh bundle set on RETURN can never be wiped by a
-            // stale echo. The mentions bundle is a client-ephemeral render store
-            // (not server-mirrored window/away state), so clearing it on a user
-            // action does not violate the "cic never originates state" invariant.
-            // Tradeoff: auto-away / cross-device going-away (no compose) no
-            // longer clear, so a stale bundle can linger IF the next return
-            // carries zero new mentions (the server suppresses the empty
-            // broadcast) — a timestamped, secondary-button digest, strictly
-            // less harmful than the fresh-bundle-wipe it replaces. A robust
-            // auto-away clear would need a server sync-broadcast (out of the
-            // "lato client" scope). See docs/DESIGN_NOTES.md 2026-07-16.
-            clearMentionsBundle(networkSlug);
-            await pushAwaySet(networkSlug, cmd.reason);
-          } else {
-            await pushAwayUnset(networkSlug);
-          }
-          result = { ok: true };
+          result = await awayCommand(cmd, ctx);
           break;
         }
         // ---------------------------------------------------------------
@@ -1504,30 +1458,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // form, out of MVP scope).
         // ---------------------------------------------------------------
         case "who": {
-          // #122 — bare /who defaults to the current channel (shares the
-          // requireChannel resolver with /names); errors only outside one.
-          const target = cmd.target ?? requireChannel("who");
-          if (typeof target !== "string") return target;
-          const networkId = requireNetworkId(networkSlug, "who");
-          if (typeof networkId !== "number") return networkId;
-          await pushWho(networkId, target); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await whoCommand(cmd, ctx);
           break;
         }
         case "names": {
-          // #140 — /names [#channel]. Server buffers the 353/366 burst and
-          // emits ONE ephemeral `names_reply` on the user topic; NamesModal
-          // renders the grouped, scrollable, dismissable roster. The modal
-          // is network-scoped (last-write-wins), so the originating window
-          // is irrelevant — no origin passed.
-          // #122 — bare /names (and /n alias) defaults to the current
-          // channel (shares the requireChannel resolver with /who).
-          const target = cmd.target ?? requireChannel("names");
-          if (typeof target !== "string") return target;
-          const networkId = requireNetworkId(networkSlug, "names");
-          if (typeof networkId !== "number") return networkId;
-          await pushNames(networkId, target); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await namesCommand(cmd, ctx);
           break;
         }
         case "list": {
@@ -1544,92 +1479,27 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "links": {
-          // #238 — /links [<mask>]. Push on the user-level channel; server
-          // primes links_pending + emits LINKS upstream. The 364 burst folds
-          // server-side and 365 RPL_ENDOFLINKS drains ONE ephemeral
-          // `links_bundle` event on the user topic; LinksModal (mounted in
-          // Shell, network-scoped) renders the interactive topology map. No
-          // focus change + no scrollback rows (mirrors /who + /names). An empty
-          // bundle (restricted/oper-only network) still opens the modal to the
-          // "hides topology" state. `cmd.pattern` is the optional server mask.
-          const networkId = requireNetworkId(networkSlug, "links");
-          if (typeof networkId !== "number") return networkId;
-          await pushLinks(networkId, cmd.pattern); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await linksCommand(cmd, ctx);
           break;
         }
-        // #581 — /recover [network]: guided "recover my identity". Push on the
-        // user-level channel; the server runs the NickServ recovery sequence and
-        // streams recover_progress / recover_result events on the user topic
-        // (RecoverModal mirrors them). The modal opens off the SERVER's first
-        // recover_progress — NOT optimistically here (cic never originates
-        // state). Bare /recover uses the active window's network. A rejection
-        // (nothing_to_recover / already_identified / not_visitor) maps to
-        // friendly copy; anything else (no_session, WS-down) delegates to the
-        // shared friendlyError catch.
         case "recover": {
-          const targetSlug = cmd.network ?? networkSlug;
-          const networkId = requireNetworkId(targetSlug, "recover");
-          if (typeof networkId !== "number") return networkId;
-          try {
-            await pushRecover(networkId);
-          } catch (e) {
-            // #581 — the recover rejection tokens (nothing_to_recover /
-            // already_identified / recovery_in_progress / forbidden) are now
-            // in the generated channel-error union, so `friendlyError` →
-            // `friendlyChannelError` owns the copy. No local bridge needed.
-            return { error: friendlyError(e) };
-          }
-          result = { ok: true };
+          result = await recoverCommand(cmd, ctx);
           break;
         }
-        // P-0d — /lusers [<mask> [<server>]]. Pushes on user-level channel;
-        // server emits the 7-numeric LUSERS bundle. cic dispatches the
-        // typed `:lusers_bundle` wire event in userTopic.ts and renders
-        // the LusersCard pinned at the top of the current window (#231).
-        // #579 — the mask + target server ride along (they were dropped at
-        // the parser, so a routed request silently answered from the local
-        // server and any mask never reached the wire at all).
         case "lusers": {
-          const networkId = requireNetworkId(networkSlug, "lusers");
-          if (typeof networkId !== "number") return networkId;
-          // #248 — mark the request solicited BEFORE pushing so the
-          // incoming bundle surfaces the card. The store's gate drops
-          // any unsolicited bundle (the Bahamut connect-welcome
-          // auto-emit), so an operator /lusers that skipped this mark
-          // would show nothing.
-          markLusersRequested(networkSlug);
-          await pushLusers(networkId, cmd.mask, cmd.server); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await lusersCommand(cmd, ctx);
           break;
         }
-        // #127 — /info, /version, /motd. No-arg server-text queries; server
-        // primes the matching accumulator + emits the command, the reply
-        // burst drains a typed `server_reply` event that userTopic.ts routes
-        // into the serverReplyModal store (ServerReplyModal renders it).
         case "info": {
-          const networkId = requireNetworkId(networkSlug, "info");
-          if (typeof networkId !== "number") return networkId;
-          await pushInfo(networkId); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await infoCommand(cmd, ctx);
           break;
         }
         case "version": {
-          const networkId = requireNetworkId(networkSlug, "version");
-          if (typeof networkId !== "number") return networkId;
-          await pushVersion(networkId); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await versionCommand(cmd, ctx);
           break;
         }
         case "motd": {
-          const networkId = requireNetworkId(networkSlug, "motd");
-          if (typeof networkId !== "number") return networkId;
-          // #374 — thread the optional target server through so grappa emits
-          // `MOTD <target>` upstream (or bare MOTD when null). A 402
-          // ERR_NOSUCHSERVER for an unknown target surfaces via the same
-          // server_reply modal, never a wrong-server MOTD.
-          await pushMotd(networkId, cmd.target); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await motdCommand(cmd, ctx);
           break;
         }
         // #992 — /admin [<target>]. Same door as /motd; the reply lands in
@@ -1641,82 +1511,20 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: true };
           break;
         }
-        // #155 — /stats [query] [server] + /rehash. Native parser sugar over
-        // the #153-de-gated raw transport (mirrors /quote): build the raw
-        // STATS/REHASH frame and ship it via pushRaw. Server routing: the
-        // STATS reply family (211-219, 240-250) is server-directed — grappa's
-        // numeric_router pins the whole family to the `$server` window as
-        // :notice rows via its @active_numerics deny list (#184). Before that
-        // fix the terminating 219 RPL_ENDOFSTATS's stats-letter param was
-        // mis-read by the scan fallback as a query target, forking a bogus
-        // window named after the letter; #155's original "no server change"
-        // premise was wrong. REHASH/permission numerics (e.g. 481) land on
-        // `$server` too. AWAIT the push so a WS-disconnected / server
-        // {:error,_} surfaces as an inline compose error instead of a silent
-        // green ✓ (the #154 no-silent-drop lesson).
         case "stats": {
-          const networkId = requireNetworkId(networkSlug, "stats");
-          if (typeof networkId !== "number") return networkId;
-          // STATS [query] [server] — omit trailing nulls. IRC STATS is a
-          // 2-arg frame; the parser guarantees target is only set when query
-          // is, so filtering nulls preserves positional order.
-          const line = ["STATS", cmd.query, cmd.target]
-            .filter((t): t is string => t !== null)
-            .join(" ");
-          await pushRaw(networkId, line);
-          result = { ok: true };
+          result = await statsCommand(cmd, ctx);
           break;
         }
         case "rehash": {
-          const networkId = requireNetworkId(networkSlug, "rehash");
-          if (typeof networkId !== "number") return networkId;
-          // REHASH [option] — omit a null option (bare /rehash → "REHASH",
-          // the default full-config reload). #375: mirror the /stats null
-          // filter so the option (MOTD/DNS/GC/…) rides the raw frame instead
-          // of being dropped into a bare REHASH.
-          const line = ["REHASH", cmd.opt].filter((t): t is string => t !== null).join(" ");
-          await pushRaw(networkId, line);
-          result = { ok: true };
+          result = await rehashCommand(cmd, ctx);
           break;
         }
-        // ---------------------------------------------------------------
-        // C2 — /whois <nick>. Push on the user-level channel; the server
-        // primes its accumulator and emits WHOIS upstream. The bundle
-        // arrives later as `whois_bundle` on the user topic
-        // (handled by userTopic.ts → setWhoisBundle). WHOIS with an
-        // explicit nick works from any window kind; the bundle render
-        // targets the active window at arrival time. (Bare /whois resolves
-        // a context default — query partner, or self on any network-scoped
-        // window; see resolveBareWhoisNick below.)
-        // ---------------------------------------------------------------
         case "whois": {
-          // #122 + #132 + #137 — bare /whois (and /w alias) context-default:
-          // query window → partner; every other network-scoped window → self.
-          const nick = cmd.nick ?? resolveBareWhoisNick("whois");
-          if (typeof nick !== "string") return nick;
-          const networkId = requireNetworkId(networkSlug, "whois");
-          if (typeof networkId !== "number") return networkId;
-          // #198 — cmd.server is set only for the two-arg `/whois <server>
-          // <nick>` form; null for single-arg + bare. The bouncer emits
-          // `WHOIS <server> <nick>` upstream when present, plain `WHOIS
-          // <nick>` otherwise.
-          // S6 (#364): await so a validation reject (e.g. invalid_nick, which
-          // fires BEFORE the upstream write → no bundle, no numeric) surfaces
-          // inline instead of leaving the operator with nothing.
-          await pushWhois(networkId, nick, cmd.server);
-          result = { ok: true };
+          result = await whoisCommand(cmd, ctx);
           break;
         }
-        // P-0c — /whowas <nick>. Push on the user-level channel; the
-        // server primes whowas_pending and emits WHOWAS upstream. The
-        // bundle arrives later as `whowas_bundle` on the user topic
-        // (handled by userTopic.ts → setWhowasBundle), or as a
-        // not_found bundle on 406 ERR_WASNOSUCHNICK.
         case "whowas": {
-          const networkId = requireNetworkId(networkSlug, "whowas");
-          if (typeof networkId !== "number") return networkId;
-          await pushWhowas(networkId, cmd.nick); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await whowasCommand(cmd, ctx);
           break;
         }
         // ---------------------------------------------------------------
@@ -1732,22 +1540,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = await watchlistCommand(cmd, ctx);
           break;
         }
-        // #247/#356 — /notify + /watch presence watch (irssi-direct add).
-        // POST to the per-network REST surface; the server broadcasts the
-        // updated notify_list + live-syncs the session's MONITOR/WATCH. The
-        // green confirmation names the nicks from the COMMAND input, not the
-        // store — the notify_list broadcast that would let us re-render the
-        // full list may not have landed by the time the POST resolves, so
-        // reading watchByNetwork() here would race. Removal is the settings
-        // × (bare /notify opens it). Per-network: the active window's network.
         case "notify": {
-          // The id is not used — this arm addresses the network by SLUG over
-          // REST — but the network must still exist, so the check is kept and
-          // the value deliberately discarded.
-          const notifyNet = requireNetworkId(networkSlug, "notify");
-          if (typeof notifyNet !== "number") return notifyNet;
-          await postNotifyAdd(t, networkSlug, cmd.nicks);
-          result = { ok: `notify: watching ${cmd.nicks.join(", ")}` };
+          result = await notifyCommand(cmd, ctx);
           break;
         }
         // #356 — a bare watch-family verb (/notify, /watch, /hilight,
@@ -1759,16 +1553,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: true };
           break;
         }
-        // Bundle C (#20 follow-up) — /quote <raw IRC line>. Push to
-        // GrappaChannel.handle_in("raw", _); server validates CRLF/NUL
-        // then ships verbatim to the upstream socket. AWAIT the push
-        // so disconnected/error replies surface as inline compose-box
-        // alerts (no silent green ✓ on a dropped escape-hatch frame).
         case "quote": {
-          const networkId = requireNetworkId(networkSlug, "quote");
-          if (typeof networkId !== "number") return networkId;
-          await pushRaw(networkId, cmd.line);
-          result = { ok: true };
+          result = await quoteCommand(cmd, ctx);
           break;
         }
         // Bundle C (#20 follow-up) — /oper <name> <password>. The password
