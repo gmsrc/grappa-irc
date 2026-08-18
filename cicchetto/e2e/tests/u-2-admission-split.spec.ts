@@ -36,7 +36,7 @@
 // afterEach restores caps to permissive defaults so subsequent specs
 // see the seeder baseline.
 
-import { login, patchNetworkConnectionState } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, login, patchNetworkConnectionState } from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
@@ -45,7 +45,6 @@ import {
 } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 
-const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
 type CapDimension = "max_concurrent_user_sessions" | "max_concurrent_visitor_sessions";

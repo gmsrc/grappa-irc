@@ -42,10 +42,9 @@
 
 import { expect, test } from "@playwright/test";
 import { expectShellReady, openAdminConsole, openRailMenu } from "../fixtures/cicchettoPage";
-import { mintVisitor } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
-const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const AZZURRA_SLUG = "azzurra";
 const AZZURRA_BASELINE_CAP = 100;
 

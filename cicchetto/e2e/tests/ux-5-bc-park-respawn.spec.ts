@@ -41,11 +41,10 @@
 // where /connect succeeds at the HTTP boundary but the spawn dance
 // half-completes (Session.Server up, autojoin loop silently failing).
 
-import { patchNetworkConnectionState } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, patchNetworkConnectionState } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
 // Production cap default is 1 (config/config.exs:68). Pre-BC, any

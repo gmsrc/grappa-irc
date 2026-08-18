@@ -38,10 +38,10 @@
 // references elsewhere don't shift.
 
 import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage";
+import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.setTimeout(60_000);

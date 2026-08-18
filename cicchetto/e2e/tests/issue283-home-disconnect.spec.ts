@@ -30,11 +30,14 @@ import {
   loginAs,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
-import { patchNetworkConnectionState, type SeededUser } from "../fixtures/grappaApi";
+import {
+  GRAPPA_BASE_URL,
+  patchNetworkConnectionState,
+  type SeededUser,
+} from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 
-const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
 
 async function fetchNetworkState(token: string, slug: string): Promise<string | null> {

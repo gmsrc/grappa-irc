@@ -24,11 +24,11 @@
 // shared baseline is restored (mirrors #291).
 
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
-const GRAPPA_BASE_URL = "http://grappa-test:4000";
 const MIN_TAP_TARGET_PX = 44;
 
 test.setTimeout(60_000);

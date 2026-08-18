@@ -53,13 +53,16 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { listSessionLogSessions, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
+import {
+  GRAPPA_BASE_URL,
+  listSessionLogSessions,
+  mintVisitor,
+  reapVisitors,
+} from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
-const GRAPPA_BASE_URL = "http://grappa-test:4000";
-
 // Every tab AdminPane mounts (`TABS` in AdminPane.tsx).
 const ADMIN_TABS = [
   "sessions",
