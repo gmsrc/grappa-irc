@@ -617,7 +617,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const dispatchDraft = async (
     key: ChannelKey,
     networkSlug: string,
-    channelName: string,
+    submittedFrom: string,
     text: string,
   ): Promise<DispatchOutcome> => {
     // #385 — expand user-defined aliases (from the aliasList store) before
@@ -634,7 +634,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // CP13 S9 — server-window only accepts slash-commands. The window
     // has no IRC target a PRIVMSG could go to. Plain text gets a friendly
     // error instead of silently failing or vanishing.
-    if (channelName === SERVER_WINDOW_NAME && cmd.kind === "privmsg") {
+    //
+    // #1396 — the THIRD thing this one fact is read as, and the only one that
+    // never crosses into the record: neither a recipient nor a destination,
+    // but a question about the window's KIND. It is a `windowKinds` constant
+    // it compares against, not a channel.
+    if (submittedFrom === SERVER_WINDOW_NAME && cmd.kind === "privmsg") {
       return { error: "Server window accepts only slash-commands. Try /raw <line>" };
     }
 
@@ -724,7 +729,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     const ctx: CommandContext = {
       key,
       networkSlug,
-      channelName,
+      submittedFrom,
       text,
       token: t,
       getActiveChannel,
@@ -750,7 +755,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
             home,
             home,
             networkSlug,
-            channelName,
+            submittedFrom,
             cmd.body,
             false,
             nothingToPrepare,
@@ -770,7 +775,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
             home,
             home,
             networkSlug,
-            channelName,
+            submittedFrom,
             cmd.body,
             true,
             nothingToPrepare,
@@ -1235,7 +1240,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const submit = async (
     key: ChannelKey,
     networkSlug: string,
-    channelName: string,
+    submittedFrom: string,
   ): Promise<SubmitResult> => {
     // #737 — a drain already owns this window's draft, and that draft holds
     // the residue it has NOT sent yet. Re-submitting would fan the same
@@ -1275,7 +1280,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       for (;;) {
         inHand = text;
         teardownAtDispatch = documentTeardownEpoch();
-        const outcome = await dispatchDraft(key, networkSlug, channelName, text);
+        const outcome = await dispatchDraft(key, networkSlug, submittedFrom, text);
         // A drain that kept the buffer already put its own residue there.
         inHand = "error" in outcome && !("keptBuffer" in outcome) ? text : null;
         if ("error" in outcome) return outcome;

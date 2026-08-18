@@ -22,16 +22,27 @@ export type CommandContext = {
   /** The submitting window. */
   key: ChannelKey;
   networkSlug: string;
-  channelName: string;
+  /**
+   * The submitting window's name, as spelled. Named for the FACT it carries
+   * and not for any use of it, because the uses disagree: `part` reads it as
+   * a default TARGET and the three relay verbs as the WINDOW their echo lands
+   * in. A name like `channelName` reads as "the channel" and invites those
+   * two to be flattened into one pre-resolved value; this one cannot.
+   *
+   * Not derivable from `key`: `channelKey` folds the name (#537), so the
+   * spelling survives only here — and `part` puts it on the WIRE.
+   */
+  submittedFrom: string;
   /** The raw draft, before parsing — the one arm that re-reads it needs it. */
   text: string;
   /** The session bearer, already proven present by the dispatcher. */
   token: string;
   /**
    * The ACTIVE window's channel, or null when the active window is not a
-   * channel. Distinct from `channelName`: a submit can be queued across a
-   * window switch, so the two can disagree, and the arms that default a
-   * target want the active one.
+   * channel. Distinct from `submittedFrom`: a submit can be queued across a
+   * window switch, so the two can disagree. This is the one the arms behind
+   * `requireChannel` want — NOT the one a target defaults to (`part` defaults
+   * to `submittedFrom`, and a test now pins that).
    */
   getActiveChannel: () => string | null;
   /**

@@ -13,12 +13,12 @@ import type { CommandHandler } from "./context";
  * The verbs that decide WHICH window the operator is in: channel membership,
  * and the two that open a pseudo-window.
  *
- * #1396 — a note on `ctx.channelName`, because this file is where the trap
+ * #1396 — a note on `ctx.submittedFrom`, because this file is where the trap
  * lives. Only `part` reads it, and it reads it as a DEFAULT TARGET. The other
  * three never read it: they WRITE a different channel into the selection. The
- * record therefore carries the submitting window's channel as ONE raw fact and
- * lets each handler mean what it means — pre-resolving it into something like
- * a "default target" field is what would collapse those meanings, so nothing
+ * record therefore carries the submitting window as ONE raw fact, named for
+ * the fact — pre-resolving it into something like a "default target" field is
+ * what would collapse that meaning against the relay verbs' one, so nothing
  * here does that.
  */
 
@@ -29,7 +29,7 @@ import type { CommandHandler } from "./context";
  * parts the wrong channel, silently and successfully.
  */
 export const partCommand: CommandHandler<"part"> = async (cmd, ctx) => {
-  const target = cmd.channel ?? ctx.channelName;
+  const target = cmd.channel ?? ctx.submittedFrom;
   await postPart(ctx.token, ctx.networkSlug, target, cmd.reason);
   return { ok: true };
 };

@@ -2183,7 +2183,7 @@ describe("compose submit — slash command dispatch", () => {
   // #1396 — the two tests above pin the fallback's VALUE with the active
   // window and the submitting one set to the same channel, so neither can
   // tell which of the two `part` actually read. Measured: swapping
-  // `ctx.channelName` for the ACTIVE window at that site killed 0 of 5615
+  // `ctx.submittedFrom` for the ACTIVE window at that site killed 0 of 5615
   // tests — not even the characterization net, whose `part` row is
   // `/part #other` and so never evaluates the fallback at all.
   //

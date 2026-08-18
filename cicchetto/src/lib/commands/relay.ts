@@ -7,11 +7,11 @@ import type { CommandHandler } from "./context";
  * The verbs that address someone who is NOT this window, while the echo stays
  * here.
  *
- * #1396 — all three read `ctx.channelName`, and all three mean the same thing
- * by it: the window the echo lands in, NOT the recipient. That is a different
- * meaning from `part`'s (where the context is the default TARGET), which is why
- * the record hands over the raw channel and lets each handler say what it is
- * for.
+ * #1396 — all three read `ctx.submittedFrom`, and all three mean the same
+ * thing by it: the window the echo lands in, NOT the recipient. That is a
+ * different meaning from `part`'s (where the same fact is the default TARGET),
+ * which is why the record hands over the submitting window as ONE raw fact,
+ * named for the fact, and lets each handler say what it is for.
  */
 
 /**
@@ -45,7 +45,7 @@ export const ctcpCommand: CommandHandler<"ctcp"> = async (cmd, ctx) => {
   await sendCtcpQuery({
     networkSlug: ctx.networkSlug,
     networkId,
-    sourceChannel: ctx.channelName,
+    sourceChannel: ctx.submittedFrom,
     targetNick: cmd.target,
     verb: cmd.verb,
     args: cmd.args,
@@ -69,7 +69,7 @@ export const pingCommand: CommandHandler<"ping"> = async (cmd, ctx) => {
   await sendCtcpQuery({
     networkSlug: ctx.networkSlug,
     networkId,
-    sourceChannel: ctx.channelName,
+    sourceChannel: ctx.submittedFrom,
     targetNick: cmd.target,
     verb: "PING",
     args: String(sentAtMs),
@@ -80,7 +80,7 @@ export const pingCommand: CommandHandler<"ping"> = async (cmd, ctx) => {
 
 /**
  * #1225 — `/notice <target> <text>`. Routed like a CTCP query, not like /msg:
- * the echo persists in the window it was TYPED in (`ctx.channelName`) and no
+ * the echo persists in the window it was TYPED in (`ctx.submittedFrom`) and no
  * window is opened for the recipient, because a NOTICE opens none by convention
  * (RFC 2812 §3.3.2 — it is the verb you must not reply to) and every client the
  * operators come from echoes it where they are looking. That is also why a
@@ -92,7 +92,7 @@ export const pingCommand: CommandHandler<"ping"> = async (cmd, ctx) => {
  * /msg does.
  */
 export const noticeCommand: CommandHandler<"notice"> = async (cmd, ctx) => {
-  await sendWindowMessage(ctx.networkSlug, ctx.channelName, cmd.body, {
+  await sendWindowMessage(ctx.networkSlug, ctx.submittedFrom, cmd.body, {
     kind: "notice",
     target: cmd.target,
   });
