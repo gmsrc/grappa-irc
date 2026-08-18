@@ -49110,3 +49110,133 @@ a lane was not taken. The `/part`-in-a-query-window behaviour the audit found on
 the way (the peer's NICK goes out as a PART target; the server 400s it at
 `validate_channel_name/1`, READ not executed) is behaviour, not record shape,
 and is filed separately.
+<!-- entry #1397-adoption -->
+
+---
+
+## 2026-08-18 — #1397: promotion is not adoption, and the grep that stopped being able to see it
+
+Bucket H's server half looked almost finished. Counting the definitions
+`#1397` names, outside `test/support/`, on `f899c25e`:
+
+| helper | issue (`1552312d`) | measured now |
+|---|---|---|
+| `passthrough_handler` | 19 | **0** |
+| `admin_session` | 14 | **0** |
+| `await_handshake` | 13 | **0** |
+| `start_server` | 21 clauses / 20 files | **2** |
+| `user_fixture` | 14 | 14 |
+| `network_fixture` | 7 | 7 |
+| `visitor_fixture` | 4 | 4 |
+| total | 92 over 53 files | **27 over 16** |
+
+Three helpers at zero, all seven canonical in `test/support`. The fixture
+trio's 25 are the copies held on an open question about Argon2 cost and are
+untouched here.
+
+That table is true and it is misleading, which is the whole entry.
+
+### The body outlived the name
+
+A second measurement, on the BODY rather than the name:
+
+| body | named defs left | still spelled out inline |
+|---|---|---|
+| `fn state, _ -> {:reply, nil, state} end` | 0 | **9** over 5 files |
+| the `"USER"`-prefix `wait_for_line` barrier | 0 | **28** over 15 files |
+| `start_link/1` + `port/1` as a pair | 2 | **20** |
+
+The zeros are real and they measure the wrong thing. `passthrough_handler`
+had been promoted and 459 call sites adopted it — while nine sites kept
+writing the body out, and one of those had RENAMED it to `defp passthrough`
+(`session/lifecycle_log_integration_test.exs`), which no grep for the
+promoted name can see. `client_test.exs` is the sharpest single file: it
+calls `IRCServer.passthrough_handler()` near the top and spells the body out
+twice further down.
+
+The #1397 F2 entry above already stated the general form — *a grep on a name
+measures who says the name, not who obeys it*. This is its other half, and
+it bites in the opposite direction: after a promotion, a grep on the name
+measures who no longer says it, and reports adoption that did not happen.
+**Promotion moves a definition; adoption moves the call sites. Only the
+second one removes a duplicate, and only a grep on the VALUE can tell you
+which one you did.**
+
+### `push.ts`, and an instrument that was scoped, not wrong
+
+The F2 entry's closing table reports `http://grappa-test:4000` going 28 → 0.
+That row says `under e2e/tests/`, and re-run today it is still 0 — the row is
+scoped, not stale. A naked `git grep -F` over ALL of `cicchetto` returned
+FOUR: the declaration in `grappaApi.ts:18`, plus three
+`const base = "http://grappa-test:4000"` inside `e2e/fixtures/push.ts`, which
+sat outside the earlier slice's scope the whole time. One of the three even
+carried the comment *"same base as grappaApi"* — a copy that says so.
+
+`push.ts` already imports from `./grappaApi`, and `grappaApi.ts` imports
+nothing at all, so there was no cycle to dodge and not even an import line to
+add. The literal now appears exactly once in `cicchetto/`, at its
+declaration.
+
+### The four `await_handshake` sites that stay, and why
+
+Of the 28 inline barriers, **24 were converted and 4 were not**. The four
+CONSUME the line the predicate matched, and `await_handshake/2` returns `:ok`
+and throws it away:
+
+- `session/server_test.exs:364,1653,1667` pattern-match the exact
+  `USER … \r\n` line to prove ident and realname reached the wire;
+- `visitors/login_test.exs:154` binds it and asserts on it two lines down.
+
+Those are not handshake barriers wearing a different spelling; they are
+assertions ABOUT the handshake line. Converting them would have deleted the
+assertion and left a test that still passed.
+
+So the transform did not key on the call at all — it keyed on the LEFT-HAND
+SIDE being exactly `{:ok, _}`, the sites that already discard the line, which
+is what the canonical does. It then selected the same four to skip that
+reading every site by hand had selected. That agreement is the only reason
+the mechanical pass is trustworthy; a sweep that had matched on the call
+would have eaten all four in silence.
+
+### Tightening 17 predicates, and refusing to call it a fix
+
+Inside those 28 sites the drift the promotion was meant to end was still
+alive: 21 used the loose `"USER"`, 7 the strict `"USER "`, and one waited
+`5_000` where the rest waited `1_000`. Of the 24 converted, **17 tighten** to
+the canonical's strict predicate.
+
+This is NOT a behaviour change and must not be logged as one. A naked
+`git grep` for `USERHOST` across all of `lib/` returns **zero**, and exactly
+one line in `lib/` writes a USER command (`irc/auth_fsm.ex:400`), so the two
+predicates select the same line today — measured, not inherited from the
+moduledoc that asserts it. The tightening removes a trap that does not exist
+yet.
+
+The `5_000` site (`visitors/autoconnect_test.exs`) keeps its `5_000`. That
+number is evidence that one second was once found insufficient, and the
+canonical takes the timeout as an argument precisely so such a site does not
+have to be flattened into the majority.
+
+### What this slice did not do
+
+- **The `start_link` + `port` pair, 20 inline sites**, is the same defect in
+  the third helper and is left for its own slice. The two remaining local
+  `start_server/0` wrappers ARE retired here — they were arity-zero, hardcoded
+  their handler, and had not yet drifted from each other, which is the
+  cheapest moment to delete a pair.
+- **The fixture trio, 25 copies over 16 files**, stays whole. So does the
+  structural cause behind it: neither `data_case.ex` nor `conn_case.ex`
+  imports `AuthFixtures`, so 122 of 338 test files import it by hand and the
+  rest have no shared fixture in scope.
+- **The e2e half is untouched**: 61 definitions over 49 files, reproducing the
+  issue's own count exactly, including the 14-strong byte-identical cluster
+  that spans BOTH `adminLogin` and `adminFriendlyLogin`. Its red is the e2e
+  suite, which needs the exclusive lane.
+
+_Not established: no e2e spec was run for the `push.ts` change — the
+substitution is value-identical by inspection and covered structurally by
+`tsc --noEmit -p e2e/tsconfig.json`, which is a type gate, not a behaviour
+one. The inline censuses above are static: `git grep` plus body extraction,
+whitespace-normalised. On the e2e side no hand-pass was made for bodies
+never extracted into a named function, so 61 remains a lower bound, exactly
+as the issue says._
