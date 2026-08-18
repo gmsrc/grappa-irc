@@ -9,7 +9,7 @@ defmodule Grappa.Session.EventRouter do
 
       @type effect ::
               {:persist, kind, persist_attrs}    -- write a Scrollback row
-              | {:reply, iodata()}                -- send a line upstream
+              | {:reply, iodata(), origin()}      -- send a line upstream, tagged
               | {:auto_reply, iodata(), persist}   -- both, or neither, under a ceiling
               | {:topic_changed, channel, topic_entry()}
               | {:channel_modes_changed, channel, channel_mode_entry()}
@@ -222,9 +222,15 @@ defmodule Grappa.Session.EventRouter do
   """
   @type userhost_cache :: %{(nick :: String.t()) => userhost_entry()}
 
+  # #1390 slice 6 — which producer built a `{:reply, _, _}` line. Carried on the
+  # effect rather than pinned at the interpreter because there are now three
+  # producers, and `send_outbound/3` reports this on the drop warning: an
+  # operator reading it must learn which machine failed, not which arm ran.
+  @type origin :: :event_router_reply | :ghost_recovery | :recover_identity
+
   @type effect ::
           {:persist, Grappa.Scrollback.Message.kind(), persist_attrs()}
-          | {:reply, iodata()}
+          | {:reply, iodata(), origin()}
           | {:auto_reply, iodata(), {:persist, Grappa.Scrollback.Message.kind(), persist_attrs()}}
           | {:identity_secret_confirmed, String.t()}
           | {:visitor_nick_changed, String.t()}

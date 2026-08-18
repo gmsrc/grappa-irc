@@ -147,7 +147,7 @@ defmodule Grappa.Session.RecoverIdentity do
   Drives one semantic input through the FSM. Returns `{:cont, state,
   [lines]}` to continue or `{:stop, state, [lines]}` at a terminal phase;
   `lines` are CRLF-framed IRC strings the host must push via
-  `Grappa.IRC.Client.send_line/2` (through `Server.flush_lines/2`, so the
+  `Grappa.IRC.Client.send_line/2` (through `Server.emit_reply_lines/3`, so
   outbound `IDENTIFY` still stages the `+r` rendezvous).
 
   Inputs that don't match the current phase's expected transition are

@@ -1970,7 +1970,7 @@ defmodule Grappa.Session.Server do
 
           state =
             state
-            |> flush_lines(lines)
+            |> emit_reply_lines(lines, :recover_identity)
             |> broadcast_recover_events(:idle, next)
 
           timer = Process.send_after(self(), :recover_timeout, @recover_timeout_ms)
@@ -3165,7 +3165,7 @@ defmodule Grappa.Session.Server do
     # arming no timer and stranding the FSM.
     {:cont, next, lines} = GhostRecovery.step(GhostRecovery.init(state.nick, pwd), msg)
 
-    state = flush_lines(state, lines)
+    state = emit_reply_lines(state, lines, :ghost_recovery)
     timer = Process.send_after(self(), :ghost_timeout, @ghost_recovery_timeout_ms)
     {:noreply, %{state | ghost_recovery: next, ghost_timer: timer}}
   end
@@ -3194,7 +3194,7 @@ defmodule Grappa.Session.Server do
   # `:failed` by definition, so the parked advisory is released here too.
   def handle_info(:ghost_timeout, %{ghost_recovery: %GhostRecovery{} = gr} = state) do
     {_, _, lines} = GhostRecovery.step(gr, :timeout)
-    state = state |> flush_lines(lines) |> release_nick_fallback()
+    state = state |> emit_reply_lines(lines, :ghost_recovery) |> release_nick_fallback()
     {:noreply, clear_ghost(state)}
   end
 
@@ -4285,7 +4285,7 @@ defmodule Grappa.Session.Server do
   # MatchError the Session, which a strict `:ok =` bind used to do on both
   # paths. Supervisor restart owns reconnect. The line is never logged — it
   # may BE the secret.
-  @spec send_outbound(t(), String.t(), :ghost_recovery | :event_router_reply) :: t()
+  @spec send_outbound(t(), String.t(), EventRouter.origin()) :: t()
   defp send_outbound(state, line, origin) do
     state = capture_outbound_ns_secret(state, line)
 
@@ -4484,7 +4484,7 @@ defmodule Grappa.Session.Server do
   # fields; non-terminal transitions just update the FSM struct.
   defp advance_ghost(state, input) do
     {_, next, lines} = GhostRecovery.step(state.ghost_recovery, input)
-    state = flush_lines(state, lines)
+    state = emit_reply_lines(state, lines, :ghost_recovery)
 
     case next.phase do
       # The nick came back, so the fallback the 001 wanted to announce never
@@ -4525,7 +4525,7 @@ defmodule Grappa.Session.Server do
     apply_effects([{:persist, kind, fresh}], %{state | parked_nick_fallback: nil})
   end
 
-  # Lines emitted by GhostRecovery bypass `handle_call({:send_privmsg,
+  # Sub-machine lines (ghost AND recover) bypass `handle_call({:send_privmsg,
   # ...})`, so they reach the wire through the #1394 door, which runs
   # NSInterceptor over each one and stages `pending_auth` on capture. This is
   # what keeps the +r MODE rendezvous (Task 15) firing for the `IDENTIFY`
@@ -4534,8 +4534,15 @@ defmodule Grappa.Session.Server do
   # choke point by `run_perform_and_identify/1`). A dead socket mid-recovery
   # is survivable: the next reconnect retries GHOST + IDENTIFY from scratch,
   # and the staging that already happened is discarded on terminate/2.
-  defp flush_lines(state, lines) do
-    Enum.reduce(lines, state, fn line, acc -> send_outbound(acc, line, :ghost_recovery) end)
+  # #1390 slice 6 — the sub-machines' `lines` travel on the ONE effect grammar
+  # now. This is an adapter, not a second interpreter: it maps them onto
+  # `{:reply, _, _}` and hands the list to `apply_effects/2`, which owns the
+  # door. `origin` is a parameter because the hard-coded `:ghost_recovery` it
+  # replaces named the ghost FSM for RecoverIdentity's two call sites too —
+  # the drop warning accused the wrong machine.
+  @spec emit_reply_lines(t(), [String.t()], EventRouter.origin()) :: t()
+  defp emit_reply_lines(state, lines, origin) do
+    apply_effects(Enum.map(lines, &{:reply, &1, origin}), state)
   end
 
   # #581 — resolve the PERSISTENT recover target (the registered nick + the
@@ -4573,7 +4580,7 @@ defmodule Grappa.Session.Server do
 
     state =
       state
-      |> flush_lines(lines)
+      |> emit_reply_lines(lines, :recover_identity)
       |> broadcast_recover_events(old_phase, next)
 
     case next.phase do
@@ -5820,7 +5827,7 @@ defmodule Grappa.Session.Server do
     case AutoReplyBudget.take(budget, now_ms) do
       {:ok, spent} ->
         apply_effects(
-          [{:reply, line}, persist_eff | rest],
+          [{:reply, line, :event_router_reply}, persist_eff | rest],
           Map.put(state, :auto_reply_budget, spent)
         )
 
@@ -5829,25 +5836,28 @@ defmodule Grappa.Session.Server do
     end
   end
 
-  # EventRouter-emitted outbound (today: the CTCP VERSION / PING NOTICE
-  # replies). #1394 routes it through the outbound door rather than calling
-  # the sender directly — this arm was the one free-form path that reached
-  # the wire without the NickServ sniff. Nothing emits a secret onto it
-  # today, which is precisely why it had to be wired before something does:
-  # #1390 moves the GhostRecovery/RecoverIdentity lines onto this grammar,
-  # and those lines carry `GHOST <nick> <pwd>` and `IDENTIFY <pwd>`. Done in
-  # the other order, that merge opens the hole with no test turning red.
+  # The one outbound arm. #1394 routed it through the outbound door rather
+  # than calling the sender directly — it was the one free-form path that
+  # reached the wire without the NickServ sniff — and warned that #1390 was
+  # about to move the GhostRecovery/RecoverIdentity lines onto this grammar,
+  # whose lines DO carry `GHOST <nick> <pwd>` and `IDENTIFY <pwd>`. Slice 6
+  # made that move: it is safe only because #1394 landed first, and the hole
+  # would have opened here with no test turning red in the other order.
+  #
+  # `origin` rides on the effect because the three producers are no longer
+  # distinguishable at this arm; the door reports it on the drop warning.
   #
   # The door THREADS state, so the recursion continues with what the sniff
   # staged; the pre-#1394 arm discarded it, which would have made a capture
   # here invisible even once one was possible.
   #
   # REV-E (H11) still holds through the door: a dead socket does not stop the
-  # paired `:persist` effect (EventRouter emits `[{:reply, _}, {:persist, _,
-  # _}]` in the SAME list) from running on the next recursion, so the
-  # user-visible scrollback row lands either way.
-  defp apply_effects([{:reply, line} | rest], state) do
-    apply_effects(rest, send_outbound(state, line, :event_router_reply))
+  # paired `:persist` effect from running on the next recursion, so the
+  # user-visible scrollback row lands either way. The pair is emitted by the
+  # `:auto_reply` arm above as `[{:reply, _, _}, {:persist, _, _}]` in ONE
+  # list — not by EventRouter, which declares the effect but produces none.
+  defp apply_effects([{:reply, line, origin} | rest], state) do
+    apply_effects(rest, send_outbound(state, line, origin))
   end
 
   # S3.4: 305 RPL_UNAWAY / 306 RPL_NOWAWAY confirmed by the upstream.
