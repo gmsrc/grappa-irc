@@ -20,16 +20,10 @@ defmodule GrappaWeb.Admin.ServersControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, Networks}
   alias Grappa.Net.HostAddresses
+  alias Grappa.Networks
   alias Grappa.Networks.Servers
   alias Grappa.PubSub.Topic
-
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
-  end
 
   defp fresh_network do
     {:ok, net} = Networks.find_or_create_network(%{slug: "srv-c-#{System.unique_integer([:positive])}"})

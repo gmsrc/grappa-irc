@@ -12,14 +12,8 @@ defmodule GrappaWeb.Admin.VhostsControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, Networks.Credentials, ServerSettings, Vhosts}
   alias Grappa.Net.HostAddresses
-
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
-  end
+  alias Grappa.{Networks.Credentials, ServerSettings, Vhosts}
 
   defp addr do
     n = Bitwise.band(System.unique_integer([:positive]), 0xFFFF)

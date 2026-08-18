@@ -13,19 +13,13 @@ defmodule GrappaWeb.Admin.DbLatencyControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, DbLatency}
+  alias Grappa.DbLatency
 
   @handler_id "grappa-db-latency"
 
   setup do
     :ok = DbLatency.reset()
     :ok
-  end
-
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
   end
 
   describe "GET /admin/db_latency — auth gate" do

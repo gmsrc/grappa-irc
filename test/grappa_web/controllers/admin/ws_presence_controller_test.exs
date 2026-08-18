@@ -15,17 +15,11 @@ defmodule GrappaWeb.Admin.WSPresenceControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, WSPresence}
+  alias Grappa.WSPresence
 
   setup do
     :ok = WSPresence.reset_for_test()
     :ok
-  end
-
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
   end
 
   defp live_pid do

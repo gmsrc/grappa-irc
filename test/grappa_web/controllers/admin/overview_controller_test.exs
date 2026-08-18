@@ -11,17 +11,11 @@ defmodule GrappaWeb.Admin.OverviewControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, AdmissionStateHelpers}
+  alias Grappa.AdmissionStateHelpers
 
   setup do
     AdmissionStateHelpers.reset_all()
     :ok
-  end
-
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
   end
 
   describe "GET /admin/overview — auth gate" do

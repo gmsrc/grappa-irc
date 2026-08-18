@@ -39,12 +39,6 @@ defmodule GrappaWeb.Admin.UsersControllerTest do
     :ok
   end
 
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
-  end
-
   describe "GET /admin/users — auth gate" do
     test "no bearer returns 401 (Authn upstream)", %{conn: conn} do
       conn = get(conn, "/admin/users")

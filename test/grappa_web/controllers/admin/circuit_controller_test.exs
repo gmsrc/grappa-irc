@@ -21,18 +21,12 @@ defmodule GrappaWeb.Admin.CircuitControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, AdmissionStateHelpers, Networks}
   alias Grappa.Admission.NetworkCircuit
+  alias Grappa.{AdmissionStateHelpers, Networks}
 
   setup do
     AdmissionStateHelpers.reset_network_circuit()
     :ok
-  end
-
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
   end
 
   describe "POST /admin/circuit/:network_id/reset — auth gate" do

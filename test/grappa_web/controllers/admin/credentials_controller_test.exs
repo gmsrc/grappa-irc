@@ -33,12 +33,6 @@ defmodule GrappaWeb.Admin.CredentialsControllerTest do
     :ok
   end
 
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
-  end
-
   defp bound_credential do
     user = user_fixture(name: "u-#{System.unique_integer([:positive])}")
     {:ok, network} = Networks.find_or_create_network(%{slug: "n-#{System.unique_integer([:positive])}"})

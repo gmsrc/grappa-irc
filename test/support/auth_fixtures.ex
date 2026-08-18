@@ -95,6 +95,23 @@ defmodule Grappa.AuthFixtures do
   end
 
   @doc """
+  Mints a session whose subject is an ADMIN user, and returns the
+  session. The bearer token is `session.id`, as everywhere else here.
+
+  Admin is granted after the fact rather than at insert because
+  `is_admin` is not a `user_fixture/1` attribute: it moves through
+  `Accounts.update_admin_flags/2`, the same door the admin surface
+  uses. Returning only the session is what every caller wanted — the
+  user ref was discarded at all fourteen sites this replaces.
+  """
+  @spec admin_session() :: Session.t()
+  def admin_session do
+    {user, session} = user_and_session()
+    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
+    session
+  end
+
+  @doc """
   Mints a live session for `visitor`. Counterpart to `session_fixture/1`
   for visitor subjects — used by REST tests that traverse `:authn`'s
   visitor branch (Task 30 controller surface).

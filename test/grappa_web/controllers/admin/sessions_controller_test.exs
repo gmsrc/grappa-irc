@@ -49,12 +49,6 @@ defmodule GrappaWeb.Admin.SessionsControllerTest do
     {server, Grappa.IRCServer.port(server)}
   end
 
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
-  end
-
   describe "GET /admin/sessions — auth gate" do
     test "no bearer returns 401 (Authn upstream)", %{conn: conn} do
       conn = get(conn, "/admin/sessions")

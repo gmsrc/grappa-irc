@@ -3,14 +3,8 @@ defmodule GrappaWeb.Admin.FeaturedChannelsControllerTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, Networks}
+  alias Grappa.Networks
   alias Grappa.Networks.FeaturedChannels
-
-  defp admin_session do
-    {user, session} = user_and_session()
-    {:ok, _} = Accounts.update_admin_flags(user, %{is_admin: true})
-    session
-  end
 
   defp fresh_network do
     {:ok, net} =
