@@ -48714,3 +48714,98 @@ carve-out, not a context internal" — not a smaller number.
 `Grappa.BoundaryCycleBudgetTest`'s `@cycle_budget 0` does not move: every edge
 added here points at a leaf with `deps: []`, which can close no cycle. That was a
 prediction until it was run; it is now a measurement.
+<!-- entry #1397-f2 -->
+
+---
+
+## 2026-08-18 — #1397 F2: `GRAPPA_BASE_URL` gets one home, and the grep that said it already had one
+
+`cicchetto/e2e/fixtures/grappaApi.ts` has exported
+`GRAPPA_BASE_URL = "http://grappa-test:4000"` for as long as the fixture has
+existed. Asked whether the e2e suite uses it, `git grep -l GRAPPA_BASE_URL`
+answered with 51 files — a number that reads as "51 use it properly" and is
+wrong in both directions at once.
+
+### The grep lies twice, in opposite directions
+
+Measured on `24db18d7`, the pre-change tree:
+
+- **51 files** name `GRAPPA_BASE_URL`. **Twelve of them do not consume the
+  export at all** — they open with their own
+  `const GRAPPA_BASE_URL = "http://grappa-test:4000";`. A shadow answers the
+  grep on the canonical name, so it inflates the adoption count with the exact
+  files that have opted out of it. The other 39 are the export's own file, 37
+  real importers, and one docs page.
+- **A further 15 files** hardcode the literal and never name the constant, so
+  the grep cannot see them at all. Two had built a half-home under a different
+  spelling — `GRAPPA_TEST_BASE` (`cursor-forward-only`) and `GRAPPA_BASE`
+  (`push-181`) — which is the same drift wearing a disguise, invisible to a
+  grep on the canonical name for the same reason.
+
+27 files, 28 literal occurrences: 12 shadow declarations plus 16 bare uses.
+The constant always had one home; 27 files walked past it.
+
+The general lesson is about the instrument, not this constant. **A grep on a
+name measures who says the name, not who obeys it.** For a "is this constant
+adopted?" question the honest instrument is the pair: grep the name AND grep
+the value, then subtract. Either grep alone reports a number with the wrong
+sign of error.
+
+### What the drift actually costs: 45 tests against 1
+
+The before-side was measured with a mirror mutant — 28 fake literals injected
+into the 27 files, `grappaApi.ts` left untouched, so only the divergent copies
+moved:
+
+| | tests | passed | failed | red files |
+|---|---|---|---|---|
+| baseline | 56 | 55 | 1 | 1 |
+| mutant | 56 | 11 | 45 | 23 |
+
+**+44 tests, +22 files.** The prediction going in was 27 of 27 files red; the
+measure was 23. The gap is worth more than the agreement, because of what the
+four survivors have in common.
+
+### The four survivors are the interesting half
+
+`cp15-b6-parked-disconnect-reconnect`, `issue100`, `issue195` and `issue248`
+stayed green because each uses the literal only inside a `test.afterEach`
+whose failures are swallowed by design — the whole loop was read before the
+verdict, and the initial suspicion that this was a fail-open assertion barrier
+was withdrawn. It is declared cleanup, and swallowing is the right posture for
+cleanup.
+
+That makes their failure mode worse, not better. Under base-URL drift these
+four specs **keep passing while their cleanup silently stops running**, and
+what the cleanup was there to undo is a parked network handed to whichever
+spec runs next. The damage surfaces somewhere else, attributed to someone
+else. A test that goes red under drift is cheap; a cleanup that goes quiet
+under drift is what makes the following morning expensive.
+
+### The after-side is a no-op, and that is the point
+
+The same mutant against the post-change tree has **zero sites to mutate**, so
+it produces no number at all. This is not a green worth reporting — a suite
+that passes because nothing was injected proves nothing. **The claim after the
+change is structural, not behavioural**, and it is carried by one POSIX grep
+run identically against both trees so the zero has a positive control:
+
+| grep (POSIX, no `\s`/`\b`/`\y`) | `24db18d7` | HEAD |
+|---|---|---|
+| `http://grappa-test:4000` under `e2e/tests/` | 28 | 0 |
+| files carrying it | 27 | 0 |
+| `^const GRAPPA_BASE_URL[ ]*=` | 12 | 0 |
+| `^export const GRAPPA_BASE_URL[ ]*=` | 1 | 1 |
+
+The last row is the one that states the shape of the defect: **the export
+count never changed.** There was always exactly one home. What is new is that
+it is now the only one.
+
+⛔ Do not reach for the obvious follow-up of mutating the *exported* constant
+to get a behavioural number. It aborts `globalSetup`, which means the run
+reports a small figure that is **vacuous rather than small** — no spec got far
+enough to have an opinion.
+
+_Not established: `scroll-on-window-switch.spec.ts:252` is red on both sides.
+It cancels in the delta and is deliberately left unclassified here — neither
+flake nor real defect was demonstrated, and this slice does not touch it._
