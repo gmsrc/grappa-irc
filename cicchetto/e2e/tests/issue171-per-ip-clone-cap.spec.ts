@@ -23,7 +23,13 @@
 // seeded headroom (100) so no later spec inherits a cap=1 on the shared
 // runner IP.
 
-import { GRAPPA_BASE_URL, login, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
+import {
+  adminPatchCaps,
+  GRAPPA_BASE_URL,
+  login,
+  mintVisitor,
+  reapVisitors,
+} from "../fixtures/grappaApi";
 import { ADMIN_IDENTIFIER, ADMIN_PASSWORD } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -31,24 +37,6 @@ import { expect, test } from "../fixtures/test";
 // value later specs rely on (see compose.yaml azzurra seeder).
 const AZZURRA = "azzurra";
 const AZZURRA_SEED_MAX_PER_IP = 100;
-
-async function adminPatchCaps(
-  adminToken: string,
-  slug: string,
-  caps: Record<string, number | null>,
-): Promise<void> {
-  const res = await fetch(`${GRAPPA_BASE_URL}/admin/networks/${encodeURIComponent(slug)}`, {
-    method: "PATCH",
-    headers: {
-      authorization: `Bearer ${adminToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(caps),
-  });
-  if (!res.ok) {
-    throw new Error(`adminPatchCaps: ${slug} → ${res.status} ${await res.text()}`);
-  }
-}
 
 test("#171 — 2nd nil-client visitor from the same source IP is rejected 503 too_many_sessions", async () => {
   const admin = await login(ADMIN_IDENTIFIER, ADMIN_PASSWORD);

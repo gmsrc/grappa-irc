@@ -92,7 +92,12 @@
 // restores vjt to :connected so subsequent specs see the seeder
 // baseline. Mirrors u-2 + u-3 cleanup pattern.
 
-import { GRAPPA_BASE_URL, login, patchNetworkConnectionState } from "../fixtures/grappaApi";
+import {
+  adminPatchCaps,
+  GRAPPA_BASE_URL,
+  login,
+  patchNetworkConnectionState,
+} from "../fixtures/grappaApi";
 import {
   ADMIN_IDENTIFIER,
   ADMIN_PASSWORD,
@@ -102,26 +107,6 @@ import {
 import { expect, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
-
-type CapKnob = "max_concurrent_user_sessions" | "max_concurrent_visitor_sessions" | "max_per_ip";
-
-async function adminPatchCaps(
-  adminToken: string,
-  slug: string,
-  caps: Partial<Record<CapKnob, number | null>>,
-): Promise<void> {
-  const res = await fetch(`${GRAPPA_BASE_URL}/admin/networks/${encodeURIComponent(slug)}`, {
-    method: "PATCH",
-    headers: {
-      authorization: `Bearer ${adminToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify(caps),
-  });
-  if (!res.ok) {
-    throw new Error(`adminPatchCaps: ${slug} → ${res.status} ${await res.text()}`);
-  }
-}
 
 // Fetch a single network's admin row by filtering the
 // `GET /admin/networks` index payload. The singular-GET endpoint is

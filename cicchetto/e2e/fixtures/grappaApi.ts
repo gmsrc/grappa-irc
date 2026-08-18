@@ -15,6 +15,15 @@
 // operator's prod ritual byte-for-byte (a regression in the mix tasks
 // surfaces in this stack first).
 
+// The ONE import in this module, and it is type-only: `wireTypes.ts` is
+// GENERATED from the server (`mix grappa.gen_wire_types`, drift-gated by #767),
+// and it declares no imports of its own, so it cannot pull a fixture back in
+// and cannot reach the solid-js dependency that keeps `e2e/` from importing
+// the rest of `src/`. Nothing here depends on another fixture module: that is
+// the property that keeps this file cycle-free, and a type erased at compile
+// time does not touch it.
+import type { NetworksAdminWireT } from "../../src/lib/wireTypes";
+
 export const GRAPPA_BASE_URL = "http://grappa-test:4000";
 
 export type LoginResult = {
@@ -494,6 +503,47 @@ export async function setAdminFlag(
     throw new Error(
       `grappaApi.setAdminFlag: is_admin=${isAdmin} on ${userId} → ${res.status} ${await res.text()}`,
     );
+  }
+}
+
+// The two PER-SUBJECT caps, and only those two. `Grappa.Admission` treats them
+// as one axis with two values: `check_network_total/2` has a clause per
+// subject_kind and each reads the column matching its own kind, so the kind
+// SELECTS the column.
+type CapDimension = "max_concurrent_user_sessions" | "max_concurrent_visitor_sessions";
+
+// `max_per_ip` joins them here as a separate term because it is a separate
+// axis, not a third value of this one. Admission enforces it in its own
+// function, over a different unit (distinct persisted subjects keyed on
+// `accounts_sessions.ip`, not live registry sessions), and reads `subject_kind`
+// as a FILTER rather than a column selector. The sharpest tell is the sentinel:
+// `nil` on a per-subject cap means UNLIMITED, while `nil` on `max_per_ip` means
+// fall back to the operator default. The server's own generated wire agrees —
+// `AdminEventsWireCapCountsChangedEvent` pairs the two per-subject caps with
+// their live counts and omits `max_per_ip`, there being no per-IP count.
+//
+// Derived from the generated row type rather than spelled by hand, so a rename
+// on the server fails this file at `tsc` instead of drifting past it. Being a
+// PICK is also what keeps the verb honest: the endpoint casts seven fields, and
+// naming three of them is what stops `adminPatchCaps` from moving
+// `visitor_enabled`.
+type NetworkCaps = Partial<Pick<NetworksAdminWireT, CapDimension | "max_per_ip">>;
+
+export async function adminPatchCaps(
+  adminToken: string,
+  slug: string,
+  caps: NetworkCaps,
+): Promise<void> {
+  const res = await fetch(`${GRAPPA_BASE_URL}/admin/networks/${encodeURIComponent(slug)}`, {
+    method: "PATCH",
+    headers: {
+      authorization: `Bearer ${adminToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(caps),
+  });
+  if (!res.ok) {
+    throw new Error(`grappaApi.adminPatchCaps: ${slug} → ${res.status} ${await res.text()}`);
   }
 }
 
