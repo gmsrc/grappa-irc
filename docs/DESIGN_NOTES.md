@@ -48422,3 +48422,145 @@ Biome reports "No files were processed", which is easy to lose in a truncated
 tail. And `tsc` caught an orphaned import that biome's `noUnusedImports` did
 not: for import hygiene here, the full `check` chain is the oracle, not biome
 alone.
+<!-- entry #1513 -->
+
+---
+
+## 2026-08-18 — #1513: the send pipeline leaves the store module, and what a moved helper has to prove
+
+#1396 moved 47 of the 59 dispatch arms behind a command seam and left six on
+what it called the pipeline axis. This is that axis, or rather the half of it
+that could be bought. `lib/sendPipeline.ts` now holds the cluster;
+`joinedChannelsOnNetwork` moved to `windowState.ts`; `compose.ts` goes 1747 →
+1526 lines.
+
+### The cycle was never the cost — measured before anything moved
+
+The premise worth killing first: `noImportCycles` was assumed to be expensive
+to switch on, and the review reported a pre-existing client cycle. Enabled
+locally and run twice with the same config, `--max-diagnostics=2000` (the
+default limit truncates this repo's lint output, so a default run undercounts
+in silence):
+
+    origin/main 24db18d7   597 files   2 diagnostics
+    the #1396 branch       607 files   2 diagnostics
+
+Same file, line and column both sides, `diff` empty. **The number did not
+move**, and the two diagnostics are the two EDGES of ONE cycle
+(`selection.ts ↔ windowState.ts`) — biome emits one per edge. The 47-arm move
+neither added nor removed a cycle. So the axis was never priced by the existing
+cycle; it was priced by a cycle that did not exist yet and would be created by
+the wrong extraction.
+
+### Why the cluster travels WHOLE, and not as two helpers
+
+The tempting small move is `draftLines` + `wireBody` to a leaf. It is the wrong
+cut. Both are one-line compositions over modules that are already **pure
+leaves** — `splitMessageLines` in `messageLines.ts`, `scrubCtcpDelimiters` and
+`ctcpFrame` in `ctcpAction.ts`, zero imports each — but all three of their call
+sites use them as a **PAIR**: `planSends` builds the plan from `draftLines`,
+`drainPaced` frames each line at the door with `wireBody`, and #1108's
+`draftFramePreview` maps one through the other to tell the operator what the
+draft will cost. Splitting the pair across two homes buys nothing and puts a
+module boundary through the middle of one thought.
+
+So the unit is the cluster: the two helpers, the three #666 retry constants,
+`sleep`, `isSendThrottled`, `retryAfterMs`, `PacedSend`, `planSends`,
+`drainPaced`, `sendBodyLines`, `sendFanOut`. That it COULD move whole was
+measured, not assumed — every one of those was module-scope (the
+`identityScopedStore` closure only opened below them), and no cluster internal
+was referenced anywhere outside `compose.ts`.
+
+The precedent is written in a file the cluster depends on. `ctcpAction.ts:23-26`
+records **#1192** taking `ctcpFrame` out of `compose.ts` so the dispatch could
+reach it "without importing `compose`, which imports `ctcpQuery` back". Same
+move, same reason, larger cluster.
+
+### What stayed, and the rule that decided it
+
+`draftFramePreview` needs `parseSlash` and `aliases()` — composer concerns, not
+pipeline ones — so it stays in `compose.ts` and now reads the two helpers ACROSS
+the new boundary. `FANOUT_CONFIRM_THRESHOLD` stays too: its only call site is
+the `ame`/`amsg` arm, never `sendFanOut`, so it belongs with the arm whenever
+the arm moves — the rule that took `listModeQueryLetter` into `mode.ts` in #1396
+slice 2a.
+
+The general form: **a helper belongs to the concern that CALLS it, not to the
+file it was born in.** A constant read by one arm is the arm's; a function read
+by the pipeline is the pipeline's.
+
+### The failure mode the mutant intercepts, and why a green would not
+
+Moving `wireBody` out has a specific way of going wrong that no passing suite
+detects: **duplicating** the helper instead of moving it. Leave a copy behind
+and the wire path uses the new one while the preview keeps reading the old —
+the two silently disagree about what a `/me` costs, which is the exact
+invariant `compose.ts` had documented as "shared by the send path and #1108's
+pre-send preview so the count the operator reads is produced by the code that
+does the sending."
+
+The mutant is therefore graded on a **SET, not a count**: drop the CTCP ACTION
+framing in `wireBody`, and require the same reds before and after the move.
+Measured on both sides, identical, seven, in two families:
+
+- **PREVIEW ×1** — "charges /me its CTCP ACTION envelope, like the send path does"
+- **WIRE ×5** — `/me`, multiline `/me`, the #723 partial, the #1126 scrub, `/ame`
+- **net ×1** — the #1396 characterization net
+
+The preview red is the load-bearing one. Seven reds are also obtainable with a
+different composition, so the count alone would lie; had the preview gone green
+while the five wire reds stayed, the helper had been duplicated. The net counts
+for nothing here — it reddens on any observable change.
+
+### The projection that had to leave the closure, and must not be exported
+
+`joinedChannelsOnNetwork` blocked `ame`/`amsg` for a reason that looked like the
+store half but was not: it sat INSIDE the `identityScopedStore` closure and was
+not re-exported, so no handler could import it. Measured rather than declared —
+every token of its body enumerated and classified — its only free identifiers
+are `decodeChannelKey` and `windowStateByChannel`, both module-scope imports
+with no shadowing declaration anywhere in the file. **Closure captures: zero.**
+It was a closure member by placement, not by necessity.
+
+**It must NOT be exported from `compose.ts`** — `compose` imports `commands/*`,
+so a handler importing it back would close exactly the cycle this work exists to
+avoid. That is the structural constraint, not a style preference.
+
+Its home was planned to be `windowState.ts`, whose store it projects and which
+already imports `decodeChannelKey`. **The gate refused that, and the refusal is
+the durable lesson here.** `compose.test.ts` replaces `../lib/windowState`
+wholesale with a `vi.mock` of stubs and drives the tests by setting
+`windowStateByChannel`'s return — so a projection placed INSIDE that module is
+swallowed by the mock, and its 22 reds (the #30 tab-complete set and the #431
+fan-out set) say the coverage went with it. The two ways to keep it there were
+both worse than moving it: hand-writing the projection into the mock
+re-implements production logic in a test and turns those 22 into assertions
+about the stub, and un-mocking the store for them is a rewrite of the CP17
+setup those same tests rely on.
+
+So it lives in `joinedChannels.ts`, a module of its own that reads
+`windowStateByChannel` from OUTSIDE — which is why the mock still governs it and
+the tests kept exercising the real projection, unchanged. **General rule: a
+module that consumers mock wholesale as a state SOURCE is not a home for derived
+read-model logic.** Put the derivation in a module that reads the store rather
+than one that is the store, or the mock quietly deletes its coverage. Placement
+here was decided by a red, not by taste.
+
+### What this does NOT finish, and the number that was wrong
+
+An earlier reading of this work claimed the hoist unblocks three of the six
+arms. Re-derived arm by arm, that was false, and the re-derivation is why it
+was caught: `service-modal` is the only one clean on the hoist alone (its other
+dependency, `openServiceModal`, was already an import). `ame`/`amsg` needed two
+further symbols, one of them the closure lift above. The claim came from
+blockers recorded in the slice commits rather than re-derived — a number that
+travelled without a measurement, which is the failure this entry records as
+much as the refactor.
+
+`privmsg`, `me` and `msg` remain, and their blocker is genuinely different:
+`sendPacedBody` is a closure member that reaches `claimDrafts`, `writeState`,
+`releaseDrafts` and `residueDraft`, four verbs that are NOT re-exported and that
+do close over store state. Unblocking those means moving the STORE, not the
+pipeline. #1513 stays open for that half. Widening the command context record to
+hand a handler the send door stays refused — it is the same widening #1396
+refused for `fanOut`.

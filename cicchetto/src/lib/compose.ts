@@ -59,6 +59,7 @@ import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
 import { identityScopedStore } from "./identityScopedStore";
 import { chantypesForNetwork } from "./isupport";
+import { joinedChannelsOnNetwork } from "./joinedChannels";
 import { membersByChannel } from "./members";
 import { splitMessageLines } from "./messageLines";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
@@ -76,7 +77,6 @@ import { requestOpenSettings } from "./settingsNav";
 import { parseSlash } from "./slashCommands";
 import { pushAdmin, pushOper } from "./socket";
 import { SERVER_WINDOW_NAME } from "./windowKinds";
-import { windowStateByChannel } from "./windowState";
 
 // #1255 — the channel sigils this NETWORK advertised (005 CHANTYPES),
 // falling back to the RFC 2812 class for a network with no live session or
@@ -1369,36 +1369,6 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       handBack(key, owed);
       setOutbox(key, null);
     }
-  };
-
-  // #30 — the channel candidate set: every channel JOINED on the same
-  // network as the window being typed in. Derived from the server-owned
-  // `windowStateByChannel` projection (no parallel client-side list to
-  // drift); a pending / invited / parked / failed / kicked window is NOT
-  // offered, mirroring the nick rule that you complete who is actually
-  // here. Scope is deliberately narrower than the issue's "optionally
-  // channels seen via /list or mentioned in the buffer" — those are a
-  // separate cut. The decoded name is already ASCII-folded (channelKey
-  // folds at construction) and for channels the folded key IS the display
-  // (the #537/#525 channel invariant), so it is inserted verbatim.
-  //
-  // No sigil filter on the candidate name: this map mirrors the server's
-  // `Session.Server` `window_states`, which is channel-keyed by
-  // construction (a DM lives in `queryWindows`, not here), so a
-  // "joined" non-channel key cannot occur. A guard for it was written,
-  // measured against the suite at ZERO failing tests, and deleted.
-  const joinedChannelsOnNetwork = (key: ChannelKey): string[] => {
-    const here = decodeChannelKey(key);
-    if (here === null) return [];
-    const states = windowStateByChannel();
-    const out: string[] = [];
-    for (const [candidate, state] of Object.entries(states)) {
-      if (state !== "joined") continue;
-      const there = decodeChannelKey(candidate as ChannelKey);
-      if (there === null || there.slug !== here.slug) continue;
-      out.push(there.name);
-    }
-    return out;
   };
 
   // Tab-complete. Cycles matches for the word at the cursor, irssi-style.
