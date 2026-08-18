@@ -49684,3 +49684,92 @@ key, which is the narrowing.
 No spec was executed for this entry. The behavioural claim rests on the bodies
 being byte-identical and on the fifteen call sites type-checking against a type
 that admits exactly what the copies admitted — not on a run.
+<!-- entry #1397-e2e-seedcursor -->
+
+---
+
+## 2026-08-18 — #1397 (e2e): a wrapper that hid no observable
+
+The census counted `seedCursor` at seven copies over seven files with four
+distinct body hashes, and filed it as four-or-more shapes to reconcile. It is
+**two**, and neither is an implementation: every one of the seven delegates to
+`grappaApi.setReadCursorToId`, which was already shared and which thirteen
+other spec files already call in the open. Six of the seven bound
+`specUser().token` and `NETWORK_SLUG`; the seventh bound the slug alone and
+took the token as a parameter. That is the entire divergence. The four hashes
+were comment prose plus a dead parameter.
+
+So the question was never which shape wins. It was whether a wrapper whose
+whole content is argument binding is worth sharing at all — and the answer
+taken here is no, on three grounds in this order.
+
+**It hides no observable.** A helper earns its name by making something
+unavailable to the caller: a barrier, an invariant, a retry, a shape the caller
+must not get wrong. `seedCursor` made nothing unavailable. It reordered four
+arguments into three. A wrapper that hides no observable is not a name, it is a
+detour, and the reader who follows it arrives where they started.
+
+**One of its parameters was a confessed lie.** Two copies took a `page` they
+immediately discarded with `void page;`, and the code said so out loud —
+*"retained as a parameter for symmetry with the prior helper shape; not
+currently used"*. A parameter kept for symmetry with a shape that no longer
+exists is worse than no helper: it tells fifteen call sites to hand over
+something the callee has no use for.
+
+**Thirteen other files already call the verb directly.** Inlining does not
+invent a house style; it moves the outliers onto the one that already had a
+supermajority.
+
+### Why hosting it somewhere was refused
+
+The alternative was a single bound `seedCursor(channel, id)` in a fixture. Its
+value would be exactly the binding — `specUser()` and `NETWORK_SLUG` — and that
+is what makes it impossible to place. `specUser()` lives in `specSubject.ts`,
+which imports `grappaApi`; `NETWORK_SLUG` lives in `seedData.ts`. Putting the
+bound helper in `grappaApi` is the cycle the `findUserIdByName` slice refused
+earlier in this issue, and a NEW fixture module to host it would end the
+property that refusal was protecting: `grappaApi` is the only leaf of the
+fixture graph. Parameterise the token so it fits the leaf, and what is left is
+`setReadCursorToId(token, slug, channel, id)` — which exists. The wrapper
+dissolves under every placement that does not cost more than it saves.
+
+### `seedCursorToHead` is not an eighth copy
+
+`issue230-mobile-touch-underfill-loadmore.spec.ts` has a `seedCursorToHead`
+that shares a prefix and nothing else: it resolves the head id through
+`fetchAllMessagesAsc` first, then seeds. It is a different verb, it stays, and
+it is named here so the next reader counting copies by prefix does not fold it
+into this one. Counting duplicates by name prefix is how `bootVisitorMobile`
+and this both landed in a census as copies of something they are not.
+
+### One comment was already false
+
+The wrappers carried docblocks explaining why seeding goes through the server.
+Half of that is durable and had no home outside the wrappers — that a
+client-side seed is not an alternative, the cursor being server-owned since
+CP29 R-1..R-4 and the legacy localStorage `rc:` keys being nuked at cic boot by
+the R-4 migration. It is lifted onto `setReadCursorToId` once, rather than
+standing twice next to callers.
+
+The other half was wrong before this slice touched it. It claimed the helper
+*"mirrors `cicchetto/src/lib/readCursor.ts`'s `advanceReadCursor` POST
+(forward-only …)"* — while the body it sat above called `setReadCursorToId`,
+whose own documentation says it reaches the TEST-ONLY force endpoint precisely
+to BYPASS the forward-only clamp that #233 introduced. A duplicated helper
+drifts in its code; its comment drifts faster, because nothing type-checks
+prose.
+
+### What gated it
+
+`bun run check` is rc=0 with the same 59 pre-existing CSS warnings. A required
+fourth parameter on `setReadCursorToId` reddened **28 call sites across 20
+files**, of which exactly the **15** belonging to the seven files here, at the
+expected per-file cardinalities (4, 4, 2, 2, 1, 1, 1).
+
+That mutation proves the fifteen sites reach the shared verb. It does NOT
+isolate them from the thirteen pre-existing callers, and more to the point it
+cannot see argument ORDER: `networkSlug` and `channel` are both `string`, so a
+transposition at any of the fifteen would type-check and fail only at runtime.
+No spec was executed for this entry, so that transposition is unmeasured — the
+argument for it is that each call site was rewritten from a wrapper whose own
+call already had the order right, not that anything checked.
