@@ -27,6 +27,7 @@
 // session.
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -48,7 +49,7 @@ test.afterEach(async () => {
     connection_state: "connected",
   }).catch(() => {});
 
-  const channelsUrl = `http://grappa-test:4000/networks/${NETWORK_SLUG}/channels`;
+  const channelsUrl = `${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/channels`;
   for (let attempt = 0; attempt < 60; attempt++) {
     const res = await fetch(channelsUrl, {
       headers: { authorization: `Bearer ${vjt.token}` },

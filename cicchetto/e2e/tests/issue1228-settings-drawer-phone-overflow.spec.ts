@@ -41,6 +41,7 @@ import {
   openSettingsSection,
   selectChannel,
 } from "../fixtures/cicchettoPage";
+import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { pushCatcherEndpoint, resetPushSubscriptions } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -66,7 +67,7 @@ const LONG_CHANNEL = `#${"z".repeat(31)}`;
 // nothing: the row's GEOMETRY is what is under test, and the server takes the
 // same row either way.
 async function seedOneDevice(token: string, id: string): Promise<void> {
-  const res = await fetch("http://grappa-test:4000/push/subscriptions", {
+  const res = await fetch(`${GRAPPA_BASE_URL}/push/subscriptions`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${token}`,

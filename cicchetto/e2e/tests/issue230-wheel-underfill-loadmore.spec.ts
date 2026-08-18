@@ -48,7 +48,7 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { setReadCursorToId } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -74,7 +74,7 @@ async function scrollbackGeometry(
 // Latest REST page (DESC by server_time) — used to pick the HEAD id for the
 // read-cursor seed. Same shape cp14-b1 / issue168 / scroll-on-window-switch use.
 async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `http://grappa-test:4000/networks/${encodeURIComponent(
+  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;
   const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });

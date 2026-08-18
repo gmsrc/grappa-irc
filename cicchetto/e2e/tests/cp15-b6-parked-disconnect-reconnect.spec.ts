@@ -53,6 +53,7 @@
 // gets the row back to its baseline live state.
 
 import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -110,8 +111,8 @@ test.afterEach(async () => {
   }).catch(() => {});
 
   const headers = { authorization: `Bearer ${vjt.token}` };
-  const channelsUrl = `http://grappa-test:4000/networks/${NETWORK_SLUG}/channels`;
-  const membersUrl = `http://grappa-test:4000/networks/${NETWORK_SLUG}/channels/${encodeURIComponent(
+  const channelsUrl = `${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/channels`;
+  const membersUrl = `${GRAPPA_BASE_URL}/networks/${NETWORK_SLUG}/channels/${encodeURIComponent(
     SEED_CHANNEL,
   )}/members`;
   for (let attempt = 0; attempt < 60; attempt++) {

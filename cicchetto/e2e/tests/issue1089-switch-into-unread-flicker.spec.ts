@@ -60,7 +60,7 @@ import {
   sidebarWindow,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { setReadCursorToId } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
@@ -424,7 +424,7 @@ async function assertNoVisibleJump(page: Page, tag: string): Promise<Frame[]> {
 // Fetch the latest scrollback page via REST (same shape as
 // scroll-on-window-switch / issue625) — used to place the cursor mid-page.
 async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `http://grappa-test:4000/networks/${encodeURIComponent(
+  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;
   const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });

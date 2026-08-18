@@ -27,13 +27,13 @@
 
 import type { BrowserContext } from "@playwright/test";
 import { loginAs, openSettingsSection, selectChannel } from "../fixtures/cicchettoPage";
+import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { resetPushCatcher, resetPushSubscriptions } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const ENDPOINT_A = "https://push.example/e2e/resub-A";
 const ENDPOINT_B = "https://push.example/e2e/resub-B";
-const GRAPPA_BASE = "http://grappa-test:4000";
 
 // Real ECDSA P-256 public key + auth secret (same pair the Sender Bypass
 // tests use) so the server changeset length caps + any encrypt step pass.
@@ -103,7 +103,7 @@ async function stubRotatingPushManager(
 }
 
 async function listDeviceCount(token: string): Promise<number> {
-  const res = await fetch(`${GRAPPA_BASE}/push/subscriptions`, {
+  const res = await fetch(`${GRAPPA_BASE_URL}/push/subscriptions`, {
     headers: { authorization: `Bearer ${token}` },
   });
   if (!res.ok) return 0;

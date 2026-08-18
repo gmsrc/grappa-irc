@@ -58,7 +58,7 @@ import {
   selectChannel,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { setReadCursorToId } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -82,7 +82,7 @@ async function distanceToBottom(page: Page): Promise<number> {
 // Latest REST page in wire shape (DESC by server_time) — used to pick a known
 // message id for the mid-page cursor seed (mirror of issue168).
 async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `http://grappa-test:4000/networks/${encodeURIComponent(
+  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;
   const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });

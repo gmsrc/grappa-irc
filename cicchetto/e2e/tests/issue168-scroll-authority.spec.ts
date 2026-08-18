@@ -46,7 +46,7 @@ import {
   selectChannel,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { setReadCursorToId } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -84,7 +84,7 @@ async function fetchScrollbackPage(
   token: string,
   channel: string,
 ): Promise<Array<{ id: number; server_time: number; sender: string }>> {
-  const url = `http://grappa-test:4000/networks/${encodeURIComponent(
+  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
     NETWORK_SLUG,
   )}/channels/${encodeURIComponent(channel)}/messages`;
   const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });

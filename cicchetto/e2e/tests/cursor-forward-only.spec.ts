@@ -41,7 +41,7 @@ import {
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { setReadCursorToId } from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -55,12 +55,10 @@ const SETTLE_DEBOUNCE_MS = 500;
 const SETTLE_WAIT_MS = SETTLE_DEBOUNCE_MS + 500;
 const SETTLE_WAIT_LONG_MS = SETTLE_DEBOUNCE_MS + 1000;
 
-const GRAPPA_TEST_BASE = "http://grappa-test:4000";
-
 // ─── shared helpers ─────────────────────────────────────────────────
 
 async function fetchCursor(token: string, channel: string): Promise<number | null> {
-  const res = await fetch(`${GRAPPA_TEST_BASE}/me`, {
+  const res = await fetch(`${GRAPPA_BASE_URL}/me`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) {
@@ -73,7 +71,7 @@ async function fetchCursor(token: string, channel: string): Promise<number | nul
 }
 
 async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_TEST_BASE}/networks/${encodeURIComponent(NETWORK_SLUG)}/channels/${encodeURIComponent(channel)}/messages`;
+  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(NETWORK_SLUG)}/channels/${encodeURIComponent(channel)}/messages`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) {
     throw new Error(`fetchScrollbackPage: ${res.status} ${await res.text()}`);
