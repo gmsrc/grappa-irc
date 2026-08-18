@@ -49773,3 +49773,79 @@ transposition at any of the fifteen would type-check and fail only at runtime.
 No spec was executed for this entry, so that transposition is unmeasured — the
 argument for it is that each call site was rewritten from a wrapper whose own
 call already had the order right, not that anything checked.
+<!-- entry #1397-e2e-fetchscrollbackpage -->
+
+---
+
+## 2026-08-19 — #1397 (e2e): thirteen callers, one request, a narrow promise
+
+The census filed `fetchScrollbackPage` as ten copies over ten files with six
+distinct body hashes, and noted it had "forked on the base URL": eight inline
+`http://grappa-test:4000` literals against one copy using the exported
+`GRAPPA_BASE_URL`. Both halves of that reading needed correcting before any
+of it could be folded.
+
+The base-URL fork does not exist, and had not for some time. `grep` over the
+whole of `cicchetto/e2e` finds the literal exactly once, at the definition in
+`grappaApi.ts`; `git grep` over `origin/main` finds it in zero spec files. All
+ten copies already imported the exported constant. The census text predates
+the landed slices that unified it (`ea484403` deleted twelve shadow
+re-declarations, `0989bcab` routed sixteen invisible literals, `e6f86344` did
+the same for `push.ts`). The lesson generalises past this cluster: a
+per-cluster note written against an older tree describes that tree, and the
+remaining clusters' notes should be re-measured rather than executed.
+
+The six hashes were real but were not the number that mattered. Normalising
+whitespace and commas — the move that collapsed `adminPatchCaps` and
+`seedCursor` — only got six down to five, because braces and the return
+annotation survive that normalisation. Deleting the signature and the `as`
+cast and hashing only the executable statements collapses all ten onto one
+md5. One behaviour, and the six shapes are `res` versus `response` (three
+against seven), braces versus a one-line throw, and where the URL template
+wrapped.
+
+The single real axis was the width of the cast: seven copies said
+`Array<{id: number}>` and three said `{id, server_time, sender}`. That width
+is dead. Across all eighteen call sites the reads are `.length`, `[0]?.id`,
+`page0[25].id`, and one `page0.filter(r => r.id > …)`; `server_time` and
+`sender` appear in those three files only inside comments and inside the
+annotation declaring them. So the shared verb is narrow, and the reasoning is
+that a return type is a promise: six fields nobody collects is a promise
+maintained in exchange for nothing. The alternative — returning the
+`WireMessage` already defined in the file — would also have had to export a
+type that is private today, widening the `grappaApi` leaf against the F6
+ruling.
+
+Narrowness is a claim about callers, so it was tested as one. Unifying on the
+narrow type and running the whole cic check is green; injecting a single read
+of `cursorRow.server_time` at one call site turns it red with exactly one
+diagnostic, TS2339 naming the property, and reverting restores green. The
+gate can see the dependency; there is none.
+
+Absorbing the three copies inside `grappaApi` needed a shape that is not
+"make all three narrow". `restoreReadCursorToTail` reads only `rows[0].id`,
+but `assertMessagePersisted` reads `body`, `kind` and `sender`, and
+`fetchAllMessagesAsc` adds `?before=` and re-sorts ascending — it is a pager
+built on the verb, not the verb. Hence the private `getMessagesPage`
+returning the full row, with the exported `fetchScrollbackPage` as a narrow
+projection over it: one request for all thirteen sites, the narrow promise on
+the public contract, `WireMessage` still private. `before` is an explicit
+parameter with no default, because the pager and the single-page callers
+differ in exactly that argument.
+
+One deliberate widening, recorded because it is easy to miss on review.
+`assertMessagePersisted` polls, and its old inline request tolerated a non-ok
+STATUS while letting a transport-level throw propagate at once. Catching
+around the shared verb cannot tell those apart, so the retry now also absorbs
+the throw. Both paths still fail loudly — the deadline converts a persistent
+failure into the timeout error with `lastSeen` attached — but the catch is
+wider than the one it replaces, and that was a choice rather than an
+oversight.
+
+What is not established: no spec was executed for this entry. The check is
+static only, and `tsc` cannot see argument ORDER — `networkSlug` and
+`channel` are both `string`, so a transposition at any of the eighteen
+rewritten call sites type-checks and fails only at runtime. That is the same
+gap the sibling entries name, and on the `seedCursor` slice it was a runtime
+positive control, not the type-checker, that caught exactly such a
+transposition.
