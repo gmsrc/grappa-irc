@@ -48900,3 +48900,94 @@ The unit suite is the whole of it. Eight e2e specs drive these verbs
 (`issue992-admin-command`, `issue148-visitor-oper`, `issue385-user-aliases`,
 `issue409-alias-edit`, `issue409-alias-tab-scope`, `issue427-alias-shadow-builtins`,
 `issue1047-alias-range-param`, `issue460-settings-index`) and none was run here.
+<!-- entry #1336-bucket-j -->
+
+---
+
+## 2026-08-18 — #1336: an e2e arm brings its own population, and the mutant that proves it reddens only AFTER the cure
+
+`ux-4-z-cluster-journey`'s bucket J claimed that ops cluster before plain
+members in the MembersPane. It made that claim behind a guard:
+
+```ts
+if (opCount > 0 && plainCount > 0) { … expect(order).toBe("op-first"); }
+```
+
+read off the **shared** autojoin channel. That population is not a fixture,
+it is a three-way race: `#bofh` is joined by `vjt`, `m9b-test` and
+`m9b-victim`, bahamut grants `+o` to whoever lands first, and
+`members-prefix-op-not-clipped`'s header documents the run where
+`m9b-victim` wins it and a destructive admin spec then terminates that
+session — leaving the channel with **no op at all**. On such a run
+`opCount == 0`, the `if` is false, and the ordering claim evaporates
+without a word in the report. It is the same self-disabling assertion
+#1117 has been curing across this suite, wearing an `if` where its
+siblings wore an empty recorder.
+
+This is the first slice of the per-spec-channel work tracked under #1336,
+which absorbed the closed #1137 (`NOT_PLANNED`, consolidated 2026-08-15)
+along with its census and its numbers. Cite #1336; #1137 is where the
+measurement below was first registered, not a live tracker.
+
+**The cure is a population, not a comparator.** The arm now mints its own
+channel and brings its own peer: self joins FIRST so bahamut ops it, the
+peer joins SECOND and stays plain. `1 op + 1 plain` holds by
+construction, so both counts are asserted exactly — a missing tier now
+fails naming which one instead of skipping the claim — and the op row is
+pinned to the own nick, the plain row to the peer. Same mint-and-peer
+shape as `members-prefix-op-not-clipped`, so nothing in the fixture or in
+the provisioned autojoin had to change: the channel comes from a `/join`
+typed into the compose box.
+
+### 🔴 The mutant's direction is green→red, and that is the point
+
+Read the four rounds below before concluding a red was introduced here.
+The mutation is the same in R1 and R4 — **run the arm on a channel whose
+only occupant is self** — and it is applied once to the old code and once
+to the new. Measured on `origin/main` `038a33ca`, project
+`webkit-iphone-15`, one worker, one stack kept up across all four:
+
+| round | code | population | result |
+|---|---|---|---|
+| R1 | pre-cure (the `if`) | single occupant | **rc=0, 1 passed** (16.6s) |
+| R2 | pre-cure, untouched | shared `#bofh` | rc=0, 1 passed (12.2s) |
+| R3 | post-cure | minted + peer | rc=0, 1 passed (15.3s) |
+| R4 | post-cure | single occupant | **rc=1, 1 failed** (22.7s) |
+
+R1 is the vacuity **executed**: deprive the old arm of a second tier and
+it reports success, because the claim it exists to make was skipped. R2 is
+the reality check that the arm runs at all. R4 kills exactly one
+assertion — `.members-pane li.member-plain` expected `1`, received `0`,
+after 18 retries — which is the arm refusing to pass on a population it
+cannot judge.
+
+So a mutant that *used* to be survivable is now lethal. Anywhere else in
+this cluster of work the direction has been red→green; here the inverse
+IS the evidence, and R1's green is the defect rather than a baseline.
+
+The R1 mutant was built to move ONE variable: its diff against the
+pre-cure file is additions only, zero deletions, leaving the assertion
+block byte-identical — otherwise the round would have measured the
+rewrite and the population at once.
+
+### Boundary: this does not reduce the row residue
+
+The headline measurement inherited from #1137 is ~2.9 scrollback rows
+per test accruing to the
+long-lived co-residents of the shared channel. **This slice does not
+touch that**, and no measurement here should be read as if it did. It
+removes one assertion's dependence on the shared channel's population,
+which is a precondition for the codemod that will move ~250 spec files
+off `#bofh`. The condition that governs the elimination lives with that
+later slice and is restated so it cannot be lost: **the per-spec channel
+must REPLACE `#bofh` in the provisioned subject's `autojoin_channels`,
+never sit alongside it** — added alongside, provision and teardown keep
+JOINing and QUITting the shared channel and the co-residents accrue
+exactly as today.
+
+### Not asserted
+
+That bucket J's vacuity ever fired on a real CI run. The opless path is
+documented by a sibling spec's header and reproduced here deliberately;
+that it occurred unprompted in some past run is not something these four
+rounds establish.

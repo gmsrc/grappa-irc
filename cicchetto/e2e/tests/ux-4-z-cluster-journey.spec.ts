@@ -61,8 +61,10 @@
 //     query window present in BottomBar after seeded connect (004
 //     RPL_MYINFO usermodes letters must NOT leak into archive /
 //     query tabs).
-//   * J — MembersPane sort: open #bofh, scroll members list, assert
-//     ops cluster before plain members. Visitor-spec parity needs
+//   * J — MembersPane sort: mint a per-arm channel (self first → op,
+//     peer second → plain), assert ops cluster before plain members
+//     on a population that is 1 + 1 by construction rather than by
+//     autojoin race (#1137). Visitor-spec parity needs
 //     members-list presence per `feedback_e2e_visitor_members_list`
 //     — this spec runs the registered class only (visitor pathway
 //     blocked), but the members-list-non-empty assertion satisfies
@@ -88,6 +90,7 @@
 import {
   closeMembersDrawer,
   closeSettings,
+  composeSend,
   loginAs,
   openAdminConsole,
   openSettingsMobile,
@@ -95,6 +98,7 @@ import {
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { joinChannel, partChannel } from "../fixtures/grappaApi";
+import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -204,54 +208,79 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
     // the assertion satisfies the rule for the matrix that will exist
     // once visitor cold-start is unblocked.
     //
-    // On mobile, MembersPane lives behind the hamburger drawer. Open
-    // it via ShellChrome's hamburger (aria-label "open members
-    // sidebar" on mobile when a channel is selected).
-    //
-    // The pane is conditional on `isActiveChannelJoined()` in
-    // Shell.tsx (returns true only when selectedChannel.kind ===
-    // "channel" AND windowStateByChannel[key] === "joined"). The
-    // `selectChannel({ ownNick })` above awaits the own-JOIN wire
-    // echo, which co-arrives with the typed `:joined` event from
-    // EventRouter. Anchor on `.topic-bar` first — its visibility
-    // proves selectedChannel().kind === "channel" — so the members
-    // hamburger and drawer wire to the right gate. Then anchor on
-    // `.members-pane h3` (renders once isActiveChannelJoined() is
-    // true), then poll for `<li>` items once members_seeded lands.
-    await expect(page.locator(".topic-bar")).toBeVisible({ timeout: 10_000 });
-    await page.getByLabel("open members sidebar").tap();
-    const membersDrawer = page.locator(".shell-members.open");
-    await expect(membersDrawer).toBeVisible({ timeout: 5_000 });
-    // Pane mount: `<h3>members (N)</h3>` renders unconditionally once
-    // the pane is in the DOM, regardless of join-state. If it
-    // doesn't appear within 10s the pane never mounted (channel
-    // isActiveChannelJoined() returned false) — that IS a regression
-    // signal.
-    await expect(membersDrawer.locator(".members-pane h3")).toBeVisible({
-      timeout: 10_000,
+    // #1137 — this arm runs on a channel the spec MINTS, with a peer it
+    // brings itself, instead of on the shared autojoin channel. The
+    // ordering claim needs one op AND one plain member simultaneously,
+    // and on `#bofh` that population is a three-way autojoin race whose
+    // opless outcome `members-prefix-op-not-clipped`'s header documents:
+    // if `m9b-victim` wins +o and a destructive admin spec terminates
+    // its session, the channel is left with no op at all. The previous
+    // arm hid exactly that behind `if (opCount > 0 && plainCount > 0)`,
+    // so on an opless run the ordering claim silently evaporated — the
+    // #1117 family of self-disabling assertion, wearing an `if` instead
+    // of an empty recorder. Self joins FIRST so bahamut grants it +o,
+    // the peer joins SECOND and stays plain: the population is 1 + 1 by
+    // construction, both counts are asserted, and the guard is gone.
+    // Same mint-and-peer shape as `members-prefix-op-not-clipped`.
+    const membersChannel = `#ux4zj-${crypto.randomUUID().slice(0, 6)}`;
+    const membersPeer = await IrcPeer.connect({
+      nick: `ux4zj-${crypto.randomUUID().slice(0, 6)}`,
     });
-    const memberItems = membersDrawer.locator(".members-pane li");
-    await expect(memberItems.first()).toBeVisible({ timeout: 15_000 });
-    const memberCount = await memberItems.count();
-    expect(memberCount).toBeGreaterThan(0);
+    try {
+      await composeSend(page, `/join ${membersChannel}`);
+      await expect(sidebarWindow(page, NETWORK_SLUG, membersChannel)).toHaveCount(1, {
+        timeout: 10_000,
+      });
+      // Awaits the own-JOIN echo + the WS-ready barrier, which is also
+      // the proof that self is in BEFORE the peer — the thing that makes
+      // self the op rather than a coin toss.
+      await selectChannel(page, NETWORK_SLUG, membersChannel, { ownNick: specNick() });
+      await membersPeer.join(membersChannel);
 
-    // Own-nick MUST be in the members list (members-list-presence rule).
-    const ownNickItem = membersDrawer.locator(".members-pane li", {
-      hasText: specNick(),
-    });
-    await expect(ownNickItem.first()).toBeVisible();
+      // On mobile, MembersPane lives behind the hamburger drawer. Open
+      // it via ShellChrome's hamburger (aria-label "open members
+      // sidebar" on mobile when a channel is selected).
+      //
+      // The pane is conditional on `isActiveChannelJoined()` in
+      // Shell.tsx (returns true only when selectedChannel.kind ===
+      // "channel" AND windowStateByChannel[key] === "joined"). The
+      // `selectChannel({ ownNick })` above awaits the own-JOIN wire
+      // echo, which co-arrives with the typed `:joined` event from
+      // EventRouter. Anchor on `.topic-bar` first — its visibility
+      // proves selectedChannel().kind === "channel" — so the members
+      // hamburger and drawer wire to the right gate. Then anchor on
+      // `.members-pane h3` (renders once isActiveChannelJoined() is
+      // true), then poll for `<li>` items once members_seeded lands.
+      await expect(page.locator(".topic-bar")).toBeVisible({ timeout: 10_000 });
+      await page.getByLabel("open members sidebar").tap();
+      const membersDrawer = page.locator(".shell-members.open");
+      await expect(membersDrawer).toBeVisible({ timeout: 5_000 });
+      // Pane mount: `<h3>members (N)</h3>` renders unconditionally once
+      // the pane is in the DOM, regardless of join-state. If it
+      // doesn't appear within 10s the pane never mounted (channel
+      // isActiveChannelJoined() returned false) — that IS a regression
+      // signal.
+      await expect(membersDrawer.locator(".members-pane h3")).toBeVisible({
+        timeout: 10_000,
+      });
 
-    // Bucket J sort: ops cluster before plain members. If the channel
-    // has at least one op AND at least one plain member, assert the
-    // first op's DOM index < first plain's DOM index. Skip the order
-    // assertion if the seeded channel has only one tier present (the
-    // single-tier case trivially preserves order; we still get the
-    // members-list-non-empty signal).
-    const opItems = membersDrawer.locator(".members-pane li.member-op");
-    const plainItems = membersDrawer.locator(".members-pane li.member-plain");
-    const opCount = await opItems.count();
-    const plainCount = await plainItems.count();
-    if (opCount > 0 && plainCount > 0) {
+      // Population, asserted instead of sampled. These two counts are
+      // the arm's own positive control: the ordering claim below can
+      // only mean something with one row of each tier present, so a
+      // missing tier fails HERE, loudly, naming which one — it does not
+      // skip the claim.
+      const opItems = membersDrawer.locator(".members-pane li.member-op");
+      const plainItems = membersDrawer.locator(".members-pane li.member-plain");
+      await expect(opItems).toHaveCount(1, { timeout: 15_000 });
+      await expect(plainItems).toHaveCount(1, { timeout: 15_000 });
+      // Own-nick MUST be in the members list (members-list-presence rule
+      // per `feedback_e2e_visitor_members_list`) — and on this channel it
+      // is specifically the op row, the peer being the plain one.
+      await expect(opItems.first()).toContainText(specNick());
+      await expect(plainItems.first()).toContainText(membersPeer.nick);
+
+      // Bucket J sort: ops cluster before plain members — the first op's
+      // DOM index must precede the first plain's.
       const firstOpHandle = await opItems.first().elementHandle();
       const firstPlainHandle = await plainItems.first().elementHandle();
       const order = await page.evaluate(
@@ -263,13 +292,20 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
         [firstOpHandle, firstPlainHandle] as const,
       );
       expect(order).toBe("op-first");
+
+      // Close the members drawer so subsequent arms (scroll, /join,
+      // /msg) interact with the compose surface uncovered. Uses the
+      // shared `closeMembersDrawer` helper (see cicchettoPage.ts) for
+      // the why behind `.click({position})` vs `.tap()` — same layout
+      // gotcha as UX-6-A's mobile members-scroll spec.
+      await closeMembersDrawer(page);
+      // Hand the shared channel back to the buckets below: C reads the
+      // network header and K taps `channelTab`, both of which assume the
+      // journey is still on the autojoin channel.
+      await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
+    } finally {
+      await membersPeer.disconnect("ux-4-z bucket J done");
     }
-    // Close the members drawer so subsequent arms (scroll, /join,
-    // /msg) interact with the compose surface uncovered. Uses the
-    // shared `closeMembersDrawer` helper (see cicchettoPage.ts) for
-    // the why behind `.click({position})` vs `.tap()` — same layout
-    // gotcha as UX-6-A's mobile members-scroll spec.
-    await closeMembersDrawer(page);
 
     // ─── Bucket C — sidebar header collapse + ShellChrome archive ─────
     // BottomBar renders ONE "Server" tab per network (no duplicate
