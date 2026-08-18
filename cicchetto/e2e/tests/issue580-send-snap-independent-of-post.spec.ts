@@ -58,7 +58,7 @@ import {
   selectChannel,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -77,19 +77,6 @@ async function distanceToBottom(page: Page): Promise<number> {
     if (!el) throw new Error("scrollback container not found");
     return el.scrollHeight - el.scrollTop - el.clientHeight;
   });
-}
-
-// Latest REST page in wire shape (DESC by server_time) — used to pick a known
-// message id for the mid-page cursor seed (mirror of issue168).
-async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    throw new Error(`fetchScrollbackPage: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as Array<{ id: number }>;
 }
 
 // Test-only force endpoint (ReadCursor.force_set/4) — the production endpoint
@@ -137,7 +124,7 @@ async function installFailingSendPost(page: Page, hold: boolean): Promise<void> 
 // issue168) and a later "we are at the bottom" assert means something.
 async function arriveParkedOnMarker(page: Page, channel: string): Promise<void> {
   const vjt = specUser();
-  const page0 = await fetchScrollbackPage(vjt.token, channel);
+  const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, channel);
   expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
   const cursorRow = page0[25];
   if (!cursorRow) throw new Error("seeded page too short for cursor placement");

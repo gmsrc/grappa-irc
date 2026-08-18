@@ -37,7 +37,11 @@ import {
   selectChannel,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, restoreReadCursorToTail, setReadCursorToId } from "../fixtures/grappaApi";
+import {
+  fetchScrollbackPage,
+  restoreReadCursorToTail,
+  setReadCursorToId,
+} from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -80,17 +84,6 @@ async function distanceToBottom(page: Page): Promise<number> {
     if (!el) throw new Error("scrollback container not found");
     return el.scrollHeight - el.scrollTop - el.clientHeight;
   });
-}
-
-async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    throw new Error(`fetchScrollbackPage: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as Array<{ id: number }>;
 }
 
 // Install an in-page sampler + a scroll-write spy on the scrollback container,
@@ -248,7 +241,7 @@ test.describe("issue #625 — a single send must not jump the pane up before set
 
     // Mid-page cursor → cold-mount lands on the unread marker, ABOVE the fold:
     // the reader is parked in history when they send (vjt's scenario).
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");

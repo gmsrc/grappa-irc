@@ -57,7 +57,7 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -92,29 +92,6 @@ async function scrollbackGeometry(
   });
 }
 
-// Fetch the latest scrollback page via the REST surface using the spec's
-// own bearer (same shape grappaApi.assertMessagePersisted uses). Returns
-// rows in the wire shape (descending server_time per
-// Grappa.Web.MessagesController.index/2). The spec uses these to compute
-// localStorage cursor values that pin the marker to a known position.
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number; server_time: number; sender: string }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    throw new Error(`fetchScrollbackPage: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as Array<{
-    id: number;
-    server_time: number;
-    sender: string;
-  }>;
-}
-
 test.describe("CP14 B1 — divider present vs absent: scroll always lands at bottom on window open", () => {
   // Force a tiny viewport so the seeded 50-row REST page reliably
   // overflows the scrollback area. Without this, chromium's default
@@ -129,7 +106,7 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
     // Fetch seeded rows from grappa-test BEFORE we boot the page so we
     // know the server_time of the tail row. Pre-seed cursor at the
     // tail → unreadCount=0 on first render.
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     // Wire shape is DESC, so rows[0] is the newest (highest id).
     const tail = page0[0];
@@ -175,7 +152,7 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
     // the bottom → 25 rows are "unread" → marker injected mid-page.
     // 25 unreads is enough to push the marker well into the middle of
     // the visible area without being right at the tail.
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     // DESC-ordered, so index 25 is the 26th-newest row. Cursor placed
     // there means rows 0..24 (the newest 25) all satisfy `id > cursor`

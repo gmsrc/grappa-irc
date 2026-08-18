@@ -87,7 +87,7 @@ import {
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -120,27 +120,6 @@ async function scrollbackGeometry(
   });
 }
 
-// Fetch the latest scrollback page via REST. Used in scenario 2 to
-// compute the cursor server_time placing the marker mid-pane. Same
-// shape cp14-b1 uses.
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number; server_time: number; sender: string }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    throw new Error(`fetchScrollbackPage: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as Array<{
-    id: number;
-    server_time: number;
-    sender: string;
-  }>;
-}
-
 test.describe("scroll-on-window-switch — re-selecting a window snaps correctly", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
@@ -169,7 +148,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // "(no marker)" scenario deterministic. Sibling test 2 seeds its OWN
     // mid-page cursor for the divider-present-lands-at-bottom scenario
     // (#168); this is the read-to-tail counterpart, not a workaround.
-    const headPage = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const headId = headPage[0]?.id;
     if (!headId) throw new Error("#bofh seed page empty — cannot seed read cursor to head");
@@ -249,7 +228,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // vjt reversed that: cold-mount now jumps to the frozen divider, SAME as a
     // deliberate switch. This test therefore now mirrors scenario 3's marker
     // contract, reached via cold-mount instead of a switch.
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
@@ -339,7 +318,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // (onMount, key-effect defer-skipped) — the same lifecycle as launching the
     // installed PWA. #bofh is never focused before the reload, so its seeded
     // read cursor is never advanced and the unread divider survives the reboot.
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
@@ -397,7 +376,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // Seed a cursor 25 rows from the tail so an unread divider injects
     // mid-page (same shape as scenario 2 / issue168), but here we reach
     // #bofh via a deliberate SWITCH, not a cold mount.
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");

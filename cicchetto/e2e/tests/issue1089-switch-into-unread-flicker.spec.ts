@@ -60,7 +60,7 @@ import {
   sidebarWindow,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
@@ -327,7 +327,7 @@ test.describe("issue #1089 — switching into an unread window must not flicker"
 // enough from the top that a scrollTop=0 frame puts it thousands of px
 // off-screen (an unmistakable excursion, not a rounding wobble).
 async function seedMidPageCursor(token: string, channel: string): Promise<void> {
-  const page0 = await fetchScrollbackPage(token, channel);
+  const page0 = await fetchScrollbackPage(token, NETWORK_SLUG, channel);
   expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
   const cursorRow = page0[25];
   if (!cursorRow) throw new Error("seeded page too short for cursor placement");
@@ -419,17 +419,4 @@ async function assertNoVisibleJump(page: Page, tag: string): Promise<Frame[]> {
     )}`,
   ).toEqual([]);
   return frames;
-}
-
-// Fetch the latest scrollback page via REST (same shape as
-// scroll-on-window-switch / issue625) — used to place the cursor mid-page.
-async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    throw new Error(`fetchScrollbackPage: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as Array<{ id: number }>;
 }

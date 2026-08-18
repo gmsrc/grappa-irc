@@ -48,7 +48,7 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -71,19 +71,6 @@ async function scrollbackGeometry(
   });
 }
 
-// Latest REST page (DESC by server_time) — used to pick the HEAD id for the
-// read-cursor seed. Same shape cp14-b1 / issue168 / scroll-on-window-switch use.
-async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    throw new Error(`fetchScrollbackPage: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as Array<{ id: number }>;
-}
-
 // Seed the SERVER-side read cursor at the given message id (server-owned
 // post-CP29; cic hydrates from the `/me` envelope on cold load). Delegates
 // to the shared `setReadCursorToId` (test-only force endpoint) so the seed
@@ -101,7 +88,7 @@ test.describe("issue #230 — wheel-up loads older history when content underfil
 
     // Seed the cursor to HEAD → no unread divider → cic's cold load is the
     // tail-only ~50-row branch (deterministic, order-independent).
-    const headPage = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const headId = headPage[0]?.id;
     if (!headId) throw new Error("#bofh seed page empty — cannot seed read cursor to head");

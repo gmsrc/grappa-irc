@@ -46,7 +46,7 @@ import {
   selectChannel,
   waitForScrollbackRefreshed,
 } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -78,22 +78,6 @@ async function distanceToBottom(page: Page): Promise<number> {
   return g.scrollHeight - g.scrollTop - g.clientHeight;
 }
 
-// Latest REST page in wire shape (DESC by server_time) — used to pick a
-// known message id for the mid-page cursor seed.
-async function fetchScrollbackPage(
-  token: string,
-  channel: string,
-): Promise<Array<{ id: number; server_time: number; sender: string }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!response.ok) {
-    throw new Error(`fetchScrollbackPage: ${response.status} ${await response.text()}`);
-  }
-  return (await response.json()) as Array<{ id: number; server_time: number; sender: string }>;
-}
-
 // Seed the SERVER-side read cursor at the given message id (server-owned
 // post-CP29 R-1..R-4; cic hydrates from the `/me` envelope on cold load).
 // Delegates to the shared `setReadCursorToId`, which hits the TEST-ONLY
@@ -110,7 +94,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
 
     // Seed a cursor 25 rows from the tail → an unread divider is injected
     // mid-page on first focus (25 unread rows, same shape as cp14-b1 sc.2).
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
@@ -162,7 +146,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Mid-page cursor → divider present, pane overflows.
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");

@@ -48,7 +48,7 @@
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import {
-  GRAPPA_BASE_URL,
+  fetchScrollbackPage,
   getReadCursor,
   restoreReadCursorToTail,
   setReadCursorToId,
@@ -73,20 +73,6 @@ async function distFromBottom(page: Page): Promise<number> {
   });
 }
 
-// Latest REST page (DESC by server_time; rows[0] is the newest) — used to pick a
-// known message id for the mid-page cursor seed + the tail id we expect the tap
-// to advance to. Mirror of the #168 local helper.
-async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) {
-    throw new Error(`fetchScrollbackPage: ${res.status} ${await res.text()}`);
-  }
-  return (await res.json()) as Array<{ id: number }>;
-}
-
 // Shared body: focus an unread #bofh, tap the floating button, assert the cursor
 // persists to the tail AND a subsequent peer line does not snap the view back.
 // `peerNick` is passed distinct per project so the two runs never collide on a
@@ -99,7 +85,7 @@ async function tapButtonPersistsCursorAndHolds(page: Page, peerNick: string): Pr
   // focus and the activation parks ABOVE the fold (button shows). Same shape as
   // #168. `setReadCursorToId` hits the test-only force endpoint (the production
   // POST is advance-only since #233, so a backward seed through it would clamp).
-  const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+  const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
   expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
   const tailRow = page0[0];
   const cursorRow = page0[25];

@@ -41,7 +41,7 @@
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLine, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -105,18 +105,6 @@ async function setTabHidden(page: Page, hidden: boolean): Promise<void> {
   await page.waitForTimeout(150);
 }
 
-// Fetch the newest REST page (DESC; [0] === newest === tail). Used to learn the
-// tail id (seed cursor to head = fully read → no divider) and a mid-page id
-// (seed a divider). Same shape as scroll-on-window-switch.spec.ts.
-async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    NETWORK_SLUG,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error(`fetchScrollbackPage: ${res.status} ${await res.text()}`);
-  return (await res.json()) as Array<{ id: number }>;
-}
-
 // Open the per-channel delivery gap (#159): silence live `phx.on("event")` for
 // this channel's topic while the socket + every other channel stay live, so a
 // message posted during the hidden window is MISSED live and only re-fetched by
@@ -148,7 +136,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     // clears the cursor; without this seed cic would treat them as live-unread
     // and pin a marker to the top — same precondition as scroll-on-window-switch
     // scenario 1).
-    const headPage = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
     if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
@@ -204,7 +192,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
 
     // Seed a cursor 25 rows from the tail so an unread divider injects mid-page
     // (same shape as scroll-on-window-switch scenario 3).
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
@@ -260,7 +248,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Fully read → focus lands at the tail, atBottom stays true (no scroll up).
-    const headPage = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
     if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
@@ -307,7 +295,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Fully read → no divider; the reader will scroll up into read backlog.
-    const headPage = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
     if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");

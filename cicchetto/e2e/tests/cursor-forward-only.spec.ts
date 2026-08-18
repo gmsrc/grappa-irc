@@ -41,7 +41,7 @@ import {
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
-import { GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
+import { fetchScrollbackPage, GRAPPA_BASE_URL, setReadCursorToId } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -68,15 +68,6 @@ async function fetchCursor(token: string, channel: string): Promise<number | nul
     read_cursors?: Record<string, Record<string, number>>;
   };
   return body.read_cursors?.[NETWORK_SLUG]?.[channel] ?? null;
-}
-
-async function fetchScrollbackPage(token: string, channel: string): Promise<Array<{ id: number }>> {
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(NETWORK_SLUG)}/channels/${encodeURIComponent(channel)}/messages`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) {
-    throw new Error(`fetchScrollbackPage: ${res.status} ${await res.text()}`);
-  }
-  return (await res.json()) as Array<{ id: number }>;
 }
 
 // Pre-seed the SERVER-side read cursor for `(NETWORK_SLUG, channel)` at
@@ -236,7 +227,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     // size + viewport row density. Pick a row strictly between
     // `visible` and `store` (mid-pane) — any row ID in that range
     // satisfies `visible < baseline ≤ store`.
-    const page0 = await fetchScrollbackPage(vjt.token, CHANNEL);
+    const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     const candidates = page0.filter((r) => r.id > (visible as number) && r.id <= (store as number));
     if (candidates.length === 0) {
       throw new Error(
