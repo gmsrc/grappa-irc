@@ -49833,14 +49833,20 @@ the public contract, `WireMessage` still private. `before` is an explicit
 parameter with no default, because the pager and the single-page callers
 differ in exactly that argument.
 
-One deliberate widening, recorded because it is easy to miss on review.
+Folding the polling caller in cost a type, and the reason is worth keeping.
 `assertMessagePersisted` polls, and its old inline request tolerated a non-ok
-STATUS while letting a transport-level throw propagate at once. Catching
-around the shared verb cannot tell those apart, so the retry now also absorbs
-the throw. Both paths still fail loudly — the deadline converts a persistent
-failure into the timeout error with `lastSeen` attached — but the catch is
-wider than the one it replaces, and that was a choice rather than an
-oversight.
+STATUS while letting a transport-level throw propagate at once. A bare catch
+around the shared verb cannot tell those apart, and the first version of this
+slice took that widening on the grounds that both paths still fail loudly.
+That was wrong, and was corrected before the slice ran: an assertion helper
+must retry on not-yet-persisted, never on a dead transport, because there the
+retry masks the fault instead of measuring it — the no-silent-swallow rule at
+a boundary. So `getMessagesPage` throws a typed `MessagesPageStatusError` for
+the status arm, the poll loop catches only that and rethrows anything else,
+and a stack that has gone away still fails at the first attempt rather than
+at the deadline. The general shape: when one caller of a shared verb needs to
+tolerate a subset of its failures, make the subset a type rather than
+widening the catch to the whole.
 
 What is not established: no spec was executed for this entry. The check is
 static only, and `tsc` cannot see argument ORDER — `networkSlug` and

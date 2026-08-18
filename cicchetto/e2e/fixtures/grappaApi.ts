@@ -324,6 +324,22 @@ export async function adminDeleteTheme(adminToken: string, id: number): Promise<
   }
 }
 
+// #1397 — a non-ok STATUS from `getMessagesPage`, as a type, so a caller can
+// tell it apart from a transport death. Only `assertMessagePersisted` needs
+// the distinction: a 4xx/5xx there means "the row has not landed yet" and is
+// worth another poll, while a thrown fetch means the stack is gone and
+// retrying would mask the fault instead of measuring it. Everyone else lets
+// both propagate and never looks at this class.
+class MessagesPageStatusError extends Error {
+  readonly status: number;
+
+  constructor(status: number, body: string) {
+    super(`grappaApi.getMessagesPage: GET → ${status} ${body}`);
+    this.name = "MessagesPageStatusError";
+    this.status = status;
+  }
+}
+
 // #1397 — the ONE `GET /networks/:slug/channels/:channel/messages` in the
 // e2e suite. Thirteen sites spoke this request verbatim (ten spec-local
 // `fetchScrollbackPage` copies plus three here); they differed only in
@@ -345,7 +361,7 @@ async function getMessagesPage(
   const url = before === undefined ? base : `${base}?before=${before}`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   if (!res.ok) {
-    throw new Error(`grappaApi.getMessagesPage: GET → ${res.status} ${await res.text()}`);
+    throw new MessagesPageStatusError(res.status, await res.text());
   }
   return (await res.json()) as WireMessage[];
 }
@@ -705,26 +721,29 @@ export async function assertMessagePersisted(opts: AssertMessageOpts): Promise<v
   let lastSeen: string[] = [];
   while (Date.now() < deadline) {
     // The one caller for which a non-200 is a RETRY, not a failure: the row
-    // may simply not have landed yet. `getMessagesPage` is fail-fast for
-    // everyone else, so the tolerance lives here, at the polling boundary
-    // that owns it — the deadline below is what turns a persistent failure
-    // into a loud error, with `lastSeen` as the diagnostic.
-    const messages = await getMessagesPage(
-      opts.token,
-      opts.networkSlug,
-      opts.channel,
-      undefined,
-    ).catch(() => undefined);
-    if (messages) {
-      const matched = messages.find(
-        (m) =>
-          m.sender === opts.sender &&
-          (opts.body === undefined || m.body === opts.body) &&
-          (opts.kind === undefined || m.kind === opts.kind),
-      );
-      if (matched) return;
-      lastSeen = messages.map((m) => `${m.kind}/${m.sender}: ${m.body}`);
+    // may simply not have landed yet, and the deadline below is what turns a
+    // persistent absence into a loud error with `lastSeen` attached.
+    //
+    // The catch is deliberately narrow. A transport death is NOT retried:
+    // polling through it would mask the fault instead of measuring it, which
+    // is the no-silent-swallow rule at a boundary. Only the status arm is
+    // tolerated; anything else propagates on the spot.
+    let messages: WireMessage[];
+    try {
+      messages = await getMessagesPage(opts.token, opts.networkSlug, opts.channel, undefined);
+    } catch (err) {
+      if (!(err instanceof MessagesPageStatusError)) throw err;
+      await sleep(intervalMs);
+      continue;
     }
+    const matched = messages.find(
+      (m) =>
+        m.sender === opts.sender &&
+        (opts.body === undefined || m.body === opts.body) &&
+        (opts.kind === undefined || m.kind === opts.kind),
+    );
+    if (matched) return;
+    lastSeen = messages.map((m) => `${m.kind}/${m.sender}: ${m.body}`);
     await sleep(intervalMs);
   }
   throw new Error(
