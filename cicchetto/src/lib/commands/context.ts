@@ -34,6 +34,33 @@ export type CommandContext = {
    * target want the active one.
    */
   getActiveChannel: () => string | null;
+  /**
+   * The channel sigils THIS network advertised (005 CHANTYPES). Per-submission
+   * because it is keyed on the submitting window's network; the resolver
+   * behind it also answers for other slugs, which is why it stays in
+   * `compose.ts` rather than becoming an import a handler could reach.
+   *
+   * A THUNK, not a value, and the characterization net is why: resolving it
+   * when the record is built puts a `networkIdBySlug` on EVERY submission,
+   * including the 58 arms that never ask. That is the same eager-resolution
+   * trap `requireNetworkId` documents, and the net caught it.
+   */
+  sigils: () => readonly string[];
+  /**
+   * Require a channel window, or the inline error the operator reads.
+   * Thirteen arms call it FIRST, before resolving a network: when both would
+   * fail the operator must still see the channel error, so the call ORDER is
+   * part of the contract, not an accident of layout.
+   */
+  requireChannel: (verb: string) => string | { error: string };
+  /**
+   * The network twin: a SLUG resolves to the live network id, or to the
+   * inline error. Called FROM the handler rather than resolved once up front,
+   * which keeps it LAZY (14 arms never ask — the REST verbs address the
+   * network by slug) and keeps the slug a PARAMETER (two arms resolve one
+   * other than `networkSlug`).
+   */
+  requireNetworkId: (slug: string, subject: string) => number | { error: string };
 };
 
 /**

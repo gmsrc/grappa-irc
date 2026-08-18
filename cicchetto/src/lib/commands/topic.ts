@@ -1,3 +1,4 @@
+import { pushChannelTopicClear } from "../socket";
 import type { CommandHandler } from "./context";
 
 /**
@@ -10,4 +11,20 @@ export const topicShowCommand: CommandHandler<"topic-show"> = async (cmd, ctx) =
   const ch = cmd.channel ?? ctx.getActiveChannel();
   if (!ch) return { error: "/topic requires a channel — switch to one or use /topic #chan" };
   return { error: `/topic ${ch} (bare) — inline render wired in C3 (TopicBar)` };
+};
+
+/** `/topic -delete` or `/topic #chan -delete` — clear the topic via channel event. */
+export const topicClearCommand: CommandHandler<"topic-clear"> = async (cmd, ctx) => {
+  const ch = cmd.channel ?? ctx.getActiveChannel();
+  if (!ch)
+    return {
+      error: "/topic -delete requires a channel — switch to one or use /topic #chan -delete",
+    };
+  const networkId = ctx.requireNetworkId(ctx.networkSlug, "topic -delete");
+  if (typeof networkId !== "number") return networkId;
+  // S21: AWAIT the verb ack (#154 no-silent-drops). A WS-down / server
+  // {:error,_} rejects into the dispatcher's shared catch → friendlyChannelError
+  // inline alert, instead of painting a green ✓ on a dropped frame.
+  await pushChannelTopicClear(networkId, ch);
+  return { ok: true };
 };

@@ -11,16 +11,35 @@ import {
   postTopic,
 } from "./api";
 import { token } from "./auth";
-import { openBanlistModal } from "./banlistModal";
-import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
 import { isChannelName } from "./chantypes";
 import type { CommandContext, DispatchOutcome, SubmitResult } from "./commands/context";
 import { watchlistCommand } from "./commands/highlight";
+import {
+  banlistCommand,
+  modeApplyCurrentCommand,
+  modeCommand,
+  modeViewCommand,
+  umodeCommand,
+  umodeTargetViewCommand,
+  umodeViewCommand,
+} from "./commands/mode";
 import { connectCommand } from "./commands/network";
+import {
+  banCommand,
+  deopCommand,
+  devoiceCommand,
+  inviteCommand,
+  kbCommand,
+  kickCommand,
+  killCommand,
+  opCommand,
+  unbanCommand,
+  voiceCommand,
+} from "./commands/ops";
 import { quitCommand } from "./commands/session";
-import { topicShowCommand } from "./commands/topic";
+import { topicClearCommand, topicShowCommand } from "./commands/topic";
 import { requestConfirm } from "./confirmDialog";
 import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
 import { sendCtcpQuery } from "./ctcpQuery";
@@ -28,14 +47,13 @@ import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown
 import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
 import { identityScopedStore } from "./identityScopedStore";
-import { chantypesForNetwork, isupportForNetwork } from "./isupport";
+import { chantypesForNetwork } from "./isupport";
 import { markLusersRequested } from "./lusersBundle";
 import { membersByChannel } from "./members";
 import { clearMentionsBundle } from "./mentionsWindow";
 import { splitMessageLines } from "./messageLines";
-import { openModeModal } from "./modeModal";
 import { networkBySlug, networkIdBySlug, user } from "./networks";
-import { asciiFold, nickEquals } from "./nickEquals";
+import { asciiFold } from "./nickEquals";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 // #1225 — the seam sends a PRIVMSG to the window OR relays a NOTICE/CTCP to a
@@ -51,18 +69,6 @@ import {
   pushAdmin,
   pushAwaySet,
   pushAwayUnset,
-  pushChannelBan,
-  pushChannelBanlist,
-  pushChannelDeop,
-  pushChannelDevoice,
-  pushChannelInvite,
-  pushChannelKick,
-  pushChannelMode,
-  pushChannelOp,
-  pushChannelTopicClear,
-  pushChannelUmode,
-  pushChannelUnban,
-  pushChannelVoice,
   pushInfo,
   pushLinks,
   pushLusers,
@@ -75,9 +81,7 @@ import {
   pushWho,
   pushWhois,
   pushWhowas,
-  resolveUserhost,
 } from "./socket";
-import { openUmodeModal } from "./umodeModal";
 import { closeQueryWindow } from "./windowClose";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./windowKinds";
 import { windowStateByChannel } from "./windowState";
@@ -90,24 +94,6 @@ import { windowStateByChannel } from "./windowState";
 // to carry a `TODO(#30)`, which pointed at a closed, unrelated issue.)
 const sigilsFor = (slug: string): readonly string[] =>
   chantypesForNetwork(networkIdBySlug(slug) ?? null);
-
-// #536/#1251 — is this `/mode` a type-A LIST QUERY rather than a mode change?
-// Three conditions, all necessary: no parameter (a mask makes it a MUTATION,
-// `/mode #chan +b nick!*@*`), exactly one optionally-signed letter, and that
-// letter is one this NETWORK offers as a queryable list (server-published, in
-// `isupport.listModesQueryable` — cic never derives it).
-//
-// Why it lives here and not in the pure parser: the third condition is 005
-// data. `/mode #chan +i` on a network where `i` is a flag must stay a mode
-// change, and no letter is a list mode everywhere — `q` is a LIST on solanum
-// and a founder-status prefix elsewhere. Returns the bare letter, or null
-// when the caller should execute the MODE verbatim.
-const listModeQueryLetter = (modes: string, params: string[], networkId: number): string | null => {
-  if (params.length > 0) return null;
-  const letter = /^[+-]?([A-Za-z])$/.exec(modes)?.[1];
-  if (letter === undefined) return null;
-  return isupportForNetwork(networkId).listModesQueryable.includes(letter) ? letter : null;
-};
 
 // #1003 — IRC nicks wear decoration (`_omino_`, `bob^`, `gio-vanni`), so
 // Tab must reach `_omino_` from the bare `omi`. Deliberately NOT taught to
@@ -934,6 +920,9 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       text,
       token: t,
       getActiveChannel,
+      sigils: () => sigilsFor(networkSlug),
+      requireChannel,
+      requireNetworkId,
     };
 
     let result: SubmitResult;
@@ -1198,20 +1187,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "topic-clear": {
-          // /topic -delete or /topic #chan -delete — clear topic via channel event.
-          const ch = cmd.channel ?? getActiveChannel();
-          if (!ch)
-            return {
-              error:
-                "/topic -delete requires a channel — switch to one or use /topic #chan -delete",
-            };
-          const networkId = requireNetworkId(networkSlug, "topic -delete");
-          if (typeof networkId !== "number") return networkId;
-          // S21: AWAIT the verb ack (#154 no-silent-drops). A WS-down / server
-          // {:error,_} now rejects into the shared catch → friendlyChannelError
-          // inline alert, instead of painting a green ✓ on a dropped frame.
-          await pushChannelTopicClear(networkId, ch);
-          result = { ok: true };
+          result = await topicClearCommand(cmd, ctx);
           break;
         }
         case "nick":
@@ -1443,267 +1419,71 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // and surfaces it inline in the compose box — the same contract as
         // `case "oper"` / `case "quote"`.
         case "op": {
-          const chanOrErr = requireChannel("op");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "op");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelOp(networkId, chanOrErr, cmd.nicks);
-          result = { ok: true };
+          result = await opCommand(cmd, ctx);
           break;
         }
         case "deop": {
-          const chanOrErr = requireChannel("deop");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "deop");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelDeop(networkId, chanOrErr, cmd.nicks);
-          result = { ok: true };
+          result = await deopCommand(cmd, ctx);
           break;
         }
         case "voice": {
-          const chanOrErr = requireChannel("voice");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "voice");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelVoice(networkId, chanOrErr, cmd.nicks);
-          result = { ok: true };
+          result = await voiceCommand(cmd, ctx);
           break;
         }
         case "devoice": {
-          const chanOrErr = requireChannel("devoice");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "devoice");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelDevoice(networkId, chanOrErr, cmd.nicks);
-          result = { ok: true };
+          result = await devoiceCommand(cmd, ctx);
           break;
         }
         case "kick": {
-          const chanOrErr = requireChannel("kick");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "kick");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelKick(networkId, chanOrErr, cmd.nick, cmd.reason);
-          result = { ok: true };
+          result = await kickCommand(cmd, ctx);
           break;
         }
         case "ban": {
-          const chanOrErr = requireChannel("ban");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "ban");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelBan(networkId, chanOrErr, cmd.mask);
-          result = { ok: true };
+          result = await banCommand(cmd, ctx);
           break;
         }
         case "kb": {
-          // #386 — kickban. Ban FIRST (`*!*@host`, no rejoin window), THEN
-          // kick — two frames, attempt BOTH regardless (vjt decision #4).
-          // The host comes from the on-demand `resolveUserhost` lookup (cic
-          // has none client-side); a cache MISS → null → fail-closed (vjt
-          // decision #1: never guess a wider mask), so the ban is NOT sent —
-          // but the kick still fires (immediate intent) and the ban error is
-          // surfaced.
-          const chanOrErr = requireChannel("kb");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "kb");
-          if (typeof networkId !== "number") return networkId;
-
-          let banError: string | null = null;
-          try {
-            const uh = await resolveUserhost(networkId, cmd.nick);
-            const mask = uh
-              ? buildBanMask("host", { nick: cmd.nick, user: uh.user, host: uh.host })
-              : null;
-            if (mask === null) {
-              banError = `/kb: host unknown for ${cmd.nick} — ban not set (run /whois ${cmd.nick} first); kicking anyway`;
-            } else {
-              await pushChannelBan(networkId, chanOrErr, mask);
-            }
-          } catch (e) {
-            banError = `/kb: ban failed — ${friendlyError(e)}`;
-          }
-
-          // Always attempt the kick (getting the person out is the intent).
-          try {
-            await pushChannelKick(networkId, chanOrErr, cmd.nick, cmd.reason);
-          } catch (kickErr) {
-            // Both failed → surface the ban error (primary) if present, else the kick's.
-            return { error: banError ?? `/kb: kick failed — ${friendlyError(kickErr)}` };
-          }
-
-          if (banError !== null) return { error: banError };
-          result = { ok: true };
+          result = await kbCommand(cmd, ctx);
           break;
         }
-        // #557 — /kill <nick> [reason]: first-class operator KILL. Unlike
-        // /kick/kb this targets a NICK (no channel, no requireChannel) and
-        // ships a RAW frame via pushRaw, mirroring /quote — the server already
-        // accepts KILL through the raw passthrough (that is what operators do
-        // today with `/quote KILL ...`). The whole win is the trailing colon
-        // being composed HERE, downstream: `KILL <nick> :<reason>` keeps a
-        // multi-word reason intact instead of the /quote foot-gun where a
-        // forgotten `:` truncates the reason at its first space. A bare /kill
-        // (empty reason) sends `KILL <nick>` and lets the server answer (481
-        // for a non-oper, or the ircd's own missing-comment error). AWAIT the
-        // push so a WS-down / server {:error,_} surfaces as an inline compose
-        // alert, never a silent green ✓ (the #154 no-silent-drop lesson).
         case "kill": {
-          const networkId = requireNetworkId(networkSlug, "kill");
-          if (typeof networkId !== "number") return networkId;
-          const line = cmd.reason === "" ? `KILL ${cmd.nick}` : `KILL ${cmd.nick} :${cmd.reason}`;
-          await pushRaw(networkId, line);
-          result = { ok: true };
+          result = await killCommand(cmd, ctx);
           break;
         }
         case "unban": {
-          const chanOrErr = requireChannel("unban");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "unban");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelUnban(networkId, chanOrErr, cmd.mask);
-          result = { ok: true };
+          result = await unbanCommand(cmd, ctx);
           break;
         }
         case "banlist": {
-          // #386 — /banlist is the channel list-mode MODAL surface (it
-          // supersedes the #376 inline BanlistCard, mirroring how the #169
-          // /who modal replaced the inline WHO dump). Open the modal AND fire
-          // a fresh re-query so the list is live on open (pre-#386 it
-          // was fire-and-forget only).
-          // An explicit `/banlist #chan` resolves in the parser; a bare
-          // /banlist carries null → the current channel (same resolver
-          // every channel-scoped verb uses).
-          const chanOrErr = cmd.channel ?? requireChannel("banlist");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "banlist");
-          if (typeof networkId !== "number") return networkId;
-          // #1251 — an explicitly typed letter this network cannot answer is
-          // an ERROR, not a silent fallback to bans: the operator asked for a
-          // specific list and would otherwise read the ban list as the
-          // exempt list. The offered set is server-published, never derived.
-          const offered = isupportForNetwork(networkId).listModesQueryable;
-          if (!offered.includes(cmd.mode)) {
-            return {
-              error: `/banlist: this network has no +${cmd.mode} list (it offers ${offered.map((m) => `+${m}`).join(" ")})`,
-            };
-          }
-          openBanlistModal(networkSlug, chanOrErr, cmd.mode);
-          pushChannelBanlist(networkId, chanOrErr, cmd.mode);
-          result = { ok: true };
+          result = await banlistCommand(cmd, ctx);
           break;
         }
         case "invite": {
-          // /invite <nick> [#chan] — channel defaults to active window.
-          // P-0f follow-up (no-silent-drops bucket 0): when the channel
-          // arg is supplied explicitly, SKIP requireChannel — typing
-          // `/invite foo #it-opers` from $server (or any non-channel
-          // window) was the common workflow that pre-fix silently
-          // errored ("requires an active channel window") because
-          // requireChannel was unconditionally evaluated.
-          let chan: string;
-          if (cmd.channel !== null) {
-            chan = cmd.channel;
-          } else {
-            const chanOrErr = requireChannel("invite");
-            if (typeof chanOrErr !== "string") return chanOrErr;
-            chan = chanOrErr;
-          }
-          const networkId = requireNetworkId(networkSlug, "invite");
-          if (typeof networkId !== "number") return networkId;
-          // S6 (#364): await the verb-ack so a server {:error,_} / WS-down
-          // surfaces inline (shared catch → friendlyChannelError), not a
-          // false green ✓. Mirror of kick/ban.
-          await pushChannelInvite(networkId, chan, cmd.nick);
-          result = { ok: true };
+          result = await inviteCommand(cmd, ctx);
           break;
         }
         case "umode": {
-          // /umode — user-mode on own nick, no channel context required.
-          const networkId = requireNetworkId(networkSlug, "umode");
-          if (typeof networkId !== "number") return networkId;
-          await pushChannelUmode(networkId, cmd.modes);
-          result = { ok: true };
+          result = await umodeCommand(cmd, ctx);
           break;
         }
         case "umode-view": {
-          // #229 — bare /umode: open the umode viewer/editor modal for the
-          // active window's network. Umodes are per-session (no channel
-          // context needed), so any window kind can open it.
-          openUmodeModal(networkSlug);
-          result = { ok: true };
+          result = await umodeViewCommand(cmd, ctx);
           break;
         }
         case "umode-target-view": {
-          // #229 — /mode <nick> with no mode args. Open the umode modal
-          // ONLY when the target resolves to the operator's OWN nick (the
-          // modal edits your own umodes; there's no viewer for another
-          // user's). Resolve via ownNickForNetwork (visitor → me.nick;
-          // user → per-credential net.nick) — the same canonical resolver
-          // /whois self-default uses; nickEquals for case-insensitive
-          // compare (ASCII, #121/#525). A non-self target is a friendly error rather
-          // than a phantom modal.
-          const net = networkBySlug(networkSlug);
-          const own = net ? ownNickForNetwork(net, user()) : null;
-          if (own && nickEquals(cmd.target, own)) {
-            openUmodeModal(networkSlug);
-            result = { ok: true };
-            break;
-          }
-          return {
-            error: `/mode ${cmd.target}: viewing another user's modes isn't supported — use /mode <#channel> for a channel, or /mode ${own ?? "<yournick>"} for your own user modes`,
-          };
+          result = await umodeTargetViewCommand(cmd, ctx);
+          break;
         }
         case "mode": {
-          // /mode <#chan> <modes> [params] — execute directly, raw
-          // verbatim, target explicit in args. No modal, no channel-window
-          // requirement (#216: mode-args present → apply).
-          const networkId = requireNetworkId(networkSlug, "mode");
-          if (typeof networkId !== "number") return networkId;
-          // #536/#1251 — a bare list letter with NO mask is a QUERY, not a
-          // mutation: open the list modal instead of putting a raw MODE on
-          // the wire whose reply rows nothing is primed to collect.
-          const listMode = listModeQueryLetter(cmd.modes, cmd.params, networkId);
-          if (listMode !== null && isChannelName(cmd.target, sigilsFor(networkSlug))) {
-            openBanlistModal(networkSlug, cmd.target, listMode);
-            pushChannelBanlist(networkId, cmd.target, listMode);
-            result = { ok: true };
-            break;
-          }
-          await pushChannelMode(networkId, cmd.target, cmd.modes, cmd.params);
-          result = { ok: true };
+          result = await modeCommand(cmd, ctx);
           break;
         }
         case "mode-view": {
-          // #216 — no mode-args: open the viewer/editor modal. Explicit
-          // `/mode #chan` targets that channel; bare `/mode` targets the
-          // current channel window (error if not in one — the same
-          // resolver every channel-scoped verb uses).
-          const ch = cmd.channel ?? getActiveChannel();
-          if (!ch) return { error: "/mode requires a channel — switch to one or use /mode #chan" };
-          openModeModal(networkSlug, ch);
-          result = { ok: true };
+          result = await modeViewCommand(cmd, ctx);
           break;
         }
         case "mode-apply-current": {
-          // #216 — `/mode +s` (mode string, no channel token) applies to
-          // the current channel. Mode-args present → execute directly, no
-          // modal; requires a channel window.
-          const chanOrErr = requireChannel("mode");
-          if (typeof chanOrErr !== "string") return chanOrErr;
-          const networkId = requireNetworkId(networkSlug, "mode");
-          if (typeof networkId !== "number") return networkId;
-          // #536/#1251 — same list-QUERY interception as the explicit-channel
-          // arm above; `/mode +b` and `/mode #chan +b` must behave alike.
-          const listMode = listModeQueryLetter(cmd.modes, cmd.params, networkId);
-          if (listMode !== null) {
-            openBanlistModal(networkSlug, chanOrErr, listMode);
-            pushChannelBanlist(networkId, chanOrErr, listMode);
-            result = { ok: true };
-            break;
-          }
-          await pushChannelMode(networkId, chanOrErr, cmd.modes, cmd.params);
-          result = { ok: true };
+          result = await modeApplyCurrentCommand(cmd, ctx);
           break;
         }
         // ---------------------------------------------------------------
