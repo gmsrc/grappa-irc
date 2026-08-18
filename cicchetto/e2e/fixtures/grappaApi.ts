@@ -324,6 +324,50 @@ export async function adminDeleteTheme(adminToken: string, id: number): Promise<
   }
 }
 
+// #1397 — the ONE `GET /networks/:slug/channels/:channel/messages` in the
+// e2e suite. Thirteen sites spoke this request verbatim (ten spec-local
+// `fetchScrollbackPage` copies plus three here); they differed only in
+// cosmetics and in the width of the `as` cast they applied afterwards.
+//
+// `before` is an explicit parameter with no default: the pager and the
+// single-page callers differ in exactly that argument, and defaulting it
+// would hide which of the two a call site is asking for. The server
+// answers DESC (newest first) and `?before=<id>` walks older pages.
+async function getMessagesPage(
+  token: string,
+  networkSlug: string,
+  channel: string,
+  before: number | undefined,
+): Promise<WireMessage[]> {
+  const base = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
+    networkSlug,
+  )}/channels/${encodeURIComponent(channel)}/messages`;
+  const url = before === undefined ? base : `${base}?before=${before}`;
+  const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    throw new Error(`grappaApi.getMessagesPage: GET → ${res.status} ${await res.text()}`);
+  }
+  return (await res.json()) as WireMessage[];
+}
+
+// #1397 — the newest page of scrollback for `(networkSlug, channel)`, in
+// the order the server serves it: DESC by `server_time` per
+// `Grappa.Web.MessagesController.index/2`, so `rows[0]` is the newest row
+// and `rows[25]` is the 26th-newest. Specs index the page to pick a known
+// id — the head id, or a mid-page one that plants an unread divider.
+//
+// Deliberately NARROW: every caller reads `.length` and `.id` and nothing
+// else. The wire carries six more fields, but a return type is a promise,
+// and promising fields nobody collects is a promise kept for free — see
+// `getMessagesPage` when a caller genuinely needs the full row.
+export async function fetchScrollbackPage(
+  token: string,
+  networkSlug: string,
+  channel: string,
+): Promise<Array<{ id: number }>> {
+  return getMessagesPage(token, networkSlug, channel, undefined);
+}
+
 // BUGHUNT-3 cascade fix (2026-05-25) — restore the seeded vjt's read
 // cursor on `(networkSlug, channel)` to the current tail row. Used in
 // `afterAll` hooks of specs that intentionally advance the cursor to
@@ -339,18 +383,7 @@ export async function restoreReadCursorToTail(
   networkSlug: string,
   channel: string,
 ): Promise<void> {
-  const messagesUrl = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    networkSlug,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const messagesRes = await fetch(messagesUrl, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!messagesRes.ok) {
-    throw new Error(
-      `restoreReadCursorToTail: GET /messages → ${messagesRes.status} ${await messagesRes.text()}`,
-    );
-  }
-  const rows = (await messagesRes.json()) as Array<{ id: number }>;
+  const rows = await getMessagesPage(token, networkSlug, channel, undefined);
   const tail = rows[0];
   if (!tail) return;
   const cursorUrl = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
@@ -423,21 +456,12 @@ export async function fetchAllMessagesAsc(
   networkSlug: string,
   channel: string,
 ): Promise<WireMessage[]> {
-  const base = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(
-    networkSlug,
-  )}/channels/${encodeURIComponent(channel)}/messages`;
-  const headers = { authorization: `Bearer ${token}` };
   const byId = new Map<number, WireMessage>();
   let before: number | undefined;
   // Bounded loop: the e2e seed is ~200 rows; 50 pages of ~50 is a safe
   // ceiling that also stops a server bug from spinning forever.
   for (let page = 0; page < 50; page++) {
-    const url = before === undefined ? base : `${base}?before=${before}`;
-    const res = await fetch(url, { headers });
-    if (!res.ok) {
-      throw new Error(`fetchAllMessagesAsc: GET → ${res.status} ${await res.text()}`);
-    }
-    const rows = (await res.json()) as WireMessage[];
+    const rows = await getMessagesPage(token, networkSlug, channel, before);
     if (rows.length === 0) break;
     for (const r of rows) byId.set(r.id, r);
     // Server returns DESC; the oldest id in this page is the next cursor.
@@ -678,14 +702,20 @@ export async function assertMessagePersisted(opts: AssertMessageOpts): Promise<v
   const intervalMs = opts.intervalMs ?? 100;
   const deadline = Date.now() + timeoutMs;
 
-  const url = `${GRAPPA_BASE_URL}/networks/${encodeURIComponent(opts.networkSlug)}/channels/${encodeURIComponent(opts.channel)}/messages`;
-  const headers = { Authorization: `Bearer ${opts.token}` };
-
   let lastSeen: string[] = [];
   while (Date.now() < deadline) {
-    const response = await fetch(url, { headers });
-    if (response.ok) {
-      const messages = (await response.json()) as WireMessage[];
+    // The one caller for which a non-200 is a RETRY, not a failure: the row
+    // may simply not have landed yet. `getMessagesPage` is fail-fast for
+    // everyone else, so the tolerance lives here, at the polling boundary
+    // that owns it — the deadline below is what turns a persistent failure
+    // into a loud error, with `lastSeen` as the diagnostic.
+    const messages = await getMessagesPage(
+      opts.token,
+      opts.networkSlug,
+      opts.channel,
+      undefined,
+    ).catch(() => undefined);
+    if (messages) {
       const matched = messages.find(
         (m) =>
           m.sender === opts.sender &&
