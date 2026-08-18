@@ -20,11 +20,12 @@
 // read-cursor POST returned 4xx (the fail2ban trigger). RED before the
 // setReadCursor guard (a $home 404 is captured); GREEN after.
 
-import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
+import { composeSend, loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
+const RUN_ID = crypto.randomUUID().slice(0, 8);
 
 // The synthetic pseudo-window channel segments, URL-encoded as they appear
 // on the wire ($ → %24). $server is deliberately absent: it is a real
@@ -56,6 +57,27 @@ test.describe("#160 virtual-tab read-cursor suppression", () => {
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
+      .toBeGreaterThan(0);
+
+    // Positive control (#1117) — armed BEFORE the stimulus under test, so
+    // both assertions below are read against a recorder proven to see.
+    // Absence is only evidence once presence has been demonstrated through
+    // the SAME `page.on("response")` predicate: a typo in it, or a listener
+    // attached after the traffic, leaves `cursorPosts` empty and every
+    // filter of it trivially `[]`. An own send is the cheapest real
+    // stimulus — scrollback.ts advances the cursor past the row it just
+    // persisted, which POSTs for the REAL channel and is neither virtual
+    // nor 4xx, so it disturbs neither assertion.
+    const controlBody = `#160 recorder control ${RUN_ID}`;
+    await composeSend(page, controlBody);
+    await expect(
+      page.locator('[data-testid="scrollback-line"]', { hasText: controlBody }),
+    ).toBeVisible({ timeout: 5_000 });
+    const realSegment = `/channels/${encodeURIComponent(CHANNEL)}/read-cursor`;
+    await expect
+      .poll(() => cursorPosts.filter((p) => p.url.includes(realSegment)).length, {
+        timeout: 5_000,
+      })
       .toBeGreaterThan(0);
 
     // Select the Home tab — disposes the ScrollbackPane. Pre-fix, the

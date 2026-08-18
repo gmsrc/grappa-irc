@@ -86,11 +86,20 @@ test("channel-directory — browse, no /messages fetch (#81 guard), search filte
     // genuine $list scrollback fetch still reds it below) while making it
     // deterministic — this is NOT a toHaveLength(<=1) relaxation nor a
     // blanket substring filter that would blind the guard.
+    // Recorded WIDE (every `/messages` request) and filtered NARROW at each
+    // assertion — #1117. A collector armed on the $list path alone can only
+    // ever be empty here, so its emptiness proves nothing: the same `[]`
+    // comes out of a mistyped path, a listener attached after the traffic,
+    // or a handler on the wrong page. Widening costs the guard nothing —
+    // the assertion below still filters to the $list path, so a genuine
+    // $list scrollback fetch still reds it — and it buys a positive control
+    // at the end of the test, where the joined channel's own GET proves
+    // this recorder sees `/channels/<enc>/messages` when one is issued.
     const listMessagesPath = `/channels/${encodeURIComponent(LIST_WINDOW_NAME)}/messages`;
     const messagesRequests: string[] = [];
     page.on("request", (req) => {
       const url = req.url();
-      if (url.includes(listMessagesPath)) {
+      if (url.includes("/messages")) {
         messagesRequests.push(url);
       }
     });
@@ -114,7 +123,7 @@ test("channel-directory — browse, no /messages fetch (#81 guard), search filte
     // selection. Checked here — before any join that would legitimately
     // trigger GET /messages for the newly-joined channel window.
     expect(
-      messagesRequests,
+      messagesRequests.filter((url) => url.includes(listMessagesPath)),
       "GET /messages must NOT fire when selecting kind=list — grappa-irc#81 guard",
     ).toHaveLength(0);
 
@@ -164,6 +173,18 @@ test("channel-directory — browse, no /messages fetch (#81 guard), search filte
     await expect(sidebarWindow(page, NETWORK_SLUG, PEER_CHANNEL)).toHaveClass(/selected/, {
       timeout: 10_000,
     });
+
+    // Positive control for the #81 guard above (#1117). The foregrounded
+    // channel hydrates its scrollback, which is exactly the request shape
+    // the guard forbids for $list — same recorder, same `/messages`
+    // predicate, only a different channel segment. If this stays empty the
+    // recorder was blind and the `toHaveLength(0)` above was vacuous.
+    const peerMessagesPath = `/channels/${encodeURIComponent(PEER_CHANNEL)}/messages`;
+    await expect
+      .poll(() => messagesRequests.filter((url) => url.includes(peerMessagesPath)).length, {
+        timeout: 10_000,
+      })
+      .toBeGreaterThan(0);
   } finally {
     await peer.disconnect("e2e channel-directory done");
   }

@@ -175,4 +175,24 @@ test("re-clicking active sidebar row does NOT POST ReadCursor (BU bug-2 idempote
   await page.waitForTimeout(500);
 
   expect(cursorPosts).toHaveLength(0);
+
+  // Positive control (#1117). The zero above is only evidence if this
+  // recorder can catch a cursor POST at all: `page.route` with a pattern
+  // that never matches — or a handler installed on the wrong page —
+  // produces the same empty array as a working idempotency guard. Send an
+  // own message: scrollback.ts advances the cursor past the row it just
+  // persisted, so a POST goes through the very route filter asserted
+  // empty. Deliberately AFTER the assertion, so the control cannot mask
+  // the defect it guards.
+  const controlBody = `BU bug-2 recorder control ${RUN_ID}`;
+  await composeSend(page, controlBody);
+  await expect(
+    page.locator('[data-testid="scrollback-line"]', { hasText: controlBody }),
+  ).toBeVisible({ timeout: 5_000 });
+  const channelSegment = `/channels/${encodeURIComponent(CHANNEL)}/read-cursor`;
+  await expect
+    .poll(() => cursorPosts.filter((url) => url.includes(channelSegment)).length, {
+      timeout: 5_000,
+    })
+    .toBeGreaterThan(0);
 });
