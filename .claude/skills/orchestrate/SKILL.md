@@ -937,6 +937,15 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   loses nothing. Verify with `pgrep -fl 'wait-for-ev''ent.sh'` (the unsplit pattern kills its own shell).
 - 🔴 **`API Error: Stream idle timeout` looks exactly like IDLE.** Cure = a SHORT `riprendi.` — do not clear.
 - 🔴 **QUEUED INPUT ≠ SWALLOWED ≠ DELIVERED.** Proof of delivery is a `-S` capture showing `❯ <text>` as a TURN.
+- 🥇🥇 **GHOST TEXT vs TYPED TEXT — THERE IS A MEASURED DISCRIMINATOR, STOP GUESSING (2026-08-17).** The
+  memory note says `capture-pane` cannot tell Claude Code's autocomplete suggestion from actually-typed
+  keystrokes, and that ambiguity cost 90 minutes of stalling. It is only true of `-p` **without `-e`**, which
+  strips attributes. **`tmux capture-pane -t <PANE> -p -e` keeps the SGR codes, and ghost text is emitted DIM
+  — `ESC[2m` before the string.** Typed input carries no dim attribute. One command settles it:
+  `tmux capture-pane -t %NN -p -e -S -6 | grep -a '<the text>' | cat -v`
+  → `^[[2m<text>^[[0m` ⇒ **ghost, the prompt is effectively EMPTY and you may type over it**; no `2m` ⇒ real
+  queued keystrokes, **do not clobber them**, wait or use a file handoff. 🥇 *An ambiguity you can resolve with
+  one query is not an ambiguity — it is an unasked question.*
   ℹ️ A picker about LANES or a BRANCH BASE is addressed to **ME**; escalate only DESIGN/product pickers.
 - 🔴 **A worker's redirect log / rc file can belong to a DEAD run** — `ls -lat` and match the mtime, never `cat`.
   Same for a staged `/tmp/orchestrate-next-<w>.txt`: **`stat` it before dispatching**, a stale body looks identical.
@@ -955,3 +964,72 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   WIDE tail (`tail -40`, not `-6`) — a reply 10 lines back reads as "no reply" and idles a worker for nothing.
 - ℹ️ The Pi has **no git credential helper** — `git push --delete` dies on "could not read Username"; prune remote
   branches with `gh api -X DELETE`.
+
+## 📓 RICETTA DESIGN_NOTES — a ogni merge/rebase (PERMANENTE; corretta tre volte dalle worker)
+Spostata qui dall'handoff 2026-08-18: e' una regola, non uno stato.
+1. **BLOB PRE/POST** — vale **SOLO quando il file NON DEVE muoversi**; su un rebase che AGGIUNGE una entry
+   il blob DEVE differire ⇒ **li' non prova niente.**
+2. **NUMSTAT A DUE LATI** su FILE e diffato: additions INVARIATE *e* deletions ZERO.
+3. **FORMA AL CONFINE letta SUL FILE**: fine-entry / marcatore **senza vuota davanti** / vuota / `---` /
+   vuota / `## `.
+4. 🥇 **ENTRY PRECEDENTE byte-identica — LA prova portante sul rebase**, l'unica che intercetta il modo di
+   coda (`merge=union`). 🔴 **`cmp -n <N>` NON si usa: su BSD stampa `EOF on <file>` e torna rc≠0 anche a
+   byte tutti coincidenti** (falso rosso, misurato da w1 2026-08-18). **Forma che regge:**
+   `head -c "$(stat -c%s main-DN)" mio-DN | cmp - main-DN` (+ `sha256` come testimone indipendente).
+   ⚠️ **`stat -c%s` e' GNU: sulle worker macOS e' BSD ⇒ `stat -f%z`** (w1, 2026-08-18).
+   ⚠️ **`merge=union` puo' risolvere il conflitto DA SOLO e IN SILENZIO su un rebase (rc=0, zero file in
+   conflitto): e' esattamente il caso in cui i quattro check sono l'unica cosa che distingue una risoluzione
+   corretta da una che ha mangiato righe.** Non leggere "nessun conflitto" come "niente da verificare".
+5. **MARCATORE UNICO sulla RIGA INTERA** (`'<!-- entry #[^>]*-->'`; il troncato `#[0-9]*` inventa duplicati).
+🔴 **`_Deploy:` NON E' UN CHECK, e' INERTE** — non citarlo, o dichiaralo inerte.
+⚠️ Il gate "forma al confine" e' **VACUO** quando il merge non tocca `DESIGN_NOTES`: **dichiaralo vacuo.**
+🥇 **Un FF PURO (`ahead=N behind=0`, ref PATCH-ato via `gh api`) rende la ricetta vacua PER COSTRUZIONE** —
+nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichiara perche' e' vacua.
+
+## 🪞 ERRORI MIEI — i vivi (PERMANENTE, spostati dall'handoff 2026-08-18)
+1. 🥇🥇 **Leggo la STRUTTURA e ne deduco una MAGNITUDINE o un MECCANISMO mai misurati** ⇒ *quale NUMERO
+   giustifica cio' che sto per ordinare, e l'ho misurato?* **Ritrattare DOVE SI E' SPARSO.**
+2. 🥇 **`STALL state=idle` = IO sono il collo di bottiglia: agisci al PRIMO, non al ventesimo.** ⚠️ Ma una
+   worker ferma **per mio ordine** in attesa di vjt e' uno stallo di vjt, gia' escalato — **non e' licenza
+   per lasciarla ferma senza dirlo.**
+3. 🪞 **Ho mandato una worker a cercare una causa IMPOSSIBILE** ⇒ verifica che la causa sia almeno possibile
+   prima di ordinare l'indagine. E **prima di ordinare un compito, verifica che esista ancora.**
+4. 🪞 **Due volte il bug era nel MIO strumento di misura** (`grep -o` troncato, timestamp gonfiati, `cmp -n`
+   su BSD) ⇒ **riga INTERA** + **`date -u` sempre**. ⚠️ Anche le worker gonfiano l'orario: **l'ora e' la mia.**
+5. 🔧 *"di un run VERDE il log non esiste"* e' TROPPO LARGA: vale per l'artefatto docker (`if: failure()`),
+   **non per i log dei job** (`gh api .../runs/<id>/attempts/1/jobs` → `.../jobs/<jid>/logs`).
+6. 🥇 **Un mio paletto puo' essere SBAGLIATO e una worker che me lo rifiuta CON LE PROVE ha ragione. Dillo e
+   vai avanti.** 🥇 **E un rifiuto si chiude MISURANDO, non cancellandolo.**
+7. 🔴 **Guarda l'`integration` in volo su main PRIMA di pushare un merge.** ⚖️ Eccezione presa per misura,
+   non per fretta: SHA identica a una gia' verde ⇒ run ridondante.
+8. 🥇 **Al 40% si CLEARA, non si accoda un quarto compito.** I clear buoni si prendono al confine (commit
+   atterrato, albero pulito): 37%→8% e 39%→7%, senza aspettare il 40%.
+9. 🥇 **`git log origin/main..main` VUOTO NON PROVA CHE SEI AGGIORNATA** — prova solo che non hai roba non
+   pushata. *avanti* = `git log origin/main..main` · **INDIETRO = `git log main..origin/main`** ·
+   *aggiornata* = **entrambi vuoti**. ⚠️ Sta in TUTTI i brief vecchi: correggila quando li riusi.
+10. 🥇 **Un numero di RIGA e' stantio appena main si muove** ⇒ **cita il NOME del tipo/assert, mai la riga.**
+
+## 🕳️ TRAPPOLE DI MISURA DEL REPO (PERMANENTI — spostate dall'handoff 2026-08-18)
+- 🔴🔴 **LO ZERO FALSO E PLAUSIBILE E' LA TRAPPOLA RICORRENTE DI QUESTO REPO — quattro istanze misurate,
+  meccanismi DIVERSI, stesso esito: un conteggio a zero che si legge come *"gia' sistemato"*.**
+  (1) **`git grep -E` e' POSIX ERE: `\s` e `\b` NON esistono.** (2) **BSD `awk` non ha `\y`.** (3) **gli
+  import qui sono MULTI-RIGA** ⇒ un grep scoped sugli importer da' zero nascondendo importer reali.
+  (4) **biome TRONCA le diagnostiche di default** (`Diagnostics not shown: 45`); serve `--max-diagnostics=2000`.
+  🥇 **REGOLA: uno ZERO non e' un risultato finche' un grep NUDO non e' d'accordo.** E vale all'incontrario:
+  `git grep -l` che da' **50** puo' essere **38 veri + 12 ombreggiature**.
+- 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
+  `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
+- 🔴 **FALSO-VERDE: `mix compile --force --warnings-as-errors` da rc=0 su un albero i cui TEST NON
+  COMPILANO** — `mix compile` non legge i `.exs`. **Un gate che si ferma alla compilata e' cieco su
+  qualunque cambio a `test/`: serve `scripts/test.sh`.**
+- 🔴🔴 **FALSO-VERDE cic: un `biome check` scoped con path `cicchetto/src/...` lanciato dalla RADICE
+  controlla ZERO file in silenzio** — dentro il container il cwd **e' gia' `/app/cicchetto`**, quindi biome
+  dice *"No files were processed"*, riga che un `tail -2` taglia via. **Prefisso giusto: `src/lib/...`.**
+  Sommato al fatto che **biome non vede gli import orfani che `tsc` vede**: **fidati solo di `run check`
+  intero e non troncare MAI l'output di un biome scoped.**
+- 🔎 **Il `paths:` di `integration.yml` NON include `test/**`** (lista vera: `lib/**`, `cicchetto/src/**`,
+  `cicchetto/e2e/**`, `cicchetto/package.json`, `cicchetto/bun.lock`, `config/**`, `priv/**`,
+  `scripts/integration.sh`, `scripts/testnet.sh`) ⇒ **una PR solo-`test/` ha QUATTRO check, non cinque** —
+  va DETTO, non letto come 4/4 ≡ 5/5. ✅ E **mergiarla non innesca `integration` su main**.
+- 🪞 **DEPISTAGGIO: il primo nome che il log offre non e' il fallimento.** Un `test/*.exs:NN` puo' essere
+  solo **un frame di stack dentro una cattura di warning**. **Il fallimento e' il blocco `1)`** — cercalo.
