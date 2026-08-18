@@ -50578,3 +50578,84 @@ shape this entry's own separator had to match, and then a name-only census was
 run anyway, by the same hand. Knowing the rule and holding it are different
 states. Treat any name-level count here as a lower bound on the truth and an
 upper bound on the finding — including the ones in this entry.
+<!-- entry #1397-adminlogin -->
+
+---
+
+## 2026-08-18 — #1397: twenty admin logins, one name, and the barrier NOT bought
+
+Twenty e2e spec files each carried their own admin-login helper, under two
+names: `adminLogin` in twelve, `adminFriendlyLogin` in eight, 54 call sites
+between them. This entry records the measurement that collapsed them, and
+the fork that was walked up to and deliberately not taken.
+
+### The two names were synonyms — measured, not assumed
+
+Extracting all twenty bodies and hashing them whitespace-normalised gives six
+clusters, which looks like six behaviours. It is one. The two largest clusters
+are seven `adminLogin` and seven `adminFriendlyLogin` that are byte-identical
+EXCEPT the function name — which is why an earlier census that masked the name
+reported a single cluster of fourteen spanning both names. Both readings were
+right; only the name-masked one was informative.
+
+The remaining six are the same statements again. All twenty seed the same
+three localStorage keys, `goto("/")`, and wait on `expectShellReady`. The
+whole variance is in the signature: four files fetched the seed inside the
+helper instead of taking it, and the seed type was spelled three ways —
+`SeededUser`, `ReturnType<typeof getSeededAdmin>`, and a local
+`type Admin = ReturnType<typeof getSeededAdmin>` — which are ONE type, since
+`getSeededAdmin(): SeededUser`. Nothing behavioural distinguished a single
+one of the twenty from any other.
+
+So the de-duplication is free, and the seed is now spelled at the fourteen
+call sites that had hidden it behind a zero-argument wrapper — the same trade
+this file recorded earlier the same day for the fake IRC server's helpers.
+
+### The fork: `loginAs` exists, and the shared admin helper still does not use it
+
+`loginAs` in the same fixtures module has a BYTE-IDENTICAL seeding half. The
+tempting move is to delete the twenty and call it. It was rejected, and the
+reason is a cost, not a taste:
+
+  * the seeded admin (`admin-vjt`) has NO networks bound, so `loginAs`'s
+    per-network-header ready selector never resolves for it. Reaching it means
+    `noNetworks: true`, and that option's own comment in this codebase calls it
+    a weakening — from "shell fully populated" to "DOM has homepane
+    scaffolding". Buying it costs a barrier that `expectShellReady` gives for
+    free, since `.shell-main` is exactly the network-independent signal;
+  * it would also add `waitForUserTopicReady`, a REAL barrier against a real
+    race — but one none of these twenty runs into today: not one of them
+    composes `/join` or otherwise depends on a user-topic broadcast. The
+    closest counterexample, the admin events-live spec, depends on
+    `grappa:admin:events`, joined at AdminPane mount, which is a different
+    topic and a different barrier;
+  * and it rests on an unverified link: `waitForUserTopicReady` matches on the
+    user NAME, so it only fires if `socketUserName()` for the admin subject
+    equals the seeded admin name. The join itself is gated on token + name
+    only, not on networks, so it should — but "should" is not a measurement,
+    and closing it costs one e2e run.
+
+🥇 The rule this instance is an example of: **do not buy a barrier with a
+declared weakening on the strength of a link you have not measured.** The
+question stays open on #1397 with its price attached (one e2e run), rather
+than being answered as a side effect of a de-duplication that had no need to
+answer it.
+
+### What the gates can and cannot see here
+
+Worth writing down, because it bounds every future change to this helper. Two
+mutants were run against the shared helper:
+
+  * REMOVE the `expectShellReady` barrier from it — `bun run check` and the
+    5616-test vitest suite both stay GREEN. No gate reachable without the
+    exclusive e2e lane can see a behavioural break in this helper;
+  * REMOVE the seed parameter from its signature — `tsc --noEmit -p
+    e2e/tsconfig.json` fails with 54 errors across 20 files, which is exactly
+    the census. The type-checker is a complete oracle for the WIRING and a
+    blind one for the BEHAVIOUR.
+
+A stale comment went out with the helper it described, in the M-7 gate spec:
+it claimed the spec waits on the settings cog because `loginAs`'s
+`.sidebar-network-section h3` would time out. The helper below it called
+`expectShellReady`, not the cog, and that selector no longer exists in the
+fixtures module — both halves were already false when it was deleted.
