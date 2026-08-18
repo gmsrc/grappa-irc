@@ -94,11 +94,6 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
 
 // Test-only force endpoint (ReadCursor.force_set/4) — the production endpoint
 // is advance-only (#233), so a backward mid-page seed must go through force.
-async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = specUser();
-  await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
-}
-
 // Fetch-wrap: the send POST reaches the server (which persists + WS-broadcasts
 // the row) but the CLIENT sees a failure — the #580 "server accepted, client
 // POST dropped" shape. Only the send POST is intercepted; every other request
@@ -146,7 +141,7 @@ async function arriveParkedOnMarker(page: Page, channel: string): Promise<void> 
   expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
   const cursorRow = page0[25];
   if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-  await seedCursor(channel, cursorRow.id);
+  await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, cursorRow.id);
 
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });

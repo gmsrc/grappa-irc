@@ -386,6 +386,11 @@ export async function restoreReadCursorToTail(
 // authoritative `read_cursor_set` WS path. Caller restores via
 // `restoreReadCursorToTail` in afterAll (BUGHUNT-3 cascade rule) — the
 // tail is a FORWARD move, so the production endpoint still serves it.
+//
+// Seeding the cursor client-side is NOT an alternative: post-CP29 R-1..R-4
+// the cursor is server-owned, cic hydrates it from the `/me` envelope at cold
+// load and from the per-channel join reply on subscribe, and the R-4 migration
+// nukes the legacy localStorage `rc:` keys on boot.
 export async function setReadCursorToId(
   token: string,
   networkSlug: string,

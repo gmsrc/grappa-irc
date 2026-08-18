@@ -120,22 +120,6 @@ async function scrollbackGeometry(
   });
 }
 
-// Pre-seed the SERVER-side read cursor for `(NETWORK_SLUG, channel)` at
-// the given message id. Post-CP29 R-1..R-4 the cursor is server-owned;
-// cic hydrates from the `/me` envelope at cold load + per-channel join
-// reply on subscribe. localStorage `rc:` keys are nuked on cic boot
-// (R-4 migration), so the pre-CP29 seedCursor-via-localStorage shape
-// no longer worked. Same shape cp14-b1 uses.
-async function seedCursor(page: Page, channel: string, messageId: number): Promise<void> {
-  const vjt = specUser();
-  // Delegates to the shared `setReadCursorToId` (test-only force endpoint,
-  // `ReadCursor.force_set/4`) so a mid-page seed lands regardless of prior
-  // cursor state — the production endpoint is advance-only since #233 and
-  // would clamp a backward seed (order-dependent flake).
-  await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
-  void page;
-}
-
 // Fetch the latest scrollback page via REST. Used in scenario 2 to
 // compute the cursor server_time placing the marker mid-pane. Same
 // shape cp14-b1 uses.
@@ -189,7 +173,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const headId = headPage[0]?.id;
     if (!headId) throw new Error("#bofh seed page empty — cannot seed read cursor to head");
-    await seedCursor(page, CHANNEL, headId);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, headId);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -269,7 +253,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-    await seedCursor(page, CHANNEL, cursorRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -359,7 +343,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-    await seedCursor(page, CHANNEL, cursorRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
     // Reboot the app BEFORE any window focus, then focus #bofh — a cold mount
@@ -417,7 +401,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-    await seedCursor(page, CHANNEL, cursorRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     // Deterministic warmth gate: cic eagerly `refreshScrollback`es every
     // joined channel on its Phoenix join-ok (subscribe.ts) — REFRESH_LIMIT

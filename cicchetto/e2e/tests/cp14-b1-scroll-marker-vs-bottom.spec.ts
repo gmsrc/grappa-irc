@@ -115,32 +115,6 @@ async function fetchScrollbackPage(
   }>;
 }
 
-// Pre-seed the SERVER-side read cursor for `(NETWORK_SLUG, channel)` at
-// the given message id. Post-CP29 R-1..R-4 the cursor is server-owned;
-// cic hydrates from the `/me` envelope at cold load + per-channel join
-// reply on subscribe. localStorage `rc:` keys are nuked on cic boot
-// (R-4 migration), so the pre-CP29 seedCursor-via-localStorage shape
-// no longer worked.
-//
-// Mirrors `cicchetto/src/lib/readCursor.ts`'s `advanceReadCursor` POST
-// (forward-only via `Grappa.ReadCursor.advance/4` — sending the same
-// id twice is idempotent). Server-side broadcast falls back to a no-op
-// for cross-device fanout because no other WS subscriber exists at
-// seed time; the cold-load `/me` envelope picks the value up when
-// `loginAs` triggers cic boot.
-async function seedCursor(page: Page, channel: string, messageId: number): Promise<void> {
-  const vjt = specUser();
-  // Delegates to the shared `setReadCursorToId` (test-only force endpoint,
-  // `ReadCursor.force_set/4`) so the mid-page seed lands regardless of
-  // prior cursor state — the production endpoint is advance-only since
-  // #233 and would clamp a backward seed to whatever tail a prior spec
-  // left behind (order-dependent flake).
-  await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
-  // `page` retained as a parameter for symmetry with the prior helper
-  // shape; not currently used (server is the source of truth post-R-4).
-  void page;
-}
-
 test.describe("CP14 B1 — divider present vs absent: scroll always lands at bottom on window open", () => {
   // Force a tiny viewport so the seeded 50-row REST page reliably
   // overflows the scrollback area. Without this, chromium's default
@@ -160,7 +134,7 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
     // Wire shape is DESC, so rows[0] is the newest (highest id).
     const tail = page0[0];
     if (!tail) throw new Error("no seeded rows");
-    await seedCursor(page, CHANNEL, tail.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tail.id);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -208,7 +182,7 @@ test.describe("CP14 B1 — divider present vs absent: scroll always lands at bot
     // → unreadCount = 25.
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-    await seedCursor(page, CHANNEL, cursorRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });

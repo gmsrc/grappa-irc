@@ -117,11 +117,6 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
   return (await res.json()) as Array<{ id: number }>;
 }
 
-async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = specUser();
-  await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
-}
-
 // Open the per-channel delivery gap (#159): silence live `phx.on("event")` for
 // this channel's topic while the socket + every other channel stay live, so a
 // message posted during the hidden window is MISSED live and only re-fetched by
@@ -157,7 +152,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
     if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
-    await seedCursor(CHANNEL, tailId);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tailId);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -213,7 +208,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-    await seedCursor(CHANNEL, cursorRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -269,7 +264,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
     if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
-    await seedCursor(CHANNEL, tailId);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tailId);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -316,7 +311,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
     if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
-    await seedCursor(CHANNEL, tailId);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tailId);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });

@@ -101,11 +101,6 @@ async function fetchScrollbackPage(
 // advance-only since #233, so a mid-page (backward) seed through it would
 // be clamped to the tail a prior spec left behind and no divider would
 // render.
-async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = specUser();
-  await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
-}
-
 test.describe("issue #168 — send pins to bottom, never jumps to the unread marker", () => {
   test.use({ viewport: { width: 800, height: 300 } });
 
@@ -119,7 +114,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-    await seedCursor(CHANNEL, cursorRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -171,7 +166,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
     if (!cursorRow) throw new Error("seeded page too short for cursor placement");
-    await seedCursor(CHANNEL, cursorRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });

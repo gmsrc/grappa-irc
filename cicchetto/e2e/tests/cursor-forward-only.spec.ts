@@ -86,10 +86,6 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
 // cic's mount-time POST may already have landed at store-tail, and the
 // production endpoint has been advance-only since #233 (a backward seed
 // through it would be silently clamped).
-async function seedCursor(token: string, channel: string, messageId: number): Promise<void> {
-  await setReadCursorToId(token, NETWORK_SLUG, channel, messageId);
-}
-
 async function visibleTailId(page: Page): Promise<number | null> {
   return await page.evaluate(() => {
     const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
@@ -220,7 +216,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     // the settle window so the scroll-settle POST from this wheel-up
     // lands BEFORE we snapshot cursor + visible. Settle POSTs
     // `visible` which advances cursor; we override below with
-    // seedCursor at baseline = mid-pane, so the post-switch leave-arm's
+    // a forced cursor at baseline = mid-pane, so the post-switch leave-arm's
     // visible POST will be < baseline and dropped by the forward-only
     // gate.
     await scrollByPx(page, -400);
@@ -250,7 +246,7 @@ test.describe("BUGHUNT-2 cursor — forward-only contract", () => {
     }
     const baselineRow = candidates[Math.floor(candidates.length / 2)];
     if (!baselineRow) throw new Error("baselineRow not found");
-    await seedCursor(vjt.token, CHANNEL, baselineRow.id);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, baselineRow.id);
 
     // Wait for cic to observe the cursor via WS broadcast — otherwise
     // setCursorIfAdvances evaluates against stale local state.

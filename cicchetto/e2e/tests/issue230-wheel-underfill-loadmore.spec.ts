@@ -89,11 +89,6 @@ async function fetchScrollbackPage(token: string, channel: string): Promise<Arra
 // to the shared `setReadCursorToId` (test-only force endpoint) so the seed
 // lands regardless of prior cursor state — the production endpoint is
 // advance-only since #233 and would clamp a backward seed.
-async function seedCursor(channel: string, messageId: number): Promise<void> {
-  const vjt = specUser();
-  await setReadCursorToId(vjt.token, NETWORK_SLUG, channel, messageId);
-}
-
 test.describe("issue #230 — wheel-up loads older history when content underfills", () => {
   // TALL viewport: the ~50-row tail load must be SHORTER than the container
   // so `.scrollback` is not natively scrollable (the bug's precondition).
@@ -110,7 +105,7 @@ test.describe("issue #230 — wheel-up loads older history when content underfil
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const headId = headPage[0]?.id;
     if (!headId) throw new Error("#bofh seed page empty — cannot seed read cursor to head");
-    await seedCursor(CHANNEL, headId);
+    await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, headId);
 
     await loginAs(page, vjt);
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
