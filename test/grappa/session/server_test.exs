@@ -7855,7 +7855,11 @@ defmodule Grappa.Session.ServerTest do
       source = File.read!("lib/grappa/session/server.ex")
 
       [_, after_head] =
-        String.split(source, "defp apply_effects([{:reply, line} | rest], state) do", parts: 2)
+        String.split(
+          source,
+          "defp apply_effects([{:reply, line, origin} | rest], state) do",
+          parts: 2
+        )
 
       # Cut at the function's own `end` (two-space indent), not at the next
       # `defp`: the latter would drag the FOLLOWING arm's comment block into
@@ -9901,6 +9905,55 @@ defmodule Grappa.Session.ServerTest do
                SessionStateHelpers.ghost_recovery(state)
 
       assert is_reference(SessionStateHelpers.ghost_timer(state))
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # #1390 slice 6 — the other end of the pair. Its sibling (in the
+    # recover_identity describe) dies if the slice relabels NOTHING; this one
+    # dies if it relabels EVERYTHING onto a single tag. Neither alone is a
+    # guard: one mutant each is the point.
+    #
+    # Unlike the recover sibling this one is GREEN before the slice, on
+    # purpose. It is not buying the fix, it is fencing it.
+    #
+    # Arming needs the socket (the 433 comes from upstream), so the socket is
+    # nilled only once the FSM sits in `:awaiting_ghost_notice`. The NickServ
+    # NOTICE is then delivered as a plain process message — `{:irc, msg}` is
+    # the same door the MODE tests use — and the `WHOIS <orig>` it emits is
+    # the line that gets dropped. `:ghost_timeout` cannot serve here: its
+    # `step/2` clause returns `[]`, so it would log nothing and assert nothing.
+    test "#1390 a dropped GhostRecovery line still names the ghost" do
+      nick = "v_t18o_#{System.unique_integer([:positive])}"
+
+      {server, port} = start_server(ghost_handler(nick))
+      {anon_visitor, network} = visitor_with_network(port, nick: nick)
+      {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
+      registered_visitor = Grappa.Repo.reload!(anon_visitor)
+
+      pid = start_visitor_session_for(registered_visitor, network)
+
+      {:ok, _} =
+        IRCServer.wait_for_line(
+          server,
+          &(&1 == "PRIVMSG NickServ :GHOST #{nick} s3cret\r\n"),
+          1_000
+        )
+
+      _ = :sys.replace_state(pid, fn state -> %{state | client: nil} end)
+
+      {:ok, notice} =
+        Grappa.IRC.Parser.parse(":NickServ!service@services. NOTICE #{nick}_ :#{nick} has been ghosted.\r\n")
+
+      log =
+        capture_log(fn ->
+          send(pid, {:irc, notice})
+          # `:sys.get_state` serialises after the callback that logged.
+          _ = SessionStateHelpers.fetch(pid)
+        end)
+
+      assert log =~ "origin=ghost_recovery",
+             "a dropped GhostRecovery line must keep naming the ghost FSM"
 
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
@@ -13145,6 +13198,38 @@ defmodule Grappa.Session.ServerTest do
 
       assert :ok = Session.recover_identity(subject, network.id)
       assert {:error, :in_progress} = Session.recover_identity(subject, network.id)
+    end
+
+    # #1390 slice 6 — RED before the slice. The two sub-machines used to flush
+    # through `flush_lines/2`, which hard-coded `origin: :ghost_recovery` for
+    # BOTH its callers, so a RECOVER line dropped on a dead socket told the
+    # operator the GHOST machine had failed. Two of the five call sites were
+    # RecoverIdentity's; the warning named the wrong machine on both.
+    #
+    # `client: nil` takes `Client.send_line/2`'s second clause
+    # (`{:error, :no_socket}`), which is the door's error branch without the
+    # socket-teardown dance the CTCP sibling documents. `recover_identity` is a
+    # `handle_call`, so it needs no socket to ARRIVE, and its reply serialises
+    # past the callback that logged — the reply IS the barrier.
+    #
+    # The fixture MUST drive the RECOVER FSM: pointed at the ghost path this
+    # assert passes on the unfixed code and proves nothing. Its sibling in the
+    # GhostRecovery describe holds the other end.
+    test "#1390 a dropped RecoverIdentity line names recover, not the ghost" do
+      %{pid: pid, subject: subject, network: network} = start_recover_visitor("s3cret")
+
+      _ = :sys.replace_state(pid, fn state -> %{state | client: nil} end)
+
+      log =
+        capture_log(fn ->
+          assert :ok = Session.recover_identity(subject, network.id)
+        end)
+
+      assert log =~ "outbound line dropped: send_line failed",
+             "the outbound door must still log the drop"
+
+      assert log =~ "origin=recover_identity",
+             "a dropped RecoverIdentity line must name its OWN sub-machine"
     end
 
     test "happy path: reads the PERSISTENT secret past 001, NICK+IDENTIFY out, +r → succeeded" do
