@@ -1,11 +1,17 @@
 import { createEffect, createSignal, on } from "solid-js";
-import { addAlias, aliases, delAlias } from "./aliasList";
+import { aliases } from "./aliasList";
 import { ownNickForNetwork } from "./api";
 import { token } from "./auth";
 import { type ChannelKey, channelKey, decodeChannelKey } from "./channelKey";
 import { isChannelName } from "./chantypes";
 import type { CommandContext, DispatchOutcome, SubmitResult } from "./commands/context";
 import { watchlistCommand } from "./commands/highlight";
+import {
+  aliasDefineCommand,
+  errorCommand,
+  openSettingsCommand,
+  unaliasCommand,
+} from "./commands/local";
 import {
   banlistCommand,
   modeApplyCurrentCommand,
@@ -30,6 +36,7 @@ import {
 } from "./commands/ops";
 import { ctcpCommand, noticeCommand, pingCommand } from "./commands/relay";
 import {
+  adminCommand,
   infoCommand,
   linksCommand,
   lusersCommand,
@@ -49,6 +56,7 @@ import {
   disconnectCommand,
   nickCommand,
   notifyCommand,
+  operCommand,
   quitCommand,
   recoverCommand,
 } from "./commands/session";
@@ -73,9 +81,7 @@ import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 import { selectedChannel, setSelectedChannel } from "./selection";
 import { draftLines, sendBodyLines, sendFanOut, wireBody } from "./sendPipeline";
 import { isServicesSender } from "./servicesSender";
-import { requestOpenSettings } from "./settingsNav";
 import { parseSlash } from "./slashCommands";
-import { pushAdmin, pushOper } from "./socket";
 import { SERVER_WINDOW_NAME } from "./windowKinds";
 
 // #1255 — the channel sigils this NETWORK advertised (005 CHANTYPES),
@@ -1111,13 +1117,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = await motdCommand(cmd, ctx);
           break;
         }
-        // #992 — /admin [<target>]. Same door as /motd; the reply lands in
-        // the same server_reply modal under the `admin` source.
         case "admin": {
-          const networkId = requireNetworkId(networkSlug, "admin");
-          if (typeof networkId !== "number") return networkId;
-          await pushAdmin(networkId, cmd.target); // S6 (#364): await verb-ack
-          result = { ok: true };
+          result = await adminCommand(cmd, ctx);
           break;
         }
         case "stats": {
@@ -1153,57 +1154,31 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = await notifyCommand(cmd, ctx);
           break;
         }
-        // #356 — a bare watch-family verb (/notify, /watch, /hilight,
-        // /highlight, /dehilight) opens the unified watch-lists settings
-        // section rather than printing inline. Opening the drawer IS the
-        // feedback, so this is a silent success.
         case "open-settings": {
-          requestOpenSettings(cmd.section);
-          result = { ok: true };
+          result = await openSettingsCommand(cmd, ctx);
           break;
         }
         case "quote": {
           result = await quoteCommand(cmd, ctx);
           break;
         }
-        // Bundle C (#20 follow-up) — /oper <name> <password>. The password
-        // travels over the WS frame; bouncer redacts it from logs by
-        // emitting a static log body before sending OPER upstream.
-        // Result lands as a 381 RPL_YOUREOPER (success) / 491 (bad host)
-        // / 464 (bad pw) numeric — the existing numeric-routing path
-        // persists those as :notice rows. AWAIT the push: a credential-
-        // bearing verb MUST NOT silently no-op when the WS is down or
-        // the server-side validator rejects (CLAUDE.md
-        // `feedback_no_silent_drops_closed`).
         case "oper": {
-          const networkId = requireNetworkId(networkSlug, "oper");
-          if (typeof networkId !== "number") return networkId;
-          await pushOper(networkId, cmd.name, cmd.password);
-          result = { ok: true };
+          result = await operCommand(cmd, ctx);
           break;
         }
-        // #385 — /alias <name> <expansion> defines/overwrites a user alias.
-        // Round-tripped through the aliasList store (full-map PUT, server
-        // normalizes + validates); a 422 (bad name/expansion, cap exceeded)
-        // is thrown as an ApiError and surfaces via friendlyError in the
-        // catch below with the per-field message. The green confirmation
-        // echoes the normalized definition.
         case "alias-define": {
-          await addAlias(cmd.name, cmd.expansion);
-          result = { ok: `alias: /${cmd.name} → ${cmd.expansion}` };
+          result = await aliasDefineCommand(cmd, ctx);
           break;
         }
-        // #385 — /unalias <name> removes a user alias.
         case "unalias": {
-          await delAlias(cmd.name);
-          result = { ok: `alias: removed /${cmd.name}` };
+          result = await unaliasCommand(cmd, ctx);
           break;
         }
-        // ---------------------------------------------------------------
-        // Parser-level error (unknown verb or validation failure).
-        // ---------------------------------------------------------------
-        case "error":
-          return { error: cmd.message };
+        // Not a verb: the parser's own failure, routed like one.
+        case "error": {
+          result = await errorCommand(cmd, ctx);
+          break;
+        }
         default: {
           const _exhaustive: never = cmd;
           void _exhaustive;

@@ -2,7 +2,7 @@ import { patchNetwork, postNick, postNotifyAdd } from "../api";
 import { friendlyError } from "../friendlyError";
 import { clearMentionsBundle } from "../mentionsWindow";
 import { quitAll } from "../quit";
-import { pushAwaySet, pushAwayUnset, pushRecover } from "../socket";
+import { pushAwaySet, pushAwayUnset, pushOper, pushRecover } from "../socket";
 import type { CommandHandler } from "./context";
 
 /**
@@ -112,4 +112,27 @@ export const notifyCommand: CommandHandler<"notify"> = async (cmd, ctx) => {
   if (typeof notifyNet !== "number") return notifyNet;
   await postNotifyAdd(ctx.token, ctx.networkSlug, cmd.nicks);
   return { ok: `notify: watching ${cmd.nicks.join(", ")}` };
+};
+
+/**
+ * Bundle C (#20 follow-up) — `/oper <name> <password>`. The password travels
+ * over the WS frame; the bouncer redacts it from logs by emitting a static log
+ * body before sending OPER upstream. The result lands as a 381 RPL_YOUREOPER
+ * (success) / 491 (bad host) / 464 (bad pw) numeric, which the numeric-routing
+ * path persists as :notice rows.
+ *
+ * AWAIT the push: a credential-bearing verb MUST NOT silently no-op when the WS
+ * is down or the server-side validator rejects
+ * (`feedback_no_silent_drops_closed`).
+ *
+ * #1396 — it lives with the session verbs rather than with the server queries
+ * in `server.ts`, whose contract is that none of them changes anything: this
+ * one changes the operator's own standing on the network for the rest of the
+ * session.
+ */
+export const operCommand: CommandHandler<"oper"> = async (cmd, ctx) => {
+  const networkId = ctx.requireNetworkId(ctx.networkSlug, "oper");
+  if (typeof networkId !== "number") return networkId;
+  await pushOper(networkId, cmd.name, cmd.password);
+  return { ok: true };
 };

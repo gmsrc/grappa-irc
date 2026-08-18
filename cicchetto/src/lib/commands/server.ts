@@ -1,5 +1,6 @@
 import { markLusersRequested } from "../lusersBundle";
 import {
+  pushAdmin,
   pushInfo,
   pushLinks,
   pushLusers,
@@ -117,6 +118,19 @@ export const motdCommand: CommandHandler<"motd"> = async (cmd, ctx) => {
   // for an unknown target surfaces via the same server_reply modal, never a
   // wrong-server MOTD.
   await pushMotd(networkId, cmd.target); // S6 (#364): await verb-ack
+  return { ok: true };
+};
+
+/**
+ * #992 — `/admin [<target>]`. Same door as /motd: bahamut's `m_admin` routes
+ * through the same `hunt_server`, so a target sends the query to another
+ * server and the reply lands in the same `server_reply` modal under the
+ * `admin` source.
+ */
+export const adminCommand: CommandHandler<"admin"> = async (cmd, ctx) => {
+  const networkId = ctx.requireNetworkId(ctx.networkSlug, "admin");
+  if (typeof networkId !== "number") return networkId;
+  await pushAdmin(networkId, cmd.target); // S6 (#364): await verb-ack
   return { ok: true };
 };
 
