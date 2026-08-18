@@ -48816,3 +48816,87 @@ where none of the 27 files run at all. A rotating red set is the suite's own
 property here, not a signal about the change under test — which is exactly why
 a spec's red is attributed by re-running it, never by reading the diff next to
 it._
+<!-- entry #1396-residue -->
+
+---
+
+## 2026-08-18 — #1396: the last six arms leave the switch, and the row the net could not see
+
+Bucket G's remainder. #1514 moved 47 of the 59 `dispatchDraft` arms behind the
+`lib/commands/` seam, #1517 moved the one the #1513 hoist unblocked, and six
+were held back by a scope ruling that gave one structural reason: *no red
+protects them*. Six more belong to #1513 and are untouched here.
+
+### The premise was false, and the correction is a measurement
+
+The net that makes a pure move provable — `#1396 — dispatch characterization
+over every arm` — landed HOURS AFTER that ruling, in #1514. It pins every arm's
+observable effects, so by the time the ruling was acted on, all six had a red.
+One mutant per arm, the full 290-file unit suite each time, the same seven
+mutants re-run after the move:
+
+| mutant | before | after |
+|---|---|---|
+| `/admin` resolves another network's id | 1 | 1 |
+| `/admin` drops `cmd.target` | **0** | 1 (after the fixture fix below) |
+| `/oper` swaps name and password | 1 | 1 |
+| `/watch` opens a fixed section | 1 | 1 |
+| `/alias` stores expansion as name | 1 | 1 |
+| `/unalias` removes the wrong name | 1 | 1 |
+| a parser error loses the parser's message | **3** | 3 |
+
+Six of the seven are the same single assertion — the pinned row — before and
+after. `error`, the arm named as the genuinely unprotected one, is the BEST
+protected of the six: three assertions die, and two of them are ordinary specs
+rather than the net, because bare `/connect` parses to `kind: "error"` and so a
+second verb's error spec rides this arm.
+
+### The one real hole was somewhere else
+
+`/admin`'s TARGET. The mutant that drops `cmd.target` killed nothing across all
+290 files, because the table's draft was a bare `/admin`: the fixture's target
+is null, and null is also what a handler that dropped it would send. That is
+the `target == context` degeneration the table's own rule is written against,
+in its other form — not "the target equals the window", but "the target equals
+the default". #992's whole point is that a target routes the query through
+bahamut's `hunt_server` to ANOTHER server, so the blind half was the
+interesting one.
+
+Closed FIRST, in its own commit, before anything moved: the row now reads
+`/admin irc.example.org` (neither `#a` nor `freenode`, so the table's rule
+still holds), and the same mutant then kills exactly one assertion — the
+cardinality every sibling arm has. The pre-move and post-move runs of that
+mutant were both taken over the full suite, so the two sides measure the same
+thing.
+
+### Three homes, chosen against the module docs rather than by size
+
+- `admin` → `server.ts`. The same shape as `/motd`, down to `hunt_server`.
+- `oper` → `session.ts`, deliberately NOT `server.ts`, whose module doc states
+  that none of its verbs changes anything on this side. `/oper` changes the
+  operator's standing on the network for the rest of the session. A handler
+  filed under a doc that denies it is how a doc stops being read.
+- `open-settings`, `alias-define`, `unalias`, `error` → a new `local.ts`: the
+  arms that reach no network. None resolves a network id, none puts a frame on
+  the wire, and — the fact that makes it an axis rather than a leftovers
+  drawer — none reads anything off the context record.
+
+`error` is not a verb. It is the parser's failure, arriving in the same union
+so the dispatcher has one shape to route, and its handler deliberately adds
+nothing: an arm that reworded the message would be inventing an error the
+parser never raised. Routing it like a verb is what makes the switch uniform —
+every case is now one call and a `break`.
+
+### What the record did not need
+
+`CommandContext` gains ZERO fields. Two of the six want `requireNetworkId` and
+`networkSlug`, which the record has carried since slice 2a; the other four want
+nothing at all. That is the measurable difference between these five and the
+`ame`/`amsg` pair still parked in #1513, whose blocker was never the record.
+
+### Limits of this measurement
+
+The unit suite is the whole of it. Eight e2e specs drive these verbs
+(`issue992-admin-command`, `issue148-visitor-oper`, `issue385-user-aliases`,
+`issue409-alias-edit`, `issue409-alias-tab-scope`, `issue427-alias-shadow-builtins`,
+`issue1047-alias-range-param`, `issue460-settings-index`) and none was run here.
