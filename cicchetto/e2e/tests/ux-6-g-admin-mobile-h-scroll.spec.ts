@@ -59,6 +59,7 @@ import {
   listSessionLogSessions,
   mintVisitor,
   reapVisitors,
+  setAdminFlag,
 } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -170,22 +171,6 @@ type Offender = {
   scrollW: number;
   clientW: number;
 };
-
-async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean): Promise<void> {
-  const res = await fetch(`${GRAPPA_BASE_URL}/admin/users/${encodeURIComponent(userId)}`, {
-    method: "PATCH",
-    headers: {
-      authorization: `Bearer ${adminToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ is_admin: isAdmin }),
-  });
-  if (!res.ok) {
-    throw new Error(
-      `PATCH /admin/users/${userId} is_admin=${isAdmin} → ${res.status} ${await res.text()}`,
-    );
-  }
-}
 
 // A Vhosts row to measure. Mirrors issue252's candidate rule: the address
 // must be one with no vhost row yet, or the create 409s.

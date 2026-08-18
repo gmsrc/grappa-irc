@@ -473,6 +473,30 @@ export async function findUserIdByName(adminToken: string, userName: string): Pr
   return user.id;
 }
 
+// The admin-chrome specs drive `is_admin` from BOTH sides — they revoke to
+// assert the affordance disappears, then restore it — so the flag is a
+// fixture verb, not an assertion. The id is a PARAMETER for the same reason
+// `findUserIdByName` takes the name: this module imports nothing.
+export async function setAdminFlag(
+  adminToken: string,
+  userId: string,
+  isAdmin: boolean,
+): Promise<void> {
+  const res = await fetch(`${GRAPPA_BASE_URL}/admin/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: {
+      authorization: `Bearer ${adminToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ is_admin: isAdmin }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `grappaApi.setAdminFlag: is_admin=${isAdmin} on ${userId} → ${res.status} ${await res.text()}`,
+    );
+  }
+}
+
 // #1158 item 4 — the lifecycle log collapsed to one entry per session.
 // A spec uses this as a PRECONDITION barrier, never as the property under
 // test: the log is a bounded global ring written from an async cast, so a

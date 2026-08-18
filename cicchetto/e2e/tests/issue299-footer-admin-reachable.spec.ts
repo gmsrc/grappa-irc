@@ -24,7 +24,7 @@
 // shared baseline is restored (mirrors #291).
 
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
-import { findUserIdByName, GRAPPA_BASE_URL } from "../fixtures/grappaApi";
+import { findUserIdByName, setAdminFlag } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -32,19 +32,6 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MIN_TAP_TARGET_PX = 44;
 
 test.setTimeout(60_000);
-
-async function setAdminFlag(adminToken: string, userId: string, isAdmin: boolean): Promise<void> {
-  const res = await fetch(`${GRAPPA_BASE_URL}/admin/users/${encodeURIComponent(userId)}`, {
-    method: "PATCH",
-    headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
-    body: JSON.stringify({ is_admin: isAdmin }),
-  });
-  if (!res.ok) {
-    throw new Error(
-      `PATCH /admin/users/${userId} is_admin=${isAdmin} → ${res.status} ${await res.text()}`,
-    );
-  }
-}
 
 // Open the mobile members/rail drawer via the TopicBar hamburger (present on
 // the channel windows these tests drive) and return the drawer locator so
