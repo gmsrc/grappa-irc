@@ -48806,6 +48806,13 @@ to get a behavioural number. It aborts `globalSetup`, which means the run
 reports a small figure that is **vacuous rather than small** — no spec got far
 enough to have an opinion.
 
-_Not established: `scroll-on-window-switch.spec.ts:252` is red on both sides.
-It cancels in the delta and is deliberately left unclassified here — neither
-flake nor real defect was demonstrated, and this slice does not touch it._
+_Not established: in the mutant measurement above,
+`scroll-on-window-switch.spec.ts:252` was red on both sides. It cancels in the
+delta and was left unclassified — and the ship-gate run afterwards showed why
+that was the right call: it passed there, while three different specs went
+red, none of them touched by this slice. Iso-reruns put two of those three at
+3/3 and 12/12 green (cascade) and the third at 1-of-3 red **in isolation**,
+where none of the 27 files run at all. A rotating red set is the suite's own
+property here, not a signal about the change under test — which is exactly why
+a spec's red is attributed by re-running it, never by reading the diff next to
+it._
