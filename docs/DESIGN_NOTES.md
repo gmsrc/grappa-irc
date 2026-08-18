@@ -48287,3 +48287,138 @@ and the fixture trio, which needs a ruling first — substituting AuthFixtures'
 placeholder hash for a real Argon2 one changes what fourteen files prove, and
 the local `visitor_fixture` calls the production provisioning verb the
 canonical one bypasses._
+<!-- entry #1396 dispatch -->
+
+---
+
+## 2026-08-18 — #1396: the command seam, and the two axes it did not cross
+
+Bucket G's HIGH was one function: `dispatchDraft`'s `switch (cmd.kind)`, 59
+arms wide, inside a module that is also the per-window composer store and the
+send pipeline. Forty-seven of those arms now delegate to `lib/commands/`. The
+switch keeps all fifty-nine labels and the `default: { const _exhaustive: never
+= cmd }` — adding a verb stays a compile error, which was the one property the
+split was not allowed to spend.
+
+### What the context record carries, and what it refuses
+
+Of the 87 identifiers the switch calls, 69 are ordinary module imports a
+handler can import for itself and four are `compose.ts` top-level consts. Only
+the values that close over the submitting window cannot be reached that way,
+and those are the whole of `CommandContext`: `key`, `networkSlug`,
+`channelName`, `text`, `token`, plus five functions — `getActiveChannel`,
+`sigils`, `requireChannel`, `requireNetworkId`, `resolveBareWhoisNick`.
+
+**Anything a handler can import, it imports.** The record carries what is
+per-submission, not what is merely convenient, and it grew one field per slice
+only when a moved arm proved it needed one. That rule is what kept `fanOut` and
+the send door out of it.
+
+Two of the five are functions for a reason worth keeping. `requireChannel` and
+`requireNetworkId` are called FROM the handler rather than resolved when the
+record is built, which keeps them LAZY and keeps the slug a PARAMETER (two arms
+resolve a network other than `networkSlug`). `sigils` is a THUNK on the same
+grounds, and the characterization net is what forced it: the first cut resolved
+it eagerly, which put a `networkIdBySlug` on EVERY submission including the 58
+arms that never ask, and the net caught the extra call as an ambient-effect
+diff. Thirteen arms call `requireChannel` BEFORE resolving a network, so that
+when both would fail the operator still reads the channel error — the call
+ORDER is part of the contract, not an accident of layout.
+
+### The twelve arms that stayed, and why they are two different sets
+
+Twelve arms remain inline, and reading them as one list is the mistake this
+section exists to prevent. They divide by whether the seam CAN take them.
+
+**Six are a declared scope closure, not a structural obstacle.** `error`,
+`open-settings`, `admin`, `oper`, `alias-define` and `unalias` are two-to-five
+line arms; `admin` and `oper` are `requireNetworkId` plus one push, the same
+shape as `stats` and `whowas`, which left in slice 2b. They would move at zero
+new fields. They stay because #1396 is being closed at forty-seven, and they
+remain its residual work — **#1396 stays open for them.** They are NOT part of
+the pipeline issue, which is a different defect.
+
+Only one of the six is genuinely unguarded, and the net says so itself. Its
+honesty test — `"names the arms this net does NOT protect"` — subtracts the
+AMBIENT effects every submission produces (`aliasList.aliases()`,
+`networks.networkIdBySlug`) and pins what remains per arm:
+
+    "unprotected": ["error"],
+    "indistinguishablePairs": [["ame", "amsg"]],
+
+`error` alone has nothing left after the subtraction, because it is a
+parser-level `return { error: cmd.message }` and reaches no store at all. The
+other five DO carry a distinguishing pinned effect — `socket.pushAdmin(1,
+null)`, `aliasList.addAlias(…)` — so a broken move would redden `"each arm's
+observable effects are pinned"`. An earlier reading of this bucket held that no
+red protected all six; measured, that is true of one.
+
+### The send pipeline is ONE axis, not three exceptions
+
+The other six — `service-modal`, `ame`, `amsg`, `privmsg`, `me`, `msg` — were
+refused across three separate slices, each time for what looked like a local
+reason. They are one defect, and naming it as one is the point of this entry.
+
+`sendPacedBody` is not defined at module scope. It lives INSIDE the
+`identityScopedStore((onIdentityChange) => { … })` factory, the same closure
+that holds `dispatchDraft`, and it reaches `claimDrafts`, `getDraft`,
+`writeState`, `releaseDrafts` and `residueDraft` — it is store, not pipeline. A
+handler cannot import a closure member. So an arm that reaches it can only
+delegate by having the send door handed to it through the context record, which
+is the widening already refused for `fanOut`: it would put the buffer-owning
+door into a record whose whole discipline is that it carries per-submission
+values.
+
+Hoisting it is blocked from the other side. `planSends` stands on the EXPORTED
+`draftLines` and `drainPaced` on the EXPORTED `wireBody`, both module-scope
+exports of `compose.ts` — so lifting the cluster into `lib/commands/` makes
+`compose -> commands/* -> compose` a real import cycle, which is the class
+bucket G exists to remove. Stopping halfway leaves the cycle; going all the way
+also moves the mock target under `ServiceModal.test.tsx` and
+`RegistrationWizardModal.test.tsx`.
+
+That is a module-boundary and import-cycle defect, not a dispatch-table one. It
+needs its own red — a mutant on `drainPaced`, or `noImportCycles` switched on —
+and a measurement this work did not make. It is filed separately (#1513);
+**reusing the verbs and not the nouns, widening the context record to reach the
+send door stays refused.**
+
+### Two corrections the plan needed, both measured
+
+**`ame`/`amsg` are not movable, and the three reds that separate them are not
+what blocks them.** Mutant A — inverting the single discriminant `cmd.kind ===
+"ame"` to `"amsg"` — was re-run against the tree forty arms later and still
+reddens exactly three tests, including the two that name the distinction. The
+distinction is bought. What blocks the arms is the import chain above, which no
+amount of test coverage moves. The net corroborates from the other side: the
+pair is its only `indistinguishablePairs` entry, so the coverage that separates
+them is dedicated, not ambient.
+
+**`channelName` has TWO meanings, not three, and the record needs no new
+field.** The plan warned of three. Measured: only `part`, `ctcp`, `ping` and
+`notice` read the parameter at all — `part` as a DEFAULT TARGET, the other
+three as the ECHO window. `join`, `list`, `msg` and `query` never read it; they
+WRITE a different channel into the selection, which is a focus change and not a
+third reading. The meanings stay distinct because the record hands over the raw
+channel and each handler says what it is for. A pre-resolved "default target"
+field is precisely what would have collapsed them into one, so none was added.
+
+### What bought the move
+
+A green after a refactor proves the tests still run; it does not prove they
+still reach the code. Each slice therefore mutated an arm AFTER it moved and
+compared the reds to the pre-move measurement. The load-bearing one is `part`:
+replacing `cmd.channel ?? ctx.channelName` with a literal reddens exactly the
+two tests that named the trap before the move — `"/part with no arg parts the
+current channel"` and `"/part with a sigil-less reason parts the current
+channel with that reason"`. Same tests, same cardinality, on the far side of
+the seam: the record did not lose the channel. Every mutant was restored
+byte-identical (`cmp`) and re-gated green.
+
+One gotcha banked, because it costs a red to rediscover: a scoped `biome check`
+invoked with `cicchetto/src/...` paths silently checks ZERO files — the
+container's cwd is already `/app/cicchetto`, so the prefix must be `src/...`.
+Biome reports "No files were processed", which is easy to lose in a truncated
+tail. And `tsc` caught an orphaned import that biome's `noUnusedImports` did
+not: for import hygiene here, the full `check` chain is the oracle, not biome
+alone.
