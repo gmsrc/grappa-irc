@@ -48564,3 +48564,86 @@ do close over store state. Unblocking those means moving the STORE, not the
 pipeline. #1513 stays open for that half. Widening the command context record to
 hand a handler the send door stays refused — it is the same widening #1396
 refused for `fanOut`.
+<!-- entry #1396 services -->
+
+---
+
+## 2026-08-18 — #1396: the one arm the #1513 hoist unblocked, and the invariant its net does not hold
+
+`service-modal` moves behind the dispatch seam, into a new
+`cicchetto/src/lib/commands/services.ts`. It is the ONLY arm the #1513 hoist
+unblocked, and it was blocked by exactly one thing: it calls `sendBodyLines`,
+which until #1513 lived inside the composer store closure and could not be
+imported from `commands/`. Now that the send pipeline is its own module, the
+handler reaches it like any other import and needs nothing off the context
+record but `ctx.networkSlug`.
+
+A one-handler module is not a new shape here: `commands/highlight.ts` is nine
+lines and carries one verb. The alternative — folding it into `relay.ts` — was
+rejected because that module's own header defines itself as "the verbs that
+address someone who is NOT this window, while the echo stays here", and a
+services console that opens a modal is a different job that would have made
+that sentence false.
+
+### What stays inline, and the three different reasons
+
+Ten arms remain inline after this slice, and they are not one class:
+
+* `privmsg`, `me`, `msg`, `ame`, `amsg` — the STORE-coupled arms, held by the
+  #1513 ruling. Moving them means publishing `claimDrafts`, `writeState` and
+  `releaseDrafts` at module scope, and `writeState` is the door that BYPASSES
+  the #737 drain lock (`setDraft` refuses a write while a drain owns the
+  window; `writeState` does not, because it is the door for the writer that
+  HOLDS the lock). Exporting it makes that invariant optional for every
+  importer. The import cycle such an export would close is NOT the objection —
+  measured innocuous: cic already carries one runtime cycle
+  (`windowState.ts` ↔ `selection.ts`, both eval-time stores consumed at call
+  time), biome's recommended set has no cycle rule, and a probe that closed
+  exactly the `compose.ts` ↔ `commands/*` cycle passed the full vitest suite,
+  `tsc --noEmit` and a production `vite build`. The objection is the lock.
+* `error` — structural: no red protects it. It returns the parser's own
+  message, so a mutant that changes the arm changes nothing a test observes.
+  Moving code that no test holds is moving it blind.
+* `admin`, `oper`, `open-settings`, `alias-define`, `unalias` — SCOPE CLOSURE,
+  declared as such. They are two-to-four-line bodies, movable at zero cost and
+  protected by the characterization net. They stay because this campaign stops
+  here, not because anything in the code resists them. Saying so plainly is the
+  point: a scope decision dressed up as a technical reason is how the next
+  reader inherits a constraint that was never real.
+
+### The red, measured on both sides of the move
+
+Protection was measured BEFORE the move and re-measured AFTER, with the same
+mutants and the same demand: same failing SET, same cardinality.
+
+| mutant | before | after |
+|---|---|---|
+| drop the `openServiceModal` call | 4 red | 4 red |
+| send `HELP` instead of `help` | 4 red | 4 red |
+| swap the two statements (order) | 0 red | 0 red |
+
+The four are the three `it.each` rows of "%s bare opens the services modal for
+%s and fires help (#290)" plus the #1396 characterization pin, "each arm's
+observable effects are pinned". Same four names on both sides, so the move is
+covered by the tests it was covered by, and nothing swallowed it — no test
+mocks `../lib/compose`, `../lib/sendPipeline` or any `commands/*` module in the
+file that exercises this arm.
+
+### The invariant this arm declares and nothing holds
+
+The third row is the finding. The arm's own comment states an ORDER:
+`openServiceModal` FIRST captures the `$server` high-water mark, THEN `help`
+goes out, so the reply notices count as while-open arrivals. Swapping the two
+statements leaves the suite fully green — before the move and after it.
+
+Two reasons, both by design elsewhere: `effectSignature()` SORTS what it
+collects ("the net pins WHAT left the module, not the order it left in"), and
+the three `it.each` rows assert that each mock was called with the right
+arguments, never their relative order. So an invariant that is written down in
+prose is bought by nothing.
+
+It is named here rather than fixed here, deliberately. Adding the guard inside
+this commit would have changed the after-set the move is proven by, and a
+two-sided proof whose two sides measure different things proves nothing. The
+gap is pre-existing, it is not widened by the move, and it wants its own change
+with its own red.

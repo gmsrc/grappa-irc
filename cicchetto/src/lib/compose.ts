@@ -43,6 +43,7 @@ import {
   whoisCommand,
   whowasCommand,
 } from "./commands/server";
+import { serviceModalCommand } from "./commands/services";
 import {
   awayCommand,
   disconnectCommand,
@@ -71,7 +72,6 @@ import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
 // for one of the verbs it can carry.
 import { selectedChannel, setSelectedChannel } from "./selection";
 import { draftLines, sendBodyLines, sendFanOut, wireBody } from "./sendPipeline";
-import { openServiceModal } from "./serviceModal";
 import { isServicesSender } from "./servicesSender";
 import { requestOpenSettings } from "./settingsNav";
 import { parseSlash } from "./slashCommands";
@@ -955,18 +955,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "service-modal": {
-          // #290 — a BARE services command (`/ns`, `/cs`, `/ms`, …) opens
-          // the dedicated services console modal and fires `help`, so the
-          // service's multi-NOTICE help wall lands confined in the modal
-          // (ServiceModal mirrors the $server service notices) instead of
-          // flooding the server window. `openServiceModal` FIRST captures the
-          // $server high-water mark, THEN `help` is sent, so the reply
-          // notices count as while-open arrivals (spec: capture only while
-          // open). A full command WITH args stays the `msg` arm above (inline
-          // execute, reply inline) — no unsolicited popup for power users.
-          openServiceModal(networkSlug, cmd.service);
-          await sendBodyLines(networkSlug, cmd.service, "help", false);
-          result = { ok: true };
+          result = await serviceModalCommand(cmd, ctx);
           break;
         }
         case "query": {
