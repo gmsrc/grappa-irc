@@ -36,7 +36,7 @@
 
 import { type BrowserContext, expect, type Page } from "@playwright/test";
 import { openSettingsSection } from "./cicchettoPage";
-import { assertMessagePersisted } from "./grappaApi";
+import { assertMessagePersisted, GRAPPA_BASE_URL } from "./grappaApi";
 import { assertNoPushAfterStimulus } from "./pushAbsence";
 
 const PUSH_CATCHER_URL = process.env.E2E_PUSH_CATCHER_URL ?? "http://push-catcher:3000";
@@ -218,8 +218,7 @@ const DEFAULT_NOTIFICATION_PREFS = {
  * silently breaks subsequent channel-mention specs unless reset.
  */
 export async function resetNotificationPrefs(token: string): Promise<void> {
-  const base = "http://grappa-test:4000";
-  await fetch(`${base}/me/settings/notification-prefs`, {
+  await fetch(`${GRAPPA_BASE_URL}/me/settings/notification-prefs`, {
     method: "PUT",
     headers: {
       authorization: `Bearer ${token}`,
@@ -239,10 +238,8 @@ export async function resetNotificationPrefs(token: string): Promise<void> {
  * Push.Sender's per-user fan-out target list.
  */
 export async function resetPushSubscriptions(token: string): Promise<void> {
-  // grappa REST surface for the runner — same base as grappaApi.
-  const base = "http://grappa-test:4000";
   const headers = { authorization: `Bearer ${token}` };
-  const list = await fetch(`${base}/push/subscriptions`, { headers });
+  const list = await fetch(`${GRAPPA_BASE_URL}/push/subscriptions`, { headers });
   if (!list.ok) {
     // Treat missing endpoint / 401 as "nothing to clean" — first-run
     // shape before any subscription has been created.
@@ -250,7 +247,7 @@ export async function resetPushSubscriptions(token: string): Promise<void> {
   }
   const body = (await list.json()) as { subscriptions?: { id: string }[] };
   for (const sub of body.subscriptions ?? []) {
-    await fetch(`${base}/push/subscriptions/${encodeURIComponent(sub.id)}`, {
+    await fetch(`${GRAPPA_BASE_URL}/push/subscriptions/${encodeURIComponent(sub.id)}`, {
       method: "DELETE",
       headers,
     });
@@ -268,10 +265,9 @@ export async function resetPushSubscriptions(token: string): Promise<void> {
  * value — a real barrier, not a sleep.
  */
 export async function awaitDeviceLastUsed(token: string, timeoutMs = 5_000): Promise<void> {
-  const base = "http://grappa-test:4000";
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(`${base}/push/subscriptions`, {
+    const res = await fetch(`${GRAPPA_BASE_URL}/push/subscriptions`, {
       headers: { authorization: `Bearer ${token}` },
     });
     if (res.ok) {
