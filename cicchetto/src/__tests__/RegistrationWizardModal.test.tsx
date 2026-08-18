@@ -31,7 +31,7 @@ const sendBodyLinesMock = vi.fn<
 const [identifiedSignal, setIdentifiedSignal] = createSignal(false);
 const identifiedForNetworkMock = vi.fn<(id: number) => boolean>(() => identifiedSignal());
 
-vi.mock("../lib/compose", () => ({
+vi.mock("../lib/sendPipeline", () => ({
   sendBodyLines: (slug: string, target: string, body: string, notice: boolean) =>
     sendBodyLinesMock(slug, target, body, notice),
 }));

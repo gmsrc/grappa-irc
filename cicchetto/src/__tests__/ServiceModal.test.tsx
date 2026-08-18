@@ -11,11 +11,11 @@ import ServiceModal from "../ServiceModal";
 // $server scrollback (where the server routes services-sender NOTICEs),
 // filtered to THIS service AND to notices that arrived since the modal opened
 // (id > sinceId). Nick is stripped per line (service name lives in the title);
-// the `>` prompt sends raw commands to the service via compose.sendBodyLines.
+// the `>` prompt sends raw commands to the service via pipeline.sendBodyLines.
 
 // The `>` prompt is the only outbound path; stub it so the component test
 // stays a pure render/behaviour test (no token/api/WS).
-vi.mock("../lib/compose", () => ({
+vi.mock("../lib/sendPipeline", () => ({
   sendBodyLines: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -145,13 +145,13 @@ describe("ServiceModal (#290)", () => {
     const slug = "svc-prompt";
     openServiceModal(slug, "NickServ");
     render(() => <ServiceModal />);
-    const compose = await import("../lib/compose");
+    const pipeline = await import("../lib/sendPipeline");
 
     const input = screen.getByTestId("service-modal-input") as HTMLInputElement;
     fireEvent.input(input, { target: { value: "ghost oldnick s3cret" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(compose.sendBodyLines).toHaveBeenCalledWith(
+    expect(pipeline.sendBodyLines).toHaveBeenCalledWith(
       slug,
       "NickServ",
       "ghost oldnick s3cret",
@@ -165,8 +165,8 @@ describe("ServiceModal (#290)", () => {
     const slug = "svc-fail";
     openServiceModal(slug, "NickServ");
     render(() => <ServiceModal />);
-    const compose = await import("../lib/compose");
-    vi.mocked(compose.sendBodyLines).mockRejectedValueOnce(new Error("boom"));
+    const pipeline = await import("../lib/sendPipeline");
+    vi.mocked(pipeline.sendBodyLines).mockRejectedValueOnce(new Error("boom"));
 
     const input = screen.getByTestId("service-modal-input") as HTMLInputElement;
     fireEvent.input(input, { target: { value: "identify hunter2" } });
@@ -184,13 +184,13 @@ describe("ServiceModal (#290)", () => {
     const slug = "svc-empty";
     openServiceModal(slug, "NickServ");
     render(() => <ServiceModal />);
-    const compose = await import("../lib/compose");
+    const pipeline = await import("../lib/sendPipeline");
 
     const input = screen.getByTestId("service-modal-input") as HTMLInputElement;
     fireEvent.input(input, { target: { value: "   " } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(compose.sendBodyLines).not.toHaveBeenCalled();
+    expect(pipeline.sendBodyLines).not.toHaveBeenCalled();
   });
 
   it("closes on the × button", () => {

@@ -10,7 +10,6 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { sendBodyLines } from "./lib/compose";
 import { friendlyError } from "./lib/friendlyError";
 import { identifiedForNetwork } from "./lib/identity";
 import { networkBySlug, networkIdBySlug } from "./lib/networks";
@@ -30,6 +29,7 @@ import {
   wizardBack,
   wizardNext,
 } from "./lib/registrationWizard";
+import { sendBodyLines } from "./lib/sendPipeline";
 import { serviceMirrorRows } from "./lib/serviceModal";
 import { MircBody } from "./MircText";
 

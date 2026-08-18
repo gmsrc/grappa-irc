@@ -1,8 +1,8 @@
 import { type Component, createEffect, createSignal, For, Show } from "solid-js";
-import { sendBodyLines } from "./lib/compose";
 import { friendlyError } from "./lib/friendlyError";
 import { nickEquals } from "./lib/nickEquals";
 import { createOverlayLock } from "./lib/overlayScrollLock";
+import { sendBodyLines } from "./lib/sendPipeline";
 import { closeServiceModal, serviceMirrorRows, serviceModalState } from "./lib/serviceModal";
 import { MircBody } from "./MircText";
 
