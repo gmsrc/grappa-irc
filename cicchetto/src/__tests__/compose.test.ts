@@ -2180,6 +2180,38 @@ describe("compose submit — slash command dispatch", () => {
     expect(result).toEqual({ ok: true });
   });
 
+  // #1396 — the two tests above pin the fallback's VALUE with the active
+  // window and the submitting one set to the same channel, so neither can
+  // tell which of the two `part` actually read. Measured: swapping
+  // `ctx.channelName` for the ACTIVE window at that site killed 0 of 5615
+  // tests — not even the characterization net, whose `part` row is
+  // `/part #other` and so never evaluates the fallback at all.
+  //
+  // The two genuinely diverge: a queued line (#904) is drained after the
+  // operator has moved on, and ComposeBox's props come from the selection it
+  // was mounted for. Reading the active window there parts the channel the
+  // operator is LOOKING at instead of the one they typed in — silently, and
+  // successfully.
+  it("/part with no arg parts the SUBMITTING window, not the active one", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sel = await import("../lib/selection");
+    vi.mocked(sel.selectedChannel).mockReturnValue({
+      networkSlug: "freenode",
+      channelName: "#b",
+      kind: "channel",
+    });
+    const api = await import("../lib/api");
+    vi.mocked(api.postPart).mockResolvedValue();
+
+    const compose = await import("../lib/compose");
+    const k = channelKey("freenode", "#a");
+    compose.setDraft(k, "/part");
+    const result = await compose.submit(k, "freenode", "#a");
+
+    expect(api.postPart).toHaveBeenCalledWith("tok", "freenode", "#a", null);
+    expect(result).toEqual({ ok: true });
+  });
+
   it("unknown slash returns {error: 'unknown command'}", async () => {
     localStorage.setItem("grappa-token", "tok");
     const compose = await import("../lib/compose");
