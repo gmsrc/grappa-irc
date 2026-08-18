@@ -995,8 +995,7 @@ defmodule Grappa.IRC.ClientTest do
       {server, port} = IRCServer.start_server(rfc_handler())
       _ = start_client(port, %{auth_method: :none})
 
-      assert {:ok, _} =
-               IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER "), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
 
       lines = IRCServer.sent_lines(server)
       refute Enum.any?(lines, &String.starts_with?(&1, "PASS"))
@@ -1015,8 +1014,7 @@ defmodule Grappa.IRC.ClientTest do
           password: "swordfish"
         })
 
-      assert {:ok, _} =
-               IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER "), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
 
       lines = IRCServer.sent_lines(server)
       pass_idx = Enum.find_index(lines, &String.starts_with?(&1, "PASS"))
@@ -1589,7 +1587,7 @@ defmodule Grappa.IRC.ClientTest do
 
       # Wait for the server to have written the 001; then poll for the
       # phase transition (no CAP END is sent — handshake is one-sided).
-      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER "), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
       Process.sleep(50)
 
       assert %{fsm: %{phase: :registered, caps_buffer: []}} = :sys.get_state(client)
@@ -2046,8 +2044,7 @@ defmodule Grappa.IRC.ClientTest do
           auth_method: :none
         })
 
-      assert {:ok, _} =
-               IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER "), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
     end
   end
 
@@ -2076,8 +2073,7 @@ defmodule Grappa.IRC.ClientTest do
       # First inbound line is the handshake's CAP LS or NICK; the handler
       # bumps the counter to 42 and writes back PING :42. We don't care
       # about the exact line — only that the seeded state was visible.
-      assert {:ok, _} =
-               IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER "), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
     end
 
     test "start_link/1 still works (no-state delegate to start_link/2)" do
@@ -2087,8 +2083,7 @@ defmodule Grappa.IRC.ClientTest do
       port = IRCServer.port(server)
       _ = start_client(port)
 
-      assert {:ok, _} =
-               IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER "), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
     end
   end
 

@@ -42,7 +42,7 @@ defmodule Grappa.PresenceFilter.ResolverTest do
 
     pid = start_session_for(user, network)
 
-    {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+    :ok = IRCServer.await_handshake(server, 1_000)
     {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
 
     IRCServer.feed(server, ":grappa-test!u@h JOIN :#{channel}\r\n")

@@ -55,8 +55,7 @@ defmodule Grappa.LiveIntrospectionTest do
       # {:irc_peer, _}, so waiting for it guarantees the peer is captured before
       # the scan — the same deterministic barrier the #550 peer-capture test
       # below uses. NOT an assertion weakening: it makes `== []` honest.
-      {:ok, _} =
-        Grappa.IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+      :ok = Grappa.IRCServer.await_handshake(server, 1_000)
 
       entries = LiveIntrospection.list_sessions()
 
@@ -106,8 +105,7 @@ defmodule Grappa.LiveIntrospectionTest do
       _ = start_visitor_session_for(visitor, network)
       on_exit(fn -> Session.stop_session({:visitor, visitor.id}, network.id) end)
 
-      {:ok, _} =
-        Grappa.IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+      :ok = Grappa.IRCServer.await_handshake(server, 1_000)
 
       entry = LiveIntrospection.lookup_session({:visitor, visitor.id}, network.id)
 

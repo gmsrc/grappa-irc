@@ -28,7 +28,7 @@ defmodule Grappa.Visitors.AutoconnectTest do
     {visitor, anchor} = visitor_with_network(port)
     {:ok, _} = Networks.update_network_settings(anchor, %{visitor_enabled: true, visitor_autoconnect: true})
     _ = start_visitor_session_for(visitor, anchor)
-    {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 5_000)
+    :ok = IRCServer.await_handshake(server, 5_000)
     {visitor, anchor}
   end
 

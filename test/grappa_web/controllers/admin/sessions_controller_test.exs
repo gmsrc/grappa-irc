@@ -136,8 +136,7 @@ defmodule GrappaWeb.Admin.SessionsControllerTest do
       _ = start_visitor_session_for(visitor, network)
       on_exit(fn -> Session.stop_session({:visitor, visitor.id}, network.id) end)
 
-      {:ok, _} =
-        Grappa.IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+      :ok = Grappa.IRCServer.await_handshake(server, 1_000)
 
       session = admin_session()
 

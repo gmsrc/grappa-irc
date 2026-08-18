@@ -95,7 +95,7 @@ defmodule Grappa.IRC.ClientOutboundCostTest do
     log =
       capture_log(fn ->
         {server, client} = start_pair()
-        {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER "), 1_000)
+        :ok = IRCServer.await_handshake(server, 1_000)
         settle(client)
       end)
 

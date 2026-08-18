@@ -48,7 +48,7 @@ defmodule GrappaWeb.MembersControllerTest do
       slug = "az-#{System.unique_integer([:positive])}"
       {_, pid} = setup_session_with_members(vjt, port, slug)
 
-      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
       {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
 
       IRCServer.feed(server, ":grappa-test!u@h JOIN :#test\r\n")
@@ -118,7 +118,7 @@ defmodule GrappaWeb.MembersControllerTest do
       slug = "az-#{System.unique_integer([:positive])}"
       {_, pid} = setup_session_with_members(vjt, port, slug)
 
-      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
       {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "JOIN"), 1_000)
 
       # Self-JOIN echo lands but NO 353/366 — channel is in
@@ -146,7 +146,7 @@ defmodule GrappaWeb.MembersControllerTest do
       {:ok, cred} = Grappa.Networks.Credentials.get_visitor_credential(visitor.id, network.id)
       nick = cred.nick
 
-      {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+      :ok = IRCServer.await_handshake(server, 1_000)
 
       IRCServer.feed(server, ":#{nick}!u@h JOIN :#test\r\n")
       IRCServer.feed(server, ":irc 353 #{nick} = #test :@#{nick} +alice\r\n")

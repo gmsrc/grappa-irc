@@ -57,7 +57,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
-    {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+    :ok = IRCServer.await_handshake(server, 1_000)
 
     assert_receive {:session_log, :connected, md}, 1_500
     assert md.session_id == "user:#{user.id}:#{network.id}"
@@ -71,7 +71,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
-    {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+    :ok = IRCServer.await_handshake(server, 1_000)
     # "grappa-test" = credential_fixture's default nick (AuthFixtures).
     IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
 
@@ -86,7 +86,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
-    {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+    :ok = IRCServer.await_handshake(server, 1_000)
     # drain the :connected event
     assert_receive {:session_log, :connected, _}, 1_500
 
@@ -117,7 +117,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
-    {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+    :ok = IRCServer.await_handshake(server, 1_000)
     IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
     assert_receive {:session_log, :registered, _}, 1_500
 

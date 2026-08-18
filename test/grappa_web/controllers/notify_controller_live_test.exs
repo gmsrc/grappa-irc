@@ -54,7 +54,7 @@ defmodule GrappaWeb.NotifyControllerLiveTest do
     # Welcome past 005 (WATCH advertised) + end-of-MOTD. The DB watch list
     # is empty here, so arm_presence sends no burst — the WATCH lines below
     # come purely from the controller's live notify_changed sync.
-    {:ok, _} = IRCServer.wait_for_line(server, &String.starts_with?(&1, "USER"), 1_000)
+    :ok = IRCServer.await_handshake(server, 1_000)
     IRCServer.feed(server, ":irc.test.org 001 grappa-test :Welcome\r\n")
     IRCServer.feed(server, ":irc.test.org 005 grappa-test WATCH=128 :are supported\r\n")
     IRCServer.feed(server, ":irc.test.org 376 grappa-test :End of MOTD\r\n")
