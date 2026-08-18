@@ -4968,7 +4968,11 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string
   { kind: "info", draft: "/info" },
   { kind: "version", draft: "/version" },
   { kind: "stats", draft: "/stats m" },
-  { kind: "admin", draft: "/admin" },
+  // #1396 — the target is NOT optional here even though the verb's grammar
+  // makes it so: a bare `/admin` row cannot tell `pushAdmin(id, cmd.target)`
+  // from `pushAdmin(id, null)`, because the fixture's target IS null. Measured,
+  // not reasoned: that mutant killed nothing across all 290 files.
+  { kind: "admin", draft: "/admin irc.example.org" },
   { kind: "oper", draft: "/oper root secret" },
   { kind: "kill", draft: "/kill bob spam" },
   { kind: "rehash", draft: "/rehash" },
@@ -5132,7 +5136,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "aliasList.aliases()",
             "networks.networkIdBySlug("freenode")",
             "networks.networkIdBySlug("freenode")",
-            "socket.pushAdmin(1, null)",
+            "socket.pushAdmin(1, "irc.example.org")",
           ],
           "result": {
             "ok": true,
