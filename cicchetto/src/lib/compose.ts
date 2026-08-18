@@ -1,9 +1,8 @@
 import { createEffect, createSignal, on } from "solid-js";
 import { addAlias, aliases, delAlias } from "./aliasList";
-import { ApiError, ownNickForNetwork, postJoin, postPart } from "./api";
+import { ApiError, ownNickForNetwork } from "./api";
 import { token } from "./auth";
-import { setQuery } from "./channelDirectory";
-import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
+import { type ChannelKey, channelKey, decodeChannelKey } from "./channelKey";
 import { isChannelName } from "./chantypes";
 import type { CommandContext, DispatchOutcome, SubmitResult } from "./commands/context";
 import { watchlistCommand } from "./commands/highlight";
@@ -29,6 +28,7 @@ import {
   unbanCommand,
   voiceCommand,
 } from "./commands/ops";
+import { ctcpCommand, noticeCommand, pingCommand } from "./commands/relay";
 import {
   infoCommand,
   linksCommand,
@@ -52,9 +52,9 @@ import {
   recoverCommand,
 } from "./commands/session";
 import { topicClearCommand, topicSetCommand, topicShowCommand } from "./commands/topic";
+import { joinCommand, listCommand, partCommand, queryCommand } from "./commands/window";
 import { requestConfirm } from "./confirmDialog";
 import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
-import { sendCtcpQuery } from "./ctcpQuery";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
 import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
@@ -76,8 +76,7 @@ import { isServicesSender } from "./servicesSender";
 import { requestOpenSettings } from "./settingsNav";
 import { parseSlash } from "./slashCommands";
 import { pushAdmin, pushOper } from "./socket";
-import { closeQueryWindow } from "./windowClose";
-import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "./windowKinds";
+import { SERVER_WINDOW_NAME } from "./windowKinds";
 import { windowStateByChannel } from "./windowState";
 
 // #1255 — the channel sigils this NETWORK advertised (005 CHANTYPES),
@@ -1029,142 +1028,23 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: `/${cmd.kind}: sent to ${targets.join(", ")}` };
           break;
         }
-        // #591 — /ctcp <target> <VERB> [args]: a single CTCP frame to an
-        // EXPLICIT target (not the current window). Non-ACTION CTCP is
-        // single-line by convention (Grappa.IRC.LineSplit) so there is no
-        // multiline fan-out. AWAIT the send: a CTCP verb MUST NOT silently
-        // no-op when the WS is down.
         case "ctcp": {
-          // ACTION is the exception this door keeps for itself: it IS
-          // conversation (`/me` to an explicit target), so it belongs in the
-          // TARGET window and rides the normal send path (the server also
-          // rejects an ACTION through the CTCP route — `Session.send_ctcp`'s
-          // non-ACTION gate). The parser upper-cases the verb; guard
-          // case-insensitively regardless.
-          if (cmd.verb.toUpperCase() === "ACTION") {
-            await sendWindowMessage(networkSlug, cmd.target, ctcpFrame(cmd.verb, cmd.args));
-            result = { ok: true };
-            break;
-          }
-          const ctcpNetworkId = requireNetworkId(networkSlug, "ctcp");
-          if (typeof ctcpNetworkId !== "number") return ctcpNetworkId;
-          // Everything else is a control-surface probe and goes through the
-          // #1192 seam, which owns the #640 source-window echo and the #600
-          // register-before-send ordering.
-          //
-          // Consequence worth naming: `/ctcp <t> PING` now CORRELATES, where it
-          // used to drop its reply into `$server` as an uncorrelated
-          // "← CTCP PING reply from …" row. The verb was always a ping; only
-          // the sugar knew to correlate it. Nothing changes on the WIRE — the
-          // seam mints no token, so a bare `/ctcp bob PING` still frames
-          // `\x01PING\x01` and rides the #637 token-less fallback home.
-          await sendCtcpQuery({
-            networkSlug,
-            networkId: ctcpNetworkId,
-            sourceChannel: channelName,
-            targetNick: cmd.target,
-            verb: cmd.verb,
-            args: cmd.args,
-            sentAtMs: Date.now(),
-          });
-          result = { ok: true };
+          result = await ctcpCommand(cmd, ctx);
           break;
         }
-        // #591 — /ping <target>: CTCP PING sugar over the same seam. The token
-        // is a client timestamp; it travels in the frame, comes back verbatim in
-        // the reply's server-typed meta.ctcp_args, and the RTT is `now - sentAt`
-        // (synthesized in subscribe.ts, irssi behavior). Minting the token is
-        // ALL this sugar adds — the correlation bookkeeping and its ordering
-        // belong to the seam, and did not survive being held by hand once a
-        // third caller appeared.
         case "ping": {
-          const pingNetworkId = requireNetworkId(networkSlug, "ping");
-          if (typeof pingNetworkId !== "number") return pingNetworkId;
-          const sentAtMs = Date.now();
-          await sendCtcpQuery({
-            networkSlug,
-            networkId: pingNetworkId,
-            sourceChannel: channelName,
-            targetNick: cmd.target,
-            verb: "PING",
-            args: String(sentAtMs),
-            sentAtMs,
-          });
-          result = { ok: true };
+          result = await pingCommand(cmd, ctx);
           break;
         }
-        // #1225 — /notice <target> <text>. Routed like a CTCP query, not like
-        // /msg: the echo persists in the window it was TYPED in (`channelName`)
-        // and no window is opened for the recipient, because a NOTICE opens
-        // none by convention (RFC 2812 §3.3.2 — it is the verb you must not
-        // reply to) and every client the operators come from echoes it where
-        // they are looking. That is also why a CHANNEL recipient is fine here
-        // while /msg refuses one: /msg's refusal exists to stop a phantom query
-        // window, and this path opens no window at all.
-        //
-        // Single await, no #666 pacing plan: a slash command is one line, so
-        // there is no multi-send to pace. A throttled send surfaces its 429 the
-        // same way a lone /msg does.
         case "notice": {
-          await sendWindowMessage(networkSlug, channelName, cmd.body, {
-            kind: "notice",
-            target: cmd.target,
-          });
-          result = { ok: true };
+          result = await noticeCommand(cmd, ctx);
           break;
         }
         case "join":
-          // #516 — the parser now returns `channels: string[]`. Rejoin with
-          // `,` to reproduce the RFC1459 comma-list on the wire byte-for-byte
-          // (the server splits it and opens a `:pending` window per channel,
-          // #382) — behaviour is unchanged from the former single `channel`.
-          await postJoin(t, networkSlug, cmd.channels.join(","), cmd.key);
-          // CP17: server-driven `:pending` window-state origination.
-          // Server's `record_in_flight_join/2` writes
-          // `window_states[ch] = :pending` and broadcasts
-          // `kind: "window_pending"` on `Topic.user/1` — userTopic.ts
-          // dispatches into setPending(...). Pre-CP17 cic mutated
-          // setPending here optimistically (the only cic-originated
-          // state mutation in the codebase) — closed the CLAUDE.md
-          // "cic NEVER originates state" hard-invariant violation.
-          //
-          // Auto-focus the new channel client-side, mirroring the
-          // /msg + /query handlers below. The user just typed /join
-          // — focus follows intent. Doing this here (instead of
-          // relying on subscribe.ts BUG4 self-JOIN handler) closes
-          // a race: the JOIN message is broadcast on the per-channel
-          // WS topic IMMEDIATELY after channels_changed fires, but
-          // cic's subscribe.ts only joins that topic AFTER the REST
-          // refetch from channels_changed completes. Phoenix PubSub
-          // doesn't replay to late subscribers, so the BUG4 handler's
-          // setSelectedChannel never fired in practice. With user-
-          // intent-driven focus here, the autojoin / sajoin / NickServ-
-          // driven JOIN paths still go through the subscribe.ts handler
-          // (no race for those — channel was already joined when JOIN
-          // event arrives via WS).
-          // #510/#516 — the parser owns the comma split now (`cmd.channels`
-          // is already the per-element list). Focus must land on the FIRST
-          // channel, folded the SAME way the server folds window keys
-          // (`canonicalChannel` = the `Identifier.canonical_channel/1` twin,
-          // CASEMAPPING=ascii — A-Z only, brackets untouched; #525). Passing
-          // a mixed-case / bracketed first element targets a key no
-          // `window_states` entry matches, opening the empty phantom window
-          // #510 reported. Single-channel `/join #foo` is a one-element list,
-          // so both paths canonicalise the focus key identically.
-          setSelectedChannel({
-            networkSlug,
-            // `channels` is non-empty (the parser errors on a missing name),
-            // so `[0]` is never undefined at runtime; the `?? join(",")`
-            // fallback exists only to satisfy TS noUncheckedIndexedAccess.
-            channelName: canonicalChannel(cmd.channels[0] ?? cmd.channels.join(",")),
-            kind: "channel",
-          });
-          result = { ok: true };
+          result = await joinCommand(cmd, ctx);
           break;
         case "part": {
-          const target = cmd.channel ?? channelName;
-          await postPart(t, networkSlug, target, cmd.reason);
-          result = { ok: true };
+          result = await partCommand(cmd, ctx);
           break;
         }
         case "topic-show":
@@ -1281,59 +1161,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "query": {
-          // /query <nick> / /q <nick> — open query window and switch focus.
-          // No message sent (spec #1: /query opens window without sending).
-          // /query (bare) / /q (bare) on a query-kind window → CLOSES it
-          // (irssi convention; this bundle, issue follow-up to #12). Bare
-          // /query on any other window kind → error (parser still emits
-          // {target: null} for both — semantics resolved here).
-          //
-          // canonicalQueryNick: see /msg case above.
-          //
-          // UX-4 bucket G: *serv targets reject — opening a query window
-          // for NickServ would be a dead window (services route to $server
-          // server-side). Surface as a user-facing error so the operator
-          // can re-issue `/msg <Xserv> ...` if they wanted to send.
-          //
-          // Cross-network safety (bare-close path): resolve the network
-          // ID from the SELECTED window's own networkSlug, not from
-          // compose's `networkSlug` arg — the two can diverge if the
-          // submit was queued before a window switch. Using compose's
-          // networkSlug with sel.channelName would no-op or close a
-          // wrong-network row when they disagree.
-          if (cmd.target === null) {
-            const sel = selectedChannel();
-            if (sel?.kind === "query") {
-              // #1396 — the one guard NOT routed through `requireNetworkId`.
-              // It is not the same guard: every other site asks "is the
-              // network this operator is typing in live?", this one asks it of
-              // a DIFFERENT network, and its copy has always said so. The
-              // shared message is `/<subject>: network not found`, which
-              // cannot spell "selected window's network" without an extra
-              // colon — so forcing it through would change operator-visible
-              // copy to buy uniformity, which is the wrong trade in a refactor.
-              const selNetId = networkIdBySlug(sel.networkSlug);
-              if (selNetId === undefined)
-                return { error: "/query: selected window's network not found" };
-              closeQueryWindow(selNetId, sel.channelName);
-              result = { ok: true };
-              break;
-            }
-            return {
-              error: "/query <nick> required (bare /query closes the current query window only)",
-            };
-          }
-          const networkId = requireNetworkId(networkSlug, "query");
-          if (typeof networkId !== "number") return networkId;
-          if (isServicesSender(cmd.target)) {
-            return {
-              error: `/query: ${cmd.target} is a services nick; responses land in the server window — use /msg ${cmd.target} <command>`,
-            };
-          }
-          const canonical = canonicalQueryNick(networkId, cmd.target);
-          openQueryWindowState(networkId, canonical, new Date().toISOString());
-          setSelectedChannel({ networkSlug, channelName: canonical, kind: "query" });
-          result = { ok: true };
+          result = await queryCommand(cmd, ctx);
           break;
         }
         case "quit":
@@ -1458,16 +1286,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "list": {
-          // Channel directory browser (#84). Open the per-network $list
-          // pseudo-window (DirectoryPane); the pane loads the snapshot on
-          // mount (server auto-refreshes on empty). A pattern pre-seeds the
-          // directory search (setQuery re-GETs filtered). No raw LIST is
-          // sent here — the directory's own refresh path owns that.
-          setSelectedChannel({ networkSlug, channelName: LIST_WINDOW_NAME, kind: "list" });
-          if (cmd.pattern !== null && cmd.pattern !== "") {
-            void setQuery(networkSlug, cmd.pattern);
-          }
-          result = { ok: true };
+          result = await listCommand(cmd, ctx);
           break;
         }
         case "links": {
