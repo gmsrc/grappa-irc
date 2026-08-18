@@ -1,3 +1,4 @@
+import { postTopic } from "../api";
 import { pushChannelTopicClear } from "../socket";
 import type { CommandHandler } from "./context";
 
@@ -11,6 +12,20 @@ export const topicShowCommand: CommandHandler<"topic-show"> = async (cmd, ctx) =
   const ch = cmd.channel ?? ctx.getActiveChannel();
   if (!ch) return { error: "/topic requires a channel — switch to one or use /topic #chan" };
   return { error: `/topic ${ch} (bare) — inline render wired in C3 (TopicBar)` };
+};
+
+/**
+ * `/topic <text>` or `/topic #chan <text>` — set the topic via REST. An
+ * explicit channel wins; otherwise the current channel; otherwise bail.
+ */
+export const topicSetCommand: CommandHandler<"topic-set"> = async (cmd, ctx) => {
+  const ch = cmd.channel ?? ctx.getActiveChannel();
+  if (!ch)
+    return {
+      error: "/topic requires a channel — switch to one or use /topic #chan <text>",
+    };
+  await postTopic(ctx.token, ctx.networkSlug, ch, cmd.text);
+  return { ok: true };
 };
 
 /** `/topic -delete` or `/topic #chan -delete` — clear the topic via channel event. */

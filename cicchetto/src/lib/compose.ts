@@ -1,6 +1,6 @@
 import { createEffect, createSignal, on } from "solid-js";
 import { addAlias, aliases, delAlias } from "./aliasList";
-import { ApiError, ownNickForNetwork, postJoin, postPart, postTopic } from "./api";
+import { ApiError, ownNickForNetwork, postJoin, postPart } from "./api";
 import { token } from "./auth";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
@@ -51,7 +51,7 @@ import {
   quitCommand,
   recoverCommand,
 } from "./commands/session";
-import { topicClearCommand, topicShowCommand } from "./commands/topic";
+import { topicClearCommand, topicSetCommand, topicShowCommand } from "./commands/topic";
 import { requestConfirm } from "./confirmDialog";
 import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
 import { sendCtcpQuery } from "./ctcpQuery";
@@ -1170,15 +1170,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         case "topic-show":
           return await topicShowCommand(cmd, ctx);
         case "topic-set": {
-          // /topic <text> or /topic #chan <text> — set topic via REST.
-          // Explicit channel wins; otherwise current channel; otherwise bail.
-          const ch = cmd.channel ?? getActiveChannel();
-          if (!ch)
-            return {
-              error: "/topic requires a channel — switch to one or use /topic #chan <text>",
-            };
-          await postTopic(t, networkSlug, ch, cmd.text);
-          result = { ok: true };
+          result = await topicSetCommand(cmd, ctx);
           break;
         }
         case "topic-clear": {
