@@ -49592,3 +49592,95 @@ on those copies being one shape — not on a run. The e2e project that matters i
 `webkit-iphone-15`: ten of the eleven tests in these files are `@webkit`, and
 the chromium project's `grepInvert: /@webkit/` would execute a single test and
 report rc=0.
+<!-- entry #1397-e2e-adminpatchcaps -->
+
+---
+
+## 2026-08-18 — #1397 (e2e): two cap axes, and a type nobody has to maintain
+
+`adminPatchCaps` stood five times over five spec files. The bodies were
+byte-identical — one md5 once the parameter line is excluded — and the whole
+divergence was the type of `caps`, spelled three ways: a flat three-key
+`CapKnob` in three copies, `CapDimension | "max_per_ip"` in a fourth, and a
+wide-open `Record<string, number | null>` in the fifth.
+
+The first question was whether any of it was load-bearing. Unifying all five on
+the NARROWEST of the three type-checks clean, including the computed
+`{ [arm.cap]: 0 }` key in the admission-split spec; a deliberately bogus key
+reddens both files that were widened, so the green is enforced rather than
+vacuous. No test depended on the divergence. That settled what unifying costs,
+and left open the only thing that actually mattered: which spelling is TRUE.
+
+### Why the two-term spelling won — the axes, not the ergonomics
+
+The flat `CapKnob` reads better and was the majority, and it is wrong.
+`Grappa.Admission` does not treat the three as one family:
+
+- `check_network_total/2` has a clause per `subject_kind`, and each clause
+  reads the column matching its own kind. The kind SELECTS the column, which is
+  what makes the two per-subject caps two values of one axis.
+- `check_ip_cap/2` is a separate function over a single column, and passes
+  `subject_kind` to the COUNT as a filter. Nothing selects anything.
+- They do not even count the same objects: live sessions in the
+  `SessionRegistry` on one side, distinct persisted subjects keyed on
+  `accounts_sessions.ip` on the other.
+- The sentinel is the sharpest tell, because it is outright opposite. `nil` on
+  a per-subject cap short-circuits to `:ok` — unlimited. `nil` on `max_per_ip`
+  falls through to `@default_max_per_ip_per_network`, a compile-env default,
+  which is a cap and not its absence. One `nil` means "no limit" and the other
+  means "the standard limit".
+
+The server had already said as much in a file nobody wrote by hand:
+`AdminEventsWireCapCountsChangedEvent` carries `visitors`, `users`, and the two
+per-subject caps, and omits `max_per_ip` — there being no per-IP count to pair
+it with. A generated wire shape that groups exactly the two is stronger
+evidence than any of the five hand-typed aliases.
+
+So `CapDimension` was deliberate vocabulary in the one spec whose subject IS
+that the two per-subject caps are independent, and the majority spelling was
+the copy that lost the distinction. Majority is not evidence when the copies
+are copies.
+
+### The type is derived, so nobody maintains it
+
+`cicchetto/src/lib/wireTypes.ts` is generated from the server
+(`mix grappa.gen_wire_types`) and drift-gated in CI by #767, and it carries
+`NetworksAdminWireT` with all seven fields the network PATCH casts. The
+parameter is therefore
+`Partial<Pick<NetworksAdminWireT, CapDimension | "max_per_ip">>` rather than a
+hand-written union: a rename on the server regenerates the row type and fails
+THIS file at `tsc`, instead of leaving a stale alias that still compiles
+against a column that no longer exists. That is precisely how the alias came to
+exist in two spellings — it was hand-copied three times.
+
+Being a `Pick` also does the work of the honest name. The endpoint casts seven
+fields, and the widest of the old copies would have let a function called
+`adminPatchCaps` move `visitor_enabled`. That width was never used by any
+caller, and it is a lie removed rather than a capability lost: the compiler now
+rejects the key BY NAME.
+
+### The leaf claim, restated
+
+Two earlier entries in this issue lean on `grappaApi.ts` importing nothing,
+citing `grep -c '^import'` as 0. It is 1 now, and the property those entries
+were actually protecting is intact: what keeps this module cycle-free is that
+it depends on no other FIXTURE, and `wireTypes.ts` is generated, declares no
+imports of its own, and is imported `type`-only, so it is erased before
+anything runs. It is also why the recorded reason `e2e/` mirrors `src/` types
+by hand — those modules pull in solid-js, absent from `e2e/node_modules` — does
+not reach this one; that was checked rather than assumed. Read the earlier
+entries' grep as shorthand for "no fixture dependency", which is what it was
+standing in for.
+
+### What gated it
+
+`bun run check` is rc=0 with the same 59 pre-existing CSS warnings. Two
+mutations carry the rest. A fourth required parameter on the shared
+`adminPatchCaps` killed **fifteen call sites across all five files**, which is
+the wiring: a surviving local copy would have shadowed the import and stayed
+quiet. Passing `visitor_enabled` at a call site fails with TS2353 naming the
+key, which is the narrowing.
+
+No spec was executed for this entry. The behavioural claim rests on the bodies
+being byte-identical and on the fifteen call sites type-checking against a type
+that admits exactly what the copies admitted — not on a run.
