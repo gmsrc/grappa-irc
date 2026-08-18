@@ -48394,14 +48394,20 @@ amount of test coverage moves. The net corroborates from the other side: the
 pair is its only `indistinguishablePairs` entry, so the coverage that separates
 them is dedicated, not ambient.
 
-**`channelName` has TWO meanings, not three, and the record needs no new
-field.** The plan warned of three. Measured: only `part`, `ctcp`, `ping` and
-`notice` read the parameter at all — `part` as a DEFAULT TARGET, the other
-three as the ECHO window. `join`, `list`, `msg` and `query` never read it; they
-WRITE a different channel into the selection, which is a focus change and not a
-third reading. The meanings stay distinct because the record hands over the raw
-channel and each handler says what it is for. A pre-resolved "default target"
-field is precisely what would have collapsed them into one, so none was added.
+**`channelName` crosses the RECORD boundary with two meanings, not three, and
+the record needs no new field.** The plan warned of three. Measured: of the
+arms behind the seam, only `part`, `ctcp`, `ping` and `notice` read the
+parameter at all — `part` as a DEFAULT TARGET, the other three as the ECHO
+window. `join`, `list`, `msg` and `query` never read it; they WRITE a different
+channel into the selection, which is a focus change and not a third reading.
+The meanings stay distinct because the record hands over the raw channel and
+each handler says what it is for. A pre-resolved "default target" field is
+precisely what would have collapsed them into one, so none was added. **The
+count is two ON THE BOUNDARY only: inside `compose.ts` the same value carries a
+third meaning that never crosses it** — the `$server` gate reads it as the
+submitting window's KIND, not as a target or a destination. A later audit found
+it and renamed the field for the fact it carries; see the 2026-08-18 entry on
+`submittedFrom`.
 
 ### What bought the move
 
@@ -48991,3 +48997,116 @@ That bucket J's vacuity ever fired on a real CI run. The opless path is
 documented by a sibling spec's header and reproduced here deliberately;
 that it occurred unprompted in some past run is not something these four
 rounds establish.
+<!-- entry #1396-submitted-from -->
+
+---
+
+## 2026-08-18 — #1396: one fact, three readings, and the name that stops them collapsing
+
+An audit slice, not a move: no arm changed hands. `CommandContext.channelName`
+became `submittedFrom`, one `/part` characterization test landed, and the
+earlier #1396 entry's "TWO meanings, not three" was corrected where it stands.
+Zero behaviour change.
+
+### The enumeration a grep on the field cannot do
+
+`git grep -c 'ctx\.channelName'` on 038a33ca answers `relay.ts 5 · window.ts 2 ·
+uploadOrchestrator.ts 1`, and every one of those eight numbers is real. What the
+eight are is another matter: three are COMMENTS, and `uploadOrchestrator.ts:743`
+is a FALSE POSITIVE — its `ctx` comes from `lastAttempt.get(key)`, a
+`{file, networkSlug, channelName}` record, proven by the same expression reading
+`ctx.file`, which `CommandContext` does not have. Four code reads of the field
+survive that filter.
+
+The filter also hides three more reads of the SAME per-submission fact, sitting
+on the near side of the record where the value is still `dispatchDraft`'s
+parameter: the `$server` gate and the `privmsg` / `me` arms. Seven readings in
+total, four through the record and three inside `compose.ts`. **This is why the
+earlier entry counted two: it counted the boundary, and the boundary is where a
+field-name grep can see.**
+
+### The three meanings, and the one that never crosses
+
+  * **DEFAULT TARGET** — `part`, one site. Goes on the WIRE, raw.
+  * **ECHO WINDOW** — `ctcp`, `ping`, `notice`. Becomes KEY MATERIAL:
+    `ctcpQuery.ts` folds it through `channelKey`. Same field, a different
+    type-level obligation from the wire one.
+  * **WINDOW KIND** — the `$server` gate. Neither recipient nor destination: a
+    question about what the window IS, answered against a `windowKinds`
+    constant. It never crosses into the record, which is exactly why it was
+    missed.
+
+`privmsg` and `me` are the degenerate case, where target and echo are the same
+argument because they coincide by construction — the reason the collision reads
+as natural.
+
+`key` is not a duplicate of it. `channelKey` folds (#537), so the spelling
+survives only in this field — and `part` puts that spelling on the wire.
+
+### What the mutants measured, and the one that killed nothing
+
+Eight mutants, one at a time, full unit suite each (5615 tests, green baseline).
+DISPLACEMENT = read the ACTIVE window instead of the submitting one at that
+site; POSITIVE CONTROL = read a constant, which proves the site runs at all.
+
+  | reading            | displacement | control |
+  |--------------------|--------------|---------|
+  | echo (relay ×3)    | 1            | 7       |
+  | default target     | **0**        | 2       |
+  | window kind        | 1 (+harness) | 1       |
+  | fused privmsg+me   | 2            | 10      |
+
+**`part`'s fallback killed nothing at all.** The characterization net misses it
+by its own rule: the net forbids a draft that aims at the window it is submitted
+from, so `part`'s row is `/part #other` — an explicit channel, and the `??`
+right-hand side is never evaluated. A rule that keeps the net honest on the
+argument axis blinds it on the fallback axis. That gap is now one test.
+
+**Where the relay and fused mutants DID die, they died on the call log, not on a
+value.** The snapshot diff is entirely additive — `+ selection.selectedChannel()`,
+`+ networks.networkIdBySlug("freenode")` — while the line that carries the
+channel is byte-identical on both sides. No assertion in the suite tells the
+submitting window from the active one at those sites; what stands between the
+two meanings is an ambient-effect diff. A refactor that resolved the wrong
+window WITHOUT adding a call would pass green. **Measured and left uncured**: only
+`part` is closed here, deliberately, because the others need their own fixtures
+and this slice was an audit.
+
+### Why a rename and not two accessors
+
+Costed both at 6 call sites and 0 test sites. Two purpose-named accessors
+(`defaultTarget()` / `echoWindow()`) invent two names for one value and so
+promise a divergence that does not exist today — and the matrix above proves no
+red would defend it. `submittedFrom` names the FACT instead, which is what makes
+the flattening unspellable: nobody reads "submitted from" as "the recipient".
+Renamed to the bottom, `compose.ts`'s local and the pump's parameter included,
+because half a migration leaves two names for one fact — the very shape this
+trap grew in.
+
+Untouched on purpose, and NOT the same fact: `sel.channelName` (the selection
+record) and `uploadOrchestrator`'s own `ctx.channelName`.
+
+### Three gotchas, each worth a red
+
+  * **vitest's JSON reporter drops the snapshot diff.** `failureMessages` holds
+    "Snapshot … mismatched" plus a stack, nothing else. A mutation bench built on
+    `--reporter=json` gives you the SET of dead tests and no way to ask WHY one
+    died; the rerun that answers that must be scoped and use the default
+    reporter. Reading the diff is how the call-log-versus-value finding above
+    exists at all.
+  * **A mutant that injects a call at the top of `dispatchDraft` poisons every
+    test using `mockReturnValueOnce`** — it eats the one-shot value before the
+    arm reads it. Five of the window-kind mutant's eight deaths are that
+    artefact, not coverage. Read a kill set against this before believing it.
+  * **`cicchetto/vitest-out.json` is NOT gitignored** (`git check-ignore` says so;
+    no rule in either `.gitignore`) and the JSON reporter writes it over 1 MiB,
+    which fails `bun run check`. Delete it after every reporter run. Whether it
+    should be ignored instead is not decided here.
+
+### Limits of this measurement
+
+Unit suite only. No e2e, no Elixir gate: this slice touches no server code, and
+a lane was not taken. The `/part`-in-a-query-window behaviour the audit found on
+the way (the peer's NICK goes out as a PART target; the server 400s it at
+`validate_channel_name/1`, READ not executed) is behaviour, not record shape,
+and is filed separately.
