@@ -16,13 +16,17 @@ import { buildBanMask } from "./banMask";
 import { setQuery } from "./channelDirectory";
 import { type ChannelKey, canonicalChannel, channelKey, decodeChannelKey } from "./channelKey";
 import { isChannelName } from "./chantypes";
+import type { CommandContext, DispatchOutcome, SubmitResult } from "./commands/context";
+import { watchlistCommand } from "./commands/highlight";
+import { connectCommand } from "./commands/network";
+import { quitCommand } from "./commands/session";
+import { topicShowCommand } from "./commands/topic";
 import { requestConfirm } from "./confirmDialog";
 import { ctcpFrame, scrubCtcpDelimiters } from "./ctcpAction";
 import { sendCtcpQuery } from "./ctcpQuery";
 import { documentTeardownEpoch, documentTornDownSince } from "./documentTeardown";
 import { type FramePreview, framePreview } from "./frameBudget";
 import { friendlyError } from "./friendlyError";
-import { addHighlight, delHighlight } from "./highlightList";
 import { identityScopedStore } from "./identityScopedStore";
 import { chantypesForNetwork, isupportForNetwork } from "./isupport";
 import { markLusersRequested } from "./lusersBundle";
@@ -34,7 +38,6 @@ import { networkBySlug, networkIdBySlug, user } from "./networks";
 import { asciiFold, nickEquals } from "./nickEquals";
 import { ensureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, openQueryWindowState } from "./queryWindows";
-import { quitAll } from "./quit";
 // #1225 — the seam sends a PRIVMSG to the window OR relays a NOTICE/CTCP to a
 // different recipient while echoing here, so it is named for the window, not
 // for one of the verbs it can carry.
@@ -145,11 +148,6 @@ type ComposeState = {
   stashedDraft: string;
 };
 
-// ok: true = silent success (draft cleared, no feedback to user).
-// ok: string = success with inline feedback (e.g. watchlist list output).
-// error: string = failure, displayed inline; draft preserved.
-type SubmitResult = { ok: true | string } | { error: string };
-
 // #904 — `submit` (the pump) OWNS the composer buffer: it takes the text out
 // at dispatch and hands it back if the submission fails, so every failure
 // path preserves the draft without each of the ~40 arms knowing about it.
@@ -157,7 +155,6 @@ type SubmitResult = { ok: true | string } | { error: string };
 // (#737) and mirrors its own, finer-grained residue into it, so it says
 // `keptBuffer` and the pump keeps its hands off instead of dropping the whole
 // paste back on top of the remainder.
-type DispatchOutcome = SubmitResult | { error: string; keptBuffer: true };
 
 // #904 — one window's send queue: an entry exists while a submission from it
 // is in flight, and `queued` holds the at-most-one message sent behind it.
@@ -926,6 +923,19 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       return own;
     };
 
+    // #1396 — the per-submission values a handler cannot import for itself.
+    // Built once, here, so every handler reads the SAME window: resolving any
+    // of these inside a handler would re-read the store at handler time and
+    // could answer for a different window than the one that submitted.
+    const ctx: CommandContext = {
+      key,
+      networkSlug,
+      channelName,
+      text,
+      token: t,
+      getActiveChannel,
+    };
+
     let result: SubmitResult;
     try {
       switch (cmd.kind) {
@@ -1173,15 +1183,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: true };
           break;
         }
-        case "topic-show": {
-          // Bare /topic or /topic #chan — render cached topic inline.
-          // The cached topic lives in channelTopic.ts; rendering is pure UI.
-          // TODO(C3): wire to TopicBar's cached topic for inline render.
-          const ch = cmd.channel ?? getActiveChannel();
-          if (!ch)
-            return { error: "/topic requires a channel — switch to one or use /topic #chan" };
-          return { error: `/topic ${ch} (bare) — inline render wired in C3 (TopicBar)` };
-        }
+        case "topic-show":
+          return await topicShowCommand(cmd, ctx);
         case "topic-set": {
           // /topic <text> or /topic #chan <text> — set topic via REST.
           // Explicit channel wins; otherwise current channel; otherwise bail.
@@ -1371,16 +1374,8 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           result = { ok: true };
           break;
         }
-        case "quit": {
-          // Nuclear: park ALL bound networks, then logout. The
-          // implementation lives in `lib/quit.ts` so the sidebar
-          // server-window × (UX-4 bucket D) can call the same path for
-          // visitors without re-parsing through here.
-          await quitAll(cmd.reason);
-          // After logout the component tree will unmount — no further
-          // result processing needed. Return early to skip history push.
-          return { ok: true };
-        }
+        case "quit":
+          return await quitCommand(cmd, ctx);
         case "disconnect": {
           // Surgical: park one network. `network` from parser is null
           // (bare /disconnect) or a named slug. Null → use active-window's
@@ -1395,10 +1390,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
           break;
         }
         case "connect": {
-          // Unpark + respawn. Network slug guaranteed by parser
-          // (bare /connect surfaces as kind: "error" instead).
-          await patchNetwork(t, cmd.network, { connection_state: "connected" });
-          result = { ok: true };
+          result = await connectCommand(cmd, ctx);
           break;
         }
         case "away": {
@@ -1957,13 +1949,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         // list, so this is race-free.
         // ---------------------------------------------------------------
         case "watchlist": {
-          const patterns =
-            cmd.action === "add"
-              ? await addHighlight(cmd.pattern)
-              : await delHighlight(cmd.pattern);
-          result = {
-            ok: `highlight (${patterns.length}): ${patterns.join(", ") || "(empty)"}`,
-          };
+          result = await watchlistCommand(cmd, ctx);
           break;
         }
         // #247/#356 — /notify + /watch presence watch (irssi-direct add).
