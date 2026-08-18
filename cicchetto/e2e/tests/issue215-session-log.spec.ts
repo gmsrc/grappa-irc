@@ -15,31 +15,15 @@
 // `m11-admin-events-live.spec.ts`.
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
-
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 async function openAdminPane(page: import("@playwright/test").Page): Promise<void> {
   await openAdminConsole(page);
 }
 
 test("#215 Session Log tab renders the persisted session-lifecycle tail", async ({ page }) => {
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminPane(page);
 
   await page.getByTestId("admin-tab-session_log").click();

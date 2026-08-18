@@ -9,7 +9,7 @@
 // other specs — never delete those. Tests create unique slugs (timestamp
 // suffix) and best-effort delete in finally.
 
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -17,22 +17,6 @@ import { expect, test } from "../fixtures/test";
 function userIdFromSubject(subjectJson: string): string {
   const subj = JSON.parse(subjectJson) as { kind: string; id: string };
   return subj.id;
-}
-
-async function adminLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
 }
 
 async function openNetworksTab(page: import("@playwright/test").Page): Promise<void> {

@@ -28,7 +28,7 @@
 // every other admin spec — out of scope here.
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminSessionsTab } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminSessionsTab } from "../fixtures/cicchettoPage";
 import { patchNetworkConnectionState } from "../fixtures/grappaApi";
 import {
   getSeededAdmin,
@@ -61,22 +61,6 @@ test.afterEach(async () => {
   });
 });
 
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
-
 // A subject's id, however the fixture happens to carry it: the two m9b
 // users expose a composite `user:<id>:<network>` session id, vjt and
 // wiz-test expose the persisted subject JSON. Both reduce to the id, which
@@ -106,7 +90,7 @@ test("M-9b admin Sessions view lists every seeded user bind", async ({ page }) =
     { name: WIZ_USER, id: idFromSubjectJson(getSeededWizUser().subjectJson) },
   ];
 
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
   // This asserted an EXACT total, and #1157 took that away twice over.
@@ -150,7 +134,7 @@ test("#242 admin Sessions tab shows the network slug (not the raw network_id FK)
     connection_state: "connected",
   });
 
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
   const victimRow = page.getByTestId(`admin-session-row-${victim.sessionId}`);
@@ -186,7 +170,7 @@ test("M-9b arming Disconnect on one row disarms the same row's Terminate (single
 }) => {
   const victim = getSeededM9bVictim();
 
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
   const disc = page.getByTestId(`admin-session-disconnect-${victim.sessionId}`);
@@ -217,7 +201,7 @@ test("M-9b admin Disconnect inline-confirm transitions Disconnect → Confirm di
     connection_state: "connected",
   });
 
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
   const victimDisconnect = page.getByTestId(`admin-session-disconnect-${victim.sessionId}`);
@@ -254,7 +238,7 @@ test("M-9b admin Terminate inline-confirm fires DELETE", async ({ page }) => {
     connection_state: "connected",
   });
 
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
 
   const victimTerminate = page.getByTestId(`admin-session-terminate-${victim.sessionId}`);

@@ -41,28 +41,12 @@
 // visitors against azzurra would 503 if the revert didn't run.
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminConsole, openRailMenu } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole, openRailMenu } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, mintVisitor } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 
 const AZZURRA_SLUG = "azzurra";
 const AZZURRA_BASELINE_CAP = 100;
-
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 // PATCH /admin/networks/:slug — partial body shape per M-10. Only
 // max_concurrent_visitor_sessions is sent; max_per_ip unchanged.
@@ -85,7 +69,7 @@ test("M-Z admin operator journey: drawer → 3 tabs → cap-saturation event lan
   page,
 }) => {
   const admin = getSeededAdmin();
-  await adminFriendlyLogin(page, admin);
+  await adminLogin(page, admin);
 
   // STEP 1 — Login as admin → the rail's 🔧 admin launcher is visible.
   // #986 — the settings-drawer "admin console" entry this step used to

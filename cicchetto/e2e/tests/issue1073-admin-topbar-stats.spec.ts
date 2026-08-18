@@ -21,26 +21,12 @@
 // until the first `"overview"` push lands, so `toBeVisible()` waits on the
 // arrival of real server data rather than on a timer.
 
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
 // admin-vjt has no network bind, so `loginAs`'s network-section shell-ready
 // selector would time out. Same shape as m7-admin-gate / m11-admin-events.
-async function adminLogin(page: import("@playwright/test").Page): Promise<void> {
-  const seed = getSeededAdmin();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
-
 const CELLS = [
   "admin-overview-sessions",
   "admin-overview-visitors",
@@ -73,7 +59,7 @@ async function expectOneLine(pane: import("@playwright/test").Locator): Promise<
 test("#1073 the admin bar carries live stats, on one line, in the shared band", async ({
   page,
 }) => {
-  await adminLogin(page);
+  await adminLogin(page, getSeededAdmin());
   const pane = await openAdminConsole(page);
 
   // Barrier AND assertion: nothing renders until the server's first push.
@@ -107,7 +93,7 @@ test("#1073 the admin bar carries live stats, on one line, in the shared band", 
 });
 
 test("#1073 @webkit on a phone the stats keep the ☰ at the far end", async ({ page }) => {
-  await adminLogin(page);
+  await adminLogin(page, getSeededAdmin());
   const pane = await openAdminConsole(page);
 
   const stats = pane.locator(".topic-bar .admin-overview-stats");

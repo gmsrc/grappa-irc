@@ -16,31 +16,15 @@
 // land in the Events tab within the expected fan-out window.
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
-
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 async function openAdminPane(page: import("@playwright/test").Page): Promise<void> {
   await openAdminConsole(page);
 }
 
 test("M-11 Events tab renders + receives reaper_swept after Sweep visitors", async ({ page }) => {
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminPane(page);
 
   // Mount triggered the channel join + snapshot push. Switch to

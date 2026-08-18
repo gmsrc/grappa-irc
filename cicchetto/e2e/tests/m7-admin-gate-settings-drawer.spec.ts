@@ -29,30 +29,9 @@
 // expanded RailActions menu, which is absolutely positioned, capped by
 // a JS-measured max-height and overlays the members list.
 
-import { expectShellReady, openRailMenu } from "../fixtures/cicchettoPage";
-import type { SeededUser } from "../fixtures/grappaApi";
+import { adminLogin, openRailMenu } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
-
-// admin-vjt has no network bind — loginAs's `.sidebar-network-section h3`
-// shell-ready selector would time out. Wait on the always-visible
-// settings cog button instead (rendered in the no-network fallback
-// header via `aria-label="open settings"`).
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: SeededUser,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 const cases = [
   {
@@ -69,7 +48,7 @@ const cases = [
 
 for (const c of cases) {
   test(`M-7 admin launcher gate — ${c.label}`, async ({ page }) => {
-    await adminFriendlyLogin(page, c.seed());
+    await adminLogin(page, c.seed());
 
     // #500 — every rail affordance lives behind the launcher menu.
     await openRailMenu(page);

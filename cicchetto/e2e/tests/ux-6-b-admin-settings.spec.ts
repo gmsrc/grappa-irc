@@ -27,24 +27,8 @@
 // seedData) to PUT it back in afterEach.
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
-
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 async function openAdminPaneAndSettingsTab(page: import("@playwright/test").Page): Promise<void> {
   // openAdminConsole waits for the settings drawer to finish its 200ms
@@ -74,7 +58,7 @@ test.describe("UX-6-B admin Settings tab", () => {
   });
 
   test("renders default settings + can flip active host litterbox → embedded", async ({ page }) => {
-    await adminFriendlyLogin(page, getSeededAdmin());
+    await adminLogin(page, getSeededAdmin());
     await openAdminPaneAndSettingsTab(page);
 
     // Defaults from B1: embedded host + 10 MB per-file + 10 GB global.
@@ -90,7 +74,7 @@ test.describe("UX-6-B admin Settings tab", () => {
   });
 
   test("422 invalid_setting flags the offending field", async ({ page }) => {
-    await adminFriendlyLogin(page, getSeededAdmin());
+    await adminLogin(page, getSeededAdmin());
     await openAdminPaneAndSettingsTab(page);
 
     // Zero image per-file cap → server returns 422 invalid_setting
@@ -103,7 +87,7 @@ test.describe("UX-6-B admin Settings tab", () => {
   });
 
   test("PUT /admin/settings fans out server_settings_changed on user-topics", async ({ page }) => {
-    await adminFriendlyLogin(page, getSeededAdmin());
+    await adminLogin(page, getSeededAdmin());
     await openAdminPaneAndSettingsTab(page);
 
     // Listen on the page console + waitForResponse for the PUT, then
@@ -138,7 +122,7 @@ test.describe("UX-6-B admin Settings tab", () => {
     request,
   }) => {
     const admin = getSeededAdmin();
-    await adminFriendlyLogin(page, admin);
+    await adminLogin(page, admin);
     await openAdminPaneAndSettingsTab(page);
 
     const duration = page.getByTestId("admin-settings-video-max-duration");
@@ -157,7 +141,7 @@ test.describe("UX-6-B admin Settings tab", () => {
   });
 
   test("422 invalid_setting flags the video duration field (#201)", async ({ page }) => {
-    await adminFriendlyLogin(page, getSeededAdmin());
+    await adminLogin(page, getSeededAdmin());
     await openAdminPaneAndSettingsTab(page);
 
     const duration = page.getByTestId("admin-settings-video-max-duration");

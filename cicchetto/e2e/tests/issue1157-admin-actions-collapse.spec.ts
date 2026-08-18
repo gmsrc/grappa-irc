@@ -24,22 +24,8 @@
 
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminSessionsTab } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminSessionsTab } from "../fixtures/cicchettoPage";
 import { getSeededAdmin, getSeededVjt } from "../fixtures/seedData";
-
-async function adminLogin(page: Page): Promise<void> {
-  const seed = getSeededAdmin();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 function idFromSubjectJson(subjectJson: string): string {
   const subject = JSON.parse(subjectJson) as { id?: string };
@@ -65,7 +51,7 @@ async function userRowKey(page: Page): Promise<string> {
 test("#1157 @webkit a phone gives the row's verbs one control, and it is the menu", async ({
   page,
 }) => {
-  await adminLogin(page);
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
   const key = await userRowKey(page);
 
@@ -81,7 +67,7 @@ test("#1157 @webkit a phone gives the row's verbs one control, and it is the men
 });
 
 test("#1157 @webkit the dropdown arms a verb rather than running it", async ({ page }) => {
-  await adminLogin(page);
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
   const key = await userRowKey(page);
 
@@ -110,7 +96,7 @@ test("#1157 @webkit the dropdown arms a verb rather than running it", async ({ p
 });
 
 test("#1157 a desktop keeps both verbs side by side and grows no menu", async ({ page }) => {
-  await adminLogin(page);
+  await adminLogin(page, getSeededAdmin());
   await openAdminSessionsTab(page);
   const key = await userRowKey(page);
 

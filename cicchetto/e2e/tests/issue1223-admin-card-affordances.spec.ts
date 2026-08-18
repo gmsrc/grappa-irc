@@ -51,27 +51,13 @@
 // Per `feedback_e2e_user_class_parity_matrix`: admin-gated, the EXEMPT shape.
 
 import type { Locator, Page } from "@playwright/test";
-import { adminSessionRowKey, expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, adminSessionRowKey, openAdminConsole } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
 // admin-vjt has no network bind, so `loginAs`'s network-section shell-ready
 // selector would time out. Same shape as #1073 / m7-admin-gate / m11-events.
-async function adminLogin(page: Page): Promise<void> {
-  const seed = getSeededAdmin();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
-
 async function openSessionsTab(page: Page): Promise<void> {
   await openAdminConsole(page);
   await page.getByTestId("admin-tab-sessions").click();
@@ -113,7 +99,7 @@ test("#1223 @webkit on a phone the whole card heading opens the row, not just th
   const visitor = await mintVisitor(`tap1223-${Date.now()}`);
 
   try {
-    await adminLogin(page);
+    await adminLogin(page, getSeededAdmin());
     await openSessionsTab(page);
 
     const key = await adminSessionRowKey(page, "visitor", visitor.id);
@@ -185,7 +171,7 @@ test("#1223 on a wide panel the facts stay two columns", async ({ page }) => {
   const visitor = await mintVisitor(`wide1223-${Date.now()}`);
 
   try {
-    await adminLogin(page);
+    await adminLogin(page, getSeededAdmin());
     await openSessionsTab(page);
 
     const key = await adminSessionRowKey(page, "visitor", visitor.id);
@@ -225,7 +211,7 @@ test("#1223 @webkit on a phone no field is on the card and in the panel at once"
   const admin = getSeededAdmin();
   const adminId = (JSON.parse(admin.subjectJson) as { id: string }).id;
 
-  await adminLogin(page);
+  await adminLogin(page, getSeededAdmin());
   await openUsersTab(page);
 
   const row = page.getByTestId(`admin-user-row-${adminId}`);
@@ -276,7 +262,7 @@ test("#1223 @webkit on a phone the detail panel spans its table, with no gutters
   const visitor = await mintVisitor(`gutter1223-${Date.now()}`);
 
   try {
-    await adminLogin(page);
+    await adminLogin(page, getSeededAdmin());
     await openSessionsTab(page);
 
     const key = await adminSessionRowKey(page, "visitor", visitor.id);
@@ -338,7 +324,7 @@ test("#1223 @webkit on a phone no panel value is broken mid-token", async ({ pag
   const visitor = await mintVisitor(`token1223-${Date.now()}`);
 
   try {
-    await adminLogin(page);
+    await adminLogin(page, getSeededAdmin());
     await openSessionsTab(page);
 
     const key = await adminSessionRowKey(page, "visitor", visitor.id);
@@ -432,7 +418,7 @@ test.describe("#1223 the 769-899 band", () => {
     const admin = getSeededAdmin();
     const adminId = (JSON.parse(admin.subjectJson) as { id: string }).id;
 
-    await adminLogin(page);
+    await adminLogin(page, getSeededAdmin());
     await openUsersTab(page);
 
     const row = page.getByTestId(`admin-user-row-${adminId}`);

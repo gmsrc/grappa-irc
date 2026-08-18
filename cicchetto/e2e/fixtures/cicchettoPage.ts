@@ -183,6 +183,36 @@ export async function loginAs(
   await waitForUserTopicReady(page, vjt.name);
 }
 
+// Admin sibling of `loginAs`: the same `seedAuthLocalStorage` seeding,
+// gated on `expectShellReady` instead of the per-network header +
+// user-topic ack above.
+//
+// #1397 — this replaces twenty local copies that lived in twenty spec
+// files under two names (`adminLogin` x12, `adminFriendlyLogin` x8).
+// The two names were synonyms: with the name masked, every body runs
+// the same three statements. All the variance sat in the SIGNATURE, on
+// two axes — the seed type was spelled three ways (`SeededUser`,
+// `ReturnType<typeof getSeededAdmin>`, a local `Admin`, which are one
+// type since `getSeededAdmin(): SeededUser`), and four of the twenty
+// fetched the seed themselves rather than taking it, which is why
+// fourteen call sites now spell `getSeededAdmin()` out loud.
+//
+// Deliberately NOT `loginAs`, though the seeding half is now literally
+// the same call. The seeded admin (`admin-vjt`) has NO networks bound,
+// so `loginAs`'s per-network-header selector never resolves for it;
+// reaching it would mean `noNetworks: true`, whose own comment above
+// calls that a weakening of the post-login invariant. Adopting
+// `loginAs` would also buy `waitForUserTopicReady`, which none of the
+// twenty specs needs today — none of them composes `/join` — and which
+// rests on `socketUserName()` matching the seeded admin name,
+// unverified at the time of writing. The barrier question is open, not
+// settled: see DESIGN_NOTES 2026-08-18.
+export async function adminLogin(page: Page, admin: SeededUser): Promise<void> {
+  await seedAuthLocalStorage(page, admin.token, admin.subjectJson);
+  await page.goto("/");
+  await expectShellReady(page);
+}
+
 // The visitor subject envelope, MIRRORED from cicchetto/src/lib/api.ts
 // `Subject` rather than imported: e2e/tsconfig.json carries no path
 // mapping into src, the same posture (and for the same reason) as

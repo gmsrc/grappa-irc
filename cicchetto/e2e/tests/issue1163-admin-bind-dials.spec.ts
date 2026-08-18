@@ -54,25 +54,10 @@
 // The assertions are repeated after a full page reload so the witness is a
 // second server round-trip, not a client-side artifact of the bind response.
 
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
-
-type Admin = ReturnType<typeof getSeededAdmin>;
-
-async function adminLogin(page: import("@playwright/test").Page, seed: Admin): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 // #1158 — the console door moved. Binding is no longer a database-wide form
 // that asks which user; it is the `+` on that one user's page, reached by

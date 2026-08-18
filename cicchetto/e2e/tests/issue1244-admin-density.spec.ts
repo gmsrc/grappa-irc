@@ -49,27 +49,13 @@
 // shape — non-admin cannot reach this surface at all.
 
 import type { Locator, Page } from "@playwright/test";
-import { adminSessionRowKey, expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, adminSessionRowKey, openAdminConsole } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
 // admin-vjt has no network bind, so `loginAs`'s network-section
 // shell-ready selector would time out. Same shape as #1223 / #1073.
-async function adminLogin(page: Page): Promise<void> {
-  const seed = getSeededAdmin();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
-
 async function openSessionsTab(page: Page): Promise<void> {
   await openAdminConsole(page);
   await page.getByTestId("admin-tab-sessions").click();
@@ -184,7 +170,7 @@ for (const width of [393, 440]) {
       const visitor = await mintVisitor(`dens1244-${Date.now()}`);
 
       try {
-        await adminLogin(page);
+        await adminLogin(page, getSeededAdmin());
         await openSessionsTab(page);
 
         const key = await adminSessionRowKey(page, "visitor", visitor.id);
@@ -252,7 +238,7 @@ for (const width of [393, 440]) {
       const visitor = await mintVisitor(`densp1244-${Date.now()}`);
 
       try {
-        await adminLogin(page);
+        await adminLogin(page, getSeededAdmin());
         await openSessionsTab(page);
 
         const key = await adminSessionRowKey(page, "visitor", visitor.id);
@@ -331,7 +317,7 @@ test.describe("#1244 the nesting around a record card", () => {
     const visitor = await mintVisitor(`frame1244-${Date.now()}`);
 
     try {
-      await adminLogin(page);
+      await adminLogin(page, getSeededAdmin());
       await openSessionsTab(page);
 
       const key = await adminSessionRowKey(page, "visitor", visitor.id);

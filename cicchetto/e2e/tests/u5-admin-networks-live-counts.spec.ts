@@ -20,25 +20,9 @@
 // review).
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { patchNetworkConnectionState } from "../fixtures/grappaApi";
 import { getSeededAdmin, getSeededM9bVictim, NETWORK_SLUG } from "../fixtures/seedData";
-
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 async function openAdminPane(page: import("@playwright/test").Page): Promise<void> {
   await openAdminConsole(page);
@@ -54,7 +38,7 @@ test("U-5 Networks live user-count drops after a session is terminated", async (
     connection_state: "connected",
   });
 
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminPane(page);
 
   // 1. Open Networks tab; capture the bahamut-test row's USER live

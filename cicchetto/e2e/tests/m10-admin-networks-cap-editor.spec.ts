@@ -18,24 +18,8 @@
 // by the time the spec runs.
 
 import { expect, test } from "@playwright/test";
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { getSeededAdmin } from "../fixtures/seedData";
-
-async function adminFriendlyLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 async function openAdminNetworksTab(page: import("@playwright/test").Page): Promise<void> {
   await openAdminConsole(page);
@@ -44,7 +28,7 @@ async function openAdminNetworksTab(page: import("@playwright/test").Page): Prom
 }
 
 test("M-10 admin Networks tab lists seeded network rows", async ({ page }) => {
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminNetworksTab(page);
 
   // bahamut-test (user network) + azzurra (visitor network) both
@@ -61,7 +45,7 @@ test("M-10 admin Networks tab lists seeded network rows", async ({ page }) => {
 });
 
 test("M-10 cap editor: edit + Save round-trips through server", async ({ page }) => {
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminNetworksTab(page);
 
   const slug = "bahamut-test";
@@ -106,7 +90,7 @@ test("M-10 cap editor: edit + Save round-trips through server", async ({ page })
 });
 
 test("M-10 Sweep visitors inline-confirm fires + renders swept count", async ({ page }) => {
-  await adminFriendlyLogin(page, getSeededAdmin());
+  await adminLogin(page, getSeededAdmin());
   await openAdminNetworksTab(page);
 
   const reap = page.getByTestId("admin-networks-force-reap");

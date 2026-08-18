@@ -22,7 +22,7 @@
 // `--repeat-each`: two repeats can start inside the same millisecond, and a
 // slug collision would fail the second one for the wrong reason.
 
-import { expectShellReady, openAdminConsole } from "../fixtures/cicchettoPage";
+import { adminLogin, openAdminConsole } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -36,22 +36,6 @@ function unique(prefix: string): string {
   const id = `${prefix}-${Date.now() % 1_000_000}-${Math.random().toString(36).slice(2, 6)}`;
   if (id.length > 32) throw new Error(`unique: "${id}" is ${id.length} chars, slug limit is 32`);
   return id;
-}
-
-async function adminLogin(
-  page: import("@playwright/test").Page,
-  seed: ReturnType<typeof getSeededAdmin>,
-): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
 }
 
 async function openUsersTab(page: import("@playwright/test").Page): Promise<void> {
