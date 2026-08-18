@@ -43,11 +43,6 @@ defmodule GrappaWeb.AuthControllerTest do
     :ok
   end
 
-  defp start_server(handler \\ IRCServer.passthrough_handler()) do
-    {:ok, server} = IRCServer.start_link(handler)
-    {server, IRCServer.port(server)}
-  end
-
   defp pick_unused_port do
     {:ok, l} = :gen_tcp.listen(0, [])
     {:ok, port} = :inet.port(l)
@@ -637,7 +632,7 @@ defmodule GrappaWeb.AuthControllerTest do
 
   describe "POST /auth/login (visitor via nick)" do
     test "anon (case 1) → 200 + subject{kind: visitor}", %{conn: conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> post(conn, "/auth/login", %{"identifier" => "vjt"}) end)
@@ -691,7 +686,7 @@ defmodule GrappaWeb.AuthControllerTest do
     # test process).
     test "visitor login → 503 db_unavailable (not 500) under sustained transient DB busy",
          %{conn: conn} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {_, _} = setup_visitor_network(port)
 
       BusyRetry.inject_transient_faults(10_000)
@@ -712,7 +707,7 @@ defmodule GrappaWeb.AuthControllerTest do
     # strip control chars) at the boundary BEFORE classification, so a nick
     # with a trailing space logs in as the trimmed nick.
     test "nick with a trailing space is trimmed → 200 + subject{nick: trimmed}", %{conn: conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> post(conn, "/auth/login", %{"identifier" => "vjt "}) end)
@@ -891,7 +886,7 @@ defmodule GrappaWeb.AuthControllerTest do
         end
       end
 
-      {_, port} = start_server(nick_in_use_handler)
+      {_, port} = IRCServer.start_server(nick_in_use_handler)
       {network, _} = setup_visitor_network(port)
 
       conn = post(conn, "/auth/login", %{"identifier" => "vjt"})
@@ -902,7 +897,7 @@ defmodule GrappaWeb.AuthControllerTest do
 
     test "anon collision (no bearer) → 409 anon_collision + Retry-After",
          %{conn: conn} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       {:ok, v} = Visitors.find_or_provision_anon("vjt", "azzurra", "5.6.7.8")
@@ -918,7 +913,7 @@ defmodule GrappaWeb.AuthControllerTest do
     end
 
     test "anon collision token reuse → 200 + rotated token", %{conn: conn} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       {:ok, v} = Visitors.find_or_provision_anon("vjt", "azzurra", "5.6.7.8")
@@ -938,7 +933,7 @@ defmodule GrappaWeb.AuthControllerTest do
     end
 
     test "#363 incognito param provisions an ephemeral (incognito) visitor", %{conn: conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task =
@@ -1034,7 +1029,7 @@ defmodule GrappaWeb.AuthControllerTest do
 
     test "visitor logout (anon) kills Session.Server AND purges visitor row per W11",
          %{conn: conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task =
@@ -1103,7 +1098,7 @@ defmodule GrappaWeb.AuthControllerTest do
       # whereas `assert_receive 100` would mask the regression by giving the
       # scheduler 100ms of slop to deliver our :DOWN AFTER the 204 came
       # back. Keep `assert_received` (no timeout) for that reason.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task =
@@ -1154,7 +1149,7 @@ defmodule GrappaWeb.AuthControllerTest do
       # the fix scopes the stop+purge teardown to ANON visitors only, so
       # a registered visitor's detach keeps the bouncer online. Quit
       # (tear down) is a separate verb (POST /session/disconnect + logout).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task =
@@ -1216,7 +1211,7 @@ defmodule GrappaWeb.AuthControllerTest do
       # the ABSENCE of teardown fixes both: the session stays up, so
       # DB == live (connection_state :connected AND whereis returns the
       # live pid).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       user = user_fixture()
       {network, _} = network_with_server(port: port)
@@ -1254,8 +1249,8 @@ defmodule GrappaWeb.AuthControllerTest do
     end
 
     test "user logout (DETACH) keeps ALL the user's bindings up (#126)", %{conn: conn} do
-      {server1, port1} = start_server()
-      {server2, port2} = start_server()
+      {server1, port1} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {server2, port2} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       user = user_fixture()
       {network1, _} = network_with_server(port: port1)
@@ -1350,7 +1345,7 @@ defmodule GrappaWeb.AuthControllerTest do
 
     test "visitor logout when network/credential removed mid-session still 204s + purges",
          %{conn: conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task =

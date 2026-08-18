@@ -4,8 +4,8 @@ defmodule Grappa.Session.DirectoryIngestTest do
 
   This file is the boundary claim made falsifiable. It runs `async: true`
   on plain `ExUnit.Case`: no `DataCase`, no Repo, no `Session.Server`, no
-  fake ircd. Its sibling `directory_test.exs` needs all four (240 lines,
-  `async: false`, 25 references to `start_server`/`IRCServer`) because
+  fake ircd. Its sibling `directory_test.exs` needs all four (228 lines,
+  `async: false`, 23 lines naming `start_server`/`IRCServer`) because
   before this extraction the parse / batch / throttle decisions were only
   reachable by booting a GenServer.
 

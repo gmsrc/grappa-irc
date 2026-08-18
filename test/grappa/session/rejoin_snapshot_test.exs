@@ -25,17 +25,12 @@ defmodule Grappa.Session.RejoinSnapshotTest do
 
   @snapshot ["#a", "#b", "#c"]
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
-    {server, IRCServer.port(server)}
-  end
-
   # A session mid-restore: the credential carries the complete pre-drop
   # snapshot, the three planned JOINs are on the wire, and NOT ONE self-JOIN
   # echo has come back yet. This is the exact state the `Read/Dead Error`
   # wave of 2026-08-16 04:40 interrupted.
   defp restoring_session do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
 
     {network, _} =

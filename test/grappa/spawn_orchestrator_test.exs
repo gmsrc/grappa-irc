@@ -40,11 +40,6 @@ defmodule Grappa.SpawnOrchestratorTest do
     :ok
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
-    {server, IRCServer.port(server)}
-  end
-
   defp setup_credential(user, slug, port, opts \\ %{}) do
     {:ok, base_network} = Networks.find_or_create_network(%{slug: slug})
     {:ok, _} = Servers.add_server(base_network, %{host: "127.0.0.1", port: port, tls: false})
@@ -178,7 +173,7 @@ defmodule Grappa.SpawnOrchestratorTest do
   describe "spawn/4 happy path" do
     test "admission ok + fresh session — returns {:ok, :spawned, pid}" do
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "happy-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
       :ok = clear_registry_for(network.id)
@@ -203,7 +198,7 @@ defmodule Grappa.SpawnOrchestratorTest do
   describe "spawn/4 idempotency" do
     test "second call against live session returns {:ok, :already_started, pid}" do
       vjt = user_fixture(name: "idempot-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "idempot-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
       :ok = clear_registry_for(network.id)
@@ -223,7 +218,7 @@ defmodule Grappa.SpawnOrchestratorTest do
   describe "spawn/4 operator-delete fail-fast" do
     test "refresh_plan returning {:error, :not_found} → {:ok, :ignored}, no session spawned" do
       vjt = user_fixture(name: "ignored-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "ignored-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
       :ok = clear_registry_for(network.id)
@@ -252,7 +247,7 @@ defmodule Grappa.SpawnOrchestratorTest do
     test "user_cap_exceeded — returns {:error, :user_cap_exceeded}, no session spawned" do
       vjt_a = user_fixture(name: "capa-#{System.unique_integer([:positive])}")
       vjt_b = user_fixture(name: "capb-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "cap-#{System.unique_integer([:positive])}"
 
       {network, plan_a} = setup_credential(vjt_a, slug, port, %{max_concurrent_user_sessions: 1})
@@ -291,7 +286,7 @@ defmodule Grappa.SpawnOrchestratorTest do
   describe "spawn/4 idempotent connect against a network at its cap (#1147)" do
     test "already-live subject keeps its session and records no capacity reject" do
       vjt = user_fixture(name: "idemcap-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "idemcap-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port, %{max_concurrent_user_sessions: 1})
       :ok = clear_registry_for(network.id)
@@ -317,7 +312,7 @@ defmodule Grappa.SpawnOrchestratorTest do
     test "subject with no live session still gets the capacity error, and it IS recorded" do
       vjt_a = user_fixture(name: "capgate-a-#{System.unique_integer([:positive])}")
       vjt_b = user_fixture(name: "capgate-b-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "capgate-#{System.unique_integer([:positive])}"
 
       {network, plan_a} = setup_credential(vjt_a, slug, port, %{max_concurrent_user_sessions: 1})
@@ -359,7 +354,7 @@ defmodule Grappa.SpawnOrchestratorTest do
   describe "spawn/4 backoff reset semantics (M-life-5)" do
     test "successful admission clears prior Backoff failure history before spawn" do
       vjt = user_fixture(name: "bo-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "bo-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
       :ok = clear_registry_for(network.id)
@@ -392,7 +387,7 @@ defmodule Grappa.SpawnOrchestratorTest do
     test "rejected admission does NOT reset Backoff (no operator action took effect)" do
       vjt_a = user_fixture(name: "bo-noreset-#{System.unique_integer([:positive])}")
       vjt_b = user_fixture(name: "bo-noreset-b-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "boreject-#{System.unique_integer([:positive])}"
 
       {network, plan_a} = setup_credential(vjt_a, slug, port, %{max_concurrent_user_sessions: 1})
@@ -439,7 +434,7 @@ defmodule Grappa.SpawnOrchestratorTest do
   describe "reconnect/5 bounce semantics" do
     test "tears down the LIVE session and respawns a FRESH pid (never :already_started)" do
       vjt = user_fixture(name: "bounce-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "bounce-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
       :ok = clear_registry_for(network.id)
@@ -469,7 +464,7 @@ defmodule Grappa.SpawnOrchestratorTest do
 
     test "no live session — stop is a no-op, then spawns fresh {:ok, :spawned, pid}" do
       vjt = user_fixture(name: "recon-nolive-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "recon-nolive-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
       :ok = clear_registry_for(network.id)
@@ -496,7 +491,7 @@ defmodule Grappa.SpawnOrchestratorTest do
     test "admission rejection propagates — {:error, :user_cap_exceeded}, no session spawned" do
       vjt_a = user_fixture(name: "recon-capa-#{System.unique_integer([:positive])}")
       vjt_b = user_fixture(name: "recon-capb-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "recon-cap-#{System.unique_integer([:positive])}"
 
       {network, plan_a} = setup_credential(vjt_a, slug, port, %{max_concurrent_user_sessions: 1})
@@ -529,7 +524,7 @@ defmodule Grappa.SpawnOrchestratorTest do
 
     test "successful reconnect clears prior Backoff failure history (single reset, no double)" do
       vjt = user_fixture(name: "recon-bo-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "recon-bo-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
       :ok = clear_registry_for(network.id)

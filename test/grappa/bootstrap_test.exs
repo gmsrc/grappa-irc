@@ -42,11 +42,6 @@ defmodule Grappa.BootstrapTest do
     :ok
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
-    {server, IRCServer.port(server)}
-  end
-
   # Bind a DB credential + server for `(user, slug)` so
   # Session.Server.init can resolve them at boot. `port` is the
   # IRCServer fake's listening port.
@@ -134,8 +129,8 @@ defmodule Grappa.BootstrapTest do
   describe "run/0 with bound credentials" do
     test "spawns one session per Credential row" do
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
-      {_, port_a} = start_server()
-      {_, port_b} = start_server()
+      {_, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {_, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       net_a = bind_db(vjt, "neta-#{System.unique_integer([:positive])}", port_a)
       net_b = bind_db(vjt, "netb-#{System.unique_integer([:positive])}", port_b)
@@ -151,7 +146,7 @@ defmodule Grappa.BootstrapTest do
 
     test "logs structured summary line with 5-bucket honest counts" do
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       net = bind_db(vjt, "summary-#{System.unique_integer([:positive])}", port)
 
       on_exit(fn -> stop_session(vjt.id, net.id) end)
@@ -183,7 +178,7 @@ defmodule Grappa.BootstrapTest do
       # "this row didn't run because capacity policy tripped" from
       # "this row tried to connect and the upstream refused."
       vjt = user_fixture(name: "uhl-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       net = bind_db(vjt, "uhl-#{System.unique_integer([:positive])}", port)
 
       {:ok, _} =
@@ -221,7 +216,7 @@ defmodule Grappa.BootstrapTest do
       # Operator saw "DB is empty" lie + chased the wrong root cause.
       # Post-T-4, count_by_state/0 surfaces the truth.
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       net_parked = bind_db(vjt, "park-#{System.unique_integer([:positive])}", port)
       net_failed = bind_db(vjt, "fail-#{System.unique_integer([:positive])}", port)
@@ -266,7 +261,7 @@ defmodule Grappa.BootstrapTest do
       # (distinct from `:capacity_rejected` which is the policy-tripped
       # bucket the legacy `:skipped` also collapsed into).
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       net = bind_db(vjt, "idem-#{System.unique_integer([:positive])}", port)
 
       on_exit(fn -> stop_session(vjt.id, net.id) end)
@@ -327,7 +322,7 @@ defmodule Grappa.BootstrapTest do
       # `(stop) {:connect_failed, _}` from the Session GenServer
       # terminate path).
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
-      {_, port_ok} = start_server()
+      {_, port_ok} = IRCServer.start_server(IRCServer.passthrough_handler())
       # 1 is a privileged port; connect from container as non-root will fail.
       port_bad = 1
 
@@ -353,7 +348,7 @@ defmodule Grappa.BootstrapTest do
 
   describe "run/0 with active visitors" do
     test "spawns Session.Server per active visitor row" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
 
       on_exit(fn -> stop_visitor_session(visitor.id, network.id) end)
@@ -373,7 +368,7 @@ defmodule Grappa.BootstrapTest do
     end
 
     test "registered visitor (password set) respawns alongside anon visitors" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       {:ok, _} = Visitors.commit_password(visitor.id, network.id, "s3cret")
 
@@ -388,10 +383,10 @@ defmodule Grappa.BootstrapTest do
       # A single visitor identity with credentials on TWO networks
       # (post-accretion). Bootstrap must restore BOTH sessions, not just the
       # primary network_slug.
-      {_, port_a} = start_server()
+      {_, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, net_a} = visitor_with_network(port_a)
 
-      {_, port_b} = start_server()
+      {_, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
       {net_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
 
       # Accrete B: attach a (visitor_id, net_b) credential to the SAME
@@ -422,10 +417,10 @@ defmodule Grappa.BootstrapTest do
       # (the visitor /disconnected B before the reboot). Bootstrap must
       # restore A but SKIP B — visitor per-network disconnect persists
       # across reboot (vjt: "of course cazzo").
-      {_, port_a} = start_server()
+      {_, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, net_a} = visitor_with_network(port_a)
 
-      {_, port_b} = start_server()
+      {_, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
       {net_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
 
       {:ok, rep} = Credentials.representative_visitor_credential(visitor.id)
@@ -486,7 +481,7 @@ defmodule Grappa.BootstrapTest do
     # `Ecto.NoResultsError`), crash-looping Bootstrap into app
     # termination on the boot after the visitor backfill.
     test "backfilled visitor credential is NOT spawned via the user path (no crash)" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       # `visitor_with_network` already provisions the visitor's per-network
       # credential (the phase-3 write-through) — the same shape the phase-1
       # backfill migration produced. No manual insert needed.
@@ -504,7 +499,7 @@ defmodule Grappa.BootstrapTest do
     end
 
     test "list_credentials_for_all_users/0 excludes visitor credentials" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       # `visitor_with_network` provisions the visitor's credential.
       {visitor, network} = visitor_with_network(port)
       user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
@@ -529,7 +524,7 @@ defmodule Grappa.BootstrapTest do
     # slug simply doesn't resolve, no credential is created, and Bootstrap
     # skips the credential-less visitor (logged, non-fatal).
     test "does not raise when a visitor's network is configured" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       on_exit(fn -> stop_visitor_session(visitor.id, network.id) end)
 
@@ -608,7 +603,7 @@ defmodule Grappa.BootstrapTest do
 
     test "does not raise when every referenced network has an enabled server" do
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       net = bind_db(vjt, "ok-#{System.unique_integer([:positive])}", port)
       on_exit(fn -> stop_session(vjt.id, net.id) end)
 
@@ -623,7 +618,7 @@ defmodule Grappa.BootstrapTest do
     # over-cap rows are skipped + warned. No queue, no retry — clean
     # skip-and-log per the Bootstrap moduledoc's best-effort contract.
     test "respawn skips visitors over network cap" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "azzurra-#{System.unique_integer([:positive])}"
       {:ok, fresh_network} = Networks.find_or_create_network(%{slug: slug})
 
@@ -676,7 +671,7 @@ defmodule Grappa.BootstrapTest do
       # `:skipped` bucket alongside `:already_running` (idempotent
       # no-op); the honest 5-bucket split separates all three so the
       # operator dashboard surfaces the right action per condition.
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "tri-#{System.unique_integer([:positive])}"
       {:ok, fresh_network} = Networks.find_or_create_network(%{slug: slug})
 
@@ -722,7 +717,7 @@ defmodule Grappa.BootstrapTest do
 
     test "installs in_pool vhosts minus overlapping fixed sources, honest log" do
       vjt = user_fixture(name: "pool-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       # Two in_pool vhosts; one of them is ALSO a per-server fixed source
       # → must be excluded from the effective rotation pool (spec §3).
@@ -766,7 +761,7 @@ defmodule Grappa.BootstrapTest do
 
     test "in_pool vhosts with no overlapping fixed source install as-is" do
       vjt = user_fixture(name: "pool-#{System.unique_integer([:positive])}")
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {:ok, _} = Grappa.Vhosts.create_vhost(%{address: "2a03:4000:2:33c::9000", in_pool: true})
 

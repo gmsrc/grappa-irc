@@ -23,11 +23,6 @@ defmodule Grappa.IRC.ClientTest do
   alias Grappa.IRC.{AuthFSM, Client, FakeLag, Message}
   alias Grappa.IRCServer
 
-  defp start_server(handler \\ IRCServer.passthrough_handler()) do
-    {:ok, server} = IRCServer.start_link(handler)
-    {server, IRCServer.port(server)}
-  end
-
   # #676 — a realistic 433: the numeric echoes the nick the SERVER rejected,
   # i.e. the one we just sent (an ircd that truncates to its NICKLEN echoes
   # the SHORTENED spelling, which is how the FSM learns the cap). A fake
@@ -156,7 +151,7 @@ defmodule Grappa.IRC.ClientTest do
       # Session.Server can cache it without round-tripping the socket per
       # admin read. The client dialed the in-process IRCServer on
       # 127.0.0.1:<port>, so the pushed peer reflects exactly that.
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       _ = start_client(port)
 
       assert_receive {:irc_peer, {:ok, {{127, 0, 0, 1}, ^port}}}, 1_000
@@ -165,7 +160,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "outbound: client → server" do
     test "send_line/2 writes the raw bytes to the server socket" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_line(client, "PING :foo\r\n")
@@ -180,7 +175,7 @@ defmodule Grappa.IRC.ClientTest do
       # frame concatenated and corrupted the wire. ensure_crlf at the
       # transport boundary makes the helper safe-by-default — every line
       # that hits the socket has CRLF, regardless of caller hygiene.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_line(client, "PING :no-crlf")
@@ -193,7 +188,7 @@ defmodule Grappa.IRC.ClientTest do
       # Some sources (HTTP-derived headers, hand-typed payloads) end with
       # bare \n. IRC framing requires \r\n; the transport boundary fixes
       # the LF→CRLF mismatch instead of writing a malformed frame.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_line(client, "PING :bare-lf\n")
@@ -203,7 +198,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_privmsg/3 emits the canonical PRIVMSG framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_privmsg(client, "#sniffo", "ciao raga")
@@ -213,7 +208,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_join/3 emits JOIN with channel param (no key)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_join(client, "#sniffo", nil)
@@ -224,7 +219,7 @@ defmodule Grappa.IRC.ClientTest do
 
     # UX-4 bucket F: +k channel-key support.
     test "send_join/3 emits JOIN with channel + key when key is non-nil" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_join(client, "#sniffo", "secret")
@@ -234,7 +229,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_join/3 with empty-string key emits the no-key form" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_join(client, "#sniffo", "")
@@ -248,7 +243,7 @@ defmodule Grappa.IRC.ClientTest do
     # `JOIN #a,#b\r\n` (never N looped JOINs). The list clause is the
     # server-side path cic's existing comma-list contract already feeds.
     test "send_join/3 list clause emits ONE JOIN line for a comma list (no key)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_join(client, ["#a", "#b", "#c"], nil)
@@ -258,7 +253,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_join/3 list clause emits ONE JOIN line with a single key" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_join(client, ["#a", "#b"], "secret")
@@ -268,7 +263,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_join/3 list clause with a single-element list matches the single-channel form" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_join(client, ["#solo"], nil)
@@ -282,7 +277,7 @@ defmodule Grappa.IRC.ClientTest do
     # close, an autojoin drop) passes `nil`, so a stray `PART #chan :` there
     # would be a visible regression on the wire for every one of them.
     test "send_part/3 with a nil reason emits the bare PART form" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_part(client, "#sniffo", nil)
@@ -292,7 +287,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_part/3 emits PART #chan :reason when a reason is given" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_part(client, "#sniffo", "non trovo utili le bestemmie")
@@ -304,7 +299,7 @@ defmodule Grappa.IRC.ClientTest do
     # Mirrors `send_join/3`'s empty-key clause: an empty reason is the
     # ABSENCE of a reason, not `PART #chan :`.
     test "send_part/3 with an empty reason emits the bare PART form" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_part(client, "#sniffo", "")
@@ -317,7 +312,7 @@ defmodule Grappa.IRC.ClientTest do
     # this is the whole point of the colon and the exact case (#1208) that
     # the sigil-less parser used to shred into a phantom channel.
     test "send_part/3 keeps spaces in the reason verbatim behind the colon" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_part(client, "#sniffo", "a  b   c")
@@ -327,7 +322,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_topic/3 emits TOPIC #chan :body framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_topic(client, "#italia", "ciao mondo")
@@ -337,7 +332,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_nick/2 emits NICK new\\r\\n" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 
@@ -356,7 +351,7 @@ defmodule Grappa.IRC.ClientTest do
     # `Client.send_line(client, "<RAW>\r\n")`.
 
     test "send_kick/4 emits KICK #chan nick :reason framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_kick(client, "#sniffo", "alice", "bad behaviour")
@@ -366,7 +361,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_kick/4 rejects malformed channel with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} =
@@ -374,7 +369,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_kick/4 rejects malformed nick with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} =
@@ -382,7 +377,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_kick/4 rejects CR/LF/NUL in reason with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} =
@@ -390,7 +385,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_invite/3 emits INVITE nick #chan framing (RFC 2812 order)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_invite(client, "#sniffo", "alice")
@@ -400,7 +395,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_invite/3 rejects malformed channel with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} =
@@ -408,7 +403,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_invite/3 rejects malformed nick with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} =
@@ -416,7 +411,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_list_mode/3 emits MODE #chan b framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_list_mode(client, "#sniffo", "b")
@@ -428,7 +423,7 @@ defmodule Grappa.IRC.ClientTest do
     # #1251 — the letter is not `b` any more. `I` also pins that the case is
     # carried verbatim: lowercasing it would query the invite-ONLY flag.
     test "send_list_mode/3 emits the requested letter, case verbatim" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_list_mode(client, "#sniffo", "I")
@@ -438,7 +433,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_list_mode/3 rejects malformed channel with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_list_mode(client, "no-prefix", "b")
@@ -447,7 +442,7 @@ defmodule Grappa.IRC.ClientTest do
     # #1251 — `mode` arrives from a client frame, so the wire builder gates
     # its SHAPE: anything but one ASCII letter could forge MODE arguments.
     test "send_list_mode/3 rejects a multi-token mode (argument forgery)" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_list_mode(client, "#sniffo", "b *!*@x")
@@ -456,7 +451,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_channel_modes/2 emits bare MODE #chan query framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_channel_modes(client, "#sniffo")
@@ -466,14 +461,14 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_channel_modes/2 rejects malformed channel with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_channel_modes(client, "no-prefix")
     end
 
     test "send_umode/3 emits MODE nick modes framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_umode(client, "vjt", "+i")
@@ -483,21 +478,21 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_umode/3 rejects malformed nick with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_umode(client, "bad nick", "+i")
     end
 
     test "send_umode/3 rejects CR/LF/NUL in modes with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_umode(client, "vjt", "+i\r\nQUIT")
     end
 
     test "send_umode_query/2 emits bare MODE nick query framing (#229)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_umode_query(client, "vjt")
@@ -507,14 +502,14 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_umode_query/2 rejects malformed nick with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_umode_query(client, "bad nick")
     end
 
     test "send_names/2 emits NAMES #chan framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_names(client, "#sniffo")
@@ -524,7 +519,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_names/2 rejects malformed channel with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_names(client, "no-prefix")
@@ -538,7 +533,7 @@ defmodule Grappa.IRC.ClientTest do
     # extended WHO takes flag ARGS separated by spaces (`+s <server>`), so a
     # space is a legitimate arg separator, not a "splice" to reject.
     test "send_who/2 emits WHO #chan framing (channel target)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_who(client, "#sniffo")
@@ -548,7 +543,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_who/2 emits WHO framing for a host mask (#221)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_who(client, "*!*@*.libera.chat")
@@ -564,7 +559,7 @@ defmodule Grappa.IRC.ClientTest do
     # the first token, so `WHO +s` reached upstream and bahamut answered
     # 522 ERR_WHOSYNTAX (the `s` flag's server arg was NULL).
     test "send_who/2 emits WHO with extended flag args, spaces forwarded (#540)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_who(client, "+s server.azzurra.chat")
@@ -578,7 +573,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_who/2 rejects CRLF/NUL injection with {:error, :invalid_line} (#540)" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       # A space is a legitimate WHO arg separator now (#540); only CRLF
@@ -588,7 +583,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_who/2 rejects an empty target with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_who(client, "")
@@ -600,7 +595,7 @@ defmodule Grappa.IRC.ClientTest do
     # target: nil → bare MOTD; a server token → `MOTD <target>`. The gate is
     # safe_oper_token? (single wire token) so injection can't splice a slot.
     test "send_motd/2 with nil emits bare MOTD framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_motd(client, nil)
@@ -610,7 +605,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_motd/2 with a target emits MOTD <target> framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_motd(client, "void.azzurra.chat")
@@ -620,7 +615,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_motd/2 rejects an injection target with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       # A space would splice an extra MOTD wire slot; CRLF would inject a
@@ -636,7 +631,7 @@ defmodule Grappa.IRC.ClientTest do
     # gate applies: a space would splice an extra ADMIN slot, CRLF would
     # inject a follow-up command.
     test "send_admin/2 with nil emits bare ADMIN framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_admin(client, nil)
@@ -646,7 +641,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_admin/2 with a target emits ADMIN <target> framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_admin(client, "void.azzurra.chat")
@@ -656,7 +651,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_admin/2 rejects an injection target with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_admin(client, "srv a")
@@ -672,7 +667,7 @@ defmodule Grappa.IRC.ClientTest do
     # mask/server → `LUSERS <mask> <server>`. Each token is gated by
     # safe_oper_token? (single wire token) so injection can't splice a slot.
     test "send_lusers/3 with nil/nil emits bare LUSERS framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_lusers(client, nil, nil)
@@ -682,7 +677,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_lusers/3 with a mask emits LUSERS <mask> framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_lusers(client, "*.azzurra.org", nil)
@@ -692,7 +687,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_lusers/3 with mask + server emits LUSERS <mask> <server> framing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_lusers(client, "*.azzurra.org", "void.azzurra.chat")
@@ -706,7 +701,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_lusers/3 rejects an injection mask/server with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       # A space would splice an extra LUSERS wire slot; CRLF would inject a
@@ -717,7 +712,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_lusers/3 rejects a server without a mask with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       # LUSERS routes <server> positionally AFTER <mask> (RFC 2812 §3.4.2), so
@@ -726,7 +721,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_topic_clear/2 emits TOPIC #chan : framing (empty trailing param)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_topic_clear(client, "#italia")
@@ -736,7 +731,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_topic_clear/2 rejects malformed channel with {:error, :invalid_line}" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       assert {:error, :invalid_line} = Client.send_topic_clear(client, "no-prefix")
@@ -755,7 +750,7 @@ defmodule Grappa.IRC.ClientTest do
     # registry-clear budget. Origin: U-5 CI failure on commit 010054d,
     # run 25975442301, BootstrapTest:506 + class siblings.
     test "send_line/2 returns {:error, :closed} when socket is closed-but-not-nil (no raise)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 
@@ -794,7 +789,7 @@ defmodule Grappa.IRC.ClientTest do
       # We inject `socket: nil` via `:sys.replace_state` rather than
       # racing connect_failed (which would crash the linked Client
       # before we could send anything).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 
@@ -816,7 +811,7 @@ defmodule Grappa.IRC.ClientTest do
 
     # Bundle C (#20 follow-up)
     test "send_oper/3 emits OPER <name> <password>\\r\\n" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_oper(client, "vjt", "s3cret")
@@ -826,7 +821,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "send_raw/2 ships the line verbatim with trailing CRLF" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
 
       :ok = Client.send_raw(client, "PING :foo.bar")
@@ -883,7 +878,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "inbound: server → client → dispatch_to" do
     test "single PRIVMSG line dispatched as parsed Message struct" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       _ = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 
@@ -899,7 +894,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "burst of 50 server lines dispatched in order with no loss (active:once re-arm)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       _ = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 
@@ -916,7 +911,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "mid-line server write coalesced via OS-level packet:line buffering" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       _ = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 
@@ -932,7 +927,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "malformed inbound line: parse error is logged, client stays alive" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 
@@ -997,7 +992,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "auth_method: :none" do
     test "sends only NICK + USER; no PASS, no CAP, no IDENTIFY" do
-      {server, port} = start_server(rfc_handler())
+      {server, port} = IRCServer.start_server(rfc_handler())
       _ = start_client(port, %{auth_method: :none})
 
       assert {:ok, _} =
@@ -1012,7 +1007,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "auth_method: :server_pass" do
     test "sends PASS BEFORE NICK + USER; no CAP" do
-      {server, port} = start_server(rfc_handler())
+      {server, port} = IRCServer.start_server(rfc_handler())
 
       _ =
         start_client(port, %{
@@ -1038,7 +1033,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "auth_method: :nickserv_identify" do
     test "sends NICK + USER only; the built-in identify moved to Session.Server (#189)" do
-      {server, port} = start_server(rfc_handler())
+      {server, port} = IRCServer.start_server(rfc_handler())
 
       _ =
         start_client(port, %{
@@ -1068,7 +1063,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "auth_method: :sasl" do
     test "sasl-supported: CAP REQ :sasl + AUTHENTICATE PLAIN + base64 payload + CAP END on 903" do
-      {server, port} = start_server(sasl_handler())
+      {server, port} = IRCServer.start_server(sasl_handler())
 
       _ =
         start_client(port, %{
@@ -1117,7 +1112,7 @@ defmodule Grappa.IRC.ClientTest do
 
     test "sasl-failed: 904 from server crashes the client (let it crash)" do
       {server, port} =
-        start_server(sasl_handler("904 grappa-test :SASL auth failed"))
+        IRCServer.start_server(sasl_handler("904 grappa-test :SASL auth failed"))
 
       Process.flag(:trap_exit, true)
 
@@ -1153,7 +1148,7 @@ defmodule Grappa.IRC.ClientTest do
     # :console` allowlist — the call site and the test would both read
     # correctly while the operator gets nothing.
     test "a 904 failure line carries the mechanism and authzid as metadata (#1169)" do
-      {_, port} = start_server(sasl_handler("904 grappa-test :SASL auth failed"))
+      {_, port} = IRCServer.start_server(sasl_handler("904 grappa-test :SASL auth failed"))
 
       Process.flag(:trap_exit, true)
 
@@ -1189,7 +1184,7 @@ defmodule Grappa.IRC.ClientTest do
     # client actually put on the wire and check the first NUL-delimited
     # field is empty, exactly when the breadcrumb claims it is.
     test "the authzid breadcrumb describes the payload the client really sent (#1169)" do
-      {server, port} = start_server(sasl_handler())
+      {server, port} = IRCServer.start_server(sasl_handler())
 
       _ = start_client(port, %{auth_method: :sasl, sasl_user: "vjt", password: "swordfish"})
 
@@ -1244,7 +1239,7 @@ defmodule Grappa.IRC.ClientTest do
     # in `auth_fsm_test.exs`; asserting the number here too would be a
     # second copy of someone else's assertion, failing for their reason.
     test "the 904 line reports the field count of the payload really sent (#1169)" do
-      {server, port} = start_server(sasl_handler("904 grappa-test :SASL auth failed"))
+      {server, port} = IRCServer.start_server(sasl_handler("904 grappa-test :SASL auth failed"))
 
       Process.flag(:trap_exit, true)
 
@@ -1306,7 +1301,7 @@ defmodule Grappa.IRC.ClientTest do
         end
       end
 
-      {_, port} = start_server(refuse_mechanism)
+      {_, port} = IRCServer.start_server(refuse_mechanism)
 
       Process.flag(:trap_exit, true)
 
@@ -1337,7 +1332,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "auth_method: :auto" do
     test "sasl-supported: behaves identically to :sasl on a SASL-capable server" do
-      {server, port} = start_server(sasl_handler())
+      {server, port} = IRCServer.start_server(sasl_handler())
 
       _ =
         start_client(port, %{
@@ -1354,7 +1349,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "sasl-not-supported (Bahamut/Azzurra sim): PASS+CAP LS+NICK/USER, server 421s the CAP, registration proceeds" do
-      {server, port} = start_server(bahamut_handler())
+      {server, port} = IRCServer.start_server(bahamut_handler())
 
       # auto + password sends PASS at register-time; server processes
       # PASS and triggers NickServ IDENTIFY internally (the Bahamut
@@ -1388,7 +1383,7 @@ defmodule Grappa.IRC.ClientTest do
       # Server fires 001 immediately on USER (rfc_handler) and IGNORES
       # CAP LS entirely. Without the registered-state transition on 001,
       # the client would sit forever waiting for a CAP LS reply.
-      {server, port} = start_server(rfc_handler())
+      {server, port} = IRCServer.start_server(rfc_handler())
 
       _ =
         start_client(port, %{
@@ -1428,7 +1423,7 @@ defmodule Grappa.IRC.ClientTest do
         end
       end
 
-      {server, port} = start_server(naking_handler)
+      {server, port} = IRCServer.start_server(naking_handler)
       Process.flag(:trap_exit, true)
 
       {:ok, client} =
@@ -1483,7 +1478,7 @@ defmodule Grappa.IRC.ClientTest do
         end
       end
 
-      {server, port} = start_server(multi_line_handler)
+      {server, port} = IRCServer.start_server(multi_line_handler)
 
       _ =
         start_client(port, %{
@@ -1528,7 +1523,7 @@ defmodule Grappa.IRC.ClientTest do
         end
       end
 
-      {server, port} = start_server(registered_then_spam)
+      {server, port} = IRCServer.start_server(registered_then_spam)
 
       client =
         start_client(port, %{
@@ -1583,7 +1578,7 @@ defmodule Grappa.IRC.ClientTest do
         end
       end
 
-      {server, port} = start_server(direct_001_handler)
+      {server, port} = IRCServer.start_server(direct_001_handler)
 
       client =
         start_client(port, %{
@@ -1618,7 +1613,7 @@ defmodule Grappa.IRC.ClientTest do
         end
       end
 
-      {server, port} = start_server(retry_handler)
+      {server, port} = IRCServer.start_server(retry_handler)
 
       {:ok, client} = start_collision_client(port)
 
@@ -1642,7 +1637,7 @@ defmodule Grappa.IRC.ClientTest do
         end
       end
 
-      {_, port} = start_server(always_clash)
+      {_, port} = IRCServer.start_server(always_clash)
       Process.flag(:trap_exit, true)
 
       {:ok, client} = start_collision_client(port)
@@ -1661,7 +1656,7 @@ defmodule Grappa.IRC.ClientTest do
     # only the raw send_line/2 escape hatch is unguarded by design (it
     # is the SASL chain's bytes-in/bytes-out contract).
     setup do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       client = start_client(port)
       {:ok, server: server, client: client}
     end
@@ -2006,7 +2001,7 @@ defmodule Grappa.IRC.ClientTest do
 
   describe "init/1 contract enforcement" do
     test ":sasl without password returns {:error, {:missing_password, :sasl}} via :stop" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       Process.flag(:trap_exit, true)
 
       assert {:error, {:missing_password, :sasl}} =
@@ -2025,7 +2020,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test ":nickserv_identify without password is rejected at boot, NOT mid-001" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       Process.flag(:trap_exit, true)
 
       assert {:error, {:missing_password, :nickserv_identify}} =
@@ -2044,7 +2039,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test ":none with no password is allowed (the only no-secret branch)" do
-      {server, port} = start_server(rfc_handler())
+      {server, port} = IRCServer.start_server(rfc_handler())
 
       _ =
         start_client(port, %{
@@ -2164,7 +2159,7 @@ defmodule Grappa.IRC.ClientTest do
       # passthrough server: accepts the connection, buffers our PING, never
       # replies. No inbound ever reaches the client → idle fires → self-PING
       # → still no inbound → timeout fires → {:stop, :ping_timeout, _}.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       Process.flag(:trap_exit, true)
 
       client = start_client(port, %{liveness_idle_ms: 100, liveness_timeout_ms: 200})
@@ -2184,7 +2179,7 @@ defmodule Grappa.IRC.ClientTest do
       # so the timeout timer is cancelled before it can fire. The client must
       # survive well past idle+timeout. This is the load-bearing "don't kill a
       # healthy-but-quiet connection" assertion.
-      {server, port} = start_server(liveness_pong_handler())
+      {server, port} = IRCServer.start_server(liveness_pong_handler())
       Process.flag(:trap_exit, true)
 
       client = start_client(port, %{liveness_idle_ms: 100, liveness_timeout_ms: 200})
@@ -2214,7 +2209,7 @@ defmodule Grappa.IRC.ClientTest do
       # Any inbound line proves liveness — a busy channel keeps the socket
       # alive without the client ever needing to self-PING. Server feeds a
       # PRIVMSG every 40ms (< the 100ms idle) so the idle timer never elapses.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       Process.flag(:trap_exit, true)
 
       client = start_client(port, %{liveness_idle_ms: 100, liveness_timeout_ms: 200})
@@ -2513,7 +2508,7 @@ defmodule Grappa.IRC.ClientTest do
       # an under-count is what would kill the fake-lag hypothesis for the
       # wrong reason. The fake server's own tally is the oracle: whatever
       # it received is what the model must have charged for.
-      {server, port} = start_server(rfc_handler())
+      {server, port} = IRCServer.start_server(rfc_handler())
       client = start_client(port)
       :ok = IRCServer.await_handshake(server, 1_000)
 

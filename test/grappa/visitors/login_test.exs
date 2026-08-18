@@ -38,11 +38,6 @@ defmodule Grappa.Visitors.LoginTest do
     :ok
   end
 
-  defp start_server(handler \\ IRCServer.passthrough_handler()) do
-    {:ok, server} = IRCServer.start_link(handler)
-    {server, IRCServer.port(server)}
-  end
-
   defp pick_unused_port do
     {:ok, l} = :gen_tcp.listen(0, [])
     {:ok, port} = :inet.port(l)
@@ -107,7 +102,7 @@ defmodule Grappa.Visitors.LoginTest do
 
   describe "case 1 — no visitor row (anon provisioning)" do
     test "spawns session, awaits 001, creates accounts_session, returns {:ok, %{visitor, token}}" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> Login.login(login_input(), []) end)
@@ -127,7 +122,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "#363 incognito login provisions the visitor with incognito=true + a ~1h linger TTL" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> Login.login(login_input(%{incognito: true}), []) end)
@@ -144,7 +139,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "fresh-nick login with ident + realname persists them and emits them in USER (#152)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task =
@@ -170,7 +165,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "malformed login-Advanced ident → :malformed_ident AND purges the fresh anon row (#152)" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       # An 11-char ident fails the shape guard. The fresh anon row provisioned
@@ -186,7 +181,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "a full threshold of malformed-ident logins leaves the circuit closed (#960)" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       # The circuit is a fail-fast signal about the UPSTREAM's health, and its
@@ -226,7 +221,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "fresh-nick login with a password identifies via :nickserv_identify at 001" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> Login.login(login_input(%{password: "freshpass"}), []) end)
@@ -264,7 +259,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "fresh-nick login with an EMPTY password stays anon — NO IDENTIFY on the wire" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> Login.login(login_input(%{password: ""}), []) end)
@@ -337,7 +332,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "no 001 within budget → {:error, :welcome_timeout}, session torn down + anon row purged" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       # U-2 (UD7): timeout split into :connect_timeout (TCP/TLS) +
@@ -369,7 +364,7 @@ defmodule Grappa.Visitors.LoginTest do
         end
       end
 
-      {_, port} = start_server(collide_once)
+      {_, port} = IRCServer.start_server(collide_once)
       {network, _} = setup_visitor_network(port)
 
       assert {:ok, %{visitor: visitor}} = Login.login(login_input(), [])
@@ -392,7 +387,7 @@ defmodule Grappa.Visitors.LoginTest do
         end
       end
 
-      {_, port} = start_server(always_clash)
+      {_, port} = IRCServer.start_server(always_clash)
       {network, _} = setup_visitor_network(port)
 
       assert {:error, :nick_in_use} = Login.login(login_input(), [])
@@ -413,7 +408,7 @@ defmodule Grappa.Visitors.LoginTest do
 
   describe "case 2 — registered visitor (password gate)" do
     setup do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       {:ok, anon} = Visitors.find_or_provision_anon("vjt", "azzurra", "1.2.3.4")
@@ -547,7 +542,7 @@ defmodule Grappa.Visitors.LoginTest do
   # drives case-2 (registered) dispatch.
   describe "case dispatch reads the Credential secret (#211 phase 7)" do
     setup do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
       {:ok, anon} = Visitors.find_or_provision_anon("vjt", "azzurra", "1.2.3.4")
 
@@ -572,7 +567,7 @@ defmodule Grappa.Visitors.LoginTest do
 
   describe "case 3 — anon collision (token gate)" do
     setup do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       {:ok, visitor} = Visitors.find_or_provision_anon("vjt", "azzurra", "1.2.3.4")
@@ -768,7 +763,7 @@ defmodule Grappa.Visitors.LoginTest do
   # crashes → RED.
   describe "#647 — client-source capture at login is best-effort" do
     test "a login with an absent (nil) ip still succeeds — no sample taken" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> Login.login(login_input(%{ip: nil}), []) end)
@@ -783,7 +778,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "a login with an unparseable ip still succeeds — no sample taken" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
 
       task = Task.async(fn -> Login.login(login_input(%{ip: "not-an-ip"}), []) end)
@@ -827,7 +822,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "a fresh visitor login lets the mode-2 plan resolve a derived source, not a hold" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = setup_visitor_network(port)
       client_ip = "2001:db8:1:2:3:4:5:6"
       {:ok, ip_tuple} = :inet.parse_address(String.to_charlist(client_ip))

@@ -99,6 +99,27 @@ defmodule Grappa.IRCServer do
     GenServer.start_link(__MODULE__, {handler, initial_state})
   end
 
+  @doc """
+  Spawns the fake server with `handler` and returns the `{server, port}`
+  pair a test needs to point a client at it — `start_link/1` plus the
+  `port/1` round-trip every caller did by hand.
+
+  `handler` carries NO default, deliberately, for the same reason
+  `await_handshake/2` above carries no timeout: the twenty local copies
+  this replaces (#1397) had hidden `passthrough_handler/0` behind a
+  zero-argument wrapper, so a call site could no longer say whether it
+  wanted a silent peer or merely had not thought about the peer at all.
+  Commit `84fe0850` settled that trade for `wait_for_line/3` — drop the
+  default, spell the value at every call site, no helper to hide it —
+  and the same reading applies here. Which peer the client talks to is
+  decidable at the call site, so it stays there.
+  """
+  @spec start_server(handler()) :: {pid(), :inet.port_number()}
+  def start_server(handler) do
+    {:ok, server} = start_link(handler)
+    {server, port(server)}
+  end
+
   @spec port(pid()) :: :inet.port_number()
   def port(server), do: GenServer.call(server, :port)
 

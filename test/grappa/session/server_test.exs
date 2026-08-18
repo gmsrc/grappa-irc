@@ -74,11 +74,6 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
-  defp start_server(handler \\ IRCServer.passthrough_handler()) do
-    {:ok, server} = IRCServer.start_link(handler)
-    {server, IRCServer.port(server)}
-  end
-
   # See `Grappa.IRC.ClientTest` — same trick. Bind ephemeral, capture,
   # release. The connect attempt that follows refuses fast on localhost
   # because nothing took the port back over in the meantime.
@@ -185,7 +180,7 @@ defmodule Grappa.Session.ServerTest do
         else: {:reply, nil, state}
     end
 
-    {server, port} = start_server(handler)
+    {server, port} = IRCServer.start_server(handler)
 
     {network, _} =
       network_with_server(port: port, slug: "test-#{System.unique_integer([:positive])}")
@@ -241,7 +236,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "injected dependency bundle (#1390)" do
     test "a live session carries the callbacks in one Deps struct" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -251,7 +246,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "the ten callback names are gone from the top level of state" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -277,7 +272,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "channel-directory ingest bundle (#1390)" do
     test "a live session carries the directory ingest in one struct, idle" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -287,7 +282,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "the four directory names are gone from the top level of state" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -310,7 +305,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "ISUPPORT MODES/LINELEN bundle (#1390)" do
     test "a live session carries both limits inside the capability table" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -326,7 +321,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "the two scanner names are gone from the top level of state" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -342,7 +337,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "DB-driven init (sub-task 2g)" do
     test "threads credential password + auth_method to IRC.Client (server_pass branch)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
       {network, _} = network_with_server(port: port, slug: "azzurra-#{System.unique_integer([:positive])}")
@@ -391,7 +386,7 @@ defmodule Grappa.Session.ServerTest do
       # cached peer reflects exactly that. `await_handshake` blocks until the
       # USER line reaches the server, which the Client sends AFTER pushing
       # `{:irc_peer, _}` — so the peer is in the mailbox before this call.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       _ = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -415,7 +410,7 @@ defmodule Grappa.Session.ServerTest do
       # IRC traffic. The session dialled the in-process IRCServer on
       # 127.0.0.1:<port> over plain TCP and no +r umode has been observed yet,
       # so tls + registered are both false.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       _ = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -438,7 +433,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
@@ -473,7 +468,7 @@ defmodule Grappa.Session.ServerTest do
       # {:connect, _}), so a fake server that has SEEN the USER line proves
       # the message is already in the Session's mailbox — the subsequent
       # GenServer.call is serialised behind it.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       before = DateTime.utc_now()
       _ = start_session_for(user, network)
@@ -509,7 +504,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -544,7 +539,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -577,7 +572,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -610,7 +605,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -691,7 +686,7 @@ defmodule Grappa.Session.ServerTest do
     # `:ignore` semantics, strictly more informative shape.
 
     test "refresh_plan return value overrides stale opts (nick + autojoin)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       # autojoin_channels: [] so the merge result equals last_joined_channels
       # alone — keeps the assertion focused on the fresh-vs-stale axis,
@@ -870,7 +865,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a mode-2 derived source is acquired before connect and registered as a live holder" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       addr = "2a03:4000:20:2d3:cb::a1"
 
@@ -894,7 +889,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "the derived source alias is released on stop" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       addr = "2a03:4000:20:2d3:cb::a2"
 
@@ -911,8 +906,8 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "two sessions sharing one derived address bind once, release on the last stop" do
-      {server1, port1} = start_server()
-      {server2, port2} = start_server()
+      {server1, port1} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {server2, port2} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user1, net1, _} = setup_user_and_network(port1)
       {user2, net2, _} = setup_user_and_network(port2)
       addr = "2a03:4000:20:2d3:cb::a3"
@@ -942,7 +937,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a non-derived source never touches the alias manager" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       # managed_source_alias nil → NO ensure_source (no expect set — an
@@ -963,7 +958,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "an acquire failure stops the session loudly (never a shared-source connect)" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       addr = "2a03:4000:20:2d3:cb::a4"
 
@@ -995,7 +990,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "registration" do
     test "registers via {user_id, network_id} in Grappa.SessionRegistry" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1004,8 +999,8 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "two sessions with different (user, network) keys coexist" do
-      {_, port1} = start_server()
-      {_, port2} = start_server()
+      {_, port1} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {_, port2} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
       alice = user_fixture(name: "alice-#{System.unique_integer([:positive])}")
@@ -1041,7 +1036,7 @@ defmodule Grappa.Session.ServerTest do
       # happens to coincide. Visitor.SessionPlan + visitor wiring land
       # in Task 7+; this test hand-crafts the visitor opts to isolate
       # the subject-tuple registry behavior at the Session boundary.
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       user_pid = start_session_for(user, network)
 
@@ -1091,7 +1086,7 @@ defmodule Grappa.Session.ServerTest do
     # …) record a failure.
 
     test ":shutdown exit from linked Client does NOT record a Backoff failure" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1131,7 +1126,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test ":normal exit from linked Client does NOT record a Backoff failure" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1164,7 +1159,7 @@ defmodule Grappa.Session.ServerTest do
       # mirrors what tcp_closed / parser-crash would produce in production:
       # the linked Client dies with a non-:normal/:shutdown reason and the
       # session's EXIT clause must still bump Backoff).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1205,7 +1200,7 @@ defmodule Grappa.Session.ServerTest do
     # the abnormal reason → terminate/2 fires with non-`:normal`/`:shutdown`
     # → Backoff.record_failure runs.
     test "non-Client-EXIT crash DOES record a Backoff failure (H12)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1248,7 +1243,7 @@ defmodule Grappa.Session.ServerTest do
     # introduces a clean Client.stop/1 path doesn't trip the silent
     # restart.
     test "clean Client :normal exit does NOT trigger supervisor auto-restart" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1282,7 +1277,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "clean Client :shutdown exit does NOT trigger supervisor auto-restart" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1338,7 +1333,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "every credential-bearing state key is redacted in the status dump" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       pid = start_session_for(user, network)
@@ -1364,7 +1359,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "absent stays absent — redaction does not invent a secret that was never held" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       pid = start_session_for(user, network)
@@ -1392,7 +1387,7 @@ defmodule Grappa.Session.ServerTest do
     # shutting down)".
 
     test ":shutdown reason emits a QUIT line upstream before exiting" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1416,7 +1411,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "{:shutdown, reason} variant also emits QUIT" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1444,7 +1439,7 @@ defmodule Grappa.Session.ServerTest do
       # in that case — server would see two QUIT lines for the same
       # session (the second on a half-closed socket would silently
       # drop, but the noise is real).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1486,7 +1481,7 @@ defmodule Grappa.Session.ServerTest do
     for reason <- [:tcp_closed, :ssl_closed] do
       test "terminate(:shutdown) treats a #{inspect(reason)} QUIT-call exit as a no-op, not a crash" do
         reason = unquote(reason)
-        {server, port} = start_server()
+        {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
         {user, network, _} = setup_user_and_network(port)
         pid = start_session_for(user, network)
         :ok = IRCServer.await_handshake(server, 1_000)
@@ -1610,7 +1605,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "stop_session/2 tears down a running Session and clears the registry" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1631,7 +1626,7 @@ defmodule Grappa.Session.ServerTest do
     # the `:transient` restart would loop forever (init can't reload
     # the now-absent credential).
     test "Credentials.unbind_credential/2 tears down the running session" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1646,7 +1641,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "handshake" do
     test "sends NICK + USER on init (auth_method :none, no realname override)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -1661,7 +1656,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "credential :realname overrides nick-based default in USER line" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{nick: "vjt-grappa", realname: "Marcello Barnaba"})
@@ -1677,7 +1672,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "autojoin on 001" do
     test "sends JOIN for each configured channel after server welcome" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#sniffo", "#other"]})
@@ -1697,7 +1692,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "no JOIN sent when credential autojoin_channels empty" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: []})
 
@@ -1728,7 +1723,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "does NOT fire autojoin on 001 — waits for the +r self-MODE echo" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -1761,7 +1756,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "fires autojoin on the ~0.5s fallback when no +r ever arrives" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -1792,7 +1787,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "deferred autojoin fires EXACTLY once when +r and the timeout race" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -1822,7 +1817,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "SASL is unaffected: autojoin still fires immediately on 001 (no +r needed)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{
@@ -1880,7 +1875,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "runs each perform line at 001, then the built-in identify (not consumed)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -1917,7 +1912,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "suppresses the built-in identify when the list consumed $nickserv_pass" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -1946,7 +1941,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a LITERAL-password identify line does NOT suppress the built-in identify (structural, not a text scan)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -1983,7 +1978,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "runs the perform list before autojoin (autojoin still gated on +r)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -2040,7 +2035,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a :server_pass credential does NOT identify — the second secret is gone" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -2073,7 +2068,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "the credential password drives the identify, NOT the other secret slot" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -2107,7 +2102,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "$nick expands to the CONFIGURED nick, not the nick the session is wearing (#885)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -2155,7 +2150,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a perform line consuming $nickserv_pass still suppresses the built-in identify" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -2186,7 +2181,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "autojoin fires immediately for :server_pass carrying only the server-PASS slot" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -2216,7 +2211,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test ":server_pass with NO nickserv secret still fires autojoin immediately on 001 (unregressed)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, credential} =
         setup_user_and_network(port, %{
@@ -2261,7 +2256,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "WATCH network: arms the DB list with WATCH +nick lines after 376" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo", "Bar"], user.name)
 
@@ -2276,7 +2271,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "MONITOR network: arms with MONITOR + comma list (MONITOR wins over WATCH)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo", "Bar"], user.name)
 
@@ -2296,7 +2291,7 @@ defmodule Grappa.Session.ServerTest do
       # WATCH command without listing `WATCH=` in 005 (common bahamut
       # forks). No advertisement therefore probes WATCH instead of
       # skipping the arm.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo"], user.name)
 
@@ -2313,7 +2308,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "421 for the WATCH probe falls back to a MONITOR burst" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo"], user.name)
 
@@ -2331,7 +2326,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "421 for MONITOR too resolves :none — no third attempt, map stays :unknown" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo"], user.name)
 
@@ -2355,7 +2350,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "baseline 604 is initial (no-toast), live 601 flip is a transition" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo"], user.name)
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -2393,7 +2388,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "second 376 (explicit /motd) does not re-send the arm burst" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo"], user.name)
 
@@ -2411,7 +2406,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "notify_changed live sync sends WATCH +new / WATCH -old and updates the map" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       {:ok, _} = Grappa.Notify.add({:user, user.id}, network.id, ["Foo"], user.name)
 
@@ -2450,7 +2445,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -2482,7 +2477,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "PING/PONG" do
     test "responds to server PING with matching PONG" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -2509,7 +2504,7 @@ defmodule Grappa.Session.ServerTest do
     # inbound PONG has already been fully processed, so the subsequent
     # $server fetch observes its (non-)effect deterministically.
     test "inbound server PONG does NOT persist to $server scrollback (#210)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -2550,7 +2545,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -2589,7 +2584,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -2620,7 +2615,7 @@ defmodule Grappa.Session.ServerTest do
   # EventRouter's), so they live here, driven end-to-end through IRCServer.
   describe "/links in-flight guard + mask carry (#513)" do
     test "#513a — a mask matching nothing carries the mask on the empty bundle" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
@@ -2645,7 +2640,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "#513a — a bare (full-mesh) request carries mask nil" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
@@ -2669,7 +2664,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "#513b — a second /links WHILE one is in flight is refused, first bundle survives" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
 
@@ -2699,7 +2694,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "#513b — a 481-denied request (no 365) does NOT brick /links: past the staleness window a fresh request re-sends" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -2758,7 +2753,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "inbound PRIVMSG fires the window_counts push with the row's window ctx" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       pid = start_session_for(user, network)
@@ -2786,7 +2781,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "outbound send_privmsg persists + broadcasts but fires NO window_counts push" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       :ok =
@@ -2819,7 +2814,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "join_failed (473) persists + broadcasts the notice but fires NO window_counts push" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       :ok =
@@ -2862,7 +2857,7 @@ defmodule Grappa.Session.ServerTest do
     # carries `dm_with: nil` and MUST NOT mint a window.
 
     test "inbound PRIVMSG to own nick opens a server-side query window + broadcasts the list" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -2900,7 +2895,7 @@ defmodule Grappa.Session.ServerTest do
     # positive half comes first: the row must ARRIVE on the `$server` window.
     # Only then is "no query window" a statement about routing.
     test "#546 inbound peer NOTICE routes to $server and opens NO query window" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -2943,7 +2938,7 @@ defmodule Grappa.Session.ServerTest do
     # "notices go to status" — and it is the arm `open_query_or_server/2`
     # already implemented for services since #400.
     test "#546 inbound peer NOTICE lands in the peer's window when it is already open" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       {:ok, _} = QueryWindows.open({:user, user.id}, network.id, "bob", user.name)
@@ -2984,7 +2979,7 @@ defmodule Grappa.Session.ServerTest do
     # #546 test above records: the row must ARRIVE first, or `refute log =~`
     # is vacuous — it would pass on a session that never processed the line.
     test "#1500 a server NOTICE with an empty trailing persists and logs no error" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       :ok =
@@ -3030,7 +3025,7 @@ defmodule Grappa.Session.ServerTest do
     # about a path #546 does not visit, and nobody should have to re-derive
     # that from the routing table six months from now.
     test "#546 a peer CTCP VERSION query still opens the peer's query window" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -3070,7 +3065,7 @@ defmodule Grappa.Session.ServerTest do
     # second helping while the feed is in flight; `sent + 1` absorbs at
     # most one token of slack should the box be slow enough to cross it.
     test "#1404 a burst of peer CTCP queries is answered under a ceiling, line and row together" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       # The per-channel topic, not the user topic: these rows land at
@@ -3134,7 +3129,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a services PRIVMSG to own nick does NOT open a query window (routes to $server)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -3158,7 +3153,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "outbound DM (send_privmsg to a peer) opens the server-side query window" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       net_id = network.id
 
@@ -3185,7 +3180,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "outbound message to a CHANNEL does NOT open a query window" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       net_id = network.id
 
@@ -3215,7 +3210,7 @@ defmodule Grappa.Session.ServerTest do
     # exactly the class of bug that put the original arm in, and the only thing
     # pinning it is this test.
     test "a sustained DB busy on the auto-open logs + the session survives" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       net_id = network.id
 
@@ -3265,7 +3260,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "PRIVMSG persistence + broadcast" do
     test "persists row and broadcasts canonical wire-shape event on PRIVMSG" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "#sniffo")
@@ -3310,7 +3305,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "broadcast scoped per (user, network, channel) — does not leak across channels" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok =
@@ -3329,7 +3324,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "topic discriminator scopes by user_name — bare-slug subscriber gets nothing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok =
@@ -3348,7 +3343,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "server-prefixed PRIVMSG (rare but valid) records server name as sender" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "#sniffo")
@@ -3386,7 +3381,7 @@ defmodule Grappa.Session.ServerTest do
     # afterwards and asserting it persists: the session is alive AND still
     # processing the upstream stream (the client never disconnected).
     test "a persist failure keeps the session alive and still processing (#336)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok =
@@ -3452,7 +3447,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(welcomed_handler)
+      {server, port} = IRCServer.start_server(welcomed_handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -3520,7 +3515,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "#373 — query window follows a peer NICK change" do
     test "peer NICK migrates the open query window + its DM scrollback old -> new" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       own = "grappa-test"
 
@@ -3583,7 +3578,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "#1340 K-S2 — the per-conversation MUTE follows the peer NICK too" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       own = "grappa-test"
 
@@ -3639,7 +3634,7 @@ defmodule Grappa.Session.ServerTest do
     # 2026-07-19 incident, and the trigger — a netsplit rejoin renaming many
     # peers at once — is precisely the correlated write burst.
     test "a sustained DB busy during a peer rename drops it whole and the session survives" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       own = "grappa-test"
       subject = {:user, user.id}
@@ -3720,7 +3715,7 @@ defmodule Grappa.Session.ServerTest do
     # the raise escaped the persister closure into the GenServer. Bootstrap
     # spawning N sessions x M autojoin channels is that write burst.
     test "a sustained DB busy on the rejoin snapshot drops it and the session survives" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -3757,7 +3752,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "#948 — the SELF window follows OUR OWN NICK change" do
     test "a self /nick migrates the self window row, its scrollback and its read cursor" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       own = "grappa-test"
       subject = {:user, user.id}
@@ -3824,7 +3819,7 @@ defmodule Grappa.Session.ServerTest do
     # bore it before us, and following our rename would file their identity
     # under our new nick. No self rows, no migration, no barrier broadcast.
     test "a self /nick with no self conversation leaves a same-named peer window alone" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       own = "grappa-test"
       subject = {:user, user.id}
@@ -3873,7 +3868,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "#1340 K-S2 — the self window's MUTE follows our own NICK" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       own = "grappa-test"
       subject = {:user, user.id}
@@ -3918,7 +3913,7 @@ defmodule Grappa.Session.ServerTest do
     # standing on that key. Migrating it would silence our new identity on
     # their behalf and un-silence them.
     test "#1340 K-S2 — a self /nick with no self conversation leaves a same-named peer's MUTE alone" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       own = "grappa-test"
       subject = {:user, user.id}
@@ -4022,7 +4017,7 @@ defmodule Grappa.Session.ServerTest do
         [:grappa, :push, :send, :stop]
       ])
 
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       # Credential nick = "vjt" — the per-network IRC nick used as own_nick
       # for the trigger eval (NOT user.name — see CP15 H3 hazard).
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
@@ -4054,7 +4049,7 @@ defmodule Grappa.Session.ServerTest do
 
       attach_push_telemetry([[:grappa, :push, :send, :start]])
 
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       _ = push_subscription_fixture(user, endpoint)
 
@@ -4077,7 +4072,7 @@ defmodule Grappa.Session.ServerTest do
 
       attach_push_telemetry([[:grappa, :push, :send, :stop]])
 
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       _ = push_subscription_fixture(user, endpoint)
 
@@ -4104,7 +4099,7 @@ defmodule Grappa.Session.ServerTest do
 
       attach_push_telemetry([[:grappa, :push, :send, :start]])
 
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       _ = push_subscription_fixture(user, endpoint)
 
@@ -4122,7 +4117,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "non-PRIVMSG events (post-E1: persisted + broadcast via EventRouter)" do
     test "JOIN + PART are persisted to scrollback + broadcast on PubSub" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok =
@@ -4179,7 +4174,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(welcomed_nick_handler)
+      {server, port} = IRCServer.start_server(welcomed_nick_handler)
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "#sniffo")
@@ -4218,7 +4213,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -4255,7 +4250,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -4292,7 +4287,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "#sniffo")
@@ -4342,7 +4337,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -4399,7 +4394,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -4547,7 +4542,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {user, network, _} = setup_user_and_network(port, %{nick: @notice_nick})
       pid = start_session_for(user, network)
 
@@ -4723,7 +4718,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -4791,7 +4786,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#test"]})
 
       topic = Topic.channel(user.name, network.slug, "#test")
@@ -4822,7 +4817,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "malformed inbound" do
     test "parse error logged, session stays alive" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -4843,7 +4838,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "EventRouter delegation — members tracking" do
     test "Session.Server starts with empty members map" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -4862,7 +4857,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -4893,7 +4888,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -4934,7 +4929,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -4982,7 +4977,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#a", "#b"]})
@@ -5017,7 +5012,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "CP15 B1 — :joined window-state event" do
     test "Session.Server starts with empty window_state struct" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -5041,7 +5036,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -5106,7 +5101,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -5137,7 +5132,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -5191,7 +5186,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -5234,7 +5229,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5281,7 +5276,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -5312,7 +5307,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5365,7 +5360,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5409,7 +5404,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -5434,7 +5429,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5474,7 +5469,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -5499,7 +5494,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5541,7 +5536,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5593,7 +5588,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a session with no oper umode is :ordinary" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5612,7 +5607,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "an oper'd session is :oper" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5629,7 +5624,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "an oper with the flavour's no-throttle umode is :exempt" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
       user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
 
       {network, _} =
@@ -5657,7 +5652,7 @@ defmodule Grappa.Session.ServerTest do
       # The exempt letter is per-flavour and only bahamut's was read at
       # source. `setup_user_and_network` leaves services_flavor nil, which
       # is what an operator who never classified the network has.
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5677,7 +5672,7 @@ defmodule Grappa.Session.ServerTest do
       # reload does not rewrite live process state, and the throttle asks
       # this on EVERY send — a KeyError here would crash-wave the sessions
       # under load rather than degrade to today's numbers.
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -5692,7 +5687,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "no live session for (subject, network) is :no_session, not a class" do
-      {_, port} = start_server(welcome_handler())
+      {_, port} = IRCServer.start_server(welcome_handler())
       {user, network, _} = setup_user_and_network(port)
 
       assert {:error, :no_session} =
@@ -5715,7 +5710,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5758,7 +5753,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -5784,7 +5779,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5820,7 +5815,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "CP15 B2 — in_flight_joins map" do
     test "Session.Server starts with empty in_flight_joins map" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -5842,7 +5837,7 @@ defmodule Grappa.Session.ServerTest do
       # becomes `#sniffo` before it ever reaches Session.Server. The
       # in_flight_joins display-value follows suit — there is no
       # mixed-case form to preserve once the boundary has folded.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -5869,7 +5864,7 @@ defmodule Grappa.Session.ServerTest do
       # windowStateByChannel without a parallel client-side state
       # machine. User-topic (NOT per-channel) — chicken-and-egg: cic
       # only joins per-channel after seeing :pending.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5906,7 +5901,7 @@ defmodule Grappa.Session.ServerTest do
       # in_flight_joins entry PER channel, flips window_states[ch] to
       # :pending PER channel, and broadcasts window_pending PER channel on
       # the user-topic so BOTH sidebar rows appear.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -5945,7 +5940,7 @@ defmodule Grappa.Session.ServerTest do
       # moved off the facade and the wire stays as-typed — while the
       # in_flight_joins / window_state KEYS are network-folded (ASCII here →
       # `#alfa`/`#beta`), so cic still sees one canonical key per channel.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -5980,7 +5975,7 @@ defmodule Grappa.Session.ServerTest do
       #     duplicate was a second place to look for what is already on
       #     screen. Asserting absence here is what keeps it from creeping
       #     back as an "extra effect, harmless" edit.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6045,7 +6040,7 @@ defmodule Grappa.Session.ServerTest do
       # such verb — an implementation that "told the peer" would be inventing
       # protocol. Sampled after a PING/PONG round-trip, so "no line" is a
       # settled observation rather than a race against a slow write.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6108,7 +6103,7 @@ defmodule Grappa.Session.ServerTest do
       # window the operator is actually using. `:joined` is the case that
       # matters: it is the state a just-accepted invite lands in, so a
       # double-click on [Join]-then-× must not evict a live channel.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -6135,7 +6130,7 @@ defmodule Grappa.Session.ServerTest do
       # flip the optimistic :pending tab to a greyed :invited one (nor
       # re-broadcast). The JOIN echo resolves :pending → :joined / :failed;
       # the invite is moot while a join is already in flight.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6170,7 +6165,7 @@ defmodule Grappa.Session.ServerTest do
       # leaves only when the operator joins or declines. So this is the one
       # window state a stranger creates and only the subject clears, which is
       # why it is the one with a top.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6219,7 +6214,7 @@ defmodule Grappa.Session.ServerTest do
       # UX-4 bucket A: `Session.Server.init/1` canonicalises the
       # autojoin list at boot, so the broadcast carries the canonical
       # channel name regardless of the operator's case-as-typed input.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#Sniffo", "#OTHER"]})
@@ -6260,7 +6255,7 @@ defmodule Grappa.Session.ServerTest do
       # user-topic broadcast, so the snapshot can't deliver new info;
       # broadcasting it would also carry a different `kind:` than the
       # user-topic origin). Documented design choice — verified here.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -6290,7 +6285,7 @@ defmodule Grappa.Session.ServerTest do
       # the in-flight window. Skipping just the state mutation +
       # broadcast keeps cic stable while preserving server-side
       # tracking.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6357,7 +6352,7 @@ defmodule Grappa.Session.ServerTest do
       # UX-4 bucket A: `Session.Server.init/1` canonicalises the
       # autojoin list, so both the outbound wire line and the in-flight
       # display value carry the canonical channel form.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#Sniffo", "#OTHER"]})
@@ -6392,7 +6387,7 @@ defmodule Grappa.Session.ServerTest do
       # the persisted notice row as a `kind: :message` event on the
       # per-channel topic. Subscribe to BOTH topics so we can assert each
       # path lands in one cycle for cic to render the failure correctly.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6468,7 +6463,7 @@ defmodule Grappa.Session.ServerTest do
       # dismisses the failed pseudo-row via Sidebar ×. Without this
       # event the pseudo-row would vanish but the archive section
       # would stay empty until manual archive-section toggle.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6502,7 +6497,7 @@ defmodule Grappa.Session.ServerTest do
       # :join_failed, and the router must not delegate it either — it
       # takes the param scan to the channel window (#1345; the sibling
       # test below asserts that landing). The user-topic stays silent (F1).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6536,7 +6531,7 @@ defmodule Grappa.Session.ServerTest do
       # now missing from BOTH the handler guard and the delegated set, so
       # the JOIN produced no effect at all: the window sat at `:pending`
       # forever and cic drew a greyed tab that never resolved.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -6599,7 +6594,7 @@ defmodule Grappa.Session.ServerTest do
       # EventRouter's numeric catch-all → no effect → nothing persisted
       # anywhere: a `/topic #nowhere` 403 answered with silence. Delegating
       # only the correlated occurrence puts it back on the scan route.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -6627,7 +6622,7 @@ defmodule Grappa.Session.ServerTest do
       # dropping any entry whose at_ms is more than 30s behind monotonic
       # now. Avoids Process.sleep(31_000) (too slow) and avoids injecting
       # a clock fn (overkill — we control what's seeded).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -6656,7 +6651,7 @@ defmodule Grappa.Session.ServerTest do
       # Without this, a JOIN issued ~25s before another JOIN would lose
       # its in-flight tracker prematurely and a real failure numeric
       # afterwards would fall through unannotated.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -6697,7 +6692,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -6755,7 +6750,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -6798,7 +6793,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -6856,7 +6851,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -6896,7 +6891,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -6940,7 +6935,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -6984,7 +6979,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "channel not in members returns :uninitialized (web/S8)" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -7009,7 +7004,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -7040,7 +7035,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#empty"]})
@@ -7071,9 +7066,10 @@ defmodule Grappa.Session.ServerTest do
   # `list_members/3` would be one GenServer call per channel at logon, which
   # is exactly the per-window fan-out #396 collapsed. One call, whole map.
   describe "list_member_counts/2" do
-    # The file's default `start_server/0` is a PASSTHROUGH: it never answers
-    # 001, so registration never completes and no JOIN is ever sent. These
-    # tests need the session to actually reach the channels.
+    # `IRCServer.passthrough_handler/0` — what every other case in this file
+    # hands to `start_server/1` — never answers 001, so registration never
+    # completes and no JOIN is ever sent. These tests need the session to
+    # actually reach the channels.
     defp counts_welcome_handler do
       fn state, line ->
         if String.starts_with?(line, "USER ") do
@@ -7085,7 +7081,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "returns the count per SEEDED channel in one call" do
-      {server, port} = start_server(counts_welcome_handler())
+      {server, port} = IRCServer.start_server(counts_welcome_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#one", "#two"]})
@@ -7115,7 +7111,7 @@ defmodule Grappa.Session.ServerTest do
     # twin must OMIT the key, or the caller reads 0 members and shows presence
     # on a channel that is about to turn out to have 900.
     test "omits a channel that has not yet observed 366 (pre-NAMES)" do
-      {server, port} = start_server(counts_welcome_handler())
+      {server, port} = IRCServer.start_server(counts_welcome_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#seeded", "#pending"]})
@@ -7153,7 +7149,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "list_channels via GenServer.call" do
     test "returns Map.keys(SessionStateHelpers.members(state)) sorted alphabetically" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7175,7 +7171,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "returns empty list when SessionStateHelpers.members(state) is empty" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7187,7 +7183,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "Session.list_channels/2 facade" do
     test "returns sorted channel-name list from session state" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7210,7 +7206,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "send_topic/4" do
     test "writes TOPIC upstream; upstream echo persists row + broadcasts (single path, #22)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "#italia")
@@ -7273,7 +7269,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "send_nick/3" do
     test "writes NICK upstream" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -7320,7 +7316,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "self-JOIN broadcasts channels_changed on user topic" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -7336,7 +7332,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "self-PART broadcasts channels_changed on user topic" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#existing"]})
@@ -7357,7 +7353,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "self-KICK broadcasts channels_changed on user topic" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#existing"]})
@@ -7378,7 +7374,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "other-user JOIN does NOT broadcast (keyset unchanged)" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#existing"]})
@@ -7406,7 +7402,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "PRIVMSG does NOT broadcast (keyset unchanged)" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#existing"]})
@@ -7450,7 +7446,7 @@ defmodule Grappa.Session.ServerTest do
     # channels_changed heartbeat emitted right beside it in the cast handler.
 
     test "send_part broadcasts archive_changed on the user topic post-cleanup" do
-      {server, port} = start_server(welcome_handler())
+      {server, port} = IRCServer.start_server(welcome_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#existing"]})
@@ -7489,7 +7485,7 @@ defmodule Grappa.Session.ServerTest do
     # re-fire to a long-dead login probe.
 
     test "caller receives {:session_ready, ref} on first 001 RPL_WELCOME" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, credential} = setup_user_and_network(port)
 
       parent = self()
@@ -7507,7 +7503,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "notify is one-shot — second 001 does NOT re-fire" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, credential} = setup_user_and_network(port)
 
       parent = self()
@@ -7528,7 +7524,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "no notify opts — Session.Server runs normally without firing" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7549,7 +7545,7 @@ defmodule Grappa.Session.ServerTest do
     # the Session is still alive when it elapses.
 
     test "record_success is DEFERRED — does NOT fire immediately on 001" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, credential} = setup_user_and_network(port)
 
       # Seed a non-zero ladder so a reset would be observable as a count drop.
@@ -7585,7 +7581,7 @@ defmodule Grappa.Session.ServerTest do
           [:grappa, :session, :backoff, :success]
         ])
 
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, credential} = setup_user_and_network(port)
 
       :ok = Backoff.reset({:user, user.id}, network.id)
@@ -7627,7 +7623,7 @@ defmodule Grappa.Session.ServerTest do
     # This is NOT a connection_state DB transition — purely presentational.
 
     test "emits connecting on client-start then connected on 001" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
@@ -7668,7 +7664,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "*Serv-targeted PRIVMSG skips scrollback + PubSub (W12 privacy)" do
     test "NickServ target: no row, no broadcast, returns {:ok, :no_persist}" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7690,7 +7686,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "ChanServ target: skipped same as NickServ (suffix-serv rule)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7705,7 +7701,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "case-insensitive: nickserv (lowercase) also skipped" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7720,7 +7716,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "non-*Serv channel target: persists + broadcasts as before" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7750,7 +7746,7 @@ defmodule Grappa.Session.ServerTest do
     # NOT services — services are nicks (PRIVMSG to a channel goes to
     # the room, not a service bot).
     test "channel target #dataserv: persists + broadcasts (NOT misclassified as service)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7771,7 +7767,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "nick target Conserv: persists + broadcasts (NOT misclassified as service)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7792,7 +7788,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "BotServ + OperServ + HostServ + HelpServ + MemoServ also skipped (full allowlist)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7813,7 +7809,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "outbound NickServ verb capture into pending_auth" do
     test "send_privmsg NickServ IDENTIFY stages password + arms timer" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7899,7 +7895,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(handler)
+      {server, port} = IRCServer.start_server(handler)
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       visitor = Grappa.Repo.reload!(anon_visitor)
@@ -7920,7 +7916,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "second IDENTIFY overwrites first (latest-wins via mailbox FIFO, W8)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7936,7 +7932,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test ":pending_auth_timeout discards pending_auth + clears timer" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7954,7 +7950,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "non-NickServ *Serv (e.g. ChanServ REGISTER) does NOT stage pending_auth" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7970,7 +7966,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "non-*Serv channel PRIVMSG does NOT stage pending_auth" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -7989,7 +7985,7 @@ defmodule Grappa.Session.ServerTest do
     alias Grappa.Repo
 
     test "visitor session: send IDENTIFY → simulate +r → password_encrypted set + expires_at cleared" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8029,7 +8025,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a /quote raw NickServ identify line stages pending_auth and commits on +r" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8068,7 +8064,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "visitor session: :pending_auth_timeout → no commit, password_encrypted stays nil" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8087,7 +8083,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "visitor session: +r without staged pending_auth → no commit" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8109,7 +8105,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "user session with staged pending_auth: +r logs warning + clears state, no commit" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -8152,7 +8148,7 @@ defmodule Grappa.Session.ServerTest do
   # reply) — they must NOT prime the WHO accumulator.
   describe "#540 — raw /quote WHO primes the WHO accumulator" do
     test "a /quote WHO line primes who_pending (keyed by folded args, display raw)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -8180,7 +8176,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "a /quote WHOIS line does NOT prime the WHO accumulator" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -8197,7 +8193,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "+r MODE on own nick → USER registration commit (#349)" do
     test "user session: REGISTER stages the secret → +r commits password + flips auth_method" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       # Wizard scenario: a --auth none binding (credential_fixture default).
       {user, network, cred} = setup_user_and_network(port)
       assert cred.auth_method == :none
@@ -8240,7 +8236,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "user session: +r with only pending_auth (no registration) does NOT touch the credential" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -8285,7 +8281,7 @@ defmodule Grappa.Session.ServerTest do
   # persisted unconfirmed, GC'd with the session on terminate.
   describe "register→auth-code +r promotion (#129)" do
     test "NickServ REGISTER stages the untimed slot; no timer; pending_auth_timeout leaves it" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8315,7 +8311,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "REGISTER → +r (no pending_auth) → password committed + expires_at cleared" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8351,7 +8347,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "integration: REGISTER → 10s pending_auth window elapses → later +r → promoted" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8388,7 +8384,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "both slots set on +r → register wins, both cleared" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8423,7 +8419,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "regression: identify fast-path still commits on +r and clears both slots" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8457,7 +8453,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "terminate GCs the untimed slot — unconfirmed REGISTER secret never persists" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8494,7 +8490,7 @@ defmodule Grappa.Session.ServerTest do
   # genuine nick change, so a forced Guest can never carry +r → never binds.
   describe "visitor NICK self-echo — identity protection (#561)" do
     test "IDENTIFIED visitor: a services-forced Guest rename does NOT overwrite the credential nick" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       # NickServ-identified BEFORE connect — a login identity that must
       # survive a force-guest (auth_method :nickserv_identify + password).
@@ -8523,7 +8519,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "ANON visitor: a NICK self-echo still persists (no login identity to protect)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       original_nick = visitor_nick(visitor)
 
@@ -8558,7 +8554,7 @@ defmodule Grappa.Session.ServerTest do
   # Azzurra would accept it, since an optimistic commit has no take-backs.
   describe "in-session SET PASSWD → optimistic commit-on-send (#131, #977)" do
     test "user session: SET PASSWD rotates the bound credential password, no +r needed" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
@@ -8587,7 +8583,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "#977 user session: a spaced new password is NOT committed — services refuse it" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
@@ -8614,7 +8610,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "visitor session (already identified): SET PASSWD rotates the visitor password, no +r" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       # The visitor is ALREADY NickServ-identified (permanent, has a
       # password) — the only state in which SET PASSWD is meaningful.
@@ -8643,7 +8639,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "visitor session (anon, NOT identified): SET PASSWD is a no-op — never pins the row permanent" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       # Anon visitor: ephemeral (expires_at set), no committed password.
       pid = start_visitor_session_for(visitor, network)
@@ -8671,7 +8667,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "regression: SET EMAIL (non-PASSWD SET) is passthrough — no commit, no staging" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
@@ -8699,7 +8695,7 @@ defmodule Grappa.Session.ServerTest do
   # capture would wait for can never arrive.
   describe "RESETPASS → optimistic commit-on-send (#978)" do
     test "user session: RESETPASS on our own nick stores the THIRD token" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
@@ -8730,7 +8726,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "user session: RESETPASS on ANOTHER nick leaves our credential alone" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
@@ -8756,7 +8752,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "user session: a RESETPASS Azzurra would refuse is not committed" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{auth_method: :nickserv_identify, password: "oldpass"})
@@ -8781,7 +8777,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "visitor session: RESETPASS rotates the stored visitor secret" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       # The incident shape: grappa holds a secret that no longer works, and
       # the visitor recovers the account from inside grappa.
@@ -8818,7 +8814,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       registered_visitor = Grappa.Repo.reload!(anon_visitor)
@@ -8854,7 +8850,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {server, port} = start_server(rfc_handler)
+      {server, port} = IRCServer.start_server(rfc_handler)
       {visitor, network} = visitor_with_network(port, nick: nick)
       pid = start_visitor_session_for(visitor, network)
 
@@ -8885,7 +8881,7 @@ defmodule Grappa.Session.ServerTest do
     # is both the correct completion gate AND the behavioural assertion.
 
     test "465 ERR_YOUREBANNEDCREEP: calls mark_failed with k-line reason, session terminates with :normal" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#test"]})
 
       # Subscribe before starting the session so we don't miss the broadcast
@@ -8946,7 +8942,7 @@ defmodule Grappa.Session.ServerTest do
     # generic delegate (persist $server_event) and the tcp_closed handed the
     # drop to Backoff, which reconnected straight into the just-applied ban.
     test "KILL targeting own nick: marks :failed with 'killed:' reason, session exits :normal" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#test"]})
 
       topic = Topic.user(user.name)
@@ -8992,7 +8988,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "KILL targeting own nick with different case still terminal (fold match)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.user(user.name)
@@ -9022,7 +9018,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "KILL targeting another nick keeps flowing: session stays alive, DB :connected" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -9056,7 +9052,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "malformed KILL (no params) is non-terminal, session stays alive" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -9075,7 +9071,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "904 with 'SASL authentication failed' (permanent cred error): marks :failed, session exits :normal" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.user(user.name)
@@ -9118,7 +9114,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "904 with 'SASL authentication aborted' (transient): does NOT mark failed, session continues" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -9155,7 +9151,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "904 with 'SASL authentication timed out' (transient): does NOT mark failed" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -9208,7 +9204,7 @@ defmodule Grappa.Session.ServerTest do
       # Visitors have ephemeral credentials — connection_state is irrelevant
       # and there is no credential_failer in the plan. The session simply
       # exits :normal without attempting any DB write.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       visitor_id = Ecto.UUID.generate()
       visitor_subject = {:visitor, visitor_id}
 
@@ -9292,7 +9288,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "S2.3 — topic cache (332/333/331/TOPIC events)" do
     test "332 then 333: cache populated with text + set_by + set_at" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#test"]})
@@ -9348,7 +9344,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "333 before 332 (out-of-order): set_by/set_at stored, text remains nil" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#oot"]})
@@ -9377,7 +9373,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "331 RPL_NOTOPIC: explicit-empty entry stored" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#quiet"]})
@@ -9407,7 +9403,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "unsolicited TOPIC: cache updated with server-side timestamp + broadcast" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#live"]})
@@ -9439,7 +9435,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "PART removes topic entry for self-parted channel" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#leavetest"]})
@@ -9464,7 +9460,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "get_topic/3 returns cached entry" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#get"]})
@@ -9482,7 +9478,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "get_topic/3 returns :no_topic for uncached channel" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -9498,7 +9494,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "channel-key case-insensitivity: 332 via #FooBar, get via #foobar" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#FooBar"]})
@@ -9521,7 +9517,7 @@ defmodule Grappa.Session.ServerTest do
       # brackets preserved); get_topic MUST read with the SAME fold. A
       # case-variant spelling resolves; the brace twin `#foo{1}` is a
       # DIFFERENT channel to the ircd (#525).
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#foo[1]"]})
@@ -9545,7 +9541,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "S2.3 — channel_modes cache (324/MODE events)" do
     test "324 RPL_CHANNELMODEIS: cache populated from server snapshot" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#modes"]})
@@ -9578,7 +9574,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "324 with mode params: key mode stored with param value" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#keyed"]})
@@ -9600,7 +9596,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "unsolicited MODE +nt: delta applied to channel_modes cache" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#delta"]})
@@ -9631,7 +9627,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "unsolicited MODE -t: delta removes 't' from channel_modes" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#remove"]})
@@ -9658,7 +9654,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "MODE +o user: per-user role update, NO channel_modes_changed broadcast" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#roles"]})
@@ -9694,7 +9690,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "mixed MODE +nt-k: delta correctly applied" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#mixed"]})
@@ -9724,7 +9720,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "PART removes channel_modes entry for self-parted channel" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#leavemodes"]})
@@ -9748,7 +9744,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "get_channel_modes/3 returns cached entry" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#getmodes"]})
@@ -9769,7 +9765,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "get_channel_modes/3 returns :no_modes for uncached channel" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -9785,7 +9781,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "channel-key case-insensitivity: 324 via #FooBar, get via #foobar" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#CaseModes"]})
@@ -9877,7 +9873,7 @@ defmodule Grappa.Session.ServerTest do
     test "registered visitor 433 → arms ghost_recovery + emits NICK_ + GHOST + 8s timer" do
       nick = "v_t18_#{System.unique_integer([:positive])}"
 
-      {server, port} = start_server(ghost_handler(nick))
+      {server, port} = IRCServer.start_server(ghost_handler(nick))
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       registered_visitor = Grappa.Repo.reload!(anon_visitor)
@@ -9921,7 +9917,7 @@ defmodule Grappa.Session.ServerTest do
     test "#1390 a dropped GhostRecovery line still names the ghost" do
       nick = "v_t18o_#{System.unique_integer([:positive])}"
 
-      {server, port} = start_server(ghost_handler(nick))
+      {server, port} = IRCServer.start_server(ghost_handler(nick))
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       registered_visitor = Grappa.Repo.reload!(anon_visitor)
@@ -9956,7 +9952,7 @@ defmodule Grappa.Session.ServerTest do
     test "anon visitor (no cached password) 433 does NOT arm ghost_recovery" do
       nick = "v_t18a_#{System.unique_integer([:positive])}"
 
-      {server, port} = start_server(ghost_handler(nick))
+      {server, port} = IRCServer.start_server(ghost_handler(nick))
       {visitor, network} = visitor_with_network(port, nick: nick)
 
       # Anon visitor has auth_method :none and no cached password, so
@@ -9993,7 +9989,7 @@ defmodule Grappa.Session.ServerTest do
     test "GhostRecovery success path: NickServ NOTICE → 401 → :succeeded + pending_auth staged + IDENTIFY emitted" do
       nick = "v_t18s_#{System.unique_integer([:positive])}"
 
-      {server, port} = start_server(ghost_handler(nick))
+      {server, port} = IRCServer.start_server(ghost_handler(nick))
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       registered_visitor = Grappa.Repo.reload!(anon_visitor)
@@ -10041,7 +10037,7 @@ defmodule Grappa.Session.ServerTest do
     test ":ghost_timeout in :awaiting_ghost_notice clears ghost_recovery + ghost_timer" do
       nick = "v_t18t_#{System.unique_integer([:positive])}"
 
-      {server, port} = start_server(ghost_handler(nick))
+      {server, port} = IRCServer.start_server(ghost_handler(nick))
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       registered_visitor = Grappa.Repo.reload!(anon_visitor)
@@ -10070,7 +10066,7 @@ defmodule Grappa.Session.ServerTest do
     # simply never answers. A release wired to one door goes silent on the
     # other, which is the accident #676 exists to prevent.
     defp ghosting_session(nick) do
-      {server, port} = start_server(ghost_handler(nick))
+      {server, port} = IRCServer.start_server(ghost_handler(nick))
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       visitor = Grappa.Repo.reload!(anon_visitor)
@@ -10170,7 +10166,7 @@ defmodule Grappa.Session.ServerTest do
     test "non-NickServ NOTICE during :awaiting_ghost_notice does NOT advance the FSM" do
       nick = "v_t18n_#{System.unique_integer([:positive])}"
 
-      {server, port} = start_server(ghost_handler(nick))
+      {server, port} = IRCServer.start_server(ghost_handler(nick))
       {anon_visitor, network} = visitor_with_network(port, nick: nick)
       {:ok, _} = Grappa.Visitors.commit_password(anon_visitor.id, network.id, "s3cret")
       registered_visitor = Grappa.Repo.reload!(anon_visitor)
@@ -10210,7 +10206,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "S2.4 — userhost_cache (311 + 352 + Session.lookup_userhost/3)" do
     test "311 RPL_WHOISUSER populates cache, lookup returns :ok entry" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#whoistest"]})
@@ -10233,7 +10229,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "352 RPL_WHOREPLY populates cache, lookup returns :ok entry" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#whotest"]})
@@ -10256,7 +10252,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "JOIN with user@host in prefix populates cache" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#joincache"]})
@@ -10275,7 +10271,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "lookup_userhost/3 is case-insensitive for nick key" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#casetest"]})
@@ -10301,7 +10297,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "lookup_userhost/3 returns :not_cached for unknown nick" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -10317,7 +10313,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "QUIT evicts the nick from userhost_cache" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#quitevict"]})
@@ -10346,7 +10342,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "NICK renames cache entry preserving user+host" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
 
       {user, network, _} =
         setup_user_and_network(port, %{autojoin_channels: ["#nickrename"]})
@@ -10417,7 +10413,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      start_server(handler)
+      IRCServer.start_server(handler)
     end
 
     # Condition-poll until at least `want` sent lines match `pred`, or the
@@ -12397,7 +12393,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "send_topic_clear/3" do
     test "sends TOPIC #chan : (empty trailing) upstream" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -12424,7 +12420,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "send_oper/4" do
     test "writes OPER <name> <password> upstream" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -12445,7 +12441,7 @@ defmodule Grappa.Session.ServerTest do
     # `#{password}` interpolation OR swaps the positional args, this
     # sentinel catches it before ship.
     test "logs OPER submission with redacted password (no interpolation of secret)" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -12488,7 +12484,7 @@ defmodule Grappa.Session.ServerTest do
     # secret reaches no sink and the session does not die for having been
     # asked to oper while reconnecting.
     test "an OPER submitted in the Backoff respawn window leaks nothing and does not kill the session" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       subject = {:user, user.id}
       sentinel = "sentinel-oper-pw-961"
@@ -12568,7 +12564,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "send_raw/3" do
     test "ships the raw IRC line verbatim with trailing CRLF" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -12609,7 +12605,7 @@ defmodule Grappa.Session.ServerTest do
     # event; CP13 makes it durable + replayable.
 
     test "404 ERR_CANNOTSENDTOCHAN persists on the channel with severity :error" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "#sniffo")
@@ -12645,7 +12641,7 @@ defmodule Grappa.Session.ServerTest do
       # 421 is in @active_numerics → routes to {:server, nil} regardless of
       # params (BLEH-as-nick problem). Chosen over 432/433/437 because the
       # latter trigger the AuthFSM's nick-rejection path mid-handshake.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "$server")
@@ -12680,7 +12676,7 @@ defmodule Grappa.Session.ServerTest do
       # is part of the #640 fix, not a weakening (CLAUDE.md "Never assert buggy
       # behavior"). The OPEN-window counterpart is the very next test — the two
       # together pin both arms of the gate.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "$server")
@@ -12712,7 +12708,7 @@ defmodule Grappa.Session.ServerTest do
       # "ghost"}. Server twin of the cp13-s5-msg-ghost-401 e2e; the
       # falsification companion to the no-window test above — the gate must
       # route to the window when it exists, never blanket-redirect.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       pid = start_session_for(user, network)
@@ -12745,7 +12741,7 @@ defmodule Grappa.Session.ServerTest do
     test "delegated numeric (372 MOTD) does NOT double-persist via the routing path" do
       # 372 is :delegated → existing MOTD handler in EventRouter persists it.
       # If the new routing path also persisted, we'd get two rows on $server.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "$server")
@@ -12788,7 +12784,7 @@ defmodule Grappa.Session.ServerTest do
       # `meta.raw_params`, mirroring EventRouter's `persist_raw_event/3`, so cic
       # can render the whole reply. This is the CLASS fix (every middle-param
       # numeric), not just the STATS example.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
 
       topic = Topic.channel(user.name, network.slug, "$server")
@@ -13014,7 +13010,7 @@ defmodule Grappa.Session.ServerTest do
 
   describe "autojoin +i/+k recovery via ChanServ INVITE (#116)" do
     test "473 on an autojoin channel sends PRIVMSG ChanServ :INVITE + marks awaiting_invite" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#secret"]})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -13042,7 +13038,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "475 (+k) on an autojoin channel also sends ChanServ INVITE" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#keyed"]})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -13061,7 +13057,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "473 on a NON-autojoin (manual-shape) channel does NOT invite" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#bofh"]})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -13077,7 +13073,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "non-invitable numerics (471/474/403/405) do NOT invite even for an autojoin channel" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#full"]})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -13096,7 +13092,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "dedupe — a second 473 for the same channel does not re-invite" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#secret"]})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -13121,7 +13117,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "inbound ChanServ INVITE for an awaiting channel re-JOINs keyless" do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#secret"]})
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -13157,7 +13153,7 @@ defmodule Grappa.Session.ServerTest do
   # to recover (auth_method :none sends no built-in identify without a 001).
   describe "recover_identity (#581) — server integration" do
     test "a user subject is refused with :not_visitor" do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
 
@@ -13545,7 +13541,7 @@ defmodule Grappa.Session.ServerTest do
       # #1338 a second tuple published by `Grappa.UserSettings` reached 40
       # clauses and no catch-all: FunctionClauseError, supervisor restart,
       # and the user's IRC connection dropped by an unrelated context.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -13581,7 +13577,7 @@ defmodule Grappa.Session.ServerTest do
       # rebuilds it. Green before #1338 (FunctionClauseError) and after
       # (an explicit `{:stop, reason, state}`): the mutant it kills is a
       # catch-all placed ahead of the EXIT class.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       pid = start_session_for(user, network)
       :ok = IRCServer.await_handshake(server, 1_000)

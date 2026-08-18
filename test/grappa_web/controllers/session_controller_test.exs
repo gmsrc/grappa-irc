@@ -37,11 +37,6 @@ defmodule GrappaWeb.SessionControllerTest do
     :ok
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
-    {server, IRCServer.port(server)}
-  end
-
   # A port nothing listens on — the accretion allowlist-gate test rejects
   # BEFORE any dial, so the disabled network's server endpoint is never
   # contacted; the port just has to be a valid, unused number.
@@ -67,7 +62,7 @@ defmodule GrappaWeb.SessionControllerTest do
 
   describe "POST /session/networks (#211 phase 4c — accretion)" do
     test "registered visitor accretes a 2nd network — ONE identity spans BOTH", %{conn: conn} do
-      {server_a, port_a} = start_server()
+      {server_a, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network_a} = registered_visitor(port_a)
 
       # The visitor is live on network A.
@@ -76,7 +71,7 @@ defmodule GrappaWeb.SessionControllerTest do
       assert is_pid(Grappa.Session.whereis({:visitor, visitor.id}, network_a.id))
 
       # A SECOND visitor_enabled network B with its own fake upstream.
-      {server_b, port_b} = start_server()
+      {server_b, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
       on_exit(fn -> Grappa.Session.stop_session({:visitor, visitor.id}, network_b.id) end)
 
@@ -118,7 +113,7 @@ defmodule GrappaWeb.SessionControllerTest do
     end
 
     test "accreting a NON-visitor_enabled network → 403", %{conn: conn} do
-      {_, port_a} = start_server()
+      {_, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, _} = registered_visitor(port_a)
 
       # A network that is NOT visitor_enabled.
@@ -133,7 +128,7 @@ defmodule GrappaWeb.SessionControllerTest do
     end
 
     test "accreting a network the identity ALREADY holds → 409 already_attached", %{conn: conn} do
-      {_, port_a} = start_server()
+      {_, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network_a} = registered_visitor(port_a)
 
       # network_a's slug is already the visitor's — flip it visitor_enabled so
@@ -149,7 +144,7 @@ defmodule GrappaWeb.SessionControllerTest do
     end
 
     test "missing network param → 400", %{conn: conn} do
-      {_, port_a} = start_server()
+      {_, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, _} = registered_visitor(port_a)
       session = visitor_session_fixture(visitor)
 
@@ -169,7 +164,7 @@ defmodule GrappaWeb.SessionControllerTest do
          %{conn: conn} do
       {user, session} = user_and_session()
 
-      {server_b, port_b} = start_server()
+      {server_b, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
       on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network_b.id) end)
 
@@ -202,7 +197,7 @@ defmodule GrappaWeb.SessionControllerTest do
       long_name = String.duplicate("a", 40)
       {user, session} = user_and_session(name: long_name)
 
-      {server_b, port_b} = start_server()
+      {server_b, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network_b, _} = network_with_server(port: port_b, slug: "gamma", visitor_enabled: true)
       on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network_b.id) end)
 
@@ -277,7 +272,7 @@ defmodule GrappaWeb.SessionControllerTest do
          %{conn: conn} do
       {user, session} = user_and_session()
 
-      {server_b, port_b} = start_server()
+      {server_b, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
       on_exit(fn -> Grappa.Session.stop_session({:user, user.id}, network_b.id) end)
 
@@ -329,7 +324,7 @@ defmodule GrappaWeb.SessionControllerTest do
     # bounded by the visitor_enabled allowlist (+ per-IP cap) inside
     # accrete_network/3.
     test "anon visitor accretes an available network → 204", %{conn: conn} do
-      {server_a, port_a} = start_server()
+      {server_a, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
       # An anon visitor (no committed password) live on network A.
       {visitor, network_a} = visitor_with_network(port_a)
       # #211 phase 7 — anon ⟺ NOT registered (derived from the credentials).
@@ -337,7 +332,7 @@ defmodule GrappaWeb.SessionControllerTest do
       _ = start_visitor_session_for(visitor, network_a)
       :ok = IRCServer.await_handshake(server_a, 5_000)
 
-      {server_b, port_b} = start_server()
+      {server_b, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network_b, _} = network_with_server(port: port_b, slug: "beta", visitor_enabled: true)
       on_exit(fn -> Grappa.Session.stop_session({:visitor, visitor.id}, network_b.id) end)
 

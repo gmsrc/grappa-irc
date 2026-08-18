@@ -21,15 +21,10 @@ defmodule Grappa.Visitors.AutoconnectTest do
     :ok
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
-    {server, IRCServer.port(server)}
-  end
-
   # A visitor identity already live on `anchor` (an autoconnect network),
   # mirroring the post-login anchor state. Returns {visitor, anchor}.
   defp visitor_on_anchor do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {visitor, anchor} = visitor_with_network(port)
     {:ok, _} = Networks.update_network_settings(anchor, %{visitor_enabled: true, visitor_autoconnect: true})
     _ = start_visitor_session_for(visitor, anchor)
@@ -40,7 +35,7 @@ defmodule Grappa.Visitors.AutoconnectTest do
   test "spawns each visitor_autoconnect network minus the anchor" do
     {visitor, anchor} = visitor_on_anchor()
 
-    {server_b, port_b} = start_server()
+    {server_b, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
 
     {:ok, net_b} =
       Networks.create_network(%{slug: "b-auto", visitor_enabled: true, visitor_autoconnect: true})
@@ -60,7 +55,7 @@ defmodule Grappa.Visitors.AutoconnectTest do
   test "a PARKED autoconnect network stays parked (not respawned)" do
     {visitor, anchor} = visitor_on_anchor()
 
-    {_, port_b} = start_server()
+    {_, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
 
     {:ok, net_b} =
       Networks.create_network(%{slug: "b-parked", visitor_enabled: true, visitor_autoconnect: true})

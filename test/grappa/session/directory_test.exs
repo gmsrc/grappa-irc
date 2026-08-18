@@ -19,11 +19,6 @@ defmodule Grappa.Session.DirectoryTest do
   alias Grappa.{ChannelDirectory, IRCServer, PubSub.Topic, Scrollback, Session}
   alias Grappa.Networks.{Credentials, SessionPlan}
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
-    {server, IRCServer.port(server)}
-  end
-
   defp setup_user_and_network(port) do
     user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
 
@@ -35,7 +30,7 @@ defmodule Grappa.Session.DirectoryTest do
   end
 
   test "refresh issues LIST upstream" do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, _} = setup_user_and_network(port)
 
     _ = start_session_for(user, network)
@@ -48,7 +43,7 @@ defmodule Grappa.Session.DirectoryTest do
   end
 
   test "a second refresh while one is in-flight returns {:error, :already_refreshing}" do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, _} = setup_user_and_network(port)
 
     _ = start_session_for(user, network)
@@ -61,7 +56,7 @@ defmodule Grappa.Session.DirectoryTest do
   end
 
   test "a refresh that never sees 323 times out, clears state, emits directory_failed" do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, _} = setup_user_and_network(port)
 
     # `start_session_for/2` resolves the plan and spawns with the boot-time
@@ -107,7 +102,7 @@ defmodule Grappa.Session.DirectoryTest do
   # has never joined. This test is the one that fails on the real wire; the
   # `NumericRouterTest` cases pin the decision itself.
   test "a 322 arriving after the watchdog fired lands on $server, not in the listed channel" do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, _} = setup_user_and_network(port)
 
     credential = Credentials.get_credential!(user, network)
@@ -147,7 +142,7 @@ defmodule Grappa.Session.DirectoryTest do
   end
 
   test "a 322/323 burst fills and finalizes the snapshot" do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, _} = setup_user_and_network(port)
 
     _ = start_session_for(user, network)
@@ -189,7 +184,7 @@ defmodule Grappa.Session.DirectoryTest do
   end
 
   test "emits at least one directory_progress before completing" do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, _} = setup_user_and_network(port)
 
     # Inject a 0ms progress throttle so EVERY 322 emits a ping (the default

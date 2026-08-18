@@ -42,11 +42,6 @@ defmodule Grappa.Session.PresencePushTest do
     {:ok, bypass: bypass, endpoint: "http://localhost:#{bypass.port}/wp"}
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
-    {server, IRCServer.port(server)}
-  end
-
   defp attach_telemetry(events) do
     test_pid = self()
     handler_id = "presence-push-#{System.unique_integer([:positive])}"
@@ -121,7 +116,7 @@ defmodule Grappa.Session.PresencePushTest do
       Plug.Conn.resp(conn, 201, "")
     end)
 
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, subject} = watching_session(port, endpoint, [])
 
     pid = start_session_for(user, network)
@@ -157,7 +152,7 @@ defmodule Grappa.Session.PresencePushTest do
       Plug.Conn.resp(conn, 500, "should-not-happen")
     end)
 
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, _} = watching_session(port, endpoint, ["#pp"])
 
     pid = start_session_for(user, network)
@@ -206,7 +201,7 @@ defmodule Grappa.Session.PresencePushTest do
     attach_telemetry([[:grappa, :push, :send, :start], [:grappa, :push, :send, :stop]])
     Bypass.expect(bypass, "POST", "/wp", fn conn -> Plug.Conn.resp(conn, 201, "") end)
 
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     {user, network, subject} = watching_session(port, endpoint, ["#pp"])
 
     pid = start_session_for(user, network)

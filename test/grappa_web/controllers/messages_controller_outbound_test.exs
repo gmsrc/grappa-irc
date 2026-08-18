@@ -36,11 +36,6 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
     {:ok, conn: put_bearer(conn, session.id), vjt: vjt}
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
-    {server, IRCServer.port(server)}
-  end
-
   defp setup_network(vjt, port, slug \\ "azzurra") do
     setup_network(vjt, port, slug, nil)
   end
@@ -54,7 +49,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
   describe "GET presence filter — #458 member-count (unset) branch" do
     test "unset pref on a LARGE channel (>= threshold members) hides presence via the size default",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -104,7 +99,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
   describe "POST with active session" do
     test "sends PRIVMSG upstream, persists row, broadcasts, returns 201",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
 
       :ok =
@@ -174,7 +169,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#640: ctcp_target routes the echo to the SOURCE window, wire to the recipient, no query window",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -213,7 +208,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#640: ctcp_target = $server is rejected (read-only) as bad_request",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -235,7 +230,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#1225: notice_target ships a NOTICE, echoes to the SOURCE window, opens no window",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -269,7 +264,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#1225: notice_target = $server is rejected (read-only) as bad_request",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -289,7 +284,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#1301: notice_target = @#chan reaches the wire VERBATIM and echoes to the source window",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -321,7 +316,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#1301: a sigil is still refused on the URL channel_id — that one IS a window key",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -345,7 +340,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#1225: a /notice to NickServ does not archive a mistyped identify password",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -377,7 +372,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#1225: a POST carrying BOTH ctcp_target and notice_target is bad_request",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -400,7 +395,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "#357: the send-path span [:grappa, :session, :send_privmsg] closes with outcome: :ok",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -439,7 +434,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "POST then GET roundtrip — vjt's POST visible via vjt's subsequent GET",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -467,7 +462,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "PER-USER ISO: alice's GET on the same channel returns 404 not_found",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -497,7 +492,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
     end
 
     test "broadcast scoped to (user, network, channel) — does not leak", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
 
       :ok =
@@ -636,7 +631,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
   describe "POST to nick target (DM)" do
     test "sends PRIVMSG upstream to nick target, persists row, returns 201",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -684,7 +679,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "a full burst succeeds (201), the next POST is throttled (429)",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -710,7 +705,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
     # contract, not a magic constant.
     test "a throttled POST (429) carries a retry-after header = the send-throttle refill interval",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -730,12 +725,12 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "the bucket is per-(subject, network): a second network is unaffected by the first's flood",
          %{conn: conn, vjt: vjt} do
-      {server1, port1} = start_server()
+      {server1, port1} = IRCServer.start_server(IRCServer.passthrough_handler())
       net1 = setup_network(vjt, port1, "azzurra")
       pid1 = start_session_for(vjt, net1)
       :ok = IRCServer.await_handshake(server1, 1_000)
 
-      {server2, port2} = start_server()
+      {server2, port2} = IRCServer.start_server(IRCServer.passthrough_handler())
       net2 = setup_network(vjt, port2, "second-net")
       pid2 = start_session_for(vjt, net2)
       :ok = IRCServer.await_handshake(server2, 1_000)
@@ -776,7 +771,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "an oper'd session rides the WIDER burst, and still lands on a 429 at its own ceiling",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -798,7 +793,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "the oper 429 carries the OPER refill interval, not the ordinary one",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -822,7 +817,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
 
     test "an oper carrying the network's no-throttle umode is not metered at all",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       # The exempt letter is per-flavour; bahamut's is the one that was read
       # at source, so the network has to say it is one.
       network = setup_network(vjt, port, "azzurra", :azzurra)
@@ -844,7 +839,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
       # No services_flavor: grappa has not been told which ircd this is, so
       # `F` carries no verified meaning and the exemption is withheld. The
       # oper tier still applies — the degradation is graceful.
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -859,7 +854,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
     end
 
     test "a plain user is metered on today's numbers, unchanged", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -885,7 +880,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
   describe "POST to *serv target (UX-4 bucket G)" do
     test "POST to NickServ returns 202 ok=true, no scrollback row, line on wire",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
 
       :ok =
@@ -924,7 +919,7 @@ defmodule GrappaWeb.MessagesControllerOutboundTest do
     end
 
     test "POST to chanserv (lowercase) returns 202", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)

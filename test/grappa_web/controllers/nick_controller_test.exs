@@ -33,13 +33,6 @@ defmodule GrappaWeb.NickControllerTest do
     end
   end
 
-  defp start_server, do: start_server(IRCServer.passthrough_handler())
-
-  defp start_server(handler) do
-    {:ok, server} = IRCServer.start_link(handler)
-    {server, IRCServer.port(server)}
-  end
-
   defp setup_network(vjt, port, slug) do
     {network, _} = network_with_server(port: port, slug: slug)
     _ = credential_fixture(vjt, network, %{nick: "grappa-test", autojoin_channels: []})
@@ -54,7 +47,7 @@ defmodule GrappaWeb.NickControllerTest do
 
   describe "POST /networks/:network_id/nick" do
     test "202 + ok body when nick line goes upstream", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "az-nick-#{System.unique_integer([:positive])}"
       network = setup_network(vjt, port, slug)
       pid = start_session_for(vjt, network)
@@ -124,7 +117,7 @@ defmodule GrappaWeb.NickControllerTest do
     # as users, gated by the same `(nick, network_slug)` UNIQUE that
     # backs anon-collision detection at login time.
     test "visitor subject — 202 + nick line upstream + DB nick rotated on echo", %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       old_nick = "v9-#{System.unique_integer([:positive])}"
       {visitor, network} = visitor_with_network(port, nick: old_nick)
       session = visitor_session_fixture(visitor)
@@ -172,7 +165,7 @@ defmodule GrappaWeb.NickControllerTest do
     # in production on Azzurra, 2026-08-04).
     test "visitor subject — 202 + NICK upstream when only a stale ANON credential holds the target nick (#828)",
          %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       old_nick = "v828a-#{System.unique_integer([:positive])}"
       {visitor, network} = visitor_with_network(port, nick: old_nick)
       session = visitor_session_fixture(visitor)
@@ -207,7 +200,7 @@ defmodule GrappaWeb.NickControllerTest do
     # list (`{:server, nil}` — the rejected nick is not a destination).
     test "visitor subject — a nick taken upstream is refused by the ircd's 433, not by the controller (#828)",
          %{conn: _conn} do
-      {server, port} = start_server(welcoming_handler())
+      {server, port} = IRCServer.start_server(welcoming_handler())
       old_nick = "v828c-#{System.unique_integer([:positive])}"
       {visitor, network} = visitor_with_network(port, nick: old_nick)
       session = visitor_session_fixture(visitor)
@@ -252,7 +245,7 @@ defmodule GrappaWeb.NickControllerTest do
     # visitor is an identity problem, not a wire-availability question.
     test "visitor subject — 409 nick_in_use when another visitor's IDENTIFIED credential holds the target nick",
          %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       old_nick = "v828e-#{System.unique_integer([:positive])}"
       {visitor, network} = visitor_with_network(port, nick: old_nick)
       session = visitor_session_fixture(visitor)

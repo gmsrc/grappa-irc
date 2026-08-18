@@ -24,11 +24,6 @@ defmodule GrappaWeb.NotifyControllerLiveTest do
 
   # Passthrough fake ircd — registration + presence numerics are fed
   # explicitly so the test controls the WATCH-vs-MONITOR mechanism.
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
-    {server, IRCServer.port(server)}
-  end
-
   defp flush(server) do
     token = "flush-#{System.unique_integer([:positive])}"
     IRCServer.feed(server, "PING :#{token}\r\n")
@@ -49,7 +44,7 @@ defmodule GrappaWeb.NotifyControllerLiveTest do
     conn: conn,
     user: user
   } do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
     slug = "notify-live-net-#{System.unique_integer([:positive])}"
     {network, _} = network_with_server(port: port, slug: slug)
     _ = credential_fixture(user, network, %{nick: "grappa-test", autojoin_channels: []})

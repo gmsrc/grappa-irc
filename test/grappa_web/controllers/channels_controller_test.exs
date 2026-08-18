@@ -41,11 +41,6 @@ defmodule GrappaWeb.ChannelsControllerTest do
     setup_network(vjt, 1024 + rem(System.unique_integer([:positive]), 60_000), "azzurra")
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
-    {server, IRCServer.port(server)}
-  end
-
   defp setup_network(vjt, port, slug \\ "azzurra") do
     {network, _} = network_with_server(port: port, slug: slug)
     _ = credential_fixture(vjt, network, %{nick: "grappa-test", autojoin_channels: []})
@@ -54,7 +49,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
   describe "POST /networks/:network_id/channels" do
     test "with active session sends JOIN upstream and returns 202", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -74,7 +69,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "#382 comma-list name sends ONE multi-target JOIN and returns 202",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -223,7 +218,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # frame as `JOIN <chan> <key>\r\n` when present.
     test "with active session + key sends JOIN with key upstream",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -276,7 +271,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "empty-string key sends the no-key JOIN form (bucket F)",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -315,7 +310,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
   describe "DELETE /networks/:network_id/channels/:channel_id" do
     test "with active session sends PART upstream and returns 202", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -377,7 +372,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # the defect this closes.
     test "reason query param lands on the wire as the PART trailing param",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -399,7 +394,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # An empty `?reason=` is the ABSENCE of a reason — byte-identical to the
     # no-param call above, not `PART #sniffo :`.
     test "empty reason query param emits the bare PART form", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -419,7 +414,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # so a refused request leaves no half-applied leave behind.
     test "reason with URL-encoded CRLF returns 400 and does not touch autojoin",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = network_with_server(port: port, slug: "az-1208-crlf-#{u()}")
       _ = credential_fixture(vjt, network, %{autojoin_channels: ["#sniffo", "#other"]})
       pid = start_session_for(vjt, network)
@@ -441,7 +436,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # graphemes. Above the cap it is refused at the door rather than handed to
     # a framing layer that would silently truncate it.
     test "over-cap reason returns 413 and sends nothing upstream", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port)
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -474,7 +469,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # fix, cicchetto's channels_changed refetch would return the channel with
     # joined: false and the sidebar would keep showing it as a parted entry.
     test "removes channel from autojoin_channels after PART", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = network_with_server(port: port, slug: "az-bug5a-#{u()}")
       _ = credential_fixture(vjt, network, %{autojoin_channels: ["#grappa", "#other"]})
       pid = start_session_for(vjt, network)
@@ -493,7 +488,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "channel not in autojoin_channels is a no-op on the autojoin list after PART",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = network_with_server(port: port, slug: "az-bug5a-noop-#{u()}")
       _ = credential_fixture(vjt, network, %{autojoin_channels: ["#other"]})
       pid = start_session_for(vjt, network)
@@ -521,7 +516,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # race window where the M16 propagation matters most.
     test "autojoin removal failure propagates as 404 instead of silently 202 (M16)",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = network_with_server(port: port, slug: "az-m16-#{u()}")
       _ = credential_fixture(vjt, network, %{autojoin_channels: ["#grappa"]})
       pid = start_session_for(vjt, network)
@@ -552,7 +547,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # sidebar entry disappears.
     test "eager PART of a never-joined channel drops window_state + emits channels_changed",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = network_with_server(port: port, slug: "az-h-eager-#{u()}")
       _ = credential_fixture(vjt, network, %{autojoin_channels: []})
 
@@ -605,7 +600,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "eager PART of a joined channel drops members + window_state immediately (don't wait for echo)",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = network_with_server(port: port, slug: "az-h-joined-#{u()}")
       _ = credential_fixture(vjt, network, %{autojoin_channels: []})
 
@@ -650,7 +645,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # persister the organic membership-change path uses.
     test "PART persists last_joined_channels snapshot minus the parted channel (reconnect-rejoin fix)",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {network, _} = network_with_server(port: port, slug: "az-lastjoined-#{u()}")
       _ = credential_fixture(vjt, network, %{autojoin_channels: []})
       pid = start_session_for(vjt, network)
@@ -687,7 +682,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "channel in BOTH autojoin AND session: source: autojoin, joined: true",
          %{conn: conn, vjt: vjt} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "az-bot-#{u()}"
       {network, _} = network_with_server(port: port, slug: slug)
       _ = credential_fixture(vjt, network, %{autojoin_channels: ["#italia"]})
@@ -721,7 +716,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "channel ONLY in session (joined post-boot, not in autojoin): source: joined, joined: true",
          %{conn: conn, vjt: vjt} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "az-sess-#{u()}"
       {network, _} = network_with_server(port: port, slug: slug)
       _ = credential_fixture(vjt, network, %{autojoin_channels: []})
@@ -740,7 +735,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "merges autojoin + session: union sorted alphabetically",
          %{conn: conn, vjt: vjt} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "az-merge-#{u()}"
       {network, _} = network_with_server(port: port, slug: slug)
       _ = credential_fixture(vjt, network, %{autojoin_channels: ["#italia", "#azzurra"]})
@@ -801,7 +796,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
   describe "POST /networks/:network_id/channels/:channel_id/topic" do
     test "202 + ok body when session accepts the topic", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "az-topic-#{u()}"
       network = setup_network(vjt, port, slug)
       pid = start_session_for(vjt, network)
@@ -897,7 +892,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "POST JOIN sends upstream as the visitor session and returns 202",
          %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       session = visitor_session_fixture(visitor)
       pid = start_visitor_session_for(visitor, network)
@@ -919,7 +914,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
 
     test "DELETE PART sends upstream as the visitor session and returns 202",
          %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       session = visitor_session_fixture(visitor)
       pid = start_visitor_session_for(visitor, network)
@@ -963,7 +958,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # visitors exactly as it does for users.
     test "DELETE PART of a live-joined channel drops it from GET /channels + last_joined (case a)",
          %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       _ = visitor_channel_fixture(visitor, network.slug, "#italia")
       session = visitor_session_fixture(visitor)
@@ -1009,7 +1004,7 @@ defmodule GrappaWeb.ChannelsControllerTest do
     # branch of `remove_from_autojoin` was a no-op and the row never went away.
     test "DELETE PART of a stale not-live autojoin entry drops it from GET /channels + last_joined (case b)",
          %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {visitor, network} = visitor_with_network(port)
       _ = visitor_channel_fixture(visitor, network.slug, "#italia")
       session = visitor_session_fixture(visitor)

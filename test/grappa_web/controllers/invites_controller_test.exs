@@ -27,11 +27,6 @@ defmodule GrappaWeb.InvitesControllerTest do
     {:ok, conn: put_bearer(conn, session_fixture(vjt).id), vjt: vjt}
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
-    {server, IRCServer.port(server)}
-  end
-
   defp setup_network(vjt, port, slug) do
     {network, _} = network_with_server(port: port, slug: slug)
     _ = credential_fixture(vjt, network, %{nick: "grappa-test", autojoin_channels: []})
@@ -62,7 +57,7 @@ defmodule GrappaWeb.InvitesControllerTest do
 
   describe "DELETE /networks/:network_id/invites/:channel_id" do
     test "declines the invite, returns 200, and drops the window", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port, "azzurra-#{u()}")
       :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(vjt.name))
       pid = start_session_for(vjt, network)
@@ -88,7 +83,7 @@ defmodule GrappaWeb.InvitesControllerTest do
     end
 
     test "a RAW-cased URL declines the folded window (#537)", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port, "azzurra-#{u()}")
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -104,7 +99,7 @@ defmodule GrappaWeb.InvitesControllerTest do
 
     test "declining a JOINED channel returns 404 not_invited and leaves it joined",
          %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port, "azzurra-#{u()}")
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)
@@ -122,7 +117,7 @@ defmodule GrappaWeb.InvitesControllerTest do
     end
 
     test "declining a channel with no invite returns 404 not_invited", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       network = setup_network(vjt, port, "azzurra-#{u()}")
       pid = start_session_for(vjt, network)
       :ok = IRCServer.await_handshake(server, 1_000)

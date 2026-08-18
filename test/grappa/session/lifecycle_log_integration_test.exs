@@ -42,11 +42,6 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
     :ok
   end
 
-  defp start_server(handler) do
-    {:ok, server} = IRCServer.start_link(handler)
-    {server, IRCServer.port(server)}
-  end
-
   defp passthrough, do: fn state, _ -> {:reply, nil, state} end
 
   defp setup_user_and_network(port) do
@@ -60,7 +55,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
   end
 
   test "connect handshake emits :connected with the composite session_id" do
-    {server, port} = start_server(passthrough())
+    {server, port} = IRCServer.start_server(passthrough())
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
@@ -74,7 +69,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
   end
 
   test "001 RPL_WELCOME emits :registered" do
-    {server, port} = start_server(passthrough())
+    {server, port} = IRCServer.start_server(passthrough())
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
@@ -89,7 +84,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
   end
 
   test "clean stop emits :disconnected clean=true with a non-negative duration_ms" do
-    {server, port} = start_server(passthrough())
+    {server, port} = IRCServer.start_server(passthrough())
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
@@ -120,7 +115,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
   end
 
   test "self-MODE +r after registration emits :identified" do
-    {server, port} = start_server(passthrough())
+    {server, port} = IRCServer.start_server(passthrough())
     {user, network} = setup_user_and_network(port)
 
     pid = start_session_for(user, network)
