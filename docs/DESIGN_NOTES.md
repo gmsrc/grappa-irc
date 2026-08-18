@@ -47965,3 +47965,76 @@ dropped, so the instrument for identifying it is the fix itself.
 _Not established: that a wrong-typed or empty body was ever observed on any kind other than
 `:notice` in production — the `:topic` case above is derived from the source, not from an
 incident. No claim is made about what the upstream peer is or why it emits on that cadence._
+<!-- entry #1390 slice 6 -->
+
+---
+
+## 2026-08-18 — #1390 slice 6: the second effect vocabulary loses its output half, and a warning stops lying
+
+`Session.Server` interpreted effects in two grammars. The declared one is
+`EventRouter.effect()`, drained by `apply_effects/2`. The private one was the
+`lines` element of `{verdict, next, lines}`, returned by `GhostRecovery.step/2`
+and `RecoverIdentity.step/2` and drained by `flush_lines/2` — three lines
+`apply_effects/2` could not see. That second grammar is what the issue title
+counts, and this slice removes its output half.
+
+### The behaviour change, declared
+
+`flush_lines/2` hard-coded `send_outbound(acc, line, :ghost_recovery)`. It had
+**five** call sites and **two** of them — `handle_call(:recover_identity, …)`
+and `advance_recover/2` — are RecoverIdentity's. So when `Client.send_line/2`
+failed during a visitor identity recovery, the operator read
+
+    outbound line dropped: send_line failed  origin=ghost_recovery
+
+and was told the wrong sub-machine had failed. The `origin` metadata exists for
+exactly one purpose — it is read nowhere else, only on that warning's error
+branch — so a tag that names the wrong producer is the whole field being wrong.
+
+The fix carries the origin on the effect: `{:reply, iodata(), origin()}`, with
+`@type origin :: :event_router_reply | :ghost_recovery | :recover_identity`.
+Each producer now names itself.
+
+The cheaper alternative was rejected: collapsing both sub-machines onto
+`:event_router_reply` would have deleted the only field distinguishing the drop
+sites, a silent diagnostic loss on precisely the path #676 exists to catch —
+NickServ never answering. Least surprise says a machine names itself.
+
+### Why it was safe to do now, and would not have been before
+
+#1394 had already wired the `{:reply, _}` arm through `send_outbound/3`, the
+one sniff-then-send door, and left a pin plus a comment saying why: nothing
+emitted a secret onto that arm *yet*, and #1390 was going to move
+`GHOST <nick> <pwd>` and `IDENTIFY <pwd>` onto it. In the other order the merge
+would have opened a secret-bypassing hole **with no test turning red**. The
+order held. `flush_lines/2` is now `emit_reply_lines/3`, an adapter that maps
+onto the one grammar and hands the list to `apply_effects/2` — not a second
+interpreter with a new name.
+
+Parity is preserved where it counts: `capture_outbound_ns_secret/2` lives
+inside `send_outbound/3`, which both the old reduce and the new recursion cross
+once per line, in list order, threading state.
+
+### The issue text is stale — measured, and recorded so the next reader does not redo landed work
+
+#1390's body describes a module that no longer exists. Measured at `a8174d70`:
+`server.ex` is **7078** lines, not 7230; the state map declares **71** keys, not
+87 or 83; `deps: Deps.t()` — the "eight injected-callback fields" the proposed
+direction offers as behaviour-free — is **already bundled**. The
+channel-directory ETL (A6) left in `f89e6e45`, the double 005 parse (A5) in
+`2a849f97`, the recover-progress projection in `c5dc5588`, the state-contract
+pin in `655ac551`. **Where an issue's text conflicts with measured code, the
+code wins**; the text is data, not instruction.
+
+Two directions were left alone on purpose: the `*_pending` accumulator bundle
+(11 fields, 439 lines across 17 files, and its prime side sits inside the
+`:send_<verb>` arms #1403 contends) and the `EventRouter` projection of A1,
+which #1391 measured false with two mutants and which must therefore be bought
+with a mutant rather than deduced.
+
+### Deploy
+
+**COLD.** `Session.Server` is in `HotReload.LongLivedModules` and the effect
+tuple changes arity: a `{:reply, line}` still in flight across a hot reload
+would meet only the 3-tuple clause and raise `FunctionClauseError`. Reload the
+node, do not hot-patch it.
