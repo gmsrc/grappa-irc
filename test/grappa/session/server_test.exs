@@ -10825,8 +10825,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {:ok, server} = IRCServer.start_link(handler)
-      port = IRCServer.port(server)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#test"]})
       pid = start_session_for(user, network)
       welcome_session_on_channel(server, "#test")
@@ -11070,8 +11069,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {:ok, server} = IRCServer.start_link(handler)
-      port = IRCServer.port(server)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: []})
       pid = start_session_for(user, network)
       # Wait for 001 reception so SessionStateHelpers.nick(state) is reconciled (post-001 only).
@@ -11765,8 +11763,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {:ok, server} = IRCServer.start_link(handler)
-      port = IRCServer.port(server)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: []})
       pid = start_session_for(user, network)
       Process.sleep(50)
@@ -11888,8 +11885,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {:ok, server} = IRCServer.start_link(handler)
-      port = IRCServer.port(server)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: []})
       pid = start_session_for(user, network)
       Process.sleep(50)
@@ -12528,8 +12524,7 @@ defmodule Grappa.Session.ServerTest do
         end
       end
 
-      {:ok, server} = IRCServer.start_link(handler)
-      port = IRCServer.port(server)
+      {server, port} = IRCServer.start_server(handler)
       {user, network, _} = setup_user_and_network(port, %{autojoin_channels: ["#test"]})
       pid = start_session_for(user, network)
       welcome_session_on_channel(server, "#test")
