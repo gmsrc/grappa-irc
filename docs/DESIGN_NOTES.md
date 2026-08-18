@@ -48647,3 +48647,70 @@ this commit would have changed the after-set the move is proven by, and a
 two-sided proof whose two sides measure different things proves nothing. The
 gap is pre-existing, it is not widened by the move, and it wants its own change
 with its own red.
+<!-- entry #1399-leaves -->
+
+---
+
+## 2026-08-18 — #1399: the two identity schemas become leaves, and four boundaries stop taking a context to name one
+
+Bucket J's remaining third. #415 promoted `Visitors.Visitor` to a
+`top_level?: true` leaf so a context could name the identity schema without
+depending on the orchestration verbs around it; #1398 did the same for the four
+`Networks` schemas and retired all five `dirty_xrefs` waivers with it. This
+finishes the pattern on `Grappa.Accounts.User` and `Grappa.Accounts.Session` —
+both now `top_level?: true, deps: []`, both out of `Grappa.Accounts`' `exports:`,
+which takes them as deps instead.
+
+Four boundaries NARROW as a result: `Subject` and `Themes` swap the whole
+`Grappa.Accounts` context for `Grappa.Accounts.User`, `Admission` and `Vhosts`
+for `Grappa.Accounts.Session`. None of the four calls an `Accounts` function.
+Seven others (`Networks`, `Operator`, `Release`, `AccountDeletion`, `GrappaWeb`,
+`TestSupport.SubjectReset`, `AuthFixtures`) do call one, so they declare the leaf
+ALONGSIDE the context rather than instead of it. The population that took a
+whole context to name a schema goes 4 → 0.
+
+### What the compiler decided, and the source parse got wrong
+
+The blast radius was not predicted, it was ENUMERATED: promote the schema, add
+no deps, and read `mix compile --force --warnings-as-errors` — 80 forbidden
+references across exactly 8 boundaries for `User`, 8 across 3 for `Session`. Two
+findings from that run correct beliefs a source-level reference scan had
+produced, and both generalise:
+
+- **`from(s in Module)` in an Ecto query IS a reference Boundary resolves.**
+  Deleting the `Grappa.Accounts` dep from `Admission` and `Vhosts` — neither of
+  which holds a struct literal or calls an `Accounts` function — fails with 3
+  forbidden references (`admission.ex:409`, `:423`, `vhosts.ex:678`). They could
+  not use the declare-nothing resolution; they had to narrow. By contrast
+  `belongs_to :x, Mod`, `Mod.t()` in a typespec and `field :x, Mod` are module
+  atoms in metadata and produce NO edge — which is why `Networks.Credential`, a
+  leaf with `deps: [Grappa.IRC]`, aliases `Accounts.User` and `EncryptedBinary`
+  without declaring either and compiles green.
+- **`MIX_ENV=dev` does not compile `test/support`.** The slice was green in dev
+  and then red in test: 4 forbidden references from `Grappa.AuthFixtures`. A
+  Boundary blast radius measured only in dev under-counts by exactly the
+  test-support boundaries, silently, because the boundary is never compiled.
+
+### Why the whole-context dep was worth removing, measured rather than argued
+
+Green after a deletion proves nothing unless the checker is known to bite, and
+"tidier" is not a reason. So the same mutation was applied twice: a call to
+`Grappa.Accounts.get_user!/1` inserted into `Grappa.Subject`. Before this change
+it compiles GREEN — `Subject` declared the whole context, so the checker had
+nothing to say about a call it never intended to allow. After, the same insertion
+is RED, one forbidden reference to `Grappa.Accounts`. That colour change IS what
+narrowing buys: the annotation now states what the boundary actually needs, and
+the compiler enforces the difference.
+
+### The cost, stated because the review asks for the opposite too
+
+The same review's A7 counts `top_level?: true` boundaries nested inside another
+boundary's namespace and calls the ambiguity a problem: 11 at review time, 15 on
+`main` after #1398, 17 after this. Promotion is A2's fix and A7's regression, one
+per schema promoted, and the two recommendations cannot both be satisfied by
+counting. The rule A7 needs is "a promoted identity or FK schema is a deliberate
+carve-out, not a context internal" — not a smaller number.
+
+`Grappa.BoundaryCycleBudgetTest`'s `@cycle_budget 0` does not move: every edge
+added here points at a leaf with `deps: []`, which can close no cycle. That was a
+prediction until it was run; it is now a measurement.

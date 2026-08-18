@@ -43,7 +43,7 @@ defmodule Grappa.Themes do
   use Boundary,
     top_level?: true,
     deps: [
-      Grappa.Accounts,
+      Grappa.Accounts.User,
       Grappa.Net.Ssrf,
       # #299 amendment (author model A): publish snapshots the visitor's
       # representative nick from the credential anchor.

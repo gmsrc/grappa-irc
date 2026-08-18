@@ -70,7 +70,7 @@ defmodule Grappa.Vhosts do
   use Boundary,
     top_level?: true,
     deps: [
-      Grappa.Accounts,
+      Grappa.Accounts.Session,
       Grappa.Net.HostAddresses,
       Grappa.Net.IpLiteral,
       Grappa.OutboundV6Pool,

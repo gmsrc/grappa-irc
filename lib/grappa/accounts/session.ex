@@ -61,6 +61,8 @@ defmodule Grappa.Accounts.Session do
   listed back — `handle/1` is the public, one-way name a device list
   and an operator log line use instead.
   """
+  use Boundary, top_level?: true, deps: []
+
   use Ecto.Schema
 
   import Ecto.Changeset

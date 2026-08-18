@@ -22,6 +22,8 @@ defmodule Grappa.Accounts.User do
   `inspect/1` output. Length bounds (8..256) are deliberately loose —
   password STRENGTH is the user's problem; password STORAGE is ours.
   """
+  use Boundary, top_level?: true, deps: []
+
   use Ecto.Schema
   import Ecto.Changeset
 

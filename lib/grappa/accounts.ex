@@ -81,13 +81,15 @@ defmodule Grappa.Accounts do
     top_level?: true,
     deps: [
       Grappa.Accounts.Revocations,
+      Grappa.Accounts.Session,
+      Grappa.Accounts.User,
       Grappa.Ecto.Like,
       Grappa.EncryptedBinary,
       Grappa.IRC,
       Grappa.Repo,
       Grappa.Visitors.Visitor
     ],
-    exports: [User, Session, Wire, AdminWire, Login, TOTP, TOTPRecoveryCode, Passkey, WebAuthn]
+    exports: [Wire, AdminWire, Login, TOTP, TOTPRecoveryCode, Passkey, WebAuthn]
 
   import Ecto.Query
 

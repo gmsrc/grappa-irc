@@ -14,6 +14,8 @@ defmodule GrappaWeb do
       [
         Grappa.AccountDeletion,
         Grappa.Accounts,
+        Grappa.Accounts.Session,
+        Grappa.Accounts.User,
         Grappa.Accounts.Revocations,
         Grappa.Admission,
         Grappa.AdminEvents,

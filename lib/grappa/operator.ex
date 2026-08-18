@@ -59,6 +59,7 @@ defmodule Grappa.Operator do
     top_level?: true,
     deps: [
       Grappa.Accounts,
+      Grappa.Accounts.User,
       Grappa.Admission,
       Grappa.AdminEvents,
       # #357 — the `db-latency` / `db-latency-reset` verbs render the

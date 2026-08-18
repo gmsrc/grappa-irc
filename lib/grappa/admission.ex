@@ -52,7 +52,7 @@ defmodule Grappa.Admission do
   use Boundary,
     top_level?: true,
     deps: [
-      Grappa.Accounts,
+      Grappa.Accounts.Session,
       Grappa.Networks,
       Grappa.Networks.Credential,
       Grappa.Networks.Network,

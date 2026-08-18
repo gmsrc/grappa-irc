@@ -69,6 +69,7 @@ if Mix.env() in [:dev, :test] do
       top_level?: true,
       deps: [
         Grappa.Accounts,
+        Grappa.Accounts.User,
         Grappa.Admission,
         Grappa.Networks,
         Grappa.Networks.Credential,
