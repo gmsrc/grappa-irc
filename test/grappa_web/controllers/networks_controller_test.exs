@@ -360,7 +360,7 @@ defmodule GrappaWeb.NetworksControllerTest do
 
     test "visitor reconnects a parked network → 200 + :connected, spawns session", %{conn: conn} do
       slug = "net-vis-connect-#{u()}"
-      {:ok, irc_server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
+      {:ok, irc_server} = IRCServer.start_link(IRCServer.passthrough_handler())
       port = IRCServer.port(irc_server)
       {network, _} = network_with_server(port: port, slug: slug, visitor_enabled: true)
       visitor = visitor_with_credential_fixture(network_slug: slug, nick: "vconn-#{u()}")
@@ -395,7 +395,7 @@ defmodule GrappaWeb.NetworksControllerTest do
       vjt = user_fixture(name: "vjt-patch-connect-#{u()}")
       session = session_fixture(vjt)
       slug = "net-connect-#{u()}"
-      {:ok, irc_server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
+      {:ok, irc_server} = IRCServer.start_link(IRCServer.passthrough_handler())
       port = IRCServer.port(irc_server)
       {network, _} = network_with_server(port: port, slug: slug)
       cred = credential_fixture(vjt, network)
@@ -440,7 +440,7 @@ defmodule GrappaWeb.NetworksControllerTest do
       vjt = user_fixture(name: "vjt-u0-netcap-#{u()}")
       session = session_fixture(vjt)
       slug = "net-u0-netcap-#{u()}"
-      {:ok, irc_server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
+      {:ok, irc_server} = IRCServer.start_link(IRCServer.passthrough_handler())
       port = IRCServer.port(irc_server)
       {network, _} = network_with_server(port: port, slug: slug)
       cred = credential_fixture(vjt, network)
@@ -544,7 +544,7 @@ defmodule GrappaWeb.NetworksControllerTest do
         Grappa.Accounts.create_session({:user, vjt.id}, "127.0.0.1", "ua", client_id: client_id)
 
       slug = "net-ux5bc-self-#{u()}"
-      {:ok, irc_server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
+      {:ok, irc_server} = IRCServer.start_link(IRCServer.passthrough_handler())
       port = IRCServer.port(irc_server)
       {network, _} = network_with_server(port: port, slug: slug)
 

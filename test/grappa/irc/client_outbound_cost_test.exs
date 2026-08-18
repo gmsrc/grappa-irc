@@ -30,7 +30,7 @@ defmodule Grappa.IRC.ClientOutboundCostTest do
   end
 
   defp start_pair do
-    {:ok, server} = IRCServer.start_link(fn state, _ -> {:reply, nil, state} end)
+    {:ok, server} = IRCServer.start_link(IRCServer.passthrough_handler())
 
     {:ok, client} =
       Client.start_link(%{
