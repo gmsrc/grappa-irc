@@ -23,11 +23,6 @@ defmodule GrappaWeb.MembersControllerTest do
     end
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(welcome_handler())
-    {server, IRCServer.port(server)}
-  end
-
   defp setup_session_with_members(vjt, port, slug) do
     {network, _} = network_with_server(port: port, slug: slug)
 
@@ -49,7 +44,7 @@ defmodule GrappaWeb.MembersControllerTest do
 
   describe "GET /networks/:network_id/channels/:channel_id/members" do
     test "returns members in mIRC sort order", %{conn: conn, vjt: vjt} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(welcome_handler())
       slug = "az-#{System.unique_integer([:positive])}"
       {_, pid} = setup_session_with_members(vjt, port, slug)
 
@@ -78,7 +73,7 @@ defmodule GrappaWeb.MembersControllerTest do
     end
 
     test "404 for cross-user network access (per-user iso)", %{conn: _conn, vjt: vjt} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(welcome_handler())
       slug = "az-#{System.unique_integer([:positive])}"
       {_, pid} = setup_session_with_members(vjt, port, slug)
 
@@ -95,7 +90,7 @@ defmodule GrappaWeb.MembersControllerTest do
 
     test "404 when no session is registered for (user, network)",
          %{conn: conn, vjt: vjt} do
-      {_, port} = start_server()
+      {_, port} = IRCServer.start_server(welcome_handler())
       slug = "az-#{System.unique_integer([:positive])}"
       {network, pid} = setup_session_with_members(vjt, port, slug)
 
@@ -119,7 +114,7 @@ defmodule GrappaWeb.MembersControllerTest do
       conn: conn,
       vjt: vjt
     } do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(welcome_handler())
       slug = "az-#{System.unique_integer([:positive])}"
       {_, pid} = setup_session_with_members(vjt, port, slug)
 
@@ -143,7 +138,7 @@ defmodule GrappaWeb.MembersControllerTest do
     # {:visitor, _} correctly — handshake + session interaction is the
     # same Session.list_members boundary user-side already exercises.
     test "visitor subject — returns members for visitor's network", %{conn: _conn} do
-      {server, port} = start_server()
+      {server, port} = IRCServer.start_server(welcome_handler())
       {visitor, network} = visitor_with_network(port)
       session = visitor_session_fixture(visitor)
       pid = start_visitor_session_for(visitor, network)

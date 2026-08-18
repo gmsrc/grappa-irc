@@ -30,15 +30,10 @@ defmodule Grappa.PresenceFilter.ResolverTest do
     end
   end
 
-  defp start_server do
-    {:ok, server} = IRCServer.start_link(welcome_handler())
-    {server, IRCServer.port(server)}
-  end
-
   # A live session joined to `channel` with exactly `n` members seeded via a
   # 353/366 NAMES burst. Returns `{network, pid, server}`.
   defp session_with_members(user, channel, n) do
-    {server, port} = start_server()
+    {server, port} = IRCServer.start_server(welcome_handler())
     slug = "az-#{System.unique_integer([:positive])}"
     {network, _} = network_with_server(port: port, slug: slug)
 
