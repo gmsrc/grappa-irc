@@ -155,6 +155,11 @@ spinner_timer() {
     | grep -oE '… \([^·)]*' | tail -1
 }
 
+# `frozen_spinner` carries the freeze verdict FORWARD to the idle debounce below.
+# Without it the debounce re-reads the same scrollback and undoes this decision —
+# see the comment on the debounce for the measurement.
+frozen_spinner=""
+
 if [ "$state" = "busy" ] \
    && ! echo "$tail" | grep -qE 'Press up to edit|esc to interrupt'; then
   t1=$(spinner_timer "$pane")
@@ -163,6 +168,7 @@ if [ "$state" = "busy" ] \
   # Frozen or vanished ⇒ not a running turn.
   if [ -z "$t2" ] || [ "$t1" = "$t2" ]; then
     state="idle"
+    frozen_spinner="$t2"
   fi
 fi
 
@@ -182,9 +188,23 @@ if [ "$state" = "idle" ] && [ "$prev_state" = "busy" ]; then
   elif echo "$tail2" | grep -qE '↑/↓ to navigate|Tab/Arrow keys to navigate|Enter to select'; then
     state="picker"
     picker_active=1
-  elif echo "$tail2" | awk '/… \(/{f=1} END{exit !f}' \
-       || echo "$tail2" | grep -qE 'Press up to edit|esc to interrupt'; then
+  elif echo "$tail2" | grep -qE 'Press up to edit|esc to interrupt'; then
     state="busy"
+  elif echo "$tail2" | awk '/… \(/{f=1} END{exit !f}'; then
+    # A bare `… (` here is NOT proof of a running turn: `-S -30` reaches into
+    # scrollback, and a spinner left in history matches forever. MEASURED on w2
+    # 2026-08-18 00:23Z — the main detector said busy, the freeze guard above
+    # correctly demoted it to idle, and THIS branch resurrected busy from the
+    # same frozen line. Because `prev_state` was then busy, the debounce ran
+    # again on the next tick and every tick after: w2 was pinned to a false BUSY
+    # for ~25 minutes while sitting idle, and the orchestrator would have missed
+    # its reply. A fresh state file classified the same pane `idle`, which is how
+    # the prior state — not the pane — was identified as the discriminator.
+    # So: only believe a spinner the freeze test has NOT already declared frozen.
+    t3=$(spinner_timer "$pane")
+    if [ -n "$t3" ] && [ "$t3" != "$frozen_spinner" ]; then
+      state="busy"
+    fi
   fi
 fi
 
