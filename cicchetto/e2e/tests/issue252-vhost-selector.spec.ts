@@ -24,25 +24,15 @@
 // Per feedback_cicchetto_browser_smoke + feedback_ux_e2e_mandatory this
 // exercises the real CSS/DOM render path jsdom can't.
 
-import { expectShellReady, openAdminConsole, openSettingsDrawer } from "../fixtures/cicchettoPage";
+import {
+  adminLogin,
+  loginAs,
+  openAdminConsole,
+  openSettingsDrawer,
+} from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
-
-type Seed = ReturnType<typeof getSeededAdmin>;
-
-async function loginAs(page: import("@playwright/test").Page, seed: Seed): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [seed.token, seed.subjectJson] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-}
 
 async function openVhostsTab(page: import("@playwright/test").Page): Promise<void> {
   await openAdminConsole(page);
@@ -115,7 +105,7 @@ test("#252 admin curates a vhost; a user customizes it via the sub-page and it p
 
   try {
     // --- Admin creates an in-pool, generally-available vhost via the UI ---
-    await loginAs(page, admin);
+    await adminLogin(page, admin);
     await openVhostsTab(page);
 
     await page.getByTestId("vhost-address-select").selectOption(candidate);
