@@ -3838,6 +3838,13 @@ const ScrollbackPane: Component<Props> = (props) => {
         onWheel={onWheel}
         onKeyDown={onKeyDown}
         data-testid="scrollback"
+        // #1336 (row #1079) — the follow intent, DERIVED, because nothing else
+        // shows it: the `[scroll-authority]` log is development-only, and the
+        // scroll-to-bottom button mirrors `atBottomNow`, which diverges from
+        // this by design. A pane that will not auto-scroll otherwise gives
+        // DevTools nothing to read. `on|off` carries the same cardinality as
+        // the boolean it mirrors, so it compresses nothing.
+        data-follow={followMode() ? "on" : "off"}
       >
         {/* #270 — peer-away banner as an IN-FLOW top row. Persistent +
             DM-contextual (unlike the ephemeral WHOIS / WHOWAS / LUSERS

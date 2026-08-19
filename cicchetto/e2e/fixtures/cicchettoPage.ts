@@ -69,6 +69,7 @@ import {
 } from "@playwright/test";
 import type { SeededUser } from "./grappaApi";
 import { type ScrollGestureResult, scrollByGesture, waitForScrollRest } from "./scrollGesture";
+import type { TraceEvent } from "./scrollTrace";
 
 const SHELL_READY_TIMEOUT_MS = 10_000;
 const MOBILE_BREAKPOINT_PX = 768;
@@ -1595,4 +1596,90 @@ export async function pageScrollbackRest(page: Page, timeoutMs: number): Promise
       pollMs: 50,
     },
   );
+}
+
+// #1336 (row #1079) — the in-page half of `scrollTrace.ts`: three channels on
+// one clock, installed before the SPA boots.
+//
+// The channels are `scroll` events, `data-follow` transitions and rows-list
+// recreations, because the freeze this row is about can happen with NO
+// scrollTop write at all (see `scrollTrace.ts` for the full argument). The
+// scroll channel is a PASSIVE listener rather than a patched setter on
+// purpose: it is the very event stream `ScrollbackPane`'s own `onScroll`
+// consumes, so the trace has exactly the fidelity of the arm under study, and
+// nothing here can perturb the timing it is trying to measure.
+export async function installScrollTrace(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    type Recorded = Record<string, unknown>;
+    const events: Recorded[] = [];
+    const at = (): number => Math.round(performance.now());
+    const push = (event: Recorded): void => {
+      events.push(event);
+    };
+
+    const w = window as unknown as {
+      __scrollTrace: { events: Recorded[]; mark(name: string, value: number | null): void };
+    };
+    w.__scrollTrace = {
+      events,
+      mark: (name, value) => push({ kind: "mark", t: at(), name, value }),
+    };
+
+    let attached: Element | null = null;
+    const attach = (el: HTMLElement): void => {
+      attached = el;
+      el.addEventListener(
+        "scroll",
+        () =>
+          push({
+            kind: "scroll",
+            t: at(),
+            scrollTop: Math.round(el.scrollTop),
+            maxScroll: Math.round(el.scrollHeight - el.clientHeight),
+          }),
+        { passive: true },
+      );
+
+      new MutationObserver(() =>
+        push({ kind: "follow", t: at(), follow: el.getAttribute("data-follow") }),
+      ).observe(el, { attributes: true, attributeFilter: ["data-follow"] });
+
+      // A rows recreation is the list DOM being rebuilt under the pane, not
+      // one row appended: only a change of the FIRST child's identity counts,
+      // or every arriving message would read as a recreation.
+      let firstRow = el.firstElementChild;
+      new MutationObserver(() => {
+        if (el.firstElementChild === firstRow) return;
+        firstRow = el.firstElementChild;
+        push({ kind: "rows", t: at() });
+      }).observe(el, { childList: true });
+    };
+
+    const find = (): void => {
+      const el = document.querySelector('[data-testid="scrollback"]');
+      if (el instanceof HTMLElement && el !== attached) attach(el);
+    };
+    new MutationObserver(find).observe(document, { childList: true, subtree: true });
+    find();
+  });
+}
+
+export async function markScrollTrace(
+  page: Page,
+  name: string,
+  value: number | null,
+): Promise<void> {
+  await page.evaluate(
+    ([n, v]) =>
+      (
+        window as unknown as { __scrollTrace: { mark(name: string, value: number | null): void } }
+      ).__scrollTrace.mark(n as string, v as number | null),
+    [name, value] as const,
+  );
+}
+
+export async function readScrollTrace(page: Page): Promise<TraceEvent[]> {
+  return (await page.evaluate(
+    () => (window as unknown as { __scrollTrace: { events: unknown[] } }).__scrollTrace.events,
+  )) as TraceEvent[];
 }

@@ -78,16 +78,21 @@
 // overflows the scrollback area; without overflow, "lands at bottom"
 // is vacuously true and "divider above the fold" is unmeasurable.
 
+import { writeFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
 import {
   composeSend,
+  installScrollTrace,
   loginAs,
+  markScrollTrace,
   pageScrollbackRest,
+  readScrollTrace,
   scrollbackLines,
   selectChannel,
   sidebarWindow,
 } from "../fixtures/cicchettoPage";
 import { fetchScrollbackPage, setReadCursorToId } from "../fixtures/grappaApi";
+import { assertTraceIsUsable, classifyPostSend } from "../fixtures/scrollTrace";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -400,6 +405,11 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
       { timeout: 20_000 },
     );
 
+    // #1336 (row #1079) — record the switch and the send, on the three
+    // channels the freeze can show up on. Before `loginAs`, because the
+    // recorder is an init script and has to be in place before the SPA boots.
+    await installScrollTrace(page);
+
     await loginAs(page, vjt);
 
     // FROM-window: the always-present $server window mounts ScrollbackPane
@@ -432,7 +442,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // a pane that has stopped. The distance test alone cannot do this: it is
     // satisfied by the reset too, which is the same pane 1071px from where
     // this test means it to be. Rejects by name if the pane never holds still.
-    await pageScrollbackRest(page, 10_000);
+    await markScrollTrace(page, "rest-exit", await pageScrollbackRest(page, 10_000));
 
     // Sanity: the pane overflows (else "not at the tail" is vacuous).
     const g = await scrollbackGeometry(page);
@@ -476,16 +486,45 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // the BOTTOM (#168 post-send authority preserved — the scope fix must
     // not re-break it). The sent line lands in the viewport, divider clears.
     const sent = `switch-then-send ${Date.now()}`;
+    await markScrollTrace(page, "send", null);
     await composeSend(page, sent);
 
     const sentLine = scrollbackLines(page).filter({ hasText: sent });
     await expect(sentLine).toHaveCount(1, { timeout: 10_000 });
-    await expect
-      .poll(async () => {
-        const cur = await scrollbackGeometry(page);
-        return cur.scrollHeight - cur.scrollTop - cur.clientHeight;
-      })
-      .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
+    // #1336 (row #1079) — the trace is saved on GREEN as well as on red: a
+    // near-miss on a passing run is the datum this row is short of. The
+    // classification runs afterwards either way, so a freeze is accused BY
+    // NAME instead of arriving as the anonymous `337` the issue reports.
+    let settleFailure: unknown = null;
+    try {
+      await expect
+        .poll(async () => {
+          const cur = await scrollbackGeometry(page);
+          return cur.scrollHeight - cur.scrollTop - cur.clientHeight;
+        })
+        .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
+    } catch (err) {
+      settleFailure = err;
+    }
+
+    const trace = await readScrollTrace(page);
+    const verdict = classifyPostSend(trace, { thresholdPx: SCROLL_BOTTOM_THRESHOLD_PX });
+    // Written to the output path rather than attached as a body: measured, an
+    // attachment on a PASSING run does not survive into the report, and a
+    // near-miss on a green run is exactly the datum this row is short of.
+    const tracePath = test.info().outputPath("scroll-trace.json");
+    writeFileSync(tracePath, JSON.stringify({ verdict, trace }, null, 2));
+    await test.info().attach("scroll-trace", { path: tracePath, contentType: "application/json" });
+    // The presence check first: an instrument that recorded nothing must not
+    // license a conclusion either way.
+    assertTraceIsUsable(trace);
+    if (verdict.kind === "FROZEN-AT-MARKER")
+      throw new Error(
+        `#1079: the pane froze ${verdict.distance}px from the bottom after the send, ` +
+          `attributed to ${verdict.attributedTo}`,
+      );
+    // Nothing was frozen, so whatever the poll said stands on its own.
+    if (settleFailure !== null) throw settleFailure;
     await expect(sentLine).toBeInViewport();
     await expect(marker).toHaveCount(0, { timeout: 5_000 });
   });
