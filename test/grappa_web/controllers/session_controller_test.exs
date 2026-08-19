@@ -37,16 +37,6 @@ defmodule GrappaWeb.SessionControllerTest do
     :ok
   end
 
-  # A port nothing listens on — the accretion allowlist-gate test rejects
-  # BEFORE any dial, so the disabled network's server endpoint is never
-  # contacted; the port just has to be a valid, unused number.
-  defp pick_unused_port do
-    {:ok, l} = :gen_tcp.listen(0, [])
-    {:ok, port} = :inet.port(l)
-    :gen_tcp.close(l)
-    port
-  end
-
   # A registered visitor = identified on some network. #211 phase 7 —
   # `commit_password/3` writes the per-network Cloak-encrypted secret on
   # the `(visitor, network)` credential; "registered/permanent" is DERIVED
@@ -117,7 +107,7 @@ defmodule GrappaWeb.SessionControllerTest do
       {visitor, _} = registered_visitor(port_a)
 
       # A network that is NOT visitor_enabled.
-      {_, _} = network_with_server(port: pick_unused_port(), slug: "locked", visitor_enabled: false)
+      {_, _} = network_with_server(port: IRCServer.pick_unused_port(), slug: "locked", visitor_enabled: false)
 
       session = visitor_session_fixture(visitor)
 
@@ -219,7 +209,7 @@ defmodule GrappaWeb.SessionControllerTest do
          %{conn: conn} do
       {_, session} = user_and_session()
       # A network the operator did NOT opt into the self-serve tier.
-      {_, _} = network_with_server(port: pick_unused_port(), slug: "locked", visitor_enabled: false)
+      {_, _} = network_with_server(port: IRCServer.pick_unused_port(), slug: "locked", visitor_enabled: false)
 
       conn
       |> put_bearer(session.id)
@@ -229,7 +219,7 @@ defmodule GrappaWeb.SessionControllerTest do
 
     test "user accreting a network they ALREADY hold → 409 already_attached", %{conn: conn} do
       {user, session} = user_and_session()
-      {network, _} = network_with_server(port: pick_unused_port(), slug: "held", visitor_enabled: true)
+      {network, _} = network_with_server(port: IRCServer.pick_unused_port(), slug: "held", visitor_enabled: true)
 
       {:ok, _} =
         Credentials.bind_credential(user, network, %{nick: "vjt", auth_method: :none, autojoin_channels: []})

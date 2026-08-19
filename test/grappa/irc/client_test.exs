@@ -50,16 +50,6 @@ defmodule Grappa.IRC.ClientTest do
     })
   end
 
-  # Bind ephemeral port, capture number, release immediately. The kernel
-  # may eventually reuse it; the C2 non-blocking-init test only needs the
-  # port to be unbound for the ~10ms it takes the connect to refuse.
-  defp pick_unused_port do
-    {:ok, l} = :gen_tcp.listen(0, [])
-    {:ok, port} = :inet.port(l)
-    :gen_tcp.close(l)
-    port
-  end
-
   defp start_client(port, overrides \\ %{}) do
     opts =
       Map.merge(
@@ -1926,7 +1916,7 @@ defmodule Grappa.IRC.ClientTest do
       # → start_link returns {:error, _}. Pinning the {:ok, pid} contract is
       # the load-bearing assertion: it can only hold once the connect moves
       # into handle_continue.
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       Process.flag(:trap_exit, true)
 
       assert {:ok, client} =
@@ -1956,7 +1946,7 @@ defmodule Grappa.IRC.ClientTest do
     # per child; the new pattern lets the exit signal terminate the
     # process immediately.
     test "mailbox responds during connect-fail throttle window (H1)" do
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       Process.flag(:trap_exit, true)
 
       assert {:ok, client} =

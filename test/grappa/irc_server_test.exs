@@ -126,5 +126,21 @@ defmodule Grappa.IRCServerTest do
       assert {:error, :econnrefused} =
                :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
     end
+
+    # The equivalence oracle for the consolidation: the helper must earn
+    # the same verdict the inline gesture above earns, put to it the same
+    # way. Not `assert helper() == inline()` — the two draw different
+    # ephemeral numbers by construction, so equal RESULTS would be a bug,
+    # not the property. What has to match is the port's OBSERVABLE
+    # behaviour, which is the only thing the seventeen call sites could
+    # ever have depended on.
+    test "IRCServer.pick_unused_port/0 earns the same verdict as the inline body" do
+      port = IRCServer.pick_unused_port()
+
+      assert is_integer(port) and port > 0
+
+      assert {:error, :econnrefused} =
+               :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
+    end
   end
 end

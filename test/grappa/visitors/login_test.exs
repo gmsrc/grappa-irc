@@ -38,13 +38,6 @@ defmodule Grappa.Visitors.LoginTest do
     :ok
   end
 
-  defp pick_unused_port do
-    {:ok, l} = :gen_tcp.listen(0, [])
-    {:ok, port} = :inet.port(l)
-    :gen_tcp.close(l)
-    port
-  end
-
   defp setup_visitor_network(port) do
     network_with_server(port: port, slug: "azzurra", visitor_enabled: true)
   end
@@ -204,7 +197,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "a refused connect still counts toward the circuit (#960 boundary)" do
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       {network, _} = setup_visitor_network(port)
 
       # The other side of the same boundary: an error that DOES describe the
@@ -299,7 +292,7 @@ defmodule Grappa.Visitors.LoginTest do
     end
 
     test "connect refused → {:error, :upstream_unreachable}, anon row purged" do
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       {network, _} = setup_visitor_network(port)
 
       assert {:error, :upstream_unreachable} = Login.login(login_input(), [])
@@ -322,7 +315,7 @@ defmodule Grappa.Visitors.LoginTest do
     # diagnosis survives the ordering — no elapsed time is measured, so
     # host load cannot flake it.
     test "connect refused → :upstream_unreachable even when the login budget expires first (#1130)" do
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       {network, _} = setup_visitor_network(port)
 
       assert {:error, :upstream_unreachable} =

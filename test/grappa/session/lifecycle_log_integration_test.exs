@@ -101,7 +101,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
   test "abnormal connect failure emits :disconnected clean=false with a reason" do
     # No server on this port → Client connect refuses → Session crashes →
     # terminate/2 abnormal clause fires the disconnect log.
-    port = unused_port()
+    port = IRCServer.pick_unused_port()
     {user, network} = setup_user_and_network(port)
 
     start_session_for(user, network)
@@ -139,7 +139,7 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
   test "backoff-delayed reconnect emits :backoff with delay_ms + attempt" do
     # No live server needed — :backoff fires in handle_continue BEFORE the
     # delayed connect attempt (which would then refuse against the dead port).
-    port = unused_port()
+    port = IRCServer.pick_unused_port()
     {user, network} = setup_user_and_network(port)
 
     # Seed a prior failure so the next spawn's handle_continue delays.
@@ -150,12 +150,5 @@ defmodule Grappa.Session.LifecycleLogIntegrationTest do
     assert_receive {:session_log, :backoff, md}, 1_500
     assert is_integer(md.delay_ms) and md.delay_ms > 0
     assert is_integer(md.attempt) and md.attempt >= 1
-  end
-
-  defp unused_port do
-    {:ok, l} = :gen_tcp.listen(0, [])
-    {:ok, port} = :inet.port(l)
-    :gen_tcp.close(l)
-    port
   end
 end

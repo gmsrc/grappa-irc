@@ -43,13 +43,6 @@ defmodule GrappaWeb.AuthControllerTest do
     :ok
   end
 
-  defp pick_unused_port do
-    {:ok, l} = :gen_tcp.listen(0, [])
-    {:ok, port} = :inet.port(l)
-    :gen_tcp.close(l)
-    port
-  end
-
   defp setup_visitor_network(port),
     do: network_with_server(port: port, slug: "azzurra", visitor_enabled: true)
 
@@ -814,7 +807,7 @@ defmodule GrappaWeb.AuthControllerTest do
 
       stub(Grappa.Admission.CaptchaMock, :wire_name, fn -> "disabled" end)
 
-      {_, _} = setup_visitor_network(pick_unused_port())
+      {_, _} = setup_visitor_network(IRCServer.pick_unused_port())
 
       conn = post(conn, "/auth/login", %{"identifier" => "fresh-anon"})
 
@@ -834,7 +827,7 @@ defmodule GrappaWeb.AuthControllerTest do
       # cap can't fire on a nil client, the rejection can only be the ip
       # cap — and it reuses the same too_many_sessions envelope (cic
       # unchanged, keys on the wire string not the atom).
-      {_, _} = setup_visitor_network(pick_unused_port())
+      {_, _} = setup_visitor_network(IRCServer.pick_unused_port())
 
       {:ok, net} = Grappa.Networks.find_or_create_network(%{slug: "azzurra"})
 
@@ -857,7 +850,7 @@ defmodule GrappaWeb.AuthControllerTest do
     end
 
     test "upstream unreachable → 502 upstream_unreachable", %{conn: conn} do
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       {network, _} = setup_visitor_network(port)
 
       conn = post(conn, "/auth/login", %{"identifier" => "vjt"})
@@ -1715,7 +1708,7 @@ defmodule GrappaWeb.AuthControllerTest do
     setup do
       :ets.delete_all_objects(FailureWindow.table_name())
 
-      {network, _} = setup_visitor_network(pick_unused_port())
+      {network, _} = setup_visitor_network(IRCServer.pick_unused_port())
       {:ok, visitor} = Visitors.find_or_provision_anon("vjt", "azzurra", "1.2.3.4")
       {:ok, _} = Visitors.commit_password(visitor.id, network.id, "s3cret")
 

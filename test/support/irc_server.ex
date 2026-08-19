@@ -218,6 +218,44 @@ defmodule Grappa.IRCServer do
     :ok
   end
 
+  @doc """
+  A TCP port with nothing listening on it — bind an ephemeral port, read
+  it back, release it, return the number.
+
+  The seventeen call sites this replaces (#1397) split in two, and the
+  split is why the name describes the MECHANISM rather than an intent:
+
+    * Ten dial it and want the connect REFUSED — "upstream unreachable",
+      "connect refused", "a refused connect still counts toward the
+      circuit", `Server.start_link/1` still answering `{:ok, pid}` when
+      nothing is up there. `irc_server_test.exs` asserts that refusal.
+
+    * Seven never dial at all. A captcha, an IP cap, a login throttle, a
+      deleted-row `:ignore` and three accretion gates all reject before
+      anything reaches the network, so the port is only ever a valid
+      number to put in a `%Network{}`. Naming this `refused_port` would
+      make those seven read as claims the tests do not make.
+
+  So the name stays, and not merely because `pick_unused_port` was the
+  dominant of the two spellings the six copies had drifted into
+  (five that way, one as `unused_port`).
+
+  Carries a TOCTOU window by construction: between the close and the
+  caller's connect, something else may bind the port. Consolidating the
+  six copies neither introduces nor fixes that — it is the property the
+  ten dialling call sites have always depended on, now named in one
+  place instead of being re-derived in six. The refusal being asserted
+  in one test means the day the window starts mattering, one test says
+  so rather than six unrelated suites going intermittent.
+  """
+  @spec pick_unused_port() :: :inet.port_number()
+  def pick_unused_port do
+    {:ok, l} = :gen_tcp.listen(0, [])
+    {:ok, port} = :inet.port(l)
+    :gen_tcp.close(l)
+    port
+  end
+
   ## GenServer
 
   @impl GenServer

@@ -74,16 +74,6 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
-  # See `Grappa.IRC.ClientTest` — same trick. Bind ephemeral, capture,
-  # release. The connect attempt that follows refuses fast on localhost
-  # because nothing took the port back over in the meantime.
-  defp pick_unused_port do
-    {:ok, l} = :gen_tcp.listen(0, [])
-    {:ok, port} = :inet.port(l)
-    :gen_tcp.close(l)
-    port
-  end
-
   defp setup_user_and_network(port, cred_attrs \\ %{}) do
     user = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
 
@@ -601,7 +591,7 @@ defmodule Grappa.Session.ServerTest do
       # crashing the supervisor and cascading through every other Session in
       # the test run. Linking to the test pid (via `start_link`) traps the
       # crash here so the supervisor is never involved.
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       {user, network, _} = setup_user_and_network(port)
       Process.flag(:trap_exit, true)
 
@@ -698,7 +688,7 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "refresh_plan returning {:error, :not_found} → :ignore (no spawn)" do
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       {user, network, _} = setup_user_and_network(port)
       Process.flag(:trap_exit, true)
 
@@ -8876,7 +8866,7 @@ defmodule Grappa.Session.ServerTest do
       # When the session fails to connect (ECONNREFUSED), it records a backoff
       # failure and the supervisor restarts it (or max_restarts exhausted).
       # The credential stays :connected throughout — no terminal failure.
-      port = pick_unused_port()
+      port = IRCServer.pick_unused_port()
       {user, network, _} = setup_user_and_network(port)
 
       reloaded =
