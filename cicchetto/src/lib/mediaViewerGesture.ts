@@ -20,7 +20,7 @@
 // transform of its own, because the modal and the backdrop move together and a
 // binder that knew about both would be a binder that knew about the viewer.
 import { isFastSwipe, type Point, swipeDirection } from "./swipe";
-import { verticalClaim } from "./touchGesture";
+import { soleTouch, verticalClaim } from "./touchGesture";
 
 // How far down (or up) the drag must reach to dismiss on distance alone,
 // as a fraction of the viewport height. A fraction rather than a pixel
@@ -58,15 +58,6 @@ export type DismissGestureParams = {
   // Claimed but not committed, or cancelled: put it back.
   onRelease: () => void;
 };
-
-// The ONE place "single finger only" is spelled: undefined for a pinch, which
-// is the image's gesture and not ours. Every arm reads it, so there is no
-// second copy of the predicate to drift — and mutating it is what a spec
-// asserting the pinch is ignored actually has to kill.
-function soleTouch(e: TouchEvent): Touch | undefined {
-  const list = e.touches.length > 0 ? e.touches : e.changedTouches;
-  return list.length === 1 ? list[0] : undefined;
-}
 
 export function bindDismissGesture(el: HTMLElement, params: DismissGestureParams): () => void {
   let start: Point | null = null; // non-null ⇒ armed

@@ -83,6 +83,18 @@ export const verticalClaim = (
   return ay >= ax * k;
 };
 
+// The ONE place "single finger only" is spelled, for the binders whose gesture
+// a second finger cancels rather than modifies: a pinch (#213) belongs to the
+// content, not to them. It lives here rather than in one binder because the
+// predicate is shared, and a second copy is what lets two gestures on one app
+// disagree about when a touch stops being theirs. `bindMessageGestures` keeps
+// its own `firstTouch` on purpose — that one is a different predicate (it
+// falls back to `changedTouches` and does its arity check separately).
+export function soleTouch(e: TouchEvent): Touch | undefined {
+  const list = e.touches.length > 0 ? e.touches : e.changedTouches;
+  return list.length === 1 ? list[0] : undefined;
+}
+
 // Parameters for the two edge → open-drawer gestures. `viewportWidth` is
 // injected (not read off the element) so the geometry is testable in jsdom,
 // which has no layout; the call site passes `() => window.innerWidth`.
