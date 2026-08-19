@@ -50990,3 +50990,149 @@ of registration, happens in both worlds, and does not presuppose the answer the
 way waiting on the nick would — the same bench reproduces 3/3.
 
 **A green that reports NON-reproduction deserves the same suspicion as a red.**
+<!-- entry #1155-inline-barrier -->
+
+---
+
+## 2026-08-19 — #1155: the last inline class-barrier drawer door, and what the probe that found it got wrong twice
+
+`7e988f2e` converted `closeMembersDrawer` from `.shell-members.open`
+count→0 to `not.toBeInViewport` and called it "the last drawer door on the
+class". That was true **among the fixtures** and false **among the specs**.
+This entry closes the one spec-side site that reproduced, and — more usefully
+— records the two ways the instrument that found it lied first.
+
+### The defect, restated
+
+A close barrier waited on the CLASS releases at the START of a 200ms
+`transform: translateX(100%)` slide-out. The panel keeps covering the point
+the next gesture aims at for the rest of that slide, so the next tap is
+received by the drawer and the failure surfaces somewhere else entirely.
+The class is the right subject for an ASSERTION and the wrong subject for a
+BARRIER.
+
+### The cure — one site
+
+`cicchetto/e2e/tests/ux-5-bm-mobile-hamburger.spec.ts:126-127`, inside
+`@webkit ux-5-bm mobile-channel …`, became one call to `closeSettings`
+(`fixtures/cicchettoPage.ts`), which already performs the same two gestures
+against the geometry rather than the class. Two differences were checked
+before declaring the substitution equivalent, and neither is a hazard:
+
+* The site used `.tap()`, the fixture uses `.click()`. `.click()` is the
+  DELIBERATE form on webkit — `closeMembersDrawer` documents why: `tap()`
+  relies on engine-side click synthesis that is timing-flaky there, while
+  `.click()` fires the synthetic click directly. Same end state.
+* The site anchored the button inside `.settings-drawer`; the fixture takes
+  it by global testid. Not ambiguous: `settings-drawer-close` is emitted at
+  exactly one place in the source (`SettingsDrawer.tsx`), and although
+  `Shell.tsx` mounts `<SettingsDrawer>` twice, the two mounts are the two
+  branches of `<Show when={isMobile()}>` — one renders. The same holds for
+  the fixture's `getByRole("dialog", {name: /settings/i})`: of the twenty
+  `role="dialog"` elements in cic, only `SettingsDrawer` carries a name
+  matching `/settings/i`. Playwright strict mode makes every green run of
+  this spec a live re-witness of both facts.
+
+### Measured — the arm under test
+
+In-page probe (a rAF sampler armed BEFORE the closing tap; the driver only
+contributes a stamp), webkit-iphone-15, 3 repeats. Settings drawer, next
+point = the topic-bar hamburger:
+
+* margin from the CLASS barrier to the tap point: **−148 / −148 / −160 ms**;
+* margin from the CLASS barrier to the box clearing the edge: −221 / −198 / −212 ms;
+* margin from `not.toBeInViewport` to the tap point: **+279 / +282 / +258 ms**.
+
+The point (355, 31) was DERIVED from the live hamburger box, not copied from
+the issue — and it landed on the coordinates #1155 cites. At the moment the
+class barrier returned, the element stack over that point was, 3/3:
+`button.settings-drawer-close` / `header.settings-drawer-header` /
+`aside.settings-drawer` / `div.settings-drawer-backdrop` /
+`button.topic-bar-hamburger` — the intended target four layers down.
+
+Geometry that makes it inevitable (`default.css` on 71e7840a): the root font
+size is `var(--font-size)` = **14px**, not 16, so `.settings-drawer`'s
+`width: 22rem` is 308px and covers x ∈ [85, 393] of a 393px viewport. The
+BACKDROP is not the hazard — its `pointer-events` switches with the class,
+instantaneously. The DRAWER is, because its transform is animated.
+
+### 🥇 The instrument was exposed to the defect it was measuring
+
+Neither of the probe's two defects would have been visible without the
+POSITIVE CONTROL run (the members drawer, whose band was already published
+by `92df169a`). Both are worth more than the number they corrupted.
+
+* **Coverage tested by class SUBSTRING over the top 3 of the stack.** On the
+  members arm the top three were `li.member-op` / `ul` / `div.members-pane` —
+  all DESCENDANTS of the aside, none of them spelling `shell-members`. The
+  probe reported **+82 ms**: the WRONG SIGN. Cure: test coverage by ANCESTRY
+  (`drawer.contains(top)`), computed in-page.
+* **The probe armed before the drawer had come to rest.** `left_min` came
+  back 285 / 257 — the panel was still ENTERING, so a PARTIAL run was being
+  timed, which is why the control kept landing mid-module. Cure: a settle
+  barrier `toBeInViewport({ratio: 1})` before arming — the idiom
+  `openMembersDrawer` already uses.
+
+The second one is **#1155 itself, inside the tool built to measure #1155**:
+`toBeVisible` on a class is not a barrier on geometry. "Your instrument is
+exposed to the defect you measure" was meant literally.
+
+Related: the probe is IN-PAGE and not driver-side for the same
+order-of-magnitude reason the defect exists at all — a driver round trip is
+~196 ms against a 200 ms window, so sampling from there would have produced a
+FALSE GREEN.
+
+### Two open readings, deliberately not resolved
+
+The positive control reproduced the members arm at −147 / −141 / −139 ms to
+the point (−220 / −226 / −227 ms to the edge), against `92df169a`'s published
+band of **−207…−193 ms**. Both are comfortably negative — the direction the
+cure depends on — but they differ by ~15-25 ms, and two readings survive:
+
+1. the published band is STALE (the page has changed since `92df169a`);
+2. the new figure carries a sampling bias — the decimated 3-repeat run and
+   the in-page clock are not the 10-repeat driver-clocked method that
+   produced the band.
+
+Neither is settled here. The number does not gate the cure (the sign does),
+so a further measurement round was declined rather than guessed.
+
+### Declared and NOT cured
+
+* **`push.ts:664` is a MEASURED negative, not an oversight.** It is the only
+  other site of #1155's exact shape, and it cannot reach the hazard: all NINE
+  callers of `enablePushFromSettings` run chromium-only, and the single
+  `@webkit` token in `push-964-device-row` is inside a COMMENT ("no @webkit
+  twin"). A corollary proves the helper is DESKTOP-shaped rather than merely
+  unexercised: on mobile its gesture does not even close the drawer — the
+  backdrop is `inset: 0`, so the `force: true` click starts from the centre
+  (196, 329), which on 393px falls INSIDE the drawer box, and `force` skips
+  the hit-target check. 3/3 failed on `.settings-drawer.open` count 0,
+  "Received: 1". **The condition that reopens this: any caller of
+  `enablePushFromSettings` acquiring a `@webkit` twin.**
+* **Five sites are protected INCIDENTALLY, by accident and not by design.**
+  On 71e7840a: `issue299-footer-admin-reachable.spec.ts:120`,
+  `issue299-theme-cards.spec.ts:49`, `issue358-daynight-theme.spec.ts:36`,
+  `issue75-theme-editor.spec.ts:65`, `issue75-themes-gallery.spec.ts:37`.
+  Each is a `.shell-members.open` count→0 barrier whose next interaction is
+  `getByTestId("themes-settings-entry").tap()` (immediately in four; after
+  two pure assertions in `issue299-footer-admin-reachable`). The target lives
+  INSIDE the settings drawer that is ENTERING, and the two drawers are a
+  mutex, so they move together: Playwright's own "stable" actionability wait
+  on the entering target happens to outlast the other drawer's exit. Lower
+  risk, for a reason no one chose, that a future IA reshuffle can withdraw
+  without touching these lines.
+
+### Census method, and its declared limit
+
+A WIDE anchor on `shell-members|settings-drawer|shell-drawer` across
+`cicchetto/e2e`, in four spellings — `toHaveCount(0)`, `toBeHidden`,
+`not.toBeVisible`, `not.toHaveClass` — returned 25 hits: 2 of #1155's exact
+shape (the site cured here and `push.ts:664`), 5 incidentally protected, and
+the rest ASSERTIONS rather than barriers, with no interaction within the
+window. On the class those are entirely correct — there the class IS the
+subject. Among them `ux-5-bv-mobile-keyboard-react:236` uses the fourth
+spelling (`toBeHidden` against a locator carrying the class, which passes
+because the locator stops matching) but is the test's last line, followed by
+`finally`. **The window is 12 lines after each site: an interaction further
+away than that escapes this census.** Not exhaustive, and not claimed to be.
