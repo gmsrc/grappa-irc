@@ -92,52 +92,22 @@ defmodule Grappa.SpawnOrchestratorTest do
     end
   end
 
-  defp clear_registry_for(network_id) when is_integer(network_id) do
-    pids =
-      Registry.select(Grappa.SessionRegistry, [
-        {{{:session, :_, network_id}, :"$1", :_}, [], [:"$1"]}
-      ])
-
-    Enum.each(pids, fn pid ->
-      ref = Process.monitor(pid)
-      _ = DynamicSupervisor.terminate_child(Grappa.SessionSupervisor, pid)
-
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _} -> :ok
-      after
-        500 -> Process.demonitor(ref, [:flush])
-      end
-    end)
-
-    # PHASE-1 (post-cr-review cluster, CI flake on
-    # spawn_orchestrator_test:179 "network_cap_exceeded"): poll until
-    # the Registry observes count == 0 for THIS network_id. Mirrors
-    # bootstrap_test.exs's `wait_until_registry_clear/2` helper added
-    # in T31 cleanup. Without this wait, an earlier test's session
-    # whose `on_exit` cleanup had its 500ms `:DOWN` receive expire can
-    # leave a zombie registered against a network.id that sqlite
-    # rowid-recycles into a fresh test's `network.id` — admission's
-    # `count_live_sessions/1` then reads "1 already" against cap=1
-    # and the FIRST `SpawnOrchestrator.spawn/4` returns
-    # `:network_cap_exceeded` instead of `:spawned`.
-    wait_until_registry_clear(network_id, 100)
-  end
-
-  defp wait_until_registry_clear(_, 0), do: :ok
-
-  defp wait_until_registry_clear(network_id, attempts) do
-    count =
-      Registry.count_select(Grappa.SessionRegistry, [
-        {{{:session, :_, network_id}, :_, :_}, [], [true]}
-      ])
-
-    if count == 0 do
-      :ok
-    else
-      Process.sleep(5)
-      wait_until_registry_clear(network_id, attempts - 1)
-    end
-  end
+  # PHASE-1 (post-cr-review cluster, CI flake on
+  # spawn_orchestrator_test:179 "network_cap_exceeded"): the registry
+  # must read count == 0 for THIS network_id before the cap assertion.
+  # An earlier test's session whose `on_exit` cleanup had its `:DOWN`
+  # receive expire can leave a zombie registered against a network.id
+  # that sqlite rowid-recycles into a fresh test's `network.id` —
+  # admission's `count_live_sessions/1` then reads "1 already" against
+  # cap=1 and the FIRST `SpawnOrchestrator.spawn/4` returns
+  # `:network_cap_exceeded` instead of `:spawned`.
+  #
+  # This used to be a private copy of bootstrap_test.exs's helper, and
+  # both copies FAILED OPEN — 500ms then `:ok` with the zombie still
+  # there, which is the very outcome this comment was written to
+  # prevent. `AdmissionStateHelpers.clear_registry_for!/2` raises
+  # instead, on the module's own 15s drain budget.
+  @clear_registry_ms 15_000
 
   defp capacity_input(network_id, flow) do
     %{network_id: network_id, source_ip: nil, flow: flow, requesting_subject: nil}
@@ -176,7 +146,7 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "happy-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
       on_exit(fn -> stop_session({:user, vjt.id}, network.id) end)
 
       subject = {:user, vjt.id}
@@ -201,7 +171,7 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "idempot-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
       on_exit(fn -> stop_session({:user, vjt.id}, network.id) end)
 
       subject = {:user, vjt.id}
@@ -221,7 +191,7 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "ignored-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
 
       subject = {:user, vjt.id}
 
@@ -261,8 +231,8 @@ defmodule Grappa.SpawnOrchestratorTest do
 
       {:ok, plan_b} = SessionPlan.resolve(cred_b)
 
-      :ok = clear_registry_for(network.id)
-      on_exit(fn -> clear_registry_for(network.id) end)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
+      on_exit(fn -> AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms) end)
 
       cap_in = capacity_input(network.id, :bootstrap_user)
 
@@ -289,8 +259,8 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "idemcap-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port, %{max_concurrent_user_sessions: 1})
-      :ok = clear_registry_for(network.id)
-      on_exit(fn -> clear_registry_for(network.id) end)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
+      on_exit(fn -> AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms) end)
 
       subject = {:user, vjt.id}
       cap_in = capacity_input(network.id, :bootstrap_user)
@@ -326,8 +296,8 @@ defmodule Grappa.SpawnOrchestratorTest do
 
       {:ok, plan_b} = SessionPlan.resolve(cred_b)
 
-      :ok = clear_registry_for(network.id)
-      on_exit(fn -> clear_registry_for(network.id) end)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
+      on_exit(fn -> AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms) end)
 
       network_id = network.id
       cap_in = capacity_input(network_id, :bootstrap_user)
@@ -357,7 +327,7 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "bo-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
       on_exit(fn -> stop_session({:user, vjt.id}, network.id) end)
 
       subject = {:user, vjt.id}
@@ -401,8 +371,8 @@ defmodule Grappa.SpawnOrchestratorTest do
 
       {:ok, plan_b} = SessionPlan.resolve(cred_b)
 
-      :ok = clear_registry_for(network.id)
-      on_exit(fn -> clear_registry_for(network.id) end)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
+      on_exit(fn -> AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms) end)
 
       subject_b = {:user, vjt_b.id}
       cap_in = capacity_input(network.id, :bootstrap_user)
@@ -437,7 +407,7 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "bounce-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
       on_exit(fn -> stop_session({:user, vjt.id}, network.id) end)
 
       subject = {:user, vjt.id}
@@ -467,7 +437,7 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "recon-nolive-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
       on_exit(fn -> stop_session({:user, vjt.id}, network.id) end)
 
       subject = {:user, vjt.id}
@@ -505,8 +475,8 @@ defmodule Grappa.SpawnOrchestratorTest do
 
       {:ok, plan_b} = SessionPlan.resolve(cred_b)
 
-      :ok = clear_registry_for(network.id)
-      on_exit(fn -> clear_registry_for(network.id) end)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
+      on_exit(fn -> AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms) end)
 
       cap_in = capacity_input(network.id, :bootstrap_user)
 
@@ -527,7 +497,7 @@ defmodule Grappa.SpawnOrchestratorTest do
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       slug = "recon-bo-#{System.unique_integer([:positive])}"
       {network, plan} = setup_credential(vjt, slug, port)
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
       on_exit(fn -> stop_session({:user, vjt.id}, network.id) end)
 
       subject = {:user, vjt.id}

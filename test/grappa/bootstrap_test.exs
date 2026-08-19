@@ -74,57 +74,17 @@ defmodule Grappa.BootstrapTest do
     end
   end
 
-  # Terminates every Session.Server in `Grappa.SessionRegistry` whose key
-  # points at `network_id`, then waits until `Registry.count_select/2`
-  # observes the cleanup. Used by the cap test to neutralize zombie
-  # sessions that other tests' DB-sandbox rollbacks make possible:
-  # sqlite reuses rowids after rollback, so a `network.id` minted by the
-  # cap test can collide with a stale Session.Server registered under
-  # the same integer by an earlier test that started a session and
-  # didn't (or couldn't synchronously) reach Registry-cleanup before
-  # bootstrap_test ran. The Session.Server processes outlive the DB
-  # rollback because Registry + SessionSupervisor are application-wide
-  # singletons; the test contract here is "Bootstrap counts live
-  # sessions against the per-network cap" so we MUST start from a
-  # registry that's clean for THIS network.id, not the one inherited
-  # from whichever ID-recycled session wandered in.
-  @clear_registry_attempts 100
-  @clear_registry_poll_ms 5
-  defp clear_registry_for(network_id) when is_integer(network_id) do
-    pids =
-      Registry.select(Grappa.SessionRegistry, [
-        {{{:session, :_, network_id}, :"$1", :_}, [], [:"$1"]}
-      ])
-
-    Enum.each(pids, fn pid ->
-      ref = Process.monitor(pid)
-      _ = DynamicSupervisor.terminate_child(Grappa.SessionSupervisor, pid)
-
-      receive do
-        {:DOWN, ^ref, :process, ^pid, _} -> :ok
-      after
-        500 -> Process.demonitor(ref, [:flush])
-      end
-    end)
-
-    wait_until_registry_clear(network_id, @clear_registry_attempts)
-  end
-
-  defp wait_until_registry_clear(_, 0), do: :ok
-
-  defp wait_until_registry_clear(network_id, attempts) do
-    count =
-      Registry.count_select(Grappa.SessionRegistry, [
-        {{{:session, :_, network_id}, :_, :_}, [], [true]}
-      ])
-
-    if count == 0 do
-      :ok
-    else
-      Process.sleep(@clear_registry_poll_ms)
-      wait_until_registry_clear(network_id, attempts - 1)
-    end
-  end
+  # The cap tests must start from a registry that is clean for THIS
+  # `network.id`: sqlite recycles rowids after a sandbox rollback, so an
+  # earlier test's Session.Server can still be registered under the same
+  # integer and be counted against the per-network cap this file is
+  # asserting. `AdmissionStateHelpers.clear_registry_for!/2` is the
+  # shared purge; the budget it takes is caller-supplied and this file's
+  # own 500ms predecessor was measured insufficient under CI load (that
+  # is the whole reason the shared one raises instead of giving up), so
+  # it matches the module's 15s registry-drain budget rather than
+  # reinstating the number that failed open.
+  @clear_registry_ms 15_000
 
   describe "run/0 with bound credentials" do
     test "spawns one session per Credential row" do
@@ -642,14 +602,14 @@ defmodule Grappa.BootstrapTest do
       on_exit(fn -> Logger.delete_module_level(Grappa.Bootstrap) end)
 
       # Neutralize zombies inherited via sqlite rowid reuse — see
-      # `clear_registry_for/1` doc above. Must run AFTER the network
+      # `@clear_registry_ms` above. Must run AFTER the network
       # row exists (so we know its id) and BEFORE `Bootstrap.run/0`
       # (so the cap calculation starts from `live = 0` for this id).
-      :ok = clear_registry_for(network.id)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
 
       log = capture_log(fn -> assert {:ok, %Result{}} = Bootstrap.run() end)
 
-      on_exit(fn -> clear_registry_for(network.id) end)
+      on_exit(fn -> AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms) end)
 
       started_rows =
         Registry.select(Grappa.SessionRegistry, [
@@ -694,8 +654,8 @@ defmodule Grappa.BootstrapTest do
       Logger.put_module_level(Grappa.Bootstrap, :info)
       on_exit(fn -> Logger.delete_module_level(Grappa.Bootstrap) end)
 
-      :ok = clear_registry_for(network.id)
-      on_exit(fn -> clear_registry_for(network.id) end)
+      :ok = AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms)
+      on_exit(fn -> AdmissionStateHelpers.clear_registry_for!(network.id, @clear_registry_ms) end)
 
       assert {:ok,
               %Result{
