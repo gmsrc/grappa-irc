@@ -49957,3 +49957,49 @@ Not claimed: that no OTHER spec depends on those fields. Seventeen tests over
 eight files were run, not the suite. Seventeen more files outside this slice
 still seed the dropped fields — a separate axis, deliberately not folded in
 here.
+<!-- entry #1397-e2e-visitorseed -->
+
+---
+
+## 2026-08-19 — #1397 (e2e): the eleven that were left, and the count that was wrong twice
+
+The `bootVisitor` collapse took the eight copies that shared a NAME.
+Eleven more specs hand-built the same visitor subject without ever
+looking like a copy — no helper, just an inline literal plus an
+`addInitScript` — and every one of them still seeded `nick` and/or
+`network_slug`, the fields the server stopped emitting at #211 phase
+6/7. They are now routed through the same two verbs. Nothing was
+invented for them: the verb already existed, which is the only reason
+this was a slice and not a design.
+
+**The census was wrong twice, in the same direction, for the same
+reason.** The briefed figure was 17 files; my own first pass said 12
+after the collapse. Both were counted per FILE — "contains a
+`kind: "visitor"` literal" AND "contains a `nick:` line" — which
+silently admits a file whose two facts live in different literals.
+`issue282` is exactly that: its subject is already `{kind, id}`, and
+the `nick:` the grep found belongs to a stubbed vhost view. Counted
+per LITERAL (the window from `kind: "visitor"` to the closing brace)
+the real numbers are **29 fields across 15 files on origin/main, 21/11
+after the collapse, 0/0 now**. The lesson is not "the number was off":
+it is that a file-level conjunction is not evidence about a literal,
+and the anchor that produced it reads as authoritative in both
+directions — it would equally have hidden a second literal inside a
+file already counted once.
+
+**Two shapes, and the 20% that did not fit.** Nine specs made a bare
+`browser.newContext()` and take `bootVisitorContext`. Two do not:
+`issue375` and `issue557` attach a `page.on("websocket")` recorder
+BEFORE the boot navigates, and a verb that creates its own context
+would swallow the frames they exist to record. They keep their page
+and take `bootVisitor(page, seed)` — the same verb, one layer down.
+That split is why the fixture exposes both arities rather than one
+"do everything" entry point.
+
+**Tradeoff taken, not hidden:** because `bootVisitorContext` creates
+the context, the boot now sits just OUTSIDE each caller's `try`, so a
+throw during `goto` no longer reaps the minted visitor inline; the row
+waits for `Grappa.Visitors.Reaper`. This matches the shape the #477
+helper already shipped, and the leak is bounded and self-healing —
+but it IS a behaviour change, and a spec that ever needs the inline
+reap must build its own context and call the page-level verb.
