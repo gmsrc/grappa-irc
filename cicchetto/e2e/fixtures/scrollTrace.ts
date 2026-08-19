@@ -59,6 +59,21 @@ export type ClassifyOptions = {
   // The same threshold the spec asserts on, passed in rather than mirrored so
   // the classifier cannot drift away from the assertion it explains.
   readonly thresholdPx: number;
+  // The terminal distance, read LIVE off the DOM at classification time — the
+  // same synchronous read the spec's poll makes, not a trace derivation.
+  //
+  // MEASURED 2026-08-19, full suite run 1: derived from the last recorded
+  // position, this accused a pane that was already at the tail. The poll had
+  // PASSED and the screenshot showed the sent line at the bottom; the trace
+  // simply had no post-send geometry, because the `scroll` event had not been
+  // delivered yet when the trace was read. Run 2 was green and its trace
+  // differs by exactly one record — a post-send scroll arriving 11 ms after
+  // the last rows recreation.
+  //
+  // So the rule this encodes: a passive listener's SILENCE is not evidence of
+  // stillness, and only a live read can say where the pane ended. The trace
+  // keeps the job it is good at, which is naming the arm.
+  readonly finalDistancePx: number;
 };
 
 const isScroll = (e: TraceEvent): e is Extract<TraceEvent, { kind: "scroll" }> =>
@@ -66,17 +81,6 @@ const isScroll = (e: TraceEvent): e is Extract<TraceEvent, { kind: "scroll" }> =
 
 const markIndex = (events: readonly TraceEvent[], name: string): number =>
   events.findIndex((e) => e.kind === "mark" && e.name === name);
-
-// The position the pane ENDED on, which is not the position the rest barrier
-// reported: the send is supposed to move it, and the whole question is whether
-// it did. Falls back to nothing when no geometry was recorded at all — a trace
-// in that state is what `assertTraceIsUsable` refuses, and callers run it
-// first.
-function lastGeometry(
-  events: readonly TraceEvent[],
-): Extract<TraceEvent, { kind: "scroll" }> | undefined {
-  return [...events].reverse().find(isScroll);
-}
 
 // The follow state the trace ENDS on. A reverse scan rather than `findLast`,
 // which the e2e tsconfig's lib target does not carry.
@@ -94,11 +98,13 @@ export function classifyPostSend(
 ): TraceVerdict {
   const sendAt = markIndex(events, "send");
   const after = sendAt < 0 ? [] : events.slice(sendAt + 1);
-  const last = lastGeometry(events);
-  const distance = last === undefined ? Number.NaN : last.maxScroll - last.scrollTop;
+  const distance = opts.finalDistancePx;
 
-  // The assertion the row is about would have passed: whatever the trace shows
-  // on the way, the pane is at the tail.
+  // The assertion the row is about DID pass: whatever the three channels show
+  // on the way — up to and including the strongest frozen signal there is —
+  // the pane ended at the tail, so there is nothing to accuse. This is the
+  // gate that makes the accusation downstream of the failure rather than
+  // parallel to it: below, the poll has necessarily already failed.
   if (distance <= opts.thresholdPx) return { kind: "OK", distance, attributedTo: null };
 
   // Follow OFF makes the position TERMINAL: `tailFollowWhenSettled` yields on

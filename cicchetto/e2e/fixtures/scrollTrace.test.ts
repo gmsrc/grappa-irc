@@ -54,17 +54,20 @@ const untilRest: readonly TraceEvent[] = [
   mark(80, "rest-exit", MARKER_TOP),
 ];
 
-const classify = (events: readonly TraceEvent[]): TraceVerdict =>
-  classifyPostSend(events, { thresholdPx: THRESHOLD });
+// The terminal distance is an INPUT, not something derived from the trace.
+// Measured 2026-08-19 on a full suite: derived from the last recorded
+// position, it accused a pane the live DOM said was at the tail. So every
+// case below has to state what the DOM said, separately from what the
+// recorder heard.
+const classify = (events: readonly TraceEvent[], finalDistancePx: number): TraceVerdict =>
+  classifyPostSend(events, { thresholdPx: THRESHOLD, finalDistancePx });
 
 describe("#1336/#1079 — classifyPostSend", () => {
   it("calls a pane that reached the bottom after the send OK", () => {
-    const verdict = classify([
-      ...untilRest,
-      mark(100, "send", null),
-      follow(101, "on"),
-      scroll(140, MAX_SCROLL),
-    ]);
+    const verdict = classify(
+      [...untilRest, mark(100, "send", null), follow(101, "on"), scroll(140, MAX_SCROLL)],
+      0,
+    );
 
     expect(verdict.kind).toBe("OK");
     expect(verdict.distance).toBe(0);
@@ -74,12 +77,10 @@ describe("#1336/#1079 — classifyPostSend", () => {
     // The candidate that explains the reported number: `scrollToActivation`'s
     // deferred `setFollowMode(near)` landing after the send's re-arm. Nothing
     // writes scrollTop afterwards — the pane simply never leaves the marker.
-    const verdict = classify([
-      ...untilRest,
-      mark(100, "send", null),
-      follow(101, "on"),
-      follow(160, "off"),
-    ]);
+    const verdict = classify(
+      [...untilRest, mark(100, "send", null), follow(101, "on"), follow(160, "off")],
+      MAX_SCROLL - MARKER_TOP,
+    );
 
     expect(verdict.kind).toBe("FROZEN-AT-MARKER");
     expect(verdict.distance).toBe(337);
@@ -87,14 +88,17 @@ describe("#1336/#1079 — classifyPostSend", () => {
   });
 
   it("attributes a disarm that FOLLOWS a scrollTop decrease to the scroll-up arm", () => {
-    const verdict = classify([
-      ...untilRest,
-      mark(100, "send", null),
-      follow(101, "on"),
-      scroll(150, MAX_SCROLL),
-      scroll(180, MARKER_TOP),
-      follow(181, "off"),
-    ]);
+    const verdict = classify(
+      [
+        ...untilRest,
+        mark(100, "send", null),
+        follow(101, "on"),
+        scroll(150, MAX_SCROLL),
+        scroll(180, MARKER_TOP),
+        follow(181, "off"),
+      ],
+      MAX_SCROLL - MARKER_TOP,
+    );
 
     expect(verdict.kind).toBe("FROZEN-AT-MARKER");
     expect(verdict.attributedTo).toBe("scroll-up");
@@ -104,7 +108,10 @@ describe("#1336/#1079 — classifyPostSend", () => {
     // `tailFollowWhenSettled` has a second silent exit: the list node it was
     // going to write is no longer connected. Follow stays armed and the pane
     // still never moves.
-    const verdict = classify([...untilRest, mark(100, "send", null), follow(101, "on"), rows(150)]);
+    const verdict = classify(
+      [...untilRest, mark(100, "send", null), follow(101, "on"), rows(150)],
+      MAX_SCROLL - MARKER_TOP,
+    );
 
     expect(verdict.kind).toBe("FROZEN-AT-MARKER");
     expect(verdict.attributedTo).toBe("rows-recreation");
@@ -118,15 +125,18 @@ describe("#1336/#1079 — classifyPostSend", () => {
   // A classifier that decides "still moving" from events ordered after the
   // disarm called this SLOW, and it is the frozen shape: 337px, terminal.
   it("calls the measured injected freeze FROZEN, though a scroll is recorded after the disarm", () => {
-    const verdict = classify([
-      ...untilRest,
-      mark(920, "send", null),
-      follow(940, "on"),
-      rows(966),
-      scroll(884, MAX_SCROLL),
-      follow(884, "off"),
-      scroll(884, MARKER_TOP),
-    ]);
+    const verdict = classify(
+      [
+        ...untilRest,
+        mark(920, "send", null),
+        follow(940, "on"),
+        rows(966),
+        scroll(884, MAX_SCROLL),
+        follow(884, "off"),
+        scroll(884, MARKER_TOP),
+      ],
+      MAX_SCROLL - MARKER_TOP,
+    );
 
     expect(verdict.kind).toBe("FROZEN-AT-MARKER");
     expect(verdict.distance).toBe(337);
@@ -139,29 +149,109 @@ describe("#1336/#1079 — classifyPostSend", () => {
     // Slowness is not the defect: Playwright's poll absorbs it under its 5s
     // default, and the value it eventually reports VARIES. Only a terminal
     // state repeats a number byte for byte, which is what #1079 reported.
-    const verdict = classify([
-      ...untilRest,
-      mark(100, "send", null),
-      follow(101, "on"),
-      scroll(150, 1200),
-      scroll(180, 1300),
-    ]);
+    const verdict = classify(
+      [
+        ...untilRest,
+        mark(100, "send", null),
+        follow(101, "on"),
+        scroll(150, 1200),
+        scroll(180, 1300),
+      ],
+      MAX_SCROLL - 1300,
+    );
 
     expect(verdict.kind).toBe("SLOW");
     expect(verdict.distance).toBe(115);
   });
 
-  it("measures the distance from the LAST position, not from the rest exit", () => {
-    const verdict = classify([
+  // REPLACES "measures the distance from the LAST position, not from the rest
+  // exit". That test passed, and the rule its name pinned was wrong: the last
+  // RECORDED position is not the terminal one. Deleted rather than kept
+  // alongside, because two rules for one number is how the next reader picks
+  // the wrong one.
+  it("takes the distance from the LIVE read, not from the last recorded position", () => {
+    const staleTrace = [
       ...untilRest,
       mark(100, "send", null),
-      scroll(150, 1400),
-      scroll(180, 1400),
-      follow(181, "off"),
-    ]);
+      follow(101, "on"),
+      rows(150),
+      rows(154),
+    ];
 
-    expect(verdict.distance).toBe(15);
+    // The recorder's last position is the marker — 337 away. The DOM says the
+    // pane is at the tail. The DOM wins, and nothing is accused.
+    expect(classify(staleTrace, 0).kind).toBe("OK");
+    expect(classify(staleTrace, 0).distance).toBe(0);
+  });
+
+  // The general rule, not the one incident: whatever the three channels show —
+  // here the STRONGEST frozen signal there is, a disarm after the send with no
+  // movement — a live read at the tail forbids an accusation. The instrument
+  // may only name the arm of a failure that actually happened.
+  it("never accuses when the live read says the pane is at the tail", () => {
+    const frozenShape = [
+      ...untilRest,
+      mark(100, "send", null),
+      follow(101, "on"),
+      follow(160, "off"),
+    ];
+
+    expect(classify(frozenShape, MAX_SCROLL - MARKER_TOP).kind).toBe("FROZEN-AT-MARKER");
+    expect(classify(frozenShape, THRESHOLD).kind).toBe("OK");
+    expect(classify(frozenShape, 0).attributedTo).toBeNull();
+  });
+});
+
+// The incident this fixture comes from, 2026-08-19, full suite run 1 of 2.
+// The classifier accused a pane that was NOT frozen: the poll asserting
+// `distance <= 50` had already PASSED (the test took 1.3s against a 5s expect
+// timeout) and the failure screenshot shows the sent line at the bottom of the
+// pane. Run 2, identical and cold, was green — 756/756 — and its trace differs
+// from this one by exactly ONE record: a post-send `scroll` to 1415/1415
+// arriving 11 ms after the last rows recreation. So the pane always moved;
+// what varied was whether the scroll event had been DELIVERED to the recorder
+// before the trace was read. A passive listener's silence is not evidence of
+// stillness, and this trace is the proof, kept rather than retold.
+const runOneFalseAccusation: readonly TraceEvent[] = [
+  rows(183),
+  { kind: "scroll", t: 197, scrollTop: 354, maxScroll: 361 },
+  rows(342),
+  follow(347, "off"),
+  { kind: "scroll", t: 347, scrollTop: 7, maxScroll: 369 },
+  rows(359),
+  { kind: "scroll", t: 364, scrollTop: 1055, maxScroll: 1417 },
+  { kind: "scroll", t: 380, scrollTop: 1078, maxScroll: 1417 },
+  mark(538, "rest-exit", 1078),
+  mark(557, "send", null),
+  follow(572, "on"),
+  rows(582),
+  rows(586),
+];
+
+describe("#1336/#1079 — the trace that produced a false accusation", () => {
+  it("is a usable trace: the presence check was never the defect", () => {
+    expect(() => assertTraceIsUsable(runOneFalseAccusation)).not.toThrow();
+  });
+
+  it("is called OK, because the live read said the pane was at the tail", () => {
+    // The exact live distance was not recorded — only that the poll accepted
+    // it, so it was <= 50. That omission is itself part of the cure: the
+    // verdict now carries the live number, so a future incident has it.
+    const verdict = classify(runOneFalseAccusation, 0);
+
     expect(verdict.kind).toBe("OK");
+    expect(verdict.attributedTo).toBeNull();
+  });
+
+  it("would still be accused if the live read agreed with the stale record", () => {
+    // The cure must not blunt the instrument: hand it the number the stale
+    // record implied — 1417 - 1078 — and the accusation stands, with the arm
+    // named. Only the DISTANCE moved to a live source; attribution did not.
+    const verdict = classify(runOneFalseAccusation, 1417 - 1078);
+
+    expect(verdict.kind).toBe("FROZEN-AT-MARKER");
+    expect(verdict.distance).toBe(339);
+    expect(verdict.attributedTo).toBe("rows-recreation");
   });
 });
 

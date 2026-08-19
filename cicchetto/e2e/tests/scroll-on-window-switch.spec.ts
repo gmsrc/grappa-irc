@@ -507,8 +507,18 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
       settleFailure = err;
     }
 
+    // The terminal distance comes from a LIVE read, taken before the trace so
+    // the trace covers every moment the number describes. Deriving it from the
+    // trace's last record accused a pane that was already at the tail
+    // (2026-08-19, full suite run 1): the recorder had simply not been handed
+    // the post-send `scroll` event yet.
+    const settled = await scrollbackGeometry(page);
+    const finalDistancePx = settled.scrollHeight - settled.scrollTop - settled.clientHeight;
     const trace = await readScrollTrace(page);
-    const verdict = classifyPostSend(trace, { thresholdPx: SCROLL_BOTTOM_THRESHOLD_PX });
+    const verdict = classifyPostSend(trace, {
+      thresholdPx: SCROLL_BOTTOM_THRESHOLD_PX,
+      finalDistancePx,
+    });
     // Written to the output path rather than attached as a body: measured, an
     // attachment on a PASSING run does not survive into the report, and a
     // near-miss on a green run is exactly the datum this row is short of.
