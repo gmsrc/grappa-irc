@@ -4,12 +4,24 @@ defmodule Grappa.AuthFixtures do
   that now traverse the `:authn` pipeline.
 
   The plain `user_fixture/1` bypasses `Grappa.Accounts.create_user/1`
-  and inserts a `%User{}` directly with a placeholder `password_hash`
-  — the ~100 ms Argon2 cost is the dominant sqlite-contention
+  and inserts a `%User{}` directly, carrying a real Argon2 hash of
+  `fixture_password/0` that was computed ONCE and is pinned as a
+  constant — the ~100 ms Argon2 cost is the dominant sqlite-contention
   contributor under the test suite (see `config/test.exs` busy_timeout
-  comment + `test/test_helper.exs` `max_cases: 2` cap). Tests that
-  exercise the real password-verification path call
-  `user_fixture_with_password/1` instead.
+  comment + `test/test_helper.exs` `max_cases: 2` cap), and nothing in
+  `config/` tunes Argon2 down for tests, so hashing per fixture would
+  pay production parameters every time.
+
+  The accepted cost of pinning it: every user this module hands out has
+  the SAME password. A test that needs a password of its own still calls
+  `user_fixture_with_password/1`, which hashes for real.
+
+  The constant is a claim, and `Grappa.AuthFixturesTest` is where it is
+  checked: it asserts `fixture_password/0` verifies against the stored
+  hash through `Accounts.get_user_by_credentials/2`. Without that
+  control a corrupted constant would make every fixture user
+  unverifiable — or, as the placeholder it replaces did, make the
+  production verify door RAISE — and no other test would notice.
 
   `session_fixture/1` mints a live `%Session{}` and returns it; the
   bearer token IS `session.id`. `put_bearer/2` is the conn helper that
@@ -35,10 +47,31 @@ defmodule Grappa.AuthFixtures do
   alias Grappa.Visitors.SessionPlan, as: VisitorSessionPlan
   alias Grappa.Visitors.Visitor
 
+  @fixture_password "correct-horse-battery-staple"
+
   @doc """
-  Inserts a `%User{}` directly with `password_hash: "x"` — does NOT
-  hash a real password. Use this when the test only needs a user row
-  to attach a session to.
+  The plaintext every `user_fixture/1` user is born holding.
+  """
+  @spec fixture_password() :: String.t()
+  def fixture_password, do: @fixture_password
+
+  # A REAL Argon2 hash of @fixture_password, computed once and pinned here
+  # rather than recomputed per fixture: hashing is the ~100 ms cost this
+  # module exists to keep out of the suite, and `config/` carries no Argon2
+  # tuning at all, so every fixture would pay the production parameters
+  # (m=65536, t=3, p=4) in full. Verifying it costs the same as verifying any
+  # other hash — but only the one test that checks it ever does.
+  @fixture_password_hash "$argon2id$v=19$m=65536,t=3,p=4$z5fqclwLZm0te+1PYDk9yw$d95TAIBwu3CkvogRwYkixjq9KuySBbO1DQ7KOH2XHLs"
+
+  @doc """
+  Inserts a `%User{}` directly, holding a real (precomputed) Argon2 hash
+  of `fixture_password/0`. Use this when the test only needs a user row
+  to attach a session to; the row is nonetheless a login-capable user,
+  so a test that wanders into the verification path gets an answer
+  instead of a crash.
+
+  Every user this returns shares ONE password. A test that needs its own
+  goes through `user_fixture_with_password/1`, which pays a real hash.
   """
   @spec user_fixture(keyword()) :: User.t()
   def user_fixture(attrs \\ []) do
@@ -48,7 +81,7 @@ defmodule Grappa.AuthFixtures do
     {:ok, user} =
       Repo.insert(%User{
         name: name,
-        password_hash: "x",
+        password_hash: @fixture_password_hash,
         is_admin: is_admin
       })
 
@@ -64,7 +97,7 @@ defmodule Grappa.AuthFixtures do
   @spec user_fixture_with_password(keyword()) :: {User.t(), String.t()}
   def user_fixture_with_password(attrs \\ []) do
     name = Keyword.get(attrs, :name, "vjt-#{System.unique_integer([:positive])}")
-    password = Keyword.get(attrs, :password, "correct-horse-battery-staple")
+    password = Keyword.get(attrs, :password, @fixture_password)
     {:ok, user} = Accounts.create_user(%{name: name, password: password})
     {user, password}
   end
