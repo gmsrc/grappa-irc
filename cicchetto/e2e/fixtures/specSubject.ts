@@ -153,7 +153,95 @@ export function specUser(): SeededUser {
   return requireCurrent("specUser()").user;
 }
 
-/** The per-test user's upstream IRC nick. */
+/**
+ * The per-test user's upstream IRC nick, as last RESOLVED — the requested
+ * one until something re-resolves it. Synchronous, so it cannot be
+ * always-correct: see the #1152 note below.
+ */
 export function specNick(): string {
   return requireCurrent("specNick()").nick;
+}
+
+// #1152 — the requested nick and the flown nick are two different things.
+//
+// `provisionSpecSubject` asks for `nick: name`, but on a 433
+// ERR_NICKNAMEINUSE during registration #676's fallback ladder
+// (`auth_fsm.ex`) re-registers as `<nick>_` and then as two random
+// suffixes, moving `state.nick` with it. Nothing raises; grappa even says
+// so in the scrollback ("nick sbff5a028 was taken — you are registered as
+// sbff5a028_"). Everything downstream that addressed the requested nick is
+// then addressing somebody else.
+//
+// There is no product bug here to fix. `GET /networks` already answers the
+// LIVE nick: `Networks.resolve_network_nick/2` asks the running
+// Session.Server and falls back to the credential's configured nick only
+// when no session is up, for exactly this reason — "a stale nick silently
+// drops all inbound DMs" (`networks_controller.ex`). cic resolves its own
+// nick from that row. This reads the same door instead of inventing a
+// third semantics.
+//
+// 🔴 The hard constraint behind the two-shaped cure: JS has no synchronous
+// fetch, so a synchronous accessor CANNOT be always-correct. It can only
+// be made NOISY. Hence `specLiveNick()` (async, correct) where the nick is
+// the stimulus, and the teardown guard in `fixtures/test.ts` (detection,
+// zero spec edits) everywhere else.
+
+// `connection` is the liveness discriminator, and it is the reason this
+// returns a reading instead of a string: it is `null` exactly when
+// `Session.connection_info/2` finds no live pid, which is exactly when
+// `nick` is the CONFIGURED fallback rather than the flown value. Comparing
+// a cached nick against a fallback would manufacture drift that isn't
+// there, so "no live session" is reported as an absence of measurement,
+// never as a nick.
+export type LiveNickReading =
+  | { kind: "live"; nick: string }
+  | { kind: "unobservable"; reason: string };
+
+type LiveNickRow = { slug: string; nick: string; connection: unknown };
+
+/**
+ * Read the subject's live upstream nick off `GET /networks`, or say why it
+ * could not be read. Never throws on a reachable server: a spec that
+ * revokes its own bearer (the logout journeys seed `specUser().token` into
+ * the page, so a UI logout kills this exact token) has not drifted, it has
+ * stopped being observable, and the two must not be confused.
+ */
+export async function readSpecLiveNick(): Promise<LiveNickReading> {
+  const subject = requireCurrent("readSpecLiveNick()");
+  const res = await fetch(`${GRAPPA_BASE_URL}/networks`, {
+    headers: { authorization: `Bearer ${subject.user.token}` },
+  });
+  if (!res.ok) {
+    return {
+      kind: "unobservable",
+      reason: res.status === 401 ? "bearer_revoked" : `${res.status}`,
+    };
+  }
+  const rows = (await res.json()) as LiveNickRow[];
+  const row = rows.find((r) => r.slug === NETWORK_SLUG);
+  if (!row) return { kind: "unobservable", reason: "no_row" };
+  if (row.connection === null) return { kind: "unobservable", reason: "no_live_session" };
+  return { kind: "live", nick: row.nick };
+}
+
+/**
+ * The nick the subject's session is actually flying, re-resolved now, and
+ * cached so the teardown guard compares against a value that was true.
+ *
+ * Use this wherever the nick is the STIMULUS — a DM addressed to it, a
+ * mention typed into a body — because there a stale nick does not fail the
+ * spec, it quietly tests nothing. Throws rather than guessing: addressing
+ * a nick nobody could confirm is the whole of #1152.
+ */
+export async function specLiveNick(): Promise<string> {
+  const subject = requireCurrent("specLiveNick()");
+  const reading = await readSpecLiveNick();
+  if (reading.kind === "unobservable") {
+    throw new Error(
+      `specLiveNick(): no live nick for ${subject.user.name} (${reading.reason}). ` +
+        `Last resolved: ${subject.nick}. Addressing that blind is #1152, so this throws.`,
+    );
+  }
+  subject.nick = reading.nick;
+  return reading.nick;
 }

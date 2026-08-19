@@ -1,5 +1,10 @@
 import { test as base, expect as baseExpect } from "@playwright/test";
-import { provisionSpecSubject, setCurrentSpecSubject, teardownSpecSubject } from "./specSubject";
+import {
+  provisionSpecSubject,
+  readSpecLiveNick,
+  setCurrentSpecSubject,
+  teardownSpecSubject,
+} from "./specSubject";
 
 // Wrapped Playwright `test` fixture. Specs that need a grappa user MUST
 // import `test` from THIS module instead of `@playwright/test`; the
@@ -81,6 +86,44 @@ export const test = base.extend<{
       setCurrentSpecSubject(subject);
       try {
         await use();
+        // #1152 — the nick guard. `specNick()` hands back the nick the
+        // provision REQUESTED; the session flies whatever survived
+        // registration, and #676's 433 fallback ladder can move it to
+        // `<nick>_` with nothing raised anywhere. 625 call sites in 290 of
+        // the 409 spec files read that accessor, so making it always-right
+        // means making it async — a rewrite that collides with every live
+        // branch, and JS offers no synchronous fetch to avoid it.
+        //
+        // So the window is closed by DETECTION rather than by prevention,
+        // which is the same shape #1336's own cure takes (a recorder that
+        // fails an empty read unless a positive control fired): one read of
+        // the live nick per test, and a drift is a loud red instead of a
+        // dead nick addressed in silence. Specs where the nick is the
+        // STIMULUS use `specLiveNick()` and are correct by construction;
+        // this catches everybody else.
+        //
+        // Runs after `use()` and NOT in the `finally`, mirroring the CSP
+        // guard below: a test that already failed should not collect a
+        // second, derivative failure on the way out.
+        //
+        // An unobservable reading is not a pass and is not a failure — it
+        // is an absence of measurement, and it says so on stderr rather
+        // than passing quietly (the #934 lesson: a path that can skip has
+        // to write a line, or its silence gets read as evidence later).
+        const reading = await readSpecLiveNick();
+        if (reading.kind === "live") {
+          baseExpect(
+            reading.nick,
+            `the subject's live upstream nick drifted away from the one the ` +
+              `spec has been addressing (#1152) — grappa re-registered after a ` +
+              `433, and every specNick() in this spec named somebody else. Use ` +
+              `specLiveNick() where the nick is the stimulus.`,
+          ).toBe(subject.nick);
+        } else {
+          process.stderr.write(
+            `__NICKGUARD__\tunobservable\t${reading.reason}\t${subject.user.name}\n`,
+          );
+        }
       } finally {
         // Clear the accessor BEFORE the network call: if the teardown
         // throws, the next test must fail on "no subject" rather than
@@ -165,4 +208,4 @@ export { expect } from "@playwright/test";
 // exactly the set of specs that import `test` from this module. Reaching
 // them through the same import that brings in `test` makes the coupling
 // impossible to get wrong.
-export { specNick, specUser } from "./specSubject";
+export { readSpecLiveNick, specLiveNick, specNick, specUser } from "./specSubject";
