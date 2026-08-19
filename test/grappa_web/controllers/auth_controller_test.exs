@@ -743,6 +743,11 @@ defmodule GrappaWeb.AuthControllerTest do
     # boundary contract: every shape rejected by validate_captcha_token MUST
     # 400 BEFORE any Login.login/2 work, regardless of which branch
     # IdentifierClassifier dispatches to (visitor included).
+    #
+    # Only the non-binary shape is pinned here. The oversize shape of the
+    # same contract is the M-web-3 test above — same describe, same
+    # `identifier: "vjt"`, so it already dispatches through this visitor
+    # branch. A second copy asserted nothing the first did not (#1397).
     test "visitor branch — non-binary captcha_token also 400 bad_request (W3)",
          %{conn: conn} do
       # `vjt` (no `@`) routes through IdentifierClassifier → :nick →
@@ -751,13 +756,6 @@ defmodule GrappaWeb.AuthControllerTest do
       # captcha_token is passed as an explicit param so the validated
       # value is the only source.
       conn = post(conn, "/auth/login", %{"identifier" => "vjt", "captcha_token" => [1, 2, 3]})
-      assert json_response(conn, 400)["error"] == "bad_request"
-    end
-
-    test "visitor branch — oversize captcha_token also 400 bad_request (W3)",
-         %{conn: conn} do
-      huge = String.duplicate("a", 4097)
-      conn = post(conn, "/auth/login", %{"identifier" => "vjt", "captcha_token" => huge})
       assert json_response(conn, 400)["error"] == "bad_request"
     end
 
