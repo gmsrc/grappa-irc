@@ -34,7 +34,13 @@
 // device. Kept @webkit-only since the bug is iOS-shaped.
 
 import type { Page } from "@playwright/test";
-import { composeSend, loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  composeSend,
+  loginAs,
+  scrollbackDistanceFromBottom,
+  scrollbackLines,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -42,14 +48,6 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 const EMPTY_QUERY_PEER = "no-dm-peer-btn";
-
-async function distFromBottom(page: Page): Promise<number | null> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) return null;
-    return Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
-  });
-}
 
 // Scroll to the top and fire a synthetic scroll so the Solid handler runs
 // loadMore. Returns once the event is dispatched.
@@ -87,7 +85,7 @@ test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands
     await expect(page.locator(".scrollback-empty")).toBeVisible({ timeout: 5_000 });
     await selectChannel(page, NETWORK_SLUG, CHANNEL);
     await expect
-      .poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 })
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // Exhaust loadMore: scroll to top until the row count stops growing —
@@ -121,7 +119,7 @@ test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands
 
     // Contract: #bofh lands at the bottom after the roundtrip — NOT blank.
     await expect
-      .poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 })
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
   });
 });

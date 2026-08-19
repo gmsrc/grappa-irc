@@ -54,6 +54,7 @@ import type { Locator, Page } from "@playwright/test";
 import {
   composeTextarea,
   loginAs,
+  scrollbackDistanceFromBottom,
   scrollbackLines,
   selectChannel,
   waitForScrollbackRefreshed,
@@ -70,14 +71,6 @@ const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 
 // REST default page size (Grappa.Web.MessagesController.@default_limit).
 const REST_PAGE_SIZE = 50;
-
-async function distanceToBottom(page: Page): Promise<number> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) throw new Error("scrollback container not found");
-    return el.scrollHeight - el.scrollTop - el.clientHeight;
-  });
-}
 
 // Test-only force endpoint (ReadCursor.force_set/4) — the production endpoint
 // is advance-only (#233), so a backward mid-page seed must go through force.
@@ -139,7 +132,7 @@ async function arriveParkedOnMarker(page: Page, channel: string): Promise<void> 
     .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
   await expect(page.locator('[data-testid="unread-marker"]')).toHaveCount(1);
   await expect
-    .poll(async () => await distanceToBottom(page))
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 0)
     .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 }
 
@@ -171,7 +164,7 @@ test.describe("issue #580 — own send snaps to the bottom independent of the PO
     // RED pre-fix: the snap sat after the throwing await, so the view stayed
     // parked on the marker and distance-to-tail stayed above threshold.
     await expect
-      .poll(async () => await distanceToBottom(page))
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999)
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
     await expect(sentLine).toBeInViewport();
   });
@@ -188,7 +181,7 @@ test.describe("issue #580 — own send snaps to the bottom independent of the PO
 
     // The pane has tail-followed the echo; the failure is still parked.
     await expect
-      .poll(async () => await distanceToBottom(page))
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999)
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
     await expect(sentLine).toBeInViewport();
 
@@ -206,7 +199,7 @@ test.describe("issue #580 — own send snaps to the bottom independent of the PO
     // re-pins a follower to the tail on any box change.
     await expect(sentLine).toBeInViewport();
     await expect
-      .poll(async () => await distanceToBottom(page))
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999)
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
   });
 });

@@ -742,6 +742,26 @@ export function scrollbackLine(page: Page, kind: string, bodyMatch: string | Reg
   });
 }
 
+// Distance in px from the scrollback's tail, or `null` when the pane is not
+// mounted. The sentinel for a missing pane belongs at the CALL SITE, because it
+// has to point the SAME WAY as the assertion that follows — `?? 999` ahead of a
+// `toBeLessThanOrEqual`, `?? 0` ahead of a `toBeGreaterThan` — so an unmounted
+// pane fails the poll instead of satisfying it. A sentinel folded into this
+// function cannot be aligned: it serves both directions at once.
+// Returning `null` rather than throwing is also what keeps the callers'
+// `expect.poll` retrying: `pollMatcher` awaits the generator OUTSIDE the try
+// that retries (playwright 1.59.1, lib/matchers/expect.js:275), so a throw here
+// would abort the poll on the first sample instead of waiting for the mount.
+// The value is a raw float on purpose — every caller compares it against a
+// threshold, and rounding here would decide the sub-pixel band for all of them.
+export async function scrollbackDistanceFromBottom(page: Page): Promise<number | null> {
+  return await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
+    if (!el) return null;
+    return el.scrollHeight - el.scrollTop - el.clientHeight;
+  });
+}
+
 // #237 — the on-JOIN inline topic line. NOT a `scrollback-line` (it is a
 // presentational, non-message row derived from the topic store — no server
 // message id, so it never enters the unread/cursor math). Its own testid

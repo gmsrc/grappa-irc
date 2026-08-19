@@ -46,7 +46,12 @@
 // assertion is the authoritative mechanism proof on both.
 
 import type { Page } from "@playwright/test";
-import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  scrollbackDistanceFromBottom,
+  scrollbackLines,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import {
   fetchScrollbackPage,
   getReadCursor,
@@ -64,14 +69,6 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 // REST default page size (Grappa.Web.MessagesController.@default_limit).
 const REST_PAGE_SIZE = 50;
-
-async function distFromBottom(page: Page): Promise<number> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) return 999;
-    return Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
-  });
-}
 
 // Shared body: focus an unread #bofh, tap the floating button, assert the cursor
 // persists to the tail AND a subsequent peer line does not snap the view back.
@@ -101,7 +98,7 @@ async function tapButtonPersistsCursorAndHolds(page: Page, peerNick: string): Pr
   // Divider present, activation parked above the fold, floating button visible.
   await expect(page.locator('[data-testid="unread-marker"]')).toHaveCount(1);
   await expect
-    .poll(async () => await distFromBottom(page), { timeout: 5_000 })
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 0, { timeout: 5_000 })
     .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
   const btn = page.locator('[data-testid="scroll-to-bottom"]');
   await expect(btn).toBeVisible({ timeout: 5_000 });
@@ -124,7 +121,7 @@ async function tapButtonPersistsCursorAndHolds(page: Page, peerNick: string): Pr
 
   // View is at the bottom; the floating button hides.
   await expect
-    .poll(async () => await distFromBottom(page), { timeout: 5_000 })
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
     .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
   await expect(btn).toBeHidden({ timeout: 5_000 });
 
@@ -142,7 +139,7 @@ async function tapButtonPersistsCursorAndHolds(page: Page, peerNick: string): Pr
     await expect(page.getByText(marker)).toBeVisible({ timeout: 15_000 });
     await page.waitForTimeout(700); // past the 500ms settle + any re-assert window
     await expect
-      .poll(async () => await distFromBottom(page), { timeout: 5_000 })
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
   } finally {
     await peer.disconnect("#310 done");

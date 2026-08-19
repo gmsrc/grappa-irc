@@ -24,21 +24,18 @@
 // which assert scroll geometry only.
 
 import type { Page } from "@playwright/test";
-import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  scrollbackDistanceFromBottom,
+  scrollbackLines,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
-
-async function distFromBottom(page: Page): Promise<number | null> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) return null;
-    return Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
-  });
-}
 
 // Scroll to the top and fire a synthetic scroll so the Solid handler runs
 // loadMore (pulls older history, leaving the pane parked near the top).
@@ -65,7 +62,7 @@ async function scrollUpThenRetapLandsAtBottom(page: Page): Promise<void> {
     .toBeGreaterThanOrEqual(50);
   // Starts at the bottom (fresh focus of a fully-read channel).
   await expect
-    .poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 })
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
     .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 
   // Scroll up, loading history, until the row count stops growing.
@@ -82,7 +79,7 @@ async function scrollUpThenRetapLandsAtBottom(page: Page): Promise<void> {
   // Precondition: we are genuinely scrolled UP (not at bottom), and the
   // floating "scroll to bottom" affordance is showing.
   await expect
-    .poll(async () => (await distFromBottom(page)) ?? 0, { timeout: 5_000 })
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 0, { timeout: 5_000 })
     .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
   await expect(page.locator('[data-testid="scroll-to-bottom"]')).toBeVisible({ timeout: 5_000 });
 
@@ -93,7 +90,7 @@ async function scrollUpThenRetapLandsAtBottom(page: Page): Promise<void> {
 
   // Contract: the re-tap jumped the scrollback to the newest message.
   await expect
-    .poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 })
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
     .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
   // The floating button hides once atBottom is re-asserted.
   await expect(page.locator('[data-testid="scroll-to-bottom"]')).toBeHidden({ timeout: 5_000 });

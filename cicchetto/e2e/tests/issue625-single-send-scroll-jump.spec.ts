@@ -33,6 +33,7 @@ import type { Page } from "@playwright/test";
 import {
   composeSend,
   loginAs,
+  scrollbackDistanceFromBottom,
   scrollbackLines,
   selectChannel,
   waitForScrollbackRefreshed,
@@ -77,14 +78,6 @@ function delayedWrites(writes: readonly WriteEvent[]): WriteEvent[] {
 
 type Sample = { t: number; top: number; height: number; client: number };
 type WriteEvent = { t: number; kind: string; detail: string; before: number };
-
-async function distanceToBottom(page: Page): Promise<number> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) throw new Error("scrollback container not found");
-    return el.scrollHeight - el.scrollTop - el.clientHeight;
-  });
-}
 
 // Install an in-page sampler + a scroll-write spy on the scrollback container,
 // BEFORE the send. The sampler records the geometry on every native `scroll`
@@ -200,7 +193,7 @@ test.describe("issue #625 — a single send must not jump the pane up before set
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     await expect
-      .poll(async () => await distanceToBottom(page), { timeout: 10_000 })
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 10_000 })
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 
     await installScrollProbe(page, SAMPLE_WINDOW_MS);
@@ -257,7 +250,7 @@ test.describe("issue #625 — a single send must not jump the pane up before set
     await expect(page.locator('[data-testid="unread-marker"]')).toHaveCount(1);
     // Parked in history, above the fold.
     await expect
-      .poll(async () => await distanceToBottom(page), { timeout: 10_000 })
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 0, { timeout: 10_000 })
       .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 
     await installScrollProbe(page, SAMPLE_WINDOW_MS);

@@ -34,8 +34,13 @@
 // `@webkit` tag opts this spec into the `webkit-iphone-15` project
 // (playwright.config.ts grep). Default chromium project skips it.
 
-import type { Page } from "@playwright/test";
-import { composeTextarea, loginAs, scrollbackLine, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  composeTextarea,
+  loginAs,
+  scrollbackDistanceFromBottom,
+  scrollbackLine,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
@@ -48,14 +53,6 @@ const MESSAGE_BODY = `BUG7-ios: own-msg visibility @ ${crypto.randomUUID().slice
 // Mirror of ScrollbackPane.SCROLL_BOTTOM_THRESHOLD_PX = 50 (not exported; kept
 // in lockstep by hand — same as issue168 / issue580).
 const SCROLL_BOTTOM_THRESHOLD_PX = 50;
-
-async function distanceToBottom(page: Page): Promise<number> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) throw new Error("scrollback container not found");
-    return el.scrollHeight - el.scrollTop - el.clientHeight;
-  });
-}
 
 test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compose-send", async ({
   page,
@@ -120,6 +117,6 @@ test("@webkit BUG7 — own message visible in scrollback after iOS-shaped compos
   // bottom once the echo laid out. NEVER weaken these, NEVER inflate the poll.
   await expect(ownRow).toBeInViewport();
   await expect
-    .poll(async () => await distanceToBottom(page))
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999)
     .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 });

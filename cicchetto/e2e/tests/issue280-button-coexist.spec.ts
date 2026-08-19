@@ -41,6 +41,7 @@ import type { Page } from "@playwright/test";
 import {
   composeTextarea,
   loginAs,
+  scrollbackDistanceFromBottom,
   scrollbackLines,
   selectChannel,
 } from "../fixtures/cicchettoPage";
@@ -80,14 +81,6 @@ function fmt(r: Rect): string {
   return `[x ${r.x.toFixed(0)}, y ${r.y.toFixed(0)}, w ${r.width.toFixed(0)}, h ${r.height.toFixed(0)} → right ${(r.x + r.width).toFixed(0)}, bottom ${(r.y + r.height).toFixed(0)}]`;
 }
 
-async function distFromBottom(page: Page): Promise<number | null> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) return null;
-    return Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
-  });
-}
-
 // Scroll to the top and fire a synthetic scroll so the Solid handler runs
 // loadMore (pulls older history, leaving the pane parked near the top).
 async function scrollToTop(page: Page): Promise<void> {
@@ -115,7 +108,7 @@ async function scrollChannelUp(page: Page): Promise<void> {
   }
   await scrollToTop(page);
   await expect
-    .poll(async () => (await distFromBottom(page)) ?? 0, { timeout: 5_000 })
+    .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 0, { timeout: 5_000 })
     .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
   await expect(page.locator(SCROLL_TO_BOTTOM)).toBeVisible({ timeout: 5_000 });
 }

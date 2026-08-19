@@ -42,6 +42,7 @@ import {
   composeSend,
   loginAs,
   pageScrollbackUp,
+  scrollbackDistanceFromBottom,
   scrollbackLines,
   selectChannel,
   waitForScrollbackRefreshed,
@@ -71,11 +72,6 @@ async function scrollbackGeometry(
       clientHeight: el.clientHeight,
     };
   });
-}
-
-async function distanceToBottom(page: Page): Promise<number> {
-  const g = await scrollbackGeometry(page);
-  return g.scrollHeight - g.scrollTop - g.clientHeight;
 }
 
 // Seed the SERVER-side read cursor at the given message id (server-owned
@@ -127,7 +123,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     // marker anchor parked the view mid-pane and the send did not follow,
     // so distance-to-tail stayed well above threshold.
     await expect
-      .poll(async () => await distanceToBottom(page))
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999)
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // (b) The just-sent line is visible — the view did NOT jump to / stay
@@ -165,7 +161,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     // (#168 completion, 2026-07-03b — vjt point-2 reversed the #46
     // cold-mount-tail wontfix). So activation already sits ABOVE the fold.
     await expect
-      .poll(async () => await distanceToBottom(page))
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 0)
       .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // Operator PAGES UP with a real wheel gesture. This ALSO clears the
@@ -180,7 +176,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     // the send window, where it disarms the follow intent and freezes the pane.
     await pageScrollbackUp(page, 4000, 5_000);
     await expect
-      .poll(async () => await distanceToBottom(page))
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 0)
       .toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 
     // SEND — must snap back to the bottom UNCONDITIONALLY (issue #168 asks:
@@ -192,7 +188,7 @@ test.describe("issue #168 — send pins to bottom, never jumps to the unread mar
     const sentLine = scrollbackLines(page).filter({ hasText: marker });
     await expect(sentLine).toHaveCount(1, { timeout: 10_000 });
     await expect
-      .poll(async () => await distanceToBottom(page))
+      .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999)
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
     await expect(sentLine).toBeInViewport();
   });

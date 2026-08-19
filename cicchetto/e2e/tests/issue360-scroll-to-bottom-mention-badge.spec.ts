@@ -25,7 +25,13 @@
 // geometry on one engine rather than the user-class parity matrix.
 
 import type { Page } from "@playwright/test";
-import { loginAs, scrollbackLine, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
+import {
+  loginAs,
+  scrollbackDistanceFromBottom,
+  scrollbackLine,
+  scrollbackLines,
+  selectChannel,
+} from "../fixtures/cicchettoPage";
 import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
@@ -103,14 +109,6 @@ const FLOOD_SAFE_BURST = 3;
 const PACE_MS = 2_200;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function distFromBottom(page: Page): Promise<number | null> {
-  return await page.evaluate(() => {
-    const el = document.querySelector('[data-testid="scrollback"]') as HTMLDivElement | null;
-    if (!el) return null;
-    return Math.round(el.scrollHeight - el.scrollTop - el.clientHeight);
-  });
-}
-
 // Scroll to the very top + fire a synthetic scroll so the Solid onScroll
 // handler runs (recomputes the badge + flips atBottom). Fresh channel ⇒
 // loadMore finds no older history and is a no-op. Mirrors #243/#280.
@@ -156,7 +154,7 @@ async function expectSettledNotAtBottom(page: Page): Promise<void> {
     )
     .toBe(true);
   expect(
-    (await distFromBottom(page)) ?? 0,
+    (await scrollbackDistanceFromBottom(page)) ?? 0,
     "the pane must come to rest above the at-bottom threshold, or the button is right to be gone",
   ).toBeGreaterThan(SCROLL_BOTTOM_THRESHOLD_PX);
 }
@@ -189,7 +187,7 @@ async function lineVisibleInPane(page: Page, needle: string): Promise<boolean> {
 // as the snap having landed (button gone == at bottom == the tap's own goal);
 // the post-tap assertions at the call site stay the source of truth for the
 // end state, so an early return can never mask a wrong one — a button that
-// vanished WITHOUT reaching bottom fails the distFromBottom poll that follows.
+// vanished WITHOUT reaching bottom fails the distance-from-bottom poll below.
 async function tapScrollToBottom(page: Page, selector: string): Promise<void> {
   const btn = page.locator(selector);
   const deadline = Date.now() + 10_000;
@@ -304,7 +302,7 @@ test.describe("#360 — mention-aware scroll-to-bottom badge", () => {
       // reaches bottom, which a settling scroll can trigger mid-click (#653/#639).
       await tapScrollToBottom(page, SCROLL_TO_BOTTOM);
       await expect
-        .poll(async () => (await distFromBottom(page)) ?? 999, { timeout: 5_000 })
+        .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
         .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);
       await expect(page.locator(SCROLL_TO_BOTTOM)).toBeHidden({ timeout: 5_000 });
     } finally {
