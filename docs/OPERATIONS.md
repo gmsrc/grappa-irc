@@ -334,8 +334,11 @@ worktree that ran the bats suite or the e2e stack needs the flag, and a
 docs-only one does not. `--force` is safe only on a branch PROVEN landed
 (head equal to `origin/main`, `git merge-base --is-ancestor`, and an
 empty `git diff --numstat` against it — on a host whose local `main`
-lags, `git branch --merged main` answers about the stale ref) with a
-clean `git status --porcelain --ignored` run from INSIDE the worktree.
+lags, `git branch --merged main` answers about the stale ref, which errs
+CONSERVATIVELY: it withholds the flag from a branch that has in fact
+landed, never the reverse, so the cost is a refused cleanup rather than
+a bad force) with a clean `git status --porcelain --ignored` run from
+INSIDE the worktree.
 Tell it apart from the OTHER removal blocker by the message: root-owned
 Playwright artefacts under `cicchetto/e2e/test-results/` fail with a
 permission error instead, and want `sudo rm -rf` + `git worktree prune`
