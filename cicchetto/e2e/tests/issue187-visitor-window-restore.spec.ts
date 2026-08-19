@@ -21,8 +21,8 @@
 // never carries `.selected` → the post-reload assertion times out.
 // GREEN post-fix: the restore arm re-selects #r187 → the row is `.selected`.
 
-import type { Browser } from "@playwright/test";
 import {
+  bootVisitorContext,
   composeSend,
   expectShellReady,
   selectChannel,
@@ -33,40 +33,15 @@ import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
-// Boot cic straight into Shell as a freshly-minted visitor (no captcha/anon
-// dance) — identical seeding to issue148/issue153/issue154.
-async function bootVisitor(browser: Browser, nick: string) {
-  const visitor = await mintVisitor(nick);
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [
-      visitor.token,
-      JSON.stringify({
-        kind: "visitor",
-        id: visitor.id,
-        nick: visitor.nick,
-        network_slug: visitor.network_slug,
-      }),
-    ] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-  return { visitor, ctx, page };
-}
-
 test("issue #187 — a visitor's last-open channel is restored on refresh/reopen (not $home)", async ({
   browser,
 }) => {
   const admin = getSeededAdmin();
   const stamp = Date.now();
   const channel = `#r187-${stamp}`;
-  const { visitor, ctx, page } = await bootVisitor(browser, `v187-${stamp}`);
+  const visitor = await mintVisitor(`v187-${stamp}`);
+  const { ctx, page } = await bootVisitorContext(browser, visitor);
+  await expectShellReady(page);
 
   try {
     // Focus $server and wait for the registration numerics → the visitor's

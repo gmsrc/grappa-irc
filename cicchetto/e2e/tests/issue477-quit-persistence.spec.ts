@@ -43,7 +43,7 @@
 // symmetrically for its ephemeral case).
 
 import type { Browser, Page } from "@playwright/test";
-import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
+import { bootVisitorContext, loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
@@ -66,24 +66,11 @@ async function bootVisitor(
 ): Promise<{ page: Page; teardown: () => Promise<void> }> {
   const label = registered ? "reg" : "anon";
   const visitor = await mintVisitor(`e2e477-${label}-${Date.now()}`);
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-  const subjectJson = JSON.stringify({
-    kind: "visitor",
+  const { ctx, page } = await bootVisitorContext(browser, {
     id: visitor.id,
-    nick: visitor.nick,
-    network_slug: visitor.network_slug,
+    token: visitor.token,
     registered,
   });
-  await page.addInitScript(
-    ([token, subject]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subject);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [visitor.token, subjectJson] as const,
-  );
-  await page.goto("/");
   return {
     page,
     teardown: async () => {

@@ -34,8 +34,13 @@
 //
 // Runs on chromium desktop (members pane renders directly).
 
-import type { Browser, Page } from "@playwright/test";
-import { expectShellReady, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import type { Browser } from "@playwright/test";
+import {
+  bootVisitorContext,
+  expectShellReady,
+  selectChannel,
+  waitForUserTopicReady,
+} from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, joinChannel, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
@@ -59,29 +64,6 @@ async function setAutoconnect(adminToken: string, slug: string, on: boolean): Pr
   if (!res.ok) {
     throw new Error(`setAutoconnect: ${slug}=${on} → ${res.status} ${await res.text()}`);
   }
-}
-
-async function bootVisitor(
-  browser: Browser,
-  visitor: { id: string; nick: string; token: string },
-): Promise<{ ctx: Awaited<ReturnType<Browser["newContext"]>>; page: Page }> {
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [
-      visitor.token,
-      // #211 phase 6 — the subject wire has NO network_slug (multi-network).
-      JSON.stringify({ kind: "visitor", id: visitor.id, nick: visitor.nick }),
-    ] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-  return { ctx, page };
 }
 
 // Poll GET /networks until it lists at least `n` rows (the async
@@ -127,7 +109,8 @@ test("issue #211 phase 6 — fresh visitor AUTO-CONNECTS the visitor_autoconnect
     expect(byslug.get("azzurra")?.connection_state).toBe("connected");
     expect(byslug.get("azzurra2")?.connection_state).toBe("connected");
 
-    const booted = await bootVisitor(browser, visitor);
+    const booted = await bootVisitorContext(browser, visitor);
+    await expectShellReady(booted.page);
     ctx = booted.ctx;
     const page = booted.page;
     await waitForUserTopicReady(page, `visitor:${visitor.id}`);

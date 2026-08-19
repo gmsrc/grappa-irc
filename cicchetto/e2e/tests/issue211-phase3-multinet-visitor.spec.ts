@@ -25,19 +25,14 @@
 // Runs on chromium desktop (members pane renders directly in
 // `.shell-members .members-pane`, no mobile drawer).
 
-import type { Browser, Page } from "@playwright/test";
 import {
+  bootVisitorContext,
   composeSend,
   expectShellReady,
   selectChannel,
   waitForUserTopicReady,
 } from "../fixtures/cicchettoPage";
-import {
-  GRAPPA_BASE_URL,
-  type MintedVisitor,
-  mintVisitor,
-  reapVisitors,
-} from "../fixtures/grappaApi";
+import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -46,33 +41,6 @@ const VISITOR_NETWORK = "azzurra";
 
 // Full chain + testnet latency + a peer round-trip — well past 30s.
 test.setTimeout(90_000);
-
-async function bootVisitor(
-  browser: Browser,
-  visitor: MintedVisitor,
-): Promise<{ ctx: Awaited<ReturnType<Browser["newContext"]>>; page: Page }> {
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [
-      visitor.token,
-      JSON.stringify({
-        kind: "visitor",
-        id: visitor.id,
-        nick: visitor.nick,
-        network_slug: visitor.network_slug,
-      }),
-    ] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-  return { ctx, page };
-}
 
 test("issue #211 phase 3 — fresh visitor lands JOINED with own nick + a live PRIVMSG (full read-cutover chain)", async ({
   browser,
@@ -90,7 +58,8 @@ test("issue #211 phase 3 — fresh visitor lands JOINED with own nick + a live P
   const visitor = await mintVisitor(`p3-${stamp}`);
   expect(visitor.network_slug).toBe(VISITOR_NETWORK);
 
-  const { ctx, page } = await bootVisitor(browser, visitor);
+  const { ctx, page } = await bootVisitorContext(browser, visitor);
+  await expectShellReady(page);
   let peer: IrcPeer | null = null;
 
   try {

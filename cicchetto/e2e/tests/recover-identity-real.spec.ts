@@ -80,6 +80,7 @@
 import type { Browser } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 import {
+  bootVisitorContext,
   composeSend,
   expectShellReady,
   selectChannel,
@@ -89,36 +90,6 @@ import { GRAPPA_BASE_URL, loginVisitor, mintVisitor, reapVisitors } from "../fix
 import { IrcPeer } from "../fixtures/ircClient";
 import { awaitMail, extractFromMail, resetMailpit } from "../fixtures/mailpit";
 import { getSeededAdmin } from "../fixtures/seedData";
-
-// Boot cic as a visitor (local per-spec helper — the established pattern; each
-// visitor spec inlines its own). Seeds the two auth localStorage keys the SPA
-// reads at module init, navigates, and waits for the shell + user-topic to be
-// live so subsequent home-row assertions see settled state.
-async function bootVisitor(
-  browser: Browser,
-  visitor: { id: string; nick: string; token: string },
-): Promise<{
-  ctx: Awaited<ReturnType<Browser["newContext"]>>;
-  page: import("@playwright/test").Page;
-}> {
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [
-      visitor.token,
-      JSON.stringify({ kind: "visitor", id: visitor.id, nick: visitor.nick }),
-    ] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-  await waitForUserTopicReady(page, `visitor:${visitor.id}`);
-  return { ctx, page };
-}
 
 const NETWORK_SLUG = "azzurra"; // visitor_enabled + real azzurra-services (bahamut-test hub)
 const RECOVER_PASSWORD = "recidpw1"; // 5–32 chars (NickServ floor)
@@ -178,7 +149,9 @@ test.describe("#581 recover-identity (real services)", () => {
       // Server-side proof: the anon credential is NOT recoverable.
       await waitForRecoverable(visitor.token, visitor.network_slug, false, 15_000);
 
-      const booted = await bootVisitor(browser, visitor);
+      const booted = await bootVisitorContext(browser, visitor);
+      await expectShellReady(booted.page);
+      await waitForUserTopicReady(booted.page, `visitor:${visitor.id}`);
       ctx = booted.ctx;
       const page = booted.page;
 
@@ -229,7 +202,9 @@ test.describe("#581 recover-identity (real services)", () => {
       // The +r commit persists the :nickserv_identify credential → recoverable.
       await waitForRecoverable(visitor.token, NETWORK_SLUG, true);
 
-      const booted = await bootVisitor(browser, visitor);
+      const booted = await bootVisitorContext(browser, visitor);
+      await expectShellReady(booted.page);
+      await waitForUserTopicReady(booted.page, `visitor:${visitor.id}`);
       ctx = booted.ctx;
       const page = booted.page;
 

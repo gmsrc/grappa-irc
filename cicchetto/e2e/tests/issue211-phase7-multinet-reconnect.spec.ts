@@ -39,8 +39,13 @@
 // reconnect backfill (`refreshScrollback` for every `joined` key) heals
 // both networks in one socket resume.
 
-import type { Browser, Page } from "@playwright/test";
-import { expectShellReady, selectChannel, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import type { Browser } from "@playwright/test";
+import {
+  bootVisitorContext,
+  expectShellReady,
+  selectChannel,
+  waitForUserTopicReady,
+} from "../fixtures/cicchettoPage";
 import {
   assertMessagePersisted,
   GRAPPA_BASE_URL,
@@ -58,28 +63,6 @@ const SECOND = "azzurra2";
 // peer round-trip on each network — well past the default. Give it
 // plenty of testnet-latency headroom (matches the phase-6 matrix budget).
 test.setTimeout(150_000);
-
-// Boot the ONE visitor into a fresh browser context. The subject wire is
-// phase-7-slim ({id, registered}); per-network nick lives on the
-// GET /networks rows, so no nick/network_slug is seeded here.
-async function bootVisitor(
-  browser: Browser,
-  visitor: { id: string; token: string },
-): Promise<{ ctx: Awaited<ReturnType<Browser["newContext"]>>; page: Page }> {
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [visitor.token, JSON.stringify({ kind: "visitor", id: visitor.id })] as const,
-  );
-  await page.goto("/");
-  await expectShellReady(page);
-  return { ctx, page };
-}
 
 type NetRow = { slug: string; nick: string; connection_state: string };
 
@@ -279,7 +262,8 @@ test("issue #211 phase 7 — one visitor on TWO networks survives a real cic WS 
 
     // ── BROWSER: boot cic, subscribe both channels, then drop the WS ──
 
-    const booted = await bootVisitor(browser, visitor);
+    const booted = await bootVisitorContext(browser, visitor);
+    await expectShellReady(booted.page);
     ctx = booted.ctx;
     const page = booted.page;
     await waitForUserTopicReady(page, `visitor:${visitor.id}`);

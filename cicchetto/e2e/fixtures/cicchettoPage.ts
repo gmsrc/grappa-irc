@@ -60,7 +60,13 @@
 // cicchetto/src/lib/theme.ts MOBILE_QUERY = `(max-width: 768px)`.
 // Playwright's iPhone 15 device has viewport 393×852 → mobile branch.
 
-import { expect, type Locator, type Page } from "@playwright/test";
+import {
+  type Browser,
+  type BrowserContext,
+  expect,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import type { SeededUser } from "./grappaApi";
 import { type ScrollGestureResult, scrollByGesture, waitForScrollRest } from "./scrollGesture";
 
@@ -98,6 +104,22 @@ export async function expectShellReady(page: Page): Promise<void> {
   });
 }
 
+// The ONE door that puts a bearer + subject envelope into localStorage
+// before first paint. `addInitScript` runs BEFORE any page script, so the
+// values are there when auth.ts's `createSignal` default reads the token
+// and `getSubject()` reads the subject; doing this via `page.evaluate`
+// AFTER goto would race the SPA's first read.
+async function seedAuthLocalStorage(page: Page, token: string, subjectJson: string): Promise<void> {
+  await page.addInitScript(
+    ([t, s]) => {
+      localStorage.setItem("grappa-token", t);
+      localStorage.setItem("grappa-subject", s);
+      localStorage.setItem("cic.installChoice", "browser");
+    },
+    [token, subjectJson] as const,
+  );
+}
+
 // Seed a token + subject into localStorage so cicchetto boots already
 // authenticated, then load the SPA and wait for the shell to be ready
 // (sidebar/bottom-bar populated with at least one network section).
@@ -114,18 +136,7 @@ export async function loginAs(
   vjt: SeededUser,
   opts: { noNetworks?: boolean } = {},
 ): Promise<void> {
-  // addInitScript runs BEFORE any page script — guarantees the
-  // localStorage values are present when auth.ts's `createSignal`
-  // default reads them. Doing this via page.evaluate AFTER goto would
-  // race the SPA's first read.
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [vjt.token, vjt.subjectJson] as const,
-  );
+  await seedAuthLocalStorage(page, vjt.token, vjt.subjectJson);
   await page.goto("/");
 
   // Shell-ready signal: a per-network section appears once the
@@ -170,6 +181,64 @@ export async function loginAs(
   // join_failed broadcasts (Phoenix.PubSub doesn't replay to late
   // subscribers). See `waitForUserTopicReady` for the full why.
   await waitForUserTopicReady(page, vjt.name);
+}
+
+// The visitor subject envelope, MIRRORED from cicchetto/src/lib/api.ts
+// `Subject` rather than imported: e2e/tsconfig.json carries no path
+// mapping into src, the same posture (and for the same reason) as
+// e2e/types/cic-window.d.ts, which inlines the window-hook types.
+//
+// The field set is the whole point. #211 phase 6 dropped `network_slug`
+// and phase 7 dropped `nick`/`ident`/`realname` from this wire: the
+// server's `Grappa.Visitors.Wire` emits `{id, registered, incognito}`,
+// `auth.ts isValidSubject` validates `id` alone, and cic resolves "my
+// nick on network X" from the GET /networks rows (`ownNickForNetwork`),
+// never from the subject. Seven per-spec copies kept seeding the dropped
+// fields for two phases because they went through
+// `JSON.stringify(value: any)` — a signature that type-checks nothing,
+// so no gate could see the drift. Building the envelope HERE, from a
+// declared field set, is what makes that structurally impossible: a
+// caller may hand in a whole MintedVisitor, but only these fields reach
+// localStorage.
+export type VisitorSeed = {
+  id: string;
+  token: string;
+  registered?: boolean;
+  incognito?: boolean;
+};
+
+// Seed a visitor session onto an EXISTING page and load the SPA.
+//
+// The readiness gate is deliberately NOT part of this verb: it genuinely
+// differs per spec (`.shell-main`, the mobile bottom-bar header, a
+// user-topic subscribe, or none at all for the #477 rail specs), and
+// folding four variants behind an enum would bury a real per-spec intent
+// under a shared default. Callers await their own signal.
+export async function bootVisitor(page: Page, visitor: VisitorSeed): Promise<void> {
+  const subject: {
+    kind: "visitor";
+    id: string;
+    registered?: boolean;
+    incognito?: boolean;
+  } = { kind: "visitor", id: visitor.id };
+  if (visitor.registered !== undefined) subject.registered = visitor.registered;
+  if (visitor.incognito !== undefined) subject.incognito = visitor.incognito;
+
+  await seedAuthLocalStorage(page, visitor.token, JSON.stringify(subject));
+  await page.goto("/");
+}
+
+// `bootVisitor` on a context of its own — the shape the browser-level
+// specs need, where each visitor gets an isolated localStorage. Returns
+// the context so the caller can close it.
+export async function bootVisitorContext(
+  browser: Browser,
+  visitor: VisitorSeed,
+): Promise<{ ctx: BrowserContext; page: Page }> {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await bootVisitor(page, visitor);
+  return { ctx, page };
 }
 
 // Sidebar / bottom-bar accessors ────────────────────────────────────

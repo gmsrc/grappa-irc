@@ -27,7 +27,7 @@
 // chromium run of `#260` is intentionally empty.
 
 import type { Page } from "@playwright/test";
-import { loginAs, waitForUserTopicReady } from "../fixtures/cicchettoPage";
+import { bootVisitor, loginAs, waitForUserTopicReady } from "../fixtures/cicchettoPage";
 import {
   GRAPPA_BASE_URL,
   type MintedVisitor,
@@ -98,26 +98,6 @@ const isAtEdge = (snap: StripSnapshot, slug: string): boolean => {
 
 const edgeCount = (snap: StripSnapshot): number =>
   snap.headers.filter((h) => Math.abs(h.left - snap.barLeft) <= EDGE_EPS).length;
-
-// Boot cicchetto as a freshly-minted visitor on the current (mobile)
-// page fixture — mirrors loginAs but for the visitor subject wire
-// ({kind:"visitor", id}). The webkit-iphone-15 viewport makes Shell.tsx
-// render the mobile `.bottom-bar`.
-async function bootVisitorMobile(page: Page, visitor: MintedVisitor): Promise<void> {
-  await page.addInitScript(
-    ([token, subjectJson]) => {
-      localStorage.setItem("grappa-token", token);
-      localStorage.setItem("grappa-subject", subjectJson);
-      localStorage.setItem("cic.installChoice", "browser");
-    },
-    [visitor.token, JSON.stringify({ kind: "visitor", id: visitor.id })] as const,
-  );
-  await page.goto("/");
-  await expect(page.locator(".bottom-bar-network-header").first()).toBeVisible({
-    timeout: 15_000,
-  });
-  await waitForUserTopicReady(page, `visitor:${visitor.id}`);
-}
 
 async function getNetworks(
   token: string,
@@ -241,7 +221,14 @@ test("@webkit #260 — the sticky header pins under scroll and the next network 
     for (const c of anchorChans) await joinChannelWhenReady(visitor.token, ANCHOR, c);
     for (const c of secondChans) await joinChannelWhenReady(visitor.token, SECOND, c);
 
-    await bootVisitorMobile(page, visitor);
+    // The webkit-iphone-15 viewport makes Shell.tsx render the mobile
+    // `.bottom-bar`, so the readiness gate is the bottom-bar header, not
+    // the desktop `.shell-main`.
+    await bootVisitor(page, visitor);
+    await expect(page.locator(".bottom-bar-network-header").first()).toBeVisible({
+      timeout: 15_000,
+    });
+    await waitForUserTopicReady(page, `visitor:${visitor.id}`);
 
     // Wait until the strip is ready to measure: both network groups
     // rendered, the strip OVERFLOWS the viewport, and the last group is
