@@ -49933,9 +49933,17 @@ unmeasured; both readings stay open. The measure that separates them is adding
 Baseline first, on `origin/main` in the same worktree, same eight specs, both
 projects: **17 passed**, no pre-existing red in this subset. After the change:
 **17 passed**, same seventeen titles. `bun run check` rc=0 over the whole chain
-with the same 59 pre-existing CSS warnings — and only rc=0 proves it, since the
-chain is `biome && tsc && tsc -p e2e`, and a biome failure leaves the log
-reading rc=1 with zero `error TS`.
+with the same 59 pre-existing CSS warnings.
+
+Only rc=0 over the WHOLE chain proves anything, because the chain is
+`biome && tsc && tsc -p e2e`: a biome failure means tsc never runs, and the log
+then reads rc=1 with zero `error TS`. **That is NOT MEASURED, and it reads
+exactly like "the types are fine".** There is no stage marker to grep for — the
+absence of `error TS` is indistinguishable between "tsc passed" and "tsc never
+started". This is not hypothetical here: the static control below first came
+back rc=1 with no `error TS` at all, and the real TS2353 only appeared after
+`biome check --write`. It caught a worker who had been warned about it in
+writing the same day.
 
 A green on removed fields proves nothing unless the suite can see a removed
 field, so the control removed one that is load-bearing: dropping `registered`
