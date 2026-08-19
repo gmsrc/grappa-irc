@@ -50547,6 +50547,34 @@ that a network-less admin can clear a `.sidebar-network-header` gate —
 which `Sidebar.tsx` renders only inside `<Show when={networks().length >
 0}>`, so it cannot. The apparent contradiction was entirely an artefact of
 the shadowing name, and the measure that dissolved it was the import list,
-free, where a whole e2e run was spent instead. Two further local homonyms
-of exported fixture verbs exist (`bootVisitor`, `scrollbackLine`); whether
-their bodies diverge observably is not measured here.
+free, where a whole e2e run was spent instead.
+
+Two further local homonyms of exported fixture verbs exist, and measuring
+them shrinks the finding instead of widening it. `bootVisitor`
+(`issue477-quit-persistence`) takes `(browser, registered)` and DELEGATES to
+the fixture's own `bootVisitorContext`; `scrollbackLine`
+(`unread-divider-beyond-window`) is a block-scoped arrow inside one test body,
+selecting on `data-msg-id` where the fixture verb selects on kind plus body
+text. Neither is reachable by mistake, because the arity differs — ARITY, not
+the name, is what makes a shadow confusable, and only `issue252`'s matches its
+fixture twin argument for argument.
+
+The rename that would fix that one site is deliberately NOT made here. It is
+two lines in an e2e spec, and an e2e spec is gated by a ~40-minute integration
+run: the change would spend forty minutes to buy back the hour that exactly one
+reader has lost so far. This paragraph is the cheaper instrument, and it costs
+the next reader nothing. A future slice that already touches
+`issue252-vhost-selector.spec.ts` should fold the rename in for free.
+
+### The rule, broken twenty minutes after reading it
+
+The census that produced those three names compared DECLARED names against
+EXPORTED names and read neither a body nor a signature — so it reported three
+confusable shadows where measuring finds one and two false positives. The entry
+immediately above this one in this file closes on exactly that instruction:
+cross three methods, by name, by naked grep, and by grouping on the BODY,
+before believing one. It was read an hour earlier, while checking the boundary
+shape this entry's own separator had to match, and then a name-only census was
+run anyway, by the same hand. Knowing the rule and holding it are different
+states. Treat any name-level count here as a lower bound on the truth and an
+upper bound on the finding — including the ones in this entry.
