@@ -51481,3 +51481,56 @@ never run, and this entry claims nothing about the other files that call the
 shared helper beyond the 23 kills already recorded on the issue. Nor was any
 suite-time effect of the pinned hash measured; the ~100 ms figure remains the
 moduledoc's own claim, inherited, not re-timed here.
+<!-- entry #1396-door-split -->
+
+---
+
+## 2026-08-19 — #1396: two doors, two tests, two deaths with different names
+
+The previous entry recorded that one test defended two guards and was therefore
+one failure point. This is the follow-through, and the reason it needed a bench
+rather than a tidy-up: a de-duplication that preserves behaviour by construction
+and one that actually separates two oracles look identical from the green side.
+
+The bundle exercised the history walk and tab-complete behind a single set of
+assertions, all of the shape `getDraft(k) === "b\nc"`. Split into one test per
+door, the bench reads:
+
+| run | result |
+|---|---|
+| clean | 290 files, 5618 tests, rc=0 |
+| guard deleted from `recallPrev` | 1 dead — the UP-ARROW test |
+| guard deleted from `tabComplete` | 1 dead — the TAB-COMPLETE test |
+| guard deleted from `recallNext` | 1 dead — the DOWN-ARROW test (#1562's pin) |
+
+Three deaths, three different names. The criterion was never "one dead" three
+times — before the split, two of those mutants killed the SAME test, and a count
+alone could not have told the difference.
+
+### The third gesture was removed, not split
+
+The bundle also called `recallNext`, and that call is gone. It could not fail:
+`recallPrev` above it had been refused, so `historyCursor` was still null and
+`recallNext` returned on its own null check without reaching the drain guard.
+Carrying it into the up-arrow test would have reproduced the illusion being
+undone — a gesture that reads as covered and is not. Calling a function is not
+reaching the branch inside it.
+
+### The injector now anchors on the function, not the line
+
+Three of the five guards are the byte-identical string
+`if (isDraining(key)) return;`, so the mutation tool targets one of them by
+position. Hardcoded line numbers went stale twice in two days (the guards moved
+398/406/420 → 406/414/428 as comments were added above them), and a stale number
+mutates the wrong door while still reporting a plausible kill. It now locates the
+enclosing declaration — unique — takes the first guard line below it, and asserts
+the expected text before deleting anything.
+
+### The flake is still there, and it still has to be re-run
+
+The `recallNext` mutant first reported THREE deaths: the down-arrow test plus two
+in `networks.test.ts` that name no invariant of this work, one of them at 5006 ms
+against a 5000 ms vitest timeout. A re-run of the same mutant returned exactly one
+death. That is the #1563 signature, unchanged and undiagnosed: a kill whose
+victims do not name the invariant, and whose durations sit on the timeout, is a
+flake until a re-run says otherwise.
