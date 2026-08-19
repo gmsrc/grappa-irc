@@ -51534,3 +51534,134 @@ against a 5000 ms vitest timeout. A re-run of the same mutant returned exactly o
 death. That is the #1563 signature, unchanged and undiagnosed: a kill whose
 victims do not name the invariant, and whose durations sit on the timeout, is a
 flake until a re-run says otherwise.
+<!-- entry #1336-1079-scrolltrace -->
+
+---
+
+## 2026-08-19 — #1336 (row #1079): the recorder that could not see the freeze, and the one attribute that fixes it
+
+#1079 reports `scroll-on-window-switch` settling 337px from the bottom against
+an expected 50, the same number twice on two trees. The S2 slice proved the
+pre-send barrier VACUOUS and cured it with `waitForScrollRest`, and said in its
+own words what it had not shown: the vacuity was never observed being
+EXPLOITED. Eight recorded samples exited at the marker every time.
+
+This slice cures nothing. It builds the instrument that can answer the
+question, because the one S2 used cannot — and that is the finding.
+
+### Two measurements that reshaped the design
+
+**The failing assertion is the POST-SEND one, and no cure barriers it.** The
+issue cites `spec:410` / `spec:512`, both stale. Against the blob current on
+2026-08-08 (522 lines) the test at `:410` is the SWITCH test and the assertion
+at `:512` is the post-send `distance <= 50` poll. The three
+`pageScrollbackRest` calls S2 added all sit BEFORE the send.
+
+**337 is the pane ON the marker — and the mechanism that leaves it there writes
+no scrollTop at all.** `1415 - 1078 = 337`; a post-send DECREASE from a rows
+reset would strand it near the top instead (`1415 - 7 = 1408`). For the pane to
+stay on the marker, follow must be disarmed AFTER the send re-arms it
+(`ScrollbackPane.tsx:2620`) and within the budget of `tailFollowWhenSettled`,
+which yields at `:2915` on `!followMode()` writing nothing and rescheduling
+nothing. The candidate that fits is `scrollToActivation`'s deferred
+`setFollowMode(near)` at `:2319` landing after the send: the send clears the
+marker latch at `:2619`, but that does not cancel an activation rAF already
+scheduled.
+
+So in the candidate that explains the number, **nothing writes `scrollTop`
+after the send**. A recorder of POSITIONS — which is what S2 built, and threw
+away — is blind to it by construction. That is the likeliest reading of eight
+mute samples: not "the exploitation did not happen", but "this instrument could
+not have seen it".
+
+### Three channels, one clock, and no new product state
+
+`scrollTrace.ts` classifies a trace carrying scroll events, `data-follow`
+transitions and rows-list recreations. The CAUSE is not published by the
+component — it is read off the crossing:
+
+| observation | attributed to |
+|---|---|
+| disarm preceded by a scrollTop decrease | `onScroll:3498-3500` |
+| disarm with no movement at all | the `:2319` activation class |
+| no disarm, but the list recreated after the send | `:2914` |
+
+That indirection is deliberate. `setFollowMode(near)` carries no reason and the
+`onScroll` path discards the one it passes to `nextFollowMode`, so publishing a
+cause would mean making the component REMEMBER one — new state, a second state
+model, the opposite of instrumentation.
+
+### The one product change, and why it is not a test hook
+
+`data-follow={followMode() ? "on" : "off"}` on the div that already carries
+`data-testid="scrollback"`. Derived, no new state, mirroring the existing
+`classList={{ "scrollback-locked": scrollLocked() }}` on the same element.
+Nothing else exposes the follow intent: the `[scroll-authority]` log is dead in
+e2e (gated on `MODE === "development"`, and the e2e bundle is a `vite build`),
+and the `scroll-to-bottom` button mirrors `atBottomNow`, which diverges from
+follow BY DESIGN. It serves a human too — a pane that will not auto-scroll
+currently gives DevTools nothing to read.
+
+`on|off` is honest because `followMode` is a boolean (`createSignal(true)`,
+`:1198`; `nextFollowMode` returns `boolean`), so the attribute compresses
+nothing. Were the signal an enum, `on|off` would have been a lie by
+compression. The rule worth keeping: a derived attribute must carry the same
+CARDINALITY as the signal it mirrors.
+
+### The presence check, and the marker that had to be dropped from it
+
+An instrument that recorded nothing must never read as "no exploitation
+observed" — #1117's shape, negative assertions passing against an empty
+recorder. `assertTraceIsUsable` therefore demands four markers: the rest-exit
+mark, the send mark, at least one scroll write BEFORE the send, and at least
+one follow transition.
+
+The design published on the issue listed a fifth, "the send's own tail write",
+and it was wrong: that write is absent EXACTLY when the defect fires. A
+presence check that trips on the phenomenon it exists to license would convert
+every real catch into an instrument failure. Corrected here, with a test whose
+name carries the correction.
+
+### The injected control earned its keep on the first run it could reach
+
+The design pre-registered a mandatory injected break: a post-send write that
+puts the pane back on the marker. It found two things, neither by review.
+
+**A window boundary.** The first injection fired on a timer 150 ms after the
+send. The poll had already exited by then — the pane reached the tail, the
+assertion passed, and the injected write landed AFTER the trace was read. The
+run still failed, on `toBeInViewport()`, with no number and no attribution:
+exactly the anonymous shape this instrument exists to replace. So the observed
+window is "from the send mark to the moment the poll stops", and a freeze
+arriving after a SUCCESSFUL poll is outside it. The natural defect is inside it
+by construction — a pane that never reaches the tail keeps the poll running for
+its full 5 s — but the boundary is real and stated.
+
+**A defect in the classifier.** With the injection re-hooked to the first
+at-tail scroll (deterministic instead of timed), the pane ended 337 px from the
+bottom and the classifier called it `SLOW`. The rule was "a scroll event after
+the last disarm means the pane is still moving", and the trace shows the disarm
+recorded BEFORE the decrease that caused it: the product's `onScroll` and the
+recorder's own listener are two listeners on one event, and the
+MutationObserver microtask carrying `data-follow` lands between them. Ordering
+inside a millisecond is not evidence.
+
+The corrected rule is the product's own semantics: follow OFF makes the
+position terminal, because `tailFollowWhenSettled` yields at `:2915` writing
+nothing and rescheduling nothing. Attribution likewise moved from event order
+to positions — reached the tail after the send and left it, or never reached
+it. Re-run against the same injection the instrument now says "the pane froze
+337px from the bottom after the send, attributed to scroll-up".
+
+### What this slice does NOT establish
+
+* The natural failure is still not reproduced, by anyone, before or after the
+  cures.
+* `:2319` is a candidate that fits the arithmetic, not a measured cause.
+* The scroll channel is a PASSIVE listener rather than a patched setter: it
+  sees exactly what the product's own `onScroll` sees, which is the right
+  fidelity for the arm under study, but not writes the browser coalesces away.
+* The injected control exercises the `scroll-up` arm only. The `activation`
+  arm cannot be injected from outside — it would mean writing `followMode`,
+  which no external observer can do — so that attribution rests on the unit
+  cases, not on an in-situ break.
