@@ -78,15 +78,14 @@ function lastGeometry(
   return [...events].reverse().find(isScroll);
 }
 
-// The LAST disarm, because a send re-arms and the question is what happened
-// after that. Written as a reverse scan rather than `findLastIndex`, which the
-// e2e tsconfig's lib target does not carry.
-function lastDisarmIndex(events: readonly TraceEvent[]): number {
+// The follow state the trace ENDS on. A reverse scan rather than `findLast`,
+// which the e2e tsconfig's lib target does not carry.
+function lastFollowState(events: readonly TraceEvent[]): "on" | "off" | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i];
-    if (event !== undefined && event.kind === "follow" && event.follow === "off") return i;
+    if (event !== undefined && event.kind === "follow") return event.follow;
   }
-  return -1;
+  return null;
 }
 
 export function classifyPostSend(
@@ -102,26 +101,26 @@ export function classifyPostSend(
   // on the way, the pane is at the tail.
   if (distance <= opts.thresholdPx) return { kind: "OK", distance, attributedTo: null };
 
-  const disarmAt = lastDisarmIndex(after);
-  if (disarmAt >= 0) {
-    // Still being written AFTER the disarm is not the frozen shape — the pane
-    // is going somewhere, and where it stops is not yet known.
-    const movedSince = after.slice(disarmAt + 1).filter(isScroll);
-    if (movedSince.length > 0) return { kind: "SLOW", distance, attributedTo: null };
-
-    // `onScroll` disarms on ANY scrollTop decrease, so a decrease standing
-    // immediately before the disarm names that arm; a disarm with no movement
-    // in front of it can only have come from a direct write — the activation
-    // class.
-    const before = after.slice(0, disarmAt).filter(isScroll);
-    const previous = before[before.length - 2];
-    const latest = before[before.length - 1];
-    const decreased =
-      previous !== undefined && latest !== undefined && latest.scrollTop < previous.scrollTop;
+  // Follow OFF makes the position TERMINAL: `tailFollowWhenSettled` yields on
+  // `!followMode()` writing nothing and rescheduling nothing, so nobody is
+  // going to bring this pane down. That, and not "no more scroll events", is
+  // what separates frozen from slow — measured: an injected freeze recorded
+  // its disarm BEFORE the decrease that caused it, because the
+  // MutationObserver microtask lands between two listeners on one event, and
+  // an event-order rule called the frozen pane SLOW.
+  if (lastFollowState(events) === "off") {
+    // `onScroll` disarms on any scrollTop DECREASE, so a pane that reached the
+    // tail after the send and then left it went out through that arm; one that
+    // never reached the tail was disarmed by a direct write — the activation
+    // class. Stated as positions rather than as event order, which the same
+    // measurement showed is not reliable to a millisecond.
+    const reachedTail = after
+      .filter(isScroll)
+      .some((e) => e.maxScroll - e.scrollTop <= opts.thresholdPx);
     return {
       kind: "FROZEN-AT-MARKER",
       distance,
-      attributedTo: decreased ? "scroll-up" : "activation",
+      attributedTo: reachedTail ? "scroll-up" : "activation",
     };
   }
 

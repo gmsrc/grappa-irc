@@ -110,6 +110,31 @@ describe("#1336/#1079 — classifyPostSend", () => {
     expect(verdict.attributedTo).toBe("rows-recreation");
   });
 
+  // MEASURED, not imagined: this is the tail of the trace an injected
+  // post-send scroll-back produced in situ (2026-08-19, one run). The pane
+  // reached the tail, the injected write took it back to the marker, and the
+  // recorder logged the disarm BEFORE the decrease that caused it — the
+  // MutationObserver microtask lands between two listeners on the same event.
+  // A classifier that decides "still moving" from events ordered after the
+  // disarm called this SLOW, and it is the frozen shape: 337px, terminal.
+  it("calls the measured injected freeze FROZEN, though a scroll is recorded after the disarm", () => {
+    const verdict = classify([
+      ...untilRest,
+      mark(920, "send", null),
+      follow(940, "on"),
+      rows(966),
+      scroll(884, MAX_SCROLL),
+      follow(884, "off"),
+      scroll(884, MARKER_TOP),
+    ]);
+
+    expect(verdict.kind).toBe("FROZEN-AT-MARKER");
+    expect(verdict.distance).toBe(337);
+    // It reached the tail and left it: that is the `onScroll` decrease arm,
+    // whatever order the two same-millisecond records arrived in.
+    expect(verdict.attributedTo).toBe("scroll-up");
+  });
+
   it("calls a pane still being written SLOW, not frozen", () => {
     // Slowness is not the defect: Playwright's poll absorbs it under its 5s
     // default, and the value it eventually reports VARIES. Only a terminal
