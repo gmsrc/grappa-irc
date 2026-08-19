@@ -374,6 +374,11 @@ The decision tree:
                 no fixes without it). Read the Playwright trace +
                 screenshot + error-context.md in test-results/ before
                 touching code.
+                🔴 EXCEPT when the run printed a #1584 cold-start
+                violation: an iso-rerun is the MOST first-in-project a
+                spec can be, so for a boot-timing-sensitive spec it
+                manufactures the red it is supposed to be diagnosing.
+                Read the next section before believing branch 3.
 ```
 
 **Common cascade signatures:**
@@ -410,6 +415,57 @@ The decision tree:
 **Never** `gh run rerun --failed`. First run IS the truth — see
 `feedback_no_ci_retries_on_first_failure`. Reproduce locally with
 `--repeat-each` instead.
+
+## The cold-start census: position in the project is an INPUT (#1584)
+
+`workers: 1`, `fullyParallel: false`, two projects — so **exactly one
+test per worker pays the browser launch**, and every later test in that
+worker runs against an already-running browser. Which test that is comes
+from filename sort order plus *which files the invocation collected*, so
+**it changes when you scope a run and it changes when somebody adds an
+earlier-sorting spec**, with no edit to the affected spec and no line in
+any diff pointing at it.
+
+Measured on #1543: the `@webkit` arm of
+`issue310-scroll-to-bottom-btn-cursor.spec.ts` is red 4/4 in that seat
+and green 3/3 behind any other `@webkit` test — and a bare open with no
+assertions is red in the same seat. In the full suite it passes, dozens
+of files deep.
+
+**Every run now prints the value of that input**, green runs included:
+
+```
+#1584 cold-start census — the first test each Playwright worker began.
+  webkit-iphone-15 / worker 0: bug7-ios-own-msg-visible.spec.ts > ... [undeclared]
+```
+
+Read it before reading a result you are about to act on. If your spec is
+NOT in that list, it ran warm.
+
+**Two tags let a spec declare which side it needs.** Both come from
+`e2e/reporters/coldStartLedger.ts` — import the constant, never retype
+the string — and both are declared through Playwright's `{ tag }`
+option so the title stays greppable:
+
+| tag | means | the run FAILS when |
+|---|---|---|
+| `@warmstart` | only meaningful behind another test | the invocation promoted it to its worker's head |
+| `@coldstart` | only exercised on the worker's first test | anything preceded it in that worker |
+
+The failure is a **run-level** red printed by the reporter, not a test
+red: the offending test may well be green, and that green is the
+problem. Nothing above the violation block is a product verdict.
+
+A `@warmstart` spec therefore **cannot be run alone** — that is the
+point, not a limitation to work around. Run it behind another spec of
+the same project (`scripts/integration.sh --project=webkit-iphone-15
+tests/bug7-ios-own-msg-visible.spec.ts tests/<yours>.spec.ts`) or in the
+full suite. `--repeat-each` does not help: every repeat sits in the same
+promoted seat.
+
+Do **not** tag a spec on a hunch. A declaration is a claim that the spec
+was measured on both sides of the input; an unmeasured one is a guess
+wearing a gate's clothes, and it will red somebody else's run.
 
 ## Five e2e gate traps that fake a green (or a red)
 

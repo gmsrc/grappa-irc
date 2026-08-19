@@ -52277,3 +52277,93 @@ the id, or something else differed in that session — that cell was not
 reconciled and nothing here depends on it. No claim is made about other
 ambient knobs: `MIX_ENV` was already neutralised per file by the fixtures that
 need it, and no census of the remaining environment surface was run.
+<!-- entry #1584 -->
+
+---
+
+## 2026-08-20 — #1584: position in the Playwright project is an INPUT, and it now appears in the result
+
+`cicchetto/e2e` runs `workers: 1`, `fullyParallel: false`, two projects, so
+exactly one test per worker pays the browser launch and every later test in
+that worker runs against an already-running browser. Whether a given spec sits
+in that seat is decided by filename sort order plus which files the invocation
+collected. It was, until this entry, invisible in the result.
+
+Measured on #1543: the `@webkit` arm of
+`issue310-scroll-to-bottom-btn-cursor.spec.ts` is red 4/4 as the first
+`@webkit` test collected and green behind any other one; a bare open with no
+assertions is red in the same seat. In the 759-test suite it passes, dozens of
+files deep. So a green from it could mean "the contract holds" or "something
+else was collected first", and its red reads as a branch regression when it is
+a property of the subset — which is how #1543 came to be filed against the
+code.
+
+### Why a reporter and not a fixture
+
+The obvious shape is a per-worker counter in `fixtures/test.ts`, next to
+`_cspGuard` and the `#1152` nick guard. It cannot be right: **29 of the 411
+spec files import `test` from `@playwright/test`** rather than the wrapped
+fixture, so a subset that puts one of those first would make the next wrapped
+test read as cold when it is not. `_cspGuard` can carry that same blind spot
+because an unguarded spec there is merely unguarded; here the blind spot makes
+the instrument WRONG about its own input, and a guard that can be wrong about
+its input is the defect this issue names, not the cure for it.
+
+`onTestBegin` sees every test with its true worker and true order, and `onEnd`
+may return `{ status: "failed" }`. So the cure is
+`e2e/reporters/coldStart.ts`, with the decision half in a Playwright-free
+`coldStartLedger.ts` proven by 15 vitest cases — the `fixtures/pushAbsence.test.ts`
+split, one directory over.
+
+### What it does, and why the census is unconditional
+
+Every run prints which test each worker began with, green runs included. A
+census only a red run prints is a census absent from exactly the runs where
+the misreading happens. Two tags let a spec declare which side it needs —
+`@warmstart` fails the run when the invocation promoted the spec to its
+worker's head, `@coldstart` fails when anything preceded it — and the failure
+is deliberately run-level: the offending test is often GREEN, and that green
+is the thing being reported.
+
+Judged per WORKER, not per run: the second project launches its own browser
+however many tests the first has run, so a run-wide counter would clear a
+promoted spec in the second project. Both tags on one test is a hard
+violation rather than a precedence rule, because picking one silently is the
+same class of quiet wrong answer.
+
+MEASURED is "the first test the worker began"; INFERRED is that it paid the
+launch (Playwright launches lazily, so a browser-less first test would push
+the launch onto its successor — no such spec exists today). The census wording
+states the measured fact and this entry names the inference.
+
+### What was proved, and what was not
+
+Five arms on the two-spec `webkit-iphone-15` subset, `origin/main` at
+`74a20af1`:
+
+| arm | tree | subset | the spec | run rc |
+|---|---|---|---|---|
+| A | base | issue310 alone | RED 10.3 s | 1 |
+| B | base | bug7 then issue310 | GREEN 3.0 s | 0 |
+| C | cure, tag mutated to `@coldstart` | bug7 then issue310 | GREEN 2.8 s | **1** |
+| D | cure as shipped (`@warmstart`) | bug7 then issue310 | GREEN 2.7 s | 0 |
+| E | cure as shipped | issue310 alone | RED 10.2 s | 1 |
+
+B → C is the mutation the cure has to survive: identical subset, the spec
+green on both sides, the RUN flipping 0 → 1 with the payer named. D is the
+control that the gate is not a blanket red. A → E is the same red gaining its
+explanation.
+
+The only declared adopter is the arm that was measured. The desktop arm of the
+same spec carries nothing, because it was measured on neither side.
+`@coldstart` ships with **no adopter at all**: under `workers: 1` a spec that
+truly needs the cold seat cannot get it at CI's position, and #1543 already
+concluded that a cold contract belongs in a vitest pin. It is shipped because
+the issue's headline case is that direction, and a mechanism that cannot
+express it would leave the headline unaddressed.
+
+Not established: how many other specs are exposed. Zero were surveyed. A grep
+for `@webkit` inside a `test(...)`/`describe(...)` title finds 85 files where
+`grep -l @webkit` finds 103 — the difference is comment matches, and the
+issue's own "103 files" figure carries that inflation. Neither number is
+Playwright's collector.
