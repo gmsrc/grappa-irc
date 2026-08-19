@@ -31,9 +31,14 @@ defmodule Grappa.SessionLog do
   :attach_session_log_telemetry, false`) — otherwise the global handler
   would route EVERY async test's lifecycle telemetry to this pid, whose
   Repo write would hit a sandbox connection owned by the emitting test.
-  Persistence tests attach + `Sandbox.allow/3` explicitly (mirror of
-  `Grappa.AdminEvents`). Tests touching this module MUST be `async:
-  false` (max_cases: 1 invariant).
+  Persistence tests attach the handler explicitly. They need no
+  `Sandbox.allow/3` for this pid: `Grappa.DataCase` puts every `async:
+  false` suite in SHARED sandbox mode, which already routes the sink's
+  writes onto the running test's connection (measured, #1551). What the
+  attach cannot avoid is the converse — while it is attached, a
+  lifecycle event from ANY session in the VM lands in that same
+  transaction. Tests touching this module MUST be `async: false`
+  (max_cases: 1 invariant).
 
   The emit path is deliberately telemetry-decoupled from the sink: a
   disconnect fired from `Session.Server.terminate/2` must never block on a

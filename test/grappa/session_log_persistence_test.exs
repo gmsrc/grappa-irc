@@ -6,9 +6,20 @@ defmodule Grappa.SessionLogPersistenceTest do
 
   `async: false` — `Grappa.SessionLog` is a singleton registered as
   `__MODULE__` (max_cases: 1 invariant). The sink boots with
-  `attach_telemetry: false` in test env; this suite attaches the handler
-  itself + allows the sink pid on the test's sandbox connection so its
-  Repo writes land in the test transaction (mirror of AdminEventsTest).
+  `attach_telemetry: false` in test env, so this suite attaches the
+  handler itself.
+
+  It does NOT need a `Sandbox.allow/3` for the sink, and used to carry
+  one that did nothing: `Grappa.DataCase` opens every `async: false`
+  suite with `start_owner!(Repo, shared: not tags[:async])`, and SHARED
+  mode already routes every ownerless process in the VM — the sink
+  included — onto this test's connection. Measured by deleting the
+  `allow` and re-running: green, and the suite's own seven tests are the
+  positive control, since each one reads back rows the sink wrote.
+
+  The door is therefore the ATTACH, not the allow: while the handler is
+  attached, any session-lifecycle event fired anywhere in the VM writes
+  a row into whichever test is running. See #1551.
   """
   use Grappa.DataCase, async: false
 
@@ -32,7 +43,6 @@ defmodule Grappa.SessionLogPersistenceTest do
     :ok =
       :telemetry.attach_many(@handler_id, @events, &SessionLog.handle_telemetry/4, nil)
 
-    Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), Process.whereis(SessionLog))
     on_exit(fn -> :telemetry.detach(@handler_id) end)
     :ok
   end
