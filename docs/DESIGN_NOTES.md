@@ -51665,3 +51665,87 @@ it. Re-run against the same injection the instrument now says "the pane froze
   arm cannot be injected from outside — it would mean writing `followMode`,
   which no external observer can do — so that attribution rests on the unit
   cases, not on an in-situ break.
+
+### The full suite found the second classifier defect, and it was a FALSE ACCUSATION
+
+Two full-suite runs, cold, identical, `workers: 1`, pre-registered at N=2
+before either was started. Run 1: `755 passed, 1 failed` — and the one failure
+was this slice's own spec, accusing by name:
+
+```
+#1079: the pane froze 339px from the bottom after the send, attributed to rows-recreation
+```
+
+339 is `1417 - 1078`: the pane on the marker, the #1079 shape, arrived at
+without an injection. It was still wrong, and three independent measurements
+say so. The poll asserting `distance <= 50` runs BEFORE the trace is read and
+its failure is captured rather than thrown; `playwright.config.ts` sets no
+expect timeout, so a failing poll costs the 5 s default — and the test took
+1.3 s, which means the poll PASSED. The failure screenshot shows the sent line
+at the bottom of the pane with no unread marker. And the trace's last geometry
+record is timestamped 177 ms BEFORE the send mark: there was no post-send
+geometry at all.
+
+Run 2 was green, 756/756, and its trace is the discriminator. The two are
+identical up to and including the two post-send rows recreations. Run 2 then
+carries ONE more record — a `scroll` to `1415/1415`, 11 ms after the last rows
+recreation — and run 1 does not.
+
+So the pane always moved. What varied between two runs of the same code on the
+same host was whether the `scroll` event had been DELIVERED to the recorder
+before the trace was read. `page.evaluate` reads `scrollTop` synchronously, so
+the poll can observe the settled position while the listener has not yet been
+called; the trace read then lands in that window.
+
+**The rule, stated so it outlives the incident: a passive listener's SILENCE is
+not evidence of stillness.** `classifyPostSend` derived the terminal distance
+from `lastGeometry` — the last recorded position — on the premise that a
+passive listener sees every movement. `installScrollTrace` samples `maxScroll`
+as `scrollHeight - clientHeight` only INSIDE the scroll handler, so both halves
+of that subtraction go stale together whenever geometry changes without a
+delivered event.
+
+This is the same CLASS as the defect the injected control found earlier in this
+slice — "ordering inside a millisecond is not evidence" — and it arrived the
+same way, from a control rather than from review. Two of them in one slice is
+the argument for building instruments that can be run against their own past
+output.
+
+### The cure: the accusation moves downstream of the failure
+
+`ClassifyOptions` gains `finalDistancePx`, a LIVE read taken at classification
+time from the same `scrollbackGeometry` helper the poll uses, and
+`classifyPostSend` uses it for `distance`. `lastGeometry` is deleted; the three
+trace channels keep the job they are actually good at, which is naming the arm.
+
+The structural gain is bigger than the bug fixed. With the distance coming from
+a live read, `OK` short-circuits before any attribution, so `FROZEN-AT-MARKER`
+is reachable ONLY when the 5 s poll has really failed. The instrument can no
+longer accuse a passing run — it can only name the arm of a failure that
+happened. A test states that as the general rule rather than as this incident:
+handed the strongest frozen signal there is (a disarm after the send with no
+movement) together with a live read at the tail, the classifier must return
+`OK`.
+
+The run-1 trace is committed verbatim as a fixture, with its three assertions:
+it is usable (the four-marker presence check was never the defect), it is `OK`
+against a live read at the tail, and — the control against blunting the
+instrument — it is still `FROZEN-AT-MARKER` with `rows-recreation` named when
+the live read agrees with the stale record. The test that used to pin
+"measures the distance from the LAST position" is deleted rather than kept
+beside the new one: its name pinned a rule now known to be false, and two rules
+for one number is how the next reader picks the wrong one.
+
+### What the two runs do and do not license
+
+* The natural race is STILL not reproduced. Run 1's red was an instrument
+  error, not a catch, and it must not be read as one.
+* The false accusation is NOT deterministic: one occurrence in two runs. Its
+  rate is unmeasured, and no third pre-cure run was spent on refining a rate
+  that would not change the decision — any nonzero rate disqualifies an
+  accuser.
+* The exact live distance in run 1 was never recorded, only that the poll
+  accepted it, so it was within 50 px. That omission is itself repaired by the
+  cure, which puts the live number in the verdict.
+* The window boundary recorded above is unchanged, and so is the browser
+  coverage caveat: chromium for this spec.
