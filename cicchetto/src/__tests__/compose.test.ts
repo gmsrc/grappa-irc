@@ -1173,6 +1173,58 @@ describe("compose submit — slash command dispatch", () => {
     }
   });
 
+  // #737 — the DOWN-arrow half of the recall guard. The mid-drain recall test
+  // above reads as if it covered both halves, and it does call `recallNext`,
+  // but that assertion cannot fail: the `recallPrev` on the line before it was
+  // refused, so `historyCursor` is still null, and `recallNext` returns early
+  // on its own null check before the drain guard is ever consulted. Deleting
+  // the guard leaves the whole suite green.
+  //
+  // Reaching the guard needs a window that is DRAINING while its cursor is
+  // still non-null, and the residue write is what nulls it (it resets to the
+  // live bottom). Only the #907 join gap offers that: `/msg` claims BOTH
+  // candidate homes synchronously, then awaits the query-topic join, so the
+  // query window is locked before a single residue write has run — and its
+  // cursor is wherever the operator left it, because nothing submitted from
+  // there and `takeDraft` never ran on it.
+  it("#737 — the down-arrow is refused on a window claimed mid-history-walk", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const sb = await import("../lib/scrollback");
+    const qtj = await import("../lib/queryTopicJoin");
+    const compose = await import("../lib/compose");
+    const source = channelKey("freenode", "#a");
+    const query = channelKey("freenode", "bob");
+
+    vi.mocked(sb.sendMessage).mockResolvedValue();
+
+    // Give the query window one history entry and leave the operator standing
+    // on it: cursor non-null, draft showing the recalled line.
+    compose.setDraft(query, "earlier reply");
+    await compose.submit(query, "freenode", "bob");
+    compose.recallPrev(query);
+    expect(compose.getDraft(query)).toBe("earlier reply");
+
+    let ackJoin!: () => void;
+    qtj.setEnsureQueryTopicJoined(
+      () =>
+        new Promise<void>((resolve) => {
+          ackJoin = resolve;
+        }),
+    );
+
+    compose.setDraft(source, "/msg bob l1\nl2\nl3");
+    const done = compose.submit(source, "freenode", "#a");
+
+    // Parked on the join ACK with both candidate homes claimed (#907), and no
+    // residue written yet — so the cursor the operator left behind is intact.
+    expect(compose.isDraining(query)).toBe(true);
+    compose.recallNext(query);
+    expect(compose.getDraft(query)).toBe("earlier reply");
+
+    ackJoin();
+    await done;
+  });
+
   it("/me action sends as ACTION via scrollback.sendMessage with CTCP framing", async () => {
     localStorage.setItem("grappa-token", "tok");
     const sb = await import("../lib/scrollback");
