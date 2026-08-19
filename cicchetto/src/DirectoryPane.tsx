@@ -17,6 +17,7 @@ import {
 } from "./lib/channelDirectory";
 import { canonicalChannel, channelKey } from "./lib/channelKey";
 import { friendlyApiError } from "./lib/friendlyApiError";
+import { bindPullGesture, PULL_COMMIT_PX } from "./lib/pullGesture";
 import { closeToPreviousWindow, setSelectedChannel } from "./lib/selection";
 import { windowStateByChannel } from "./lib/windowState";
 import { MircBody } from "./MircText";
@@ -62,6 +63,23 @@ import { MircBody } from "./MircText";
 // createEffect on the page's entry COUNT restores it via queueMicrotask so
 // the viewport stays steady while rows update from a progress ping or an
 // append; a REPLACE that shrinks the list snaps back to the top.
+
+// #1445 — the pull slot rests at `translateY(-100%)`, parked one slot-height
+// above the list's top edge and clipped there by the scroller's overflow. An
+// inline transform REPLACES that declaration wholesale, so the pulled paint
+// has to re-state the parked offset or the slot drops into the rows by its own
+// height instead of sliding in from above. Same trap #1438 hit with the media
+// viewer's centering transform, on a different element.
+//
+// Two `translateY` functions rather than one `calc`: they compose to the same
+// matrix, and the resolved form a test can read is `-slotHeight + dy` either
+// way — but this one is legible in an assertion and needs no CSS arithmetic.
+const pulledTransform = (dy: number): string => `translateY(-100%) translateY(${dy}px)`;
+
+// How far the paint is allowed to follow the finger. Past the commit distance
+// the slot stops moving and the gesture is already spent, so more travel would
+// only drag the spinner into the rows it is supposed to sit above.
+const paintedTravel = (dy: number): number => Math.min(dy, PULL_COMMIT_PX);
 
 // Quiet window after the last keystroke before the filter GET fires. Long
 // enough to swallow a burst of typing, short enough that a deliberate pause
@@ -211,6 +229,7 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   // Callback-ref so TypeScript accepts potential undefined (element is inside
   // <Show when={page()}> and only rendered once a page is in the store).
   let containerRef: HTMLDivElement | undefined;
+  let pullSlotRef: HTMLDivElement | undefined;
   let savedScrollTop = 0;
   // The slug currently shown — kept in sync by the effect so onCleanup can
   // reset the right slug without reading props during disposal.
@@ -320,6 +339,50 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
     sentinelObserver.observe(el);
   };
   onCleanup(() => sentinelObserver?.disconnect());
+
+  // #1445 — pull down from the top of the list to ask for a re-capture.
+  //
+  // Painted straight into the DOM rather than through a signal: nothing else
+  // RENDERS from the pulled distance, and a signal here would run the reactive
+  // graph once per touchmove to move one element. Same call MediaViewerModal
+  // makes for the dismiss drag it mirrors.
+  const paintPull = (dy: number): void => {
+    const slot = pullSlotRef;
+    if (slot === undefined) return;
+    const travel = paintedTravel(dy);
+    slot.style.transform = pulledTransform(travel);
+    // The spinner is legible before the commit point, not after it: the ramp
+    // reaches full exactly where the release starts spending a capture, so the
+    // affordance itself says where the line is.
+    slot.style.opacity = String(travel / PULL_COMMIT_PX);
+  };
+
+  const unpaintPull = (): void => {
+    pullSlotRef?.style.removeProperty("transform");
+    pullSlotRef?.style.removeProperty("opacity");
+  };
+
+  // Bound in the ref callback and disposed there too, mirroring
+  // `attachSentinel` above: `.directory-list` lives inside <Show when={page()}>
+  // and can unmount and come back, and Solid does NOT re-invoke a function ref
+  // with undefined at unmount the way React does (#308 landmine 3).
+  let pullDispose: (() => void) | undefined;
+  const attachList = (el: HTMLDivElement): void => {
+    containerRef = el;
+    pullDispose?.();
+    pullDispose = bindPullGesture(el, {
+      // Read LIVE by the binder on every move, never snapshotted: anywhere but
+      // the top of the list the same drag is native scrolling.
+      canPull: () => el.scrollTop === 0,
+      onProgress: paintPull,
+      // THE SAME DOOR the button and the stale CTA use. A second refresh path
+      // would sidestep the store latch that makes those two honest (F1), and
+      // re-open the double-capture this issue closed.
+      onCommit: onRefresh,
+      onRelease: unpaintPull,
+    });
+  };
+  onCleanup(() => pullDispose?.());
 
   const page = () => directoryPage(props.networkSlug);
   const status = () => page()?.status;
@@ -431,14 +494,23 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
               </button>
             </div>
             <div
-              ref={(el) => {
-                containerRef = el;
-              }}
+              ref={attachList}
               class="directory-list"
               onScroll={() => {
                 if (containerRef) savedScrollTop = containerRef.scrollTop;
               }}
             >
+              {/* #1445 — the pulled affordance. Absolutely positioned INSIDE
+                  the scroller: an absolute child is placed against the
+                  scrolled content origin, and the pull exists only at
+                  scrollTop 0, so the two origins coincide by construction —
+                  which buys the plain descendant selector the stylesheet needs
+                  to drop the snap-back transition while a finger is driving.
+                  aria-hidden: the outcome it announces is the Refresh button
+                  going to "Refreshing…", which is already in the a11y tree. */}
+              <div class="directory-pull-slot" aria-hidden="true" ref={pullSlotRef}>
+                <span class="directory-pull-spinner" />
+              </div>
               <ul class="directory-list-inner">
                 <For each={p().entries}>
                   {(entry) => <DirectoryRow entry={entry} networkSlug={props.networkSlug} />}

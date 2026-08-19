@@ -1205,8 +1205,15 @@ html.overlay-open #root > div {
   .login-matrix::before,
   .login-matrix::after,
   .login-spinner,
-  .compose-send-spinner {
+  .compose-send-spinner,
+  .directory-pull-spinner {
     animation: none;
+  }
+  /* #1445 — same call as the swipe-to-reply snap-back below: the slot still
+     follows the finger (that is the gesture's own feedback, not decoration);
+     only the eased return is dropped, so it jumps home. */
+  .directory-pull-slot {
+    transition: none;
   }
   /* #1067 — the swipe-to-reply snap-back. The row still follows the finger
      (that is the gesture's own feedback, not decoration); only the animated
@@ -11732,7 +11739,68 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   overflow-y: auto;
   /* #125 — never scroll horizontally; rows reflow within the viewport. */
   overflow-x: hidden;
-  overscroll-behavior: contain;
+  /* #1445 — `none`, not `contain`. Both stop a scroll chaining out of the
+     list; only `none` also suppresses the element's OWN overscroll affordance,
+     which is the iOS rubber-band that would fight the pulled slot at exactly
+     the position the pull lives — scrollTop 0. Same value and same reason as
+     the body rule (~:492, "kills rubber-band bounce on iOS Safari"). Nothing
+     the `contain` here was protecting is lost: `none` is strictly stronger.
+     NOT accompanied by a `touch-action`: `none` would kill the list's native
+     scroll outright, and the property does not inherit (CSS UI L4), so the
+     `.shell-mobile` blanket never reached this element to begin with.
+     #1445 — `relative` makes the scroller the containing block for the pull
+     slot below. An absolute child is placed against the SCROLLED content
+     origin, and the pull only exists at scrollTop 0, where that origin is the
+     visible top edge. */
+  overscroll-behavior: none;
+  position: relative;
+}
+
+/* #1445 — the pull-to-refresh slot. Parked one slot-height ABOVE the list's
+   top edge, where the scroller's own overflow clips it, and slid into view by
+   the gesture's inline transform (DirectoryPane's `pulledTransform`, which
+   re-states this parked offset because an inline transform replaces the
+   declaration wholesale). `pointer-events: none` so a slot mid-slide never
+   swallows a tap meant for the first row. */
+.directory-pull-slot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.5rem;
+  opacity: 0;
+  transform: translateY(-100%);
+  transition:
+    transform 150ms ease-out,
+    opacity 150ms ease-out;
+  pointer-events: none;
+}
+
+/* While a finger is driving a CLAIMED pull the binder wears
+   `pull-gesture-active` on the scroller, and the slot must track the finger
+   rather than ease behind it. Reachable as a plain descendant selector only
+   because the slot lives INSIDE the bound element — the reason it is an
+   absolute child rather than a sibling above the list. */
+.directory-list.pull-gesture-active .directory-pull-slot {
+  transition: none;
+}
+
+/* Reuses the `.login-spinner` ring recipe and the shared `login-spin`
+   keyframes, exactly as `.compose-send-spinner` does — a third hand-copied
+   ring is how that recipe would start to drift. In `--accent` like the
+   original: this one sits on the pane background, not on a coloured button. */
+.directory-pull-spinner {
+  box-sizing: border-box;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: login-spin 0.9s linear infinite;
 }
 
 .directory-list-inner {

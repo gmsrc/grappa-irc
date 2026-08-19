@@ -3,6 +3,8 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DirectoryPage } from "../lib/api";
 import { channelKey } from "../lib/channelKey";
+import { PULL_COMMIT_PX } from "../lib/pullGesture";
+import { fireTouch } from "./helpers/touchEvents";
 
 // E3 — DirectoryPane unit suite. Covers:
 //   * mount with undefined page → calls loadDirectory(slug)
@@ -832,6 +834,160 @@ describe("DirectoryPane", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+  // #1445 F3 — the pull gesture on the row list. The binder's own decision
+  // table (what it claims, what it refuses) is covered against a bare element
+  // in pullGesture.test.ts; these are the pane's WIRING: that the pull reaches
+  // the same door the button reaches, that the slot is painted, and that the
+  // listeners die with the pane.
+  //
+  // What jsdom cannot say: whether any of this feels like a pull. A synthetic
+  // touch drives no compositor and jsdom resolves no `touch-action`, so this
+  // pins the transform STRING the pane writes, not that anything tracked a
+  // finger. That half is Playwright's, and the FEEL is a device call.
+  describe("pull to refresh (#1445)", () => {
+    const X = 120;
+    const Y0 = 300;
+
+    const listIn = (container: HTMLElement): HTMLElement => {
+      const el = container.querySelector<HTMLElement>(".directory-list");
+      if (el === null) throw new Error("no directory list rendered");
+      return el;
+    };
+
+    const slotIn = (container: HTMLElement): HTMLElement => {
+      const el = container.querySelector<HTMLElement>(".directory-pull-slot");
+      if (el === null) throw new Error("no pull slot rendered");
+      return el;
+    };
+
+    // Finger down and dragged to `dy`, still on the glass — the mid-pull paint
+    // exists only before the release wipes it. TWO moves because the binder
+    // claims LATE: it decides on a touchmove, never on the touchstart.
+    const pullTo = (target: HTMLElement, dy: number): void => {
+      fireTouch(target, "touchstart", { clientX: X, clientY: Y0 });
+      fireTouch(target, "touchmove", { clientX: X, clientY: Y0 + Math.min(dy, 20) });
+      fireTouch(target, "touchmove", { clientX: X, clientY: Y0 + dy });
+    };
+
+    const pullAndLift = (target: HTMLElement, dy: number): void => {
+      pullTo(target, dy);
+      fireTouch(target, "touchend", { clientX: X, clientY: Y0 + dy });
+    };
+
+    it("a pull past the commit distance asks for the refresh through the SAME door as the button", async () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      pullAndLift(listIn(container), PULL_COMMIT_PX * 3);
+
+      // triggerRefresh, not a second refresh path: the store latch that makes
+      // the button honest (#1445 F1) only guards THAT verb, so a gesture on
+      // any other door would re-open the double-POST this issue closed.
+      await waitFor(() => {
+        expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
+      });
+      expect(triggerRefreshMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("a pull short of the commit distance asks for nothing", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      pullAndLift(listIn(container), Math.round(PULL_COMMIT_PX / 2));
+
+      expect(triggerRefreshMock).not.toHaveBeenCalled();
+      // Positive control: the same pane, pulled far enough, DOES ask. Without
+      // it a binder that never armed at all would pass the assertion above.
+      pullAndLift(listIn(container), PULL_COMMIT_PX * 3);
+      expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
+    });
+
+    it("the slot follows the finger while it is down", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      const travel = Math.round(PULL_COMMIT_PX / 2);
+      pullTo(listIn(container), travel);
+
+      expect(slotIn(container).style.transform).toContain(`translateY(${travel}px)`);
+    });
+
+    it("keeps the slot's parked offset in the pulled transform (an inline transform replaces the rule)", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      pullTo(listIn(container), Math.round(PULL_COMMIT_PX / 2));
+
+      // The slot rests at translateY(-100%), clipped above the list's top
+      // edge. An inline transform REPLACES that declaration wholesale, so a
+      // paint that forgot it would drop the slot into the rows by its own
+      // height instead of sliding it in from above — the #1438 lesson, on a
+      // different element.
+      expect(slotIn(container).style.transform).toContain("translateY(-100%)");
+    });
+
+    it("the paint stops at the commit distance however far the finger goes", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      pullTo(listIn(container), PULL_COMMIT_PX * 4);
+
+      const painted = slotIn(container).style.transform;
+      expect(painted).toContain(`translateY(${PULL_COMMIT_PX}px)`);
+      expect(painted).not.toContain(`translateY(${PULL_COMMIT_PX * 4}px)`);
+    });
+
+    it("the release wipes the paint", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      const list = listIn(container);
+      pullTo(list, Math.round(PULL_COMMIT_PX / 2));
+      expect(slotIn(container).style.transform).not.toBe("");
+
+      fireTouch(list, "touchend", { clientX: X, clientY: Y0 + Math.round(PULL_COMMIT_PX / 2) });
+
+      expect(slotIn(container).style.transform).toBe("");
+    });
+
+    it("a drag that starts scrolled away from the top is left to native scroll", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      const list = listIn(container);
+      list.scrollTop = 200;
+      pullAndLift(list, PULL_COMMIT_PX * 3);
+
+      expect(triggerRefreshMock).not.toHaveBeenCalled();
+      expect(slotIn(container).style.transform).toBe("");
+      // Positive control: the same distance at the top of the list DOES ask,
+      // so this measures the scroll guard and not a dead binder.
+      list.scrollTop = 0;
+      pullAndLift(list, PULL_COMMIT_PX * 3);
+      expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
+    });
+
+    // #308 landmine 3 — Solid does NOT re-invoke a function ref with undefined
+    // at unmount the way React does, so a binder whose disposer is never
+    // called keeps its listeners on a detached element and a stray touch
+    // still spends a server capture.
+    it("unmounting the pane disposes the binder", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container, unmount } = render(() => <DirectoryPane networkSlug={SLUG} />);
+      const list = listIn(container);
+
+      // Pre-state: while mounted, this exact gesture on this exact element
+      // reaches the door. Without it the assertion below cannot tell a
+      // disposed listener from a gesture that never worked.
+      pullAndLift(list, PULL_COMMIT_PX * 3);
+      expect(triggerRefreshMock).toHaveBeenCalledTimes(1);
+
+      unmount();
+      pullAndLift(list, PULL_COMMIT_PX * 3);
+
+      expect(triggerRefreshMock).toHaveBeenCalledTimes(1);
     });
   });
 });
