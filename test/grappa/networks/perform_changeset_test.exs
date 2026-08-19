@@ -23,6 +23,15 @@ defmodule Grappa.Networks.PerformChangesetTest do
     )
   end
 
+  # #1397 — every `reload_credential/1` here is handed a struct that
+  # PREDATES the write under test, never the one `Repo.update/1` just
+  # returned, and the value asserted is one that struct does not carry.
+  # Reloading the post-write struct yields the same fields whether or not
+  # the read happens, so the round trip the assertions name — encrypt →
+  # store → Cloak `:load` — is not what they observe. The rule has teeth:
+  # in the clearing and keep-branch tests below the pre-write struct is
+  # `saved`, not `cred`, because `cred` carries nil for the fields those
+  # tests expect to find nil, and a reload that returned it would pass.
   describe "Credential.perform_changeset/2" do
     test "encrypts + round-trips perform_list and oper_pass on read (Cloak decrypt)" do
       {_, _, cred} = rotating_credential(%{})
@@ -34,8 +43,8 @@ defmodule Grappa.Networks.PerformChangesetTest do
         })
 
       assert cs.valid?
-      {:ok, saved} = Repo.update(cs)
-      reloaded = reload_credential(saved)
+      {:ok, _} = Repo.update(cs)
+      reloaded = reload_credential(cred)
 
       # After Cloak :load, the *_encrypted fields carry the DECRYPTED plaintext.
       assert reloaded.perform_list_encrypted ==
@@ -47,7 +56,7 @@ defmodule Grappa.Networks.PerformChangesetTest do
     test "accessors return the decrypted plaintext, nil when unset" do
       {_, _, cred} = rotating_credential(%{})
 
-      {:ok, saved} =
+      {:ok, _} =
         cred
         |> Credential.perform_changeset(%{
           perform_list: "MODE $nick +x",
@@ -55,7 +64,7 @@ defmodule Grappa.Networks.PerformChangesetTest do
         })
         |> Repo.update()
 
-      reloaded = reload_credential(saved)
+      reloaded = reload_credential(cred)
       assert Credential.perform_list_text(reloaded) == "MODE $nick +x"
       assert Credential.upstream_oper_pass(reloaded) == "s3cr3t"
 
@@ -67,7 +76,7 @@ defmodule Grappa.Networks.PerformChangesetTest do
     test "inspect/1 never leaks perform_list or oper_pass (redact: true)" do
       {_, _, cred} = rotating_credential(%{})
 
-      {:ok, saved} =
+      {:ok, _} =
         cred
         |> Credential.perform_changeset(%{
           perform_list: "OPER vjt topsecret",
@@ -75,7 +84,15 @@ defmodule Grappa.Networks.PerformChangesetTest do
         })
         |> Repo.update()
 
-      dump = inspect(reload_credential(saved))
+      reloaded = reload_credential(cred)
+
+      # The refutes below are only worth anything over a struct that DOES
+      # carry the secrets: redaction proven on an empty struct is proven
+      # on nothing.
+      assert Credential.perform_list_text(reloaded) == "OPER vjt topsecret"
+      assert Credential.upstream_oper_pass(reloaded) == "leakme"
+
+      dump = inspect(reloaded)
       refute dump =~ "topsecret"
       refute dump =~ "leakme"
     end
@@ -102,12 +119,12 @@ defmodule Grappa.Networks.PerformChangesetTest do
         })
         |> Repo.update()
 
-      {:ok, cleared} =
+      {:ok, _} =
         saved
         |> Credential.perform_changeset(%{perform_list: "", oper_pass: ""})
         |> Repo.update()
 
-      reloaded = reload_credential(cleared)
+      reloaded = reload_credential(saved)
       assert Credential.perform_list_text(reloaded) == nil
       assert Credential.upstream_oper_pass(reloaded) == nil
     end
@@ -122,12 +139,12 @@ defmodule Grappa.Networks.PerformChangesetTest do
 
       # A later edit that touches ONLY the perform list must not disturb the
       # stored oper secret (get_change == nil → keep-branch).
-      {:ok, updated} =
+      {:ok, _} =
         saved
         |> Credential.perform_changeset(%{perform_list: "MODE $nick +x"})
         |> Repo.update()
 
-      reloaded = reload_credential(updated)
+      reloaded = reload_credential(saved)
       assert Credential.perform_list_text(reloaded) == "MODE $nick +x"
       assert Credential.upstream_oper_pass(reloaded) == "keepme"
     end
@@ -158,12 +175,18 @@ defmodule Grappa.Networks.PerformChangesetTest do
       # home, which is the split brain #124 is named after.
       {_, _, cred} = rotating_credential(%{})
 
-      {:ok, saved} =
+      {:ok, _} =
         cred
         |> Credential.perform_changeset(%{perform_list: "MODE $nick +x", server_pass: "sneaky"})
         |> Repo.update()
 
-      assert reload_credential(saved).server_pass_encrypted == nil
+      reloaded = reload_credential(cred)
+
+      # A nil slot is also what a row nobody wrote to says. The perform
+      # list is the evidence that this read reached the written row, so
+      # the nil below is a refusal and not an absence.
+      assert Credential.perform_list_text(reloaded) == "MODE $nick +x"
+      assert reloaded.server_pass_encrypted == nil
     end
 
     test "rejects a perform list over the byte cap" do
