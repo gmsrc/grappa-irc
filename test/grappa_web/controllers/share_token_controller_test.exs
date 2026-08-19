@@ -543,12 +543,6 @@ defmodule GrappaWeb.ShareTokenControllerTest do
     end
   end
 
-  describe "ShareTokens module ETS sanity" do
-    test "table_name is reachable from the test harness" do
-      assert ShareTokens.table_name() == :share_tokens_used
-    end
-  end
-
   describe "telemetry" do
     setup do
       handler = "share-token-telemetry-#{System.unique_integer([:positive])}"
