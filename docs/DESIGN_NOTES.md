@@ -51397,3 +51397,87 @@ used to close on "gating one door means the next door added is a fresh
 instance of this bug" — a warning against the shape the code has. It now
 states the obligation on the next writer, and names the three writers
 that already skip the guard (`takeDraft`, `handBack`, `pushHistory`).
+<!-- entry #1397-fixture-oracles -->
+
+---
+
+## 2026-08-19 — #1397: two test-support claims that nothing was checking
+
+Bucket H of the architecture review is a de-duplication issue, and consolidating
+its fixtures surfaced two things that de-duplication is not allowed to decide:
+a fixture that stated in its own moduledoc that it was not doing what its name
+implied, and six assertions that could not fail. Both were filed as questions
+rather than acted on. vjt ruled on both; this entry records the rulings and what
+was measured carrying them out.
+
+### The fixture hash was a placeholder, and the placeholder was worse than slow
+
+`AuthFixtures.user_fixture/1` inserted `password_hash: "x"`. The saving was real
+— nothing under `config/` tunes Argon2 down for tests, so a per-fixture hash pays
+production parameters (m=65536, t=3, p=4) across the ~130 files that import the
+module. The ruling keeps the saving and drops the lie: a REAL Argon2 hash of a
+known password, computed once and pinned as a constant that lives only in test
+support. Hashing is what cost; pinning removes it. Verification costs what it
+always cost, and exactly one test pays it.
+
+That one test is not optional, and the reason is the general one about constants:
+nothing in a suite recomputes a pinned value, so nothing notices when it stops
+being what it claims. A corrupted constant would leave every fixture user
+unverifiable while the files that only want a row to hang a session on kept
+passing. `Grappa.AuthFixturesTest` reads the constant as a claim and checks it
+through the production door, `Accounts.get_user_by_credentials/2`.
+
+The red that test produced before the fix is worth keeping: with `"x"` stored,
+the door did not answer `{:error, :invalid_credentials}` — it RAISED
+`ArgumentError: Invalid Argon2 hash`, because the placeholder cannot be parsed as
+one. The fixture user was not merely unverifiable; it was a landmine for any test
+that wandered into the verify path. The accepted limit, now in the moduledoc
+instead of waiting to be discovered: every fixture user shares one password, and
+a test that needs its own still calls `user_fixture_with_password/1`.
+
+### A reload of the struct the write returned is not a reload
+
+`perform_changeset_test.exs` called `reload_credential/1` six times, and every
+call was handed the struct `Repo.update/1` had just returned. Re-reading and not
+re-reading yield the same field values, so none of the six could fail: the
+encrypt → store → Cloak `:load` round trip the file's own comment names was never
+observed. The assertions would have held with no database behind them.
+
+The two-sided mutant is the whole result, and it is more informative here than
+usual. With `reload_credential/1` replaced by the identity function, the file ran
+**10 tests, 0 failures** before the change and **10 tests, 6 failures** after —
+the six being exactly the six sites, by name. A de-duplication that preserves
+behaviour by construction and one that repairs something look identical from the
+green side; that asymmetry is what tells them apart.
+
+The blindness is PRE-EXISTING on main, measured rather than argued: the same
+mutant against the file's own local `reload/1`, on a detached worktree at
+`origin/main` with nothing else touched, left it green. The consolidation onto
+shared fixtures did not introduce it — it made it visible.
+
+### Which pre-write struct is not a detail
+
+The fix is to hand each reload a struct that PREDATES the write and to assert a
+value that struct does not carry. The trap is that the right struct is not
+uniform: in the clearing and keep-branch tests it is `saved`, not `cred`, because
+`cred` holds nil for exactly the fields those two expect to find nil. A reload
+returning it would pass for the wrong reason — the defect being fixed,
+reintroduced one layer down. The rule is not "reload something older", it is
+"reload something whose in-memory values CONTRADICT the expected outcome".
+
+Two of the six assert an absence (`inspect/1` leaks nothing; the perform door
+cannot reach the server-PASS slot), and a nil is also what an unwritten row says.
+Neither can be repaired by choosing a different struct, so both gained a positive
+control — the perform list landed — which is what makes the nil a refusal and not
+an empty read. Same shape as the empty-recorder controls in #1336.
+
+### Not established
+
+The count reconciles: base 6560 tests measured on a tree byte-identical to
+`8a23e667` for the three touched files, 6561 after, one added test block, zero
+removed, `scripts/check.sh` rc=0 on the branch. What was NOT measured: whether
+the post-write-reload shape occurs anywhere else in the suite — the search was
+never run, and this entry claims nothing about the other files that call the
+shared helper beyond the 23 kills already recorded on the issue. Nor was any
+suite-time effect of the pinned hash measured; the ~100 ms figure remains the
+moduledoc's own claim, inherited, not re-timed here.
