@@ -32,7 +32,16 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
-  reporter: [["list"], ["html", { outputFolder: "playwright-report", open: "never" }]],
+  // `./reporters/coldStart.ts` (#1584) — LAST on purpose, so its census
+  // prints under the list summary rather than above the first test line.
+  // A reporter, not a fixture: it is the only place that sees every test's
+  // true worker and true order, including the 29 spec files that import
+  // `test` from `@playwright/test` and so are invisible to `fixtures/test`.
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: "playwright-report", open: "never" }],
+    ["./reporters/coldStart.ts"],
+  ],
   use: {
     baseURL,
     // Self-signed nginx-test cert — accepted across every spec.

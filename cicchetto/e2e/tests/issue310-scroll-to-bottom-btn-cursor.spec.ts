@@ -61,6 +61,7 @@ import {
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
+import { WARM_START_TAG } from "../reporters/coldStartLedger";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
@@ -172,9 +173,24 @@ test.describe("#310 — scroll-to-bottom button persists the read cursor (mobile
     await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   });
 
-  test("@webkit tapping the button advances the cursor to the tail and does not snap back", async ({
-    page,
-  }) => {
+  // `@warmstart` (#1584) — MEASURED on #1543: this test is red 4/4 as the
+  // first `@webkit` test an invocation collects, and green behind any other
+  // one; a bare open with no assertions is red on the same seat. So its red,
+  // when it is the head of its worker, is a property of what the invocation
+  // collected and not of the branch under test — which is how #1543 came to
+  // be filed against the code. The tag makes that invocation fail with the
+  // reason spelled out instead of handing back a regression-shaped red.
+  //
+  // The tag is on the mobile arm ONLY: the desktop arm above was not measured
+  // on either side of the input, and an unmeasured declaration would be a
+  // guess wearing a gate's clothes.
+  //
+  // Declared through the `{ tag }` option rather than in the title, so the
+  // title stays greppable exactly as `docs/TESTING.md` and #1543 spell it
+  // (`--grep` matches tags too).
+  test("@webkit tapping the button advances the cursor to the tail and does not snap back", {
+    tag: WARM_START_TAG,
+  }, async ({ page }) => {
     await tapButtonPersistsCursorAndHolds(page, `btn310-w${Date.now() % 100000}`);
   });
 });

@@ -21,7 +21,17 @@ export default defineConfig({
     // worth testing here (#806). Matched on `.test.ts` alone, never
     // `.spec.ts`: `e2e/tests/*.spec.ts` are playwright specs and must not
     // be picked up by vitest.
-    include: ["src/**/*.{test,spec}.{ts,tsx}", "e2e/fixtures/**/*.test.ts"],
+    //
+    // `e2e/reporters/**/*.test.ts` — same argument one directory over
+    // (#1584): a playwright REPORTER is the only place that sees every
+    // test's true worker and true order, so the cure for the
+    // first-in-project class lives there, and the part of it that is a
+    // decision rather than a driver call is proven here.
+    include: [
+      "src/**/*.{test,spec}.{ts,tsx}",
+      "e2e/fixtures/**/*.test.ts",
+      "e2e/reporters/**/*.test.ts",
+    ],
   },
   resolve: {
     conditions: ["development", "browser"],
