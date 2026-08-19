@@ -51966,3 +51966,128 @@ One interaction is modelled nowhere: the pane rewrites `scrollTop` from
 a queueMicrotask whenever the entry count changes, so a progress ping
 that lands while a finger is down meets a gesture that assumes it owns
 the scroller. No test holds a finger across a ping.
+<!-- entry #1397-fixture-fold -->
+
+---
+
+## 2026-08-19 — #1397: the fixture trio folds, and the suite-time claim its predecessor declined to make
+
+The entry above (`#1397-fixture-oracles`) closes with *"nor was any suite-time
+effect of the pinned hash measured; the ~100 ms figure remains the moduledoc's
+own claim, inherited, not re-timed here."* This one re-times it, because the
+same ruling is what unblocked the twenty-five copies this folds.
+
+### A blocker that had already expired
+
+The fourteen local `user_fixture` copies were held — explicitly, in
+`#1397-adoption` — on an open question about Argon2 cost. vjt ruled it and
+#1564 carried it out, so by the time this slice opened there was nothing left
+holding them. That is `#1397-deferred7`'s rule in its second instance: **a
+blocker recorded in an issue is a measurement of a moment, not a property of
+the code**, and the failure mode is declining to act on a stale red, which is
+invisible because nothing breaks when you obey it.
+
+### What the copies were actually paying
+
+All fourteen went through `Accounts.create_user/1` — changeset plus
+`Argon2.hash_pwd_salt/1` — while the canonical they shadow does a bare
+`Repo.insert` with a precomputed hash. `grep -rniE 'argon2|t_cost|m_cost' config/`
+returns nothing, so `:test` runs argon2_elixir's production defaults in full;
+the moduledoc's claim is corroborated by a grep independent of the moduledoc.
+
+None of the fourteen exercises the verification path. The issue's own text says
+"13 of those 14", implying one does — on today's base that one does not exist:
+the single hit for `login` across all fourteen is **prose inside a comment**
+(`networks_test.exs:504`). The count was a grep artifact and is corrected here.
+
+### The displacement, and the first number that was wrong
+
+| run | suite | async | sync |
+| --- | --- | --- | --- |
+| before (base files restored in place) | **138.2s** | 42.9s | 95.2s |
+| after ×3 | **116.8 / 118.4 / 118.2s** | 25.7s | 92.4s |
+
+≈ **-20s, -15%**, and essentially ALL of it in the async half — which is where
+thirteen of the fourteen files live (`networks_test.exs` is `async: false`).
+That the saving lands where the touched files run is the internal check that
+makes the number readable as this change rather than as noise.
+
+🥇 **The first before/after was measured against a moving host and would have
+claimed twice the truth.** An initial pair read 166.4s → 116.8s (-30%), taken
+while another worker's full gate ran in a second tmux session. The 166.4s was
+that contention, not the fixtures: re-measured back-to-back on an idle host the
+same base is 138.2s. **A before/after is only a displacement if both sides see
+the same machine** — and the way that was caught was noticing the other session
+had disappeared between the two runs, not anything in the numbers.
+
+### Two mutants, two sides, two mechanisms
+
+Against the canonical, over the same 494 tests in the fourteen files:
+
+| mutant | branch | base |
+| --- | --- | --- |
+| `user_fixture/1` ignores `attrs`, constant name | **29 failures** | **0** |
+| `network_fixture/1` ignores `:slug`, constant slug | **17 failures** | **0** |
+
+The base column is what attributes the kills: there the fourteen files still
+carry their own bodies, so the canonical can be broken freely and nothing
+notices. The two mutants also die by different mechanisms and say so in their
+failure lines — `Ecto.ConstraintError` on `users_folded_name_index` for the
+first, `assert a.id != b.id` ("same nick on two networks is two independent
+entries") for the second — which is the standard this project holds a kill to:
+**deaths with different names, read off the failure lines**, not one death
+counted twice.
+
+### Three refusals, each with its reason
+
+**The seven `network_fixture` copies ride along.** They are the canonical
+specialised at a different slug prefix — no drift, no weaker copy — so folding
+them changes no behaviour. That was first read as disqualifying, by the same
+criterion that refused `flush/1` on this issue. It is a category error: for
+`flush/1` the only claim on offer was behavioural, and none could be made; here
+the claim is structural, and being preserving-by-construction is the POINT of a
+de-duplication rather than an objection to it. "Total consistency or nothing"
+settles the rest — seven left behind would be exactly the two patterns #1397
+names.
+
+**The four `visitor_fixture` copies stay.** They call the production door
+`Visitors.find_or_provision_anon/3`; the canonical mirrors that shape rather
+than calling it, and says so in its own comment. Folding them would trade a real
+door for an imitation of one, so those four files keep a narrowed import instead
+— the same `only:` shape thirteen files in the suite already use.
+
+**The e2e half is out of scope and is now two definitions, not sixty-one.**
+Measured on `def49b52`, the nine helpers #1397 names have 8 definitions over 4
+files, six of which are the canonicals in `e2e/fixtures/`. The real residue is
+`loginAs` in `issue252-vhost-selector.spec.ts:34` — the `adminLogin` body
+wearing the `loginAs` name, stopping at `expectShellReady` without the
+`waitForUserTopicReady` barrier the canonical carries — and a `bootVisitor` in
+`issue477` which is NOT a duplicate at all (different signature, and it calls
+the canonical `bootVisitorContext`). It waits for the exclusive e2e lane.
+
+### Three uniform zeros, all instrument
+
+Worth recording because each looked like a finding:
+
+  * `git grep -E` knows neither `\b` nor `\s` — they are not POSIX ERE. Two
+    separate anchors, each returning **0 files** for a helper that has fourteen
+    definitions. Isolated one element at a time to attribute it.
+  * comparing a local body to the canonical with string literals blanked
+    returns "different" for all 25, which is TRUE and answers the wrong
+    question: the canonical is parameterised (`Keyword.get(attrs, :slug, …)`)
+    and the copies are not, so a textual compare can never coincide.
+  * an alias pruner keyed on `Short.` would have deleted two LIVE aliases used
+    only as `%Short{}`. The cure was to stop guessing and let
+    `--warnings-as-errors` name the twenty unused aliases and the one orphaned
+    `uniq/0`, which it did precisely.
+
+### Not established
+
+No claim is made about the 13 further files, 30 call sites, that reach
+`Accounts.create_user/1` inline outside any fixture — they were counted and
+classified by whether they name the verification path, and not read. The
+runtime hash COUNT was never taken: the 44 static sites are neither an upper
+nor a lower bound, since a site inside a `defp` costs one hash per call and one
+inside a `setup` costs one per test. The before side of the timing is a single
+run against three after runs; the after spread is 1.6s and the gap is 20s, but
+one run is one run.
