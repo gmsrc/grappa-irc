@@ -51749,3 +51749,119 @@ for one number is how the next reader picks the wrong one.
   cure, which puts the live number in the verdict.
 * The window boundary recorded above is unchanged, and so is the browser
   coverage caveat: chromium for this spec.
+<!-- entry #1445-refresh-latch -->
+
+---
+
+## 2026-08-19 — #1445: the refresh latch, and the gap the server field cannot cover
+
+#1445 asks for a pull-to-refresh in the channel directory. Building the
+gesture first would have stacked it on a hole, so this is the store half
+alone: the gesture lands in a later slice.
+
+### The gap was already open, on the button
+
+`ChannelDirectory.triggerRefresh` only ASKS the server to re-capture. The
+rows arrive later through the progress/complete/failed pings, each of
+which re-GETs page 1 — which is why a 202 clears nothing. Until that
+first GET lands, `status` still reads whatever it read before the POST.
+
+`DirectoryPane` disabled its Refresh button off `status === "refreshing"`
+alone, so across that window the button was enabled and labelled
+"Refresh" while a capture was already on its way. This was NOT a hazard
+the gesture would have introduced: it is a defect the button shipped
+with. Measured, not reasoned — the first test in
+`channelDirectory.test.ts` fails on the parent commit with two POSTs for
+one double tap, and that same test is the cure's oracle.
+
+### The guard sits at the verb, not at a door
+
+There are already two doors onto the re-capture (the toolbar button and
+the stale CTA at the bottom of the meta row) and #1445 adds a third. A
+guard on whichever door happens to be disabled is a guard each new door
+can reopen, so it lives in `triggerRefresh` itself. The pane's job is
+only to SHOW it: one `busy()` accessor ORing the server status with the
+latch, read by all three affordances so they cannot disagree.
+
+The stale CTA is disabled too. Left live it would take a click the store
+now swallows, which is precisely the silent no-op #732 closed.
+
+### Why it releases on the first page write, whatever that page says
+
+The latch stands down on the first `fetchInto` settle for the slug after
+the POST, in BOTH arms and regardless of the status it carries: from
+that moment the store holds fresher information than the latch does. A
+`refreshing` status hands the signal over to `status` itself; a terminal
+one means the capture already finished; a failed GET means the pane is
+showing an error with a reload, and a latch held past that is a door
+disabled with no capture coming. The release sits inside the arms rather
+than in a `finally` so a SUPERSEDED response cannot release a latch a
+newer POST has since taken.
+
+Deliberately **no timer backstop**, against the issue's own sketch. The
+only case a timer would guard is a 202 followed by no ping at all — not
+even `directory_failed` — and the cost is a stale timer releasing the
+NEXT latch early, which is a lifecycle hazard heavier than the case it
+covers. The bound is stated instead: a pane close (`resetDirectory`) or
+an identity rotation releases it. If a measurement later shows the gap
+is genuinely unbounded, adding the timer is additive.
+
+### Declared behaviour change
+
+The Refresh button now stays disabled until the refresh has actually
+finished, where before it came back the moment the POST returned. This
+is a visible change to an existing control and is called out rather than
+left to be discovered. The tiebreak is minimum surprise, and it favours
+the latch: a button that re-enables mid-capture breaks the promise the
+interface just made.
+
+### Two of the issue's own directions are superseded — measured
+
+The issue body, written against `38e75561`, says to mirror
+`bindMessageGestures` "on the vertical axis" and to claim the axis via
+`swipe.ts`'s `claimAxis`. Both were re-measured on `cda50a5f` and both
+are stale:
+
+* `lib/mediaViewerGesture.ts` (#1438) is ALREADY a vertical
+  follow-the-finger binder, and it already exposes the `onProgress`
+  channel the issue asks for, alongside `onCommit` / `onRelease`. The
+  issue cites #1438 once, and only for two inherited landmines — not as
+  the shape to copy. Mirroring the horizontal binder would re-derive
+  what #1438 derived.
+* `verticalClaim` (`touchGesture.ts`) is the exact primitive, added by
+  #1438 for this job. `claimAxis` carries a `selectionActive` flag and a
+  textarea `ScrollBoundary` that mean nothing on a row list.
+
+What the issue got right about `bindMessageGestures` is narrower than it
+claimed, and it is the part that matters: the DIRECTION GATE. Recorded
+here so the gesture slice does not re-walk it.
+
+### The 20% that does not fit — the domain boundary for the gesture slice
+
+`bindDismissGesture` covers most of what the pull needs. What does not:
+
+* **Direction.** `verticalClaim` is direction-agnostic and the dismiss
+  binder commits on up OR down. A pull must claim DOWN only: claiming an
+  upward drag at the top of a list would `preventDefault` native scroll.
+  The shape to copy is `messageGestures.ts`'s rightward-only gate.
+* **Threshold.** The dismiss binder commits on a fraction of viewport
+  HEIGHT. That is the wrong magnitude for a pull at the top of a list;
+  `SWIPE_MIN_PX` is the starting point.
+* **Arming.** `canDismiss()` at touchstart maps cleanly onto
+  `scrollTop === 0`. This one FITS — noted so it is not mistaken for a
+  gap.
+
+A `direction: "down" | "both"` flag on the existing binder was rejected:
+that is the shared-data-model-with-a-type-flag shape CLAUDE.md calls a
+boundary violation. The house precedent is the opposite — three binders
+(edge, message, dismiss) each COMPOSING one pure core. A fourth is
+written the same way.
+
+### Not established
+
+The size of the POST→first-GET gap was never measured, only bounded by
+the behaviour above; whether a 202 can be followed by total silence is
+unknown; and nothing here touches the gesture, so none of #1445's
+device-level questions (feel, threshold in px, whether iOS Safari's
+rubber-band at the top of the scroller fights a transform) are answered
+or affected.
