@@ -24,20 +24,14 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
   """
   use Grappa.DataCase, async: true
 
-  import Grappa.AuthFixtures, only: [visitor_fixture: 0]
+  import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, UserSettings}
+  alias Grappa.UserSettings
   alias Grappa.UserSettings.Settings
 
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
-
-  defp user_fixture do
-    name = "dp-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
 
   # A full, valid wire-shape body (string keys, as the controller passes it).
   defp valid_wire(overrides \\ %{}) do

@@ -25,24 +25,14 @@ defmodule Grappa.NetworksTest do
   # cheaper than further bumping busy_timeout (already at 30s).
   use Grappa.DataCase, async: false
 
+  import Grappa.AuthFixtures
+
   alias Grappa.{Accounts, Networks, Repo}
   alias Grappa.IRC.Identifier
   alias Grappa.Networks.{Credential, Credentials, Network, Server, Servers, SessionPlan}
   alias Grappa.PubSub.Topic
   alias Grappa.Session.Backoff
   alias Grappa.Visitors.Visitor
-
-  defp user_fixture(name \\ nil) do
-    name = name || "vjt-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
-
-  defp network_fixture(slug \\ nil) do
-    slug = slug || "net-#{System.unique_integer([:positive])}"
-    {:ok, network} = Networks.find_or_create_network(%{slug: slug})
-    network
-  end
 
   # #93 — builds the `{host, enabled}` list as an ascending-priority ring,
   # binds `user` to it and resolves the spawn-door plan.
@@ -175,7 +165,7 @@ defmodule Grappa.NetworksTest do
 
   describe "add_server/2" do
     test "inserts a server attached to the network" do
-      net = network_fixture("azzurra")
+      net = network_fixture(slug: "azzurra")
 
       assert {:ok, %Server{} = srv} =
                Servers.add_server(net, %{
@@ -193,7 +183,7 @@ defmodule Grappa.NetworksTest do
     end
 
     test "returns {:error, :already_exists} on the same (network, host, port)" do
-      net = network_fixture("azzurra")
+      net = network_fixture(slug: "azzurra")
       attrs = %{host: "irc.azzurra.chat", port: 6697, tls: true}
 
       assert {:ok, _} = Servers.add_server(net, attrs)
@@ -213,7 +203,7 @@ defmodule Grappa.NetworksTest do
 
   describe "list_servers/1" do
     test "returns servers ordered by (priority asc, id asc)" do
-      net = network_fixture("azzurra")
+      net = network_fixture(slug: "azzurra")
       {:ok, _} = Servers.add_server(net, %{host: "a", port: 6697, priority: 1})
       {:ok, _} = Servers.add_server(net, %{host: "b", port: 6697, priority: 0})
       {:ok, _} = Servers.add_server(net, %{host: "c", port: 6697, priority: 0})
@@ -480,7 +470,7 @@ defmodule Grappa.NetworksTest do
     test "reuses an existing network and its server when no server is given", %{user: user} do
       # The shape the admin page needs: the operator picks a network that
       # already exists, and supplies per-network settings only.
-      net = network_fixture("azzurra")
+      net = network_fixture(slug: "azzurra")
       {:ok, _} = Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697, tls: true})
 
       assert {:ok, %Credential{} = cred} =
@@ -493,7 +483,7 @@ defmodule Grappa.NetworksTest do
 
     test "refuses, and writes NO credential, when the network has no enabled server",
          %{user: user} do
-      net = network_fixture("azzurra")
+      net = network_fixture(slug: "azzurra")
       {:ok, _} = Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697, enabled: false})
 
       assert {:error, :no_enabled_server} =
@@ -715,8 +705,8 @@ defmodule Grappa.NetworksTest do
   describe "list_credentials_for_user/1" do
     test "returns every binding for a user with networks preloaded" do
       user = user_fixture()
-      net1 = network_fixture("net-a")
-      net2 = network_fixture("net-b")
+      net1 = network_fixture(slug: "net-a")
+      net2 = network_fixture(slug: "net-b")
 
       {:ok, _} = Credentials.bind_credential(user, net1, %{nick: "n", auth_method: :none, autojoin_channels: []})
       {:ok, _} = Credentials.bind_credential(user, net2, %{nick: "n", auth_method: :none, autojoin_channels: []})
@@ -740,10 +730,10 @@ defmodule Grappa.NetworksTest do
     end
 
     test "returns every credential across users + networks with :network preloaded" do
-      u1 = user_fixture("alice-#{System.unique_integer([:positive])}")
-      u2 = user_fixture("bob-#{System.unique_integer([:positive])}")
-      net_a = network_fixture("net-a-#{System.unique_integer([:positive])}")
-      net_b = network_fixture("net-b-#{System.unique_integer([:positive])}")
+      u1 = user_fixture(name: "alice-#{System.unique_integer([:positive])}")
+      u2 = user_fixture(name: "bob-#{System.unique_integer([:positive])}")
+      net_a = network_fixture(slug: "net-a-#{System.unique_integer([:positive])}")
+      net_b = network_fixture(slug: "net-b-#{System.unique_integer([:positive])}")
 
       {:ok, _} =
         Credentials.bind_credential(u1, net_a, %{nick: "a", auth_method: :none, autojoin_channels: []})
@@ -777,14 +767,14 @@ defmodule Grappa.NetworksTest do
       [lo_user, hi_user] =
         Enum.sort_by(
           [
-            user_fixture("alice-#{System.unique_integer([:positive])}"),
-            user_fixture("bob-#{System.unique_integer([:positive])}")
+            user_fixture(name: "alice-#{System.unique_integer([:positive])}"),
+            user_fixture(name: "bob-#{System.unique_integer([:positive])}")
           ],
           & &1.id
         )
 
-      net_a = network_fixture("net-a-#{System.unique_integer([:positive])}")
-      net_b = network_fixture("net-b-#{System.unique_integer([:positive])}")
+      net_a = network_fixture(slug: "net-a-#{System.unique_integer([:positive])}")
+      net_b = network_fixture(slug: "net-b-#{System.unique_integer([:positive])}")
 
       {:ok, _} =
         Credentials.bind_credential(hi_user, net_b, %{
@@ -1154,8 +1144,8 @@ defmodule Grappa.NetworksTest do
 
     test "renders one row per credential, alpha by slug (matches list_credentials_for_user)" do
       user = user_fixture()
-      net_a = network_fixture("net-a-#{System.unique_integer([:positive])}")
-      net_b = network_fixture("net-b-#{System.unique_integer([:positive])}")
+      net_a = network_fixture(slug: "net-a-#{System.unique_integer([:positive])}")
+      net_b = network_fixture(slug: "net-b-#{System.unique_integer([:positive])}")
 
       {:ok, _} =
         Credentials.bind_credential(user, net_a, %{
@@ -1314,7 +1304,7 @@ defmodule Grappa.NetworksTest do
 
     test "keeps the network + servers after the last user unbinds (no auto-delete)" do
       user = user_fixture()
-      net = network_fixture("azzurra-solo")
+      net = network_fixture(slug: "azzurra-solo")
       {:ok, _} = Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697})
 
       {:ok, _} =
@@ -1337,7 +1327,7 @@ defmodule Grappa.NetworksTest do
     test "keeps the network + servers when another user still has a credential" do
       u1 = user_fixture()
       u2 = user_fixture()
-      net = network_fixture("azzurra-shared")
+      net = network_fixture(slug: "azzurra-shared")
       {:ok, _} = Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697})
 
       {:ok, _} =
@@ -1376,7 +1366,7 @@ defmodule Grappa.NetworksTest do
     # the network + its scrollback persist, and it returns :ok.
     test "detaches the last user from a visitor-only network with scrollback present" do
       user = user_fixture()
-      net = network_fixture("azzurra-archived")
+      net = network_fixture(slug: "azzurra-archived")
       {:ok, _} = Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697})
 
       {:ok, _} =
@@ -1415,7 +1405,7 @@ defmodule Grappa.NetworksTest do
 
   describe "get_network_by_slug!/1" do
     test "returns the row on a known slug" do
-      net = network_fixture("known-slug-#{System.unique_integer([:positive])}")
+      net = network_fixture(slug: "known-slug-#{System.unique_integer([:positive])}")
       assert %Network{id: id} = Networks.get_network_by_slug!(net.slug)
       assert id == net.id
     end
@@ -1429,8 +1419,8 @@ defmodule Grappa.NetworksTest do
 
   describe "network_id_by_slug_index/0 (M-4 admin console)" do
     test "returns %{slug => id} for every networks row" do
-      net_a = network_fixture("idx-a-#{System.unique_integer([:positive])}")
-      net_b = network_fixture("idx-b-#{System.unique_integer([:positive])}")
+      net_a = network_fixture(slug: "idx-a-#{System.unique_integer([:positive])}")
+      net_b = network_fixture(slug: "idx-b-#{System.unique_integer([:positive])}")
 
       index = Networks.network_id_by_slug_index()
 
@@ -1442,9 +1432,9 @@ defmodule Grappa.NetworksTest do
   describe "list_all/0 (M-5 admin console)" do
     test "returns every networks row ordered by slug ascending" do
       # Insert in reverse-slug order to prove the ordering isn't accidental.
-      net_z = network_fixture("z-#{System.unique_integer([:positive])}")
-      net_a = network_fixture("a-#{System.unique_integer([:positive])}")
-      net_m = network_fixture("m-#{System.unique_integer([:positive])}")
+      net_z = network_fixture(slug: "z-#{System.unique_integer([:positive])}")
+      net_a = network_fixture(slug: "a-#{System.unique_integer([:positive])}")
+      net_m = network_fixture(slug: "m-#{System.unique_integer([:positive])}")
 
       slugs = Enum.map(Networks.list_all(), & &1.slug)
 

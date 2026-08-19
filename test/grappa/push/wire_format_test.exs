@@ -36,7 +36,9 @@ defmodule Grappa.Push.WireFormatTest do
   """
   use Grappa.DataCase, async: false
 
-  alias Grappa.{Accounts, Push}
+  import Grappa.AuthFixtures
+
+  alias Grappa.Push
   alias Grappa.Push.Sender
 
   @payload %{
@@ -52,12 +54,6 @@ defmodule Grappa.Push.WireFormatTest do
   @gcm_tag_length 16
   # An uncompressed P-256 point: 0x04 ‖ X(32) ‖ Y(32).
   @p256_point_length 65
-
-  defp user_fixture do
-    name = "wire-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
 
   # Stands in for `PushManager.subscribe()`: the client generates a
   # P-256 keypair and a 16-byte auth secret, ships the PUBLIC half to

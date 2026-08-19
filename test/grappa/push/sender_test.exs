@@ -34,7 +34,9 @@ defmodule Grappa.Push.SenderTest do
   """
   use Grappa.DataCase, async: false
 
-  alias Grappa.{Accounts, Push, Visitors}
+  import Grappa.AuthFixtures, only: [user_fixture: 0]
+
+  alias Grappa.{Push, Visitors}
   alias Grappa.Push.Sender
 
   # Real P-256 client public key + 16-byte auth secret — NOT random
@@ -50,12 +52,6 @@ defmodule Grappa.Push.SenderTest do
     tag: "libera:#sbiffo",
     url: "/?network=libera&channel=%23sbiffo"
   }
-
-  defp user_fixture do
-    name = "sender-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
 
   defp visitor_fixture do
     nick = "sender-visitor-#{System.unique_integer([:positive])}"

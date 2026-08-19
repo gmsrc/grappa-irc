@@ -34,7 +34,9 @@ defmodule Grappa.UserSettingsConcurrencyTest do
   """
   use Grappa.DataCase, async: false
 
-  alias Grappa.{Accounts, UserSettings}
+  import Grappa.AuthFixtures
+
+  alias Grappa.UserSettings
   alias Grappa.IRC.Identifier
   alias Grappa.UserSettings.Settings
 
@@ -45,12 +47,6 @@ defmodule Grappa.UserSettingsConcurrencyTest do
   # timing guess: generous on purpose, because a window too short to let an
   # UNGUARDED writer commit would turn the defect green.
   @peer_grace_ms 1_000
-
-  defp user_fixture do
-    name = "us-conc-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
 
   # Spawns the second writer, then arms the pause. `peer_write` runs only once
   # the paused writer has read, and the pause ends as soon as it reports back.

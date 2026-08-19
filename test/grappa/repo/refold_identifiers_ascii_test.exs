@@ -13,7 +13,9 @@ defmodule Grappa.Repo.Migrations.RefoldIdentifiersAsciiTest do
   """
   use Grappa.DataCase, async: false
 
-  alias Grappa.{Accounts, Networks, Repo}
+  import Grappa.AuthFixtures
+
+  alias Grappa.Repo
   alias Grappa.QueryWindows.Window
 
   @migration Grappa.Repo.Migrations.RefoldIdentifiersAscii
@@ -25,18 +27,6 @@ defmodule Grappa.Repo.Migrations.RefoldIdentifiersAsciiTest do
     # don't depend on that — ensure the module is available for direct calls.
     unless Code.ensure_loaded?(@migration), do: Code.require_file(@migration_path)
     :ok
-  end
-
-  defp user_fixture do
-    name = "refold-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
-
-  defp network_fixture do
-    slug = "refold-net-#{System.unique_integer([:positive])}"
-    {:ok, network} = Networks.find_or_create_network(%{slug: slug})
-    network
   end
 
   defp now, do: DateTime.truncate(DateTime.utc_now(), :second)

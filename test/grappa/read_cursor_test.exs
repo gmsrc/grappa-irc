@@ -24,7 +24,9 @@ defmodule Grappa.ReadCursorTest do
   """
   use Grappa.DataCase, async: true
 
-  alias Grappa.{Accounts, Networks, ReadCursor, Repo, ScrollbackHelpers, Visitors}
+  import Grappa.AuthFixtures, only: [user_fixture: 0, network_fixture: 0]
+
+  alias Grappa.{ReadCursor, Repo, ScrollbackHelpers, Visitors}
   alias Grappa.PubSub.Topic
   alias Grappa.ReadCursor.Cursor
 
@@ -34,23 +36,11 @@ defmodule Grappa.ReadCursorTest do
 
   defp uniq, do: System.unique_integer([:positive])
 
-  defp user_fixture do
-    {:ok, user} =
-      Accounts.create_user(%{name: "rc-user-#{uniq()}", password: "correct horse battery staple"})
-
-    user
-  end
-
   defp visitor_fixture(network_slug) do
     {:ok, visitor} =
       Visitors.find_or_provision_anon("rc-visitor-#{uniq()}", network_slug, "127.0.0.1")
 
     visitor
-  end
-
-  defp network_fixture do
-    {:ok, network} = Networks.find_or_create_network(%{slug: "rc-net-#{uniq()}"})
-    network
   end
 
   # Generic unread-content inserter: `sender: "peer"` so a row stands for

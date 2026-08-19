@@ -19,23 +19,11 @@ defmodule Grappa.Migrations.CollapseNickReadCursorsTest do
   """
   use Grappa.DataCase, async: true
 
-  alias Grappa.{Accounts, Networks, Repo, ScrollbackHelpers}
+  import Grappa.AuthFixtures
+
+  alias Grappa.{Repo, ScrollbackHelpers}
 
   @nick_predicate "substr(channel,1,1) NOT IN ('#','&','!','+')"
-
-  defp uniq, do: System.unique_integer([:positive])
-
-  defp user_fixture do
-    {:ok, user} =
-      Accounts.create_user(%{name: "cursor-#{uniq()}", password: "correct horse battery staple"})
-
-    user
-  end
-
-  defp network_fixture do
-    {:ok, net} = Networks.find_or_create_network(%{slug: "azzurra-#{uniq()}"})
-    net
-  end
 
   defp message(user, net, channel, st) do
     {:ok, m} =

@@ -25,25 +25,17 @@ defmodule Grappa.NotifyTest do
 
   import ExUnit.CaptureLog
 
-  alias Grappa.{Accounts, Networks, Notify, Visitors}
+  import Grappa.AuthFixtures, only: [user_fixture: 0, network_fixture: 0]
+
+  alias Grappa.{Notify, Visitors}
   alias Grappa.Notify.Entry
   alias Grappa.PubSub.Topic
 
   # ---------------------------------------------------------------------------
-  # Fixtures — inline pattern, same as Grappa.QueryWindowsTest
+  # `visitor_fixture` stays inline: it provisions through the production
+  # door `Visitors.find_or_provision_anon/3`, which the AuthFixtures
+  # twin mirrors rather than calls.
   # ---------------------------------------------------------------------------
-
-  defp user_fixture do
-    name = "notify-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
-
-  defp network_fixture do
-    slug = "notify-net-#{System.unique_integer([:positive])}"
-    {:ok, network} = Networks.find_or_create_network(%{slug: slug})
-    network
-  end
 
   defp visitor_fixture(network_slug) do
     {:ok, visitor} =

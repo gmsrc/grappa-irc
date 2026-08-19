@@ -24,25 +24,11 @@ defmodule Grappa.QueryWindowsTest do
   use Grappa.DataCase, async: true
   use ExUnitProperties
 
-  alias Grappa.{Accounts, Networks, QueryWindows}
+  import Grappa.AuthFixtures
+
+  alias Grappa.QueryWindows
   alias Grappa.PubSub.Topic
   alias Grappa.QueryWindows.Window
-
-  # ---------------------------------------------------------------------------
-  # Fixtures — match the inline pattern the project uses (no ExMachina factory)
-  # ---------------------------------------------------------------------------
-
-  defp user_fixture do
-    name = "qw-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
-
-  defp network_fixture do
-    slug = "qw-net-#{System.unique_integer([:positive])}"
-    {:ok, network} = Networks.find_or_create_network(%{slug: slug})
-    network
-  end
 
   # ---------------------------------------------------------------------------
   # open/4

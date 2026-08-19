@@ -21,20 +21,10 @@ defmodule Grappa.NickMigrationTest do
   """
   use Grappa.DataCase, async: false
 
-  alias Grappa.{Accounts, Networks, NickMigration, QueryWindows, Scrollback, UserSettings}
+  import Grappa.AuthFixtures
+
+  alias Grappa.{NickMigration, QueryWindows, Scrollback, UserSettings}
   alias Grappa.IRC.Identifier
-
-  defp user_fixture do
-    name = "nm-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
-
-  defp network_fixture do
-    slug = "nm-net-#{System.unique_integer([:positive])}"
-    {:ok, network} = Networks.find_or_create_network(%{slug: slug})
-    network
-  end
 
   # Every SQL statement Ecto reports while `fun` runs, lowercased. `async:
   # false` because the handler is global: a concurrent test's queries would

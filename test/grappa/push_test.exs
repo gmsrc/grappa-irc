@@ -9,15 +9,10 @@ defmodule Grappa.PushTest do
   """
   use Grappa.DataCase, async: true
 
-  alias Grappa.{Accounts, Push}
-  alias Grappa.Push.Subscription
+  import Grappa.AuthFixtures
 
-  # Inline fixture mirroring the project convention (no ExMachina factory).
-  defp user_fixture do
-    name = "push-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
+  alias Grappa.Push
+  alias Grappa.Push.Subscription
 
   defp valid_attrs(opts \\ []) do
     base = %{

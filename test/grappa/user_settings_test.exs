@@ -18,21 +18,15 @@ defmodule Grappa.UserSettingsTest do
   use Grappa.DataCase, async: true
   use ExUnitProperties
 
-  import Grappa.AuthFixtures, only: [visitor_fixture: 0]
+  import Grappa.AuthFixtures
 
-  alias Grappa.{Accounts, Repo, UserSettings}
+  alias Grappa.{Repo, UserSettings}
   alias Grappa.PubSub.Topic
   alias Grappa.UserSettings.Settings
 
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
-
-  defp user_fixture do
-    name = "us-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
 
   # The PubSub topic root a settings write broadcasts on, built by the
   # same production function the web edge uses — never spelled out here.

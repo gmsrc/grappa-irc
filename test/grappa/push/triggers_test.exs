@@ -20,7 +20,9 @@ defmodule Grappa.Push.TriggersTest do
   """
   use Grappa.DataCase, async: false
 
-  alias Grappa.{Accounts, Push, UserSettings, Visitors, WSPresence}
+  import Grappa.AuthFixtures, only: [user_fixture: 0]
+
+  alias Grappa.{Push, UserSettings, Visitors, WSPresence}
   alias Grappa.Push.{Subscription, Triggers}
   alias Grappa.Scrollback.Message
 
@@ -352,12 +354,6 @@ defmodule Grappa.Push.TriggersTest do
   # ---------------------------------------------------------------------------
   # evaluate_and_dispatch/2 — end-to-end with Bypass + real subscription
   # ---------------------------------------------------------------------------
-
-  defp user_fixture do
-    name = "trigger-user-#{System.unique_integer([:positive])}"
-    {:ok, user} = Accounts.create_user(%{name: name, password: "correct horse battery staple"})
-    user
-  end
 
   defp visitor_fixture do
     nick = "trigger-visitor-#{System.unique_integer([:positive])}"
