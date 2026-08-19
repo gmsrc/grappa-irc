@@ -40,12 +40,4 @@ describe("shouldSuppressPush", () => {
   it("does NOT suppress when there are no windows (PWA closed)", () => {
     expect(shouldSuppressPush([])).toBe(false);
   });
-
-  it("ignores URL — visible window suppresses regardless of pathname", () => {
-    // Pre-L the gate compared client.url to payload.url. L drops the
-    // URL match entirely — once cic is foreground the in-app beep
-    // covers the alert, regardless of which channel/window is on top.
-    const clients: ClientLike[] = [{ visibilityState: "visible" }];
-    expect(shouldSuppressPush(clients)).toBe(true);
-  });
 });

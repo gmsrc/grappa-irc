@@ -1305,7 +1305,10 @@ describe("parseSlash — /notify + /watch presence (#356: irssi-direct, bare →
 
 describe("#385 — expandAlias grammar", () => {
   it("positional $1 substitution (whois-with-idle motivating example)", () => {
-    // /wii foo → whois foo foo
+    // /wii foo → whois foo foo. This also pins the NO-implicit-append half of
+    // the rule: the expansion carries a placeholder, so the raw rest is not
+    // appended on top of it — that would read `foo foo foo`. The sibling case
+    // below pins the other half, the append when there is no placeholder.
     expect(expandAlias("wii", "foo", { wii: "whois $1 $1" })).toEqual({
       verb: "whois",
       rest: "foo foo",
@@ -1317,14 +1320,6 @@ describe("#385 — expandAlias grammar", () => {
     expect(expandAlias("w2", "foo bar", { w2: "whois" })).toEqual({
       verb: "whois",
       rest: "foo bar",
-    });
-  });
-
-  it("no implicit append when a placeholder is present (no triple-arg)", () => {
-    // alias wii whois $1 $1 + /wii foo → whois foo foo (NOT foo foo foo)
-    expect(expandAlias("wii", "foo", { wii: "whois $1 $1" })).toEqual({
-      verb: "whois",
-      rest: "foo foo",
     });
   });
 

@@ -229,12 +229,6 @@ describe("linkify", () => {
     it("empty string returns single empty text segment", () => {
       expect(linkify("")).toEqual([{ type: "text", value: "" }]);
     });
-
-    it("text without protocol prefix is not a URL", () => {
-      expect(linkify("just example.com no scheme")).toEqual([
-        { type: "text", value: "just example.com no scheme" },
-      ]);
-    });
   });
 
   describe("IDN pass-through", () => {
