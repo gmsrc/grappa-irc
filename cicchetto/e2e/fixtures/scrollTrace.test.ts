@@ -200,6 +200,46 @@ describe("#1336/#1079 — classifyPostSend", () => {
     expect(classify(frozenShape, THRESHOLD).kind).toBe("OK");
     expect(classify(frozenShape, 0).attributedTo).toBeNull();
   });
+
+  // THE MIRROR of the incident, and the direction that would never have
+  // announced itself. The trace-derived rule could go stale in BOTH senses,
+  // because `maxScroll` is sampled as `scrollHeight - clientHeight` inside the
+  // scroll handler: content growing under a pane that is not following changes
+  // the distance to the bottom while `scrollTop` never moves, so no scroll
+  // event fires and the last record keeps saying "at the tail".
+  //
+  // Under the old rule that read OK and the instrument fell silent. It could
+  // not turn a red into a green — the spec always rethrows the poll failure —
+  // but it degraded a NAMED red into the anonymous one the instrument exists
+  // to replace. Silence was the dangerous direction, so it gets the assertion.
+  it("still accuses when the last recorded position says tail but the live read does not", () => {
+    const grewUnderneath = [
+      ...untilRest,
+      mark(100, "send", null),
+      follow(101, "on"),
+      // The last geometry the recorder ever heard: the pane AT the tail.
+      scroll(150, MAX_SCROLL),
+      // Then a burst rebuilds the list. Content grows, scrollTop does not
+      // move, and a passive listener is told nothing at all.
+      rows(190),
+      rows(240),
+    ];
+
+    // The mutant, made explicit rather than asserted in prose: the OLD rule
+    // read the distance off the last recorded position, and that arithmetic
+    // yields 0 here — under the threshold, so it returned OK and said nothing.
+    const lastRecorded = [...grewUnderneath].reverse().find((e) => e.kind === "scroll");
+    if (lastRecorded === undefined || lastRecorded.kind !== "scroll")
+      throw new Error("fixture must carry a geometry record");
+    expect(lastRecorded.maxScroll - lastRecorded.scrollTop).toBe(0);
+
+    const verdict = classify(grewUnderneath, 585);
+
+    expect(verdict.kind).toBe("FROZEN-AT-MARKER");
+    expect(verdict.attributedTo).toBe("rows-recreation");
+    // The number comes from the live read, not from the record that says 0.
+    expect(verdict.distance).toBe(585);
+  });
 });
 
 // The incident this fixture comes from, 2026-08-19, full suite run 1 of 2.
