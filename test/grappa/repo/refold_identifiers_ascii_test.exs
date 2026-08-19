@@ -15,8 +15,8 @@ defmodule Grappa.Repo.Migrations.RefoldIdentifiersAsciiTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.Repo
   alias Grappa.QueryWindows.Window
+  alias Grappa.Repo
 
   @migration Grappa.Repo.Migrations.RefoldIdentifiersAscii
   @migration_path "priv/repo/migrations/20260729120000_refold_identifiers_ascii.exs"

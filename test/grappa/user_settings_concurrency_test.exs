@@ -36,8 +36,8 @@ defmodule Grappa.UserSettingsConcurrencyTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.UserSettings
   alias Grappa.IRC.Identifier
+  alias Grappa.UserSettings
   alias Grappa.UserSettings.Settings
 
   @handler_id {__MODULE__, :pause_between_read_and_write}

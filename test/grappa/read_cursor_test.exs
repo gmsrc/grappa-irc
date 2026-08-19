@@ -26,8 +26,8 @@ defmodule Grappa.ReadCursorTest do
 
   import Grappa.AuthFixtures, only: [user_fixture: 0, network_fixture: 0]
 
-  alias Grappa.{ReadCursor, Repo, ScrollbackHelpers, Visitors}
   alias Grappa.PubSub.Topic
+  alias Grappa.{ReadCursor, Repo, ScrollbackHelpers, Visitors}
   alias Grappa.ReadCursor.Cursor
 
   # ---------------------------------------------------------------------------

@@ -23,8 +23,8 @@ defmodule Grappa.NickMigrationTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.{NickMigration, QueryWindows, Scrollback, UserSettings}
   alias Grappa.IRC.Identifier
+  alias Grappa.{NickMigration, QueryWindows, Scrollback, UserSettings}
 
   # Every SQL statement Ecto reports while `fun` runs, lowercased. `async:
   # false` because the handler is global: a concurrent test's queries would

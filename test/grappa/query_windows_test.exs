@@ -26,8 +26,8 @@ defmodule Grappa.QueryWindowsTest do
 
   import Grappa.AuthFixtures
 
-  alias Grappa.QueryWindows
   alias Grappa.PubSub.Topic
+  alias Grappa.QueryWindows
   alias Grappa.QueryWindows.Window
 
   # ---------------------------------------------------------------------------
