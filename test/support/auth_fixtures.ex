@@ -298,7 +298,7 @@ defmodule Grappa.AuthFixtures do
     credential = Credentials.get_credential!(user, network)
     {:ok, plan} = SessionPlan.resolve(credential)
     {:ok, pid} = Grappa.Session.start_session({:user, user.id}, network.id, plan)
-    register_session_cleanup(pid)
+    register_session_cleanup({:user, user.id}, network.id)
     pid
   end
 
@@ -314,31 +314,34 @@ defmodule Grappa.AuthFixtures do
   def start_visitor_session_for(%Visitor{} = visitor, %Network{} = network) do
     {:ok, plan} = VisitorSessionPlan.resolve(visitor, network)
     {:ok, pid} = Grappa.Session.start_session({:visitor, visitor.id}, network.id, plan)
-    register_session_cleanup(pid)
+    register_session_cleanup({:visitor, visitor.id}, network.id)
     pid
   end
 
-  # Every Session.Server spawned via these helpers gets an `on_exit`
-  # callback that ATOMICALLY removes the pid from the DynamicSupervisor
-  # via `terminate_child/2`. This is the only correct teardown shape
-  # for `:transient` children whose upstream Client crashes on
-  # `:tcp_closed` / `:connect_failed` (typical end-of-test condition
-  # when the fake IRCServer the session connected to dies with the
-  # test pid): without `terminate_child`, the DynamicSupervisor
-  # restarts the child on every abnormal Client exit, the Session.Server
-  # spins in a `connect → :econnrefused → respawn` loop, and the
-  # SessionRegistry entry survives across test boundaries — poisoning
-  # the next singleton-lane test's setup (see `Grappa.AdminEventsTest`).
-  # `terminate_child/2` is sync + supervisor-mediated; passing a dead
-  # pid is a no-op (returns `{:error, :not_found}` which we discard).
+  # Teardown is keyed on the (subject, network_id) KEY, never on the pid
+  # we happened to spawn (#1551). `Session.Server` is `:transient`, so an
+  # abnormal Client exit — the routine end-of-test condition, since the
+  # fake IRCServer dies with the test pid — makes the supervisor restart
+  # the child under a NEW pid that re-registers the SAME key. A single
+  # `DynamicSupervisor.terminate_child/2` on the original pid then hits a
+  # dead pid, answers `{:error, :not_found}`, and the respawned session
+  # outlives the test: still registered, still emitting lifecycle
+  # telemetry into whichever suite runs next. That is the leak #1551
+  # reported, and it is why this used to be the wrong shape despite the
+  # comment that stood here claiming it was the only correct one.
   #
-  # Note: existing test-callers that explicitly `GenServer.stop(pid,
-  # :normal, _)` at end-of-test still work — `terminate_child/2` on an
-  # already-dead pid is the no-op above, no double-teardown surprises.
-  defp register_session_cleanup(pid) do
-    ExUnit.Callbacks.on_exit(fn ->
-      _ = DynamicSupervisor.terminate_child(Grappa.SessionSupervisor, pid)
-    end)
+  # `Grappa.Session.stop_session/2` is the production teardown and already
+  # solves this: it re-reads the key each round, chases the respawn for
+  # `@stop_chase_rounds`, and logs an error if the key is still taken at
+  # the end. Tests get the same verb rather than a weaker copy of it.
+  #
+  # `Grappa.AuthFixturesTeardownTest` is what holds this shape in place.
+  # It cannot call this callback — `on_exit` runs after the test — so it
+  # registers its own assertion BEFORE spawning and lets ExUnit's reverse
+  # callback order run it afterwards. Reverting this function to the pid
+  # form turns that test red.
+  defp register_session_cleanup(subject, network_id) do
+    ExUnit.Callbacks.on_exit(fn -> Grappa.Session.stop_session(subject, network_id) end)
   end
 
   @doc """
