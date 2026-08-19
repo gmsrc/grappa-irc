@@ -304,11 +304,19 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   //
   // The claim is per WINDOW, not per component: a ComposeBox-local `sending()`
   // would follow the operator to whatever window they switch to, freezing that
-  // one while leaving the actually-draining window writable. It is also
-  // checked HERE rather than at the doors, because every door lands on this
-  // store — typing, both paste routes (`pasteRoute` → setDraft), arrow-key and
-  // swipe history recall, and tab-complete. Gating one door means the next
-  // door added is a fresh instance of this bug.
+  // one while leaving the actually-draining window writable. It is checked in
+  // this store rather than in the components, because every gesture lands
+  // here — typing, both paste routes (`pasteRoute` → setDraft), arrow-key and
+  // swipe history recall, and tab-complete.
+  //
+  // But it is checked once PER DOOR — five separate `isDraining` returns — and
+  // NOT in the `writeState` funnel they all share, because the funnel has to
+  // stay open for the drain that HOLDS the claim: the residue write below goes
+  // through it. So a new draft writer added to this store does not inherit the
+  // guard; it has to answer the question itself, and three existing ones
+  // (`takeDraft`, `handBack`, `pushHistory`) already write without it.
+  // #1396 found the cost is not hypothetical: one of the five doors was
+  // pinned by no test at all until its own case was written.
   const [drainingKeys, setDrainingKeys] = createSignal<Record<ChannelKey, true>>({});
 
   const isDraining = (key: ChannelKey): boolean => drainingKeys()[key] === true;
