@@ -52091,3 +52091,108 @@ nor a lower bound, since a site inside a `defp` costs one hash per call and one
 inside a `setup` costs one per test. The before side of the timing is a single
 run against three after runs; the after spread is 1.6s and the gap is 20s, but
 one run is one run.
+<!-- entry #1397-dupe-cases -->
+
+---
+
+## 2026-08-19 — #1397: two duplicated test CASES, two refusals, and the strip-comments regex that ate half of every body
+
+vjt's standing ruling — *"if we have duplicated tests, remove them"* — names a
+population #1397 had never counted. #1397 censuses duplicated helper
+DEFINITIONS (152 over 102 files at filing); a duplicated test CASE is the same
+assertion written twice. The two sets barely intersect, and this entry records
+measuring the second one, removing the two it proves, and refusing three
+candidates it does not.
+
+### The criterion is declared before the count, or the count means nothing
+
+Three criteria, strictest first, over `test "..." do` (ExUnit) and
+`it(...)`/`test(...)` (vitest, Playwright) on `a45428c6`:
+
+  * **D1** — normalised BODY identical (comments stripped, whitespace collapsed,
+    bodies under 40 characters dropped). Names ignored.
+  * **D2** — identical MULTISET of assertion lines (≥ 2), setup ignored.
+  * **D3** — identical test NAME. Weak by construction; carried for completeness.
+
+Calibration, stated with the numbers because a parser nobody calibrated is a
+number nobody can use: 6321 ExUnit blocks against 6346 naked-grep `test "`
+lines (**99.6%**), 5223 vitest cases against the 5665 the suite reports
+(**92.2%** — the gap is tabular `it.each`, declared and not closed), 746
+Playwright cases with no known total to check against.
+
+| criterion | ExUnit | of which cross-file | vitest | e2e |
+| --- | --- | --- | --- | --- |
+| D1 | 4 groups / 8 tests | 3 / 6 | 13 / 32 | 0 |
+| D2 | 131 / 314 | 13 / 36 | — | — |
+| D3 | 126 / 384 | 60 / 223 | 59 / 133 | 0 |
+
+### The first D1 number was 44 groups, and it was the tool
+
+The strip-comments pass was `#[^\n]*`. Every channel in this codebase is
+written `"#chan"`, so the regex cut each body at its first channel literal and
+left the identical prefix behind: four tests in `session_test.exs` that pass
+`"hi\r\nQUIT"`, `"#chan\r\nQUIT"`, `"hi\nbye"` and `"hi\x00bye"` hashed the
+same. Replacing it with a lexer that knows string boundaries takes D1 from
+**44 groups / 107 tests to 4 / 8**.
+
+🥇 The general form: **an all-identical result accuses the oracle exactly as an
+all-red one does.** A plausible count from a broken instrument is the failure
+mode this repo keeps paying for, and the defence is the same either way — one
+naked grep the instrument has to agree with.
+
+### The two that were removed, proven on content
+
+  * `auth_controller_test.exs` held *"captcha_token > 4096 bytes → 400"*
+    (M-web-3) and *"visitor branch — oversize captcha_token also 400 (W3)"*
+    with byte-identical bodies, both inside
+    `describe "POST /auth/login (visitor via nick)"` — so the second's "visitor
+    branch ALSO" names the branch the first already dispatched through. Its
+    non-binary sibling, by contrast, genuinely differs (`[1, 2, 3]` against
+    `42`), which is what marks the oversize pair as a slip rather than a design.
+  * `share_token_controller_test.exs` held a one-assertion describe,
+    `ShareTokens.table_name() == :share_tokens_used`, which is
+    `share_tokens_test.exs`'s own `describe "table_name/0"` verbatim. The
+    function is pure, so neither copy depends on its file's setup.
+
+Measured on the two touched files: **98 tests before, 96 after, 0 failures on
+both sides** — the two-sided run is what attributes the delta to the removals
+rather than to the suite.
+
+### The three that were refused, and why a refusal is worth as much
+
+  * **Setup is content.** `messages_controller_test.exs:543` and
+    `messages_controller_outbound_test.exs:520` both read
+    *"unknown network slug returns 404"* with identical bodies, but their
+    modules' setups differ (one binds a credential, the other starts a session
+    against the fake IRC server) and the second sits beside the *"known slug
+    but no session"* test that closes the probing oracle. Identical bodies
+    under different ambient state are not one test.
+  * **Identical text, different binding.** `wireNarrow.test.ts` has eight
+    `expect(narrowAdminEvent(valid)).toEqual(valid)` bodies; each `describe`
+    declares its own `const valid` for a different admin-event kind. No textual
+    criterion can see that, which is the honest limit of the whole method.
+  * **A name census proposed a fold that content refuses.** The last
+    `credential_fixture` copy outside `test/support` — in
+    `networks/credentials/admin_wire_test.exs` — was in the approved slice on my
+    own proposal. It builds an in-memory `%Credential{}` carrying sentinel
+    secrets (`"decrypted-plaintext-MUST-NEVER-LEAK"`) so the admin-wire test can
+    prove they never reach the JSON; the canonical `credential_fixture/3`
+    INSERTS through `Credentials.bind_credential/3` and cannot carry them.
+    Same name, different verb — the `visitor_fixture` shape again. Folding it
+    would have traded a leak oracle for a database write.
+
+That leaves the server half of bucket H at **zero** true duplicated helper
+copies: four `visitor_fixture` and one `credential_fixture`, all deliberate.
+
+### The last e2e helper copy
+
+`issue252-vhost-selector.spec.ts` defined a local `loginAs` that was
+`adminLogin`'s body under another name. The suite's own idiom decides where each
+call site lands — 20 spec files call `adminLogin` and every one passes an admin
+seed, 333 call `loginAs` — so the admin goes to `adminLogin` (behaviour
+identical to the deleted helper, nothing changes) and the ordinary user to the
+canonical `loginAs`, which additionally waits for the per-network header and for
+`waitForUserTopicReady`. That barrier is the one #1397 was filed over; here it
+was **latent, not live** (the spec composes no `/join`), so the fold buys
+determinism and does not fix a race — a race that was never reproduced is not
+claimed.
