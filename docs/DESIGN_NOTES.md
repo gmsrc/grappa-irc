@@ -50659,3 +50659,28 @@ it claimed the spec waits on the settings cog because `loginAs`'s
 `.sidebar-network-section h3` would time out. The helper below it called
 `expectShellReady`, not the cog, and that selector no longer exists in the
 fixtures module — both halves were already false when it was deleted.
+
+### The body changed shape under the rebase: `seedAuthLocalStorage`
+
+As first written, the shared helper spelled the three `localStorage.setItem`
+calls itself, because when it was written nothing else expressed them. Between
+that writing and the rebase onto main, this fixtures module grew
+`seedAuthLocalStorage(page, token, subjectJson)` — module-private, and already
+called by BOTH `loginAs` and `bootVisitor`. The helper now delegates to it
+instead of restating the three keys. That is the slice applied to itself: a
+helper whose reason to exist is removing copies may not carry one, and shipping
+it as written would have made the seeding gesture's third inline copy the one
+inside the de-duplication. Anything added here later is the fourth — call the
+verb.
+
+🥇 How it surfaced is the transferable part, and it is a rule this file has
+already paid for once. The rebase conflicted on this module, and the conflict
+was trivially resolvable: keep both blocks, they touch different functions.
+**Resolvability was not the signal. The BODY inside the conflict was** — the
+other side showed `bootVisitor` calling a verb that did not exist when this
+branch started, which is the whole reason to read a conflict rather than settle
+it. The slice recorded earlier the same day paid the opposite price: a lock and
+an equivalence oracle written against wrapper bodies that a landed branch had
+already rewritten, discovered only after the rebase had cheerfully carried them
+forward as greens that could no longer fail. On a rebase, read what the other
+side's code now SAYS, not merely whether the two sides can be reconciled.
