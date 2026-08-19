@@ -51035,11 +51035,17 @@ before declaring the substitution equivalent, and neither is a hazard:
 
 ### Measured — the arm under test
 
+⚠️ Read this section as establishing the HOLE — how long the panel keeps
+covering the point after the class barrier lets go. It is not, on its own,
+the reason the barrier is wrong: what happens in that hole is settled further
+down, under "The mutant SURVIVED", and the answer is that the driver waits it
+out. The three-sample figures here were later superseded by n=25.
+
 In-page probe (a rAF sampler armed BEFORE the closing tap; the driver only
 contributes a stamp), webkit-iphone-15, 3 repeats. Settings drawer, next
 point = the topic-bar hamburger:
 
-* margin from the CLASS barrier to the tap point: **−148 / −148 / −160 ms**;
+* hole from the CLASS barrier to the tap point: **−148 / −148 / −160 ms**;
 * margin from the CLASS barrier to the box clearing the edge: −221 / −198 / −212 ms;
 * margin from `not.toBeInViewport` to the tap point: **+279 / +282 / +258 ms**.
 
@@ -51082,20 +51088,81 @@ order-of-magnitude reason the defect exists at all — a driver round trip is
 ~196 ms against a 200 ms window, so sampling from there would have produced a
 FALSE GREEN.
 
-### Two open readings, deliberately not resolved
+### The mutant SURVIVED, and the reason is the useful part
 
-The positive control reproduced the members arm at −147 / −141 / −139 ms to
-the point (−220 / −226 / −227 ms to the edge), against `92df169a`'s published
-band of **−207…−193 ms**. Both are comfortably negative — the direction the
-cure depends on — but they differ by ~15-25 ms, and two readings survive:
+The mutant is the pre-cure shape put back — the CLASS barrier in place of
+`closeSettings`. It was run at `--repeat-each=5` and again at 20, on a clean
+tree restored from HEAD each time, with the injection witnessed (`git diff
+--stat`) rather than assumed. **It survived 50 runs out of 50.** The
+un-mutated control stayed green (10/10), as it must.
 
-1. the published band is STALE (the page has changed since `92df169a`);
-2. the new figure carries a sampling bias — the decimated 3-repeat run and
-   the in-page clock are not the 10-repeat driver-clocked method that
-   produced the band.
+A surviving mutant is not an absolution. The first explanation offered was a
+~196 ms driver latency borrowed from the members-arm incident — a number
+measured on a different arm, which would have been a structure read and a
+magnitude assumed. Measuring it here replaced it, and the replacement is
+better than the guess.
 
-Neither is settled here. The number does not gate the cure (the sign does),
-so a further measurement round was declined rather than guessed.
+The quantity was declared before the run: `L` = the next tap landing in the
+page minus the stamp of the CLASS barrier's return, against `H` = the point
+clearing minus the same stamp. Same origin, same page clock; failure is
+exactly `L < H`, and the stamp's own round-trip biases both equally. On
+n=25:
+
+* `H` min 150 / median 164 / max 169 ms — and the hole reproduced at n=25 in
+  two independent runs (medians 160 and 164), where the earlier figure rested
+  on three samples;
+* `L` min 150 / median 265 / max 291 ms — **not a constant**, but BIMODAL:
+  eleven samples land within one rAF frame of the clear, fourteen a single
+  ~100 ms retry cycle later;
+* `L − H` min −18 / median 106 / max 139 ms.
+
+And the positive control — a deliberate 400 ms inserted before the tap —
+does **not** add: `L` becomes 451 ms, not 265 + 400, because `L` already
+contained the wait for `H`. That non-additivity was not predicted, and it is
+the strongest of the three signs.
+
+**So the driver does not merely run slower than the hole: it HOLDS the tap
+until the panel stops intercepting it.** Playwright's fourth actionability
+check — "receives events" — is active for `tap` (`dom.js` builds the
+interceptor with `actionType` `"tap"`), an interception is a RETRY rather
+than a failure, and the tap interceptor covers touch as well as pointer
+events. `force: true` is what skips it. With the driver waiting, the mutant
+*cannot* die reliably on this arm, which is precisely what 50/50 says.
+
+🥇 Two further things this cost, worth more than the number. The positive
+control killed the instrument twice more: on the first latency run the tap
+listener was armed before the CLOSING tap and so recorded *that* one,
+reporting `L` = −9 ms and staying stone-deaf to the 400 ms injected into the
+control (−10 ms). Three instrument defects on this issue, all three found by
+the positive control and none by the data. And the earlier "two open
+readings" on the −207…−193 ms band are now moot: the band was a margin, and
+margin is no longer the frame in which this is described.
+
+### What the cure actually buys
+
+Stated plainly, because the measurement forces it: on a caller that reaches
+the next target through a plain locator gesture, **the geometry barrier is
+belt-and-braces** — the driver's own hit-target retry is already standing
+where the barrier stands. It ships anyway, for two reasons that are not
+"it might help": a barrier on the CLASS asserts the panel is closed while it
+is demonstrably still on screen, and the protection it duplicates belongs to
+the DRIVER, not to us, so it is withdrawn by any change of gesture.
+
+What would make it load-bearing, concretely: a `force: true` gesture, which
+skips the hit-target check outright (measured on `push.ts:664` — a force
+centre click lands inside the drawer box, 3/3); a coordinate-addressed
+gesture (`page.mouse.*`, `page.touchscreen.*`) or a dispatched event, none of
+which run actionability at all; or a next step that is not a pointer action
+and therefore has nothing to retry.
+
+🔴 **One thing is NOT explained, and is recorded rather than smoothed over.**
+The incident this whole thread rests on shows a tap that *did* land on a
+members row. With the hit-target check active and covering touch, it should
+have retried instead. Reading the two call sites did not account for it —
+they issue the identical plain locator tap, historically as well as today —
+and neither did the CSS: `pointer-events` switches only on the backdrops,
+so both drawers intercept while sliding. The class barrier's unsoundness does
+not depend on the answer, but the answer is not known.
 
 ### Declared and NOT cured
 

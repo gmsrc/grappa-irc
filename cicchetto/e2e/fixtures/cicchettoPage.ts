@@ -1259,9 +1259,37 @@ export async function closeSettings(page: Page): Promise<void> {
 // barrier and the hazard are the same order of magnitude — ~196 ms of driver
 // latency against a 200 ms animation — so the margin is zero by construction.
 //
-// Playwright cannot see this on its own: its "visible, enabled and stable"
-// check runs on the TARGET's box, and the hamburger never moves. The thing
-// moving is the drawer on top of it.
+// CORRECTED (#1155, 2026-08-19). This used to read "Playwright cannot see this
+// on its own: its 'visible, enabled and stable' check runs on the TARGET's box,
+// and the hamburger never moves." That named THREE of Playwright's four
+// actionability checks and concluded blindness from the three. The fourth —
+// "receives events" — is precisely the one that sees an overlay, and it is
+// active for `tap`: `dom.js` builds the interceptor with `actionType` `"tap"`,
+// an interception is a RETRY (`hitTargetDescription … intercepts pointer
+// events`, then `continue`) rather than a failure, and the tap interceptor
+// covers touch (`pointerdown/pointerup/touchstart/touchend/touchcancel`).
+// `force: true` is what skips it.
+//
+// MEASURED on the settings arm (n=25, in-page probe, webkit-iphone-15), where
+// L = tap-lands − class-barrier-stamp and H = point-clears − the same stamp:
+// L does not sit at a fixed driver latency, it TRACKS H (L−H median 106 ms,
+// minimum within one rAF frame), and inserting a deliberate 400 ms before the
+// tap does NOT add to L (451 ms, not 265+400) because L already contained the
+// wait for H. So on a plain locator tap the driver HOLDS the gesture until the
+// panel stops intercepting it — it is not merely slow.
+//
+// The consequence for this fixture: on a plain-locator caller the geometry
+// barrier is belt-and-braces, not the thing standing between the suite and the
+// bug. It stays because it is the honest statement of what "closed" means, and
+// because the protection it duplicates is the DRIVER's, not ours — a `force`
+// gesture withdraws it entirely (measured on `push.ts:664`: a `force` centre
+// click lands inside the drawer box, 3/3).
+//
+// STILL UNEXPLAINED, deliberately not papered over: the incident recorded
+// above shows a tap that DID land on a members row. With the hit-target check active and
+// covering touch, that should have retried instead. Nothing read so far
+// accounts for it; the class barrier's own unsoundness does not depend on the
+// answer, but the answer is not known.
 //
 // Every caller is a mobile `@webkit` spec, which is what makes the viewport
 // test meaningful: on desktop `.shell-members` is the permanent rail and never
