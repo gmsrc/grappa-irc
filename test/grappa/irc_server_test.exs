@@ -102,4 +102,29 @@ defmodule Grappa.IRCServerTest do
       refute function_exported?(IRCServer, :welcome_handler, 0)
     end
   end
+
+  describe "the dead-port body (#1397 bucket H characterization)" do
+    # Six test files carry this same four-line body, five under the name
+    # `pick_unused_port` and one as `unused_port`. Ten of its seventeen
+    # call sites dial the number and want the connect REFUSED, so that
+    # "upstream unreachable" / "connect refused" / "a refused connect
+    # still counts toward the circuit" have something to happen against.
+    # (The other seven never dial — a captcha, an IP cap, a throttle, an
+    # `:ignore` and three accretion gates all reject first — so for them
+    # any valid unused number would do.)
+    #
+    # For the ten, that refusal is the contract, and nothing asserted it
+    # before this test: the six copies were only ever exercised through
+    # what their callers did next.
+    test "the six-copy body yields a port a connect is refused on" do
+      {:ok, l} = :gen_tcp.listen(0, [])
+      {:ok, port} = :inet.port(l)
+      :gen_tcp.close(l)
+
+      assert is_integer(port) and port > 0
+
+      assert {:error, :econnrefused} =
+               :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 1_000)
+    end
+  end
 end
