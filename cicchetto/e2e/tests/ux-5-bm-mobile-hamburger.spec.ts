@@ -34,7 +34,13 @@
 // Parity matrix per `feedback_e2e_user_class_parity_matrix`: UI shape
 // contract, subject-shape-agnostic. Registered seed suffices.
 
-import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  closeSettings,
+  loginAs,
+  openRailMenu,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
@@ -122,9 +128,16 @@ test("@webkit ux-5-bm mobile-channel — topic-bar hosts hamburger only; drawer 
   await expect(page.locator(".shell-members.open")).toHaveCount(0, { timeout: 5_000 });
   await expect(page.locator(".settings-drawer.open")).toBeVisible({ timeout: 5_000 });
 
-  // Close settings (× button). Re-open the drawer to test archive launcher.
-  await page.locator(".settings-drawer [data-testid='settings-drawer-close']").tap();
-  await expect(page.locator(".settings-drawer.open")).toHaveCount(0, { timeout: 5_000 });
+  // Close settings (× button), then re-open the members drawer to test the
+  // archive launcher. #1336 (#1155) — the close MUST go through `closeSettings`,
+  // not through a `.settings-drawer.open` count→0 barrier: the class is stripped
+  // at the START of a 200ms translateX(100%) slide, so that barrier returns with
+  // the panel still covering the point the NEXT gesture aims at. Here the next
+  // gesture is the topic-bar hamburger at (355, 31), which sits INSIDE the
+  // drawer's 308px box on this 393px viewport — measured four layers under
+  // `.settings-drawer` when the class barrier let go. The fixture waits on
+  // `not.toBeInViewport` (geometry, not class) instead.
+  await closeSettings(page);
 
   await page.getByLabel(/open members sidebar/i).tap();
   await expect(page.locator(".shell-members.open")).toBeVisible({ timeout: 5_000 });
