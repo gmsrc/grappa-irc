@@ -709,6 +709,16 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
   30-min `integration`; rebasing then cost nothing, and a stale green would have cost a full re-run.
   **Check `git merge-base --is-ancestor origin/main <pr head>` the moment a PR appears**, not when it goes
   green.
+- 🔴🔴 **A RESOLVABLE REBASE CONFLICT CAN HIDE THAT THE WORK'S PREMISE IS GONE (w2, 2026-08-19 — the
+  sharpest thing learned in this cluster).** F3 was finished and green on the old base; meanwhile the PR it
+  was characterising landed and **rewrote all eight bodies it had locked**. So the LOCK described a body
+  that no longer existed and the oracle compared a call **with itself** — a green that cannot fail. **The
+  rebase offered to keep both, the conflicts were resolvable, and the result would have been GREEN.**
+  🥇 *The signal was not the conflict; it was the wrapper BODY inside the conflict.* Cure: on any rebase
+  past a merge that touched your slice's own subject, **re-derive the premise before resolving** — and if
+  the premise is gone, THROW the work away rather than rebase it. A vacuous green is worse than a red.
+  ⚠️ Orchestrator's half of the same failure: **the brief described the POST-merge state while the worker's
+  base was PRE.** Say which SHA a brief's numbers were measured on.
 - 🔴 **A MONITOR FIRING IS NOT THE ORCHESTRATOR READING IT.** The union-gate monitor reported that red at
   22:05; it was not processed until 08:41, **idling both workers ~9 hours.** This is the twin of the
   dead-listener trap below — there the events never arrived, here they arrived and were not read, and
@@ -981,6 +991,12 @@ Spostata qui dall'handoff 2026-08-18: e' una regola, non uno stato.
    conflitto): e' esattamente il caso in cui i quattro check sono l'unica cosa che distingue una risoluzione
    corretta da una che ha mangiato righe.** Non leggere "nessun conflitto" come "niente da verificare".
 5. **MARCATORE UNICO sulla RIGA INTERA** (`'<!-- entry #[^>]*-->'`; il troncato `#[0-9]*` inventa duplicati).
+🔴🔴 **GITHUB NON APPLICA IL DRIVER `merge=union`: UN REBASE LOCALE PULITO SU `DESIGN_NOTES.md` NON
+GARANTISCE UNA PR MERGEABILE** (w1, 2026-08-19 — misurato leggendo `mergeable`, non indovinato). Il
+merge-ref lato GitHub ignora i driver di `.gitattributes`, quindi la PR puo' aprirsi **CONFLICTING** subito
+dopo un rebase che in locale non aveva dato un solo conflitto — **e una PR CONFLICTING non fa girare NESSUNA
+CI**, cioe' si presenta come "check non ancora partiti". Cura: ri-rebasare e ri-pushare finche' `mergeable`
+lo dice. 🥇 *Il tell e' `gh pr view --json mergeable,mergeStateStatus`, non l'assenza di conflitti in locale.*
 🔴 **`_Deploy:` NON E' UN CHECK, e' INERTE** — non citarlo, o dichiaralo inerte.
 ⚠️ Il gate "forma al confine" e' **VACUO** quando il merge non tocca `DESIGN_NOTES`: **dichiaralo vacuo.**
 🥇 **Un FF PURO (`ahead=N behind=0`, ref PATCH-ato via `gh api`) rende la ricetta vacua PER COSTRUZIONE** —
@@ -1017,8 +1033,43 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   (4) **biome TRONCA le diagnostiche di default** (`Diagnostics not shown: 45`); serve `--max-diagnostics=2000`.
   🥇 **REGOLA: uno ZERO non e' un risultato finche' un grep NUDO non e' d'accordo.** E vale all'incontrario:
   `git grep -l` che da' **50** puo' essere **38 veri + 12 ombreggiature**.
+  🥇🥇 **E VALE ANCHE ALL'ESTREMO OPPOSTO — UN TUTTO-ROSSO E' SOSPETTO QUANTO UN TUTTO-ZERO** (w2,
+  2026-08-19): il suo confronto delle entry DESIGN_NOTES diceva `DIFFERS` su **5/5**, e il difetto era
+  **l'ESTRATTORE** (delimitava a marcatore invece che a EOF), non il dato. **Un risultato uniforme su
+  tutto il campione — 0/N o N/N — accusa lo strumento prima del codice.** Quinta istanza della stessa
+  famiglia: `$h[...]` letto da zsh come SUBSCRIPT DI ARRAY ⇒ *"0 file"* dove i veri erano 12 e 8 (w1).
+- 🔴🔴 **UN GREP SU `passed|failed` IN UN LOG PLAYWRIGHT MISURA I NOMI DEI TEST, NON GLI ESITI** (orch,
+  2026-08-19). Ho dichiarato *"giro tagliato al test 383 di 756, zero rossi"*: **entrambi falsi.** Le parole
+  `fail`/`failed` stanno dentro i NOMI (`issue38-...-rejoin-fail`, `issue511-failed-autojoin`,
+  `issue554 ...:failed`), quindi il "383" era **l'ultimo test il cui NOME contiene "failed"** — un numero
+  vero, di una domanda mai posta. E lo "zero rossi" veniva da pattern **incapaci di matchare `✘`**: non ho
+  misurato zero, ho misurato NIENTE e l'ho letto come zero. La worker ha rimisurato: chromium **completa
+  612/612**, taglio dentro **webkit** (626/756), **due** rossi. 🥇 *Conta per PROGETTO (`✓`/`✘` col nome del
+  progetto) o dal sommario; e se il sommario NON C'E', dillo — l'assenza di sommario e' essa stessa il dato.*
+  🥇 **E quando una worker ti offre una spiegazione gentile del tuo errore, RIFIUTALA se non e' la tua:
+  nominare il difetto vero del proprio strumento vale piu' dell'assoluzione.**
+- 🔴🔴 **`git status --porcelain` VUOTO NON VUOL DIRE "DENTRO NON C'E' NIENTE DI PREZIOSO" — E' CIECO SUI
+  FILE GITIGNORATI** (orch, 2026-08-19). Ho potato `.worktrees/w2-1396-bench` giudicandola vuota da un
+  `--porcelain` vuoto: dentro c'era un **`node_modules` clonato** che alla worker serviva per la fetta cic
+  successiva, e la sua domanda *"poto o tengo?"* e' arrivata **dopo** che l'avevo gia' rimossa. Il ramo era
+  davvero atterrato (SHA identica a `origin/main`) quindi nessun lavoro perso, **ma il costo di setup si
+  ripaga.** 🥇 *Sesta istanza dello ZERO FALSO E PLAUSIBILE: un comando che tace perche' non guarda.*
+  **Prima di rimuovere una worktree: `git status --porcelain --ignored` (o `du -sh`), e se una worker ti ha
+  fatto una domanda su quella worktree, LEGGILA PRIMA DI AGIRE.**
+  ⚠️ **E il controllo va fatto DENTRO la worktree, non dal repo padre con un pathspec** (misurato lo stesso
+  giorno): `git status --porcelain --ignored -- .worktrees/<x>` risponde `!! .worktrees/` — cioe' *"quella
+  directory e' ignorata"*, **non** *"e' vuota"*. Una riga che sembra un esito e non lo e'. La forma che
+  regge e' `git -C .worktrees/<x> status --porcelain --ignored`.
+  🥇 **E il vero salvagente non e' il check: e' che la worker se ne sia GIA' andata.** Verifica il suo cwd
+  nel pane prima di potare — un controllo che non hai capito ti assolve solo per fortuna.
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
+- 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
+  2026-08-19). Terza vittima della stessa pipe che maschera l'exit code: **redirigi su file e cattura
+  l'rc a parte**, sempre, anche per un comando "che non puo' fallire".
+- 🥇 **UN NUMERO DI ISSUE NEL MESSAGGIO DI COMMIT NON E' UN INDICE** (w1, 2026-08-19): appaiare cure e
+  righe con `git log --grep "#NNNN"` ha sbagliato **due righe su nove** — la cura di #1119 era taggata
+  `e2e(#1089)` e #951 non aveva **nessun** commit `#1336`. Cerca il CONTENUTO della cura, non il numero.
 - 🔴 **FALSO-VERDE: `mix compile --force --warnings-as-errors` da rc=0 su un albero i cui TEST NON
   COMPILANO** — `mix compile` non legge i `.exs`. **Un gate che si ferma alla compilata e' cieco su
   qualunque cambio a `test/`: serve `scripts/test.sh`.**
