@@ -49855,3 +49855,97 @@ rewritten call sites type-checks and fails only at runtime. That is the same
 gap the sibling entries name, and on the `seedCursor` slice it was a runtime
 positive control, not the type-checker, that caught exactly such a
 transposition.
+<!-- entry #1397-e2e-bootvisitor -->
+
+---
+
+## 2026-08-19 — #1397 (e2e): the fixture kept swearing to fields the server dropped
+
+`bootVisitor` was the worst of the census residue: seven copies over seven
+files, six distinct body hashes, 171 lines. Two of the census's standing
+assumptions did not survive contact with it, in opposite directions.
+
+The count was too LOW, not too high. An eighth copy lives in
+`issue260-sticky-network-tab.spec.ts` under the name `bootVisitorMobile` — the
+same verb, differing only in that it takes an existing `page` instead of a
+`Browser`. A census that greps for a name cannot see a synonym. Eight copies,
+eight files, 186 lines.
+
+And the md5 count did NOT overstate the semantics here, which is what it had
+done on every earlier cluster. Three successive normalisations — whitespace,
+commas and variable names; then the whole signature; then the return statement
+— each left the count at six. On `fetchScrollbackPage` the same treatment had
+collapsed six hashes onto one behaviour. The lesson is not that md5 overstates,
+it is that md5 tells you nothing either way.
+
+### The axis was real in the bodies and fake in production
+
+What separated the six was the subject envelope seeded into
+`localStorage["grappa-subject"]`: `{kind,id,nick,network_slug}` in three copies,
+`{kind,id,nick}` in two, `{kind,id}` in one, and `{…,registered}` in #477's.
+
+Only `registered` is load-bearing. Three layers, independently, say the rest is
+sediment. The server's `Grappa.Visitors.Wire` emits `{id, registered,
+incognito}` — #211 phase 6 dropped `network_slug` and phase 7 dropped
+`nick`/`ident`/`realname` — and its moduledoc says cic resolves "my nick on
+network X" from the `GET /networks` rows, never from the subject. The client's
+`api.Subject` visitor arm declares `{kind, id, registered?, incognito?}` and
+nothing more. `auth.ts isValidSubject` validates `id` alone, with a comment
+explaining that guarding `nick` would log out every persisted subject. No spec
+reads the key back.
+
+So the seeds had been swearing to two fields for two phases after the wire
+dropped them.
+
+### Why nothing caught it, and what now would
+
+`JSON.stringify(value: any)` — the declared signature, read from the
+TypeScript shipped in this repo. The parameter is `any`, so there is no
+contextual typing and no excess-property check against `Subject`. Every one of
+the eight seeds went through it. **A green `bun run check` was never evidence
+about the subject shape**, which is exactly how the drift survived two phases
+of #211 without a gate objecting.
+
+That, not the line count, is the argument for the shared verb. `bootVisitor`
+now takes a declared `VisitorSeed` and BUILDS the envelope from that field set,
+so a stale field cannot reach localStorage even when a caller hands in a whole
+`MintedVisitor`. Measured, not asserted: re-adding `nick` to the one call site
+that passes an object literal produced
+`TS2353: Object literal may only specify known properties, and 'nick' does not
+exist in type 'VisitorSeed'`. The limit is worth naming — excess-property
+checking fires on literals, so a caller passing a variable still gets no
+warning; the construction, not the type, is what makes the drift impossible.
+
+### What the verb deliberately does NOT own
+
+The readiness gate. It genuinely differs per spec — `.shell-main`, the mobile
+bottom-bar header, a user-topic subscribe, or nothing at all for #477's rail
+timing — and folding four variants behind an enum would bury per-spec intent
+under a shared default. Callers await their own signal, so this change moves
+exactly one axis and a red would have been attributable to it.
+
+Whether #477's absent readiness gate is deliberate or an omission is still
+unmeasured; both readings stay open. The measure that separates them is adding
+`expectShellReady` there and running it.
+
+### What gated it
+
+Baseline first, on `origin/main` in the same worktree, same eight specs, both
+projects: **17 passed**, no pre-existing red in this subset. After the change:
+**17 passed**, same seventeen titles. `bun run check` rc=0 over the whole chain
+with the same 59 pre-existing CSS warnings — and only rc=0 proves it, since the
+chain is `biome && tsc && tsc -p e2e`, and a biome failure leaves the log
+reading rc=1 with zero `error TS`.
+
+A green on removed fields proves nothing unless the suite can see a removed
+field, so the control removed one that is load-bearing: dropping `registered`
+from #477's seed reddened **exactly one test of the seventeen** — `registered
+VISITOR (persistent) → the rail offers BOTH detach and quit`, the one that
+reads it. One mutant, one dead assertion, sixteen untouched. That is what makes
+the treatment green mean something: the same path that detects a `registered`
+removal did not detect the `nick`/`network_slug` removal.
+
+Not claimed: that no OTHER spec depends on those fields. Seventeen tests over
+eight files were run, not the suite. Seventeen more files outside this slice
+still seed the dropped fields — a separate axis, deliberately not folded in
+here.
