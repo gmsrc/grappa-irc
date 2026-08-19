@@ -7,6 +7,7 @@ import {
   directoryQuery,
   directorySort,
   isLoadingMore,
+  isRefreshPending,
   loadDirectory,
   loadMore,
   resetDirectory,
@@ -323,6 +324,13 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   const page = () => directoryPage(props.networkSlug);
   const status = () => page()?.status;
 
+  // #1445 — the ONE "a re-capture is under way" reading, because neither half
+  // covers the whole of it: `status` is a SERVER field that only arrives with
+  // a page GET, and the store's latch only spans the gap before that GET
+  // lands. Read by all three affordances below so they cannot disagree about
+  // whether the pane is busy.
+  const busy = () => status() === "refreshing" || isRefreshPending(props.networkSlug);
+
   const onSearchInput = (e: Event) => {
     const val = (e.currentTarget as HTMLInputElement).value;
     const slug = props.networkSlug;
@@ -359,13 +367,8 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
           value={searchText()}
           onInput={onSearchInput}
         />
-        <button
-          type="button"
-          class="directory-refresh"
-          disabled={status() === "refreshing"}
-          onClick={onRefresh}
-        >
-          {status() === "refreshing" ? "Refreshing…" : "Refresh"}
+        <button type="button" class="directory-refresh" disabled={busy()} onClick={onRefresh}>
+          {busy() ? "Refreshing…" : "Refresh"}
         </button>
         {/* #125 — close the directory and return to the previously
             active window (restore the prior selection, not a blank pane). */}
@@ -416,6 +419,7 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
                   <button
                     type="button"
                     class="directory-captured-at directory-stale"
+                    disabled={busy()}
                     onClick={onRefresh}
                   >
                     {capturedAt()} — refresh now

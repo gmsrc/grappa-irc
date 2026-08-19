@@ -57,6 +57,12 @@ const directorySortMock = vi.fn<(slug: string) => "users" | "name">(() => "users
 const [directoryQuerySignal, setDirectoryQuerySignal] = createSignal("");
 const directoryQueryMock = vi.fn<(slug: string) => string>(() => directoryQuerySignal());
 const isLoadingMoreMock = vi.fn<(slug: string) => boolean>(() => false);
+// #1445 — the store's refresh latch, spanning the POST→first-page-GET gap.
+// SIGNAL-backed so a test can raise it the way the store does (from outside
+// the pane, between renders) and the pane's `busy()` has something reactive
+// to follow.
+const [refreshPendingSignal, setRefreshPendingSignal] = createSignal(false);
+const isRefreshPendingMock = vi.fn<(slug: string) => boolean>(() => refreshPendingSignal());
 const loadMoreMock = vi.fn<(slug: string) => Promise<void>>(() => Promise.resolve());
 const resetDirectoryMock = vi.fn<(slug: string) => void>(() => {});
 // #732 — per-slug load error the pane renders with a retry affordance.
@@ -68,6 +74,7 @@ vi.mock("../lib/channelDirectory", () => ({
   directoryQuery: (slug: string) => directoryQueryMock(slug),
   directorySort: (slug: string) => directorySortMock(slug),
   isLoadingMore: (slug: string) => isLoadingMoreMock(slug),
+  isRefreshPending: (slug: string) => isRefreshPendingMock(slug),
   loadDirectory: (slug: string) => loadDirectoryMock(slug),
   loadMore: (slug: string) => loadMoreMock(slug),
   resetDirectory: (slug: string) => resetDirectoryMock(slug),
@@ -163,6 +170,7 @@ describe("DirectoryPane", () => {
     setSelectedChannelMock.mockClear();
     closeToPreviousWindowMock.mockClear();
     directorySortMock.mockReturnValue("users");
+    setRefreshPendingSignal(false);
     setDirectoryQuerySignal("");
     directoryErrorMock.mockReturnValue(null);
     isLoadingMoreMock.mockReturnValue(false);
@@ -537,6 +545,41 @@ describe("DirectoryPane", () => {
 
       const btn = screen.getByRole("button", { name: /refreshing/i });
       expect(btn).toBeDisabled();
+    });
+
+    // #1445 — the gap the server field cannot cover. `status` only changes
+    // when a page GET lands, so across the POST→first-GET window the page
+    // still reads "fresh" and the button used to re-enable itself there. The
+    // page fixture stays FRESH_PAGE on purpose: it is what makes this test
+    // fail on the pre-latch pane rather than duplicate the one above.
+    it("is disabled and relabeled while the store's latch is up, on a 'fresh' page", async () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      // Pre-state: the same page, latch down, is an enabled "Refresh".
+      expect(screen.getByRole("button", { name: /^refresh$/i })).toBeEnabled();
+
+      setRefreshPendingSignal(true);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /refreshing/i })).toBeDisabled();
+      });
+    });
+
+    // The stale CTA is the pane's SECOND door onto the same verb (#732). A
+    // door that stays live while the first is disabled is the silent no-op
+    // that issue closed — the store guard would swallow its POST and nothing
+    // would tell the reader why.
+    it("the stale CTA is disabled while the latch is up", async () => {
+      directoryPageMock.mockReturnValue(STALE_PAGE);
+      render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      const cta = screen.getByRole("button", { name: /refresh now/i });
+      expect(cta).toBeEnabled();
+
+      setRefreshPendingSignal(true);
+
+      await waitFor(() => expect(cta).toBeDisabled());
     });
   });
 
