@@ -50406,3 +50406,75 @@ not; only the eleven touched specs. Nor that the +0.6 control proves the six
 rounding sites could never have depended on the rounding: it proves only that
 none of them sits within 0.6 px of its threshold in the states these specs
 reach.
+<!-- entry #1397-unusedport -->
+
+---
+
+## 2026-08-19 — #1397 bucket H: one dead-port helper, and the seven callers that never dial
+
+Six test files carried the same four-line body — bind an ephemeral TCP port,
+read the number back, close the listener, return the number — five spelled
+`pick_unused_port` and one `unused_port`, byte-identical in all six. It now
+lives once as `Grappa.IRCServer.pick_unused_port/0`, called from seventeen
+sites across the same six files.
+
+### The census said one thing; reading the call sites said another
+
+The consolidation was specced on the claim that all seventeen call sites want
+the same thing, and that the thing is not a port at all but a REFUSED connect
+— the ground under "upstream unreachable", "connect refused", and "a refused
+connect still counts toward the circuit". Reading the body of the test that
+contains each of the seventeen shows that holds for TEN of them. The other
+SEVEN never dial: a captcha rejection, an IP cap, a login throttle, a
+`refresh_plan` returning `:not_found` (so `start_link/1` answers `:ignore` and
+never spawns), and three accretion gates that answer 403/403/409 before
+anything reaches the network. For those seven the number is only a valid port
+to put in a `%Network{}`.
+
+Two comments already in the suite said as much before this change touched it —
+`auth_controller_test`'s "No IRC handshake anywhere below: a wrong password
+never dials, and neither does a throttled one", and `session_controller_test`'s
+"the accretion allowlist-gate test rejects BEFORE any dial ... the port just
+has to be a valid, unused number". The census had counted definitions and call
+sites correctly and still got the CONTRACT wrong, because a count of identical
+bodies says nothing about what the callers ask of them.
+
+### Which is why the name is mechanical on purpose
+
+The consolidated helper keeps `pick_unused_port`, and not merely as the
+dominant of the two spellings. An intent name — `refused_port` and the like —
+would make the seven non-dialling sites read as claims their tests do not make,
+and a test that appears to assert something it never exercises is the failure
+mode this whole bucket exists to remove. The mechanism is what all seventeen
+share; the refusal is what ten of them additionally depend on. The moduledoc
+records both classes so the split does not have to be re-derived from
+seventeen call sites the next time someone reaches for a better name.
+
+This is the inverse of the `start_server/1` ruling one slice earlier, and the
+two are consistent: there the wrapper HID something decidable at the call site
+(which peer), so it went; here the helper hides nothing — it performs a gesture
+that is identical everywhere — and only the NAME risked asserting more than the
+callers do.
+
+### The equivalence oracle does not compare results
+
+`pick_unused_port/0` returns a different ephemeral number on each call by
+construction, so `assert helper() == inline()` would be a defect dressed as a
+property. The oracle instead puts both to the same question — connect to the
+number and read the verdict — and requires the same answer. Its non-vacuity was
+measured: dropping `:gen_tcp.close(l)` from the helper leaves the listener up,
+the connect succeeds, and exactly one of the six tests in that file dies. The
+characterization test written before the refactor keeps its own inline body and
+stays green under that mutant, which is what makes the pair discriminating
+rather than redundant — one witnesses the gesture, the other witnesses that the
+helper still performs it.
+
+### Three comments left with the body
+
+Each of `client_test`, `server_test` and `session_controller_test` carried a
+comment above its local copy. Deleting a `defp` and leaving its comment behind
+does not preserve information, it relocates a description onto whatever
+function happens to follow — so they went with the body they described. The
+first two explained the ephemeral-bind trick, now stated once on the helper.
+The third recorded the never-dials observation, which survives promoted into
+the moduledoc as one of the two classes above.
