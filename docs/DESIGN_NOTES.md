@@ -52196,3 +52196,79 @@ canonical `loginAs`, which additionally waits for the per-network header and for
 was **latent, not live** (the spec composes no `/join`), so the fold buys
 determinism and does not fix a race — a race that was never reproduced is not
 claimed.
+<!-- entry #1522 -->
+
+---
+
+## 2026-08-20 — #1522: the eight bats reds are an ambient `GRAPPA_CACHE_ID`, not the gate
+
+#1522 reported eight bats cases that fail "only when run through
+`scripts/check.sh`" and pass under `scripts/bats.sh`, identically on a clean
+`origin/main`, and concluded that "the difference that remains is `check.sh`
+itself". **That premise is false, and the correction is the finding.** The
+variable is an ambient `GRAPPA_CACHE_ID` in the caller's shell; `check.sh` is
+merely the command it happened to be attached to.
+
+### Measured by displacement, one variable at a time
+
+On `74a20af1`, from a clean worktree:
+
+| run | result |
+| --- | --- |
+| `scripts/check.sh`, whole gate, no cache id | **rc=0, 564/564 bats green** |
+| the three files alone, no cache id | 14/14 green |
+| the three files alone, `GRAPPA_CACHE_ID=w2probe` | **rc=1, the eight, by name** |
+| full `scripts/bats.sh`, cache id set, after the fix | 566/566 green |
+| full `scripts/bats.sh`, no cache id, after the fix | 566/566 green |
+
+Three intermediate displacements were run first and all came back green, which
+is what excluded the gate: the invocation SHAPE (`cd $REPO_ROOT` then
+`$SRC_ROOT/scripts/bats.sh`, exactly as `check.sh` calls it, with no `mix` at
+all), a preceding `scripts/mix.sh --env=dev compile`, and the whole gate. And
+`git log 259780f3..74a20af1 -- scripts/ test/scripts/ test/infra/ test/bin/
+infra/lib/ mix.exs` is **empty** — 125 commits, none touching the gate or the
+tests — so nothing was repaired in between and the base is not the variable
+either.
+
+### The mechanism, and why nothing under test was wrong
+
+`deploy.sh` refuses to run while the knob is set, by design (#1409): *"only
+'compose run' accepts -v, so the oneshots would use the per-id caches while
+'compose up' boots the container from the shared ones."* The eight cases all
+drive a deploy door, so they die on that refusal — with a message about
+deploying, in a run about something else. The tests are right, the refusal is
+right, and no assertion was weakened to make them pass.
+
+Two of the issue's own details do not survive the measurement either: the four
+`standalone door` cases live in `test/infra/deploy_docker_convergence_test.bats`,
+not in `test/scripts/mix_env_db_test.bats` where the issue files them, and the
+red is a false RED rather than a vacuous green.
+
+### The cure is at the door, because the leak is a class
+
+#1409 already found this leak and cured it **per file** — `unset MIX_ENV
+GRAPPA_CACHE_ID` in `deploy_docker_test.bats`, `unset GRAPPA_CACHE_ID` in
+`deploy_docker_update_test.bats` — in two of the five files that reach a deploy
+door. The other three never got the line, and a sixth file written tomorrow
+would not get it either. The class is "any bats case that reaches a deploy
+door", so `scripts/bats.sh` drops the knob once, **before `_lib.sh` reads it**
+(so no `.caches/<id>` is provisioned and no `MIX_TEST_PARTITION` is derived for
+a door that runs no `mix`), and says so on stderr rather than silently. The two
+per-file `unset`s stay: they also cover a direct `vendor/bats-core/bin/bats`
+invocation, which never passes through the door.
+
+`test/scripts/bats_ambient_cache_id_test.bats` pins it the way the #592 suite
+next door does — a recorder stands in for the bats binary and dumps the
+environment it was handed, with a `GRAPPA_BATS_PROBE=present` control so the
+asserted absence cannot be an empty log. RED before the fix on exactly that
+assertion, green after.
+
+### What is not claimed
+
+The reporter's own table lists a full `scripts/bats.sh` run as green *"with the
+same GRAPPA_CACHE_ID"*; measured here, a full run with the knob set is red on
+those eight (before the fix). Either the standalone runs did not in fact carry
+the id, or something else differed in that session — that cell was not
+reconciled and nothing here depends on it. No claim is made about other
+ambient knobs: `MIX_ENV` was already neutralised per file by the fixtures that
+need it, and no census of the remaining environment surface was run.
