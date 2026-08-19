@@ -51865,3 +51865,80 @@ unknown; and nothing here touches the gesture, so none of #1445's
 device-level questions (feel, threshold in px, whether iOS Safari's
 rubber-band at the top of the scroller fights a transform) are answered
 or affected.
+<!-- entry #1445-directory-pull -->
+
+---
+
+## 2026-08-19 — #1445: the pull wired into the pane, and where the CSS decision went
+
+The latch entry above closed the door; this closes the gesture. Three
+things were decided here that the module comments cannot carry on their
+own, because each one is a choice against a plausible alternative.
+
+### The slot lives INSIDE the scroller, and that is a CSS decision
+
+The pulled spinner is an absolutely-positioned FIRST CHILD of
+`.directory-list`, not a sibling above it. An absolute child of a
+scroller is placed against the SCROLLED content origin rather than the
+visible box, which normally makes it the wrong tool — but a pull only
+exists at `scrollTop === 0`, where those two origins are the same point.
+The guarantee is structural, not incidental: the binder refuses to arm
+anywhere else.
+
+What that placement buys is a plain descendant selector. The binder
+wears `pull-gesture-active` on the element it is BOUND to, and the
+stylesheet has to reach the slot from that class to drop its snap-back
+transition while a finger is driving. With the slot as a PRECEDING
+sibling no combinator reaches it at all — `~` only looks forward — and
+the alternative was to put the slot after the list in the DOM and
+position it back to the top, i.e. to reorder the markup to suit a
+selector. The markup would then have lied about what sits above what.
+
+### `overscroll-behavior: contain` -> `none`, and deliberately no `touch-action`
+
+The container's `contain` became `none`. Both values stop a scroll
+chaining out of the list; only `none` also suppresses the element's OWN
+overscroll affordance — the iOS rubber-band, which lives at exactly the
+scroll position the pull lives at and is the one thing on the page that
+would fight the slot. `none` is strictly stronger than what `contain`
+was protecting, so nothing was traded away, and it is the same value and
+the same reason the body rule has carried since iOS-1.
+
+No `touch-action` was added, and that is the deliberate half. `none`
+would kill the list's native scroll outright, which is why #1438 can
+afford it on a modal that does not scroll and this cannot. The property
+does not inherit (CSS UI L4), so the `.shell-mobile` blanket never
+reached this element to begin with — the list has always resolved to
+`auto` and still does. The pull therefore leans on `preventDefault`
+after a claim rather than on a blanket declaration, which is the part
+that cannot be verified off a device: the binder claims LATE, on a
+touchmove, and a real engine may have committed to a pan before the
+claim lands. The webkit e2e arm asserts the CSS that is supposed to
+decide that; it cannot assert that it does.
+
+### Distance only — no flick route, and the asymmetry that chose it
+
+The sibling dismiss binder commits on a short fast flick as well as on
+distance. This one does not, and the reason is a cost asymmetry rather
+than a preference: at the top of a list a flick is the commonest thing a
+finger does, a spurious commit spends an upstream LIST capture and
+disables all three refresh affordances for its whole duration, and a
+spurious spring-back costs one repeated gesture. Adding the flick route
+later is additive; taking it away after it has fired on people is not.
+Standing as a product question with vjt — if it is reversed, it is an
+addition to `bindPullGesture`, not a rewrite of anything here.
+
+### What the tests do and do not settle
+
+The binder's decision table is unit-tested against a bare element, the
+pane's wiring in jsdom, and three doors end-to-end. None of that reaches
+the feel. jsdom drives no compositor and resolves no `touch-action`;
+Playwright's webkit is not iOS. `PULL_COMMIT_PX` is derived from
+`SWIPE_MIN_PX`, not calibrated, and whether it is the right distance —
+like whether the rubber-band actually stands down — is a device call
+that has to be made on a phone with the feature shipped.
+
+One interaction is modelled nowhere: the pane rewrites `scrollTop` from
+a queueMicrotask whenever the entry count changes, so a progress ping
+that lands while a finger is down meets a gesture that assumes it owns
+the scroller. No test holds a finger across a ping.
