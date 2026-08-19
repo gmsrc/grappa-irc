@@ -7,6 +7,7 @@ import {
   directoryQuery,
   directorySort,
   isLoadingMore,
+  isRefreshPending,
   loadDirectory,
   loadMore,
   onDirectoryComplete,
@@ -168,6 +169,80 @@ describe("channelDirectory store", () => {
     const spy = vi.spyOn(api, "refreshDirectory");
     await triggerRefresh("freenode");
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  // --- #1445 refresh latch: the POST→first-GET gap ---
+
+  test("a second triggerRefresh while the first is in flight makes no second POST", async () => {
+    // The POST only ASKS for a re-capture, and nothing in the store said
+    // "busy" until the first page GET reported `refreshing`. Across that gap
+    // the Refresh button stayed enabled, so a double tap sent two captures.
+    // The gate keeps the first POST unsettled for exactly as long as the
+    // second call needs to be refused.
+    const gate = deferred<void>();
+    const spy = vi.spyOn(api, "refreshDirectory").mockReturnValue(gate.promise);
+
+    const first = triggerRefresh("latch1");
+    const second = triggerRefresh("latch1");
+    expect(spy).toHaveBeenCalledTimes(1);
+
+    gate.resolve();
+    await Promise.all([first, second]);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  // The positive control for the test above: a guard that simply swallowed
+  // every refresh after the first would pass it and break the feature. This
+  // is the assertion that tells "suppressed the duplicate" from "killed the
+  // door".
+  test("the latch stands down once a page lands, so a later refresh POSTs again", async () => {
+    const spy = vi.spyOn(api, "refreshDirectory").mockResolvedValue(undefined);
+    vi.spyOn(api, "listDirectory").mockResolvedValue(makePage({ status: "fresh" }));
+
+    await triggerRefresh("latch2");
+    expect(spy).toHaveBeenCalledTimes(1);
+    // The server's completion ping re-GETs; that page write is the handoff.
+    await onDirectoryComplete("latch2");
+    await triggerRefresh("latch2");
+
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  test("isRefreshPending spans exactly the gap — false, true after the POST, false once a page lands", async () => {
+    vi.spyOn(api, "refreshDirectory").mockResolvedValue(undefined);
+    vi.spyOn(api, "listDirectory").mockResolvedValue(makePage({ status: "refreshing" }));
+
+    // The pre-state, asserted rather than assumed: without it a latch that
+    // was ALWAYS true would read the same at the second assertion.
+    expect(isRefreshPending("latch3")).toBe(false);
+    await triggerRefresh("latch3");
+    expect(isRefreshPending("latch3")).toBe(true);
+    await onDirectoryProgress("latch3");
+    expect(isRefreshPending("latch3")).toBe(false);
+  });
+
+  test("a rejected POST releases the latch — a refusal must not disable the door", async () => {
+    vi.spyOn(api, "refreshDirectory").mockRejectedValue(new api.ApiError(503, "unavailable"));
+
+    await triggerRefresh("latch4");
+
+    expect(isRefreshPending("latch4")).toBe(false);
+    // The rejection path is what ran, not a POST that never happened: the
+    // error copy is the witness.
+    expect(directoryError("latch4")).not.toBeNull();
+  });
+
+  test("closing the pane releases the latch (resetDirectory)", async () => {
+    const gate = deferred<void>();
+    vi.spyOn(api, "refreshDirectory").mockReturnValue(gate.promise);
+
+    const pending = triggerRefresh("latch5");
+    expect(isRefreshPending("latch5")).toBe(true);
+    resetDirectory("latch5");
+    expect(isRefreshPending("latch5")).toBe(false);
+
+    gate.resolve();
+    await pending;
   });
 
   // --- #677 pagination: loadMore appends the next keyset page ---

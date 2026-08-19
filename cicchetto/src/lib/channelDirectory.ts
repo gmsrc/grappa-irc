@@ -71,6 +71,14 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // when it settled. Every async verb in this module writes it; the pane
   // renders it with a reload affordance.
   const [errors, setErrors] = createSignal<Record<string, string>>({});
+  // #1445 — per-slug "a re-capture has been asked for" latch. It spans the gap
+  // the refresh POST opens: the POST only ASKS the server to re-capture, so
+  // between its 202 and the first page GET reporting `refreshing` NOTHING in
+  // the store said busy. Measured, not reasoned — with no latch the guard's
+  // own test sends two POSTs for a double tap. Same shape as `loadingMore`
+  // deliberately: an in-flight guard that doubles as a render source, one
+  // boolean per slug, identity-scoped.
+  const [refreshPending, setRefreshPending] = createSignal<Record<string, boolean>>({});
 
   // #732 — request identity. `issued` is a single monotonic counter and
   // `newest[slug]` is the id of the latest request ISSUED for that slug; a
@@ -107,6 +115,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => setViews({}));
   onIdentityChange(() => setLoadingMore({}));
   onIdentityChange(() => setErrors({}));
+  onIdentityChange(() => setRefreshPending({}));
   onIdentityChange(() => {
     for (const slug of Object.keys(newest)) invalidate(slug);
   });
@@ -117,6 +126,23 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     setErrors((prev) => {
       if (!(slug in prev)) return prev;
       const { [slug]: _cleared, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  // #1445 — the latch stands down on the first page write for this slug after
+  // the POST, whatever that page says: from that moment the store holds
+  // fresher information than the latch does. A `refreshing` status hands the
+  // signal over to `status` itself; a terminal one means the capture already
+  // finished. Deliberately NO timer backstop — the only case one would guard
+  // is a 202 followed by no ping at all, not even `directory_failed`, and a
+  // stale timer releasing the NEXT latch early costs more than that case is
+  // worth. The bound is stated instead: a pane close (resetDirectory) or an
+  // identity rotation releases it.
+  const releaseRefreshLatch = (slug: string): void => {
+    setRefreshPending((prev) => {
+      if (!(slug in prev)) return prev;
+      const { [slug]: _released, ...rest } = prev;
       return rest;
     });
   };
@@ -139,9 +165,16 @@ const exports_ = identityScopedStore((onIdentityChange) => {
       if (!isNewest(slug, id)) return;
       setPages((prev) => ({ ...prev, [slug]: { id, page } }));
       clearError(slug);
+      releaseRefreshLatch(slug);
     } catch (err) {
       if (!isNewest(slug, id)) return;
       setErrors((prev) => ({ ...prev, [slug]: describe(err) }));
+      // A failed GET releases it too: the pane now shows an error with a
+      // reload, and a latch held past that is a door disabled with no capture
+      // on the way. Released in the arms rather than a `finally` so a
+      // SUPERSEDED response (the !isNewest returns above) cannot release a
+      // latch a newer POST has since taken.
+      releaseRefreshLatch(slug);
     }
   };
 
@@ -167,6 +200,11 @@ const exports_ = identityScopedStore((onIdentityChange) => {
 
   // #677 — true while a loadMore for `slug` is in flight (sentinel spinner).
   const isLoadingMore = (slug: string): boolean => loadingMore()[slug] ?? false;
+
+  // #1445 — true across the POST→first-page-write gap. The pane ORs it with
+  // `status === "refreshing"` to get one honest "busy": neither half covers
+  // the whole re-capture on its own.
+  const isRefreshPending = (slug: string): boolean => refreshPending()[slug] ?? false;
 
   // #677 — fetch the NEXT keyset page and APPEND. No-op when: no token, no
   // page yet (nothing to page from), no next_cursor (already at the end),
@@ -230,6 +268,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // user does next inherits a snapshot the close was supposed to discard.
     invalidate(slug);
     clearError(slug);
+    releaseRefreshLatch(slug);
     setViews((prev) => ({ ...prev, [slug]: { ...currentView(slug), q: "" } }));
     setPages((prev) => {
       const { [slug]: _dropped, ...rest } = prev;
@@ -263,6 +302,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   const triggerRefresh = async (slug: string): Promise<void> => {
     const t = token();
     if (!t) return;
+    // #1445 — every door onto the re-capture comes through here: the toolbar
+    // button, the stale CTA, and the pull gesture to come. The guard lives at
+    // the verb rather than on whichever door happens to be disabled, so a new
+    // door cannot reopen the hole.
+    if (refreshPending()[slug]) return;
+    setRefreshPending((prev) => ({ ...prev, [slug]: true }));
     // Not `issue`: a re-capture request must not supersede a page GET in
     // flight. It rides the current id purely so a rejection arriving after a
     // close — or after an identity rotation — cannot park copy on a slug that
@@ -271,6 +316,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     try {
       await api.refreshDirectory(t, slug);
     } catch (err) {
+      // A refusal releases the latch at once: no capture is coming, so no page
+      // write is either, and a door left disabled is worse than the duplicate
+      // this guards against.
+      releaseRefreshLatch(slug);
       if (isNewest(slug, id)) setErrors((prev) => ({ ...prev, [slug]: describe(err) }));
     }
   };
@@ -285,6 +334,7 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     directoryQuery,
     directorySort,
     isLoadingMore,
+    isRefreshPending,
     loadDirectory,
     loadMore,
     resetDirectory,
@@ -302,6 +352,7 @@ export const directoryPage = exports_.directoryPage;
 export const directoryQuery = exports_.directoryQuery;
 export const directorySort = exports_.directorySort;
 export const isLoadingMore = exports_.isLoadingMore;
+export const isRefreshPending = exports_.isRefreshPending;
 export const loadDirectory = exports_.loadDirectory;
 export const loadMore = exports_.loadMore;
 export const resetDirectory = exports_.resetDirectory;
