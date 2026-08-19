@@ -50478,3 +50478,75 @@ function happens to follow — so they went with the body they described. The
 first two explained the ephemeral-bind trick, now stated once on the helper.
 The third recorded the never-dials observation, which survives promoted into
 the moduledoc as one of the two classes above.
+<!-- entry #1397-fetta2-parked -->
+
+---
+
+## 2026-08-19 — #1397: the auth-seed slice, parked because the mutant said so
+
+Fourteen spec files open with the same five-line `page.addInitScript`
+lambda: bearer, subject envelope, `cic.installChoice`. Nine of them sit
+inside no helper at all. The obvious move is to collapse them onto
+`loginAs`, which already does seed + goto + a readiness gate. The move was
+NOT made, and the reason is a measurement rather than a preference.
+
+### What the mutant answered
+
+`loginAs` ends on `waitForUserTopicReady` — a gate on the user-topic WS
+subscribe, added because compose-driven specs that fire `/join` right
+after login race the JOIN ack and miss `window_pending`/`join_failed`
+(Phoenix PubSub does not replay to late subscribers). If that barrier were
+load-bearing for the nine, the collapse would be a cure and not just tidying.
+
+The mutant wraps the user-topic `ch.join()` in `socket.ts` in a
+`setTimeout`, so the window between shell-ready and subscribe is held open
+on purpose. Three runs on the e2e stack:
+
+* base, unmutated: eleven tests green, and a calibration spec reading
+  `__cic_userTopicReady` reports `first=1` — at shell-ready the window is
+  ALREADY shut. That calibration FAILS here, and its failure is the
+  positive control: the instrument reads a real quantity instead of
+  always answering "open".
+* mutant at 2s: the calibration passes with `first=-1` (the seam Set does
+  not yet exist) and the stamp landing 1956ms after shell-ready, so the
+  window is genuinely open — and **all eleven tests stay green**.
+* mutant at 12s, past the barrier's own 5s timeout: `issue481`, which does
+  go through `loginAs`, dies inside `waitForUserTopicReady`; the same three
+  admin specs stay green. The knob kills, through exactly the code path the
+  collapse would introduce, so the zero above is a true zero rather than a
+  blunt instrument.
+
+The nine sites do not read anything the user topic provides. Collapsing
+them would not remove a race; it would ADD a dependency they do not have —
+in the 12s run the inline specs are the ones still standing. That is the
+trade the criterion forbids: buying lines and paying in behaviour. Parked,
+alongside `scrollbackGeometry` and `waitForNetworkState`, for the same
+reason those were: when no mutant can tell the copies apart, the
+duplication is a NAME, not a lie.
+
+### Two retractions, both mine
+
+The census that sized this slice was wrong twice before it was right. A
+scope attributor that dropped a function name when the signature spanned
+several lines filed twelve `adminLogin` and eight `adminFriendlyLogin`
+copies as top-level, inflating the slice from fourteen to thirty-two; it
+was caught only by demanding the parser reproduce a previously known
+count. And `issue1061` was filed as collapsible from a window of seven
+lines BELOW the call, while ten lines ABOVE it the spec already explains
+that its boot is open-coded precisely because it stubs the WS offline and
+the fixture's gate cannot express that. A census that reads only downhill
+from the gesture cannot see the premise.
+
+### The homonym that costs an hour
+
+`issue252-vhost-selector.spec.ts` calls `loginAs(page, admin)` and it is
+NOT the fixture's `loginAs`: the file declares a local one that shadows
+it, and imports only `expectShellReady`, `openAdminConsole` and
+`openSettingsDrawer`. Read as the fixture verb, that line looks like proof
+that a network-less admin can clear a `.sidebar-network-header` gate —
+which `Sidebar.tsx` renders only inside `<Show when={networks().length >
+0}>`, so it cannot. The apparent contradiction was entirely an artefact of
+the shadowing name, and the measure that dissolved it was the import list,
+free, where a whole e2e run was spent instead. Two further local homonyms
+of exported fixture verbs exist (`bootVisitor`, `scrollbackLine`); whether
+their bodies diverge observably is not measured here.
