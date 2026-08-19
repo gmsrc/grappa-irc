@@ -50856,3 +50856,99 @@ migration is behaviour-preserving by CONSTRUCTION (same arguments, same emitted
 string) and unwitnessed by any assertion in the suite. That is worth knowing
 before someone reads a green suite as coverage of this helper: for most of its
 call sites, it is not.
+<!-- entry #1152-livenick -->
+
+---
+
+## 2026-08-19 — #1152: the nick the fixture asked for, the nick the session flew
+
+`specNick()` (`cicchetto/e2e/fixtures/specSubject.ts`) answered the nick the
+provision REQUESTED. The session flies whatever survived registration, and the
+two part company without a word: on a 433 ERR_NICKNAMEINUSE, #676's fallback
+ladder (`auth_fsm.ex`) re-registers as `<nick>_` and then as two random
+suffixes, moving `state.nick` with it. Grappa is not even quiet about it — it
+writes the substitution into the scrollback in plain words ("nick sbff5a028 was
+taken — you are registered as sbff5a028_"). Only the fixture believed the old
+one. Every `privmsg(specNick(), …)` then addressed whoever DID hold that nick,
+the spec's own assertion timed out, and the failure read as a flake.
+
+Reproduced 3/3 under `--repeat-each 3`, by DISPLACEMENT: in the wild the nick
+is held by the previous test's not-yet-reaped ghost, which is a race; a
+squatter taking it while the session is parked makes the same 433 deterministic.
+The race itself was not observed and is not claimed.
+
+No product bug is involved. `GET /networks` already answers the LIVE nick —
+`Networks.resolve_network_nick/2` asks the running Session.Server and falls back
+to the credential's configured nick only when no session is up, for exactly this
+reason ("a stale nick silently drops all inbound DMs",
+`networks_controller.ex`) — and cic resolves its own nick from that row. The
+cure reads the same door rather than inventing a third semantics.
+
+### The hard constraint, and why the cure has two shapes
+
+**Sync and always-correct is impossible in JS: there is no synchronous fetch.**
+A synchronous accessor can be made NOISY; it cannot be made right. That is the
+whole reason a fork existed here, and it is worth writing down so the next
+reader does not re-open it.
+
+Making `specNick()` async everywhere was rejected on a MEASURE, not a
+preference: 625 call sites in 290 of the 409 spec files (three anchors — `grep`
+from `e2e/`, `grep` from the repo root, `git grep` — all agreeing at the SHA
+this was measured on; the 627 an earlier pass reported is not reproducible and
+the two-line gap is unexplained). That is a patch colliding with every live
+branch. So the window is closed by DETECTION instead of by prevention, which is
+not a fallback: it is the same shape #1336's own cure takes — a recorder that
+fails an empty read unless a positive control fired. Detection is this epic's
+idiom.
+
+What shipped:
+
+* **a teardown guard, zero spec edits** — `fixtures/test.ts` reads the live
+  nick once per test and fails the test when the cached one has drifted. The
+  `connection` field of the `/networks` row is the liveness discriminator: it
+  is `null` exactly when `Session.connection_info/2` finds no live pid, which is
+  exactly when `nick` is the CONFIGURED fallback. Comparing a cached nick to a
+  fallback would manufacture drift, so that reading is reported as an absence of
+  measurement — on stderr as `__NICKGUARD__ unobservable <reason>`, never
+  silently, per the #934 lesson that a path which can skip has to write a line
+  or its silence gets read as evidence later. A revoked bearer is one such
+  reason and not a drift: the logout journeys seed `specUser().token` into the
+  page, so a UI logout kills the very token the guard would read.
+* **`specLiveNick()` on the 27 sites where the nick is the STIMULUS** — the
+  `privmsg(specNick(), …)` set, where a stale nick does not fail the spec, it
+  quietly tests nothing. It throws rather than guessing.
+
+### Two measurements that corrected the brief
+
+The slice was briefed as 28 sites. 28 is the LINE count; one of them is prose
+inside a comment. 27 are code, across 20 files.
+
+And `privmsg` is not the dominant consumer. Grouped by call shape, the 625 are
+led by roughly 425 `selectChannel(page, …, { ownNick: specNick() })`, then 27
+`privmsg`, then 17 `sender: specNick()` — that last one an oracle, not a
+stimulus, and drift there produces a timeout rather than a silent pass. The
+slice was NOT widened on this; it is recorded so the next reader sizes the
+remainder from a number instead of from the 28.
+
+The ruling also asked for re-resolution after every fixture gesture that
+reconnects. That half was declined, on the timeline below: a read issued right
+after `PATCH connection_state=connected` lands BEFORE the reconciliation it
+means to observe, so it would launder a stale value into the cache — repeating,
+inside the cure, the defect the cure is for. Re-resolution happens at the point
+of USE instead, which cannot be early by construction.
+
+### 🥇 The lesson: an instrument that measures a barrier defect is exposed to it
+
+The first reproduction bench went GREEN — `rc=0`, clean, and it would have
+closed #1152 on a vacuous measurement. Its barrier polled
+`connection_state == "connected"`, which is INTENT, not liveness: it is already
+`"connected"` while the FSM is still walking the 433 ladder. Measured, the nick
+was read 35 ms before the reconciliation that would have changed it — `.567`
+PATCH, `.572` two NICK, `.576/.579` the GETs, `.614` reconcile. Nothing in the
+run said so; only the server logs did.
+
+Redone with a CAUSAL barrier — the autojoin JOIN, which is strictly downstream
+of registration, happens in both worlds, and does not presuppose the answer the
+way waiting on the nick would — the same bench reproduces 3/3.
+
+**A green that reports NON-reproduction deserves the same suspicion as a red.**
