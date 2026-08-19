@@ -35,6 +35,9 @@ defmodule Grappa.AdmissionStateHelpers do
   `clear_registry_for(network_id)` polling helpers silently exhausted
   their 500ms budget under CI load (returned `:ok` with zombies still
   present). Loud raise + setup-time global reset is the durable fix.
+  Those two copies outlived that finding by months and are now retired
+  in favour of `clear_registry_for!/2`, which is the same purge with
+  the raise attached (#1397 bucket H).
 
   ## Usage
 
@@ -72,6 +75,13 @@ defmodule Grappa.AdmissionStateHelpers do
   # separate cluster scope; this is the load-tolerance knob.
   @reset_registry_attempts 600
   @reset_registry_poll_ms 25
+
+  # Per-pid ceiling for both teardown waits (the `:DOWN` after
+  # `terminate_child/2` and the `GenServer.stop` sweep). Extracted from
+  # the two literals `reset_session_supervisor/0` already carried so
+  # `clear_registry_for!/2` can cap its caller-supplied budget against
+  # the same number instead of inventing a second one.
+  @terminate_timeout_ms 2_000
 
   # How far ahead `open_circuit!/1` pins `cooled_at_ms`. Any value that
   # outlives a single test works; a minute matches the forged row the
@@ -223,11 +233,12 @@ defmodule Grappa.AdmissionStateHelpers do
       receive do
         {:DOWN, ^ref, :process, ^pid, _} -> :ok
       after
-        2_000 ->
+        @terminate_timeout_ms ->
           Process.demonitor(ref, [:flush])
 
           raise "AdmissionStateHelpers.reset_session_supervisor: " <>
-                  "Session.Server #{inspect(pid)} did not terminate within 2s"
+                  "Session.Server #{inspect(pid)} did not terminate within " <>
+                  "#{@terminate_timeout_ms}ms"
       end
     end
 
@@ -244,19 +255,100 @@ defmodule Grappa.AdmissionStateHelpers do
     # between `Process.alive?` check + `GenServer.stop` entry); we
     # don't care about the cause, only that the pid is gone by the
     # time `wait_until_registry_clear!/1` polls.
-    leftover_pids = Registry.select(Grappa.SessionRegistry, [{{:_, :"$1", :_}, [], [:"$1"]}])
+    Grappa.SessionRegistry
+    |> Registry.select([{{:_, :"$1", :_}, [], [:"$1"]}])
+    |> sweep_alive(@terminate_timeout_ms)
 
-    Enum.each(leftover_pids, fn pid ->
+    wait_until_registry_clear!(@reset_registry_attempts)
+  end
+
+  @doc """
+  Terminate every `Grappa.Session.Server` registered under
+  `Grappa.SessionRegistry` for `network_id`, then block until the
+  Registry observes the cleanup FOR THAT NETWORK. Raises on timeout —
+  and the raise is the whole point.
+
+  `bootstrap_test.exs` and `spawn_orchestrator_test.exs` each carried a
+  private `clear_registry_for/1` doing this, and both FAILED OPEN:
+  their terminal clause was `wait_until_registry_clear(_, 0), do: :ok`,
+  so an exhausted 500ms budget returned `:ok` with zombies still
+  registered and the test carried on against a dirty registry. This
+  module's moduledoc already names that failure and "loud raise" as the
+  durable fix; the two copies simply outlived the fix (#1397 bucket H).
+
+  `timeout_ms` is REQUIRED, no default: consolidating a barrier means
+  deciding the budget at the call site instead of inheriting whichever
+  value the majority of copies happened to carry — the same posture the
+  handshake barrier took earlier in this bucket. It bounds the Registry
+  poll, and (capped at the 2s per-pid ceiling `reset_session_supervisor/0`
+  uses) each per-pid wait, so a test that only wants to observe the
+  raise can ask for a cheap budget.
+
+  Scoped to `network_id`: sessions on other networks are left alone.
+  That is what makes it usable MID-test — after `reset_all/0` has run in
+  `setup` and the test has since spawned sessions of its own against a
+  `network.id` sqlite may have recycled.
+  """
+  @spec clear_registry_for!(integer(), pos_integer()) :: :ok
+  def clear_registry_for!(network_id, timeout_ms)
+      when is_integer(network_id) and is_integer(timeout_ms) and timeout_ms > 0 do
+    per_pid_ms = min(timeout_ms, @terminate_timeout_ms)
+
+    # Unlike `reset_session_supervisor/0` this does NOT raise per pid.
+    # The contract here is the AGGREGATE postcondition — "nothing is
+    # registered for this network" — which is the same one production's
+    # `Session.stop_session/2` states about its key. A pid that ignores
+    # `terminate_child/2` is not itself the failure; it is a failure only
+    # if it is still registered when the poll gives up, and then the poll
+    # reports it with a count. One loud failure mode, not two.
+    Enum.each(network_pids(network_id), fn pid ->
+      ref = Process.monitor(pid)
+      _ = DynamicSupervisor.terminate_child(Grappa.SessionSupervisor, pid)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _} -> :ok
+      after
+        per_pid_ms -> Process.demonitor(ref, [:flush])
+      end
+    end)
+
+    # Re-select rather than reuse the list above: same two-step shape as
+    # `reset_session_supervisor/0`, and it catches a pid that registered
+    # while the terminate loop was running.
+    sweep_alive(network_pids(network_id), per_pid_ms)
+
+    wait_until_network_clear!(network_id, max(div(timeout_ms, @reset_registry_poll_ms), 1), timeout_ms)
+  end
+
+  defp network_pids(network_id) do
+    Registry.select(Grappa.SessionRegistry, [{{{:session, :_, network_id}, :"$1", :_}, [], [:"$1"]}])
+  end
+
+  defp sweep_alive(pids, stop_timeout_ms) do
+    Enum.each(pids, fn pid ->
       if Process.alive?(pid) do
         try do
-          GenServer.stop(pid, :shutdown, 2_000)
+          GenServer.stop(pid, :shutdown, stop_timeout_ms)
         catch
           :exit, _ -> :ok
         end
       end
     end)
+  end
 
-    wait_until_registry_clear!(@reset_registry_attempts)
+  defp wait_until_network_clear!(network_id, 0, timeout_ms) do
+    raise "AdmissionStateHelpers.clear_registry_for!: Grappa.SessionRegistry still has " <>
+            "#{length(network_pids(network_id))} session(s) registered for " <>
+            "network_id=#{network_id} after #{timeout_ms}ms"
+  end
+
+  defp wait_until_network_clear!(network_id, attempts, timeout_ms) do
+    if network_pids(network_id) == [] do
+      :ok
+    else
+      Process.sleep(@reset_registry_poll_ms)
+      wait_until_network_clear!(network_id, attempts - 1, timeout_ms)
+    end
   end
 
   defp wait_until_registry_clear!(0) do
