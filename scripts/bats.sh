@@ -19,9 +19,10 @@
 # carries an id: eight cases across three files, failing with a message
 # about deploying that has nothing to do with the code under test.
 #
-# #1409 cured the same leak per-file, in two of the five files that reach a
-# deploy door; the class is "any bats case reaching a deploy door", so the
-# cure belongs at the door, where a case written tomorrow inherits it. The
+# #1409 cured the same leak per-file, in two files. Censused after the fact:
+# TWENTY bats files drive a deploy door by name and eighteen carry no unset,
+# so the class is "any bats case reaching a deploy door" and the cure belongs
+# at the door, where a case written tomorrow inherits it. The
 # two per-file `unset`s stay: they also cover a direct `vendor/bats-core/
 # bin/bats` invocation, which never passes through here.
 #

@@ -52248,9 +52248,14 @@ red is a false RED rather than a vacuous green.
 
 #1409 already found this leak and cured it **per file** — `unset MIX_ENV
 GRAPPA_CACHE_ID` in `deploy_docker_test.bats`, `unset GRAPPA_CACHE_ID` in
-`deploy_docker_update_test.bats` — in two of the five files that reach a deploy
-door. The other three never got the line, and a sixth file written tomorrow
-would not get it either. The class is "any bats case that reaches a deploy
+`deploy_docker_update_test.bats` — in two files. **A first pass here said "two
+of the five files that reach a deploy door" and that number was derived (the
+two cured plus the three red), not censused.** Censused: `git grep -l` for the
+deploy door script names over `test/**/*.bats` returns **twenty** files, of
+which **eighteen** carry no unset. Which of the other fifteen merely never
+reach the guard — the jail and Linux doors do not carry it — was not measured;
+what the census establishes is that the exposed set is far wider than the three
+that happen to go red today, and that a file written tomorrow inherits nothing. The class is "any bats case that reaches a deploy
 door", so `scripts/bats.sh` drops the knob once, **before `_lib.sh` reads it**
 (so no `.caches/<id>` is provisioned and no `MIX_TEST_PARTITION` is derived for
 a door that runs no `mix`), and says so on stderr rather than silently. The two
