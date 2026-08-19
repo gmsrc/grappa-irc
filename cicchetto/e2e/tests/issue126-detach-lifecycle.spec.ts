@@ -31,7 +31,7 @@
 // reconnects the subject's network defensively (a pre-#126 RED run of
 // this spec would tear its session down).
 
-import { loginAs, openRailMenu } from "../fixtures/cicchettoPage";
+import { bootVisitorContext, loginAs, openRailMenu } from "../fixtures/cicchettoPage";
 import {
   GRAPPA_BASE_URL,
   login,
@@ -100,27 +100,14 @@ test.describe("issue #126 — detach lifecycle", () => {
     browser,
   }) => {
     const visitor = await mintVisitor(`e2e126-${Date.now()}`);
-    const ctx = await browser.newContext();
-    const page = await ctx.newPage();
+    // ephemeral: no NickServ identity → not registered
+    const { ctx, page } = await bootVisitorContext(browser, {
+      id: visitor.id,
+      token: visitor.token,
+      registered: false,
+    });
 
     try {
-      const subjectJson = JSON.stringify({
-        kind: "visitor",
-        id: visitor.id,
-        nick: visitor.nick,
-        network_slug: visitor.network_slug,
-        // ephemeral: no NickServ identity → not registered
-        registered: false,
-      });
-      await page.addInitScript(
-        ([token, subject]) => {
-          localStorage.setItem("grappa-token", token);
-          localStorage.setItem("grappa-subject", subject);
-          localStorage.setItem("cic.installChoice", "browser");
-        },
-        [visitor.token, subjectJson] as const,
-      );
-      await page.goto("/");
       await openRailMenu(page);
 
       // The ONLY lifecycle verb an ephemeral visitor gets is quit.

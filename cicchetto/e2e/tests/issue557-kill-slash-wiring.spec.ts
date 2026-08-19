@@ -25,6 +25,7 @@
 // exactly `"KILL spammer"` (no trailing colon, no stray null/space).
 
 import {
+  bootVisitor,
   composeSend,
   expectShellReady,
   scrollbackLine,
@@ -66,24 +67,11 @@ test("issue #557 — /kill <nick> <reason> ships KILL nick :reason on the raw wi
   });
 
   try {
-    const visitorSubject = {
-      kind: "visitor",
-      id: visitor.id,
-      nick: visitor.nick,
-      network_slug: visitor.network_slug,
-    };
-
     // Boot cic straight into Shell as the visitor (no captcha/anon dance),
-    // exactly like #375/#155/#148.
-    await page.addInitScript(
-      ([token, subjectJson]) => {
-        localStorage.setItem("grappa-token", token);
-        localStorage.setItem("grappa-subject", subjectJson);
-        localStorage.setItem("cic.installChoice", "browser");
-      },
-      [visitor.token, JSON.stringify(visitorSubject)] as const,
-    );
-    await page.goto("/");
+    // exactly like #375/#155/#148. Onto the page made above, NOT a fresh
+    // context: the websocket listener has to be attached before the boot
+    // navigates, or the raw frames it records are missed.
+    await bootVisitor(page, { id: visitor.id, token: visitor.token });
     await expectShellReady(page);
 
     // Focus the visitor's $server window and wait for the upstream registration

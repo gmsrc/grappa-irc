@@ -27,6 +27,7 @@
 // DeleteAccountModal). Honest scope, mirroring issue126-detach-lifecycle.
 
 import {
+  bootVisitorContext,
   closeSettings,
   expectShellReady,
   openRailMenu,
@@ -218,26 +219,13 @@ test.describe("issue #157 — delete account", () => {
 
   test("a minted (anon) visitor is NOT offered delete account — only quit", async ({ browser }) => {
     const visitor = await mintVisitor(`e2e157v-${Date.now()}`);
-    const ctx = await browser.newContext();
-    const page = await ctx.newPage();
+    const { ctx, page } = await bootVisitorContext(browser, {
+      id: visitor.id,
+      token: visitor.token,
+      registered: false,
+    });
 
     try {
-      const subjectJson = JSON.stringify({
-        kind: "visitor",
-        id: visitor.id,
-        nick: visitor.nick,
-        network_slug: visitor.network_slug,
-        registered: false,
-      });
-      await page.addInitScript(
-        ([token, subject]) => {
-          localStorage.setItem("grappa-token", token);
-          localStorage.setItem("grappa-subject", subject);
-          localStorage.setItem("cic.installChoice", "browser");
-        },
-        [visitor.token, subjectJson] as const,
-      );
-      await page.goto("/");
       await openSettingsDrawer(page);
       await expect(page.getByRole("dialog", { name: /settings/i })).toHaveClass(/open/);
 

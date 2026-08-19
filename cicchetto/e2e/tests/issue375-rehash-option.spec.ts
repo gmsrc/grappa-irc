@@ -29,6 +29,7 @@
 // still sends exactly `"REHASH"` (the null-filter drops the absent option).
 
 import {
+  bootVisitor,
   composeSend,
   expectShellReady,
   scrollbackLine,
@@ -70,24 +71,11 @@ test("issue #375 — /rehash <option> forwards the option on the raw wire, bare 
   });
 
   try {
-    const visitorSubject = {
-      kind: "visitor",
-      id: visitor.id,
-      nick: visitor.nick,
-      network_slug: visitor.network_slug,
-    };
-
     // Boot cic straight into Shell as the visitor (no captcha/anon dance),
-    // exactly like issue155/issue148.
-    await page.addInitScript(
-      ([token, subjectJson]) => {
-        localStorage.setItem("grappa-token", token);
-        localStorage.setItem("grappa-subject", subjectJson);
-        localStorage.setItem("cic.installChoice", "browser");
-      },
-      [visitor.token, JSON.stringify(visitorSubject)] as const,
-    );
-    await page.goto("/");
+    // exactly like issue155/issue148. Onto the page made above, NOT a fresh
+    // context: the websocket listener has to be attached before the boot
+    // navigates, or the raw frames it records are missed.
+    await bootVisitor(page, { id: visitor.id, token: visitor.token });
     await expectShellReady(page);
 
     // Focus the visitor's $server window and wait for the upstream

@@ -17,7 +17,7 @@
 // Seeding: featured channels added via the admin REST path, removed in
 // `finally`. Network id resolved by slug from GET /admin/networks.
 
-import { expectShellReady } from "../fixtures/cicchettoPage";
+import { bootVisitorContext, expectShellReady } from "../fixtures/cicchettoPage";
 import { GRAPPA_BASE_URL, mintVisitor, reapVisitors } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
@@ -71,27 +71,14 @@ test("issue #135 — visitor home shows welcome + featured + a directory link", 
   const networkId = await resolveNetworkId(admin.token, visitor.network_slug);
   const featuredId = await addFeatured(admin.token, networkId, FEATURED_NAME);
 
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  // Seed the visitor bearer + subject so cic boots straight into Shell
+  // (no captcha/anon dance), then auto-lands on the home pane.
+  const { ctx, page } = await bootVisitorContext(browser, {
+    id: visitor.id,
+    token: visitor.token,
+  });
 
   try {
-    const visitorSubject = {
-      kind: "visitor",
-      id: visitor.id,
-      nick: visitor.nick,
-    };
-
-    // Seed the visitor bearer + subject so cic boots straight into Shell
-    // (no captcha/anon dance), then auto-lands on the home pane.
-    await page.addInitScript(
-      ([token, subjectJson]) => {
-        localStorage.setItem("grappa-token", token);
-        localStorage.setItem("grappa-subject", subjectJson);
-        localStorage.setItem("cic.installChoice", "browser");
-      },
-      [visitor.token, JSON.stringify(visitorSubject)] as const,
-    );
-    await page.goto("/");
     await expectShellReady(page);
 
     // (1) Welcome / orientation copy — the #496 always-on value prop (stable

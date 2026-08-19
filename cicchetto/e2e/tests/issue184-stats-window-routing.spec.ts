@@ -27,6 +27,7 @@
 // server-side or client-side.
 
 import {
+  bootVisitorContext,
   composeSend,
   expectShellReady,
   scrollbackLine,
@@ -56,28 +57,14 @@ test("issue #184 — /stats reply renders in $server, never a query window named
   const visitorNick = `v184-${Date.now()}`;
   const visitor = await mintVisitor(visitorNick);
 
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  // Boot cic straight into Shell as the visitor (no captcha/anon dance),
+  // exactly like issue155.
+  const { ctx, page } = await bootVisitorContext(browser, {
+    id: visitor.id,
+    token: visitor.token,
+  });
 
   try {
-    const visitorSubject = {
-      kind: "visitor",
-      id: visitor.id,
-      nick: visitor.nick,
-      network_slug: visitor.network_slug,
-    };
-
-    // Boot cic straight into Shell as the visitor (no captcha/anon dance),
-    // exactly like issue155.
-    await page.addInitScript(
-      ([token, subjectJson]) => {
-        localStorage.setItem("grappa-token", token);
-        localStorage.setItem("grappa-subject", subjectJson);
-        localStorage.setItem("cic.installChoice", "browser");
-      },
-      [visitor.token, JSON.stringify(visitorSubject)] as const,
-    );
-    await page.goto("/");
     await expectShellReady(page);
 
     // Focus the $server window and wait for the registration numerics

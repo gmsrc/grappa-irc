@@ -28,6 +28,7 @@
 // issue MODE freely on any channel they're in (see ircClient.oper docs).
 
 import {
+  bootVisitorContext,
   composeSend,
   expectShellReady,
   scrollbackLine,
@@ -55,29 +56,15 @@ test("issue #153 — visitor /quote and /mode reach upstream and take effect", a
   const marker = `quote153-${stamp}`;
   const visitor = await mintVisitor(visitorNick);
 
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  // Boot cic straight into Shell as the visitor (no captcha/anon dance),
+  // exactly like issue148-visitor-oper.spec.ts.
+  const { ctx, page } = await bootVisitorContext(browser, {
+    id: visitor.id,
+    token: visitor.token,
+  });
   let peer: IrcPeer | null = null;
 
   try {
-    const visitorSubject = {
-      kind: "visitor",
-      id: visitor.id,
-      nick: visitor.nick,
-      network_slug: visitor.network_slug,
-    };
-
-    // Boot cic straight into Shell as the visitor (no captcha/anon dance),
-    // exactly like issue148-visitor-oper.spec.ts.
-    await page.addInitScript(
-      ([token, subjectJson]) => {
-        localStorage.setItem("grappa-token", token);
-        localStorage.setItem("grappa-subject", subjectJson);
-        localStorage.setItem("cic.installChoice", "browser");
-      },
-      [visitor.token, JSON.stringify(visitorSubject)] as const,
-    );
-    await page.goto("/");
     await expectShellReady(page);
 
     // Focus the visitor's $server window and wait for the upstream

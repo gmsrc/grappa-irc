@@ -13,7 +13,13 @@
 // attributed to the fixed "guest" label server-side (author model B); this
 // spec exercises the client half.
 
-import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import {
+  bootVisitorContext,
+  loginAs,
+  openRailMenu,
+  selectChannel,
+  sidebarWindow,
+} from "../fixtures/cicchettoPage";
 import {
   adminDeleteTheme,
   adminDeleteVisitor,
@@ -105,27 +111,13 @@ test.describe("#299 — theme cards (tap-select + progressive disclosure)", () =
     browser,
   }) => {
     const visitor = await mintVisitor(`e2e299v-${Date.now()}`);
-    const ctx = await browser.newContext();
-    const page = await ctx.newPage();
+    const { ctx, page } = await bootVisitorContext(browser, {
+      id: visitor.id,
+      token: visitor.token,
+      registered: false,
+    });
 
     try {
-      const subjectJson = JSON.stringify({
-        kind: "visitor",
-        id: visitor.id,
-        nick: visitor.nick,
-        network_slug: visitor.network_slug,
-        registered: false,
-      });
-      await page.addInitScript(
-        ([token, subject]) => {
-          localStorage.setItem("grappa-token", token);
-          localStorage.setItem("grappa-subject", subject);
-          localStorage.setItem("cic.installChoice", "browser");
-        },
-        [visitor.token, subjectJson] as const,
-      );
-      await page.goto("/");
-
       await openThemesSubPageDesktop(page);
 
       // Select a built-in card → reveal its actions → copy it. A visitor is a

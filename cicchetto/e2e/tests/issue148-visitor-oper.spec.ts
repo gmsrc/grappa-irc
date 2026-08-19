@@ -26,6 +26,7 @@
 // nick can oper with `testoper`/`testoperpass`.
 
 import {
+  bootVisitorContext,
   composeSend,
   expectShellReady,
   scrollbackLine,
@@ -51,28 +52,14 @@ test("issue #148 — visitor /oper ships OPER upstream and renders the 381 notic
   const visitorNick = `oper148-${Date.now()}`;
   const visitor = await mintVisitor(visitorNick);
 
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  // Seed the visitor's bearer + subject so cic boots straight into Shell
+  // (no captcha/anon dance), exactly like the share spec's device A.
+  const { ctx, page } = await bootVisitorContext(browser, {
+    id: visitor.id,
+    token: visitor.token,
+  });
 
   try {
-    const visitorSubject = {
-      kind: "visitor",
-      id: visitor.id,
-      nick: visitor.nick,
-      network_slug: visitor.network_slug,
-    };
-
-    // Seed the visitor's bearer + subject so cic boots straight into Shell
-    // (no captcha/anon dance), exactly like the share spec's device A.
-    await page.addInitScript(
-      ([token, subjectJson]) => {
-        localStorage.setItem("grappa-token", token);
-        localStorage.setItem("grappa-subject", subjectJson);
-        localStorage.setItem("cic.installChoice", "browser");
-      },
-      [visitor.token, JSON.stringify(visitorSubject)] as const,
-    );
-    await page.goto("/");
     await expectShellReady(page);
 
     // Focus the visitor's $server window. awaitWsReady:false — the server

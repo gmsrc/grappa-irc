@@ -37,6 +37,7 @@
 // and the reply numerics render as :notice rows in $server.
 
 import {
+  bootVisitorContext,
   composeSend,
   expectShellReady,
   scrollbackLine,
@@ -64,28 +65,14 @@ test("issue #155 — native /stats and /rehash ship upstream and render reply nu
   const visitorNick = `v155-${Date.now()}`;
   const visitor = await mintVisitor(visitorNick);
 
-  const ctx = await browser.newContext();
-  const page = await ctx.newPage();
+  // Boot cic straight into Shell as the visitor (no captcha/anon dance),
+  // exactly like issue148/issue153.
+  const { ctx, page } = await bootVisitorContext(browser, {
+    id: visitor.id,
+    token: visitor.token,
+  });
 
   try {
-    const visitorSubject = {
-      kind: "visitor",
-      id: visitor.id,
-      nick: visitor.nick,
-      network_slug: visitor.network_slug,
-    };
-
-    // Boot cic straight into Shell as the visitor (no captcha/anon dance),
-    // exactly like issue148/issue153.
-    await page.addInitScript(
-      ([token, subjectJson]) => {
-        localStorage.setItem("grappa-token", token);
-        localStorage.setItem("grappa-subject", subjectJson);
-        localStorage.setItem("cic.installChoice", "browser");
-      },
-      [visitor.token, JSON.stringify(visitorSubject)] as const,
-    );
-    await page.goto("/");
     await expectShellReady(page);
 
     // Focus the visitor's $server window and wait for the upstream

@@ -31,7 +31,7 @@
 // other rows), `ServerInfoCard.test.tsx` (the pure rendering rule).
 
 import { expect, test } from "@playwright/test";
-import { selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
+import { bootVisitorContext, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";
 import {
   GRAPPA_BASE_URL,
   mintVisitor,
@@ -64,27 +64,14 @@ test.describe("#897 server-info uptime measures the live link", () => {
   }) => {
     const admin = getSeededAdmin();
     const visitor = await mintVisitor(`e2e897-${Date.now()}`);
-    const ctx = await browser.newContext();
-    const page = await ctx.newPage();
+    const { ctx, page } = await bootVisitorContext(browser, {
+      id: visitor.id,
+      token: visitor.token,
+      registered: false,
+    });
 
     try {
       const networkId = await resolveNetworkId(visitor.token, visitor.network_slug);
-      const subjectJson = JSON.stringify({
-        kind: "visitor",
-        id: visitor.id,
-        nick: visitor.nick,
-        network_slug: visitor.network_slug,
-        registered: false,
-      });
-      await page.addInitScript(
-        ([token, subject]) => {
-          localStorage.setItem("grappa-token", token);
-          localStorage.setItem("grappa-subject", subject);
-          localStorage.setItem("cic.installChoice", "browser");
-        },
-        [visitor.token, subjectJson] as const,
-      );
-      await page.goto("/");
 
       // ---- 1. LIVE LINK: the duration is present and is a real duration.
       await expect(sidebarWindow(page, visitor.network_slug, SERVER_WINDOW_LABEL)).toHaveCount(1, {
