@@ -36,7 +36,7 @@ import {
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, readSpecLiveNick, specLiveNick, specNick, specUser, test } from "../fixtures/test";
+import { expect, readSpecLiveNick, specLiveNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique: bahamut lingers a ghosted nick after disconnect, so a
 // fixed literal 433s the peer itself on a rapid rerun.
@@ -45,7 +45,13 @@ const LIVE_BODY = "#1152 addressed to the live nick";
 const REQUESTED_BODY = "#1152 addressed to the requested nick";
 
 test("a squatted registration moves the live nick, and specLiveNick() follows it", async () => {
-  const requested = specNick();
+  // `specUser().name` and NOT `specNick()`: the provision asks for
+  // `nick: name`, so the account name IS the requested nick, at the
+  // source. Reading it through `specNick()` would ALSO be reading it as
+  // an address, and the teardown guard would rightly redden this spec for
+  // addressing a nick the subject stops holding two lines later. The
+  // squat below wants the string, not the address.
+  const requested = specUser().name;
   const token = specUser().token;
 
   // (1) PRE-STATE. `kind: "live"` is half the assertion: it proves the

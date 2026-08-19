@@ -1,5 +1,6 @@
 import { test as base, expect as baseExpect } from "@playwright/test";
 import {
+  consumedSpecNicks,
   provisionSpecSubject,
   readSpecLiveNick,
   setCurrentSpecSubject,
@@ -112,13 +113,23 @@ export const test = base.extend<{
         // to write a line, or its silence gets read as evidence later).
         const reading = await readSpecLiveNick();
         if (reading.kind === "live") {
+          // The judged value is what the test was HANDED, not what the
+          // cache last held. Measured on this branch: 19 of the 20 specs
+          // that call `specLiveNick()` also read `specNick()` earlier, so
+          // a guard on the cache alone would be laundered by the very
+          // refresh this cure introduced — live compared against live,
+          // green, with the stale value those specs already addressed
+          // never mentioned. A spec that consumed no nick at all is
+          // vacuously fine here, and that is correct: drift cannot reach
+          // what never read it.
+          const stale = consumedSpecNicks().filter((nick) => nick !== reading.nick);
           baseExpect(
-            reading.nick,
-            `the subject's live upstream nick drifted away from the one the ` +
-              `spec has been addressing (#1152) — grappa re-registered after a ` +
-              `433, and every specNick() in this spec named somebody else. Use ` +
-              `specLiveNick() where the nick is the stimulus.`,
-          ).toBe(subject.nick);
+            stale,
+            `this spec addressed a nick the subject was not flying (#1152). ` +
+              `Live: ${reading.nick}. Grappa re-registered after a 433 and ` +
+              `specNick() kept answering the requested nick. Where the nick is ` +
+              `the stimulus, use specLiveNick().`,
+          ).toEqual([]);
         } else {
           process.stderr.write(
             `__NICKGUARD__\tunobservable\t${reading.reason}\t${subject.user.name}\n`,

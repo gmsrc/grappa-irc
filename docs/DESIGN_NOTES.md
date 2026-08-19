@@ -50927,15 +50927,53 @@ And `privmsg` is not the dominant consumer. Grouped by call shape, the 625 are
 led by roughly 425 `selectChannel(page, …, { ownNick: specNick() })`, then 27
 `privmsg`, then 17 `sender: specNick()` — that last one an oracle, not a
 stimulus, and drift there produces a timeout rather than a silent pass. The
-slice was NOT widened on this; it is recorded so the next reader sizes the
-remainder from a number instead of from the 28.
+slice was NOT widened on this; the number is recorded so the next reader sizes
+the remainder from evidence rather than from the 28, and so that what the slice
+does not cover is stated rather than left as a silent cap.
+
+Those ~442 are covered by the guard, not by the conversion, and that is the
+intended posture. But it only became TRUE after the guard was rewritten, which
+is the finding below.
+
+### The cure grew its own blind spot, and it took the same shape
+
+The guard as first written compared the CACHED nick against the live one. That
+is laundered by the very call the cure introduces: `specLiveNick()` refreshes
+the cache, so at teardown the guard compares the live nick against itself, goes
+green, and never mentions the stale value the spec had already addressed
+earlier in the same body. Measured on this branch: **19 of the 20** specs that
+call `specLiveNick()` also read `specNick()` at an earlier line — so the blind
+spot landed on precisely the specs the cure touched, which are the DM specs,
+which are the ones that drift.
+
+(The 19 is a LEXICAL ordering — first `specNick()` line before first
+`specLiveNick()` line — not an execution trace. For straight-line test bodies
+the two coincide; it was not verified case by case.)
+
+The fix is to judge what the test was HANDED rather than what the cache last
+held: `specNick()` and `specLiveNick()` record every value they return, and the
+guard asserts that every recorded value equals the live nick. A spec that read
+no nick at all is then vacuously fine, which is correct — drift cannot reach
+what never read it.
+
+Worth keeping for its own sake: a derived copy plus a guard over it is a
+mechanism with two moving parts, and the SECOND part failed here for the same
+reason the first one did. It is the same argument that declined push-at-gesture
+above, arriving from the other direction.
 
 The ruling also asked for re-resolution after every fixture gesture that
-reconnects. That half was declined, on the timeline below: a read issued right
+reconnects. That half was declined on the timeline below: a read issued right
 after `PATCH connection_state=connected` lands BEFORE the reconciliation it
-means to observe, so it would launder a stale value into the cache — repeating,
-inside the cure, the defect the cure is for. Re-resolution happens at the point
-of USE instead, which cannot be early by construction.
+means to observe, so it would launder a stale value into the cache —
+repeating, inside the cure, the defect the cure is for.
+
+🥇 The structural reason is the better one, and it generalises past this
+issue: **re-resolving at the point of USE leaves no cached object that can
+age.** Push-at-gesture manufactures the stale value at a moment chosen for
+convenience and then posts a guard over it; pull-at-use makes the stale value
+unrepresentable. Given a choice between guarding a derived copy and not
+keeping one, prefer not keeping one — a guard is a thing that can be
+laundered, and the next section is what that looks like when it happens.
 
 ### 🥇 The lesson: an instrument that measures a barrier defect is exposed to it
 

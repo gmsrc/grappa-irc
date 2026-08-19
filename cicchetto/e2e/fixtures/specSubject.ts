@@ -133,8 +133,27 @@ export async function teardownSpecSubject(subject: SpecSubject): Promise<void> {
 // renaming a call instead of rewriting a signature.
 let current: SpecSubject | null = null;
 
+// #1152 — every nick value the running test actually HANDED OUT, which is
+// what the teardown guard has to judge, and it is not the same thing as
+// the last value cached.
+//
+// Measured on this branch: 19 of the 20 specs that now call
+// `specLiveNick()` also read `specNick()` earlier in the file. Guarding
+// the CACHE alone would let the async call launder it — refresh to the
+// live nick, teardown compares live against live, green — while the stale
+// value those 19 already consumed goes unreported. Recording the values
+// instead makes the guard's question the honest one: was everything this
+// test addressed the nick the session was flying?
+let consumed = new Set<string>();
+
 export function setCurrentSpecSubject(subject: SpecSubject | null): void {
   current = subject;
+  consumed = new Set();
+}
+
+/** Every distinct nick the current test has been handed, in first-seen order. */
+export function consumedSpecNicks(): string[] {
+  return [...consumed];
 }
 
 function requireCurrent(caller: string): SpecSubject {
@@ -159,7 +178,9 @@ export function specUser(): SeededUser {
  * always-correct: see the #1152 note below.
  */
 export function specNick(): string {
-  return requireCurrent("specNick()").nick;
+  const nick = requireCurrent("specNick()").nick;
+  consumed.add(nick);
+  return nick;
 }
 
 // #1152 — the requested nick and the flown nick are two different things.
@@ -243,5 +264,6 @@ export async function specLiveNick(): Promise<string> {
     );
   }
   subject.nick = reading.nick;
+  consumed.add(reading.nick);
   return reading.nick;
 }
