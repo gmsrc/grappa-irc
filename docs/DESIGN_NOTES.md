@@ -50325,3 +50325,84 @@ prefix-eating (`grep -o` discards what it did not capture, so a follow-on
 available, not the most reassuring: it is indistinguishable from "already
 done". Cross three methods — by name, by naked grep, by grouping on the
 BODY — before believing one.
+<!-- entry #1397-e2e-distbottom -->
+
+---
+
+## 2026-08-19 — #1397 (e2e): four contracts under two names, and two premises retracted
+
+Eleven specs each carried their own "how far is the scrollback from its tail"
+helper, under two names — `distanceToBottom` and `distFromBottom` — in FOUR
+distinct bodies: throw on a missing pane (4 files), delegate to a local
+`scrollbackGeometry` with no guard (1), return `null` (5), return the constant
+`999` (1). Six rounded, five did not. They are now one verb,
+`scrollbackDistanceFromBottom(page): Promise<number | null>`, in
+`fixtures/cicchettoPage.ts`, and the 24 call sites carry the sentinel.
+
+The rule the collapse is built on is not "duplication is bad". It is that **a
+sentinel for a missing pane has to point the same way as the assertion that
+follows, and only the call site knows which way that is.** Nine of the twelve
+sites on the `null` shape already did exactly that — `?? 999` ahead of a
+`toBeLessThanOrEqual`, `?? 0` ahead of a `toBeGreaterThan`, so an unmounted
+pane FAILS the poll — and the migration confirmed it: the rewriter derived each
+sentinel from the matcher below it and would have stopped on a disagreement,
+and it never stopped. `issue310` was the one file that hoisted its sentinel
+INTO the helper, where it serves both directions at once and therefore points
+the wrong way for one of its three uses.
+
+**Retracted premise (mine, and the one this slice was approved on first): "the
+999 hides a red".** It does not, at the granularity that matters. Measured: the
+constant does satisfy `toBeGreaterThan(50)` with no scrollback in the document
+at `issue310:104` — so the ASSERTION is masked — but the same test reads the
+same helper 23 lines later at `issue310:127` against `toBeLessThanOrEqual(50)`,
+where 999 fails. No test outcome was ever masked. The slice proceeded on the
+corrected motivation above, and the false one is recorded here rather than
+quietly replaced: a decision log that keeps only the reasons that held is a log
+that cannot be audited.
+
+**Why the verb returns `null` instead of throwing.** All 24 call sites sit
+inside `expect.poll`, so the choice is not stylistic. Read in the installed
+playwright 1.59.1: `lib/matchers/expect.js:275` awaits the poll generator
+OUTSIDE the `try` that retries (only the matcher's own failure returns
+`continuePolling: true`), `playwright-core/.../timeoutRunner.js:49` awaits
+`raceAgainstDeadline` with no `try`, and `:28` is a bare `Promise.race` with
+only a `.finally`. A throwing helper therefore aborts the poll on its first
+sample instead of waiting for the pane to mount — the opposite of what the four
+throwing copies looked like they were buying. This is a source reading against
+a pinned version, not a runtime probe.
+
+**Why a raw float.** Six of the eleven copies rounded. Rounding inside the verb
+would decide the sub-pixel band for every consumer at once, and unrounding is
+the direction that can only ever tighten an assertion, never weaken one.
+
+**Second retraction, same slice: `waitForNetworkState` was proposed as a
+companion collapse ("two failure semantics under one name") and is withdrawn
+before it was written.** Measured across its four files: all poll
+`attempts = 60` × 500 ms, and all four fail fast on a non-ok response — three
+through a local `getNetworks` that throws, the fourth through its own inline
+`if (!res.ok) throw`. The semantics are identical; only the message prefix and
+the inlining differ. The mutant proposed for it (make `/networks` answer 500
+and watch one file hang for 30 s) is falsified BY CONSTRUCTION: no file would
+hang. Three spellings of one behaviour is a name, not a lie, so it parks
+alongside `scrollbackGeometry` (8 files, one body) under the same test: when no
+mutant can tell the copies apart, collapsing buys tidiness, not correctness.
+**The controls, run on the e2e stack (11 specs, both projects).** Baseline on
+the base commit and treatment on this branch each report 18 passed / 1 failed
+with the SAME twenty titles; the one red is `issue580` case 2 dying in
+`loginAs` on `.sidebar-network-header` — before any distance is measured, on
+both arms, and it passed in two later runs of the same set, so it is not this
+change. M1 opened a scoped window around `issue310`'s masked assertion in which
+the pane carries no `data-testid="scrollback"`, bracketed by two calibration
+reads (open, and still open when the assertion ends): on the base the assertion
+PASSED with zero panes in the document, on this branch it fails with
+`Expected: > 50, Received: 0`, on both projects. That pair is the whole claim,
+and it is why the sentinel moved to the call site. The rounding control (+0.6
+inside the verb) killed NOTHING over the eleven specs, and its own positive
+control (+100) killed 13 of 19 — so the probe can kill, and no site sits within
+0.6 px of its threshold. Nothing had to be decided site by site.
+
+Not claimed: that the full integration suite was run for this change — it was
+not; only the eleven touched specs. Nor that the +0.6 control proves the six
+rounding sites could never have depended on the rounding: it proves only that
+none of them sits within 0.6 px of its threshold in the states these specs
+reach.
