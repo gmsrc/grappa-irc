@@ -845,7 +845,19 @@ describe("compose submit — slash command dispatch", () => {
     }
   });
 
-  it("#737 — history recall and tab-complete are refused mid-drain too", async () => {
+  // #737 — one test used to carry both doors: the history walk and
+  // tab-complete, three gestures behind a single set of assertions. Breaking
+  // either guard killed the same test, so the count could not say which door
+  // had opened. They are two tests now, one door each.
+  //
+  // The bundle also called `recallNext` here, and that call is GONE rather
+  // than split out. It could not fail: the `recallPrev` above it was refused,
+  // so `historyCursor` was still null and `recallNext` returned early on its
+  // own null check without ever consulting the drain guard. The down-arrow
+  // half needs a window that is draining while its cursor is still non-null,
+  // which this fixture cannot produce — it is pinned separately below, on the
+  // #907 join gap.
+  it("#737 — the up-arrow recall is refused mid-drain, residue intact", async () => {
     vi.useFakeTimers();
     try {
       localStorage.setItem("grappa-token", "tok");
@@ -854,7 +866,8 @@ describe("compose submit — slash command dispatch", () => {
       const compose = await import("../lib/compose");
       const k = channelKey("freenode", "#a");
 
-      // Seed one history entry so recallPrev has somewhere to walk.
+      // Seed one history entry so recallPrev has somewhere to walk — without
+      // it the walk stops on its own empty-history guard and proves nothing.
       vi.mocked(sb.sendMessage).mockResolvedValue();
       compose.setDraft(k, "earlier line");
       await compose.submit(k, "freenode", "#a");
@@ -877,12 +890,42 @@ describe("compose submit — slash command dispatch", () => {
 
       compose.recallPrev(k);
       expect(compose.getDraft(k)).toBe("b\nc");
-      compose.recallNext(k);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await done;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("#737 — tab-complete is refused mid-drain, residue intact", async () => {
+    vi.useFakeTimers();
+    try {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      const api = await import("../lib/api");
+      const compose = await import("../lib/compose");
+      const members = await import("../lib/members");
+      const k = channelKey("freenode", "#a");
+
+      let n = 0;
+      let refused = false;
+      vi.mocked(sb.sendMessage).mockImplementation(async () => {
+        n += 1;
+        if (n === 2 && !refused) {
+          refused = true;
+          throw new api.ApiError(429, "rate_limited", { retry_after: 2 });
+        }
+        return undefined as never;
+      });
+
+      compose.setDraft(k, "a\nb\nc");
+      const done = compose.submit(k, "freenode", "#a");
+      await vi.advanceTimersByTimeAsync(0);
       expect(compose.getDraft(k)).toBe("b\nc");
 
       // Members MUST be seeded here, or tabComplete returns null on its own
       // empty-members guard and this assertion proves nothing.
-      const members = await import("../lib/members");
       vi.mocked(members.membersByChannel).mockReturnValue({
         [k]: [{ nick: "bruno", modes: [] }],
       });
