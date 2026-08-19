@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { bindPullGesture, PULL_COMMIT_PX, PULLING_CLASS } from "../lib/pullGesture";
+import { SWIPE_MIN_PX } from "../lib/swipe";
 import { fireTouch } from "./helpers/touchEvents";
 
 // #1445 — pull down from the top of a scroller to ask for a refresh.
@@ -19,6 +20,14 @@ import { fireTouch } from "./helpers/touchEvents";
 
 const X = 200;
 const START_Y = 300;
+
+// A travel that clears the bare swipe floor but NOT the pull's commit
+// distance. Derived from BOTH constants on purpose: a magnitude written as
+// `PULL_COMMIT_PX - 20` is invisible to the value of PULL_COMMIT_PX — halve
+// the constant and the drag shrinks with it, staying under the floor and
+// passing anyway. Measured: a mutant dropping PULL_COMMIT_PX to SWIPE_MIN_PX
+// survived the whole suite until this was anchored between the two.
+const BETWEEN_FLOOR_AND_COMMIT = (SWIPE_MIN_PX + PULL_COMMIT_PX) / 2;
 
 let list: HTMLDivElement;
 let row: HTMLDivElement;
@@ -65,10 +74,11 @@ describe("bindPullGesture — commit vs spring back", () => {
     expect(onRelease).not.toHaveBeenCalled();
   });
 
-  it("springs back on a short pull, however fast — distance is the only route", () => {
-    // 60px: past the 8px slop and the 40px swipe floor, so this is a CLAIMED
-    // pull that simply did not go far enough — not an unclaimed drag. Without
-    // that the assertion would pass against a binder with no commit distance.
+  it("springs back between the swipe floor and the commit distance, however fast", () => {
+    // Past the 8px slop and past the 40px swipe floor, so this is a CLAIMED
+    // pull that simply did not go far enough — not an unclaimed drag. That is
+    // what makes the commit distance the thing under test: relax it to the
+    // bare floor and this drag commits.
     //
     // It also guards the deliberate divergence from the viewer's dismiss,
     // which commits on velocity as well as distance. jsdom stamps every
@@ -76,7 +86,7 @@ describe("bindPullGesture — commit vs spring back", () => {
     // would read it as a flick and commit. One gesture, one mutant, both
     // claims — a separate "flick" test would be the same drag asserting the
     // same thing twice.
-    drag(PULL_COMMIT_PX - 20);
+    drag(BETWEEN_FLOOR_AND_COMMIT);
     expect(onCommit).not.toHaveBeenCalled();
     expect(onRelease).toHaveBeenCalledTimes(1);
   });
