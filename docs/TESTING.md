@@ -44,17 +44,20 @@ scripts/format.sh --check                # mix format --check-formatted
 scripts/credo.sh                         # mix credo --strict
 scripts/dialyzer.sh                      # mix dialyzer
 scripts/mix.sh --env=dev sobelow --config --exit Medium
-scripts/mix.sh --env=dev deps.audit --ignore-advisory-ids GHSA-g2wm-735q-3f56
-scripts/mix.sh --env=dev hex.audit
+scripts/mix.sh --env=dev deps.audit      # hard CVE gate — NO ignore list, same as CI
+scripts/mix.sh --env=dev hex.audit       # advisory-only (#147); ci.check runs it `|| true`
 scripts/mix.sh --env=dev doctor
 
 # Bash dispatchers (bin/grappa)
 scripts/bats.sh                          # all bats specs: test/bin/ test/infra/ test/scripts/
 scripts/bats.sh test/bin/grappa_test.bats
 
-# Release image — deploy it for real and probe it (#1162)
-docker pull ghcr.io/vjt/grappa:v0.16.0
-GRAPPA_IMAGE=ghcr.io/vjt/grappa:v0.16.0 GRAPPA_SMOKE_VERSION=0.16.0 \
+# Release image — deploy it for real and probe it (#1162).
+# Read the number from VERSION rather than hardcoding one: a literal
+# here goes stale at the next release and nothing fails when it does.
+V=$(cat VERSION)                         # 1.2.0 as of this line
+docker pull ghcr.io/vjt/grappa:v$V
+GRAPPA_IMAGE=ghcr.io/vjt/grappa:v$V GRAPPA_SMOKE_VERSION=$V \
   scripts/smoke-release-image.sh
 
 # E2E (Playwright + real testnet)
@@ -280,8 +283,16 @@ stack (`cicchetto/e2e/compose.yaml`):
 * **nginx-test**: a DUMB reverse proxy (`cicchetto/e2e/nginx-test.conf`) that terminates TLS on :443 (so the cic SW + Push get a secure context) and forwards everything to grappa-test:4000. Since #485 it serves nothing itself — grappa-test self-serves the SPA + static + PWA manifest and emits the security headers (`GrappaWeb.Plugs.SecurityHeaders`). It shares the substrate-agnostic proxy snippet (`infra/snippets/locations-api.conf`) with native Linux (`infra/linux/nginx.conf`) + the AWS box (`infra/cloud/first-boot.sh` fetches it), so the CSP + Range parity specs exercise the REAL prod header surface through the proxy. The m42 jail is NOT in that set any more — its nginx was deleted and the host vhost proxies straight to the BEAM.
 * **playwright-runner**: official Playwright base, runs `npx playwright test` against `https://nginx-test` from inside the docker network.
 
-Cold bring-up: ~30s. Suite (~190 specs across chromium + webkit-iphone-15
-projects): ~3 min.
+Cold bring-up: ~30s, suite ~3 min — both wall-clock figures inherited
+from an earlier run, not re-measured. Size of the suite, counted statically on
+`cicchetto/e2e/tests/*.spec.ts` (not from a run): **411 spec files**
+declaring **755** cases (750 `test(` + 5 `test.skip(`, line-anchored).
+That is a floor, not the collected total — 101 of those files build
+cases inside a loop, and the two Playwright projects **partition** the
+set rather than duplicate it (`chromium` is `grepInvert: /@webkit/`,
+`webkit-iphone-15` is `grep: /@webkit/`). For collected counts, read
+what a real run reports; the figures quoted in trap 4 below are runtime
+numbers and were not re-measured here.
 
 E2E test outputs land in `cicchetto/e2e/test-results/` (failure
 artifacts: screenshot, video, trace.zip) and
@@ -308,15 +319,29 @@ workflow uploads the directory as the `container-logs` artifact
 alongside the trace + report, so a CI-only red can be read from the
 server side too instead of stopping at the browser.
 
-**Per-spec state reset.** Every spec auto-resets `vjt`'s grappa-side
-state (DB rows + live `Session.Server` + ETS) after the test via the
-`_vjtReset` `auto: true` fixture (`cicchetto/e2e/fixtures/test.ts`),
-which calls `POST /admin/test/reset-subject` — an endpoint compile-gated
-to `:dev`/`:test` (the module + route literally do not exist in the prod
-release). So each spec starts from the seeded baseline rather than the
-previous spec's mutations of `vjt`. Cascades that survive this come from
-state outside the reset's scope (other seed users, testnet-side IRC
-state).
+**Per-spec subject (#1078).** Every spec gets its OWN throwaway user
+rather than sharing the seeded `vjt`: the `_specSubject` `auto: true`
+fixture (`cicchetto/e2e/fixtures/test.ts`, alongside `_cspGuard` and
+`_unrouteGuard`) calls `provisionSpecSubject`
+(`cicchetto/e2e/fixtures/specSubject.ts`) → `POST /admin/test/subject`
+before the test and `teardownSpecSubject` → `DELETE
+/admin/test/subject/:name` after it. The name is `s<first 8 hex of
+sha1(titlePath)>` — derived from the test's title, not a counter, so
+`--grep` and the full suite provision the same name and a failure log
+points back at something. The subject is bound to `bahamut-test`,
+autojoins `#spec-w<TEST_PARALLEL_INDEX>` and gets 200 scrollback lines
+from `seed-bot`; a teardown whose subject is already gone throws rather
+than passing quietly. Both endpoints live in a scope compile-gated to
+`:dev`/`:test` (the module + route literally do not exist in the prod
+release).
+
+`POST /admin/test/reset-subject` — the older restore-`vjt`-to-baseline
+door — is still routed and still called EXPLICITLY by 9 specs via
+`resetSubject` (`fixtures/grappaApi.ts`); the router comment says it
+goes when the last of them does. It is no longer what runs
+automatically after every test. Cascades therefore come from state
+outside a per-spec subject's lifetime: the seeded users, the shared
+worker channel, testnet-side IRC state.
 
 ## Triaging a failing e2e: cascade vs flake vs real bug
 
@@ -451,9 +476,11 @@ the hard way on 2026-07-27.
    test red** — triaging it as a regression sends you hunting something
    that does not exist.
 
-   **The scripts already handle it.** `scripts/testnet.sh:41` guards on
-   `[ ! -d "$E2E_DIR/infra/bahamut" ]` and auto-inits at `:52`;
-   `scripts/bats.sh:37` does the same for `vendor/bats-core`. Both pass
+   **The scripts already handle it.** `scripts/testnet.sh` guards on
+   `[ ! -d "$E2E_DIR/infra/bahamut" ]` and auto-inits inside that block;
+   `scripts/bats.sh` does the same for `vendor/bats-core`. (Cited by the
+   guard's own text, not by line number — the numbers this paragraph
+   used to carry were all three stale.) Both pass
    `-c protocol.file.allow=always` (#592, PR #616, merged 2026-08-01),
    which is REQUIRED and not cosmetic: a worktree clones the submodule
    from the superproject's **local module store** over `file://`, and
