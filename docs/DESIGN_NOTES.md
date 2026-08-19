@@ -51298,3 +51298,84 @@ over 57 files). Of the 58 definitions whose name already exists in
 behaviour callbacks in stub modules (not duplication at all), and 4 already
 delegate to the canonical they collide with. The inline `passthrough_handler`
 duplication this issue recorded — 14 bodies over 10 files — is now **0**.
+<!-- entry #1396-drain-guard -->
+
+---
+
+## 2026-08-19 — #1396: the guard that looked covered because the gesture was called
+
+The #737 drain lock refuses every write to a draft a paced send owns. It
+is enforced by five `isDraining` returns in `compose.ts`, one per door:
+`setDraft`, `recallPrev`, `recallNext`, the paste route, and
+`tabComplete`. A mutant bench — delete one guard, run the cic suite, put
+it back — asked which of the five any test actually defends.
+
+Four are defended. `recallNext` was not: with its guard deleted, all
+5616 tests stayed green.
+
+### Calling the gesture is not reaching the branch
+
+The reason it looked covered is worth keeping. The test named
+`#737 — history recall and tab-complete are refused mid-drain too`
+**does call `recallNext`**, right after `recallPrev`, and asserts the
+draft is unchanged. But that second assertion cannot fail. The
+`recallPrev` above it is refused, so `historyCursor` is still null, and
+`recallNext` opens with its own `if (s.historyCursor === null) return s;`
+— it returns before the drain guard is ever consulted. The guard appears
+covered because the gesture was called, not because the branch was
+reached.
+
+**The general shape: a test that exercises two halves of a symmetric
+pair can pin one and leave the other vacuous, and the name will claim
+both.** Up-arrow and down-arrow are not interchangeable evidence. The
+only instrument that tells them apart is the mutant — nothing in the
+test text, the name, or a coverage count distinguishes an assertion that
+holds from one that cannot fail.
+
+### Reaching the guard at all
+
+The branch needs a window that is draining while its cursor is still
+non-null, and the residue write is exactly what nulls it (it resets to
+the live bottom). The one place that exists is the #907 join gap: `/msg`
+claims BOTH candidate homes synchronously and then awaits the
+query-topic join, so the query window is locked before any residue has
+been written, and its cursor is wherever the operator left it — nothing
+submitted from there, so `takeDraft` never ran on it.
+
+Under the mutant the new test fails with `expected '' to be 'earlier
+reply'`: the parked live draft restored over the recalled line. That
+settles a question the static census could not — the guard is
+load-bearing, not dead code.
+
+### The measured negative
+
+`handBack` writes a draft through the same funnel with no guard, and its
+own comment promises "never a clobber". Whether the suite ever reaches
+it while a key is draining was probed with an inverted mutant: a guard
+was ADDED to `handBack`, on the reasoning that anything depending on the
+unguarded behaviour would then die. Nothing died — 5616 passed.
+
+Recorded as a **measured negative, not an omission**: the suite does not
+reach that combination. That is not a proof it is unreachable in
+production, and the difference is the whole point of writing it down.
+
+### A flake nearly bought a false "defended"
+
+The first run of the `recallNext` mutant killed three tests, and the
+verdict would have been "defended". It did not hold up: none of the
+three named #737, two lived in `windowClose.test.ts`, and the durations
+were 5004 ms and 5005 ms — the vitest timeout, not an assertion. Two
+re-runs came back green. **A kill whose victims do not name the
+invariant, and whose durations sit on the timeout, is a flake until a
+re-run says otherwise.**
+
+### Why the guard stays per door
+
+The five checks are not a funnel guard waiting to be factored. The
+funnel is `writeState`, and the drain that HOLDS the claim writes its
+residue through it, so a blind guard there would freeze the legitimate
+owner. Per door is the right shape. What changed is the comment: it
+used to close on "gating one door means the next door added is a fresh
+instance of this bug" — a warning against the shape the code has. It now
+states the obligation on the next writer, and names the three writers
+that already skip the guard (`takeDraft`, `handBack`, `pushHistory`).
