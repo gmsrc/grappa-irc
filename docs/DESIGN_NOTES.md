@@ -51332,6 +51332,24 @@ only instrument that tells them apart is the mutant — nothing in the
 test text, the name, or a coverage count distinguishes an assertion that
 holds from one that cannot fail.
 
+### One test defending two guards is one point of failure for two
+
+The bench turned up a second economy in the same suite. Deleting the
+`recallPrev` guard and deleting the `tabComplete` guard kill the **same
+single test** — `#737 — history recall and tab-complete are refused
+mid-drain too`. Two doors, one assertion.
+
+That is not coverage; it is a single point of failure standing in for
+two invariants. If that one test is deleted, renamed out of the way, or
+weakened, both guards go undefended at once and nothing says so. And it
+is the *same* economy that produced the hole this entry is about: the
+test bundles three gestures under one name, and the third — the
+down-arrow — turned out to be along for the ride.
+
+**A test whose name lists more than one mechanism is worth mutating once
+per mechanism.** The bundle is what hides which of them the assertions
+actually reach.
+
 ### Reaching the guard at all
 
 The branch needs a window that is draining while its cursor is still
