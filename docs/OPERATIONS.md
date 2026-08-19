@@ -313,6 +313,34 @@ ever recurs: offline-init from the main checkout's already-cloned objects
 submodule."cicchetto/e2e/infra".url=<main-checkout>/.git/modules/cicchetto/e2e/infra
 submodule update --init cicchetto/e2e/infra`.
 
+**…and the removal side of it: `git worktree remove` needs `--force`
+once a submodule has EVER been initialised in that worktree.** The
+refusal is `fatal: working trees containing submodules cannot be moved
+or removed`, and the trigger is NOT a submodule being checked out right
+now — it is the per-worktree `.git/worktrees/<name>/modules/` directory,
+created the first time any submodule is initialised there. Measured by
+displacement on a scratch worktree: never-initialised removes at rc=0;
+after `submodule update --init vendor/bats-core` the same removal is
+rc=128; after `git submodule deinit -f` — which clears the checkout, so
+`submodule status` reports every path uninitialised — it is STILL rc=128;
+moving only that `modules/` directory aside, changing nothing else,
+returns rc=0. So deinit does not lift it: the first init is a one-way
+door for the life of the worktree. You are walked through it on your
+behalf: `scripts/bats.sh` auto-inits `vendor/bats-core` and
+`scripts/testnet.sh` auto-inits `cicchetto/e2e/infra` — and a full bats
+run lands BOTH, because `test/scripts/e2e_clone_directive_test.bats`
+inits the e2e submodule in the real checkout as part of a case. So a
+worktree that ran the bats suite or the e2e stack needs the flag, and a
+docs-only one does not. `--force` is safe only on a branch PROVEN landed
+(head equal to `origin/main`, `git merge-base --is-ancestor`, and an
+empty `git diff --numstat` against it — on a host whose local `main`
+lags, `git branch --merged main` answers about the stale ref) with a
+clean `git status --porcelain --ignored` run from INSIDE the worktree.
+Tell it apart from the OTHER removal blocker by the message: root-owned
+Playwright artefacts under `cicchetto/e2e/test-results/` fail with a
+permission error instead, and want `sudo rm -rf` + `git worktree prune`
+— see `docs/TESTING.md`.
+
 **The container IS the runtime.** No local Elixir installation, no host
 `mix deps.get`. All commands run inside the `grappa` container. NEVER run
 `mix` or `iex` on the host. NEVER install hex packages on the host.
