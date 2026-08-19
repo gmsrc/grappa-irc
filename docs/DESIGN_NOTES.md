@@ -51178,7 +51178,9 @@ not depend on the answer, but the answer is not known.
   "Received: 1". **The condition that reopens this: any caller of
   `enablePushFromSettings` acquiring a `@webkit` twin.**
 * **Five sites are protected INCIDENTALLY, by accident and not by design.**
-  On 71e7840a: `issue299-footer-admin-reachable.spec.ts:120`,
+  Enumerated on 71e7840a and re-verified unchanged on `ea733fc9` after #1152
+  moved twenty-odd e2e files — same paths, same lines:
+  `issue299-footer-admin-reachable.spec.ts:120`,
   `issue299-theme-cards.spec.ts:49`, `issue358-daynight-theme.spec.ts:36`,
   `issue75-theme-editor.spec.ts:65`, `issue75-themes-gallery.spec.ts:37`.
   Each is a `.shell-members.open` count→0 barrier whose next INTERACTION is
