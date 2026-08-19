@@ -471,6 +471,21 @@ tests/bug7-ios-own-msg-visible.spec.ts tests/<yours>.spec.ts`) or in the
 full suite. `--repeat-each` does not help: every repeat sits in the same
 promoted seat.
 
+🔴 **`@coldstart` cannot be satisfied at CI's position, and that is a
+documented limit, not an oversight.** With `workers: 1` only the roster's
+first test in each project holds a cold seat, so any spec that genuinely
+needs one — anywhere but position 1 — makes the full suite fail by
+declaration. **No spec carries the tag today** and none should acquire
+one without first moving the contract somewhere the seat is not an
+input: for the #1543 case that is a `vitest` pin over the component,
+which is what that issue itself concluded. The tag exists so the claim
+can be *stated and checked* rather than assumed, and so a run that
+believes it has cold coverage finds out it does not.
+
+(The seats a failure mints are not an escape hatch either: they are
+minted by whichever test happens to be next after a red, so they are
+not a position anybody can ask for.)
+
 Do **not** tag a spec on a hunch. A declaration is a claim that the spec
 was measured on both sides of the input; an unmeasured one is a guess
 wearing a gate's clothes, and it will red somebody else's run.
