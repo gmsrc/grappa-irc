@@ -51209,3 +51209,92 @@ spelling (`toBeHidden` against a locator carrying the class, which passes
 because the locator stops matching) but is the test's last line, followed by
 `finally`. **The window is 12 lines after each site: an interaction further
 away than that escapes this census.** Not exhaustive, and not claimed to be.
+<!-- entry #1397-registry-purge -->
+
+---
+
+## 2026-08-19 — #1397: a barrier that failed open, in the file the fix was named after
+
+Bucket H's server side had one cluster left where the drift was a **barrier**
+rather than a name, and it is the one this entry is about. `bootstrap_test.exs`
+and `spawn_orchestrator_test.exs` each carried a private
+`clear_registry_for/1` that purged `Grappa.SessionRegistry` for one
+`network_id` and then waited for the Registry to observe it. Both waits ended
+in `defp wait_until_registry_clear(_, 0), do: :ok` — **fail-open**: after 500ms
+they returned `:ok` with zombies still registered and the test carried on
+against a dirty registry. The call sites even read `:ok = clear_registry_for(...)`,
+a match that cannot fail because the callee cannot return anything else.
+
+The sharp part is not the duplication. `AdmissionStateHelpers`' own moduledoc
+**already named these two copies as the defect** — *"per-test-file
+`clear_registry_for(network_id)` polling helpers silently exhausted their 500ms
+budget under CI load (returned `:ok` with zombies still present). Loud raise +
+setup-time global reset is the durable fix"* — and both files **already aliased
+that module and already called `reset_all/0` in setup**. The shared module had
+no per-network form, so each file wrote its own weaker one and kept it. A
+promotion is not finished when the canonical exists; it is finished when the
+copies are gone.
+
+### What the two-sided mutant established
+
+One mutant, applied symmetrically to both sides: *the purge does nothing, only
+the wait remains.* Subject: the two adopting files, 42 tests.
+
+| side | control | mutant |
+|---|---|---|
+| branch | rc=0, 42 tests, 0 failures | **rc=2, 42 tests, 4 failures** |
+| base `ea733fc9` | rc=0, 42 tests, 0 failures | **rc=0, 42 tests, 0 failures** |
+
+All four branch failures are the raise itself, naming the survivor count
+(`still has 1 session(s) registered for network_id=1 after 15000ms`; one says
+2). The base produced **zero** raises and zero failures — the neutered purge is
+invisible there, which is precisely the defect stated as a number rather than
+as a story.
+
+Note what that asymmetry means for the de-duplication framing: the slice is
+behaviour-**changing**, not behaviour-preserving. A consolidation whose mutant
+cannot tell the two sides apart has not fixed anything.
+
+### The budget was decided, not inherited
+
+`clear_registry_for!/2` takes `timeout_ms` as a required argument with no
+default — the same posture this bucket's handshake barrier took, and for the
+same reason: consolidating a barrier means deciding the budget at the call
+site. Both call sites moved 500ms → 15s, the module's existing drain budget.
+Re-inheriting 500ms would have consolidated on the number the canonical's own
+docstring records as insufficient under CI load.
+
+### Aggregate postcondition, not per-pid
+
+`reset_session_supervisor/0` raises when a single pid misses its terminate
+window. `clear_registry_for!/2` deliberately does not: its contract is the
+aggregate — *"nothing is registered for this network"* — which is the same
+postcondition production's `Session.stop_session/2` states about its key. A pid
+that ignores `terminate_child/2` is a failure only if it is still registered
+when the poll gives up, and then the poll reports it with a count. One loud
+failure mode beats two.
+
+### Two false zeros, both in the measuring instrument
+
+The census that picked this slice produced two zeros that were artefacts:
+
+* grouping definition bodies with `def`/`defp` left distinct reported **0**
+  site definitions body-identical to a `test/support` one. The real number is
+  1. It was caught only because that one case had already been found by hand;
+* an import oracle anchored on `alias Grappa.Foo` missed the braced form
+  `alias Grappa.{A, B, C}` and reported four files as not importing a helper
+  they call.
+
+Same lesson this bucket has now recorded four times, in a fourth mechanism: **a
+uniform result accuses the instrument before the code.** A zero is worth less
+than the naked grep that agrees with it.
+
+### The server-side counts, re-measured on `ea733fc9`
+
+74 helper names defined in ≥2 site files (234 definitions over 108 files) by
+name; 28 clusters of a byte-identical body spanning ≥2 files (76 definitions
+over 57 files). Of the 58 definitions whose name already exists in
+`test/support`, 25 are the fixture trio blocked on the Argon2 question, 20 are
+behaviour callbacks in stub modules (not duplication at all), and 4 already
+delegate to the canonical they collide with. The inline `passthrough_handler`
+duplication this issue recorded — 14 bodies over 10 files — is now **0**.
