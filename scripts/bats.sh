@@ -8,6 +8,29 @@
 # Bats runs ON THE HOST (vendor/bats-core submodule, pinned to v1.9.0),
 # against host-side scripts — no docker compose involvement.
 
+# GRAPPA_CACHE_ID is dropped HERE, before _lib.sh reads it (#1522).
+#
+# The knob (#1263) binds `.caches/<id>` over `_build`, `deps` and
+# `priv/plts` so two workers can run `mix` at once. This door runs no mix —
+# but the Docker deploy scripts REFUSE to start while it is set (#1409:
+# only `compose run` accepts `-v`, so the oneshots would use the per-id
+# caches while `compose up` boots from the shared ones). So every bats case
+# that drives a deploy door dies on that refusal when the caller's shell
+# carries an id: eight cases across three files, failing with a message
+# about deploying that has nothing to do with the code under test.
+#
+# #1409 cured the same leak per-file, in two of the five files that reach a
+# deploy door; the class is "any bats case reaching a deploy door", so the
+# cure belongs at the door, where a case written tomorrow inherits it. The
+# two per-file `unset`s stay: they also cover a direct `vendor/bats-core/
+# bin/bats` invocation, which never passes through here.
+#
+# Dropping a variable the caller set is stated out loud, not silently.
+if [ -n "${GRAPPA_CACHE_ID:-}" ]; then
+    printf 'scripts/bats.sh: ignoring GRAPPA_CACHE_ID=%s — bats runs no mix, and the deploy doors refuse while it is set (#1522).\n' "$GRAPPA_CACHE_ID" >&2
+    unset GRAPPA_CACHE_ID
+fi
+
 # shellcheck source=scripts/_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
