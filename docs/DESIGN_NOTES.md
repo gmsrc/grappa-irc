@@ -51114,14 +51114,18 @@ so a further measurement round was declined rather than guessed.
   On 71e7840a: `issue299-footer-admin-reachable.spec.ts:120`,
   `issue299-theme-cards.spec.ts:49`, `issue358-daynight-theme.spec.ts:36`,
   `issue75-theme-editor.spec.ts:65`, `issue75-themes-gallery.spec.ts:37`.
-  Each is a `.shell-members.open` count→0 barrier whose next interaction is
-  `getByTestId("themes-settings-entry").tap()` (immediately in four; after
-  two pure assertions in `issue299-footer-admin-reachable`). The target lives
-  INSIDE the settings drawer that is ENTERING, and the two drawers are a
-  mutex, so they move together: Playwright's own "stable" actionability wait
-  on the entering target happens to outlast the other drawer's exit. Lower
-  risk, for a reason no one chose, that a future IA reshuffle can withdraw
-  without touching these lines.
+  Each is a `.shell-members.open` count→0 barrier whose next INTERACTION is
+  `getByTestId("themes-settings-entry").tap()`. The class is defined on the
+  interposed INTERACTION, not on adjacency of lines: in four of the five that
+  tap is the very next line, and in `issue299-footer-admin-reachable` two pure
+  assertions (`toHaveCount(0)` on two #299 labels) sit in between. Said
+  explicitly because a reader grepping for the adjacent shape finds four and
+  concludes the fifth was miscounted. The target lives INSIDE the settings
+  drawer that is ENTERING, and the two drawers are a mutex, so they move
+  together: Playwright's own "stable" actionability wait on the entering
+  target happens to outlast the other drawer's exit. Lower risk, for a reason
+  no one chose, that a future IA reshuffle can withdraw without touching these
+  lines.
 
 ### Census method, and its declared limit
 
