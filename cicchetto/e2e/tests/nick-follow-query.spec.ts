@@ -33,7 +33,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 // Real grappa session (not a seed-per-spec DB) — unique suffixes so retries
 // / sibling specs don't strict-mode-collide on persisted scrollback or on a
@@ -93,7 +93,7 @@ test("query window follows a peer NICK change — relabels, keeps history, route
     ).toBeVisible({ timeout: 5_000 });
 
     await waitForDmListenerReady(page, NETWORK_SLUG);
-    peer.privmsg(specNick(), REPLY_BODY);
+    peer.privmsg(await specLiveNick(), REPLY_BODY);
     await expect(
       page.locator('[data-testid="scrollback-line"]', { hasText: REPLY_BODY }),
     ).toBeVisible({ timeout: 5_000 });

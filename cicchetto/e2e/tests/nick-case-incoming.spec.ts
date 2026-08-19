@@ -35,7 +35,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK_LOWER = "foldreplypeer";
 const PEER_NICK_PROPER = "FoldReplyPeer";
@@ -86,7 +86,7 @@ test("incoming reply from a differently-cased nick lands in the opened query win
     // there. Pre-fix the reply was re-keyed to a phantom `FoldReplyPeer`
     // bucket and never rendered in the opened window.
     await waitForDmListenerReady(page, NETWORK_SLUG);
-    peer.privmsg(specNick(), REPLY_BODY);
+    peer.privmsg(await specLiveNick(), REPLY_BODY);
 
     // The reply lands in the SAME (focused) window's scrollback...
     await expect(

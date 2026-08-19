@@ -35,7 +35,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b3-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -66,7 +66,7 @@ test("CP14 B3 — DM query window shows both inbound and outbound history after 
   try {
     // Inbound: peer → vjt-grappa. Server persists with channel =
     // own_nick AND dm_with = peer (CP14 B3 derivation in EventRouter).
-    peer.privmsg(specNick(), PEER_TO_VJT);
+    peer.privmsg(await specLiveNick(), PEER_TO_VJT);
 
     // Probe via REST against channel = PEER_NICK so the peer-DM
     // aggregation OR-shape (channel == peer OR dm_with == peer) picks

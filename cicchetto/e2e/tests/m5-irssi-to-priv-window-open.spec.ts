@@ -23,7 +23,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m5-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -48,7 +48,7 @@ test("M5 — inbound DM to focused query window renders inline, no unread", asyn
     await composeSend(page, `/query ${peer.nick}`);
     await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
-    peer.privmsg(specNick(), MESSAGE_BODY);
+    peer.privmsg(await specLiveNick(), MESSAGE_BODY);
 
     // Probe via REST against channel = PEER_NICK (peer-DM aggregation
     // OR-shape matches inbound rows). Probing channel = specNick()

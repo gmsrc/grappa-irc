@@ -34,7 +34,7 @@ import { assertMessagePersisted, partChannel } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { forwardPageDiagnostics } from "../fixtures/pageDiagnostics";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK_DM = "ux6l-dmer";
 const PEER_NICK_MENTION = "ux6l-mentioner";
@@ -75,7 +75,7 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK_DM });
   try {
-    peer.privmsg(specNick(), DM_BODY);
+    peer.privmsg(await specLiveNick(), DM_BODY);
 
     // Step 1: confirm the DM landed SERVER-SIDE. Isolates "peer
     // connection / bahamut load flake" (server has no row) from "cic

@@ -39,7 +39,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "fg-suppressor";
 const SUB_ID = "foreground-suppression";
@@ -67,7 +67,7 @@ test("server suppresses push while a device reports visible, delivers once hidde
     // until WSPresence has acked visible=true, so the DM can't race it.
     await setPageVisibility(page, true);
     const visibleBody = "you are looking at the app — no toast please";
-    peer.privmsg(specNick(), visibleBody);
+    peer.privmsg(await specLiveNick(), visibleBody);
     await assertNoPushDelivery(SUB_ID, {
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
@@ -80,7 +80,7 @@ test("server suppresses push while a device reports visible, delivers once hidde
     await resetPushCatcher();
     await setPageVisibility(page, false);
     const hiddenBody = "now you backgrounded it — deliver this one";
-    peer.privmsg(specNick(), hiddenBody);
+    peer.privmsg(await specLiveNick(), hiddenBody);
 
     const deliveries = await awaitPushDelivery(SUB_ID, {
       token: vjt.token,

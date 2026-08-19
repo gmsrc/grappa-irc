@@ -52,7 +52,7 @@ import {
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i532-peer";
@@ -138,7 +138,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
     // First inbound DM → cic auto-opens the query window (server-owned,
     // #422). Focus it so the DM renders, then focus away so selection.ts's
     // leave-arm advances the cursor to this first DM — leaving it READ.
-    peer.privmsg(specNick(), DM_FIRST);
+    peer.privmsg(await specLiveNick(), DM_FIRST);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
@@ -168,7 +168,7 @@ test("#532 B — a closed DM window holding an unread message shows the message 
 
     // Second inbound DM while focused elsewhere → exactly ONE unread
     // content row on the peer window.
-    peer.privmsg(specNick(), DM_SECOND);
+    peer.privmsg(await specLiveNick(), DM_SECOND);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,

@@ -51,7 +51,7 @@ import {
 import { assertMessagePersisted, getReadCursor } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "ux6k-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -85,7 +85,7 @@ test("UX-6 K — focus-leave on a peer DM window advances the server-side read c
     // Peer sends an INBOUND DM to vjt. Persisted server-side at
     // `channel = specNick(), dm_with = PEER_NICK` — the storage
     // shape that exposed the K bug.
-    peer.privmsg(specNick(), PM_BODY);
+    peer.privmsg(await specLiveNick(), PM_BODY);
 
     // Probe via REST against channel = PEER_NICK so the peer-DM
     // aggregation (channel == peer OR dm_with == peer) returns the

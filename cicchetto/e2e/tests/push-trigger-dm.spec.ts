@@ -30,7 +30,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "b5-dmer";
 const SUB_ID = "dm";
@@ -64,7 +64,7 @@ test("DM while push-enabled fires Sender → push-catcher receives a POST", asyn
     // Server-side this hits Session.Server's :persist arm with
     // `channel = own_nick`; Triggers' dm? predicate matches.
     const dmBody = "hi from b5-dmer";
-    peer.privmsg(specNick(), dmBody);
+    peer.privmsg(await specLiveNick(), dmBody);
 
     const deliveries = await awaitPushDelivery(SUB_ID, {
       token: vjt.token,

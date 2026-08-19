@@ -42,7 +42,7 @@ import {
 } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const PEER_NICK = "i576-peer";
@@ -79,7 +79,7 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
     // Peer opens the DM. Focus it so it renders (the send-time advance's
     // anti-poison gate #50 needs a non-empty pane), and read it — the
     // cursor baseline will be restored to exactly this line below.
-    peer.privmsg(specNick(), OPENER);
+    peer.privmsg(await specLiveNick(), OPENER);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
@@ -134,7 +134,7 @@ test("#576 — own content lines don't badge; a later peer line does", async ({ 
     // A PEER line after the own ones DOES count — proving the badge
     // mechanism is live (the 0 above is the own-exclusion, not a dead
     // badge). Exactly one unread peer line ⟹ "1".
-    peer.privmsg(specNick(), REPLY);
+    peer.privmsg(await specLiveNick(), REPLY);
     await assertMessagePersisted({
       token: vjt.token,
       networkSlug: NETWORK_SLUG,

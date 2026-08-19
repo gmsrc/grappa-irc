@@ -31,7 +31,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m4-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -59,7 +59,7 @@ test("M4 — inbound DM auto-opens query window with unread, clears on focus", a
     // before peer sent" flake).
     await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(0);
 
-    peer.privmsg(specNick(), MESSAGE_BODY);
+    peer.privmsg(await specLiveNick(), MESSAGE_BODY);
 
     // Server-side: row persisted at channel = specNick() (the
     // RECIPIENT nick is the channel for inbound DMs) with sender =

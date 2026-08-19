@@ -32,7 +32,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const DM_LINE = "265 direct message counts";
@@ -73,7 +73,7 @@ async function seedEventOnlyAndMessageWindows(
 
   // Message window — a DM opens the peer's query window (unfocused →
   // unread content).
-  peer.privmsg(specNick(), DM_LINE);
+  peer.privmsg(await specLiveNick(), DM_LINE);
   await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
   await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
 

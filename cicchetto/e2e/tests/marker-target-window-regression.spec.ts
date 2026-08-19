@@ -33,7 +33,7 @@ import {
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "marker-target-buddy";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
@@ -88,7 +88,7 @@ test("focused-window send+reply does NOT spawn unread marker", async ({ page }) 
     // socket and never render.
     await waitForDmListenerReady(page, NETWORK_SLUG);
     // Peer replies on the same DM topic.
-    peer.privmsg(specNick(), reply);
+    peer.privmsg(await specLiveNick(), reply);
     // Wait for the reply to land.
     await expect(page.locator('[data-testid="scrollback-line"]', { hasText: reply })).toBeVisible({
       timeout: 5_000,
@@ -121,7 +121,7 @@ test("switching to tall window after focused send scrolls target to bottom", asy
       timeout: 5_000,
     });
     await waitForDmListenerReady(page, NETWORK_SLUG);
-    peer.privmsg(specNick(), reply);
+    peer.privmsg(await specLiveNick(), reply);
     await expect(page.locator('[data-testid="scrollback-line"]', { hasText: reply })).toBeVisible({
       timeout: 5_000,
     });

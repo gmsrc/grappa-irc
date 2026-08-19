@@ -32,7 +32,7 @@ import {
 } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const DM_LINE = "914 direct message";
@@ -56,7 +56,7 @@ async function seedOneUnreadDm(
   await waitForDmListenerReady(page, NETWORK_SLUG);
 
   const peer = await IrcPeer.connect({ nick: peerNick });
-  peer.privmsg(specNick(), DM_LINE);
+  peer.privmsg(await specLiveNick(), DM_LINE);
   await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
   return peer;
 }

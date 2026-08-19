@@ -28,7 +28,7 @@
 import { loginAs, waitForDmListenerReady } from "../fixtures/cicchettoPage";
 import { IrcPeer } from "../fixtures/ircClient";
 import { NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specUser, test } from "../fixtures/test";
 
 // Per-run-unique peer nick — bahamut holds a ghosted nick for a linger
 // window after disconnect, so a fixed literal 433s on rapid reruns
@@ -58,7 +58,7 @@ test("inbound DM opens the query window server-side (cic pure renderer) and surv
   try {
     // The operator NEVER opened a query with this peer — no /q, no click.
     // An unsolicited inbound DM is the ONLY trigger.
-    peer.privmsg(specNick(), "unsolicited DM #422");
+    peer.privmsg(await specLiveNick(), "unsolicited DM #422");
 
     // FACET 1 — the window appears with cic as a pure renderer: the server
     // opened it + broadcast the list. (Client auto-open is gone; if the

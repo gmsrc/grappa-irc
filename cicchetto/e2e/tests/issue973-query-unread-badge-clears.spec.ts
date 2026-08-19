@@ -39,7 +39,7 @@ import {
 import { restoreReadCursorToTail } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const SERVER_WINDOW = "Server";
@@ -76,7 +76,7 @@ test("#973 — a mixed-case query window's unread badge clears on read and stays
   const nick = peer.nick;
   try {
     // 1. Inbound DM auto-opens the query window and puts one on the badge.
-    peer.privmsg(specNick(), FIRST_DM);
+    peer.privmsg(await specLiveNick(), FIRST_DM);
     await expect(sidebarMessageBadge(page, NETWORK_SLUG, nick)).toHaveText("1", {
       timeout: 10_000,
     });
@@ -103,7 +103,7 @@ test("#973 — a mixed-case query window's unread badge clears on read and stays
 
     // 4. A second DM arrives while the operator is away. The badge counts it —
     //    the fix must not have silenced the window, only unstuck the cursor.
-    peer.privmsg(specNick(), SECOND_DM);
+    peer.privmsg(await specLiveNick(), SECOND_DM);
 
     // 5. Exactly "1", not "2". This is the monotonic growth from the report:
     //    with the cursor stuck, the first (already-read) DM was still being

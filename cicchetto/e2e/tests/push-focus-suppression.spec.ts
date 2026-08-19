@@ -37,7 +37,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "focus-suppressor";
 const SUB_ID = "focus-suppression";
@@ -70,7 +70,7 @@ test("server delivers push once the window is blurred though still on-screen, su
     // acked present=true, so the DM can't race the focus update.
     await setPageFocus(page, true);
     const focusedBody = "you are looking at the app — no toast please";
-    peer.privmsg(specNick(), focusedBody);
+    peer.privmsg(await specLiveNick(), focusedBody);
     await assertNoPushDelivery(SUB_ID, {
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
@@ -85,7 +85,7 @@ test("server delivers push once the window is blurred though still on-screen, su
     await resetPushCatcher();
     await setPageFocus(page, false);
     const blurredBody = "you clicked another app — deliver this one";
-    peer.privmsg(specNick(), blurredBody);
+    peer.privmsg(await specLiveNick(), blurredBody);
 
     const deliveries = await awaitPushDelivery(SUB_ID, {
       token: vjt.token,
@@ -101,7 +101,7 @@ test("server delivers push once the window is blurred though still on-screen, su
     await resetPushCatcher();
     await setPageFocus(page, true);
     const refocusedBody = "back in focus — suppress again";
-    peer.privmsg(specNick(), refocusedBody);
+    peer.privmsg(await specLiveNick(), refocusedBody);
     await assertNoPushDelivery(SUB_ID, {
       token: vjt.token,
       networkSlug: NETWORK_SLUG,

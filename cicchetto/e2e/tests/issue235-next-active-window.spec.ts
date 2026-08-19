@@ -30,7 +30,7 @@ import {
 import { assertMessagePersisted } from "../fixtures/grappaApi";
 import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const CHANNEL_LINE = "235 ordinary channel traffic";
@@ -74,7 +74,7 @@ async function seedTwoTierUnread(
   await expect(sidebarMessageBadge(page, NETWORK_SLUG, CHANNEL)).toBeVisible({ timeout: 10_000 });
 
   // Tier 0 — a DM opens the peer's query window (unfocused → unread).
-  peer.privmsg(specNick(), DM_LINE);
+  peer.privmsg(await specLiveNick(), DM_LINE);
   await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toBeVisible({ timeout: 10_000 });
 
   return peer;

@@ -43,7 +43,7 @@ import {
   stubPushManager,
 } from "../fixtures/push";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
-import { expect, specNick, specUser, test } from "../fixtures/test";
+import { expect, specLiveNick, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "n964-dmer";
 const SUB_ID = "964-device-row";
@@ -80,7 +80,7 @@ test("device row shows the activity instant + marks the device you are on", asyn
     // Background the device: a VISIBLE one suppresses the push at source.
     await setPageVisibility(page, false);
     const dmBody = "hi from n964-dmer";
-    peer.privmsg(specNick(), dmBody);
+    peer.privmsg(await specLiveNick(), dmBody);
     const deliveries = await awaitPushDelivery(SUB_ID, {
       token: vjt.token,
       networkSlug: NETWORK_SLUG,
