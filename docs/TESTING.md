@@ -442,6 +442,14 @@ of files deep.
 Read it before reading a result you are about to act on. If your spec is
 NOT in that list, it ran warm.
 
+**More rows than projects means workers were restarted.** Playwright
+discards a worker after a failed test, so **every red mints a fresh cold
+seat for whatever ran next** — measured on the 759-test suite, 4 failures
+turned the expected 2 cold seats into 6, and in each case the spec that
+inherited the seat was simply the next one in the roster. That is the
+cascade mechanism the tree above calls "state pollution", with a second
+carrier nobody had named: not shared state, but a cold browser.
+
 **Two tags let a spec declare which side it needs.** Both come from
 `e2e/reporters/coldStartLedger.ts` — import the constant, never retype
 the string — and both are declared through Playwright's `{ tag }`

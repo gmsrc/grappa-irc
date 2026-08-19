@@ -53,7 +53,11 @@ function renderCensus(census: readonly CensusRow[]): string {
     "\n#1584 cold-start census — the first test each Playwright worker began.\n" +
     "  That test paid the browser launch; every later test in the same worker\n" +
     "  ran against an already-running browser. Position is an input to every\n" +
-    "  spec in this suite, and these are its values for this run.\n";
+    "  spec in this suite, and these are its values for this run.\n" +
+    "  More rows than projects means workers were RESTARTED: Playwright\n" +
+    "  discards a worker after a failed test, so every red mints a fresh cold\n" +
+    "  seat for whatever ran next. Measured on the 759-test suite: 4 failures\n" +
+    "  turned the expected 2 cold seats into 6.\n";
 
   if (census.length === 0) return `${header}  (no test reached a worker)\n`;
 

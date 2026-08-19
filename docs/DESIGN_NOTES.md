@@ -52367,3 +52367,33 @@ for `@webkit` inside a `test(...)`/`describe(...)` title finds 85 files where
 `grep -l @webkit` finds 103 — the difference is comment matches, and the
 issue's own "103 files" figure carries that inflation. Neither number is
 Playwright's collector.
+
+### What the first full run found: the seat recurs, and a red mints one
+
+The issue's model — and this entry's first draft — said "exactly one test per
+project pays it", so two cold seats per run. The first full
+`scripts/integration.sh` under the census printed **six**: `chromium` workers
+0–3 and `webkit-iphone-15` workers 4–5, on a run with 755 passed and 4 failed.
+
+The arithmetic closes exactly: Playwright discards a worker after a failed
+test, so 4 failures plus 1 project change account for all 5 restarts, and each
+census head is the roster's next test after a red. **Every failure therefore
+mints a fresh cold seat for whatever runs next**, which makes the exposure
+proportional to how red the run already is — worst precisely when a reader is
+triaging. `docs/TESTING.md` calls this out beside the cascade tree: the tree's
+"state pollution" carrier has a sibling nobody had named, and it is not state,
+it is a cold browser.
+
+The census was not written to find this. It found it on its first full run,
+which is the argument for printing it on green runs too.
+
+The same run's 4 reds are not this branch's, and the evidence is uneven, so it
+is split rather than averaged. Three chromium reds (33.0 s, 33.5 s, 33.9 s)
+sit on top of three grappa-test stalls of 32.5 s, 33.0 s and 33.3 s with
+`db30=7` and `saturated=3` in the #1429 census — gap plus damage signature,
+which the house rule reads as environment. The fourth,
+`issue1445-directory-pull-refresh` on webkit, has no gap anywhere near it: it
+passed 1/1 when re-run in a warm two-spec subset, and one run per side does
+not attribute anything. **It stays unattributed, and this says so.** Note the
+shape of the trap: the runbook's iso-rerun would have promoted it into a cold
+seat, which is the one triage this very entry documents as blind.
