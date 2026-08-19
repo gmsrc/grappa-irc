@@ -51904,17 +51904,41 @@ would fight the slot. `none` is strictly stronger than what `contain`
 was protecting, so nothing was traded away, and it is the same value and
 the same reason the body rule has carried since iOS-1.
 
-No `touch-action` was added, and that is the deliberate half. `none`
-would kill the list's native scroll outright, which is why #1438 can
-afford it on a modal that does not scroll and this cannot. The property
-does not inherit (CSS UI L4), so the `.shell-mobile` blanket never
-reached this element to begin with — the list has always resolved to
-`auto` and still does. The pull therefore leans on `preventDefault`
-after a claim rather than on a blanket declaration, which is the part
-that cannot be verified off a device: the binder claims LATE, on a
-touchmove, and a real engine may have committed to a pan before the
-claim lands. The webkit e2e arm asserts the CSS that is supposed to
-decide that; it cannot assert that it does.
+`touch-action` went to `pan-y`, on the scroller AND on its descendants.
+The first draft of this change declared NO `touch-action` at all and
+called that the deliberate half, reasoning that `none` would kill the
+native scroll (true, and why #1438 can afford it on a modal that does
+not scroll) and that the `.shell-mobile` blanket never reached this
+element anyway because the property does not inherit (also true - the
+list has resolved to `auto` since #125). Both facts are correct and
+neither is a defence: they explain why the element is not BROKEN, not
+why leaving it permissive is right. `auto` was still advertising a
+horizontal pan and a pinch on a list whose `overflow-x: hidden` says it
+never scrolls sideways, and this project's standing rule is that a
+touchable surface left at `auto` is a chrome-drag hole on iOS. There was
+no measurement behind the omission, so it was withdrawn rather than
+defended.
+
+The DESCENDANT rule is the half that does the work, and it is a borrowed
+shape rather than a new one. iOS elects the gesture consumer from the
+HIT-TEST TARGET's own value, and `touch-action` does not inherit - so
+the row buttons, which are the hit-test target across nearly the whole
+list, would keep reading `auto` however the scroller above them is
+declared. #913 recorded that exact failure: the scroller-only form had
+already shipped for `.members-pane` and did not work, which is why both
+surviving precedents carry the star. This is the third instance of the
+same shape.
+
+What none of that settles is the claim race. The binder cancels the pan
+from JS after it claims - element-level `addEventListener` with
+`{passive: false}`, never a JSX `onTouchMove`, because Solid delegates
+touch to a single PASSIVE document listener where `preventDefault`
+silently no-ops (#308 landmine 1). But the claim is LATE, on a
+touchmove, and a real engine may have committed to a pan before it
+lands. `pan-y` narrows the axes; it does not make the claim earlier. The
+webkit e2e arm asserts the computed values on both elements - the
+deterministic half, the posture #255 chose for the same stated reason -
+and cannot assert that the gesture wins. That is device-verify.
 
 ### Distance only — no flick route, and the asymmetry that chose it
 

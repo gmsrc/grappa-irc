@@ -22,9 +22,12 @@
 //   3. CSS CONTRACT (@webkit, iPhone 15): on the real target browser the row
 //      container refuses its own overscroll (so the iOS rubber-band does not
 //      fight the slot at the one scroll position the pull lives at) while
-//      still permitting the browser to pan it. Two POSITIVE assertions, not
-//      one absence: `overscroll-behavior: none` alone would also be satisfied
-//      by a container that had stopped scrolling altogether.
+//      still declaring the ONE axis it can be panned on. Three POSITIVE
+//      assertions, not one absence: `overscroll-behavior: none` alone would
+//      also be satisfied by a container that had stopped scrolling
+//      altogether, and the scroller's own `pan-y` alone would leave the ROW
+//      — the hit-test target across nearly the whole list — still reading
+//      `auto`, which is the shape #913 measured as insufficient.
 //
 // NOT PROVEN ANYWHERE, on purpose rather than by omission:
 //
@@ -201,15 +204,21 @@ test("#1445 — mid-pull the slot moves by the finger's travel, parked offset in
   expect(after - before).toBeCloseTo(travel, 0);
 });
 
-test("@webkit #1445 — the directory list refuses its own overscroll but still pans (iPhone 15)", async ({
+test("@webkit #1445 — the directory list refuses its own overscroll and declares its one pan axis (iPhone 15)", async ({
   page,
 }) => {
   test.slow();
   const { list } = await openDirectory(page, "list-command");
 
   const contract = await list.evaluate((el) => {
+    const row = el.querySelector<HTMLElement>(".directory-row-join");
+    if (row === null) throw new Error("no directory row to hit-test against");
     const s = getComputedStyle(el);
-    return { overscroll: s.overscrollBehaviorY, touchAction: s.touchAction };
+    return {
+      overscroll: s.overscrollBehaviorY,
+      touchAction: s.touchAction,
+      rowTouchAction: getComputedStyle(row).touchAction,
+    };
   });
 
   // `none`, not `contain`: both stop a scroll chaining out of the list, only
@@ -217,9 +226,16 @@ test("@webkit #1445 — the directory list refuses its own overscroll but still 
   // rubber-band that would fight the slot at scrollTop 0, which is the one
   // position the pull exists at.
   expect(contract.overscroll).toBe("none");
-  // And the list must still be pannable. `touch-action: none` here would kill
-  // native scrolling outright, which is why the pull leans on preventDefault
-  // after a claim instead of on a blanket declaration. Asserting the positive
-  // value rather than "not none" so this also fails on a `pan-x` typo.
-  expect(contract.touchAction).toBe("auto");
+  // `pan-y`, not `none` and not `auto`. `none` would kill the native scroll
+  // outright — which is why the pull cancels the pan from JS after a claim
+  // rather than by declaration — and `auto` was still advertising a
+  // horizontal pan and a pinch on a list that `overflow-x: hidden` says
+  // never scrolls sideways.
+  expect(contract.touchAction).toBe("pan-y");
+  // The half that actually decides it. iOS elects the gesture consumer from
+  // the hit-test target's own value and `touch-action` does not inherit, so a
+  // row left at `auto` under a `pan-y` scroller is the exact shape #913
+  // measured as not working. Reverting the descendant rule turns THIS red and
+  // leaves the assertion above green — which is why they are two.
+  expect(contract.rowTouchAction).toBe("pan-y");
 });

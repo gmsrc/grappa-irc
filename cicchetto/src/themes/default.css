@@ -11745,15 +11745,41 @@ button.home-pane-network-title:hover .home-pane-network-slug {
      the position the pull lives — scrollTop 0. Same value and same reason as
      the body rule (~:492, "kills rubber-band bounce on iOS Safari"). Nothing
      the `contain` here was protecting is lost: `none` is strictly stronger.
-     NOT accompanied by a `touch-action`: `none` would kill the list's native
-     scroll outright, and the property does not inherit (CSS UI L4), so the
-     `.shell-mobile` blanket never reached this element to begin with.
      #1445 — `relative` makes the scroller the containing block for the pull
      slot below. An absolute child is placed against the SCROLLED content
      origin, and the pull only exists at scrollTop 0, where that origin is the
      visible top edge. */
   overscroll-behavior: none;
   position: relative;
+  /* #1445 — `pan-y`, the value #125 already declared in prose: this list
+     scrolls vertically and `overflow-x: hidden` says it never scrolls
+     sideways, so the horizontal pan and the pinch that `auto` was still
+     advertising were capability the surface does not have. `none` is the
+     value that is wrong here — it would kill the native scroll outright,
+     which is why #1438 can afford it on a modal that does not scroll and
+     this cannot. The pull therefore cancels the pan from JS after a claim
+     (element-level `addEventListener` with `{passive: false}` in
+     `pullGesture.ts`, never a JSX `onTouchMove`: Solid delegates touch to a
+     single PASSIVE document listener where preventDefault silently no-ops). */
+  touch-action: pan-y;
+}
+
+/* #1445 — the DESCENDANT half, and it is the half that does the work. iOS
+   elects the gesture consumer from the HIT-TEST TARGET's own value, and
+   `touch-action` does not inherit (CSS UI L4) — so the row buttons, which are
+   the hit-test target across nearly the whole list, would keep reading `auto`
+   however the scroller above them is declared. #913 measured exactly that:
+   the scroller-only form had shipped for `.members-pane` and did not work,
+   which is why both surviving precedents (`.members-pane *`,
+   `.rail-actions-menu *`) carry the star. This is a third instance of the
+   same shape, not a new idea.
+   NOT verified on a device, and it cannot be from here: neither jsdom nor
+   Playwright's webkit reproduces iOS scroll physics. What IS asserted is the
+   computed value on both elements in the real target engine, which is the
+   deterministic half — the same posture #255 chose, and for the same stated
+   reason. */
+.directory-list * {
+  touch-action: pan-y;
 }
 
 /* #1445 — the pull-to-refresh slot. Parked one slot-height ABOVE the list's
