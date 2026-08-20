@@ -179,9 +179,9 @@ defmodule GrappaWeb.ReaperSocketBlastRadiusTest do
       message ->
         case UserSocket.handle_info(message, state) do
           {:ok, state} -> serve(state)
-          {:push, _reply, state} -> serve(state)
-          {:stop, _reason, _code, _state} -> :ok
-          {:stop, _reason, _state} -> :ok
+          {:push, _, state} -> serve(state)
+          {:stop, _, _, _} -> :ok
+          {:stop, _, _} -> :ok
         end
     end
   end

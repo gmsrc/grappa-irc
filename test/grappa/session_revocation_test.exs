@@ -220,7 +220,7 @@ defmodule Grappa.SessionRevocationTest do
   end
 
   defp stale_session do
-    {_user, session} = user_and_session()
+    {_, session} = user_and_session()
     age_out(session)
   end
 
