@@ -52397,3 +52397,74 @@ passed 1/1 when re-run in a warm two-spec subset, and one run per side does
 not attribute anything. **It stays unattributed, and this says so.** Note the
 shape of the trap: the runbook's iso-rerun would have promoted it into a cold
 seat, which is the one triage this very entry documents as blind.
+<!-- entry #1098 -->
+
+---
+
+## 2026-08-20 — #1098: the sandbox answered a different question than the read
+
+The 2026-08-11 entry above lists *"the sort runs across every credential in
+the DB"* under **false, measured**, on the grounds that `DataCase` opens a
+sandbox owner per test. That is correct about what it measured — **rows do not
+PERSIST from one test into another** — and it is not an answer about the
+**SCOPE of the read**. The two are different questions, and only the first was
+put. The read stayed global: `ts` was built from an unfiltered
+`Credentials.list_credentials_for_all_users/0`, so the ordering assertion still
+ranged over every row that query would return, whoever wrote them.
+
+### How wide the residue actually was
+
+Narrower than the issue's phrasing. The query is
+`where: c.connection_state == :connected and not is_nil(c.user_id)`
+(`credentials.ex:1359`), so a foreign row had to be `:connected` — which is the
+column default — **and** user-owned; visitor credentials were out by
+construction. And the failure class had already changed once the oracle became
+a literal: against an exact three-element expected list a foreign row is a
+loud, immediate mismatch, not the subtle ordering flake that passes on rerun.
+
+Latent, then, and with an in-codebase control already standing over it: the
+module has no `setup_all` and no module-level `setup`, the `describe` has none
+of its own, and its first test asserts `list_credentials_for_all_users() == []`
+— the same query, so any leak reddens there first. **Latency is a property of
+today's neighbours, though, not of the assertion**, and the assertion outlives
+them. That is the whole reason for the three lines.
+
+### Filtered by USER, not by the expected PAIRS
+
+The obvious filter is a `MapSet` of the three `{user_id, network_id}` pairs the
+test expects. It is the wrong one: it makes the read a restatement of the
+expected list, so an unexpected row belonging to one of **our own** two users
+would be filtered out rather than reddening. Filtering on the two user ids
+keeps that failure available. Both users are created here with
+`System.unique_integer/1` in their names, so no other row can bear their ids.
+
+**What stops being covered, stated as a scope call and not as a measurement:**
+this test no longer notices a foreign `:connected`, user-owned row entering the
+result set. That property is asserted by both sibling tests in the same
+`describe`, over the same global query — `== []` on an empty DB, and
+`length(creds) == 3` — so the class leaves this test, not the module.
+
+### Two mutants, neither committed
+
+A red was not producible honestly without forcing one. The module is
+`async: false`, so the sandbox is `shared: true` and rolls back: rows written by
+other tests cannot reach this one, and no supervised process writes a
+credential — every `bind_credential/3` caller is request-driven. So the foreign
+row was **injected**, and declared as an injection rather than reported as an
+incidence.
+
+| mutant | before the cure | after |
+|---|---|---|
+| a fourth `:connected`, user-owned row, stamped ahead of `boundary` | RED — 1 failure, this test; the foreign row enters at the HEAD of the list | GREEN |
+| `asc: c.user_id` dropped from the query's `order_by` | — | RED — 1 failure, this test |
+
+The second is the 2026-08-11 entry's own mutant, re-run on the narrowed oracle:
+it still kills exactly this test, which is what says the filter did not weaken
+the ordering it was there to pin.
+
+**Not claimed.** No incidence figure, before or after — structure says a path
+exists, never how often it fires. Nothing here was measured against production
+or a CI runner; the runs are the local module (`117 tests`) plus the full
+`check.sh`. And whether ExUnit can overlap this `async: false` module with an
+`async: true` module that writes credentials was NOT established — the sandbox
+mode was read, the scheduler was not.
