@@ -26,7 +26,13 @@ defmodule Grappa.AdminEventsTest do
     [:grappa, :session, :lifecycle, :terminated]
   ]
 
-  setup do
+  setup context do
+    # #1546 — registered FIRST so ExUnit's reverse-registration (LIFO)
+    # order runs it LAST: it reads the state the restore below left
+    # behind. Registering it any later would observe the singleton
+    # BEFORE the restore and prove nothing.
+    maybe_watch_for_escaping_dirt(context)
+
     # Drain stale `{:session, _, _}` entries left by prior tests.
     # `AdmissionStateHelpers.reset_session_supervisor/0` is the canonical
     # purge — it walks `DynamicSupervisor.which_children/1` and calls
@@ -55,6 +61,16 @@ defmodule Grappa.AdminEventsTest do
     # sandbox checkout, so the ring goes back to a booted struct per test.
     AdmissionStateHelpers.reset_admin_events()
 
+    # #1546 — and back to a booted struct AFTERWARDS too. This file is
+    # the only writer of the singleton's `persist` / `retention` in all
+    # of `test/`, so this one registration is what makes the dirt
+    # unable to reach any other file. As an `on_exit` it is off the
+    # happy path: a test that fails before its own inline restore
+    # (two such windows were censused on #1546) still leaves the
+    # singleton clean. Cleanup belongs in `on_exit`, never in a test
+    # body — same shape as `session_log_persistence_test.exs:90`.
+    on_exit(&AdmissionStateHelpers.reset_admin_events/0)
+
     # M-11: AdminEvents boots with `attach_telemetry: false` under
     # `config :grappa, :attach_admin_telemetry, false` in test env
     # (see `config/test.exs` rationale). Telemetry-adapter tests
@@ -71,6 +87,31 @@ defmodule Grappa.AdminEventsTest do
     Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), Process.whereis(AdminEvents))
 
     on_exit(fn -> :telemetry.detach(@telemetry_handler_id) end)
+
+    :ok
+  end
+
+  # #1546 — the leak witness. Only armed for `@tag :dirt_probe`, so one
+  # mutant (dropping the restore) kills exactly one assertion instead of
+  # reddening every test in the file.
+  #
+  # A `raise` inside an `on_exit` callback reddens the test it belongs
+  # to (ExUnit.OnExitHandler.exec_callback/1) — that is the observation
+  # point, and the stacktrace names it.
+  defp maybe_watch_for_escaping_dirt(context) do
+    if context[:dirt_probe] do
+      on_exit(fn ->
+        defaults = %AdminEvents{}
+        left = :sys.get_state(AdminEvents)
+
+        if {left.persist, left.retention} != {defaults.persist, defaults.retention} do
+          raise "AdminEvents config dirt escaped the test: " <>
+                  "persist=#{inspect(left.persist)} retention=#{inspect(left.retention)} " <>
+                  "(defaults persist=#{inspect(defaults.persist)} " <>
+                  "retention=#{inspect(defaults.retention)})"
+        end
+      end)
+    end
 
     :ok
   end
@@ -174,6 +215,44 @@ defmodule Grappa.AdminEventsTest do
     end
   end
 
+  describe "config dirt cannot outlive the test that made it (#1546)" do
+    # `Grappa.AdminEvents` is a singleton started by `Grappa.Application`;
+    # it outlives every sandbox checkout, so `persist` / `retention`
+    # written by one test are still there for the next FILE unless
+    # something puts them back. This file is the only place in `test/`
+    # that writes them (pinned by `AdminEventsDirtSourcesTest`).
+    #
+    # Before #1546 the restores were straight-line statements in the test
+    # bodies, so a failing assertion ABOVE one skipped it. Two such
+    # windows were censused. `persist: true` escaping makes the singleton
+    # write to the Repo from its own pid, which is not `Sandbox.allow`ed
+    # outside this file — the singleton then dies inside an unrelated
+    # file's setup, which is a cascade with no relation to the real
+    # failure.
+    #
+    # The cure is that the restore is an `on_exit`, registered in setup,
+    # so it is off the happy path entirely: it runs on pass, on failure
+    # and on raise alike. This test IS the failing-assert path minus the
+    # failure — it dirties and deliberately never restores.
+    @tag :dirt_probe
+    test "a test that dirties persist/retention and never restores leaves the singleton clean" do
+      defaults = %AdminEvents{}
+
+      :sys.replace_state(AdminEvents, fn s ->
+        %{s | persist: not defaults.persist, retention: defaults.retention + 1}
+      end)
+
+      # Assert the pre-state, or the watcher's verdict is about a
+      # singleton that was never dirtied in the first place.
+      dirty = :sys.get_state(AdminEvents)
+      assert dirty.persist != defaults.persist
+      assert dirty.retention != defaults.retention
+
+      # NO inline restore. The verdict is `maybe_watch_for_escaping_dirt/1`'s
+      # `on_exit`, which runs after this body returns.
+    end
+  end
+
   describe "disk-backing (#215 Option B)" do
     # The singleton boots persist:false in test env (config); flip it on +
     # rely on the setup's Sandbox.allow so the pid's Repo writes land in
@@ -183,12 +262,11 @@ defmodule Grappa.AdminEventsTest do
       Repo.delete_all(Event)
       :sys.replace_state(AdminEvents, fn s -> %{s | persist: true, retention: 200} end)
 
-      on_exit(fn ->
-        # Restore the in-memory-only steady state (incl. retention) so no
-        # later suite sees a leaked persist flag / shrunk retention.
-        :sys.replace_state(AdminEvents, fn s -> %{s | persist: false, buffer: [], retention: 200} end)
-      end)
-
+      # #1546 — no restore here. The file-wide `on_exit` in the outer
+      # setup lands the identical state (`%AdminEvents{buffer: []}` IS
+      # `persist: false, retention: 200, buffer: []`), and one restore
+      # for one invariant is the point of the fix: a second copy is the
+      # duplication that drifts.
       :ok
     end
 
