@@ -82,6 +82,19 @@ defmodule Grappa.Repo.LockWatch do
   folds into a bounded ring — so `GET /admin/db_latency` and
   `bin/grappa db-latency` both inherit the data with no new noun.
 
+  The warning carries the holder's scheduler `status` next to its
+  `current_function`, because the two are one answer and only together do
+  they name a cause. Measured on #1420's own stalls: a holder genuinely
+  blocked inside `Exqlite.Sqlite3NIF.execute/2` on a contended
+  `BEGIN IMMEDIATE` reads `:running` (so the write is slow), one that is
+  merely queued and not being scheduled reads `:runnable` (so nothing about
+  SQLite is slow), and a parked one reads `:waiting`. `sample/2` has always
+  collected the byte; for four days the only door that reaches an artefact
+  threw it away, and the two diagnoses stayed indistinguishable.
+  `message_queue_len` is deliberately NOT in the line — it rides the
+  telemetry door, which carries the whole sample, and the log line stays the
+  two fields that answer the question.
+
   ## Cost and off-switch
 
   On the write path: one `:persistent_term` read, one `:ets.whereis/1`, and
@@ -358,10 +371,15 @@ defmodule Grappa.Repo.LockWatch do
 
     stall = %{holder: holder, waiters: waiter_samples, waiter_count: length(waiter_samples)}
 
+    # `status` rides in the PROSE, next to `current_function`, and not in the
+    # metadata beside `held_ms`/`waiters`: those two are measurements an
+    # operator aggregates, while these two are one answer split in half —
+    # WHERE the holder is, and whether it is running there at all. Separating
+    # them across the message/metadata line is what made the reading hard.
     Logger.warning(
       "db lock stall: holder #{holder.pid} has held RESERVED for #{holder.elapsed_ms}ms " <>
-        "with #{stall.waiter_count} waiter(s) queued — holder at #{holder.current_function}, " <>
-        "stack: #{Enum.join(holder.stacktrace, " <- ")}",
+        "with #{stall.waiter_count} waiter(s) queued — holder status=#{inspect(holder.status)} " <>
+        "at #{holder.current_function}, stack: #{Enum.join(holder.stacktrace, " <- ")}",
       held_ms: holder.elapsed_ms,
       waiters: stall.waiter_count
     )

@@ -210,7 +210,7 @@ BEGIN {
         " across 1 attempts (1500ms retry budget) — returning :db_unavailable")
     sig("lockstall", \
         "db lock stall: holder #PID<0.512.0> has held RESERVED for 30123ms with 2" \
-        " waiter(s) queued — holder at :gen_server.loop/7, stack: …")
+        " waiter(s) queued — holder status=:runnable at :gen_server.loop/7, stack: …")
     sig("lockstall_resolved", \
         "db lock stall RESOLVED: holder #PID<0.512.0> released RESERVED after 30456ms")
 

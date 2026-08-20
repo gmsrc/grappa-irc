@@ -55456,3 +55456,83 @@ and would have passed on either.
   the outcome here — a broken gate that ships publicly is not a limitation a
   reader can route around — but the partial-release posture itself was neither
   measured nor changed.
+<!-- entry #1420b -->
+
+---
+
+## 2026-08-20 — #1420b: print the holder's scheduler `status`, because the byte that separates the two diagnoses was already sampled and thrown away
+
+`Grappa.Repo.LockWatch` names the write-lock holder and samples its live
+stack. It also samples the holder's scheduler `status` and its
+`message_queue_len` — and the only door that reaches a CI container log,
+the `Logger.warning` in `report/1`, printed neither. This adds `status` to
+that line.
+
+### Why one field is worth an entry
+
+Because for four days the issue could not tell two incompatible diagnoses
+apart, and the discriminator was already in the struct:
+
+| `status` | reading |
+|---|---|
+| `:running` | the holder really is inside the SQLite NIF — the write is slow |
+| `:runnable` | the holder is queued and NOT being scheduled — nothing about SQLite is slow |
+| `:waiting` | the holder is parked in a receive |
+
+Measured, not assumed (2026-08-20, in-container, two arms of one call with
+only the TARGET moving): a process blocked inside
+`Exqlite.Sqlite3NIF.execute/2` on a contended `BEGIN IMMEDIATE` reads
+`:running`; a process parked in a `receive` reads `:waiting`. The same
+measurement killed the fear that made the field look expensive —
+`Process.info/2` on a process executing a **dirty** NIF (every exqlite NIF
+is `ERL_NIF_DIRTY_JOB_IO_BOUND`) returns in **0 ms** and does not block the
+sampler, so nothing about reading `status` can make the watchdog part of
+the incident it is reporting.
+
+Without it, a 33 s hold in an artefact is compatible with "SQLite is slow"
+and with "the runtime stopped", and those have different owners. The three
+holder samples that actually reached a log in the 2026-08-20 field run sat
+at `Sqlite3NIF.execute/2`, `Sqlite3NIF.transaction_status/1` and
+`Sqlite3NIF.columns/2` — the last two are `sqlite3_get_autocommit()` and
+`sqlite3_column_name()`, which do no IO and take no lock, so `status` was
+the missing byte in exactly the cases that mattered.
+
+### Prose, not metadata — and the split is deliberate
+
+`held_ms` and `waiters` are Logger METADATA. `status` is not, and the
+reason is not taste: those two are MEASUREMENTS an operator aggregates,
+while `status` and `current_function` are ONE answer split in half — where
+the holder is, and whether it is running there at all. Putting half of one
+answer in the prose and half in the metadata is what made the reading hard
+in the first place. `message_queue_len` stays off the line entirely: it
+rides the telemetry door, which carries the whole sample into
+`Grappa.DbLatency`'s ring, and the log line stays the two fields that
+answer the question.
+
+### The two verbatim fixtures move with it
+
+`scripts/log-gap-scan.awk`'s own positive control and
+`test/scripts/log_gap_scan_test.bats`'s `LOCKSTALL_LINE` are both declared
+*verbatim from the call site*, so that a pin which drifts from production
+prose fails there instead of reporting a confident zero. Changing the
+message without changing them would make both fixtures lie about the shape
+they claim to mirror. The matcher itself (`/db lock stall: holder /`) is
+unaffected — `status=` lands after it.
+
+### Not established
+
+- **That the log line is the right door at all.** It reaches an artefact
+  only on a RED run; on green only the `#1429` census survives, and the
+  census carries a COUNT, not the field. Dumping `Grappa.DbLatency`'s ring
+  at e2e teardown was considered and NOT done: the e2e `grappa-test`
+  container runs `mix phx.server` with no `--sname` and no
+  `RELEASE_COOKIE`, so `bin/grappa`'s `--rpc-eval` door cannot reach it,
+  and the HTTP door needs an admin bearer minted inside `cleanup()`.
+  Both are larger than this change; neither was built.
+- **That `status` will read `:runnable` in the field.** The three samples
+  on record predate this line, so the field value is unknown until a stall
+  recurs with the field printed. That is the point of shipping it.
+- **`log-gap-scan.awk` still only COUNTS the two episode edges.** Carrying
+  the max `held_ms` or the observed `status` into the census — the summary
+  that survives a green run — is a separate, cheaper change than the ring
+  dump above, and is not made here.
