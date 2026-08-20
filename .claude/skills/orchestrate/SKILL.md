@@ -1086,6 +1086,20 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   dell'insieme = 0 assenti, riga inventata = assente). **Un output che non puo' esistere senza i controlli
   non puo' mentire in silenzio; un controllo accanto allo strumento protegge solo il giro in cui te lo
   ricordi.** Chiedilo nei brief per qualunque censimento o conteggio.
+- 🔴🔴 **GIT NON HA UN CAMPO "PROPRIETARIO" — L'ATTRIBUZIONE DI UN RAMO SI RACCOGLIE DALLE WORKER, NON SI
+  DERIVA DAL REPO** (w2, 2026-08-20, correggendo un mio ordine). Avevo ordinato *"classifica gli 88 rami per
+  PROPRIETARIO, non indovinare dal prefisso"*: w2 ha misurato che i commit non atterrati hanno **UN SOLO
+  autore**, `Marcello Barnaba <vjt@openssl.it>`, **cardinalita' 1** — tutte le sessioni scrivono con la stessa
+  identita'. Quindi **l'unico segnale dentro al repo E' il prefisso**, cioe' esattamente quello che avevo
+  proibito: **avevo ordinato una colonna che non puo' esistere.**
+  🥇 **La forma corretta: chiedere a ogni worker cosa rivendica, e trattare l'assenza di dichiarazione come
+  IGNOTO ⇒ NON POTABILE** (mai "probabilmente potabile"). Una colonna *rivendicato / non rivendicato* onesta
+  vale piu' di una colonna *proprietario* inventata. **Vale per qualunque host dove piu' sessioni condividono
+  un checkout e una identita' git.**
+  ⚠️ Corollario misurato nello stesso giro: **tre rami ATTERRATI (1420/1392/623) hanno patch-id DIVERSO** ⇒
+  un criterio `git cherry`/patch-id puro **li chiamerebbe vivi a torto**. Patch-id identico prova
+  l'atterraggio; **patch-id diverso non prova il contrario** — incrocia sempre con la PRESENZA DEL CONTENUTO,
+  e se i due discordano vince il contenuto e lo si dichiara.
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
 - 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
