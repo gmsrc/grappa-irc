@@ -209,10 +209,18 @@ vi.mock("../lib/members", () => ({
   sortMembers: <T,>(list: T[]) => list,
 }));
 
-vi.mock("../lib/channelTopic", () => ({
+// Only the STORE half is faked; the pure helpers come through
+// `importOriginal` (CLAUDE.md: use production code in tests, never
+// re-implement logic — the same shape TopicBar.test.tsx uses). A literal
+// factory here was a partial that LIED about the module's surface: every
+// helper TopicBar picks up later arrives `undefined` and takes the whole
+// Shell tree down at render, which is how #1505's `hasNoTopic` broke 29
+// tests in a file that has nothing to do with topics. `compactModeString`
+// was already being re-implemented inline for the same reason.
+vi.mock("../lib/channelTopic", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/channelTopic")>()),
   topicByChannel: () => ({}),
   modesByChannel: () => ({}),
-  compactModeString: (modes: string[]) => (modes.length > 0 ? `+${modes.join("")}` : ""),
   seedTopic: vi.fn(),
   seedModes: vi.fn(),
   dropChannelTopicState: vi.fn(),

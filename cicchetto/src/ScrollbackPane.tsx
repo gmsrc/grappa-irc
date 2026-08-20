@@ -15,7 +15,7 @@ import { isContentKind, ownNickForNetwork, type ScrollbackMessage } from "./lib/
 import { acceptInvite, confirmJoinChannel } from "./lib/channelJoin";
 import { channelKey, decodeChannelKey } from "./lib/channelKey";
 import { statusmsgDescription } from "./lib/channelModes";
-import { type TopicJoinLine, topicByChannel, topicJoinLine } from "./lib/channelTopic";
+import { hasNoTopic, type TopicJoinLine, topicByChannel, topicJoinLine } from "./lib/channelTopic";
 import { isChannelName } from "./lib/chantypes";
 import { stripCtcpAction } from "./lib/ctcpAction";
 import { isDocumentVisible } from "./lib/documentVisibility";
@@ -975,6 +975,21 @@ const renderBody = (msg: ScrollbackMessage, handlers: NickHandlers): JSX.Element
       );
     }
     case "topic":
+      // #1505 — `TOPIC #chan :` (empty trailing) is how an operator CLEARS a
+      // topic, and the server persists it verbatim as `body: ""` (#1500's
+      // ruling: the wire carried an empty string, not an absence). The
+      // generic arm below would emit `* alice changed topic:` and stop —
+      // `parseMircFormat("")` yields zero runs, so `<MircBody>` renders
+      // nothing. That asserts *changed* and then shows a blank, which reads
+      // as a truncated line rather than as the event that happened. `null` is
+      // folded in by the same predicate: absence and emptiness both mean the
+      // channel has no topic, and a renderer arm that says so cannot be
+      // reached with an "undefined" to print.
+      if (hasNoTopic(msg.body)) {
+        return (
+          <span class="scrollback-body">* {bareSenderSpan(msg.sender)} cleared the topic</span>
+        );
+      }
       return (
         <span class="scrollback-body">
           * {bareSenderSpan(msg.sender)} changed topic: <MircBody body={msg.body ?? ""} emphasis />

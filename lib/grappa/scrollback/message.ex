@@ -35,8 +35,10 @@ defmodule Grappa.Scrollback.Message do
 
   The column is nullable because not all event types carry text content:
   `:join` and `:part` and `:nick_change` and `:mode` have no body;
-  `:privmsg`, `:notice`, `:action`, `:topic` do. The changeset
-  enforces presence per-kind. This is a deliberate split from
+  `:privmsg` and `:action` do, and the changeset enforces presence for
+  exactly those two. `:notice` (#1500) and `:topic` (#1505) are content
+  kinds whose body may legitimately be the EMPTY STRING the wire carried —
+  see `@body_required_kinds`. This is a deliberate split from
   CLAUDE.md "Total consistency or nothing" — but the cases ARE
   semantically distinct: PRIVMSG with no body is a malformed message,
   while JOIN with a body is a malformed event. The validation rule
@@ -113,11 +115,22 @@ defmodule Grappa.Scrollback.Message do
   # #1500 — `:notice` is NOT here. A NOTICE with an empty trailing is legal
   # (RFC 1459 §2.3.1: `:` followed by nothing is a valid, empty last param),
   # and the empty body is itself the diagnosable event. Requiring a body
-  # dropped the row AND error-logged the drop on every arrival. The other
-  # three stay: an empty PRIVMSG/ACTION/TOPIC has no reported arrival and no
-  # decided semantics, and widening past the measured case is how a rule
-  # stops meaning anything.
-  @body_required_kinds [:privmsg, :action, :topic]
+  # dropped the row AND error-logged the drop on every arrival.
+  #
+  # #1505 — `:topic` left too, and it is the SAME defect, not a widening.
+  # `TOPIC #chan :` is how an operator CLEARS a topic; it is also the exact
+  # line `IRC.Client.send_topic_clear/2` writes for our own `/topic -delete`,
+  # so the drop ate our own echo. #1500 measured the server relaxation as free
+  # and held it back for one reason only — the renderer had no honest arm and
+  # would have printed `* alice changed topic:`, a label and a colon. That arm
+  # now exists (`ScrollbackPane.tsx`'s `case "topic"` → "cleared the topic",
+  # gated by `hasNoTopic`), so the two halves land together as that issue
+  # required.
+  #
+  # `:privmsg` and `:action` stay: an empty one of those has no reported
+  # arrival and no decided semantics, and widening past the measured case is
+  # how a rule stops meaning anything.
+  @body_required_kinds [:privmsg, :action]
 
   # S17 (2026-07-08 review) / #395 — the human-content kinds and their
   # unread PROJECTION, declared ONCE. Each content kind maps to whether it
@@ -326,11 +339,12 @@ defmodule Grappa.Scrollback.Message do
   `messages_subject_xor`). `:network_id`, `:channel`, `:server_time`,
   `:kind`, `:sender` are universally required.
 
-  `:body` is required only for content-bearing kinds
-  (`:privmsg`, `:notice`, `:action`, `:topic`). Presence-event kinds
-  (`:join`, `:part`, etc.) accept `body: nil`. Per-kind validation
-  encodes the domain truth that PRIVMSG with no body is malformed
-  while JOIN with a body is malformed; see moduledoc.
+  `:body` is required only for `:privmsg` and `:action`. Presence-event
+  kinds (`:join`, `:part`, etc.) accept `body: nil`, and so do the two
+  content kinds whose empty body is a real wire value — `:notice` (#1500)
+  and `:topic` (#1505). Per-kind validation encodes the domain truth that
+  PRIVMSG with no body is malformed while JOIN with a body is malformed;
+  see moduledoc.
 
   `:meta` defaults to `%{}` via the schema-level field default —
   callers may omit it for kinds that have no event-specific payload.

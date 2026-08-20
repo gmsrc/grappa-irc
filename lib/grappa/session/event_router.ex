@@ -47,15 +47,21 @@ defmodule Grappa.Session.EventRouter do
       | Kind          | Body           | Meta                                    | members delta              |
       |---------------|----------------|-----------------------------------------|----------------------------|
       | :privmsg      | required text  | %{}                                     | (none)                     |
-      | :notice       | required text  | %{}                                     | (none)                     |
+      | :notice       | text or ""     | %{}                                     | (none)                     |
       | :action       | required text  | %{}                                     | (none)                     |
       | :join         | nil            | %{}                                     | add (or reset+add if self) |
       | :part         | reason \\| nil | %{}                                     | remove                     |
       | :quit         | reason \\| nil | %{}                                     | remove (fan-out)           |
       | :nick_change  | nil            | %{new_nick: String.t()}                 | rename (fan-out)           |
       | :mode         | nil            | %{modes: String.t(), args: [String.t()]} | per-arg add/remove modes   |
-      | :topic        | required text  | %{}                                     | (none)                     |
+      | :topic        | text or ""     | %{}                                     | (none)                     |
       | :kick         | reason \\| nil | %{target: String.t()}                   | remove                     |
+
+  `text or ""` on `:notice` (#1500) and `:topic` (#1505) is not slack: an
+  empty trailing is legal (RFC 1459 §2.3.1) and, on TOPIC, it IS the
+  topic-cleared event. Both persist the `""` verbatim rather than a `nil`,
+  which would claim the row has no body at all — the thing a `:join` row
+  means. See `Grappa.Scrollback.Message`'s `@body_required_kinds`.
 
   Q2-pinned: NICK + QUIT are server-level events that fan out to one
   scrollback row per channel where the nick was in `state.members`.

@@ -48,6 +48,29 @@ export type ModesEntry = {
   params: Record<string, string | null>;
 };
 
+/**
+ * #1505 — "this channel has no topic", the ONE predicate every surface asks.
+ *
+ * The server publishes that fact in TWO shapes and both are truthful:
+ * `null` is 331 RPL_NOTOPIC (or a topic that has not arrived yet), `""` is
+ * what an operator's `TOPIC #chan :` actually put on the wire — the same
+ * empty trailing `Client.send_topic_clear/2` writes for our own
+ * `/topic -delete`. #1500 pinned `""` over `NULL` for the stored body on the
+ * rule that the wire carried an empty string, not an absence; the server
+ * therefore does NOT normalise the two into one, and the READ side is where
+ * they converge.
+ *
+ * Whitespace is deliberately NOT trimmed: a topic of spaces is a topic the
+ * wire carried, so `" "` is present, not absent. `topicJoinLine` is stricter
+ * on purpose and that divergence is presentational, not a second answer to
+ * this question — it decides whether to PRINT a join-time line at all, and a
+ * line that would render blank is worth nothing there. The bar has no such
+ * option: it occupies its strip either way, so it must say something true.
+ */
+export function hasNoTopic(text: string | null | undefined): boolean {
+  return text === null || text === undefined || text === "";
+}
+
 const exports_ = identityScopedStore((onIdentityChange) => {
   const [topicByChannel, setTopicByChannel] = createSignal<Record<ChannelKey, TopicEntry>>({});
   const [modesByChannel, setModesByChannel] = createSignal<Record<ChannelKey, ModesEntry>>({});

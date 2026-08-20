@@ -73,10 +73,12 @@ defmodule Grappa.ScrollbackTest do
   # `@suppressed_presence_kinds` must break the count assertions by CHANGING
   # THE NUMBERS, not silently agree with a hand-copied list.
   # Every row carries a body, including the presence kinds that would
-  # normally persist `body: nil`. `Message.@body_required_kinds` is
-  # `content_kinds ∪ [:topic]`, and restating that here would be a second
-  # copy of a production list — while the changeset ACCEPTS a body on every
-  # kind, and these tests bucket rows by KIND and never read a body. So the
+  # normally persist `body: nil`. Which kinds actually REQUIRE one is
+  # `Message.@body_required_kinds`, and restating it here would be a second
+  # copy of a production list that drifts the moment the real one moves (it
+  # did: this comment claimed `content_kinds ∪ [:topic]`, which #1500 and
+  # #1505 have both since falsified). The changeset ACCEPTS a body on every
+  # kind, and these tests bucket rows by KIND and never read a body — so the
   # uniform body is the choice that keeps the helper from forking an SSOT.
   defp seed_one_row_per_kind(user, net) do
     Message.kinds()
@@ -690,11 +692,26 @@ defmodule Grappa.ScrollbackTest do
       assert "can't be blank" in errors_on(cs).body
     end
 
-    test "rejects :topic without body (per-kind body required)", %{user: user, network: net} do
-      assert {:error, %Ecto.Changeset{} = cs} =
-               ScrollbackHelpers.insert(sample(user, net, 0, %{kind: :topic, sender: "ChanServ", body: nil}))
+    # #1505 — `:topic` LEFT `@body_required_kinds`, so this is the inverse of
+    # the assertion that stood here. `TOPIC #chan :` clears a topic and is
+    # legal input, so the empty body must round-trip as the `""` the wire
+    # carried — never as `nil`, which would claim the row has no body at all
+    # (the thing a `:join` row means, and the shape #1400 exists to keep out
+    # of a renderer). `nil` is accepted by the relaxed validator too and
+    # pinned here for the same reason #1500 pinned it on `:notice`: it is the
+    # shape a cold-deploy backfill row can carry, and the renderer treats it
+    # as the same "no topic" event.
+    test "accepts :topic with an EMPTY body and stores the empty string", %{user: user, network: net} do
+      assert {:ok, %Message{kind: :topic, body: ""}} =
+               ScrollbackHelpers.insert(sample(user, net, 0, %{kind: :topic, sender: "ChanServ", body: ""}))
 
-      assert "can't be blank" in errors_on(cs).body
+      assert [%Message{kind: :topic, body: ""}] =
+               Scrollback.fetch({:user, user.id}, net.id, "#sniffo", nil, 10, nil, false)
+    end
+
+    test "accepts :topic with a nil body", %{user: user, network: net} do
+      assert {:ok, %Message{kind: :topic, body: nil}} =
+               ScrollbackHelpers.insert(sample(user, net, 0, %{kind: :topic, sender: "ChanServ", body: nil}))
     end
 
     test "accepts all 10 extended kinds with appropriate body/meta shape",
@@ -1534,9 +1551,10 @@ defmodule Grappa.ScrollbackTest do
       {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 0, %{kind: :join, body: nil}))
       {:ok, m1} = ScrollbackHelpers.insert(sample(user, net, 1, %{kind: :privmsg}))
       {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 2, %{kind: :part, body: nil}))
-      # `:topic` is body-required (`Message.@body_required_kinds`) — it is a
-      # CONTROL row that carries text, which is exactly why it must survive
-      # the hide: the pane renders it.
+      # `:topic` is a CONTROL row that carries text, which is exactly why it
+      # must survive the hide: the pane renders it. (Since #1505 the text may
+      # legitimately be `""` — a cleared topic — but this case is about the
+      # presence filter, so it uses the ordinary non-empty shape.)
       {:ok, _} = ScrollbackHelpers.insert(sample(user, net, 3, %{kind: :topic, body: "new topic"}))
 
       assert Scrollback.count_after_split({:user, user.id}, net.id, "#sniffo", m1.id, nil, false) ==

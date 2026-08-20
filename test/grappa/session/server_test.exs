@@ -2952,6 +2952,52 @@ defmodule Grappa.Session.ServerTest do
       :ok = GenServer.stop(pid, :normal, 1_000)
     end
 
+    # #1505 — the same defect on `:topic`, which #1500 deliberately left in
+    # `@body_required_kinds` because the renderer had no honest arm for an
+    # empty body. `TOPIC #chan :` is how an operator CLEARS a topic — it is
+    # also the exact line `Client.send_topic_clear/2` writes for our OWN
+    # `/topic -delete`, so the drop hit our own echo too.
+    #
+    # Same two-part oracle as #1500 and the same order: the row must ARRIVE
+    # first, or `refute log =~` passes on a session that never processed the
+    # line. `""` is asserted on the STORED value, not just the broadcast one —
+    # `nil` would claim the row has no body at all, which is what a `:join`
+    # row means.
+    test "#1505 a TOPIC with an empty trailing persists and logs no error" do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Topic.channel(user.name, network.slug, "#italia")
+        )
+
+      pid = start_session_for(user, network)
+      :ok = IRCServer.await_handshake(server, 1_000)
+
+      log =
+        capture_log(fn ->
+          IRCServer.feed(server, ":alice!~a@host TOPIC #italia :\r\n")
+
+          assert_receive %Phoenix.Socket.Broadcast{
+                           event: "event",
+                           payload: %{
+                             kind: :message,
+                             message: %{kind: :topic, channel: "#italia", sender: "alice", body: ""}
+                           }
+                         },
+                         2_000
+        end)
+
+      assert [%{kind: :topic, body: ""}] =
+               Scrollback.fetch({:user, user.id}, network.id, "#italia", nil, 10, nil, false)
+
+      refute log =~ "scrollback insert failed"
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
     # #546 regression the issue called out as the one concrete casualty: the
     # "CTCP VERSION query → grappa X" visibility row. It does NOT ride the
     # NOTICE door at all — it is emitted by the inbound-PRIVMSG CTCP arm,

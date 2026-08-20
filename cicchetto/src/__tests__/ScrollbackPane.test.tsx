@@ -1106,6 +1106,58 @@ describe("ScrollbackPane", () => {
     expect(document.querySelector("form.compose")).toBeNull();
   });
 
+  // #1505 — `TOPIC #chan :` (empty trailing) is how an operator CLEARS a
+  // topic. The server persists the row with `body: ""` (the empty string the
+  // wire carried; #1500 pinned "" over NULL). The generic arm renders
+  // `changed topic: ` + `<MircBody body="">`, and `parseMircFormat("")`
+  // returns zero runs — so the line asserts "changed" and then shows nothing,
+  // which reads as a truncated render rather than as a cleared topic.
+  describe("#1505 — an empty topic body renders as CLEARED, not as a truncation", () => {
+    const topicRow = (body: string | null) => ({
+      id: 1,
+      network: "freenode",
+      channel: "#a",
+      server_time: 100,
+      kind: "topic" as const,
+      sender: "alice",
+      body,
+      meta: {},
+    });
+
+    it("says the topic was cleared and never claims it was 'changed'", () => {
+      setScrollback({ "freenode #a": [topicRow("")] });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#a" kind="channel" />);
+      const line = screen.getAllByTestId("scrollback-line")[0];
+      expect(line).toHaveTextContent("* alice cleared the topic");
+      expect(line).not.toHaveTextContent("changed topic");
+    });
+
+    // The `body: null` shape is not produced by the TOPIC path (the row is
+    // body-required-relaxed, not body-dropped), but the renderer's own `??`
+    // makes it reachable from any cold-deploy backfill row. Absence and
+    // emptiness both mean "there is no topic", so they render the same.
+    it("renders the cleared wording for a null body too", () => {
+      setScrollback({ "freenode #a": [topicRow(null)] });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#a" kind="channel" />);
+      expect(screen.getAllByTestId("scrollback-line")[0]).toHaveTextContent(
+        "* alice cleared the topic",
+      );
+    });
+
+    // The non-empty arm is the control: the cleared branch must not swallow a
+    // real topic change. A whitespace-only topic is NOT cleared — it is a
+    // topic made of spaces, which the wire carried and which `topicJoinLine`
+    // separately declines to PRINT; the row still reports the change.
+    it("still reports a real change, including a whitespace-only topic", () => {
+      setScrollback({ "freenode #a": [topicRow("new topic"), { ...topicRow(" "), id: 2 }] });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#a" kind="channel" />);
+      const lines = screen.getAllByTestId("scrollback-line");
+      expect(lines[0]).toHaveTextContent("* alice changed topic: new topic");
+      expect(lines[1]).toHaveTextContent("changed topic");
+      expect(lines[1]).not.toHaveTextContent("cleared the topic");
+    });
+  });
+
   describe("mention highlight (P4-1)", () => {
     it("adds .scrollback-mention to lines that mention the user's nick", () => {
       setUserNick("vjt");
