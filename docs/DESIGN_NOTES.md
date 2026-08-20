@@ -52649,3 +52649,82 @@ fixed incidentally by a reformat — no history was mined, as the issue already
 noted. Nor whether `--max-diagnostics=none` has a pathological output size on
 some future tree; today it is 1323 lines against 456, on a tree with 65
 standing diagnostics.
+<!-- entry #1428 -->
+
+---
+
+## 2026-08-20 — #1428: the marker that defeats `merge=union` has two scopes of uniqueness, and the gate only closed one
+
+#1271 cured a silent three-line loss by giving every DESIGN_NOTES entry a
+`<!-- entry #NNNN -->` opening line. The mechanism is DIFFERENCE, not the
+marker: the old identical prefix (blank / `---` / blank) is what the merge
+machinery aligns as a common addition, and a line that differs between the two
+sides leaves nothing to collapse. #1428 is the regime in which that cure does
+not cure — the marker on the branch is one the BASE already carries.
+
+### Measured, on the scratch repo the bats suite builds
+
+The oracle is a real `merge=union` attribute and a real `git rebase`, not a
+hand-written broken file. Same harness, four regimes, additions of the
+branch's own contribution before → after:
+
+| markers (branch / main) | rebase | additions | gate BEFORE | gate AFTER |
+|---|---|---|---|---|
+| none / none (#1271) | rc=0, del=0 | 6 → 3 (**-3**) | 1 | 1 |
+| distinct | rc=0, del=0 | 7 → 7 | 0 | 0 |
+| **same / same (#1428)** | **rc=0, del=0** | **7 → 3 (-4)** | **0** | 1 |
+| none / distinct | rc=0, del=0 | 6 → 6 | 1 | 1 |
+
+Two things in that third row. A duplicated marker costs **four** lines, one
+MORE than carrying no marker at all, because the marker collapses together
+with the separator block it was added to protect. And the gate was **green
+before the rebase** — the only moment at which the loss was still preventable.
+
+### Why the file-wide uniqueness check could not see it
+
+The gate already counted duplicate markers in the file. That closes the
+copy-paste-within-one-branch case and nothing else. Here the branch's own file
+carries the marker exactly ONCE and the base carries the other, so nothing
+local is duplicated. And the collapse destroys the evidence on its way past:
+afterwards a single marker is left to count, so the check cannot retro-detect
+either. It is blind in both directions, by construction.
+
+What catches the damage today is the SEPARATOR check — the detector, not the
+prevention — and it fires only after the four lines are gone. The repair loop
+was measured too: restoring the separator while keeping the marker puts two
+identical markers in one file, which the existing count then does catch, so
+the loop terminates. It terminates one full round-trip late.
+
+### The cure, and the one line of it that is load-bearing
+
+Every marker the branch ADDS is compared against the markers in
+`$BASE_REF:docs/DESIGN_NOTES.md`. **The reference is the base ref's TIP, not
+the merge base**, and that is the whole finding rather than an implementation
+detail: the colliding entry landed on main AFTER the branch was cut — that is
+what "a rebase is when a previously-unique marker stops being unique" means.
+At the merge base the marker is not there yet. Pinned by a mutant: swapping
+`$BASE_REF` for `$base` reddens exactly one case and leaves the negative
+control green.
+
+Checks 1 and 2 stay diff-scoped against the merge base because they judge the
+SHAPE of what the branch wrote; check 3 judges a COLLISION with what the branch
+is about to land on. Different question, different reference.
+
+### Not covered, deliberately
+
+A marker added to an EXISTING entry without adding a heading — a retrofit —
+exits at the "adds no entry heading" fast path before check 3 runs. Out of
+convention (old entries need no retrofit) and left uncovered rather than
+silently half-covered; widening it would also make that fast path's message
+untrue.
+
+### Its sibling is a different defect, measured side by side
+
+#1432 (`merge=union` resurrects deliberately-deleted text) reproduces in the
+same harness with the opposite sign: additions **7 → 9**, deletions 0, the
+removed lines back in the file, and the gate **rc=0 — fully blind**. Opposite
+direction, opposite verdict from the current gate, so not one defect with two
+symptoms. The overlap is in the CURE, not the defect: a two-sided
+numstat-invariance check would detect both. It can only ever be a DETECTOR
+though — it needs a before and an after — whereas the marker check is a
+PREVENTER that runs on a single state. That is the argument for keeping both.

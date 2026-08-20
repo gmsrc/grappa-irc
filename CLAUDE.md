@@ -451,6 +451,17 @@ not the surrounding code.**
   Enforced by `scripts/design-notes-gate.sh` over the entries a branch ADDS,
   in CI and in `scripts/bats.sh`; the same gate treats an added `^## ` as an
   ENTRY heading, so a subsection inside an entry must be `###` or deeper.
+  **UNIQUE has two scopes, and the second is the one that bites (#1428):
+  unique in your file, AND unique against what `origin/main` carries NOW.**
+  One issue producing several entries needs distinct suffixes (`#1404a`,
+  `#1404b`, …) — and the suffix must be chosen against the base's CURRENT
+  content, not the base you branched from, because **a rebase is exactly when
+  a previously-unique marker stops being unique**. A marker the base already
+  carries restores the identical prefix the convention exists to destroy, and
+  costs **FOUR** lines instead of three — one MORE than no marker at all,
+  since the marker collapses together with the separator block it was added
+  to protect. The gate checks this against the base ref's TIP; the collision
+  does not exist at the merge base, so checking there sees nothing.
 - **Log honesty**: when a fast path skips work, the log message must
   describe the state it OBSERVED, not the absence of work. Example:
   `bootstrap: no credentials bound — running web-only` lies when N
