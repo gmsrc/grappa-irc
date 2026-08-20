@@ -54838,8 +54838,9 @@ that makes one of them urgent has not happened yet.
 
 ## 2026-08-20 — #1591: a pre-release `VERSION` could not build the Arch package, and a red leg still published
 
-Cutting `v1.3.0-rc1` — the first pre-release in 23 tags — killed the `arch` job
-of `release.yml` and still produced a **public GitHub Release with `assets=0`**.
+Cutting `v1.3.0-rc1` — the first and only pre-release among the repository's
+tags — killed the `arch` job of `release.yml` and still produced a **public
+GitHub Release with `assets=0`**.
 Two defects, one tag. Deleting the tag afterwards does not retract the release,
 which is why this was not closeable with a line of documentation: that question
 was asked first, and the answer is that a doc line cannot stop CI from
@@ -54980,3 +54981,14 @@ which the old order could not do at all, since the partial already existed.
 - **`publishable`'s `present` branch was not exercised against real `gh`.** The
   five bats cases drive the decision table; the `gh release view` probe that
   feeds it is inline YAML and untested, like every other `gh` call in that job.
+
+### One line of the issue does not survive measurement
+
+The issue records **"23 tags, zero pre-releases"**. Measured against
+`git ls-remote --tags origin`, the authoritative set: **22** tags matching
+`v*`, of which **one** — `v1.3.0-rc1` — is a pre-release. The zero is a
+sentence the tag it describes overtook (the issue says as much: *"`v1.3.0-rc1`
+is being cut anyway"*); where the 23 came from is not established, and it is
+not restated here. Nothing downstream rests on either number: the identity
+case is pinned by shape ("every tag that predates `v1.3.0-rc1`"), never by a
+count.

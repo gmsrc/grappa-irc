@@ -64,10 +64,10 @@ arch_job() {
 # ── The mapping ─────────────────────────────────────────────────────────────
 
 @test "#1591 a bare X.Y.Z passes through byte-for-byte" {
-    # The identity case is load-bearing, not a formality: every one of the 23
-    # tags cut so far is bare, so a mapper that touched them would restamp the
-    # whole release history's worth of package names for a case that has never
-    # occurred.
+    # The identity case is load-bearing, not a formality: every tag that
+    # predates `v1.3.0-rc1` is bare, so a mapper that touched them would
+    # restamp the whole release history's worth of package names for a case
+    # that had never occurred.
     for v in 0.1.0 1.2.0 1.3.0 10.20.30; do
         run "$PKGVER_SH" "$v"
         [ "$status" -eq 0 ]
