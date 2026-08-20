@@ -229,6 +229,24 @@ jobs:
             exit 1
           fi
 
+      # A DIFFERENT claim from the step above, and #1594's whole point. That
+      # one reads the number the BEAM reports; this one reads the number the
+      # PACKAGE is stamped with, which nfpm derives and can therefore restamp.
+      # It did: `1.3.0-rc1` reached apt as `1.3.0~rc1`, and no assertion in
+      # this pipeline was looking at that field — the two version proofs it
+      # had both compared the CLIENT package against the CLIENT's carrier.
+      # `pkgversion.sh` is the shared oracle; its map is measured against the
+      # pinned nfpm, not read off nfpm's source.
+      - name: Prove the bouncer .deb is stamped with the version nfpm derives from VERSION
+        run: |
+          deb="$(find dist -name 'grappa_*.deb' -print -quit)"
+          [ -n "$deb" ] || { echo "::error::no bouncer .deb in dist/"; exit 1; }
+          want="$(infra/packaging/pkgversion.sh deb grappa)"
+          got="$(dpkg-deb -f "$deb" Version)"
+          echo "bouncer package version: '$got' (want '$want')"
+          [ "$got" = "$want" ] || {
+            echo "::error::the bouncer .deb is stamped '$got', expected '$want'"; exit 1; }
+
       # Same proof discipline as the migrate + version checks above: assert
       # on the INSTALLED artifact, not on the build tree. `--help` exits 0
       # without a server, a terminal or config, so it exercises the real
@@ -285,8 +303,10 @@ jobs:
             echo "::error::Replaces: is not the literal grappa (<< 1.3.0~)"
             dpkg-deb -f "$deb" Replaces; exit 1; }
 
-          # Its own version line, not the bouncer's.
-          want="$(infra/packaging/version.sh shottino)"
+          # Its own version line, not the bouncer's — through the same nfpm
+          # map the bouncer's proof uses, so a pre-release on the client's
+          # cadence is covered the day it appears rather than the day it fails.
+          want="$(infra/packaging/pkgversion.sh deb shottino)"
           got="$(dpkg-deb -f "$deb" Version)"
           echo "client version: '$got' (want '$want')"
           [ "$got" = "$want" ] || {
@@ -662,6 +682,26 @@ jobs:
             exit 1
           fi
 
+      # The rpm twin of the deb job's stamped-version gate (#1594). Two fields
+      # here, not one: nfpm could in principle split a pre-release out into
+      # `Release`, and measured against the pinned 2.43.0 it does NOT — every
+      # shape lands wholly in `Version` with `Release` left at the default 1.
+      # Asserting both is what makes "the number was not restamped" a closed
+      # claim rather than a claim about one field.
+      - name: Prove the bouncer .rpm is stamped with the version nfpm derives from VERSION
+        run: |
+          pkg="$(find dist -name 'grappa-*.rpm' -print -quit)"
+          [ -n "$pkg" ] || { echo "::error::no bouncer .rpm in dist/"; exit 1; }
+          want="$(infra/packaging/pkgversion.sh rpm grappa)"
+          got="$(rpm -qp --queryformat '%{VERSION}' "$pkg")"
+          rel="$(rpm -qp --queryformat '%{RELEASE}' "$pkg")"
+          echo "bouncer package NEVRA: $(rpm -qp --queryformat '%{NEVRA}' "$pkg")"
+          echo "bouncer package version: '$got' (want '$want'), release: '$rel'"
+          [ "$got" = "$want" ] || {
+            echo "::error::the bouncer .rpm is stamped '$got', expected '$want'"; exit 1; }
+          [ "$rel" = "1" ] || {
+            echo "::error::Release is '$rel', not nfpm's default 1 — a release: key was added and this gate has not measured it"; exit 1; }
+
       # Same proof discipline as the .deb, both directions — the file must be
       # ABSENT from the bouncer's payload and delivered by the client package.
       # Like the arch source build, this also confirms shottino compiled on
@@ -706,7 +746,7 @@ jobs:
             echo "::error::Obsoletes: is not the literal grappa < 1.3.0~"
             rpm -qp --obsoletes "$pkg"; exit 1; }
 
-          want="$(infra/packaging/version.sh shottino)"
+          want="$(infra/packaging/pkgversion.sh rpm shottino)"
           got="$(rpm -qp --queryformat '%{VERSION}' "$pkg")"
           echo "client version: '$got' (want '$want')"
           [ "$got" = "$want" ] || {
