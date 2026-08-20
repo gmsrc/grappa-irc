@@ -50,7 +50,6 @@ import type {
   ChannelDirectoryStatus,
   ChannelDirectoryWireEntry,
   ChannelDirectoryWireIndexPayload,
-  LiveIntrospectionAdminWireLiveStateJson,
   LiveIntrospectionAdminWireT,
   NetworksAdminWireT,
   NetworksCredentialConnectionState,
@@ -1821,16 +1820,28 @@ async function fetchMe(token: string): Promise<MeResponse> {
 // M-8 doesn't render individual values (those land in M-9 Sessions
 // tab's per-row detail surface); a non-empty array implies the live
 // state values may be stale.
-// M-cluster M-8 / M-9b — shared live-introspection wire shape.
-// Mirror of `Grappa.LiveIntrospection.AdminWire.live_state_json/0`.
-// Same physical struct surfaces under `/admin/visitors[].live_state`
-// (where it's `| null` per U-0 honesty) AND every
-// `/admin/sessions[].live_state` (non-null since the latter is
-// registry-driven). Single source per "Implement once, reuse
-// everywhere".
-export type AdminLiveState = LiveIntrospectionAdminWireLiveStateJson;
 
-export type AdminVisitorLiveState = AdminLiveState;
+// M-cluster M-8 / M-9b — admin `live_state` is THREE shapes, by scope, and
+// there is deliberately no cic-side alias for it. Take each one from the
+// generated type of the endpoint that OWNS it, the way `adminSubjectRows.ts`
+// already does — `AdminVisitorNetwork["live_state"]` for a visitor row,
+// `AdminSession["live_state"]` for a session row.
+//
+// #550 scoped the upstream peer triple (`peer_address` / `peer_port` /
+// `peer_name`) to the Sessions tab, the netsplit-triage door:
+// `LiveIntrospectionAdminWireLiveStateJson` carries 10 keys,
+// `VisitorsAdminWireLiveStateJson` and
+// `NetworksCredentialsAdminWireLiveStateJson` the 7-key subset. That is a
+// recorded scoping decision, not drift — `peer_name` is not a `SessionEntry`
+// field at all (the Sessions controller resolves it through `Net.PtrCache`,
+// #252), so the other two wires would have to synthesise it.
+//
+// #1509 deleted four aliases that flattened all three onto the widest. Two of
+// them promised the peer triple on endpoints that never send it: measured,
+// a consumer typed with the visitor alias could read `.peer_address` with
+// `tsc` green and get `undefined` at runtime. Nothing consumed them — the
+// renderers already went through the generated types — so the whole cost was
+// the sentence that used to stand here claiming one struct was correct.
 
 // #211 phase 7 — per-network entry inside an AdminVisitor. A visitor is
 // multi-network; each attached network carries its own nick +
@@ -1872,8 +1883,6 @@ export async function adminDeleteVisitor(token: string, id: string): Promise<voi
 // string per the M-9a controller contract; cic constructs it
 // client-side. Cic must NEVER round-trip `pid_inspect` back to the
 // server — it's a human-readable label only.
-export type AdminSessionLiveState = AdminLiveState;
-
 export type AdminSession = LiveIntrospectionAdminWireT;
 
 // Composite session id constructor — single source for the wire
@@ -3083,8 +3092,6 @@ export async function adminDeleteFeaturedChannel(
 
 // Bucket 3 — Credential CRUD. URL composite (`:user_id/:network_id`)
 // reflects the schema's composite primary key (no surrogate id).
-
-export type AdminCredentialLiveState = AdminLiveState;
 
 export type AdminCredential = NetworksCredentialsAdminWireT & {
   // Present on PUT responses only; index/GET shape excludes it.

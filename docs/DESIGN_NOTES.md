@@ -52976,3 +52976,76 @@ census count the two apart.
   own implicit transaction and registering nothing. A seam on all of them is
   not a reflex-sized change.
 - **Who holds the lock is still unnamed**, and nothing here narrows it.
+<!-- entry #1509 -->
+
+---
+
+## 2026-08-20 — #1509: three admin `live_state` shapes, and four cic aliases that promised one
+
+`cicchetto/src/lib/api.ts` carried a four-link alias chain —
+`AdminLiveState` → `AdminVisitorLiveState` / `AdminSessionLiveState` /
+`AdminCredentialLiveState` — all resolving to
+`LiveIntrospectionAdminWireLiveStateJson`, with a comment above it stating
+that one physical struct surfaces on both `/admin/visitors` and
+`/admin/sessions`. The codegen has said otherwise per owner since #550:
+`LiveIntrospectionAdminWireLiveStateJson` carries 10 keys,
+`VisitorsAdminWireLiveStateJson` and
+`NetworksCredentialsAdminWireLiveStateJson` carry the 7-key subset.
+
+**The server split is not the defect.** #550 scoped the upstream peer triple
+(`peer_address` / `peer_port` / `peer_name`) to the Sessions tab — the
+netsplit-triage door — and left the visitors/credentials tabs on the existing
+subset. Aligning the three would also be wrong on its own terms: `peer_name`
+is not a `SessionEntry` field, the Sessions controller resolves it through
+`Net.PtrCache` (#252), so the other two wires would have to synthesise it.
+The client declaring ONE shape where the ruling records THREE is the whole
+defect.
+
+**Measured before deciding**, on a scratch probe compiled by the tree's own
+`tsc` (deleted before the commit; baseline without it was rc=0, zero
+diagnostics):
+
+- `Equal<alias, owner's generated type>` is FALSE for the visitor and the
+  credential alias, TRUE for the session and the base alias. So **two of the
+  four misrepresented the shape; the other two were merely dead** — the
+  issue's "four aliases flatten three onto one" is true of the chain, not of
+  each name, and the instrument was not uniformly red.
+- The trap was measured OPEN, not predicted: `v.peer_address` on a value
+  typed `AdminVisitorLiveState` compiled GREEN. A renderer written that way
+  would read `undefined` from an endpoint that never sends the field. After
+  the deletion the same probe fails at the import (TS2305) — the name is
+  gone, so the trap cannot be entered.
+- Calibration that must not move across the fix: `peer_address` on
+  `VisitorsAdminWireLiveStateJson` is RED on both sides (the server shape
+  genuinely lacks it) and `.nick` GREEN on both.
+- Zero consumers: `git grep -w` over the four names outside `node_modules`
+  returns only the definitions themselves plus two historical mentions in
+  this file and a 2026-05-22 review draft. Positive control on the same
+  grep: `AdminSession`, a name that IS consumed, returns 20.
+
+**Deleted rather than repointed-and-pinned.** Repointing each alias at its
+owner and adding three `wireTypesAssert` entries was fully specified and buys
+a red; it also installs a standing gate over four names no consumer wants,
+which preserves the thing whose only defect is existing. The knowledge — three
+shapes, by scope, and why — is what needed to survive, and a comment carries
+it where a dead alias never did. Consumers were already correct
+(`adminSubjectRows.ts` takes `live_state` from the owner's generated type),
+which is why the lie stayed inert.
+
+**Accepted consequence, stated rather than dressed up:** the deletion is
+bought by a reading plus a green gate, not by a standing red. You cannot pin a
+type you removed. What guards the class going forward is that no cic-side
+`live_state` name exists to be pointed at the wrong owner, plus the
+`wireTypesAssert` golden shapes from #1510, which redden on a mis-pointed
+alias only when the two shapes differ.
+
+**Not done here, deliberately:** the moduledoc of
+`lib/grappa/networks/credentials/admin_wire.ex` disambiguates `session_ip`
+against `live_state.peer_address` — a field that particular wire never emits,
+the same lie one layer down. It is a comment-only fix on the server side and
+this branch is cic-only; it is left for a branch that can run the Elixir
+gates.
+
+The two historical mentions of these names elsewhere in this file
+(`AdminLiveState`, `AdminVisitorLiveState`) are left untouched: the log
+records what was true when it was written.
