@@ -20,6 +20,15 @@ load ../bats_helpers
 setup() {
     SCANNER="$BATS_TEST_DIRNAME/../../scripts/log-gap-scan.awk"
     [ -f "$SCANNER" ]
+
+    # Verbatim from the call sites, so a pin that drifts from production
+    # prose fails here rather than reporting a confident zero.
+    #   lock_watch.ex — the two edges of one stall episode
+    #   busy_retry.ex — the two terminal arms, one per fault kind
+    LOCKSTALL_LINE='db lock stall: holder #PID<0.512.0> has held RESERVED for 30123ms with 2 waiter(s) queued — holder at :gen_server.loop/7, stack: a <- b'
+    LOCKRESOLVED_LINE='db lock stall RESOLVED: holder #PID<0.512.0> released RESERVED after 30456ms'
+    LOCKHELD_LINE='db write unavailable: SQLite write lock held by another writer for the full 1500ms retry budget (1 attempts) — returning :db_unavailable'
+    SATURATED_LINE='db write unavailable: SQLite pool saturated for the full 1500ms retry budget (3 attempts) — returning :db_unavailable'
 }
 
 # The scanner as integration.sh invokes it: a service label and a
@@ -81,12 +90,164 @@ stamp() {
         stamp '12:00:01.' 'conn idle=30062.4ms checked out'
         stamp '12:00:02.' 'scrollback row dropped for #bofh'
         stamp '12:00:03.' 'pool saturated for the full 30s'
+        stamp '12:00:04.' "$LOCKHELD_LINE"
+        stamp '12:00:05.' "$LOCKSTALL_LINE"
+        stamp '12:00:06.' "$LOCKRESOLVED_LINE"
     } | scan 10 )"
 
     grep -q 'db30=1' <<<"$out"
     grep -q 'idle30=1' <<<"$out"
     grep -q 'dropped=1' <<<"$out"
     grep -q 'saturated=1' <<<"$out"
+    grep -q 'lockheld=1' <<<"$out"
+    grep -q 'lockstall=1' <<<"$out"
+    grep -q 'lockstall_resolved=1' <<<"$out"
+}
+
+# --- #1420: the LockWatch verdict has to reach a GREEN run's artefact ------
+#
+# `container-logs` uploads on failure only; this census uploads always. #1420
+# measured 9 stalled attempts with LockWatch compiled in and only 3 readable —
+# the other 6 (5 green, 1 cancelled) threw the instrument's verdict away by
+# construction. These two counters are what puts it in the artefact that
+# survives.
+
+@test "a LockWatch stall episode is counted at BOTH edges" {
+    local out
+    out="$( {
+        stamp '12:00:00.' "$LOCKSTALL_LINE"
+        stamp '12:00:30.' "$LOCKRESOLVED_LINE"
+    } | scan 60 )"
+
+    grep -q 'lockstall=1' <<<"$out"
+    grep -q 'lockstall_resolved=1' <<<"$out"
+}
+
+@test "the RESOLVED edge alone does not score as a DETECTION" {
+    # The substring trap, and the reason these are two counters rather than
+    # one `db lock stall`: the RESOLVED line CONTAINS that phrase, so a
+    # counter anchored on it would report an episode that never opened —
+    # and, worse, report a resolved stall as an unresolved one.
+    local out
+    out="$( stamp '12:00:00.' "$LOCKRESOLVED_LINE" | scan 10 )"
+
+    grep -q 'lockstall=0' <<<"$out"
+    grep -q 'lockstall_resolved=1' <<<"$out"
+}
+
+@test "a DETECTION alone does not score as RESOLVED" {
+    # The other side, and the one that matters most in a census: an episode
+    # that never closed is the stall still running when the run ended.
+    local out
+    out="$( stamp '12:00:00.' "$LOCKSTALL_LINE" | scan 10 )"
+
+    grep -q 'lockstall=1' <<<"$out"
+    grep -q 'lockstall_resolved=0' <<<"$out"
+}
+
+@test "a retry budget exhausted on the write LOCK is counted apart from a saturated POOL" {
+    # #1420 measured 4 terminal BusyRetry observations in CI, all four
+    # `fault=busy_locked` — i.e. lock contention wearing a pool label. The
+    # prose split at the call site is worth nothing if the census re-merges
+    # them here.
+    local out
+    out="$( stamp '12:00:00.' "$LOCKHELD_LINE" | scan 10 )"
+    grep -q 'lockheld=1' <<<"$out"
+    grep -q 'saturated=0' <<<"$out"
+
+    out="$( stamp '12:00:00.' "$SATURATED_LINE" | scan 10 )"
+    grep -q 'saturated=1' <<<"$out"
+    grep -q 'lockheld=0' <<<"$out"
+}
+
+# --- the scanner's own controls -------------------------------------------
+#
+# The counters above are only worth their numbers if a broken pattern is
+# LOUD rather than zero. The scanner carries three controls in BEGIN —
+# known answer, invented line, complete set — and refuses to print a census
+# when one fails. A control nobody has seen fire is not a control, so each is
+# exercised by corrupting a COPY (the complete-set one in both directions).
+
+# A copy of the scanner with one sed applied. The edit must actually change
+# something, or the test would pass against an untouched script.
+corrupted_scanner() {
+    local out="$BATS_TEST_TMPDIR/scanner.awk"
+    sed "$1" "$SCANNER" >"$out"
+    refute cmp -s "$out" "$SCANNER"
+    printf '%s' "$out"
+}
+
+@test "the shipped scanner passes its own controls and prints its census" {
+    # The positive side. Without it the three corruption tests below could
+    # all be passing because the scanner never runs at all.
+    run awk -v SVC=svc -v THRESH=10 -f "$SCANNER" </dev/null
+    [ "$status" -eq 0 ]
+    grep -q 'svc	SUMMARY	lines=0' <<<"$output"
+    refute grep -q 'CONTROL FAILED' <<<"$output"
+}
+
+@test "a known-answer control failure prints NO numbers" {
+    # A pattern that stopped matching the line it exists for reports zero,
+    # and a zero is what a clean run looks like. Break the db30 sample so it
+    # no longer raises its counter.
+    local mutated
+    mutated="$(corrupted_scanner 's/db=30064\.1ms/db=1.1ms/')"
+
+    run awk -v SVC=svc -v THRESH=10 -f "$mutated" </dev/null
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"db30"* ]]
+    refute grep -q $'\tSUMMARY\t' <<<"$output"
+}
+
+@test "two patterns that do not discriminate print NO numbers" {
+    # The trap this slice exists for, as a mutant: loosen the DETECTION
+    # anchor to the bare phrase and it swallows the RESOLVED line too. The
+    # known-answer control's cross-talk arm is what names both signatures
+    # instead of quietly reporting an episode that never opened.
+    local mutated
+    mutated="$(corrupted_scanner 's|/db lock stall: holder /|/db lock stall/|')"
+
+    run awk -v SVC=svc -v THRESH=10 -f "$mutated" </dev/null
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"lockstall_resolved's sample also raised lockstall"* ]]
+    refute grep -q $'\tSUMMARY\t' <<<"$output"
+}
+
+@test "a pattern that matches lines it does not describe prints NO numbers" {
+    # The invented-line control. Make the negative sample carry a real
+    # signature: the `dropped` pattern then matches a line no signature
+    # describes, which is how a degenerate pattern would look.
+    local mutated
+    mutated="$(corrupted_scanner 's/no signature here/scrollback row dropped/')"
+
+    run awk -v SVC=svc -v THRESH=10 -f "$mutated" </dev/null
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"dropped"* ]]
+    refute grep -q $'\tSUMMARY\t' <<<"$output"
+}
+
+@test "a registered signature missing from the SUMMARY prints NO numbers" {
+    # The complete-set control, counted direction: a counter that is raised
+    # but never emitted is a measurement nobody can read.
+    local mutated
+    mutated="$(corrupted_scanner 's/\\tdropped=%d//')"
+
+    run awk -v SVC=svc -v THRESH=10 -f "$mutated" </dev/null
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"dropped"* ]]
+    refute grep -q $'\tSUMMARY\t' <<<"$output"
+}
+
+@test "a SUMMARY field nothing registers prints NO numbers" {
+    # The complete-set control, emitted direction: a field in the census
+    # that no signature backs reports a number that means nothing.
+    local mutated
+    mutated="$(corrupted_scanner 's/\\tsaturated=%d/\\tsaturated=%d\\tbogus=%d/')"
+
+    run awk -v SVC=svc -v THRESH=10 -f "$mutated" </dev/null
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"bogus"* ]]
+    refute grep -q $'\tSUMMARY\t' <<<"$output"
 }
 
 @test "a sub-30s duration does not score as a 30-something hold" {
