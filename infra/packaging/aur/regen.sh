@@ -5,8 +5,13 @@
 # TWO recipes since #1447, because they carry TWO version lines:
 #
 #   ./PKGBUILD           the bouncer      pkgver=@GRAPPA_VERSION@
+#                                         _grappaver=@GRAPPA_VERSION@
 #   ./shottino/PKGBUILD  the client       pkgver=@SHOTTINO_VERSION@
 #                                         _grappaver=@GRAPPA_VERSION@
+#
+# Both sentinels read `@GRAPPA_VERSION@` in the bouncer's recipe and are still
+# TWO carriers: since #1591 `pkgver` is the version MAPPED for makepkg and
+# `_grappaver` is the raw tag, and a pre-release makes them differ.
 #
 # A split package could not express that: PKGBUILD(5) does not let a
 # `package_*()` override `pkgver`, so both halves would take the bouncer's
@@ -35,6 +40,18 @@ AUR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 version="$("${AUR_DIR}/../version.sh")"
 client_version="$("${AUR_DIR}/../version.sh" shottino)"
 
+# pkgver is NOT the version, and since #1591 that is load-bearing rather than
+# incidental. `makepkg` refuses the hyphen a semver pre-release spells its
+# suffix with, so `pkgver.sh` maps the canonical number onto one makepkg
+# accepts AND `vercmp` orders below the release it precedes — or refuses to
+# derive at all. On a bare `X.Y.Z` (every tag cut so far) it is the identity,
+# so this changes nothing for a normal release. BOTH recipes go through it:
+# the client's carrier can grow a pre-release exactly the way the bouncer's
+# did, and a second recipe that skipped the mapping would die at makepkg, at
+# release time, on a tag.
+pkgver="$("${AUR_DIR}/pkgver.sh" "${version}")"
+client_pkgver="$("${AUR_DIR}/pkgver.sh" "${client_version}")"
+
 # derive <recipe-dir> <pkgver> — fill the sentinels, checksum, regenerate.
 # One function for both recipes: the client's extra `_grappaver` is a no-op
 # sed on the bouncer's, which has no such line, so the two paths cannot drift
@@ -44,7 +61,11 @@ derive() {
 	echo "==> ${dir}: deriving pkgver=${pkgver} (#538/#652 single source)"
 	sed -i -E "s/^pkgver=.*/pkgver=${pkgver}/" "${dir}/PKGBUILD"
 	# The tag that carries the source is ALWAYS the bouncer's version, even in
-	# the recipe whose pkgver is not.
+	# the recipe whose pkgver is not — and, since #1591, even in the recipe
+	# whose pkgver is the bouncer's own MAPPED number. `v${pkgver}` would name
+	# a tag nobody cut the moment a pre-release is mapped, so BOTH recipes now
+	# spell the tag `_grappaver`, and this sed (a deliberate no-op on the
+	# bouncer's file until then) is live on both.
 	sed -i -E "s/^_grappaver=.*/_grappaver=${version}/" "${dir}/PKGBUILD"
 	(
 		cd "${dir}"
@@ -55,6 +76,6 @@ derive() {
 	)
 }
 
-derive "${AUR_DIR}" "${version}"
-derive "${AUR_DIR}/shottino" "${client_version}"
-echo "==> recipes ready: grappa=${version}, shottino=${client_version}"
+derive "${AUR_DIR}" "${pkgver}"
+derive "${AUR_DIR}/shottino" "${client_pkgver}"
+echo "==> recipes ready: grappa=${pkgver}, shottino=${client_pkgver} (tag v${version})"

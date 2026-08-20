@@ -458,6 +458,51 @@ jobs:
           [ "$got" = "$want" ] || {
             echo "::error::the Arch client package is stamped '$got', expected '$want'"; exit 1; }
 
+      # The BOUNCER's own number, which nothing in this workflow used to check
+      # (#1591). Both existing package-version gates — the deb job's and the
+      # rpm job's — compare against the SHOTTINO carrier, so a restamped
+      # grappa version would be seen by nobody. That was an omission while
+      # pkgver was a verbatim copy of VERSION; since #1591 the Arch number is
+      # deliberately TRANSFORMED (makepkg refuses the hyphen a semver
+      # pre-release spells its suffix with), and an unchecked transformation
+      # is the difference between a derivation and a hope.
+      #
+      # `cut -d- -f1` splits off pkgrel and is safe by construction: pkgver.sh
+      # guarantees the value it returns holds no hyphen — that is its job.
+      - name: Prove the derived pkgver reached the built bouncer package
+        run: |
+          want="$(infra/packaging/aur/pkgver.sh "$(infra/packaging/version.sh)")"
+          got="$(pacman -Q grappa | awk '{print $2}' | cut -d- -f1)"
+          echo "bouncer package version: '$got' (want '$want')"
+          [ "$got" = "$want" ] || {
+            echo "::error::the Arch bouncer package is stamped '$got', expected '$want'"; exit 1; }
+
+      # The ordering claim the mapping's SPELLING rests on, re-measured with
+      # the real comparator on a real Arch box. `1.3.0-rc1` maps to
+      # `1.3.0rc1`, which sorts BELOW `1.3.0`; the Arch-conventional
+      # `1.3.0_rc1` sorts ABOVE it and would strand every user who installed
+      # the rc, since pacman would never offer them the release. pkgver.sh
+      # encodes that as a shape rule (its bats suite runs on a host with no
+      # pacman); this is the rule's source of truth, asserted at the only
+      # moment a pre-release can reach a user.
+      #
+      # A no-op on a bare release, and it says so out loud rather than
+      # reporting a green it never computed.
+      - name: Prove a pre-release pkgver sorts BELOW its own release
+        run: |
+          srcv="$(infra/packaging/version.sh)"
+          core="${srcv%%-*}"
+          if [ "$core" = "$srcv" ]; then
+            echo "VERSION is $srcv — no pre-release suffix, nothing to order"
+            exit 0
+          fi
+          pkgver="$(infra/packaging/aur/pkgver.sh "$srcv")"
+          cmp="$(vercmp "$pkgver" "$core")"
+          echo "vercmp $pkgver $core = $cmp (want a negative number)"
+          [ "$cmp" -lt 0 ] || {
+            echo "::error::pkgver '$pkgver' does not sort below '$core' — pacman would never offer the $core upgrade"
+            exit 1; }
+
       - name: Stage Arch artifacts (packages + regenerated recipe metadata)
         run: |
           mkdir -p arch-out

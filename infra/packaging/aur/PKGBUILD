@@ -23,8 +23,21 @@ pkgname=grappa
 # the human AUR publish) fills this from `version.sh` before makepkg. The
 # `@GRAPPA_VERSION@` sentinel is deliberate: makepkg's pkgver lint REFUSES '@',
 # so an underived build fails loudly instead of shipping `grappa-@GRAPPA_VERSION@`.
+#
+# DERIVED ≠ EQUAL, since #1591: makepkg's same lint refuses the hyphen a
+# semver pre-release spells its suffix with, so `regen.sh` fills this through
+# `pkgver.sh`, which maps `1.3.0-rc1` onto `1.3.0rc1` — the only spelling that
+# both builds and `vercmp`s BELOW the release it precedes (the header of that
+# script carries the measurement). On a bare `X.Y.Z` the map is the identity.
 pkgver=@GRAPPA_VERSION@
 pkgrel=1
+# The grappa TAG that carries the source, and a SECOND carrier from pkgver
+# even though both sentinels read `@GRAPPA_VERSION@`: a mapped pre-release
+# makes them differ, and `v${pkgver}` would then name a tag nobody ever cut.
+# The client recipe has carried this for the same reason since #1447 — there
+# because its pkgver is a different NUMBER, here because it is a different
+# SPELLING of the same one. Everything about the source is spelled with it.
+_grappaver=@GRAPPA_VERSION@
 pkgdesc="Always-on IRC bouncer with a REST + Phoenix Channels API and a bundled web PWA (cicchetto)"
 arch=('x86_64')
 url="https://github.com/vjt/grappa-irc"
@@ -58,7 +71,7 @@ optdepends=('shottino: the terminal client, now its own package (#1447)'
             'ffmpeg: strip metadata from video uploads (#39)'
             'nginx: TLS + static reverse proxy (recommended, not required)')
 install="${pkgname}.install"
-source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+source=("${pkgname}-${_grappaver}.tar.gz::${url}/archive/refs/tags/v${_grappaver}.tar.gz")
 # SKIP until the vX.Y.Z tag exists: the release step regenerates this with
 # `updpkgsums` (and .SRCINFO with `makepkg --printsrcinfo`). See README.md.
 sha256sums=('SKIP')
@@ -68,8 +81,9 @@ sha256sums=('SKIP')
 # proven-good .deb payload, which nfpm never strips.
 options=('!strip' '!debug')
 
-# GitHub tag tarballs extract to <repo>-<version>/ = grappa-irc-<pkgver>/.
-_srcdir="grappa-irc-${pkgver}"
+# GitHub tag tarballs extract to <repo>-<version>/ — and the version there is
+# the TAG's, which a mapped pre-release makes different from this package's.
+_srcdir="grappa-irc-${_grappaver}"
 
 build() {
 	cd "${srcdir}/${_srcdir}"

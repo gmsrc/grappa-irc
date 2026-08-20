@@ -15,7 +15,13 @@ defmodule Grappa.VersionSingleSourceTest do
     * the Arch `pkgver` — `infra/packaging/aur/regen.sh` derives it from the
       same `version.sh` at release time, filling the committed
       `@GRAPPA_VERSION@` sentinel (a value `makepkg` REFUSES, so an
-      underived build fails loudly instead of shipping `grappa-@…@`);
+      underived build fails loudly instead of shipping `grappa-@…@`).
+      DERIVED ≠ EQUAL since #1591: `makepkg` also refuses the hyphen a semver
+      pre-release spells its suffix with, so the value goes through
+      `aur/pkgver.sh` (`1.3.0-rc1` → `1.3.0rc1`, identity on a bare `X.Y.Z`).
+      That is why the same recipe carries a SECOND `@GRAPPA_VERSION@`
+      sentinel, `_grappaver`: `pkgver` is the mapped number, `_grappaver` is
+      the raw tag, and a pre-release makes them differ;
     * the Arch CLIENT recipe (#1447, `aur/shottino/`) — a SECOND pkgbase, and
       therefore a second carrier: `pkgver=@SHOTTINO_VERSION@` derives from
       `frontends/shottino/version.h` (the client's own line, so
@@ -98,6 +104,23 @@ defmodule Grappa.VersionSingleSourceTest do
     test "PKGBUILD pkgver is the @GRAPPA_VERSION@ sentinel (makepkg refuses it → loud)" do
       pkgver = carrier_value("infra/packaging/aur/PKGBUILD", ~r/^pkgver=(.+)$/m)
       assert pkgver == "@GRAPPA_VERSION@"
+    end
+
+    test "the bouncer PKGBUILD names its source TAG through _grappaver (#1591)" do
+      # Same sentinel, second carrier — and the pair is not redundant. Since
+      # #1591 `pkgver` is the version MAPPED for makepkg (which refuses the
+      # hyphen a semver pre-release carries) while `_grappaver` is the raw tag,
+      # so a pre-release makes the two DIFFER. A recipe that went back to
+      # spelling its source `v${pkgver}` would fetch a tag nobody ever cut.
+      pkgbuild = File.read!("infra/packaging/aur/PKGBUILD")
+
+      assert carrier_value("infra/packaging/aur/PKGBUILD", ~r/^_grappaver=(.+)$/m) ==
+               "@GRAPPA_VERSION@"
+
+      assert carrier_value("infra/packaging/aur/PKGBUILD", ~r/^source=\((.+)\)$/m) =~
+               "v${_grappaver}.tar.gz"
+
+      refute pkgbuild =~ ~r/^source=.*v\$\{pkgver\}/m
     end
 
     test ".SRCINFO pkgver is the @GRAPPA_VERSION@ sentinel (regenerated with PKGBUILD)" do
