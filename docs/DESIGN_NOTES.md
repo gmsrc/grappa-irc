@@ -52568,3 +52568,84 @@ explains PERIODIC drops; if the reported account drops more often than that, thi
 is one cause and not established as the only one, and nothing here looked for the
 rest. Nothing was measured against production or CI — the runs are the local
 module set plus a full `check.sh`.
+<!-- entry #1469 -->
+
+---
+
+## 2026-08-20 — #1469: the gate stopped at the first stage, and truncated the one error it did find
+
+`"check": "biome check && tsc --noEmit && tsc --noEmit -p e2e/tsconfig.json"`.
+The `&&` meant a red `check` reported the FIRST stage and nothing about the
+rest, while reading to a human as "the gate ran and found a problem".
+Formatting is the cheapest and most frequent failure and it sat first, so it
+was the stage most likely to mask the expensive ones — three times in one day
+(2026-08-17) a cosmetic complaint hid two, then three, genuine type errors for
+exactly as long as it lasted.
+
+### The measurement found a SECOND lie in the same command
+
+Three independent mutants, one per stage, on a tree whose clean `check` is
+rc=0: a format-only error (`src/lib/zzMutantFmt.ts`), a `tsc` src type error,
+a `tsc` e2e type error. Each was positive-controlled alone — red, and naming
+its own file — and cross-controlled so no mutant bites a stage it does not own.
+
+| on the gate, all three planted | before | after |
+|---|---|---|
+| exit code | 1 | 1 |
+| format error named in the output | **no** | yes |
+| `tsc` src error named | no | yes |
+| `tsc` e2e error named | no | yes |
+| `error TS` lines | 0 | 2 |
+| `Diagnostics not shown` | present | absent |
+| red when exactly ONE stage is red (each of the three) | rc=1 | rc=1 |
+
+The first row of "no" is the known bug: neither `tsc` ran. **The format error
+going unnamed was not predicted.** biome's default `--max-diagnostics` is 20
+and this tree already carries 59 warnings + 6 infos, so the ONE error was
+truncated away under `Diagnostics not shown: 46` while the summary still read
+`Found 1 error.` The gate printed 456 lines that named **none** of the three
+broken files. That is why `--max-diagnostics=none` rides in this change rather
+than a follow-up: same command, same class — a red nobody can act on.
+
+### Why a stage array and not a shell chain
+
+The obvious one-liner is `rc=0; biome … || rc=1; tsc … || rc=1; exit $rc` in
+`package.json`. Rejected: a fourth stage appended without its `|| rc=1` exits
+GREEN over a real failure, which is strictly worse than the bug being fixed
+here. `cicchetto/scripts/check.ts` makes the stage list data, so aggregation
+comes with the entry. It closes on `check summary — N stages ran, M failed`:
+with the fix, "all stages ran" is an invariant, and printing it is what makes
+the next regression visible instead of silent.
+
+### `run build` keeps its `&&` — deliberately
+
+`"build": "tsc --noEmit && vite build"` short-circuits too (measured: with a
+type mutant planted, `vite` produced no output at all). It is **not** the same
+defect. There the two stages are precondition → effect, not two independent
+verdicts: `vite build` WRITES `dist/`, and it is the deploy path
+(`Dockerfile.release`, `infra/packaging/build.sh`, `infra/linux/cic_build.sh`,
+`infra/freebsd/jail_cic_build.sh`, both compose files). Aggregating there would
+mean staging a bundle from code that does not typecheck. Cure the reporting
+gap, not the ordering.
+
+### Measured, not cured
+
+- **The CI job has the same shape one layer up.** `cicchetto (types + lint +
+  unit)` runs `check` and `test` as two plain steps, so a red `check` skips the
+  vitest step outright — observed on runs `32003821634` and `31355607479`:
+  step 7 `failure`, step 8 `skipped`. Fixed here with `if: ${{ !cancelled() }}`
+  on the vitest step, in its own commit.
+- **`cicchetto/scripts/` is outside every lint gate**, so this runner is
+  unlinted and untypechecked — biome's `files.includes` does not reach it
+  (`Checked 0 files`, "these paths were provided but ignored"), `tsconfig.json`
+  is `include: ["src"]`, and `scripts/shellcheck.sh`'s roots are `bin infra
+  scripts` at the REPO root. The same hole `scripts/gen-emoji.ts` already sits
+  in, not one opened here. Adding `"scripts/**"` to biome's includes was
+  measured and is NOT free: it goes red on a standing import-order finding in
+  `scripts/gen-pwa-icons.mjs`, which belongs to whoever widens the gate.
+
+**Not established.** How many past red `check` runs hid a type error later
+fixed incidentally by a reformat — no history was mined, as the issue already
+noted. Nor whether `--max-diagnostics=none` has a pathological output size on
+some future tree; today it is 1323 lines against 456, on a tree with 65
+standing diagnostics.
