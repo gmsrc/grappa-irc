@@ -79,7 +79,14 @@ defmodule Grappa.Networks.SessionPlan do
     # `Credentials.list_credentials_for_all_users/0` (network preloaded
     # already) or one fresh from `Credentials.get_credential!/2` (assoc
     # not loaded). Both paths are valid — `Repo.preload` is a no-op on
-    # already-loaded assocs, so no extra query for the Bootstrap path.
+    # an already-loaded assoc, so the Bootstrap path pays nothing here.
+    #
+    # That "nothing" is about the BOOTSTRAP caller and no other (#1410).
+    # The `refresh_plan` closure below reaches this same line with a
+    # credential from `get_credential_by_ids/2`, a bare `Repo.one` with
+    # no preload — so on the respawn door the line costs two queries
+    # (`networks`, `network_servers`), measured, not one. See
+    # `Grappa.Session.RefreshPlanCostTest` for the per-door counts.
     credential = Repo.preload(credential, network: :servers)
     user = Accounts.get_user!(credential.user_id)
     server = Servers.pick_server!(credential.network, attempt)

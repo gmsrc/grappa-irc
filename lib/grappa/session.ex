@@ -55,8 +55,10 @@ defmodule Grappa.Session do
   `handle_continue` would turn a reported failure into a silent death.
 
   Two consequences stay open. On the SPAWN door the re-resolve
-  duplicates the resolution its caller performed microseconds earlier,
-  and one closure cannot tell the two doors apart. And `Boundary` is
+  duplicates the resolution its caller performed microseconds earlier
+  — measured at nine queries against the caller's six, so Bootstrap
+  pays fifteen per credential where six would do — and one closure
+  cannot tell the two doors apart. And `Boundary` is
   structurally blind to this class: a closure built in `Networks` or
   `Visitors` and invoked here carries no module reference for a
   compile-time checker to see, which is why the deps list below can

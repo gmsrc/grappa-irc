@@ -863,8 +863,17 @@ defmodule Grappa.Session.Server do
   # does pay those queries per credential. Synchronous by necessity —
   # `:ignore` is the spawn door's only synchronous "not viable" signal
   # (see `Grappa.Session`'s A2 section for why `handle_continue` cannot
-  # carry it). The boot cost has never been measured; measure before
-  # quoting a figure for it.
+  # carry it).
+  #
+  # The cost is now measured, and it is NINE queries per `init/1`, not
+  # the three the issue derived from the call chain — the five nobody
+  # counted are `SessionPlan.base_plan/7`'s source resolution
+  # (`server_settings` twice, then `vhost_grants` / `vhosts` /
+  # `user_settings` through `Vhosts.effective_source/3`), uncached and
+  # paid by both plan producers. Bootstrap pays FIFTEEN per credential:
+  # six in its own `resolve/1` plus these nine. Pinned per door in
+  # `Grappa.Session.RefreshPlanCostTest`; #1410. Still unmeasured: the
+  # wall-clock of the loop, and N on any real deployment.
   @impl GenServer
   def init(opts) do
     :ok = Log.set_session_context(opts.subject_label, opts.network_slug)
