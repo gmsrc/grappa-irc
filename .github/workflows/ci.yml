@@ -386,10 +386,20 @@ jobs:
       - name: Install e2e type dependencies
         run: bun install --cwd e2e
 
-      # `check` is biome check (src + e2e) && tsc --noEmit for both projects —
+      # `check` is biome (src + e2e) plus `tsc --noEmit` for both projects —
       # the same gate the local path runs, so CI and the developer see one rule.
+      # Since #1469 the three stages all RUN and the step fails on the union of
+      # their failures: the old `&&` chain meant a red here reported the first
+      # stage and nothing about the rest, and formatting sat first.
       - name: Biome + typecheck
         run: bun run check
 
+      # #1469 one layer up: two plain steps short-circuit exactly like the `&&`
+      # chain did. Measured on runs 32003821634 and 31355607479 — step "Biome +
+      # typecheck" `failure`, this step `skipped`, so a red job said nothing
+      # about the unit suite. `!cancelled()` (not `always()`, which would also
+      # run through a cancellation) makes the job report the union; a failure in
+      # either step still fails the job.
       - name: Unit tests (vitest)
+        if: ${{ !cancelled() }}
         run: bun run test
