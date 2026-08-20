@@ -925,7 +925,13 @@ So the trap now streams each service's log through
 measured: the largest silence between consecutive lines, every silence
 at or over `GAP_THRESHOLD` (10 s — above the 5 s healthcheck cadence,
 below the 30 s `busy_timeout`), and counts of the damage signatures
-(`db=3xxxx`, `idle=3xxxx`, a dropped scrollback row, a saturated pool).
+(`db=3xxxx`, `idle=3xxxx`, a dropped scrollback row, a saturated pool, a
+retry budget exhausted against a held write lock, and — since #1420 — both
+edges of a `LockWatch` stall episode, `lockstall` / `lockstall_resolved`).
+Those last three are why the census is where the LockWatch verdict lives:
+`container-logs` uploads on failure only, and of the 9 stalled attempts that
+had LockWatch compiled in, 6 (5 green, 1 cancelled) uploaded no bytes at all,
+so the instrument's answer was discarded by construction.
 That lands in `container-logs/gap-scan.tsv`, a few KB, and on stdout as
 well — on a green CI run the job log is the copy that survives without
 an artifact. `tee` is the mechanism: the stream reaches the scanner
@@ -1031,6 +1037,15 @@ without touching the script that implements it — which is why
 `test/scripts/log_gap_scan_test.bats` (threshold boundary from both
 sides, arithmetic, midnight rollover, one case per damage signature,
 and the refusal to default a missing threshold).
+
+The scanner also carries its own controls, in BEGIN, before a single input
+line is read: each signature's known-answer sample must raise ITS counter and
+no other, an invented line must raise nothing, and every registered signature
+must reach the SUMMARY. A failed control exits 3 having printed no numbers —
+because a zero from a broken pattern is indistinguishable from a zero that
+means "clean", and this census is read as evidence months later. The bats file
+exercises each control by corrupting a COPY of the scanner, so a control
+nobody has watched fire is not shipped as one.
 
 This is evidence collection, not a gate: no branch of the trap touches
 the exit code, and a green run stays green.
@@ -4733,7 +4748,11 @@ baseline table, never a summary number**:
   row `mean_ms`, watched as the table grows.
 
 WAL/lock corroboration (mechanism 2, out-of-band): grep prod logs for the
-`SQLite pool saturated` warning and busy/locked `%Exqlite.Error{}` lines during
+`db write unavailable` warning — it names WHICH of the two it observed since
+#1420 (`SQLite pool saturated` for a pool `queue_timeout`, `SQLite write lock
+held by another writer` for a `busy_locked`; before that it said "pool" for
+both while its own `fault=` metadata said otherwise) — and busy/locked
+`%Exqlite.Error{}` lines during
 the burst; watch WAL checkpoint pressure via the `runtime/*.db-wal` file size
 (a large, slow-shrinking `-wal` = checkpoints falling behind the write rate).
 

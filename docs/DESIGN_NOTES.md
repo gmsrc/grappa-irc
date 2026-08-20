@@ -52892,3 +52892,87 @@ does **not** have that geometry: the deleted region sits ~59 lines before the
 file's end and `git blame` puts those 59 lines in the same commit as the
 deleted text. The adjacency threshold is A path to resurrection; that it is THE
 path is not established, and the tool promises no threshold.
+<!-- entry #1420-instrument -->
+
+---
+
+## 2026-08-20 — #1420: the instrument's verdict, and the line that named the wrong subsystem
+
+Two instrument-side slices of #1420. Neither touches the contested cure —
+narrowing `BEGIN IMMEDIATE` is a ruling about what we accept to lose, and it
+conflicts with why #1374/#1375 exist.
+
+### The census now carries the LockWatch verdict on a GREEN run
+
+`log-gap-census` uploads with `if: always()`; `container-logs` only on
+failure. Measured over a 3-day window: 161 attempts, 12 of them stalled, 9
+with `LockWatch` compiled in — and of those 9, **6 (5 green, 1 cancelled)
+uploaded no bytes at all**, so the instrument's answer was discarded BY
+CONSTRUCTION on two thirds of the attempts that armed it. The verdict cost a
+few bytes and it was already being computed; it just was not in the artefact
+that survives.
+
+`scripts/log-gap-scan.awk` now counts three more signatures beside `db30 /
+idle30 / dropped / saturated`: `lockstall` and `lockstall_resolved` (the two
+edges of a `LockWatch` episode) and `lockheld` (a `BusyRetry` budget exhausted
+against a held write lock — see below). Two counters for the episode, not one,
+because the RESOLVED line CONTAINS the phrase `db lock stall`: a counter
+anchored there reports an episode that never opened, and reports a resolved
+stall as an unresolved one. `lockstall` therefore anchors on `db lock stall:
+holder ` — the colon is load-bearing.
+
+Nothing about RETENTION changed: the triggers are still a service gap and a
+dropped row. Making a detected stall keep the 275 MB is a defensible next
+move and is deliberately not taken here — it is a policy change, and this
+slice is an instrument change.
+
+### The controls live INSIDE the scanner
+
+A census is read as evidence months later, and a zero from a pattern that
+stopped matching is indistinguishable from a zero that means "clean". So the
+scanner registers each signature with a known-answer sample copied from the
+call site that emits it, and BEGIN pushes those samples through the REAL
+counting path before one input line is read:
+
+* **known answer** — each sample raises ITS counter exactly once and no
+  other. This is the arm that catches the `db lock stall` substring trap:
+  loosen `lockstall` to that phrase and the control names both signatures.
+* **invented line** — a line no signature describes raises nothing, so a
+  pattern that degenerated to match-anything cannot pass the arm above.
+* **complete set** — every registered signature reaches the SUMMARY with its
+  known answer, and the SUMMARY declares no `key=` field nothing registers.
+
+A failed control exits 3 having printed **no numbers**. The format is scanned
+BEFORE it is rendered on purpose: an unbacked `%d` makes `sprintf` die with
+"not enough args" on BSD awk and pass silently on gawk/mawk, so rendering
+first would make the control's verdict depend on which awk the runner has.
+Each control is exercised in `test/scripts/log_gap_scan_test.bats` by
+corrupting a COPY of the scanner — a control nobody has watched fire is not
+shipped as one.
+
+### The terminal line named the wrong subsystem
+
+`Repo.BusyRetry`'s budget-exhaustion warning read `SQLite pool saturated` for
+BOTH fault kinds while its own `fault:` metadata on the SAME line said which.
+Measured across three stalled CI runs: **4 terminal observations, all four
+`fault=busy_locked`, zero `queue_timeout`** — every one a write-lock
+contention wearing a pool label, on the exact axis (pool vs lock) this issue
+exists to separate. CLAUDE.md's log-honesty rule says the line describes the
+state OBSERVED, so the prose splits per fault kind. Prose only: same retry,
+same `{:error, :db_unavailable}`, same metadata. It is also what lets the
+census count the two apart.
+
+### Named, not cured
+
+- **The retry budget cannot fire on the fault it exists for.**
+  `busy_timeout: 30_000` against `budget_ms: 1_500` means the first attempt
+  overruns the budget by 20×, so the `monotonic_time < deadline` arm is
+  unreachable for a `busy_locked` fault — observed 4/4 as `(1 attempts)`.
+  Real, measured, and deliberately NOT fixed here: changing it changes retry
+  behaviour under contention, which is the contested axis.
+- **`LockWatch` is blind to bare writes.** Both its sets are populated only by
+  `Repo.immediate_transaction/1`, and there are ~130 bare
+  `Repo.insert/update/delete/*_all` call sites, each taking `RESERVED` for its
+  own implicit transaction and registering nothing. A seam on all of them is
+  not a reflex-sized change.
+- **Who holds the lock is still unnamed**, and nothing here narrows it.

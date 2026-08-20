@@ -21,6 +21,8 @@ defmodule Grappa.Repo.BusyRetryTest do
   """
   use ExUnit.Case, async: true
 
+  import ExUnit.CaptureLog
+
   alias Grappa.Repo.BusyRetry
 
   # A pool checkout that could not be served — always transient (retry).
@@ -37,6 +39,15 @@ defmodule Grappa.Repo.BusyRetryTest do
   # Syntax / corruption — NON-transient: retrying only spins.
   defp raise_syntax do
     raise %Exqlite.Error{message: "near \"SLECT\": syntax error", statement: nil}
+  end
+
+  # Every captured terminal line tagged with this fault kind. The `fault=`
+  # metadata is what the prose has to agree with, so it is also what selects
+  # the lines to judge.
+  defp terminal_lines(log, fault) do
+    log
+    |> String.split("\n")
+    |> Enum.filter(&(&1 =~ "db write unavailable" and &1 =~ "fault=#{fault}"))
   end
 
   describe "run/1 happy + validation paths" do
@@ -103,6 +114,40 @@ defmodule Grappa.Repo.BusyRetryTest do
 
       assert_raise Exqlite.Error, ~r/syntax error/, fn -> BusyRetry.run(op) end
       assert Agent.get(counter, & &1) == 1
+    end
+  end
+
+  # #1420 — CLAUDE.md "Log honesty": the line must describe the state it
+  # OBSERVED. This one read `SQLite pool saturated` for BOTH fault kinds while
+  # its own `fault:` metadata on the SAME line said which one it was. Measured
+  # in CI over three stalled integration runs: 4 terminal observations, all
+  # four `fault=busy_locked` and none `fault=queue_timeout` — so every one of
+  # them was a write-lock contention wearing a pool label, and the two
+  # topologies this whole issue is about stayed conflated in the prose that
+  # names them.
+  #
+  # Asserted over the SET of terminal lines carrying a given `fault=`, never
+  # over the whole capture: `capture_log/1` sees Logger output from every
+  # concurrently-running async file, and several of them drive this same
+  # terminal arm. "Every terminal line tagged X names X" is the invariant, and
+  # a leaked line from a sibling file satisfies it too.
+  describe "terminal log line — the fault it names is the fault it observed" do
+    test "a busy_locked exhaustion names the write LOCK, never the pool" do
+      log = capture_log(fn -> assert {:error, :db_unavailable} = BusyRetry.run(&raise_busy/0) end)
+
+      lines = terminal_lines(log, :busy_locked)
+      assert lines != []
+      assert Enum.all?(lines, &(&1 =~ "SQLite write lock held by another writer"))
+      refute Enum.any?(lines, &(&1 =~ "pool saturated"))
+    end
+
+    test "a queue_timeout exhaustion still names the POOL, never the lock" do
+      log = capture_log(fn -> assert {:error, :db_unavailable} = BusyRetry.run(&raise_queue_timeout/0) end)
+
+      lines = terminal_lines(log, :queue_timeout)
+      assert lines != []
+      assert Enum.all?(lines, &(&1 =~ "SQLite pool saturated"))
+      refute Enum.any?(lines, &(&1 =~ "write lock held"))
     end
   end
 

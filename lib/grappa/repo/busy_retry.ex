@@ -102,17 +102,33 @@ defmodule Grappa.Repo.BusyRetry do
           loop(op, opts, deadline, attempt + 1)
 
         true ->
-          on_contention(opts, fault_kind(error), attempt, true)
+          kind = fault_kind(error)
+          on_contention(opts, kind, attempt, true)
 
           Logger.warning(
-            "db write unavailable: SQLite pool saturated for the full " <>
+            "db write unavailable: #{observed_state(kind)} for the full " <>
               "#{@budget_ms}ms retry budget (#{attempt} attempts) — returning :db_unavailable",
-            fault: fault_kind(error)
+            fault: kind
           )
 
           {:error, :db_unavailable}
       end
   end
+
+  # CLAUDE.md "Log honesty": the line describes the state it OBSERVED, not a
+  # plausible one. It used to say "SQLite pool saturated" for BOTH fault kinds
+  # while its own `fault:` metadata on the same line said which — and #1420
+  # measured 4 terminal observations across three stalled CI runs, all four
+  # `fault=busy_locked` and none `queue_timeout`. Every one was a write-lock
+  # contention wearing a pool label, which is a plausible reason the two
+  # topologies stayed conflated for as long as they did.
+  #
+  # Prose only: same retry, same `{:error, :db_unavailable}`, same metadata.
+  # Splitting it also lets the #1429 census count the two apart
+  # (`saturated` / `lockheld` in `scripts/log-gap-scan.awk`).
+  @spec observed_state(fault_kind()) :: String.t()
+  defp observed_state(:queue_timeout), do: "SQLite pool saturated"
+  defp observed_state(:busy_locked), do: "SQLite write lock held by another writer"
 
   # Invoke the caller's contention observer if one was supplied. Its return is
   # discarded — it is a side-channel (telemetry), not part of the retry result.
