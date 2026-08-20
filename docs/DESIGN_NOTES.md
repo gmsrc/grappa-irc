@@ -47915,8 +47915,30 @@ decided semantics, and widening past the measured case is how a rule stops meani
 **`:topic` is the known next candidate, it is the SAME defect, and it is still deliberately
 not taken here — for a measured reason, not a scoping one.** `TOPIC #chan :` is how an
 operator CLEARS a topic; it produces `body: ""`, and today the row drops and error-logs
-exactly as the NOTICE did (the `{:topic_changed, …}` effect still fires, so the topic bar
-clears correctly and only the HISTORY is lost). Server-side the extension really would be
+exactly as the NOTICE did (the `{:topic_changed, …}` effect still fires, so ~~the topic bar
+clears correctly and only the HISTORY is lost~~).
+
+> ⚠️ **Corrected at the source by #1505 (2026-08-20): "the topic bar clears correctly and
+> only the HISTORY is lost" was MEASURED FALSE.** It was inferred from the effect FIRING and
+> never checked at the bar. `EventRouter`'s TOPIC arm caches `entry = %{text: body, …}`, so a
+> clear caches `text: ""` — a different value from the `nil` that 331 RPL_NOTOPIC produces —
+> while `TopicBar` gated its "(no topic set)" placeholder on `topicText() !== null` at all
+> three of its sites (strip, `title` tooltip, read-only modal). `"" !== null`, so the value
+> reached `MircBody`, and this entry's own next bullet says what happens then:
+> `parseMircFormat("")` returns zero runs. The vitest red printed the DOM —
+> `<span class="topic-bar-topic-text" />`, an EMPTY box where the placeholder belongs, and
+> `title=""` on the button. So the HISTORY was not the only casualty: the bar carried the
+> SAME defect, on the surface that is permanently on screen, and it did so for the same
+> reason the scrollback row would have. Struck rather than deleted — the log records what was
+> claimed, and a claim this entry used to justify a scope boundary has to stay legible beside
+> its refutation. Cured in the #1505 entry at the end of this file (one `hasNoTopic`
+> predicate over `null` / `undefined` / `""`, shared by the bar and the new renderer arm).
+>
+> Nothing else in this entry moves. The reasoning it used to hold `:topic` back — that an
+> empty row would render as `* alice changed topic:` — was re-measured and reproduced
+> verbatim before #1505 changed a line.
+
+Server-side the extension really would be
 free — the same atom out of the same list, already covered by the same re-cast. The blocker
 is on the client, and it was read rather than assumed:
 
@@ -53622,6 +53644,15 @@ a topic.
 `topicJoinLine` in the same module already got this right (`text.trim() === "" → null`), which
 is what makes the bar the outlier rather than the convention. One module, two answers to one
 question, is the "half-migrated creates two patterns" failure CLAUDE.md names.
+
+**The #1500 entry is corrected AT THE SOURCE, not only here** (vjt's ruling, 2026-08-20): a
+decision log whose earlier entry states something a later measurement falsified will keep being
+read forwards, and a correction that lives only at the far end of the file is a correction
+nobody reaching for the original claim will meet. The false clause is struck in place with the
+measurement and this entry named beside it — struck rather than deleted, because that clause is
+what justified #1500's scope boundary and the boundary only reads honestly next to its
+refutation. The rest of that entry stands: its prediction about the scrollback render was
+re-measured and reproduced verbatim.
 
 ### One predicate, and the whitespace line it deliberately does not cross
 
