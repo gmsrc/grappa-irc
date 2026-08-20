@@ -53568,3 +53568,103 @@ identical in both cases by design — that is the issue, not an omission. And
 nothing in `lib/` attaches to `[:grappa, :ws, :connect]` today, so the
 telemetry half remains a hook for a future exporter; the Logger line is what
 an operator can actually read now.
+<!-- entry #1505 -->
+
+---
+
+## 2026-08-20 — #1505: an empty topic is not an absent one, and three surfaces disagreed about it
+
+`TOPIC #chan :` is how an operator CLEARS a topic. It is also the exact line
+`IRC.Client.send_topic_clear/2` writes for our own `/topic -delete`, so the defect ate our
+own echo as well as anyone else's. #1500 fixed the identical mechanism for `:notice`, measured
+the `:topic` extension as free on the server, and deliberately held it back for one reason: the
+renderer had no honest arm and would have printed `* alice changed topic:` — a label, a colon,
+and nothing. That reasoning is confirmed, not revised: the red reproduced that exact string,
+`00:00:00 * alice changed topic:`, before a line of it was changed.
+
+### The two halves are not in tension, and the issue title's "and" is the fix
+
+The title reads as a dilemma — dropped if we do nothing, truncated if we persist. It is not one.
+"Would render as a truncated line" is a statement about a renderer that has one arm; the cure is
+the second arm, and the halves are sequential rather than opposed. So: `:topic` leaves
+`@body_required_kinds` (which is now `[:privmsg, :action]`), and `ScrollbackPane.tsx`'s
+`case "topic"` grows a cleared branch. Neither is shippable alone, which is what #1500 meant by
+"taken together or not at all".
+
+`:privmsg` and `:action` stay required. An empty one of those still has no reported arrival and
+no decided semantics.
+
+### The wording is "cleared the topic", and why not the sender's own words
+
+irssi prints `-!- Topic unset by alice on #chan` for this event and a different line for a
+change, so a distinct sentence — not a change-line with an empty tail — is the least surprising
+shape. cic's register is its own (`* alice changed topic: …`, no "of #chan", no "to:"), so the
+sibling reads `* alice cleared the topic`. This is the one product call in the change and it is
+one string plus two assertions to revise if vjt wants different words.
+
+Rejected: synthesising a body server-side (e.g. `"(cleared)"`). It would store a sentence the
+wire never carried, and Phase 6's `CHATHISTORY` facade would replay grappa's prose to a
+third-party client as though the operator had typed it.
+
+### The premise the issue left open was false: the topic BAR was broken too
+
+The issue closed with "the topic bar and `channelTopic.ts` were not checked", and #1500's entry
+had asserted in passing that "the topic bar clears correctly and only the HISTORY is lost".
+Measured, that is wrong. The `:topic` route caches `text: body`, so a clear caches `text: ""`,
+while `TopicBar` gated its placeholder on `topicText() !== null`. An empty string is not null,
+so the gate passed the value to `MircBody`, `parseMircFormat("")` yielded zero runs, and the
+strip rendered `<span class="topic-bar-topic-text" />` — an EMPTY box where "(no topic set)"
+belongs. The tooltip went the same way (`title=""`), and the read-only modal shares the gate.
+So the cleared topic was mis-rendered on the bar for exactly the same reason it would have been
+mis-rendered in the scrollback: `""` treated as a string to print rather than as the absence of
+a topic.
+
+`topicJoinLine` in the same module already got this right (`text.trim() === "" → null`), which
+is what makes the bar the outlier rather than the convention. One module, two answers to one
+question, is the "half-migrated creates two patterns" failure CLAUDE.md names.
+
+### One predicate, and the whitespace line it deliberately does not cross
+
+`hasNoTopic(text)` in `lib/channelTopic.ts` is now the single answer to "does this channel have
+a topic", consumed by the bar's three gates (strip, tooltip, modal) and by the scrollback arm.
+It folds `null`, `undefined` and `""` together and stops there.
+
+Whitespace is NOT trimmed. `TOPIC #chan : ` sets the topic to a space: the wire carried it, the
+ircd stores it, RPL_TOPIC returns it. Rendering "(no topic set)" over it would be a lie, and a
+`trim()`-shaped cure would erase a real if silly topic. `topicJoinLine` is stricter on purpose
+and that is not a second answer to the same question — it decides whether to PRINT a join-time
+line at all, and a line that would render blank is worth nothing there. The bar has no such
+option: it occupies its strip either way, so it must say something true. Both directions are
+pinned by control tests.
+
+Rejected: normalising `text: ""` to `nil` server-side so the wire carries one shape. It would
+publish something other than what the wire carried (against #1500's ruling on the sibling
+field), it would change the value an existing wire field takes for every client, and it would
+leave `topicJoinLine`'s `""` branch dead. The read side is the cheaper and more honest place for
+two truthful shapes to converge.
+
+### Why `nil` is accepted too, and what the changeset stopped guaranteeing
+
+Relaxing `:topic` the way `:notice` was relaxed also lets `body: nil` through. No producer
+writes it — the router's TOPIC arm is guarded `is_binary(body)` — but the renderer folds it into
+the same cleared arm, so the shape that can arrive from a cold-deploy backfill row has a
+destination that says something true rather than an `undefined` to print. The test that asserted
+`:topic` REJECTS a blank body is now its inverse; assertions of a validation that no longer
+exists are worse than none.
+
+### The mock that lied, and the 29 tests it took down
+
+`Shell.test.tsx` mocked `../lib/channelTopic` with a literal factory listing five of the
+module's exports, so `hasNoTopic` arrived `undefined` and every Shell render that mounts
+TopicBar threw — 29 failures in a file with nothing to do with topics. The mock had already been
+re-implementing `compactModeString` inline for the same reason. Replaced with the
+`importOriginal` spread `TopicBar.test.tsx` already uses, so only the STORE half is faked and
+every pure helper is production code. A partial mock of a growing module is a fixture that lies
+about the shape, and it fails far from the edit that caused it.
+
+### Also corrected in passing
+
+The `EventRouter` per-kind shape table still read `required text` for `:notice`, which #1500 had
+already falsified. Both that cell and `:topic`'s now read `text or ""`, with the reason beneath
+the table — leaving one right and one wrong in the same table is how the next reader picks the
+wrong one.
