@@ -6,6 +6,7 @@ import { channelKey } from "./lib/channelKey";
 import {
   compactModeString,
   flattenTopicNewlines,
+  hasNoTopic,
   modesByChannel,
   topicByChannel,
 } from "./lib/channelTopic";
@@ -106,6 +107,12 @@ const TopicBar: Component<Props> = (props) => {
 
   const topicEntry = () => topicByChannel()[key()] ?? null;
   const topicText = () => topicEntry()?.text ?? null;
+  // #1505 — the placeholder gate. `hasNoTopic` and not `text !== null`: a
+  // CLEARED topic arrives as `""` (the empty trailing the wire carried), and
+  // the old gate let it through to `MircBody`, which emits zero runs for an
+  // empty body. The strip then painted an EMPTY box and the tooltip an empty
+  // string — a blank rectangle where "(no topic set)" belongs.
+  const topicMissing = () => hasNoTopic(topicText());
   // #142: the `title` tooltip + the rendered strip both come from the same
   // topic. The strip routes the raw text through `MircBody` (formatting
   // renders); the tooltip is a plain-text-only attribute surface, so it
@@ -113,7 +120,7 @@ const TopicBar: Component<Props> = (props) => {
   // the ONE parser, never leaked raw into the attribute.
   const topicTitle = () => {
     const t = topicText();
-    return t !== null ? mircPlainText(t) : "(no topic set)";
+    return topicMissing() ? "(no topic set)" : mircPlainText(t ?? "");
   };
   const modesEntry = () => modesByChannel()[key()] ?? null;
   const modeStr = () => {
@@ -180,7 +187,7 @@ const TopicBar: Component<Props> = (props) => {
     // Empty submit with nothing to clear → nothing to send: revert to read-only
     // (modal stays open), like cancel. Done BEFORE `setSaving(true)` so the
     // (saving-guarded) `cancelEdit` reverts cleanly.
-    if (trimmed === "" && (topicText() === null || topicText() === "")) {
+    if (trimmed === "" && topicMissing()) {
       cancelEdit();
       return;
     }
@@ -349,7 +356,7 @@ const TopicBar: Component<Props> = (props) => {
             reimplementation is needed. MircBody emits its runs with no block
             wrapper, so they land as the span's direct line-box content. */}
           <span class="topic-bar-topic-text">
-            <Show when={topicText() !== null} fallback={"(no topic set)"}>
+            <Show when={!topicMissing()} fallback={"(no topic set)"}>
               {/* #220 — the bar NEVER navigates a link directly; a tap on a
                 link "surface-wins" (suppresses navigation) and bubbles to
                 the strip's onClick, which opens the modal. */}
@@ -384,7 +391,7 @@ const TopicBar: Component<Props> = (props) => {
               fallback={
                 <>
                   <p class="topic-modal-text">
-                    <Show when={topicText() !== null} fallback={"(no topic set)"}>
+                    <Show when={!topicMissing()} fallback={"(no topic set)"}>
                       <MircBody body={topicText() ?? ""} emphasis />
                     </Show>
                   </p>

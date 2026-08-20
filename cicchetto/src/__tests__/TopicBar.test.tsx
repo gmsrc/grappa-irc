@@ -175,6 +175,44 @@ describe("TopicBar", () => {
     expect(screen.getByText("(no topic set)")).toBeInTheDocument();
   });
 
+  // #1505 — an operator who CLEARS the topic (`TOPIC #chan :`) makes the
+  // server cache `text: ""`, not `text: null`: `null` is the 331 RPL_NOTOPIC
+  // / not-yet-arrived shape, `""` is what the wire carried. Both mean "this
+  // channel has no topic", so both MUST reach the placeholder — gating on
+  // `!== null` alone paints an empty strip, a blank rectangle rather than a
+  // statement. `topicJoinLine` already treats `""` as no-topic; the bar was
+  // the surface that disagreed.
+  it("#1505 shows placeholder when the topic was CLEARED (empty text)", () => {
+    mockTopicByChannel.mockReturnValue({
+      "freenode #italia": { text: "", set_by: "vjt", set_at: null },
+    });
+    render(() => <TopicBar {...baseProps()} />);
+    expect(screen.getByText("(no topic set)")).toBeInTheDocument();
+  });
+
+  // The modal reads the same entry through the same gate, so it carries the
+  // same defect and the same cure.
+  it("#1505 shows placeholder in the modal when the topic was CLEARED", () => {
+    mockTopicByChannel.mockReturnValue({
+      "freenode #italia": { text: "", set_by: "vjt", set_at: "2026-05-04T10:00:00Z" },
+    });
+    render(() => <TopicBar {...baseProps()} />);
+    fireEvent.click(screen.getByTestId("topic-strip"));
+    const modal = screen.getByRole("dialog");
+    expect(modal.querySelector(".topic-modal-text")).toHaveTextContent("(no topic set)");
+  });
+
+  // Control: a whitespace-only topic is a topic the wire carried, not an
+  // absence. It must NOT collapse into the placeholder — otherwise the cure
+  // would be `trim()`-shaped and would erase a real (if silly) topic.
+  it("#1505 does NOT show the placeholder for a whitespace-only topic", () => {
+    mockTopicByChannel.mockReturnValue({
+      "freenode #italia": { text: " ", set_by: "vjt", set_at: null },
+    });
+    render(() => <TopicBar {...baseProps()} />);
+    expect(screen.queryByText("(no topic set)")).toBeNull();
+  });
+
   // #263 — tapping the strip ALWAYS opens the read-only modal, for EVERYONE
   // (the #74 inline in-place editor is gone). The modal shows the full topic,
   // setter + timestamp. An op additionally sees a ✏️ toggle (tested in the
