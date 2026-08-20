@@ -55061,3 +55061,148 @@ edge, `from(s in Mod)` does — is quoted from the `--force
 --warnings-as-errors` run recorded in #1521 (`03e7254b`), not re-measured on
 this branch. The one measurement taken here is the absence of
 `find_violations` from `deps/boundary` at 0.10.4._
+<!-- entry #1630 -->
+
+---
+
+## 2026-08-20 — #1630: 97.5s of the e2e boot is cacheable, and the other ~3m40s is not
+
+The second lever of #1519, after the four-way shard. The shard bought ~2.6x
+(39m25-40m10 down to 14m41-15m55, four runs a side) and what it left is
+dominated by a fixed cost that **every shard pays in full**, so a second
+removed there is four seconds of runner time.
+
+### The split, because the issue said it was not established
+
+The workflow's own comment block quoted **4.6 min for `testnet up`: "mix
+deps.get + Elixir compile, solanum built from source, image assembly,
+container health"** — one number over four different mechanisms. The step
+summary cannot take that apart; the job LOG can. Read off green run
+32411402873 shard 1 (`96562423684`), with shard 2 (`96562423519`) as the
+cross-check — the two agree on the mix total to **0.2s**:
+
+| phase | shard 1 |
+|---|---|
+| checkout, `submodules: recursive` | 29.5s |
+| compose plugin + GHCR login | 0.9s |
+| build the `grappa:e2e` toolchain image | 8.7s |
+| seeder container up | 3.1s |
+| **`mix deps.get`** | **2.6s** |
+| **compile the 76 deps** (incl. rebar3 `quic` 5.1s, `webtransport`, `hackney`, and the `exqlite`/`argon2_elixir` NIFs) | **94.9s** |
+| **compile grappa** — 326 `.ex`, one `Compiling` line | **8.4s** |
+| `ecto.create` + migrate + seed | 32.6s |
+| pull the GHCR bahamut/services/nginx/mailpit/bun images | 3.7s |
+| build solanum from source | 43.1s |
+| container create/start/health → `testnet up.` | 21.2s |
+| build the Playwright runner image (736 MB base pull, 22.2s of it) | 30.6s |
+| build push-catcher + start the runner | 22.0s |
+| **the Playwright suite** — 190 tests, one worker | **7m3.5s** |
+| census + tear-down | 20.7s |
+| **job total** | **12m30s** |
+
+So the fixed cost is **5m27s**, of which **105.8s is mix** and 8.4s of that is
+the app. **97.5s per shard is what a host-side `actions/cache` can reach** —
+13% of the shard's wall clock, 30% of its fixed cost.
+
+The premise that makes it reachable at all is the `Dockerfile`'s own rule at
+line 43 (*"Do not add a `mix deps.get` layer here"*): the image is
+toolchain-only and the seeder runs `MIX_ENV=dev` over the `../..:/app` bind
+mount, so `deps/` and `_build/dev/` are written to the **runner's workspace**,
+not into an image layer. Verified in `cicchetto/e2e/compose.yaml` — no named
+volume shadows either path.
+
+### What is NOT claimed
+
+The remaining ~3m40s of fixed cost is **out of `actions/cache`'s reach** and no
+number here should be read as promising it: 29.5s of recursive submodule
+checkout (26.3s of it `submodule update`, most of it `shottino`'s
+`libdatachannel` tree, which this suite never builds), 43.1s of solanum from
+source, 30.6s for the Playwright runner image behind a 736 MB base pull, 32.6s
+of seeding, 21.2s of container health. Those are docker-layer or network —
+buildx `type=gha` territory, a **different mechanism**, still unmeasured, still
+unclaimed, exactly as #1519 already said of it.
+
+Also not measured here, and named so nobody reads its absence as a zero:
+cicchetto/bun and the Playwright browser bundle. Both are inside the container
+builds above, not on the runner's `~/.bun` or `~/.cache/ms-playwright`.
+
+The issue estimated *"~2 min of the fixed cost, so ~15m -> ~13m per shard"*.
+The measurement puts the CEILING at 97.5s, before the cache's own
+download+extract is subtracted — the estimate was in the right family and
+slightly hot.
+
+### Why this is not #1170 at GitHub scale
+
+CLAUDE.md documents the class in the strongest terms available: a `_build`
+shared between worktrees produced **a red that belonged to no branch** — a
+`Grappa.Version` compiled from another tree's `VERSION`. A CI cache of `_build`
+is the same shape with GitHub's fleet behind it: artefacts compiled from
+another commit's source, restored onto yours, making green what is not.
+
+The defence is not a cleverer key. **It is that nothing branch-specific is ever
+written.** The cache holds `deps/` and the deps' beams — both a pure function
+of files that are themselves in the key — and `_build/dev/lib/grappa` is
+excluded from the path list. There is no branch-specific artefact to restore
+because none was ever saved.
+
+And the exclusion is **free**, which is what makes it the right answer rather
+than a sacrifice: `actions/checkout` writes every source with `mtime=now`,
+newer than any restored manifest, so mix recompiles the app on every run
+whether or not its beams came back. The 8.4s is paid either way. `VERSION` is
+deliberately absent from the key for the same reason — it reaches only the
+app's own beams, which are not in the cache.
+
+Three more properties, each load-bearing:
+
+- **`deps/` and `_build` are ONE cache entry, not two.** Split, a re-fetched
+  `deps/` would carry fresh mtimes against an old `_build` manifest and mix
+  would recompile everything — the cache would cost more than it saved. One
+  tarball preserves the relative order.
+- **The `e2e-musl-` namespace is disjoint from `ci.yml`'s `-mix-`, and the
+  `restore-keys` prefix with it.** These beams are built under
+  `elixir:1.19-otp-28-alpine`; ci.yml's are built by `setup-beam` on glibc
+  ubuntu. `exqlite` and `argon2_elixir` ship NIFs, and **mix rebuilds a NIF on
+  ABSENCE, not on ABI** — a crossed restore hands the alpine container a glibc
+  `.so` that mix considers built and will not replace.
+- **A stale key is SLOW, never WRONG.** `mix deps.get` reconciles `deps/`
+  against `mix.lock`, and each dep's `.mix/compile.{lock,elixir_scm}` forces a
+  recompile when its lock entry or the Elixir version moved. That is the
+  backstop for the floating `1.19-otp-28-alpine` tag, which
+  `hashFiles('Dockerfile')` cannot see through — the tag drifting costs a cold
+  run, not a wrong one.
+
+### One writer, and the `always()` trap
+
+Four shards do byte-identical mix work under one key, so `actions/cache` is
+split into `restore` (all four) and `save` (shard 1 only); three concurrent
+uploads racing for an entry that is immutable once written buy nothing.
+
+The save condition is `success() || failure()` and **deliberately not
+`always()`**: `always()` also fires on CANCELLED, and this workflow sets
+`cancel-in-progress: true`, so a superseded run would freeze a half-compiled
+tree under the key and **no later run could replace it**. A FAILED run's tree
+is worth keeping — mix's build is incremental by construction, a partial one is
+what any interrupted compile leaves and the next run finishes it — and that is
+also when warmth is worth most, iterating on a red under a new key.
+
+Size, measured on a local `deps` + dep-half-of-`_build` (a darwin build, so the
+same order rather than the same bytes as the musl one): **~31 MB zstd**,
+against a 10 GB per-repo LRU budget. The key changes only when `mix.lock`,
+`mix.exs`, `Dockerfile` or `config/*.exs` do, so most branches produce main's
+key and write nothing at all.
+
+### What has not been measured, and cannot be from here
+
+**The gain itself.** The first run after this lands is COLD by construction —
+it has no entry to restore and pays the full 105.8s — so its wall clock proves
+nothing, and the honest comparison is the SECOND run on the same key. That
+number does not exist yet and is not asserted anywhere in this entry or in the
+workflow. What is asserted is the 97.5s ceiling the log shows, and the claim
+that the restore cannot make a run wrong.
+
+`test/infra/integration_dep_cache_test.bats` guards the two invariants that
+would rot silently and take nothing red with them: the path list never carrying
+the app's own build dir (with restore and save compared against each other, not
+against a transcribed copy, since `cache/save` takes its own `path:`), and the
+two key namespaces staying disjoint. Its stated limit: it compares the key
+strings as written, `${{ }}` unexpanded.
