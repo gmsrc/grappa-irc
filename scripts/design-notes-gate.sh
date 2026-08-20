@@ -28,7 +28,7 @@
 # 12 of those headings are not entry headings at all (7 document sections, and
 # 5 mis-levelled subsections inside the 2026-08-08 #1038 entry).
 #
-# THE TWO CHECKS, and why both
+# THE CHECKS, and why each
 #
 #   1. every ADDED `## ` heading is preceded by `---` — the detector. It sees
 #      whatever the merge machinery does next, including a mechanism nobody has
@@ -40,6 +40,26 @@
 #      directions, so adoption is incremental. Uniqueness is the mechanism, not
 #      decoration: a copy-pasted marker restores the collapsible prefix and the
 #      bug with it, silently.
+#   3. uniqueness has TWO scopes, and check 2's file-wide count only closes one
+#      of them (#1428). Two copies in one file it can see. A copy the BASE
+#      already carries it cannot: the branch's own file holds the marker
+#      exactly ONCE, nothing local is duplicated, and the collision only
+#      becomes real at the rebase — which is also when it stops being
+#      detectable, because the collapse leaves a single marker behind to count.
+#      So the added markers are compared against the base as well. Measured on
+#      the scratch repo the bats suite builds: that rebase reports rc=0, zero
+#      deletions, and takes FOUR lines — one MORE than carrying no marker at
+#      all, because the duplicated marker collapses together with the separator
+#      block it was added to protect.
+#
+# THE REFERENCE FOR CHECK 3 IS THE BASE REF'S TIP, NOT THE MERGE BASE. This is
+# the whole finding and it is easy to undo by tidying: the colliding entry
+# landed on main AFTER the branch was cut — that is what "a rebase is when a
+# previously-unique marker stops being unique" means. At the merge base the
+# marker is not there yet, so a check written against `$base` measures nothing
+# and passes every real occurrence. Checks 1 and 2 stay diff-scoped against the
+# merge base, because they judge the SHAPE of what the branch wrote; check 3
+# judges a COLLISION with what the branch is about to land on.
 #
 # A convention that is only written down depends on somebody remembering it
 # across sessions — which is the very property that made this bug survive four
@@ -138,6 +158,36 @@ if [ -n "$duplicates" ]; then
 	{
 		printf 'design-notes-gate: duplicate entry marker(s) — each must be unique:\n'
 		printf '%s\n' "$duplicates"
+	} >&2
+fi
+
+# The other scope of the same uniqueness (#1428): a marker the BASE already
+# carries. Both sets are matched as WHOLE lines (`-x`): a marker collides only
+# with a byte-identical one, since only a byte-identical prefix is what the
+# merge machinery collapses. No reachable substring pair is known — `-x` states
+# the contract rather than closing a measured hole.
+added_markers="$(git diff "$base" HEAD -- "$FILE" | sed -n 's/^+\(<!-- entry .* -->\)$/\1/p' | sort -u)"
+base_markers="$(git show "$BASE_REF:$FILE" 2>/dev/null | grep '^<!-- entry .* -->$' || true)"
+
+collisions=""
+if [ -n "$added_markers" ] && [ -n "$base_markers" ]; then
+	collisions="$(printf '%s\n' "$added_markers" \
+		| grep -Fxf <(printf '%s\n' "$base_markers") || true)"
+fi
+
+if [ -n "$collisions" ]; then
+	status=1
+	{
+		printf 'design-notes-gate: entry marker(s) already carried by %s — pick a fresh one:\n' "$BASE_REF"
+		printf '%s\n' "$collisions"
+		printf '\nA marker defeats merge=union only because it DIFFERS between the two\n'
+		printf 'sides. One the base already carries restores the identical prefix the\n'
+		printf 'convention exists to destroy, and the rebase then eats FOUR lines with\n'
+		printf 'rc=0 and zero deletions — the separator block plus the marker itself,\n'
+		printf 'one MORE than carrying no marker at all.\n\n'
+		printf 'Rename yours. One issue producing several entries needs distinct\n'
+		printf 'suffixes (#1404a, #1404b, ...), chosen against what the base carries\n'
+		printf 'NOW rather than when the branch was cut.\n'
 	} >&2
 fi
 

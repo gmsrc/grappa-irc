@@ -202,6 +202,61 @@ contribution() {
     refute grep -q "NOT preceded by" <<<"$output"
 }
 
+# ── The prevention window: a marker the BASE already carries (#1428) ─────────
+#
+# The regime in which #1271's cure does not cure. The case above needs both
+# copies in ONE file to be seen; here the branch's file carries the marker
+# exactly ONCE and the base carries the other. Nothing local is duplicated, so
+# the file-wide count is blind, and the collision only becomes real at the
+# rebase — by which point the four lines are already gone.
+
+@test "a marker the base already carries is rejected BEFORE the rebase (#1428)" {
+    # `scratch C C` puts the SAME marker on both sides, and main's copy landed
+    # AFTER the branch was cut. That is the reachable path: a rebase is exactly
+    # when a previously-unique marker stops being unique.
+    #
+    # This case also PINS the reference. The collision does not exist at the
+    # merge base — only at the base REF's tip — so a check written against the
+    # merge base measures nothing and this case goes red.
+    scratch C C
+
+    run scripts/design-notes-gate.sh main
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"already carried by"* ]]
+    [[ "$output" == *"<!-- entry #C -->"* ]]
+}
+
+@test "the pre-rebase gate is the only window: the rebase itself is silent (#1428)" {
+    # What the check above is standing in front of, measured rather than
+    # asserted. Left ungated, this rebase reports success, deletes nothing, and
+    # takes FOUR lines — one more than carrying no marker at all, because the
+    # duplicated marker collapses together with the separator block it was
+    # added to protect.
+    scratch C C
+
+    local add_before add_after del_after
+    add_before="$(contribution 1)"
+
+    run git rebase main
+    [ "$status" -eq 0 ]
+
+    add_after="$(contribution 1)"
+    del_after="$(contribution 2)"
+
+    [ "$del_after" -eq 0 ]
+    [ "$add_after" -eq $((add_before - 4)) ]
+}
+
+@test "a marker absent from the base passes the pre-rebase check (#1428)" {
+    # The negative control for the two cases above: same shape, distinct
+    # markers, no rebase. Without it, a check that simply failed every branch
+    # carrying a marker would satisfy them both.
+    scratch B C
+
+    run scripts/design-notes-gate.sh main
+    [ "$status" -eq 0 ]
+}
+
 # ── Fail-closed, and the fast path that must stay honest ────────────────────
 
 @test "an unresolvable base ref FAILS the gate, it does not skip it" {
