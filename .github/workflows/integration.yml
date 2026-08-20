@@ -44,7 +44,10 @@ name: integration
 #
 # Stack timing: cold ~6-8 min for the testnet+grappa+nginx images +
 # Playwright base pull; warm with cache it's faster but we don't cache
-# docker layers cross-runs (would need a registry push). The "suite runs
+# docker layers cross-runs (would need a registry push, or buildx
+# `type=gha` — unmeasured). The Elixir dep cache added in #1630 is a
+# DIFFERENT mechanism and reaches a different 97.5s; the step carries the
+# per-phase split of the boot that this line only totals. The "suite runs
 # in ~16s" that stood here was true of the first dozen specs and has not
 # been for a long time: measured 2026-08-20 it is 33.6 min of the 40.5,
 # which is what #1519 shards. The per-shard numbers are on the job below.
@@ -137,6 +140,13 @@ jobs:
     #  ------
     #  40.5 min  total
     #
+    # That 4.6 min line is a BUNDLE, and #1630 is what took it apart: of
+    # the equivalent 5m27s fixed cost on a post-shard run, 105.8s is mix
+    # (2.6 fetch + 94.9 deps + 8.4 app) and the remaining ~3m40s is
+    # submodules, solanum-from-source, the Playwright base pull, seeding
+    # and container health. Only the mix half has a cache step; the split
+    # and what it deliberately does not claim are on that step below.
+    #
     # Only the 33.6 divides. The other 6.8 min is fixed and every shard
     # pays it in full, so four shards land at ~15 min wall clock, not the
     # ~13.4 the issue's arithmetic gave (it counted the in-script boot and
@@ -178,8 +188,9 @@ jobs:
     # 589 of 590 by the cap alone, not by a failure; that must not recur.
     #
     # That raise bought headroom and fixed nothing; the SHARD below is the
-    # fix, and it is one of the three levers #1519 named (the other two —
-    # cache the dep compile, make the suite parallel-safe — are untouched).
+    # fix, and it is one of the three levers #1519 named (the second, cache
+    # the dep compile, landed in #1630; the third, make the suite
+    # parallel-safe, is untouched).
     # 60 stays: a backstop belongs far above the working range, and the
     # working range just fell to ~15 min, so the cap is further from firing
     # than it has ever been. If it is ever the thing tracking the suite's
@@ -241,6 +252,75 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Restore deps/ + the dep half of _build/ (#1630)
+        # The second #1519 lever. Measured off the job LOG of green run
+        # 32411402873 shard 1 (shard 2 agrees to 0.2s), not off the step
+        # summary — the summary bundles the whole boot into one number and
+        # that is what left the split unestablished in the issue:
+        #
+        #     2.6s  `mix deps.get`
+        #    94.9s  compiling the 76 deps, incl. the rebar3 natives (quic
+        #           5.1s, webtransport, hackney) and the exqlite/argon2 NIFs
+        #     8.4s  compiling grappa itself — 326 .ex, one `Compiling` line
+        #   ------
+        #   105.8s  of a 5m27s fixed cost, inside a 12m30s shard
+        #
+        # So 97.5s per shard is reachable from here and 8.4s is not. The
+        # REST of the fixed cost is not reachable either, and is not claimed:
+        # 29.5s recursive submodule checkout, 43.1s solanum built from
+        # source, 30.6s building the Playwright runner image (736 MB base
+        # pull), 32.6s ecto.create + migrate + seed, 21s container health.
+        # Those are docker-layer or network — buildx `type=gha` territory, a
+        # different mechanism, still unmeasured, still unclaimed.
+        #
+        # The seeder runs MIX_ENV=dev inside `elixir:1.19-otp-28-alpine` over
+        # the `../..:/app` bind mount (cicchetto/e2e/compose.yaml), and the
+        # Dockerfile bakes no deps on purpose (its line 43 says so), so deps/
+        # and _build/dev/ are written to the RUNNER's workspace. That is what
+        # makes them reachable by actions/cache at all. ~31 MB compressed,
+        # against a 10 GB per-repo LRU budget.
+        #
+        # WHY THE PATH LIST EXCLUDES `_build/dev/lib/grappa` — this is the
+        # contamination answer, and it is the reason this step is safe.
+        # CLAUDE.md documents the failure class: a `_build` shared between
+        # worktrees produced a red belonging to NO branch (#1170 — a
+        # `Grappa.Version` compiled from another tree's `VERSION`). A CI
+        # cache is that same shape at GitHub scale. The cure is not a
+        # cleverer key, it is to put nothing branch-specific IN the cache:
+        # what is stored is a pure function of files that are themselves in
+        # the key. There is no branch-specific artefact to restore because
+        # none was ever saved.
+        #
+        # And the exclusion is free. `actions/checkout` writes every source
+        # with mtime=now, newer than any restored manifest, so mix recompiles
+        # the app on every run whether or not its beams were restored — the
+        # 8.4s above is paid either way. `VERSION` is deliberately absent
+        # from the key for the same reason: it reaches only the app's beams.
+        #
+        # The `e2e-musl-` namespace is disjoint from ci.yml's
+        # `${{ runner.os }}-mix-` and MUST stay so. These beams are built
+        # under alpine/musl; ci.yml's are built by setup-beam on glibc.
+        # exqlite and argon2_elixir ship NIFs, and mix rebuilds a NIF on
+        # absence, not on ABI — so a crossed restore hands the alpine
+        # container a glibc `.so` it considers built. `restore-keys` carries
+        # the same prefix so prefix matching cannot reach across either.
+        #
+        # A stale key is SLOW, never WRONG: `mix deps.get` reconciles deps/
+        # against mix.lock, and each dep's `.mix/compile.{lock,elixir_scm}`
+        # forces a recompile when its lock entry or the Elixir version moved.
+        # That is the backstop for the floating `1.19-otp-28-alpine` tag,
+        # which `hashFiles('Dockerfile')` cannot see through.
+        id: mix-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            _build/dev/lib
+            !_build/dev/lib/grappa
+          key: ${{ runner.os }}-e2e-musl-mix-${{ hashFiles('mix.lock', 'mix.exs', 'Dockerfile', 'config/*.exs') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-musl-mix-
+
       - name: Run integration suite
         # `bash scripts/integration.sh` boots the stack, runs the
         # Playwright suite, tears the stack down on EXIT trap. Exit
@@ -264,6 +344,34 @@ jobs:
         env:
           COMPOSE_FILE: compose.yaml:compose.ghcr-vjt.yaml
         run: bash scripts/integration.sh --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+
+      - name: Save deps/ + the dep half of _build/ (#1630)
+        # ONE writer. All four shards do byte-identical mix work under one
+        # key, so letting all four save is three redundant uploads racing for
+        # an entry that is immutable once written. Shard 1 writes, the rest
+        # read. The paths are repeated because cache/save takes its own —
+        # they MUST stay identical to the restore step's.
+        #
+        # `success() || failure()` and NOT `always()`: `always()` also fires
+        # on CANCELLED, and this workflow sets `cancel-in-progress: true`, so
+        # a superseded run would freeze a half-compiled tree under the key
+        # and no later run could replace it. A FAILED run's tree is worth
+        # keeping — mix's build is incremental by construction, a partial one
+        # is exactly what any interrupted compile leaves and the next run
+        # finishes it. That also means a red iteration under a NEW key still
+        # warms the cache, which is when warmth is worth most.
+        #
+        # Skipped on an EXACT hit — the entry exists, saving would only log a
+        # collision. A `restore-keys` partial hit is not a hit and DOES save:
+        # that run is the one that just compiled the delta.
+        if: matrix.shard == 1 && steps.mix-cache.outputs.cache-hit != 'true' && (success() || failure())
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            deps
+            _build/dev/lib
+            !_build/dev/lib/grappa
+          key: ${{ steps.mix-cache.outputs.cache-primary-key }}
 
       - name: Upload Playwright traces (on failure)
         # Every artifact name below carries the shard (#1519). Not cosmetic:
