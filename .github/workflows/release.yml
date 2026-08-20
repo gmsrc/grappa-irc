@@ -275,12 +275,14 @@ jobs:
 
           # The takeover metadata reached the control file intact — an
           # unexpanded ${VAR} would show up here verbatim (nfpm does not
-          # expand deb.breaks).
-          dpkg-deb -f "$deb" Breaks | grep -qF 'grappa (<< 1.3.0)' || {
-            echo "::error::Breaks: is not the literal grappa (<< 1.3.0)"
+          # expand deb.breaks). The trailing `~` is #1594's pre-release
+          # epsilon and is part of the boundary VALUE: without it the relation
+          # captures grappa's own `1.3.0~rc1` and the pair stops installing.
+          dpkg-deb -f "$deb" Breaks | grep -qF 'grappa (<< 1.3.0~)' || {
+            echo "::error::Breaks: is not the literal grappa (<< 1.3.0~)"
             dpkg-deb -f "$deb" Breaks; exit 1; }
-          dpkg-deb -f "$deb" Replaces | grep -qF 'grappa (<< 1.3.0)' || {
-            echo "::error::Replaces: is not the literal grappa (<< 1.3.0)"
+          dpkg-deb -f "$deb" Replaces | grep -qF 'grappa (<< 1.3.0~)' || {
+            echo "::error::Replaces: is not the literal grappa (<< 1.3.0~)"
             dpkg-deb -f "$deb" Replaces; exit 1; }
 
           # Its own version line, not the bouncer's.
@@ -696,9 +698,12 @@ jobs:
             echo "::error::expected exactly /usr/bin/shottino, got: $files"; exit 1; }
 
           # nfpm maps `replaces:` to Obsoletes: on rpm (rpm/rpm.go), so this is
-          # the same declaration the .deb spells as Replaces:.
-          rpm -qp --obsoletes "$pkg" | grep -qF 'grappa < 1.3.0' || {
-            echo "::error::Obsoletes: is not the literal grappa < 1.3.0"
+          # the same declaration the .deb spells as Replaces:. Anchored on the
+          # end of line: `grappa < 1.3.0` is a PREFIX of the cured
+          # `grappa < 1.3.0~`, so an unanchored fixed-string match cannot tell
+          # the pre-#1594 boundary from this one and would pass on either.
+          rpm -qp --obsoletes "$pkg" | grep -qE '^grappa < 1\.3\.0~$' || {
+            echo "::error::Obsoletes: is not the literal grappa < 1.3.0~"
             rpm -qp --obsoletes "$pkg"; exit 1; }
 
           want="$(infra/packaging/version.sh shottino)"

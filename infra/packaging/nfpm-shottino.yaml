@@ -46,8 +46,31 @@ description: |
 # the file — so it is written as a constant. It must NOT become
 # `${GRAPPA_VERSION}`: at 1.4.0 that would claim every grappa older than 1.4.0
 # shipped the file, which is false for 1.3.0, and a false statement in package
-# metadata is worse than an inconvenient one. Two further reasons, measured in
-# nfpm v2.43.0 (the version build.sh pins) rather than assumed:
+# metadata is worse than an inconvenient one.
+#
+# 🔴 THE TRAILING `~` IS LOAD-BEARING (GH #1594), and it is not decoration on
+# the constant — it is part of the boundary's VALUE. `~` sorts BELOW the empty
+# string in dpkg and in rpm version ordering, and nfpm stamps a `1.3.0-rc1`
+# VERSION file as `1.3.0~rc1`. So a bare `1.3.0` boundary is strictly GREATER
+# than the release candidate of 1.3.0 itself: cutting v1.3.0-rc1 made these two
+# packages mutually uninstallable — apt exit 100, dnf exit 1, both at the
+# *Install BOTH packages* step — because shottino asserted that a grappa which
+# does not own /usr/bin/shottino still owns it. `1.3.0~` spells "everything
+# strictly before 1.3.0, its own pre-releases NOT included", which is the
+# statement that was always meant.
+#
+# Measured through the RESOLVERS, not derived from the ordering rule: with the
+# bare boundary, apt and dnf both REFUSE a `1.3.0~rc1` pair and both accept a
+# bare `1.3.0` one; with this boundary the rc1 pair installs, and 1.2.0 / 1.2.9
+# keep being refused on both formats. Exactly one cell of that matrix moves —
+# the guard is relocated, not disarmed. Full table: DESIGN_NOTES #1594.
+#
+# The same hole exists for ANY future `X.Y.Z` boundary written as a constant,
+# so a new one is written `X.Y.Z~` unless someone has a reason to capture that
+# version's pre-releases on purpose.
+#
+# Two further reasons the constant stays a constant, measured in nfpm v2.43.0
+# (the version build.sh pins) rather than assumed:
 #
 #   * `deb.breaks` is NOT env-expanded. nfpm expands ${VARS} in depends /
 #     replaces / recommends / provides / suggests / conflicts (nfpm.go:214-227)
@@ -68,7 +91,7 @@ description: |
 # inferred from the syntax.
 deb:
   breaks:
-    - grappa (<< 1.3.0)
+    - grappa (<< 1.3.0~)
 
 # Runtime deps are per-format (disjoint package names across distro families).
 # NOT the bouncer's list: no ERTS here, so libncurses6 (the NARROW build ERTS
@@ -98,7 +121,7 @@ overrides:
       - ca-certificates
     # Debian relation syntax: parenthesised, `<<` for strictly-less.
     replaces:
-      - grappa (<< 1.3.0)
+      - grappa (<< 1.3.0~)
   rpm:
     depends:
       - ncurses-libs
@@ -108,7 +131,7 @@ overrides:
     # `Obsoletes:`. See the comment above the `deb:` block for what happens if
     # the Debian spelling reaches this list instead.
     replaces:
-      - grappa < 1.3.0
+      - grappa < 1.3.0~
 
 contents:
   - src: ./staging-shottino/usr/bin/shottino

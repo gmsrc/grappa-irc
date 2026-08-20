@@ -282,9 +282,36 @@ upload_dirs() {
     # Deb and RPM SPELL a relation differently and `replaces` reaches both, so
     # it is written per-format. The Debian spelling is what deb.breaks and
     # overrides.deb.replaces carry; overrides.rpm.replaces carries the rpm one.
-    [ "$(grep -cF -- '- grappa (<< 1.3.0)' "$NFPM_CLIENT")" -eq 2 ]
-    [ "$(grep -cF -- '- grappa < 1.3.0' "$NFPM_CLIENT")" -eq 1 ]
+    #
+    # The trailing `~` is #1594's — see the case below for what it buys. The
+    # rpm row is anchored on the end of line because `- grappa < 1.3.0` is a
+    # PREFIX of `- grappa < 1.3.0~`: an unanchored fixed-string count cannot
+    # tell the pre-#1594 spelling from the cured one and would pass either way.
+    [ "$(grep -cF -- '- grappa (<< 1.3.0~)' "$NFPM_CLIENT")" -eq 2 ]
+    [ "$(grep -cE -- '^[[:space:]]+- grappa < 1\.3\.0~$' "$NFPM_CLIENT")" -eq 1 ]
     grep -q '^  breaks:$' "$NFPM_CLIENT"
+}
+
+@test "#1594 the boundary carries the pre-release epsilon, or it captures its own rc" {
+    # `~` sorts BELOW the empty string in dpkg AND in rpm version ordering, so
+    # a bare `1.3.0` boundary is strictly greater than `1.3.0~rc1` — which is
+    # exactly what nfpm stamps for a `1.3.0-rc1` VERSION file. Cutting
+    # v1.3.0-rc1 therefore made the two packages mutually uninstallable: apt
+    # exit 100, dnf exit 1, both at the *Install BOTH packages* step.
+    #
+    # `1.3.0~` is the boundary that means "everything before 1.3.0, its own
+    # pre-releases NOT included". Measured through the resolvers, not derived
+    # from the ordering rule: with the bare boundary a 1.3.0~rc1 pair REFUSES
+    # and with this one it INSTALLS, while 1.2.0 and 1.2.9 keep REFUSING on
+    # both — the guard is moved, not disarmed. See DESIGN_NOTES #1594.
+    #
+    # This case is deliberately separate from the syntax case above: that one
+    # is about each format's spelling, this one is about the boundary VALUE.
+    refute grep -qE -- '- grappa \(<< 1\.3\.0\)[[:space:]]*$' "$NFPM_CLIENT"
+    refute grep -qE -- '- grappa < 1\.3\.0[[:space:]]*$' "$NFPM_CLIENT"
+    # Every relation naming grappa ends at the epsilon — no third spelling
+    # crept in under one of the three keys.
+    [ "$(grep -cE -- '^[[:space:]]+- grappa ?[(<].*1\.3\.0~\)?$' "$NFPM_CLIENT")" -eq 3 ]
 }
 
 @test "#1447 no Debian-spelled relation is offered to the rpm renderer" {
