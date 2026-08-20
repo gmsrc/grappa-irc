@@ -29,7 +29,6 @@ defmodule GrappaWeb.Admin.CredentialsControllerTest do
 
   setup do
     AdmissionStateHelpers.reset_all()
-    AdmissionStateHelpers.reset_admin_events()
     :ok
   end
 

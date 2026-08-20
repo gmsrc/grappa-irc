@@ -32,9 +32,6 @@ defmodule GrappaWeb.Admin.UsersControllerTest do
 
   setup do
     AdmissionStateHelpers.reset_session_supervisor()
-    # Bucket 4: the head-of-buffer assertions need the ring to start
-    # empty, or a prior test's event sits where this test's should.
-    AdmissionStateHelpers.reset_admin_events()
     :ok
   end
 

@@ -36,6 +36,17 @@ defmodule GrappaWeb.Admin.NetworksControllerTest do
     # MED-1: PATCH emits :network_caps_updated via AdminEvents.record/1,
     # so the ring has to start empty or a prior test's event pollutes the
     # head-of-buffer assertion.
+    #
+    # #1546 removed this line from the two sibling admin controller tests
+    # and deliberately KEPT it here: those two never read the ring, this
+    # one does (`[head | _] = AdminEvents.snapshot()` below). What it buys
+    # is protection against a false PASS — with the ring broken, a stale
+    # `:network_caps_updated` at the head satisfies the match and the
+    # assertions pass on the wrong row. Measured on #1546: red with this
+    # reset intact, green with a crafted stale head. The cap assertion is
+    # what makes that head unproducible by today's suite; drop it, or add
+    # a sibling that PATCHes user cap to 4, and this line is the only
+    # thing left.
     AdmissionStateHelpers.reset_admin_events()
     :ok
   end
