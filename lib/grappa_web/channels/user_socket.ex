@@ -102,6 +102,23 @@ defmodule GrappaWeb.UserSocket do
   channel "grappa:user:*", GrappaWeb.GrappaChannel
   channel "grappa:admin:events", GrappaWeb.AdminChannel
 
+  @typedoc """
+  What the connect boundary made of the client's `client_proto`
+  declaration (#1416) — a closed set, ridden verbatim by both connect
+  signals.
+
+    * `:absent` — no `client_proto` at all. The deliberate zero-friction
+      path (#447): served as current.
+    * `:declared` — read as an integer at or above
+      `Grappa.Protocol.min_version/0`. (A readable value BELOW the floor
+      never becomes a declaration: it returns `{:error, :upgrade_required}`
+      and there is no connect to report on.)
+    * `:unreadable` — present and not readable as a version. Served as
+      current, exactly like `:absent`, and that is the point: the two are
+      indistinguishable in the RESULT, so they must not be in the SIGNAL.
+  """
+  @type declaration :: :absent | :declared | :unreadable
+
   @impl Phoenix.Socket
   def connect(params, socket, connect_info) do
     # #447 — the protocol-version gate runs BEFORE auth: a client that
@@ -112,9 +129,9 @@ defmodule GrappaWeb.UserSocket do
     # (`handle_ws_error/2`) sends a clean 426; a bare `:error` (missing /
     # bad token, or an absent-but-fine version) still gets the transport's
     # own 403. The two failures stay distinct on the wire (426 vs 403).
-    with :ok <- check_protocol_version(params),
+    with {:ok, declaration} <- check_protocol_version(params),
          {:ok, token} <- extract_token(connect_info),
-         {:ok, socket} <- authenticate_and_assign(token, socket) do
+         {:ok, socket} <- authenticate_and_assign(token, socket, declaration) do
       maybe_record_client_source(socket, connect_info)
       {:ok, socket}
     end
@@ -181,25 +198,41 @@ defmodule GrappaWeb.UserSocket do
   # server speaks is still accepted: additive-only means a newer client
   # tolerates an older server (unknown-is-never-fatal), so there is no
   # upper bound.
-  @spec check_protocol_version(map()) :: :ok | {:error, :upgrade_required}
+  # #1416 — the gate also REPORTS what it made of the declaration, because
+  # the accept/reject answer alone cannot: `:declared` and `:unreadable`
+  # are the same `{:ok, _}` by design, so a client bug that discards the
+  # whole negotiation used to be byte-identical, in every emission of this
+  # module, to a client that negotiated correctly. That is the shape that
+  # hid #1379 for a full release. The decision is unchanged — this is a
+  # signal, not a policy.
+  @spec check_protocol_version(map()) ::
+          {:ok, declaration()} | {:error, :upgrade_required}
   defp check_protocol_version(%{"client_proto" => raw}) when is_binary(raw) do
     case Integer.parse(raw) do
       {version, ""} ->
         if version < Grappa.Protocol.min_version() do
           {:error, :upgrade_required}
         else
-          :ok
+          {:ok, :declared}
         end
 
       _ ->
         # Unparseable `client_proto` — a client bug, not a reason to refuse
         # a socket that might otherwise work. Treat as current (silent),
-        # same as absent (unknown-is-never-fatal).
-        :ok
+        # same as absent (unknown-is-never-fatal) — but SAY SO.
+        {:ok, :unreadable}
     end
   end
 
-  defp check_protocol_version(_), do: :ok
+  # A `client_proto` that is present but not a binary — `?client_proto[]=1`
+  # decodes to a list, `?client_proto[a]=1` to a map. Same class as an
+  # unparseable string and NOT the same as absent: the client declared
+  # something and the server could not read it. Folding this into the
+  # absent clause would reinstate the exact lie #1416 removes, one costume
+  # over.
+  defp check_protocol_version(%{"client_proto" => _}), do: {:ok, :unreadable}
+
+  defp check_protocol_version(_), do: {:ok, :absent}
 
   @doc false
   # #447 — custom WS error_handler wired in `endpoint.ex`'s `socket`
@@ -246,9 +279,9 @@ defmodule GrappaWeb.UserSocket do
     end
   end
 
-  @spec authenticate_and_assign(String.t(), Phoenix.Socket.t()) ::
+  @spec authenticate_and_assign(String.t(), Phoenix.Socket.t(), declaration()) ::
           {:ok, Phoenix.Socket.t()} | :error
-  defp authenticate_and_assign(token, socket) do
+  defp authenticate_and_assign(token, socket, declaration) do
     with {:ok, session} <- Accounts.authenticate(token),
          {:ok, socket} <- assign_subject(socket, session) do
       socket =
@@ -336,9 +369,34 @@ defmodule GrappaWeb.UserSocket do
       # constant `:subprotocol` once the query-string fallback was
       # removed, so it carried no information. The token VALUE is never
       # logged or emitted — the raw bearer IS the session credential (S9).
-      Logger.info("ws connect authenticated")
+      #
+      # #1416 — both carry the ONE thing the connect result cannot say:
+      # what this boundary made of the client's `client_proto`. The
+      # MESSAGE stays byte-identical so #95's grep keeps working and the
+      # new fact rides the metadata prefix.
+      #
+      # The declared VALUE is deliberately NOT repeated here. Phoenix's
+      # own `[:phoenix, :socket_connected]` handler already prints
+      # `Parameters: <inspect>` from this same transport process at
+      # `log: :info` (`deps/phoenix/lib/phoenix/logger.ex:363`; the
+      # default is set at `socket.ex:524`, `endpoint.ex` overrides
+      # nothing, and prod runs at `:info`), and `:pid` is in the Logger
+      # metadata allowlist, so the value is one correlated line away.
+      # Repeating it would put unbounded attacker-controlled text into a
+      # second log site for no fact the operator does not already have.
+      #
+      # What did NOT exist anywhere, and is what these two now state, is
+      # the server's READING of that value. That half is pinned by tests.
+      # The other half is not: no test in this repo can witness the
+      # phoenix line's production configuration, because
+      # `Phoenix.ChannelTest.__connect__/4` synthesises its own socket
+      # options and never passes the endpoint's. So a future `log: false`
+      # here would silently take the value away with no gate firing —
+      # a known, declared gap, and the reason this comment names the
+      # dependency instead of leaving it implicit.
+      Logger.info("ws connect authenticated", client_proto: declaration)
 
-      :telemetry.execute([:grappa, :ws, :connect], %{count: 1}, %{})
+      :telemetry.execute([:grappa, :ws, :connect], %{count: 1}, %{client_proto: declaration})
 
       {:ok, socket}
     else

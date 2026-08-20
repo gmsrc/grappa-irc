@@ -32,6 +32,7 @@ defmodule GrappaWeb.UserSocketTest do
   """
   use GrappaWeb.ChannelCase, async: false
 
+  import ExUnit.CaptureLog
   import Grappa.AuthFixtures
 
   alias Grappa.{Accounts, Protocol, PubSub.Topic}
@@ -63,6 +64,14 @@ defmodule GrappaWeb.UserSocketTest do
   defp connect_with_proto_no_token(client_proto) do
     Phoenix.ChannelTest.connect(UserSocket, %{"client_proto" => client_proto}, connect_info: %{})
   end
+
+  # #1416 — the VALUE cicchetto actually shipped on the wire when
+  # `socketEndpoint` baked the query into the endpoint string and
+  # phoenix.js concatenated `/websocket` onto it (DESIGN_NOTES 2026-08-16,
+  # "the hop this entry named as unmeasured was the bug"). `Integer.parse/1`
+  # answers `{1, "/websocket"}` — parseable head, unconsumed tail — which is
+  # the exact shape the `_ -> :ok` arm swallowed in silence.
+  @shipped_unreadable "1/websocket"
 
   describe "connect/3" do
     test "returns :error when no token is given" do
@@ -174,6 +183,20 @@ defmodule GrappaWeb.UserSocketTest do
 
       assert {:ok, _} = connect_with_proto("garbage", session.id)
     end
+
+    # #1416 — `?client_proto[]=1` decodes to a LIST, not a binary, so it
+    # misses the `is_binary(raw)` head and lands on the catch-all clause.
+    # The DECISION is unchanged (served as current, same as any other
+    # value the server cannot read); this pins that the new clause added
+    # for the signal did not smuggle in a refusal.
+    test "a present-but-non-binary client_proto still connects (decision unchanged)" do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:ok, _} =
+               Phoenix.ChannelTest.connect(UserSocket, %{"client_proto" => ["1"]},
+                 connect_info: %{auth_token: session.id}
+               )
+    end
   end
 
   # #447 — the custom error_handler wired into the endpoint's `websocket:`
@@ -195,11 +218,15 @@ defmodule GrappaWeb.UserSocketTest do
   # #95 + #202 — connect observability: connect/3 emits a
   # [:grappa, :ws, :connect] counter on every authenticated connect. #202
   # dropped the `auth_method` metadata tag — it had collapsed to a
-  # constant `:subprotocol` once the query-string fallback was removed —
-  # leaving a bare `%{count: 1}` measurement with EMPTY metadata. The
-  # token value is NEVER emitted (the raw bearer IS the session
-  # credential — S9).
-  describe "connect telemetry (#95 / #202)" do
+  # constant `:subprotocol` once the query-string fallback was removed.
+  #
+  # #1416 re-populates the metadata with ONE bounded key: what the connect
+  # boundary could make of the client's `client_proto` declaration. Before
+  # it, a declaration the server could not read was byte-identical in every
+  # observable output to one it read — the counter carried `%{}` and the
+  # Logger line was a bare string. The token value is still NEVER emitted
+  # (the raw bearer IS the session credential — S9).
+  describe "connect telemetry (#95 / #202 / #1416)" do
     setup do
       ref = make_ref()
       handler_id = "ws-connect-test-#{System.unique_integer([:positive])}"
@@ -218,19 +245,135 @@ defmodule GrappaWeb.UserSocketTest do
       %{ref: ref}
     end
 
-    test "emits the connect counter with empty metadata on an authenticated connect", %{ref: ref} do
+    # #202 asserted `metadata == %{}` here. #1416 supersedes that: the
+    # empty map was the defect, not the contract — it is what made an
+    # unreadable declaration indistinguishable from a read one. The
+    # measurement is untouched.
+    test "an absent declaration is reported as :absent, not as nothing", %{ref: ref} do
       {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
 
       assert {:ok, _} = connect_via_subprotocol(session.id)
       assert_receive {^ref, measurements, metadata}
       assert measurements == %{count: 1}
-      assert metadata == %{}
+      assert metadata == %{client_proto: :absent}
+    end
+
+    test "a readable declaration is reported as :declared", %{ref: ref} do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:ok, _} =
+               connect_with_proto(Integer.to_string(Protocol.min_version()), session.id)
+
+      assert_receive {^ref, _, metadata}
+      assert metadata == %{client_proto: :declared}
+    end
+
+    # THE issue. Same return value as the test above by design — the
+    # distinction can only live in the emitted signal, so that is where
+    # it is asserted.
+    test "a declaration the server could not read is reported as :unreadable", %{ref: ref} do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:ok, _} = connect_with_proto(@shipped_unreadable, session.id)
+
+      assert_receive {^ref, _, metadata}
+      assert metadata == %{client_proto: :unreadable}
+    end
+
+    # A present-but-non-binary value (`?client_proto[]=1`) is a client that
+    # DECLARED something the server could not read — reporting it as
+    # `:absent` would be the same lie in a second costume, so the catch-all
+    # clause splits on whether the key is there at all.
+    test "a present-but-non-binary declaration is :unreadable, not :absent", %{ref: ref} do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      assert {:ok, _} =
+               Phoenix.ChannelTest.connect(UserSocket, %{"client_proto" => ["1"]},
+                 connect_info: %{auth_token: session.id}
+               )
+
+      assert_receive {^ref, _, metadata}
+      assert metadata == %{client_proto: :unreadable}
     end
 
     test "emits NO connect event on an auth failure (counter is post-auth)", %{ref: ref} do
       assert :error = connect_via_subprotocol(Ecto.UUID.generate())
       refute_receive {^ref, _, _}
     end
+  end
+
+  # #1416 — the Logger half of the same signal, and the half that has an
+  # operator behind it: nothing in `lib/` attaches to
+  # `[:grappa, :ws, :connect]`, so the counter above is a hook for a future
+  # exporter while the log line is what a 2am grep actually reads.
+  #
+  # This describe pins the `config/config.exs` `:metadata` allowlist as
+  # much as the code: an undeclared key is dropped at FORMAT time, so the
+  # call site would compile, the telemetry tests above would pass, and the
+  # operator would still read a bare line. Only a capture of the RENDERED
+  # output can tell those apart.
+  #
+  # `Logger.configure(level: :info)` because the test env runs at
+  # :warning — same rationale (and same `async: false` requirement) as
+  # `Grappa.IRC.ClientOutboundCostTest`.
+  describe "connect log line (#1416)" do
+    setup do
+      original = Logger.level()
+      Logger.configure(level: :info)
+      on_exit(fn -> Logger.configure(level: original) end)
+      :ok
+    end
+
+    defp capture_connect(fun) do
+      capture_log(fn ->
+        assert {:ok, _} = fun.()
+        Logger.flush()
+      end)
+    end
+
+    test "an unreadable declaration is named as unreadable" do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      log = capture_connect(fn -> connect_with_proto(@shipped_unreadable, session.id) end)
+
+      # The message is byte-unchanged — #95's greppable line keeps working
+      # and the new fact rides the metadata prefix beside it.
+      assert log =~ "ws connect authenticated"
+      assert log =~ "client_proto=unreadable"
+    end
+
+    test "a readable declaration is named as declared" do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      log =
+        capture_connect(fn ->
+          connect_with_proto(Integer.to_string(Protocol.min_version()), session.id)
+        end)
+
+      assert log =~ "ws connect authenticated"
+      assert log =~ "client_proto=declared"
+    end
+
+    test "an absent declaration is named as absent" do
+      {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
+
+      log = capture_connect(fn -> connect_via_subprotocol(session.id) end)
+
+      assert log =~ "client_proto=absent"
+    end
+
+    # NOT ASSERTED HERE, deliberately: that the declared VALUE is also
+    # observable. It is — phoenix's own `[:phoenix, :socket_connected]`
+    # handler prints `Parameters: <inspect>` from this same process
+    # (`deps/phoenix/lib/phoenix/logger.ex:363`, level defaulting to
+    # `:info` at `socket.ex:524`, and prod runs at `:info`) — but no test
+    # in this file can witness it, because `Phoenix.ChannelTest.__connect__/4`
+    # synthesises its own socket options (`channel_test.ex:337-343`) and
+    # never passes the endpoint's, so `log:` is hardcoded `:info` in every
+    # ChannelTest connect. Measured, not assumed: injecting `log: false`
+    # into `endpoint.ex`'s socket declaration killed ZERO tests. An
+    # assertion on that line would measure the harness and pass forever.
+    # See `UserSocket`'s emission comment for what this leaves unpinned.
   end
 
   describe "id/1" do

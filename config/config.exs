@@ -700,7 +700,17 @@ config :logger, :console,
     # entry indistinguishable from a page that reported hidden, so the
     # `/admin/ws_presence` snapshot can no longer show it; this line is
     # where that age survives.
-    :silent_for_ms
+    :silent_for_ms,
+    # #1416 — what `GrappaWeb.UserSocket.connect/3` made of the client's
+    # `client_proto` declaration (`:absent | :declared | :unreadable`).
+    # A value the server cannot read is served as CURRENT by design
+    # (#447, unknown-is-never-fatal), so the connect result is identical
+    # either way and this key is the only place the difference exists.
+    # Declared here because an UNDECLARED key is dropped at FORMAT time:
+    # without this line the call site compiles, the telemetry twin still
+    # fires, and the operator reads the same bare string as before —
+    # which is precisely the defect #1416 was filed about.
+    :client_proto
   ]
 
 # #1075 — os_mon is loaded for `:cpu_sup.avg1/0` alone (the admin top bar's
