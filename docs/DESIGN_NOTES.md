@@ -54832,3 +54832,151 @@ that makes one of them urgent has not happened yet.
 - **Write-side cost of the index changes.** The 2.4x covering index adds one
   b-tree; its INSERT cost was not measured here (#1372 measured that
   widening an existing index is free and that adding new ones is not).
+<!-- entry #1591 -->
+
+---
+
+## 2026-08-20 — #1591: a pre-release `VERSION` could not build the Arch package, and a red leg still published
+
+Cutting `v1.3.0-rc1` — the first pre-release in 23 tags — killed the `arch` job
+of `release.yml` and still produced a **public GitHub Release with `assets=0`**.
+Two defects, one tag. Deleting the tag afterwards does not retract the release,
+which is why this was not closeable with a line of documentation: that question
+was asked first, and the answer is that a doc line cannot stop CI from
+performing an irreversible outward-facing act.
+
+### Why `VERSION` was not the place to fix it
+
+`makepkg` refuses a hyphen in `pkgver`. Reproduced here in
+`menci/archlinuxarm:base-devel` with the issue's own harness shape — a minimal
+PKGBUILD per candidate, driven by the invocation `release.yml` uses, with
+known-answer controls: `1.3.0` rc=0 (positive control), **`1.3.0-rc1` rc=12**
+(`ERROR: pkgver is not allowed to contain colons, forward slashes, hyphens or
+whitespace`), `@GRAPPA_VERSION@` rc=0. The lint is
+`[[ $ver = *[[:space:]/:-]* ]]`, in makepkg's own
+`lint_pkgbuild/pkgver.sh` — architecture-independent shell, which is why an
+ARM Arch container is an honest stand-in for the x86_64 runner.
+
+`VERSION` feeds `mix.exs` and the OTP application vsn, and the alternative
+spellings measure badly (`1.3.0rc1` / `1.3.0_rc1` are `:error` from
+`Version.parse/1`; `1.3.0+rc1` parses but compares `:eq` with `1.3.0`, since
+semver build metadata takes no part in precedence). So the number stays semver
+and the transformation happens at the `pkgver` boundary, where makepkg's
+constraint actually lives: `infra/packaging/aur/pkgver.sh`.
+
+### The spelling is a measured constraint, and it reverses the Arch convention
+
+Every candidate BUILDS. Only one ORDERS right. `vercmp <candidate> 1.3.0`,
+pacman 7.1.0, all five at build rc=0:
+
+| `pkgver` | `vercmp` vs `1.3.0` | meaning |
+|---|---|---|
+| **`1.3.0rc1`** | **−1** | **older than its release — correct** |
+| `1.3.0_rc1` | +1 | newer — the Arch-conventional underscore INVERTS it |
+| `1.3.0.rc1` | +1 | |
+| `1.3.0+rc1` | +1 | |
+| `1.3.0~rc1` | +1 | no tilde semantics here, unlike deb |
+
+pacman's comparator explains the split, and the source agrees with the
+measurement rather than being substituted for it: the segment loop is
+`while (*one && *two) { skip separators; … }`, so when the shorter side runs
+out the loop exits **at the condition** and the leftover separator is never
+skipped; the tie-break that follows is `isalpha(*one) ? -1 : 1`
+(`lib/libalpm/version.c`, *"we never want a remaining alpha string to beat an
+empty string"*). **A letter left over means older; a separator left over means
+newer.** Hence: delete the hyphen, join nothing in its place. A future edit
+that "corrects" this to the wiki-conventional `_` would strand every user who
+installed an rc — pacman would never offer them the release.
+
+**This settles a question the issue recorded as NOT MEASURED:** `makepkg` does
+accept `+` in `pkgver` (rc=0). It changes nothing here — the cure does not rest
+on `+`, because `1.3.0+rc1` measures `+1` on the axis that matters.
+
+### Fail closed, not best effort
+
+The same tie-break makes one legal semver shape unmappable. `1.3.0-1` sorts
+below `1.3.0`, but `1.3.01` leaves a DIGIT at the tie-break and measures `+1`.
+No spelling saves it, so `pkgver.sh` refuses to derive (exit 2, naming the
+reason) rather than publish a pre-release that outranks its own release. That
+refusal is why this is a script and not a `sed`.
+
+### `pkgver` stopped being the tag
+
+Once the two can differ, `source=(… v${pkgver}.tar.gz)` names a tag nobody cut.
+The bouncer recipe now carries `_grappaver=@GRAPPA_VERSION@` and spells its
+`source` and `_srcdir` with it — the same shape `aur/shottino/PKGBUILD` has
+carried since #1447, for a neighbouring reason: there `_grappaver` is a
+different NUMBER, here a different SPELLING of the same one. `regen.sh`'s
+`_grappaver` sed, a deliberate no-op on the bouncer's file until now, becomes
+live rather than being added. Both recipes route their `pkgver` through the
+mapper: the client's carrier can grow a pre-release the same way.
+
+### The gate the issue named, closed on the Arch side only
+
+Nothing in the pipeline asserted grappa's own package number — both existing
+package-version gates (`dpkg-deb -f … Version`, `rpm -qp … %{VERSION}`) compare
+against the **shottino** carrier, so a restamp of grappa's number would be seen
+by nobody. That was an omission while `pkgver` was a verbatim copy; with a
+deliberate transformation it is the difference between a derivation and a hope.
+The `arch` job now asserts `pacman -Q grappa` against `pkgver.sh`'s output, and
+— on a pre-release only, saying so out loud otherwise — re-checks the ordering
+with the real `vercmp`.
+
+Both gates were proven by mutating the production they guard, each run
+verbatim (extracted from the workflow, so a paraphrase cannot drift from it)
+against a real Arch box with a genuinely installed `grappa` package. They are
+complementary, not redundant: a **restamped package** kills the first and
+leaves the second green; a **mapper changed to the `_` join, with the package
+rebuilt from it**, leaves the first green — blind by construction, both sides
+moved — and kills the second.
+
+**The deb/rpm half of that hole is deliberately NOT closed here.** Those gates
+live in jobs owned by concurrent work on #1594 (nfpm's own pre-release
+restamping); closing them from this branch would collide with it. Named, not
+fixed.
+
+### `publish` no longer CREATES a partial release — a deliberate behaviour change
+
+`publish` declares `needs: [deb, arch, rpm]` but runs on `if: !cancelled()`,
+and its attach step was named *"mark a partial release"*: a red leg still
+reached `gh release create`. #504/#573 chose that, and the reasoning holds for
+a release that **already exists** — attaching what built is the only way to
+complete one, and it is exactly what the "(b) repair" dispatch does. It does
+not hold for the first run of a fresh tag, where the same rule performs an
+unretractable publication.
+
+So the rule is now completeness **×** does-the-release-exist, expressed as
+`release_assets.sh publishable <dir> <absent|present>` — in that script because
+it is the same expected-kinds table the rest of it owns, and because a
+two-variable rule inlined in YAML is precisely what #573 was filed about. The
+workflow probes with `gh release view` and reads a FAILING probe as `absent`,
+the conservative side. Net effect: an incomplete first run now stops before
+creating anything and a re-run after the fix creates the release cleanly —
+which the old order could not do at all, since the partial already existed.
+
+### Not established
+
+- **The real Arch package was never built.** It needs elixir + bun on x86_64
+  and a real tag tarball. What ran end-to-end is `regen.sh` itself on a real
+  Arch box with `updpkgsums` stubbed (it fetches over the network and is not
+  what is under test): `origin/main` + `1.3.0` → rc=0, `origin/main` +
+  `1.3.0-rc1` → **rc=12**, this branch + `1.3.0` → rc=0 with a `.SRCINFO`
+  identical to the base's, this branch + `1.3.0-rc1` → rc=0 with
+  `pkgver=1.3.0rc1`, `_grappaver=1.3.0-rc1` and the tag URL intact, this branch
+  + `1.3.0-1` → rc=2 before makepkg. The package-version gate ran against a
+  stand-in package genuinely named `grappa` and genuinely installed, not
+  against the bouncer.
+- **Measured on ARM, not on the release runner.** The pkgver lint and `vercmp`
+  are architecture-independent by inspection of their source; that is an
+  argument, not a second measurement.
+- **No `epoch`.** The mapped pre-release sorts below its release, so the Arch
+  escape hatch for inverted pre-release ordering is not needed — and `epoch`
+  is a one-way door that every later release would have to carry. Recorded as
+  the remedy if the mapping ever has to change.
+- **The mapping is not injective**: `1.3.0-rc-1` and `1.3.0-rc1` map onto one
+  `pkgver`. Two pre-releases of one release colliding is a naming annoyance;
+  the ordering property is what breaks an upgrade path, and it is preserved.
+  Accepted, not machinery.
+- **`publishable`'s `present` branch was not exercised against real `gh`.** The
+  five bats cases drive the decision table; the `gh release view` probe that
+  feeds it is inline YAML and untested, like every other `gh` call in that job.

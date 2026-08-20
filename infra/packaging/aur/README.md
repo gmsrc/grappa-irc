@@ -123,7 +123,13 @@ concrete publishable recipe by `regen.sh`:
 - `pkgver=@GRAPPA_VERSION@` is a sentinel `makepkg` REFUSES (#538) — an
   underived build fails loudly instead of silently shipping
   `grappa-@GRAPPA_VERSION@`. `regen.sh` fills it from the repo-root `VERSION`
-  file, the single source of truth.
+  file, the single source of truth — **through `pkgver.sh`, which is the
+  identity on a bare `X.Y.Z` and not on a pre-release** (#1591: `makepkg`
+  refuses the hyphen too, so `1.3.0-rc1` becomes `1.3.0rc1`). That is why
+  this recipe also carries `_grappaver=@GRAPPA_VERSION@`, and why every
+  mention of the tag — `source`, `_srcdir` — is spelled with it: once the
+  two can differ, `v${pkgver}` names a tag nobody cut. The spelling is a
+  measured constraint, not a convention — see `pkgver.sh`'s header.
 - `sha256sums=('SKIP')` is a placeholder: the `vX.Y.Z` tarball does not exist
   until the tag is cut, so its real hash cannot be known yet. `regen.sh` runs
   `updpkgsums` to fill it at release.
@@ -140,9 +146,28 @@ copied here too to keep the committed snapshot honest (e.g. #527's
 `test/grappa/version_single_source_test.exs` fails if either carrier stops
 being the `@GRAPPA_VERSION@` sentinel — and, since #1447, if the client
 recipe's `pkgver` stops being `@SHOTTINO_VERSION@` or its `_grappaver` stops
-being `@GRAPPA_VERSION@`. What that guard does NOT do is compare a `PKGBUILD`
-with its `.SRCINFO` field by field: the structural mirroring above stays a
-human discipline, and the only full regeneration is `regen.sh`'s.
+being `@GRAPPA_VERSION@`, and since #1591 if the BOUNCER recipe loses its
+`_grappaver` or goes back to spelling its source `v${pkgver}`. What that
+guard does NOT do is compare a `PKGBUILD` with its `.SRCINFO` field by
+field: the structural mirroring above stays a human discipline, and the
+only full regeneration is `regen.sh`'s.
+
+## Publishing a PRE-RELEASE to the AUR — read this first (#1591)
+
+The release job builds and proves an Arch package for a pre-release tag,
+and `regen.sh` derives a legal `pkgver` for it (`1.3.0-rc1` → `1.3.0rc1`).
+Pushing that to the AUR is still a human decision, and one worth taking
+deliberately:
+
+- The mapped number sorts **below** its own release — measured, `vercmp
+  1.3.0rc1 1.3.0 = -1` — so a user who installs the rc is offered `1.3.0`
+  when it lands. That is the whole reason the hyphen is DELETED rather
+  than replaced with the conventional `_`, which measures `+1` and would
+  strand them. Do not "tidy" that spelling.
+- The AUR has one recipe per package, not a channel per track: publishing
+  a pre-release means every `grappa` AUR user gets it. `optdepends` and
+  `epoch` do not help. If that is not wanted, build it, prove it, and do
+  not push it — the CI leg being green is the deliverable.
 
 ## Version reporting (bare `X.Y.Z`, #419 R3)
 

@@ -4065,7 +4065,9 @@ several other sections point at:
   `nfpm.yaml` interpolates into `version:` for BOTH the `.deb` and the
   `.rpm`.
 - `release.yml`'s Arch job and `aur/regen.sh` run it to fill PKGBUILD's
-  `pkgver=@GRAPPA_VERSION@` sentinel before `makepkg`.
+  `pkgver=@GRAPPA_VERSION@` sentinel before `makepkg` — **through
+  `aur/pkgver.sh`, which is not the identity on a pre-release** (#1591,
+  below).
 - Every cicchetto build entrypoint exports `GRAPPA_VERSION` from it so
   vite can bake `<meta cicchetto-version>`: `scripts/bun.sh`,
   `scripts/deploy.sh`, `scripts/deploy-cic.sh`, `scripts/integration.sh`,
@@ -4082,6 +4084,64 @@ path with no local signal. The `deb` and `arch` release jobs both assert
 `v$tag == $(infra/packaging/version.sh)` before building, and
 `test/grappa/version_single_source_test.exs` fails if the committed
 PKGBUILD stops carrying the sentinel.
+
+#### A pre-release `VERSION` and the Arch `pkgver` (#1591)
+
+**`makepkg` refuses a hyphen in `pkgver`** — measured rc=12, *"pkgver is
+not allowed to contain colons, forward slashes, hyphens or whitespace"*,
+from its own lint (`[[ $ver = *[[:space:]/:-]* ]]`,
+`/usr/share/makepkg/lint_pkgbuild/pkgver.sh`). A semver pre-release
+spells its suffix with exactly that character, so `v1.3.0-rc1` — the
+first pre-release in 23 tags — killed the `arch` job.
+
+**`VERSION` is not the place to fix it.** It feeds `mix.exs` and the OTP
+application vsn, and the alternatives measure badly: `1.3.0rc1` and
+`1.3.0_rc1` are `:error` from `Version.parse/1`, and `1.3.0+rc1` parses
+but `Version.compare("1.3.0+rc1", "1.3.0")` is `:eq` — build metadata
+takes no part in semver precedence, so it would order as the final
+release. The number stays semver and the transformation happens at the
+`pkgver` boundary, in **`infra/packaging/aur/pkgver.sh`**:
+
+    pkgver.sh 1.3.0      -> 1.3.0        identity — every tag cut so far
+    pkgver.sh 1.3.0-rc1  -> 1.3.0rc1
+    pkgver.sh 1.3.0-1    -> refused, exit 2
+
+**The spelling is not free.** Every candidate BUILDS; only one ORDERS
+right. `vercmp <candidate> 1.3.0` on pacman 7.1.0 measures `1.3.0rc1` at
+`-1` (older than its release, correct) and `1.3.0_rc1`, `1.3.0.rc1`,
+`1.3.0+rc1`, `1.3.0~rc1` all at `+1`. **The Arch-conventional underscore
+is the wrong answer here**: a user who installed the rc would never be
+offered the release. pacman's comparator explains it — its segment loop
+is `while (*one && *two) { skip separators; … }`, so when the shorter
+side runs out the loop exits at the condition and the leftover separator
+is never skipped; the tie-break is then `isalpha(*one) ? -1 : 1`
+(`lib/libalpm/version.c`). A **letter** left over means older; a
+separator left over means newer.
+
+That same tie-break is why the mapper **fails closed**: `1.3.0-1` is
+legal semver sorting below `1.3.0`, but `1.3.01` leaves a digit at the
+tie-break and measures `+1`. No spelling saves it, so `pkgver.sh` refuses
+to derive rather than publish a package that outranks its own release.
+
+Consequences to know when touching the Arch recipes:
+
+- **`pkgver` is no longer the tag.** The bouncer recipe's `source` and
+  `_srcdir` now spell it `${_grappaver}`, the second `@GRAPPA_VERSION@`
+  sentinel `regen.sh` fills with the RAW version — `v${pkgver}` would
+  name a tag nobody cut. The client recipe has done this since #1447.
+- **Both recipes map.** The client's carrier can grow a pre-release the
+  same way, so `regen.sh` routes both numbers through `pkgver.sh`.
+- **The `arch` job now asserts its own output**: `pacman -Q grappa` must
+  carry the derived `pkgver`, and on a pre-release `vercmp` must put it
+  below the release core. Before #1591 nothing in the pipeline checked
+  grappa's package number at all — the `deb` and `rpm` version gates
+  both compare against the *shottino* carrier.
+- Pinned by `test/infra/packaging_prerelease_pkgver_test.bats` (the
+  mapping and its refusals, host-side, no pacman needed).
+
+**Publishing an Arch pre-release to the AUR is still a human step**, and
+the ordering above is the reason to think twice before doing it: pacman
+has no `epoch`-free way back if the mapping ever changes.
 
 ### `build.sh` — one throwaway build tree, one format at a time
 
@@ -4225,6 +4285,27 @@ The logic lives in a script rather than inline in `release.yml` precisely
 because the bug lived in untested inline YAML: it is pure filesystem +
 string logic — no docker, no network, no mix — so it runs under bats
 (`test/infra/release_assets_test.bats`).
+
+**`publishable <dir> <absent|present>` — the narrowing #1591 applied.**
+`publish` declares `needs: [deb, arch, rpm]` but runs on
+`if: !cancelled()`, so a red package leg still reached `gh release
+create`. That is #504/#573's deliberate choice and it is right *for a
+release that already exists*: attaching what built is the only way to
+complete one, and it is exactly what the "(b) repair" dispatch does. It
+is **not** right for the first run of a fresh tag, where the same rule
+publishes a partial release — and publication cannot be taken back:
+deleting the tag afterwards does not retract it. Cutting `v1.3.0-rc1`
+produced precisely that, a public release object with `assets=0`.
+
+So the decision is completeness **×** does-the-release-exist, and it
+lives in this script for the same reason the rest does. The workflow
+probes with `gh release view` and reads a FAILING probe as `absent`, the
+conservative side: an errored probe makes publish refuse, never publish.
+An incomplete set against `absent` exits non-zero naming every missing
+kind, and the run stops before creating anything — a re-run after the fix
+then creates the release cleanly, which the old order could not do at
+all. An incomplete set against `present` proceeds and marks the release
+partial, unchanged.
 
 ### The packaged operator CLI and the migrate path (#419)
 

@@ -95,6 +95,16 @@ carrier, and `_grappaver=@GRAPPA_VERSION@` naming the tag whose tarball
 holds the source. `aur/regen.sh` fills both and regenerates both
 `.SRCINFO`s; `test/grappa/version_single_source_test.exs` pins all of it.
 
+Since #1591 the **bouncer** recipe carries `_grappaver` too, for a
+different reason: `makepkg` refuses the hyphen a semver pre-release spells
+its suffix with, so `aur/pkgver.sh` maps `1.3.0-rc1` onto `1.3.0rc1` and
+`pkgver` stops being the tag. There it is a different SPELLING of the same
+number; in the client recipe it is a different number. Both recipes route
+their `pkgver` through the mapper, which is the identity on a bare
+`X.Y.Z`. Why that spelling and not the Arch-conventional underscore — a
+measured ordering property, not taste — is in `aur/pkgver.sh`'s header and
+`docs/OPERATIONS.md` § "A pre-release `VERSION` and the Arch `pkgver`".
+
 Both halves are pinned by `test/infra/packaging_shottino_pkg_test.bats`,
 and the release audit (`release_assets.sh`) now expects the client's
 packages **by name** — a release that builds the bouncer and loses the
