@@ -166,7 +166,6 @@ test.describe("#220 link-bearing surfaces double-fire", () => {
 
       // Give a (buggy) navigation a window to fire before asserting none.
       await page.waitForTimeout(1_000);
-      context.off("page", onPage);
       expect(popupOpened, "topic-bar link must NOT navigate — the bar opens the modal").toBe(false);
 
       // Inside the modal the link is a working anchor (default policy):
@@ -174,6 +173,20 @@ test.describe("#220 link-bearing surfaces double-fire", () => {
       const modalLink = dialog.locator(".scrollback-link");
       await expect(modalLink).toHaveAttribute("href", LINK_URL);
       await expect(modalLink).toHaveAttribute("target", "_blank");
+
+      // Positive control (#1117 / #1336) for the `false` above, and the
+      // reason `context.off` moved BELOW it: a listener that was never
+      // reached — detached early, registered on another context, or
+      // watching an event this build no longer emits — leaves the flag
+      // false for a reason that has nothing to do with the topic bar, and
+      // the assertion cannot tell the two apart. The modal's own anchor
+      // IS a target=_blank navigation, so clicking it must produce the
+      // very `page` event the flag says never came.
+      const controlPopup = context.waitForEvent("page", { timeout: 5_000 });
+      await modalLink.click();
+      await (await controlPopup).close();
+      await expect.poll(() => popupOpened, { timeout: 5_000 }).toBe(true);
+      context.off("page", onPage);
     } finally {
       await partChannel(vjt.token, NETWORK_SLUG, channel).catch(() => {});
     }
