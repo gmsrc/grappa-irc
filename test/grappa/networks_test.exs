@@ -808,8 +808,20 @@ defmodule Grappa.NetworksTest do
       stamp(hi_user, net_a, next_second)
       stamp(lo_user, net_b, next_second)
 
+      # Narrowed to the two users this test created (their names carry a unique
+      # integer, so no other row can bear their ids): the query is global, and
+      # an ordering oracle that ranges over rows the test did not create reads
+      # a red off someone else's data. Filtering by USER, not by the three
+      # expected PAIRS, keeps the assert able to fail on an unexpected row of
+      # OUR OWN. What it stops covering — that the query returns nothing ELSE —
+      # is what the two sibling tests in this describe assert, and they still
+      # read globally (`== []` above, `length(creds) == 3` above that).
+      ours = [lo_user.id, hi_user.id]
+
       ts =
-        Enum.map(Credentials.list_credentials_for_all_users(), &{&1.user_id, &1.network_id, &1.inserted_at})
+        Credentials.list_credentials_for_all_users()
+        |> Enum.filter(&(&1.user_id in ours))
+        |> Enum.map(&{&1.user_id, &1.network_id, &1.inserted_at})
 
       # Stated outright, never re-derived with `Enum.sort_by/2`: that sorts by
       # Erlang TERM order, and term order on a `%DateTime{}` compares the
