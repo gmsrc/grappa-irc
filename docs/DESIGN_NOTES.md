@@ -52800,3 +52800,95 @@ independently.
 **Not evaluated**, unchanged from the issue: the two narrow `["kind"]` pins
 (`_Assert_MeResponseKind`, `_Assert_LoginSubjectKind`) and seven of the eight
 #1406 arm-walking asserts.
+<!-- entry #1432 -->
+
+---
+
+## 2026-08-20 — #1432: the union driver fails in two directions, and only one of them can live in a gate
+
+`merge=union` takes the additions from BOTH sides and NEVER the deletions. That
+gives two silent failures with OPPOSITE signs, both at `rc=0`, zero conflicts
+and zero deletions:
+
+- **EATEN** (#1271/#1428) — an identical leading prefix is collapsed and an
+  entry loses its separator. Additions go **DOWN**.
+- **RESURRECTED** (#1432) — a branch that predates a commit which deliberately
+  removed text gets that text back. Additions go **UP**.
+
+A check that only asks "did we lose lines?" passes the second one cleanly. The
+invariant is therefore two-sided: **additions unchanged AND deletions zero.**
+
+### How often it can bite, measured
+
+Census over the **1001** commits touching the file on main's first-parent line,
+with known-answer controls inside the tool (`64914b6d` must classify as a
+rewrite, `9771ac8f` as an append; both passed, and the tool exits without
+printing numbers if either fails):
+
+| | count | share |
+|---|---|---|
+| pure append | 716 | 71.5% |
+| non-append | 284 | 28.4% |
+| — of those, actually DELETING | 131 | 13.1% of all |
+
+Then the unbiased question, asked of the driver rather than of the authors: for
+each of those 131 real deletions, replay a hypothetical branch that forked
+immediately before it and appended an entry at the tail. **30 of 131 (22.9%)
+resurrect.** So roughly one DESIGN_NOTES commit in eight deletes, and about
+one deletion in five is a live resurrection hazard for the branch shape this
+repo actually uses.
+
+### Why the detector could not be a check in the gate
+
+`scripts/design-notes-gate.sh` can read three states: HEAD's file, the base
+ref's file, and their merge base. Measured in the resurrection regime:
+
+| moment | merge base == base ref? | lines the base deleted, visible |
+|---|---|---|
+| PRE-rebase | no | **2** |
+| POST-rebase | **yes** | **0** |
+
+After the rebase the merge base collapses onto the base ref, and with it the
+only state that records that a line was ever deleted. A resurrected line and a
+deliberately re-added line are then the same bytes in the same three states.
+The scope's "compare against the merge base AND against main" is therefore
+**not expressible inside the gate** — it needs a BEFORE and an AFTER.
+
+So the detector is a VERB, `scripts/union-rebase.sh`: pin, rebase, re-pin,
+compare. It watches every path `.gitattributes` marks `merge=union` (derived,
+not hard-coded), refuses a dirty tree, refuses an unresolvable ref, refuses
+outright when no union path exists rather than reporting a rebase it did not
+verify, says out loud when the comparison is VACUOUS because the branch was
+already on top, and — because `git rebase --abort` is gone by the time drift is
+visible — hands back the pre-rebase HEAD.
+
+The gate keeps its role unchanged: a PREVENTER that runs on a single state.
+The verb is the DETECTOR. Both are needed and neither replaces the other.
+
+### Two measurement traps, recorded because they cost real time
+
+- **A merged-PR sweep cannot measure this.** The first attempt replayed the
+  last 60 merged PRs. That population is exactly the one resurrections have
+  been removed from by hand — #1432's own occurrence was caught by the author's
+  numstat pin and the file rebuilt before landing. Survivorship bias,
+  structural rather than a sample-size problem. It also came back all-zero for
+  a second reason worth knowing: **11 of the first 20 branches had a fork proxy
+  equal to the merge point**, i.e. zero BY CONSTRUCTION, not zero measured.
+- **BSD `seq 1 0` counts DOWN**, printing `1\n0\n` where GNU prints nothing. A
+  scratch harness padded with it shifted every reading by two lines and
+  produced an all-green sample. Anyone writing a measurement harness on macOS
+  will meet this.
+
+Both are instances of the same rule: a uniform result accuses the instrument
+before the data.
+
+### What is deliberately not claimed
+
+The verb compares **numstat, never geometry**. In a scratch fixture the
+resurrection reproduces only when the deleted block is immediately adjacent to
+the branch's own append — one line of separation and the 3-way merge sees two
+non-overlapping hunks and applies cleanly. But the real 2026-08-16 occurrence
+does **not** have that geometry: the deleted region sits ~59 lines before the
+file's end and `git blame` puts those 59 lines in the same commit as the
+deleted text. The adjacency threshold is A path to resurrection; that it is THE
+path is not established, and the tool promises no threshold.

@@ -436,6 +436,20 @@ not the surrounding code.**
   the BOUNDARY SHAPE on the real file** (full stop / blank / `---` / blank /
   heading), because an identical numstat proves nothing when the pre-rebase
   state was already broken.
+  **🔴 TWO-SIDED means BOTH directions are failures, not just loss (#1432).**
+  Additions going **DOWN** is the driver EATING a separator; additions going
+  **UP** is it RESURRECTING text the base deliberately deleted — `merge=union`
+  takes the additions from both sides and never the deletions, so a branch
+  that predates a removal gets it back, glued wherever it lands. Measured:
+  **131 of 1001** DESIGN_NOTES commits on main delete text, and for **30 of
+  those 131 (22.9%)** a tail-appending branch forked just before would
+  resurrect it. Both modes report `rc=0`, zero conflicts and zero deletions.
+  `scripts/union-rebase.sh` is that ritual automated — it pins, rebases,
+  re-pins and compares. **It is a VERB and not a check in
+  `design-notes-gate.sh` on purpose:** after a rebase the merge base collapses
+  onto the base ref and the only state recording that a line was ever deleted
+  is gone (measured: 2 such lines visible pre-rebase, 0 post), so the detector
+  needs a BEFORE and an AFTER and the gate has neither.
 - **🔴 Open every new DESIGN_NOTES entry with a UNIQUE `<!-- entry #NNNN -->`
   line, as its FIRST appended line (#1271).** Exact shape: marker / blank /
   `---` / blank / `## <date> — #NNNN: …`, with NO blank before the marker.
