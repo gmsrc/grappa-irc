@@ -52728,3 +52728,75 @@ symptoms. The overlap is in the CURE, not the defect: a two-sided
 numstat-invariance check would detect both. It can only ever be a DETECTOR
 though — it needs a before and an after — whereas the marker check is a
 PREVENTER that runs on a single state. That is the argument for keeping both.
+<!-- entry #1510 -->
+
+---
+
+## 2026-08-20 — #1510: a pin needs two independent declarations, and an alias is only one
+
+`cicchetto/src/lib/wireTypesAssert.ts` presented fourteen full-shape pins
+between the cic-facing wire types and the codegen-emitted `wireTypes.ts`.
+Eleven compared a type with itself: since #410 the api.ts side is a DIRECT
+ALIAS of its generated counterpart, so `Equal<X, Gen>` with `type X = Gen` is
+`true` by construction and no server-side change can redden it — the alias
+follows the codegen, and so does the pin. Measured before the cure, all
+fourteen: one optional probe field added to the generated type left `bun run
+check` green on the eleven and reddened the three whose cic side is
+hand-written (`MemberEntry`, `TopicEntry`, `ModesEntry`). That positive
+control is what makes the greens mean "this pin cannot fail" rather than "the
+gate never ran".
+
+**The rule is what produced them.** The file asked for "an assert for every
+api.ts type that has a wireTypes.ts counterpart". Once api.ts had migrated to
+aliases, that rule MANUFACTURES vacuous pins — applied literally today it
+produces more of exactly this. It is now keyed on how the cic side is
+DECLARED, not on whether a counterpart exists: a hand-written cic side pins
+against the generated type (two independent declarations already exist); an
+alias pins against an INLINE GOLDEN SHAPE written out by hand in this file,
+never against the alias's own right-hand side.
+
+**Why golden shapes rather than deletion.** Deletion was the cure the issue
+body proposed, on the argument that an alias cannot structurally drift from
+the type it aliases, so there is nothing to protect. True — on the
+cic-vs-codegen axis. The gate's subject is cic-vs-SERVER, and the alias is
+precisely what lets a server-side shape change reach cic with nobody
+acknowledging it. The mutant that settles it is the one measured on the issue:
+renaming `sender` in `SessionWireMentionsBundleMessage` produced ZERO
+occurrences of `wireTypesAssert` in the log and was caught only by the
+hand-written `MentionsBundle` mirror in `userTopic.ts` — the mirror
+architecture-review A4 proposes to retire, whose removal would open a blind
+window. The same rename against the cured file reddens
+`_Assert_MentionsBundleMessage` (plus the two `userTopic.ts` sites, still
+there today). A deleted pin cannot do that, so the A4 ordering constraint is
+discharged here rather than carried.
+
+**Two-sided kill test, all fourteen.** With the cure in place, one optional
+probe field injected into each generated counterpart — anchor verified to
+match exactly once, injection verified to add exactly one probe, restore
+verified byte-identical — all fourteen go red, `rc=1`, against a green
+baseline. The eleven repaired pins are SURGICAL: one mutant, exactly one
+reddened assertion, zero other TS errors. The three hand-written ones each
+also redden `_Assert_NoChannelArmDrift`, reproducing what the issue measured —
+their generated types feed channel arms, so the #1406 walk catches them
+independently.
+
+### Measured, not cured
+
+- **A golden shape is blind INSIDE a type it names by reference.** Naming
+  `HomeNetworkRow` inside `HomeData`'s literal is deliberate — it is what
+  keeps one server-side change to one reddened pin — and the cost is measured:
+  a probe field on `NetworksWireAvailableNetworkRow`, which `HomeData` names
+  and nothing pins, leaves the whole gate green.
+- **The leaf enums #410 unpinned are not silent.** Appending an arm to the
+  generated `SCROLLBACK_MESSAGE_KIND` const gives ZERO `wireTypesAssert`
+  occurrences and two reds elsewhere — `ScrollbackPane.tsx` and `members.ts`,
+  both exhaustive switches. The guard there is the consumers, not a pin.
+  Restoring the enum pins is outside this issue's perimeter.
+- **#1509's class is now partly reachable.** A golden shape also reddens when
+  an alias is re-pointed at the WRONG generated type, but only when the two
+  shapes differ; structural coincidence still passes. Not a substitute for the
+  mechanical alias-target guard #1510 left as a separate design call.
+
+**Not evaluated**, unchanged from the issue: the two narrow `["kind"]` pins
+(`_Assert_MeResponseKind`, `_Assert_LoginSubjectKind`) and seven of the eight
+#1406 arm-walking asserts.

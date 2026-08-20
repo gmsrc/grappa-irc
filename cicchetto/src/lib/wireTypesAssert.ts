@@ -1,5 +1,6 @@
-// Structural-equivalence asserts between hand-rolled cic types in
-// `./api.ts` and codegen-emitted types in `./wireTypes.ts`.
+// Structural-equivalence asserts between the cic-facing wire types
+// (`./api.ts` and its store-side siblings) and codegen-emitted types
+// in `./wireTypes.ts`.
 //
 // Why this file exists:
 //
@@ -17,38 +18,82 @@
 //     "./wireTypes"` is risky in one go (the cic-side type unions
 //     are richer than the server-side typespecs in places — REST-
 //     aggregate, discriminator-narrowed). Instead, this file asserts
-//     STRUCTURAL EQUIVALENCE between each api.ts type and its
-//     wireTypes.ts counterpart. The `_Assert_*` type aliases evaluate
-//     to `true` when shapes match, `never` when they drift. The
-//     `assertExtends/2` helpers further enforce bi-directional
-//     subtype-ness at compile time. `bun run check` fails on `never`
-//     — closing the drift class at TS compile rather than waiting
-//     for a runtime narrower mismatch.
+//     STRUCTURAL EQUIVALENCE between each cic-facing type and the
+//     shape the server promises. The `_Assert_*` type aliases evaluate
+//     to `true` when the shapes match and to `false` (or, for the
+//     walks, a named-arm object) when they drift; `bun run check`
+//     fails on that — closing the drift class at TS compile rather
+//     than waiting for a runtime narrower mismatch.
 //
 //   * The CI-time loop is: typespec change → codegen regen → drift
 //     gate (D) catches stale committed file → operator runs codegen
 //     → wireTypes.ts updates → this file's asserts fail at `bun run
-//     check` if the api.ts hand-roll doesn't match the new shape →
-//     operator fixes api.ts to match → CI green.
+//     check` → operator reconciles the cic side → CI green.
+//
+//   * WHAT MAKES A PIN ABLE TO FAIL (#1510). A pin needs TWO
+//     INDEPENDENT declarations of the shape. Since #410 most api.ts
+//     types are DIRECT ALIASES of their generated counterpart, so
+//     `Equal<X, Gen>` where `type X = Gen` compares a type with
+//     itself: `true` by construction, and no server-side change can
+//     ever redden it — the alias follows the codegen silently, and so
+//     does the pin. Eleven of the fourteen full-shape pins were in
+//     that state and were MEASURED vacuous (an optional probe field
+//     added to the generated type left `bun run check` green on every
+//     one of them, while the same probe on `SessionWireMember` —
+//     whose cic side is hand-written — reddened). Those eleven now
+//     carry an INLINE GOLDEN SHAPE as their second side: the field
+//     roster written out by hand here, which no alias can follow. A
+//     server-side rename, retype, add or removal now reaches a human
+//     instead of regenerating in silence.
 //
 // Maintenance:
 //
-//   * Add an assert for every api.ts type that has a wireTypes.ts
-//     counterpart. When server-side adds a new Wire module + type,
-//     the codegen emits it; if a cic consumer needs the new shape,
-//     add the assert + the api.ts mirror. EXCEPT for UNION ARMS, which
-//     are walked rather than listed (#1406): a `WireSessionEvent` arm
-//     needs nothing at all, and a cross-module arm needs one line in the
-//     `CrossModuleArm` registry naming its generated counterpart. Neither
-//     buys the silence a forgotten assert line used to.
+//   * Add a pin for every cic-facing type that has a wireTypes.ts
+//     counterpart, and pick its SECOND SIDE by how the cic side is
+//     declared:
+//       - cic side HAND-WRITTEN (today `MemberEntry`, `TopicEntry`,
+//         `ModesEntry`, all outside api.ts): pin it against the
+//         GENERATED type. Two independent declarations already exist.
+//       - cic side a DIRECT ALIAS of the generated type (everything
+//         pinned out of api.ts): pin it against an inline golden
+//         shape. NEVER against the alias's own right-hand side — that
+//         is the vacuous form #1510 found eleven times, and the rule
+//         this file used to state ("add an assert for every api.ts
+//         type that has a counterpart") manufactured it once api.ts
+//         had migrated to aliases.
+//     EXCEPT for UNION ARMS, which are walked rather than listed
+//     (#1406): a `WireSessionEvent` arm needs nothing at all, and a
+//     cross-module arm needs one line in the `CrossModuleArm` registry
+//     naming its generated counterpart. Neither buys the silence a
+//     forgotten assert line used to.
 //
-//   * If an assert fails (`Type 'true' is not assignable to type
-//     'never'` at the `: true = true` lines), the api.ts mirror has
-//     drifted from the server typespec. The fix is on the cic side —
-//     update api.ts to match wireTypes.ts (server is the source of
-//     truth per CLAUDE.md "Implement once, reuse everywhere").
+//   * A golden shape names a field's type BY REFERENCE when the
+//     referenced type carries its own pin (`HomeNetworkRow` inside
+//     `HomeData`), so one server-side change reddens one pin. Where
+//     the reference is a leaf the codegen emits and nothing here pins
+//     — `MessageKind`, `ScrollbackMetaT`, `ConnectionState`,
+//     `NetworksCredentialAuthMethod`, `AvailableNetworkRow` — the pin
+//     is blind to changes INSIDE it, by construction. #410 dropped the
+//     leaf-enum pins on the same alias argument #1510 overturns;
+//     restoring them is outside #1510's perimeter and is recorded here
+//     rather than cured.
+//
+//   * When a GOLDEN-SHAPE pin fails, the server changed the shape:
+//     read the codegen diff, check cic's consumers, then update the
+//     literal here — updating it IS the acknowledgement the pin exists
+//     to force. When a HAND-WRITTEN-side pin fails, the cic mirror has
+//     drifted; the fix is on the cic side — update it to match
+//     wireTypes.ts (server is the source of truth per CLAUDE.md
+//     "Implement once, reuse everywhere").
+//
+//   * Residual, named rather than cured: a golden shape also reddens
+//     when an alias is re-pointed at the WRONG generated type (#1509's
+//     class) — but only when the two shapes differ. Structural
+//     coincidence still passes.
 
 import type {
+  AvailableNetworkRow,
+  ConnectionState,
   CredentialJson,
   DirectoryEntry,
   FeaturedChannelLink,
@@ -57,6 +102,7 @@ import type {
   LinksEntry,
   MentionsBundleMessage,
   MeResponse,
+  MessageKind,
   NotifyEntry,
   QueryWindowEntry,
   ScrollbackMessage,
@@ -69,31 +115,22 @@ import type { ModesEntry, TopicEntry } from "./channelTopic";
 import type { MemberEntry } from "./memberTypes";
 import type {
   AuthJSONSubjectWire,
-  ChannelDirectoryWireEntry,
   CicWireBundleHashPayload,
   MeJSONMeJson,
-  NetworksFeaturedChannelsWireLink,
+  NetworksCredentialAuthMethod,
   NetworksWireConnectionStateEvent,
-  NetworksWireCredentialJson,
-  NetworksWireHomeData,
-  NetworksWireHomeNetworkRow,
-  NotifyWireEntry,
   NotifyWireNotifyListPayload,
-  QueryWindowsWireWindowsEntry,
   QueryWindowsWireWindowsListPayload,
   RateLimitWireWebSessionSeveredEvent,
   ReadCursorWireReadCursorSet,
+  ScrollbackMetaT,
   ScrollbackWireArchiveChangedPayload,
   ScrollbackWireArchivePurgedPayload,
   ScrollbackWireEvent,
-  ScrollbackWireT,
   ServerSettingsWireChangedPayload,
   SessionWireChannelModesWire,
-  SessionWireLinksEntry,
   SessionWireMember,
-  SessionWireMentionsBundleMessage,
   SessionWireTopicEntryWire,
-  SessionWireWhoUser,
   UserSettingsWireAutoAwayDebounceChangedPayload,
   WindowCountsWireEvent,
   WireSessionEvent,
@@ -108,11 +145,27 @@ type Assert<T extends true> = T;
 
 // === #85 — Featured channels ===
 // Public delivery link (HomePane) + the /list directory entry's new
-// `featured` flag, pinned to their codegen counterparts.
+// `featured` flag, pinned to the shape the server promises.
 export type _Assert_FeaturedChannelLink = Assert<
-  Equal<FeaturedChannelLink, NetworksFeaturedChannelsWireLink>
+  Equal<
+    FeaturedChannelLink,
+    {
+      name: string;
+      description: string | null;
+    }
+  >
 >;
-export type _Assert_DirectoryEntry = Assert<Equal<DirectoryEntry, ChannelDirectoryWireEntry>>;
+export type _Assert_DirectoryEntry = Assert<
+  Equal<
+    DirectoryEntry,
+    {
+      name: string;
+      topic: string | null;
+      user_count: number;
+      featured: boolean;
+    }
+  >
+>;
 
 // === S3 (2026-07-08 review) — end-to-end gate for the flat wire mirrors ===
 // Every hand-rolled `api.ts` type below has a structurally-identical
@@ -124,32 +177,131 @@ export type _Assert_DirectoryEntry = Assert<Equal<DirectoryEntry, ChannelDirecto
 // window (S43), the /who + /topic + /modes + members payloads, the
 // home rows, and the credential JSON (S3 caught `auth_method` drift).
 //
-// #410 — the leaf ENUM types (MessageKind, ConnectionState, ServicesFlavor,
-// DirectoryStatus, ServerReplySource) are no longer asserted here: they are
-// now single-sourced in api.ts as `export type X = <generated>` aliases, so
-// equality with the codegen type holds BY CONSTRUCTION (an alias can't
-// drift). Only the STRUCT mirrors below still need a pin.
+// #410 dropped the leaf ENUM pins (MessageKind, ConnectionState,
+// ServicesFlavor, DirectoryStatus, ServerReplySource) on the argument that
+// an alias "can't drift", so equality with the codegen type holds BY
+// CONSTRUCTION. #1510 measured what that argument actually buys: holding by
+// construction is exactly what makes a pin unable to redden, and the STRUCT
+// mirrors below had migrated to aliases too — so nine of them had quietly
+// joined the enums. They are pinned against an inline golden shape now. The
+// leaf enums are NOT (outside #1510's perimeter, recorded in the header).
 //
 // Enriched / discriminated types (`WireUserEvent`, `WireChannelEvent`,
 // `WireAdminEvent`, `MeResponse`, `Network`) carry cic-side
 // consumer enrichments and are validated via their runtime narrowers +
 // `assertNever`; their per-arm PAYLOADS that have a flat counterpart
 // are pinned below (e.g. `ScrollbackMessage`, `MentionsBundleMessage`).
-export type _Assert_ScrollbackMessage = Assert<Equal<ScrollbackMessage, ScrollbackWireT>>;
-export type _Assert_MentionsBundleMessage = Assert<
-  Equal<MentionsBundleMessage, SessionWireMentionsBundleMessage>
+export type _Assert_ScrollbackMessage = Assert<
+  Equal<
+    ScrollbackMessage,
+    {
+      id: number;
+      network: string;
+      channel: string;
+      server_time: number;
+      kind: MessageKind;
+      sender: string;
+      body: string | null;
+      meta: ScrollbackMetaT;
+    }
+  >
 >;
-export type _Assert_WhoUser = Assert<Equal<WhoUser, SessionWireWhoUser>>;
+export type _Assert_MentionsBundleMessage = Assert<
+  Equal<
+    MentionsBundleMessage,
+    {
+      server_time: number;
+      channel: string;
+      sender: string;
+      body: string | null;
+      kind: MessageKind;
+    }
+  >
+>;
+export type _Assert_WhoUser = Assert<
+  Equal<
+    WhoUser,
+    {
+      nick: string;
+      user: string;
+      host: string;
+      server: string;
+      modes: string;
+      hops: number | null;
+      realname: string | null;
+      channel: string;
+    }
+  >
+>;
+// The three pins whose cic side is an independent HAND-WRITTEN declaration
+// (all outside api.ts, in the stores that own the shape). Those need no
+// golden literal — the hand-roll IS the second source, and #1510 measured
+// all three reddening under a probe field added to the generated type.
 export type _Assert_MemberEntry = Assert<Equal<MemberEntry, SessionWireMember>>;
 export type _Assert_TopicEntry = Assert<Equal<TopicEntry, SessionWireTopicEntryWire>>;
 export type _Assert_ModesEntry = Assert<Equal<ModesEntry, SessionWireChannelModesWire>>;
 export type _Assert_QueryWindowEntry = Assert<
-  Equal<QueryWindowEntry, QueryWindowsWireWindowsEntry>
+  Equal<
+    QueryWindowEntry,
+    {
+      network_id: number;
+      target_nick: string;
+      opened_at: string;
+    }
+  >
 >;
-export type _Assert_NotifyEntry = Assert<Equal<NotifyEntry, NotifyWireEntry>>;
-export type _Assert_HomeNetworkRow = Assert<Equal<HomeNetworkRow, NetworksWireHomeNetworkRow>>;
-export type _Assert_HomeData = Assert<Equal<HomeData, NetworksWireHomeData>>;
-export type _Assert_CredentialJson = Assert<Equal<CredentialJson, NetworksWireCredentialJson>>;
+export type _Assert_NotifyEntry = Assert<
+  Equal<
+    NotifyEntry,
+    {
+      network_id: number;
+      nick: string;
+      added_at: string;
+    }
+  >
+>;
+export type _Assert_HomeNetworkRow = Assert<
+  Equal<
+    HomeNetworkRow,
+    {
+      slug: string;
+      nick: string;
+      connection_state: ConnectionState;
+      connection_state_reason: string | null;
+      connection_state_changed_at: string | null;
+      recoverable: boolean;
+    }
+  >
+>;
+export type _Assert_HomeData = Assert<
+  Equal<
+    HomeData,
+    {
+      networks: HomeNetworkRow[];
+      available_networks: AvailableNetworkRow[];
+    }
+  >
+>;
+export type _Assert_CredentialJson = Assert<
+  Equal<
+    CredentialJson,
+    {
+      network: string;
+      nick: string;
+      ident: string | null;
+      realname: string | null;
+      sasl_user: string | null;
+      auth_method: NetworksCredentialAuthMethod;
+      auth_command_template: string | null;
+      autojoin_channels: string[];
+      connection_state: ConnectionState;
+      connection_state_reason: string | null;
+      connection_state_changed_at: string | null;
+      inserted_at: string;
+      updated_at: string;
+    }
+  >
+>;
 
 // === cross-surface S7 (2026-07-19 review) — the biggest boundary payloads ===
 // S7 pinned the largest payloads on the wire — WhoisBundle (28 fields, grown
@@ -164,7 +316,17 @@ export type _Assert_CredentialJson = Assert<Equal<CredentialJson, NetworksWireCr
 // for the whole 37-arm population. What survives here is the ELEMENT type
 // nested inside an arm, which the walk covers only through its container
 // and which cic also reuses standalone in its stores.
-export type _Assert_LinksEntry = Assert<Equal<LinksEntry, SessionWireLinksEntry>>;
+export type _Assert_LinksEntry = Assert<
+  Equal<
+    LinksEntry,
+    {
+      server: string;
+      linked_to: string | null;
+      hopcount: number | null;
+      description: string | null;
+    }
+  >
+>;
 
 // === #1406 X-S1 — the cross-module arms, as DATA rather than asserts ===
 // cic's two hand-rolled unions fan IN from many `Grappa.*.Wire` modules;
