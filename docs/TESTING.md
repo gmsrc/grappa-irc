@@ -22,6 +22,14 @@ The CI pipeline runs all three on every push to main. Both `ci.yml`
 (Elixir + lint + audit + cic) and `integration.yml` (Playwright)
 must be green for the commit to count.
 
+`integration.yml` is **four jobs, not one** (#1519): the suite is split
+with Playwright's `--shard`, each leg booting its own stack. Read the
+aggregate off **`integration (all shards)`** — the one check that is red
+whenever any shard is. Per-shard artifacts are suffixed
+(`playwright-traces-shard-2`, `container-logs-shard-2`, …), because
+`upload-artifact` refuses a duplicate name inside a run. Locally nothing
+changes: `scripts/integration.sh` with no argument still runs all 759.
+
 ## Quick reference
 
 ```bash
@@ -65,6 +73,7 @@ scripts/integration.sh                   # full suite, cold bring-up + tear-down
 scripts/integration.sh --grep "UX-6 K"   # one spec or pattern
 scripts/integration.sh --project chromium --grep "UX-6 K"  # one project
 scripts/integration.sh --project chromium --grep "UX-6 K" --repeat-each 3
+scripts/integration.sh --shard=2/4       # exactly what CI's shard 2 runs (#1519)
 KEEP_STACK=1 scripts/integration.sh ...  # leave testnet up after run for iterative debugging
 scripts/testnet.sh up|down|status|logs <svc>|probe|shell <svc>
 ```
@@ -360,9 +369,12 @@ also dumps one log file per container to `cicchetto/e2e/container-logs/`
 trap destroys the containers. The service set is derived from
 `docker compose ps`, so a service added later is covered without editing
 anything. Failure-only: a green run writes nothing. The `integration`
-workflow uploads the directory as the `container-logs` artifact
-alongside the trace + report, so a CI-only red can be read from the
-server side too instead of stopping at the browser.
+workflow uploads the directory as the `container-logs-shard-<N>`
+artifact alongside the trace + report, so a CI-only red can be read from
+the server side too instead of stopping at the browser. The `-shard-<N>`
+suffix names which of the four stacks it came from — a red in shard 3
+carries no evidence about the other three, which is precisely why
+`fail-fast` is off and the other three still run.
 
 **Per-spec subject (#1078).** Every spec gets its OWN throwaway user
 rather than sharing the seeded `vjt`: the `_specSubject` `auto: true`
@@ -397,6 +409,18 @@ anything else.
 ```bash
 scripts/integration.sh --project chromium --grep "<failing spec>" --repeat-each 3
 ```
+
+⚠️ **Sharding changed what "upstream spec" means (#1519).** A cascade is
+state left behind by a spec that ran EARLIER ON THE SAME STACK, and each
+of the four shards is now its own stack with its own quarter of the
+roster. So the set of specs that can pollute a given one is a quarter of
+what it was, and a cascade that used to reproduce can stop reproducing —
+or start — because the two specs landed in different shards. Reproduce
+CI's grouping with `--shard=<N>/4` before concluding anything about
+order; a plain full local run is a fifth grouping, not the one that
+failed. The split is by (project, file) group and it is stable for a
+given roster: measured on `bb65f73b`, no file is split across shards
+within a project.
 
 The decision tree:
 

@@ -54060,3 +54060,114 @@ underneath it. Recorded here rather than filed as an issue, because "these are
 out of scope and here is why" is the outcome, not a backlog item: a reader who
 flips `ignoreTypes` to false will find exactly 11 and now knows what they are
 looking at.
+<!-- entry #1519 -->
+
+---
+
+## 2026-08-20 — #1519: four shards, and the three ways a sharded gate lies
+
+`integration` was one job, one stack, one Playwright worker, 40.5 minutes,
+and a daily median climbing +0.42 min/day. vjt's ruling: shard it, "4 or
+even 8 workers". The word "worker" covers two different things and only one
+of them is authorised here — **sharding is N separate JOBS, each with its own
+stack; `workers: 1` inside a shard is untouched**, because the three
+long-lived users (`vjt`, `m9b-test`, `m9b-victim`) still share `#bofh`
+(`compose.yaml:262,286,296`) and #1618 has just measured a 31572 ms SQLite
+write lock in `record_client_source` with the suite running SERIALLY. Shard
+first, shared-state audit after.
+
+### What divides and what does not
+
+Step timings read off the green run `32395956800` (2026-08-20), not
+estimated:
+
+| phase | min |
+|---|---|
+| checkout with submodules + compose plugin + GHCR login | 1.7 |
+| `testnet up` — deps.get, Elixir compile, solanum built from source, images, health | 4.6 |
+| the Playwright suite — 759 passed, one worker | 33.6 |
+| census + tear-down | 0.5 |
+| **total** | **40.5** |
+
+Only the 33.6 divides; the other **6.8 is fixed and every shard pays it in
+full**. Four shards therefore land at ~15 min, not the ~13.4 the issue's
+table gave — that arithmetic used the in-script boot alone and forgot the
+checkout ahead of it and the tear-down behind it. Eight would reach ~11: four
+minutes for double the runners, with the fixed cost dominating. **Four.**
+
+**Paying the boot once was considered and rejected on those numbers.** A
+build-once job that publishes the images has to FINISH before any shard can
+start, so it adds a serial stage the same size as the one it removes (~5
+min), and `5 + pull + 8.4` is no better than four parallel 15s. Layer caching
+(`type=gha`) might shrink the per-shard build; it is **not measured**, so it
+is not claimed.
+
+### The partition is proven, not assumed
+
+A sharded gate that reports green having run fewer tests is worse than a slow
+one. Measured with `playwright test --list` on `bb65f73b`:
+
+| shard | tests |
+|---|---|
+| 1/4 | 190 |
+| 2/4 | 190 |
+| 3/4 | 191 |
+| 4/4 | 188 |
+| **sum** | **759** — the unsharded total, to the test |
+
+Cardinality is the weak form and it was not the one relied on: the four shard
+listings were compared to the full listing as SETS. Tests in the total and in
+no shard: 0. Tests in a shard and not in the total: 0. Tests in two shards: 0.
+The comparator was shown a deliberately altered input and reported the
+difference, so the zeros are measurements rather than a silent parser.
+
+The split granularity is the **(project, file) group**: 447 such groups, and
+not one of them spans two shards. Ordering WITHIN a file is therefore
+preserved exactly as `fullyParallel: false` implies. What is not preserved is
+ordering ACROSS files, and that is a real change to cascade behaviour — the
+set of specs that can pollute a given one is now a quarter of what it was.
+`docs/TESTING.md` carries that warning next to the triage tree.
+
+### The three ways this could have gone quietly wrong
+
+Each is now a bats case (`test/infra/integration_shard_test.bats`), deriving
+its expectation from the workflow rather than transcribing the shard count,
+and each was verified by mutation — six mutants, six kills, one assertion
+each.
+
+1. **The denominator.** `--shard=i/N` with N adrift from the number of jobs
+   silently drops the tail of the suite (too big) or double-runs (too small),
+   and Playwright is content either way: it filters, it does not audit. So the
+   denominator is `${{ strategy.job-total }}` — the matrix's own length, not a
+   literal. That is also why the matrix must stay ONE-dimensional: job-total
+   counts LEGS, so a second axis would double them while the shard values
+   stayed 1..4.
+2. **Artifact names.** `upload-artifact` v4+ refuses a name already present in
+   the run, so four shards uploading `playwright-traces` would fail three
+   uploads — a second red on top of the one being triaged, with the evidence
+   missing. Every name carries `-shard-${{ matrix.shard }}`.
+3. **The aggregate check.** `needs.e2e.result` over a matrix is `success` only
+   if every leg succeeded, which makes `e2e-result` the one name that cannot
+   miss a shard. It carries `if: always()` deliberately: without it a failed
+   shard leaves the aggregate SKIPPED, and a skipped check does not read as a
+   failure to a human or to a required-check rule. `main` has no branch
+   protection and no ruleset today (measured: the protection API answers 404,
+   `/rulesets` is `[]`), so nothing is required by name yet — the stable name
+   exists so that the day one is, it is one entry and not four.
+
+`fail-fast` is explicitly `false` for the opposite reason to the usual one:
+the default cancels the surviving shards, which replaces three results with
+three unknowns exactly when the comparison between them is the triage.
+
+### Not claimed
+
+- **The runner concurrency ceiling was not measured**, and the entire gain
+  rests on it: if four jobs cannot start together, the wall clock degrades
+  towards the serial number. Nothing in this change detects that.
+- The per-shard counts are equal to within three tests; their **durations are
+  not measured**. Wall clock is the slowest shard, so a slice heavy in slow
+  specs sets it, and the ~15 min figure assumes the median holds across the
+  split.
+- Whether any cross-file cascade actually changes verdict under the new
+  grouping is **unknown until the first reds arrive**; the mechanism is
+  argued above, the incidence is not.
