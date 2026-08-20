@@ -52468,3 +52468,103 @@ or a CI runner; the runs are the local module (`117 tests`) plus the full
 `check.sh`. And whether ExUnit can overlap this `async: false` module with an
 `async: true` module that writes credentials was NOT established — the sandbox
 mode was read, the scheduler was not.
+<!-- entry #1499 -->
+
+---
+
+## 2026-08-20 — #1499: a socket outlives its row, so the reaper must fire — narrowly
+
+The idle-session reaper deleted rows past the 7-day window and announced
+`Revocations.announce({:user, name})` per distinct owner. On h-irc, 2026-08-17
+18:00:30, one week-old row of an active account crossed the window; the account's
+`bicchierino` IRC bridge lost its WebSocket and the weechat behind it rejoined 14
+channels. The bridge's own bearer had never expired.
+
+### The conflict, and which side the measurement took
+
+#1499's body proposes dropping the announcement outright: the rows are already
+dead at read-time, `authenticate/1` returns `{:error, :expired}` for anything past
+the window, so no live socket can be resting on one. That reading is about the
+ROW. The question is about the SOCKET, and the two coincide only if an open socket
+re-authenticates.
+
+It does not, and this was measured rather than reasoned. `Accounts.authenticate/1`
+has three call sites — REST `Plugs.Authn`, the visitor login, and
+`GrappaWeb.UserSocket`, which reaches it once, at connect — and
+`Session.touch_changeset/2`, driven from that one function, is the only writer of
+`last_seen_at`. A client that speaks only over the WebSocket therefore never
+refreshes its row, which ages out under a connection that is still serving.
+`GrappaWeb.SocketLivenessVsSessionRowTest` pins it and passes on `98c180ac`
+unchanged. **So the announcement is load-bearing: removing it strands a live
+socket on a deleted row.** The body's smallest-first option is dead, and the
+house rule applied — where an issue's text disagrees with measured code, the code
+wins.
+
+What remained was the granularity, and the reaper is where per-subject stops being
+defensible. `Revocations`' "over-firing is the safe direction" was argued for doors
+the account holder had just walked through, where a reconnect is expected and
+`phoenix.js` handles it. The reaper fires on a 60s timer with no request and no
+operator behind it, so its blast lands on whoever happened to be connected, and it
+lands in a downstream IRC client as a server disconnect plus a rejoin storm.
+
+### The shape: additive, not a re-key
+
+`UserSocket.id/1` stays keyed by subject; every authenticated transport now ALSO
+subscribes to `UserSocket.id_for_session/1` at connect, and
+`Revocations.announce_session/1` → `UserSocket.disconnect_session/1` addresses it.
+`Phoenix.Socket.__info__/2` stops a transport on a `"disconnect"` broadcast
+whatever topic carried it, so both addresses reuse the one teardown path.
+
+Re-keying `id/1` onto `session_id` — the option the issue body names, together
+with teaching `WSPresence` to carry it — was rejected: `id/1` yields ONE topic, so
+the five account-wide doors would lose their address for a subject entirely and
+have to enumerate live sessions to rebuild one. Under-firing a revoke is the
+failure `Revocations` exists to prevent.
+
+The two topics cannot collide, and not by luck: a user name matches
+`~r/^[a-zA-Z][a-zA-Z0-9_\-]*$/` so it can never contain a `:`, which is the same
+argument the pre-existing `"user_socket:visitor:" <> id` already rests on.
+
+The subscribe sits in `connect/3` rather than `init/1` because `use Phoenix.Socket`
+generates `init/1` non-overridably. It leans on the same guarantee
+`WSPresence.register/2` two lines above has leaned on since #182 — that `connect/3`
+runs in the process that will own the socket. That is a dependency on Phoenix's
+transport shape, stated here rather than guarded, because no test in a
+`server: false` suite can distinguish it.
+
+### The oracle
+
+`GrappaWeb.ReaperSocketBlastRadiusTest` stands up one transport process per socket
+and drives the production `Phoenix.Socket.Transport` callbacks — the harness is a
+stand-in for the WebSock adapter, not for the socket, and holds no view of its own
+on what closes a connection. Two transports in one process could not have shown
+the defect: both the subscription and the teardown are per-process.
+
+| state | the reaped session's socket | the other socket of the same user |
+|---|---|---|
+| `98c180ac`, before the cure | down (positive control, passes) | **down — RED** |
+| after the cure | down | serving |
+
+The positive control passes on both sides, so the survival claim is not a teardown
+path that had quietly stopped working. `session_revocation_listener_test.exs`
+asserts the narrowing in both directions — a session announcement must not reach
+the subject topic, and a subject announcement must not be narrowed onto a session
+topic — so neither granularity can absorb the other.
+
+### Option (b), priced and not taken
+
+The alternative cure was to keep the row fresh while its socket is alive, so it
+never becomes a reap candidate. Rejected on meaning, not on cost: `last_seen_at`
+is what `authenticate/1` gates on, so bumping it from a connection would redefine
+"idle" from *nobody has used this credential* to *nobody has closed this tab*, and
+an abandoned logged-in browser would then hold a bearer open indefinitely. It is
+also the larger change — a new writer on the auth-gate column, on a cadence, from
+the WS layer.
+
+### Not claimed
+
+No incidence. The reaper only bites rows past 7 days of idleness, so #1499
+explains PERIODIC drops; if the reported account drops more often than that, this
+is one cause and not established as the only one, and nothing here looked for the
+rest. Nothing was measured against production or CI — the runs are the local
+module set plus a full `check.sh`.
