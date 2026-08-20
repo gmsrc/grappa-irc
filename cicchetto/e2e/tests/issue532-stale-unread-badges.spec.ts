@@ -66,7 +66,7 @@ const DM_SECOND = "#532 B: second DM — the unread that the archive badge must 
 
 test.afterEach(async () => {
   const vjt = specUser();
-  // Restore the seed-time joined state (test A parts #bofh) and clear the
+  // Restore the seed-time joined state (test A parts #spec-wN) and clear the
   // DM unread test B leaves behind, so neither poisons a later spec under
   // retries. Both are idempotent / no-ops for the test that didn't touch
   // them, and guarded so a mid-test failure can't cascade.
@@ -88,7 +88,7 @@ test("#532 A — a self-PART leaves NO stale event badge on the archived channel
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  // PART #bofh. The self-PART persists an own `:part` audit row (id >
+  // PART #spec-wN. The self-PART persists an own `:part` audit row (id >
   // cursor) and drops the channel from the active sidebar into Archive.
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });

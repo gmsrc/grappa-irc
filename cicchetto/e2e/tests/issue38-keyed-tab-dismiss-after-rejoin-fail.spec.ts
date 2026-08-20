@@ -23,7 +23,7 @@
 //
 // Repro construction:
 //   1. peer founds NEW_CHANNEL +k (auto-op basis, as cp15-b6).
-//   2. admin PATCH vjt's credential autojoin = [#bofh, NEW_CHANNEL].
+//   2. admin PATCH vjt's credential autojoin = [#spec-wN, NEW_CHANNEL].
 //      An autojoin-only edit is `:left_alone` server-side — a DB write
 //      with NO session restart — so this alone does NOT fire the JOIN.
 //   3. /disconnect + Home Reconnect → a fresh SpawnOrchestrator reads
@@ -38,7 +38,7 @@
 // Runs on chromium desktop (no @webkit tag).
 //
 // CLEANUP: the wrapped `test` fixture auto-resets vjt after every spec
-// (restores autojoin to ["#bofh"] — dropping NEW_CHANNEL even if the ×
+// (restores autojoin to ["#spec-wN"] — dropping NEW_CHANNEL even if the ×
 // failed — clears last_joined, and restarts the session, which drops
 // the failed NEW_CHANNEL window). afterEach only tears down the peer.
 

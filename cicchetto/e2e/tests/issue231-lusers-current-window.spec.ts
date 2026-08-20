@@ -15,7 +15,7 @@
 // old gated code this fails — the card only exists on kind==="server".
 //
 // Full path exercised:
-//   1. operator focused on a channel window (#bofh, seed-autojoined)
+//   1. operator focused on a channel window (#spec-wN, seed-autojoined)
 //   2. operator issues `/lusers` via composeSend
 //   3. Bahamut replies with the 7-numeric LUSERS sequence; 266
 //      RPL_GLOBALUSERS flushes the `:lusers_bundle` wire event
@@ -41,7 +41,7 @@ test("#231 — /lusers surfaces LusersCard in the CURRENT (channel) window, not 
   const vjt = specUser();
   await loginAs(page, vjt);
 
-  // Focus a CHANNEL window (seed-autojoined #bofh) — deliberately NOT
+  // Focus a CHANNEL window (seed-autojoined #spec-wN) — deliberately NOT
   // the $server window. This is the anti-regression pivot: the old
   // `kind === "server"` gate would leave the card unmounted here.
   const channel = AUTOJOIN_CHANNELS[0];

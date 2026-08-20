@@ -161,7 +161,7 @@ test.describe("issue #281 — account switch replay", () => {
     // `waitForChannelReady` returns while `refreshScrollback` is still in
     // flight: subscribe.ts fires it and stamps the ready seam synchronously
     // right after (the #552 hazard, which is why this twin seam exists). With
-    // `#bofh` seeded at exactly PAGE_LIMIT rows, that backfill gets a FULL
+    // `#spec-wN` seeded at exactly PAGE_LIMIT rows, that backfill gets a FULL
     // page and therefore probes `/messages/count` — measured firing 1.5–75ms
     // before the clear across three fresh stacks, under A's own live bearer,
     // hundreds of ms before any identity purge, at the very `?after=681` the

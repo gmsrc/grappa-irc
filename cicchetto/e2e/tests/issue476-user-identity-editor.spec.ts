@@ -13,7 +13,7 @@
 // Non-destructive on the shared seeded `vjt`: APPLY-AND-RESTORE. The spec
 // changes vjt's per-network nick THROUGH the editor and asserts the change
 // applied LIVE (the /networks row nick flips, the "Identity applied." banner
-// shows, and vjt's own new nick appears in the #bofh members list), THEN
+// shows, and vjt's own new nick appears in the #spec-wN members list), THEN
 // restores `vjt-grappa` in a finally so downstream specs see the seeded
 // baseline. `resetSubject` (the wrapped-test auto-teardown) restores
 // autojoin + scrollback but NOT the nick, so this restore is load-bearing,
@@ -137,7 +137,7 @@ test("issue #476 — a USER edits its per-network identity in settings and it ap
   try {
     // ── GATE: ensure vjt is LIVE under the seeded baseline nick ──
     // Idempotent reconnect (no-op if already connected), then wait for the
-    // session to be connected AND vjt-grappa to be in #bofh members — the
+    // session to be connected AND vjt-grappa to be in #spec-wN members — the
     // real "the editor's starting point is live" precondition.
     await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {
       connection_state: "connected",
@@ -174,7 +174,7 @@ test("issue #476 — a USER edits its per-network identity in settings and it ap
 
     // HEADLINE — the apply succeeds (the "Identity applied." banner), the
     // /networks row's LIVE nick flips to the new value, and vjt's own new
-    // nick appears in the #bofh members list after the reconnect + autojoin.
+    // nick appears in the #spec-wN members list after the reconnect + autojoin.
     // Three independent witnesses that the USER edit reached upstream.
     await expect(general.getByTestId("settings-identity-ok")).toBeVisible({
       timeout: 20_000,

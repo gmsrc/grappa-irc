@@ -47,8 +47,8 @@
 //     bottom again (no unread → tail). Pre-fix: pinned at scrollTop=0.
 //
 //   Scenario 2 — COLD-MOUNT into channel-with-unreads (#168 completion):
-//     Pre-seed a read cursor for #bofh placing the divider mid-page (25
-//     unreads), then FIRST-focus #bofh straight after login (a cold mount —
+//     Pre-seed a read cursor for #spec-wN placing the divider mid-page (25
+//     unreads), then FIRST-focus #spec-wN straight after login (a cold mount —
 //     the key-effect is `defer`-skipped, so onMount owns the first snap).
 //     Jumps to the MARKER (near the top, distance-to-bottom ABOVE threshold),
 //     NOT the tail — the #46 cold-mount-tail wontfix reversed. A follow-on
@@ -56,9 +56,9 @@
 //     this after a full `page.reload()` (genuine app-startup).
 //
 //   Scenario 3 — SWITCH into channel-with-unreads (#168 regression fix):
-//     Focus the $server window first (mounts ScrollbackPane), let #bofh warm
+//     Focus the $server window first (mounts ScrollbackPane), let #spec-wN warm
 //     in the background (eager join-ok refresh loads all 200 rows), THEN
-//     click #bofh in the sidebar — a real key-change SWITCH. The pane must
+//     click #spec-wN in the sidebar — a real key-change SWITCH. The pane must
 //     jump to the MARKER (marker visible near the top, distance-to-bottom
 //     ABOVE threshold — NOT the tail). Pre-fix (307 race) this stranded at
 //     scrollTop 0 (marker +1048) once the catch-up refresh recreated the DOM;
@@ -139,8 +139,8 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // for. Pre-fix bug: scrollTop stayed at 0 — the operator saw the
     // very first row of history, not the recent context.
     //
-    // Precondition: mark #bofh fully read BEFORE login. The auto-reset
-    // (_vjtReset, fixtures/test.ts) re-seeds #bofh with freshly-
+    // Precondition: mark #spec-wN fully read BEFORE login. The auto-reset
+    // (_vjtReset, fixtures/test.ts) re-seeds #spec-wN with freshly-
     // timestamped rows and clears the read cursor; with no cursor
     // hydrated, cic counts those recent rows as live-unread and pins the
     // unread-marker to the very first row (scrollTop=0). That state is
@@ -156,7 +156,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const headId = headPage[0]?.id;
-    if (!headId) throw new Error("#bofh seed page empty — cannot seed read cursor to head");
+    if (!headId) throw new Error("#spec-wN seed page empty — cannot seed read cursor to head");
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, headId);
 
     await loginAs(page, vjt);
@@ -223,7 +223,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     const vjt = specUser();
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
-    // Pre-seed a cursor 25 rows from the tail of #bofh so the divider injects
+    // Pre-seed a cursor 25 rows from the tail of #spec-wN so the divider injects
     // mid-page. Same shape cp14-b1 scenario 2 uses.
     //
     // #168 completion (2026-07-03b, vjt point-2): the FIRST focus after login
@@ -321,7 +321,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     // The genuine app-startup path: a full PWA reload re-boots the SPA, so the
     // FIRST window focus after the reload cold-mounts the ScrollbackPane fresh
     // (onMount, key-effect defer-skipped) — the same lifecycle as launching the
-    // installed PWA. #bofh is never focused before the reload, so its seeded
+    // installed PWA. #spec-wN is never focused before the reload, so its seeded
     // read cursor is never advanced and the unread divider survives the reboot.
     const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
@@ -330,7 +330,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, cursorRow.id);
 
     await loginAs(page, vjt);
-    // Reboot the app BEFORE any window focus, then focus #bofh — a cold mount
+    // Reboot the app BEFORE any window focus, then focus #spec-wN — a cold mount
     // on a freshly-booted SPA.
     await page.reload();
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -380,7 +380,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
 
     // Seed a cursor 25 rows from the tail so an unread divider injects
     // mid-page (same shape as scenario 2 / issue168), but here we reach
-    // #bofh via a deliberate SWITCH, not a cold mount.
+    // #spec-wN via a deliberate SWITCH, not a cold mount.
     const page0 = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(page0.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const cursorRow = page0[25];
@@ -389,7 +389,7 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
 
     // Deterministic warmth gate: cic eagerly `refreshScrollback`es every
     // joined channel on its Phoenix join-ok (subscribe.ts) — REFRESH_LIMIT
-    // (200) == the seed size, so #bofh loads ALL rows in the background
+    // (200) == the seed size, so #spec-wN loads ALL rows in the background
     // WITHOUT us focusing it. Register the waiter BEFORE loginAs so the
     // post-boot fetch can't slip past us; awaiting it proves the channel is
     // warm (rows in the store) before we switch into it. Without warmth the
@@ -413,17 +413,17 @@ test.describe("scroll-on-window-switch — re-selecting a window snaps correctly
     await loginAs(page, vjt);
 
     // FROM-window: the always-present $server window mounts ScrollbackPane
-    // WITHOUT touching #bofh's read cursor (focusing #bofh first would fire
+    // WITHOUT touching #spec-wN's read cursor (focusing #spec-wN first would fire
     // the leave-arm on the way out and advance its cursor to the tail,
     // erasing the unread we need). `windowName === NETWORK_SLUG` resolves to
     // the $server tab; awaitWsReady:false — no auto-join echo to wait on.
     await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
     await expect(page.locator('[data-testid="scrollback"]')).toBeVisible({ timeout: 10_000 });
 
-    // #bofh scrollback fetched → warm. Only now is the switch a warm one.
+    // #spec-wN scrollback fetched → warm. Only now is the switch a warm one.
     await channelWarm;
 
-    // THE SWITCH — click #bofh in the sidebar. key() changes $server→#bofh,
+    // THE SWITCH — click #spec-wN in the sidebar. key() changes $server→#spec-wN,
     // firing the channel-switch key-effect (prevKey defined, so NOT the
     // defer-skipped mount run). This is the trigger the #168 collapse
     // over-reached into.

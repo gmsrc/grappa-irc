@@ -4,7 +4,7 @@
 // The original #196 fix (14daadce) snapshots the scroll container's scrollTop on
 // the overlay open edge and re-asserts it on close. Its e2e
 // (issue196-preview-scroll-preserve.spec.ts) opens+closes on a QUIET, fully-read
-// #bofh and passes — because nothing perturbs the scroll while the overlay is up.
+// #spec-wN and passes — because nothing perturbs the scroll while the overlay is up.
 //
 // A LIVE channel does perturb it: a message arriving while the preview is open
 // mutates messages() → rows() recomputes → the ref-keyed <For> RECREATES the
@@ -22,7 +22,7 @@
 //
 // Desktop project only (untagged → chromium): desktop Chrome reproduces desktop
 // scroll physics (feedback_playwright_webkit_not_ios_scroll). Modelled on the
-// #196 + #219-general harness: seeded #bofh (200 lines → tall pane), a live
+// #196 + #219-general harness: seeded #spec-wN (200 lines → tall pane), a live
 // IrcPeer for the in-overlay arrival, deterministic scroll via evaluate, overlay
 // opened by the anchor's OWN real click on a VISIBLE mid-list image.
 

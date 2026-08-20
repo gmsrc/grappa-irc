@@ -9,9 +9,9 @@
 // This spec drives the USER-VISIBLE OUTCOME from inside a channel, with two
 // independent oracles so a sidebar class flipped without the pane following
 // cannot pass:
-//   1. the sidebar selection moves off #bofh onto the `$server` row, and
+//   1. the sidebar selection moves off #spec-wN onto the `$server` row, and
 //   2. the compose textarea placeholder becomes the server window's
-//      (`message <slug>`, #151) instead of the channel's (`message #bofh`).
+//      (`message <slug>`, #151) instead of the channel's (`message #spec-wN`).
 // Both are asserted in their PRE state first, so the gesture is what moves
 // them. On the unfixed code Alt+0 is an unbound key: the channel stays
 // selected and the placeholder never changes — the spec goes RED.

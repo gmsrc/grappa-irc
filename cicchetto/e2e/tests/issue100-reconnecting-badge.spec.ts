@@ -22,7 +22,7 @@
 // that is not currently connected coming back up, surfaced to the user.
 //
 // CLEANUP: afterEach reconnects the network (best-effort) and polls
-// GET /channels until autojoin restores #bofh — same discipline as
+// GET /channels until autojoin restores #spec-wN — same discipline as
 // cp15-b6-parked-disconnect-reconnect so the next spec inherits a live
 // session.
 
@@ -40,7 +40,7 @@ const PARK_REASON = "testing reconnect badge #100";
 test.setTimeout(90_000);
 
 test.afterEach(async () => {
-  // Best-effort reconnect + poll #bofh back to joined so a mid-run
+  // Best-effort reconnect + poll #spec-wN back to joined so a mid-run
   // failure doesn't leave the network parked for the next spec (same
   // rationale as cp15-b6-parked-disconnect-reconnect).
   const vjt = specUser();

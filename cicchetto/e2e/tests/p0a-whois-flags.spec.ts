@@ -4,7 +4,7 @@
 // "registered" tag chip.
 //
 // Pre-conditions:
-//   - vjt logged in, focused on #bofh.
+//   - vjt logged in, focused on #spec-wN.
 //   - Peer "p0a-target" connects to a leaf, REGISTERs with NickServ, then
 //     AUTHs with the emailed code (EMAIL:1 since GH #349) to reach +r.
 //     azzurra-testnet d998d09 added the `U:services.azzurra

@@ -68,7 +68,7 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
   await loginAs(page, vjt);
 
   // Anchor focus on the autojoin channel so the topic-bar settings
-  // button mounts. We deliberately stay on `#bofh` rather than the
+  // button mounts. We deliberately stay on `#spec-wN` rather than the
   // mention target — we want the mention to land OUT of the focused
   // window so the SW dedup doesn't suppress it. Focused-channel
   // dedup is the dedup spec's concern; this spec asserts the
@@ -94,7 +94,7 @@ test("channel mention while push-enabled fires Sender → push-catcher receives 
     // sends — same race as M1 / b2 specs.
     await selectChannel(page, NETWORK_SLUG, TARGET_CHANNEL, { ownNick: specNick() });
 
-    // Re-focus #bofh so the mention lands UNFOCUSED.
+    // Re-focus #spec-wN so the mention lands UNFOCUSED.
     await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     // #182 — background the device so the server delivers. The server

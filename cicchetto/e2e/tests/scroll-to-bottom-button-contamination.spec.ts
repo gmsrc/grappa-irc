@@ -71,15 +71,15 @@ test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands
     const vjt = specUser();
     await loginAs(page, vjt);
 
-    // Focus #bofh, confirm the first REST page is in.
+    // Focus #spec-wN, confirm the first REST page is in.
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
     await expect
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(50);
 
     // Open an empty query (the "other" window) so it exists to switch to,
-    // then return to #bofh. Done up front so the loadMore + tap below all
-    // happen inside #bofh with no intervening switch (avoids racing
+    // then return to #spec-wN. Done up front so the loadMore + tap below all
+    // happen inside #spec-wN with no intervening switch (avoids racing
     // scrollToActivation's re-snap).
     await composeSend(page, `/query ${EMPTY_QUERY_PEER}`);
     await expect(page.locator(".scrollback-empty")).toBeVisible({ timeout: 5_000 });
@@ -117,7 +117,7 @@ test.describe("scroll-to-bottom button (iOS) — tap then window roundtrip lands
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(50);
 
-    // Contract: #bofh lands at the bottom after the roundtrip — NOT blank.
+    // Contract: #spec-wN lands at the bottom after the roundtrip — NOT blank.
     await expect
       .poll(async () => (await scrollbackDistanceFromBottom(page)) ?? 999, { timeout: 5_000 })
       .toBeLessThanOrEqual(SCROLL_BOTTOM_THRESHOLD_PX);

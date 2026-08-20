@@ -45,7 +45,7 @@
 // pane has tail-followed the WS echo) so the geometry is deterministic, and
 // asserts on the state the operator actually ends up looking at.
 //
-// Harness mirrors issue168-scroll-authority (DB-seeded 200-row `#bofh`; tiny
+// Harness mirrors issue168-scroll-authority (DB-seeded 200-row `#spec-wN`; tiny
 // 800×300 viewport so the REST page overflows and scroll geometry is
 // measurable; mid-page cursor so cold-mount lands on the marker, above the
 // fold).

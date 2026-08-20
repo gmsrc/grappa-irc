@@ -59,9 +59,9 @@ function ownNickRows(page: Page, body: string) {
 test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   // ── Sentinel 1: two-session own-msg-no-bump ─────────────────────────
   //
-  // Two browser contexts, same seeded vjt. Session A focused on #bofh,
+  // Two browser contexts, same seeded vjt. Session A focused on #spec-wN,
   // session B focused on $server. Session A sends a PRIVMSG. Session
-  // B's sidebar/BottomBar badge for #bofh must NOT bump.
+  // B's sidebar/BottomBar badge for #spec-wN must NOT bump.
   //
   // Mechanism (NOT asserted directly — only the behavior is):
   //   - session A's `scrollback.sendMessage` advances local cursor to
@@ -71,15 +71,17 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   //   - session B's `applyReadCursorSet` (subscribe.ts) folds the new
   //     id into local `readCursors`
   //   - session B's `messagesUnread` memo (bucket B2) recomputes
-  //     `count_after(cursor)` on #bofh → drops the row → badge stays
+  //     `count_after(cursor)` on #spec-wN → drops the row → badge stays
   //     at 0 (or whatever pre-existing count was)
-  test("session A's send in #bofh does NOT bump session B's #bofh badge", async ({ browser }) => {
+  test("session A's send in #spec-wN does NOT bump session B's #spec-wN badge", async ({
+    browser,
+  }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
     const vjt = specUser();
 
     // Restore cursor to tail BEFORE either session loads so both
     // sessions hydrate with a clean (empty) unread state. Prior specs
-    // may have left the seeded vjt's cursor mid-pane on #bofh — bucket
+    // may have left the seeded vjt's cursor mid-pane on #spec-wN — bucket
     // B2's derived memo would otherwise show a stale unread count on
     // session B and the "did not bump" assertion would need to compare
     // deltas instead of absolutes. Clean baseline is simpler + more
@@ -94,13 +96,13 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
       await loginAs(pageA, vjt);
       await loginAs(pageB, vjt);
 
-      // Session A focused on #bofh; session B focused on $server.
+      // Session A focused on #spec-wN; session B focused on $server.
       await selectChannel(pageA, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
       await selectChannel(pageB, NETWORK_SLUG, NETWORK_SLUG, {
         awaitWsReady: false,
       });
 
-      // Snapshot session B's #bofh badge BEFORE the send. With the
+      // Snapshot session B's #spec-wN badge BEFORE the send. With the
       // cursor restored to tail, count_after(cursor) === 0 so the
       // badge element is absent (the production guard hides the
       // badge when count is 0). Use count() as the dispatchable
@@ -133,7 +135,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
       // testnet (typically <100ms).
       await pageB.waitForTimeout(POST_SEND_SETTLE_MS);
 
-      // The load-bearing assertion: session B's #bofh badge did NOT
+      // The load-bearing assertion: session B's #spec-wN badge did NOT
       // bump. Either still absent (count === 0) or still at the
       // pre-existing text. A bump would either materialize the badge
       // element (count goes 0 → 1) or grow its number.
@@ -157,9 +159,9 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
 
   // ── Sentinel 2: marker-collapses-on-send-in-focused ─────────────────
   //
-  // Single browser context. Seed `── XX unread ──` marker on #bofh by
+  // Single browser context. Seed `── XX unread ──` marker on #spec-wN by
   // having a peer PRIVMSG while focus is on $server, switch focus to
-  // #bofh to render the marker, then send a message. SEND-RELATCH
+  // #spec-wN to render the marker, then send a message. SEND-RELATCH
   // (2026-06-09, vjt: "marker showing + you send → hide it"): a focused
   // send is an explicit caught-up action and collapses the divider
   // immediately — NO window-switch needed. The freeze contract still
@@ -167,12 +169,12 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
   // an own send fires the `lastOwnSend` re-latch.
   //
   // Mechanism (NOT asserted directly — only the behavior is):
-  //   - peer privmsg lands on #bofh while focus is on $server →
+  //   - peer privmsg lands on #spec-wN while focus is on $server →
   //     server persists row with id > cursor → cic's incoming WS
-  //     fanout to #bofh topic stores the row but DOESN'T touch
+  //     fanout to #spec-wN topic stores the row but DOESN'T touch
   //     cursor (focus on $server, leave-arm on $server doesn't fire
-  //     for #bofh).
-  //   - switch focus to #bofh → key-effect latches `markerCursorId` at
+  //     for #spec-wN).
+  //   - switch focus to #spec-wN → key-effect latches `markerCursorId` at
   //     the pre-peer cursor → rows memo injects `unread-marker` BEFORE
   //     the first row with id > snapshot.
   //   - send a PRIVMSG → `sendMessage` advances the live cursor AND
@@ -190,8 +192,8 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
 
     await loginAs(page, vjt);
 
-    // Focus $server first so the peer's PRIVMSG to #bofh lands while
-    // #bofh is NOT focused — cursor stays put, row stacks past it.
+    // Focus $server first so the peer's PRIVMSG to #spec-wN lands while
+    // #spec-wN is NOT focused — cursor stays put, row stacks past it.
     await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
 
     const peerBody = `unread-cursor Z sentinel2 peer ${crypto.randomUUID().slice(0, 8)}`;
@@ -200,7 +202,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
       await peer.join(CHANNEL);
       peer.privmsg(CHANNEL, peerBody);
 
-      // Switch to #bofh — key-effect latches the snapshot at cursor <
+      // Switch to #spec-wN — key-effect latches the snapshot at cursor <
       // peer-row id, rows memo injects the unread-marker. Wait for the
       // peer row + marker to render before the focused send so the
       // pre-condition is visible (otherwise a marker-already-gone state
@@ -215,7 +217,7 @@ test.describe("unread-badges-from-cursor cluster (A → D + Z)", () => {
         timeout: 5_000,
       });
 
-      // Send an own-PRIVMSG in the focused #bofh. `sendMessage` advances
+      // Send an own-PRIVMSG in the focused #spec-wN. `sendMessage` advances
       // the live cursor AND fires `lastOwnSend` → the send-relatch effect
       // hides the marker. No window-switch.
       const ownBody = `unread-cursor Z sentinel2 own ${crypto.randomUUID().slice(0, 8)}`;

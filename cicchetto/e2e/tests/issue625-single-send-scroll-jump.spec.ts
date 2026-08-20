@@ -26,7 +26,7 @@
 // first reached the tail means the pane was dragged away — the "too far up"
 // jump.
 //
-// Harness mirrors issue580 (DB-seeded 200-row #bofh; tiny 800×300 viewport so
+// Harness mirrors issue580 (DB-seeded 200-row #spec-wN; tiny 800×300 viewport so
 // the buffer overflows and scroll geometry is measurable).
 
 import type { Page } from "@playwright/test";

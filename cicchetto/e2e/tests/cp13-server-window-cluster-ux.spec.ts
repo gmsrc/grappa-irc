@@ -81,7 +81,7 @@ test.describe("CP13 server-window cluster", () => {
     // {:server, nil} → persists as a :notice row on $server with
     // meta.numeric=306, severity=:ok. The row arrives on the per-
     // channel WS topic and bumps messagesUnread for $server (the
-    // currently-focused window is #bofh, not $server).
+    // currently-focused window is #spec-wN, not $server).
     //
     // (MOTD lines persist on $server too but they fire DURING session
     // bootstrap, before cicchetto's WS subscription is ready, so they

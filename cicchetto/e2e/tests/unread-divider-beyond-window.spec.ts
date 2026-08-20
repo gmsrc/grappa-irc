@@ -20,7 +20,7 @@
 // last-read row is not in the tail page, so neither it nor a correctly-
 // placed marker appears in the DOM.
 //
-// Per BUGHUNT-3 cascade rule: this spec rewinds the seeded vjt's #bofh
+// Per BUGHUNT-3 cascade rule: this spec rewinds the seeded vjt's #spec-wN
 // cursor to an early row, so it MUST restore to tail in afterAll or
 // downstream specs inherit a mid-list cursor → marker injects → scroll
 // lands mid-pane → cascade.
@@ -35,7 +35,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Own-presence kinds excluded from the unread-marker count — mirrors the
 // single source of truth `src/lib/ownPresenceEvent.ts` (`PRESENCE_KINDS`).
 // Used only to DERIVE the expected count from server data (the operator's
-// own auto-JOIN line on #bofh is the one such row after an early cursor);
+// own auto-JOIN line on #spec-wN is the one such row after an early cursor);
 // it is not the behaviour under test.
 const OWN_PRESENCE_KINDS = new Set(["join", "part", "quit", "nick_change", "mode", "kick"]);
 
@@ -67,7 +67,7 @@ test.describe("#156 unread divider with unread beyond the fetch window", () => {
     // not the full history (scroll-up `loadMore` pages further back).
     const readContextRow = rows[cursorIndex - 10];
     if (!lastReadRow || !firstUnreadRow || !readContextRow) {
-      throw new Error("#156 spec: seeded #bofh rows missing expected indices");
+      throw new Error("#156 spec: seeded #spec-wN rows missing expected indices");
     }
 
     // True unread = rows after the cursor MINUS the operator's own

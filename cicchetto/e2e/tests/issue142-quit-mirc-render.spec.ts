@@ -33,7 +33,7 @@ test("issue142 — QUIT reason renders mIRC bold+color spans (not raw control by
   await selectChannel(page, NETWORK_SLUG, TEST_CHANNEL, { awaitWsReady: false });
 
   // Live per-channel WS gate: the QUIT PubSub broadcast must land after
-  // cic has joined the `grappa:user:.../channel:#bofh` Phoenix topic, or
+  // cic has joined the `grappa:user:.../channel:#spec-wN` Phoenix topic, or
   // the row never renders. members-pane rendering vjt-grappa is the
   // cheapest live-WS signal (see cp13-s10 rationale).
   await expect(page.locator(".members-pane li", { hasText: specNick() })).toBeVisible({

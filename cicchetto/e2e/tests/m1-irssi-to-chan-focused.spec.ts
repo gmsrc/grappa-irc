@@ -8,9 +8,9 @@
 //
 // Wiring:
 //   - peer connects via IrcPeer (uses bahamut-test alias → leaf-v4)
-//   - peer JOINs #bofh (cicchetto is autojoined there via the seeder)
+//   - peer JOINs #spec-wN (cicchetto is autojoined there via the seeder)
 //   - cicchetto loginAs() (token + subject pre-seeded into localStorage)
-//   - cicchetto selectChannel(#bofh) — explicit, even though autojoin makes
+//   - cicchetto selectChannel(#spec-wN) — explicit, even though autojoin makes
 //     it the only candidate, so the spec reads as "vjt is focused"
 //   - peer PRIVMSGs the channel
 //   - assert: scrollback has the new line; no msg-unread badge

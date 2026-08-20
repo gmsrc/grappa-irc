@@ -49,7 +49,7 @@ import { expect, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
-// Re-seed #bofh with a corpus LARGER than the 200-row server cap so the
+// Re-seed #spec-wN with a corpus LARGER than the 200-row server cap so the
 // planted early cursor leaves > 200 unread — the exact condition under which
 // #693 abandons the cursor anchor and lands at the tail instead.
 const LARGE_SEED_COUNT = 260;
@@ -71,7 +71,7 @@ test.describe("#161/#693 — a gap larger than one page opens at the tail, not t
     const vjt = specUser();
     const admin = getSeededAdmin();
 
-    // Re-seed #bofh with > 200 rows. resetSubject truncates then re-seeds
+    // Re-seed #spec-wN with > 200 rows. resetSubject truncates then re-seeds
     // `seedCount` synthetic privmsgs and re-JOINs the channel (own-nick JOIN
     // lands as the max id row after the seed).
     await resetSubject(
@@ -92,7 +92,7 @@ test.describe("#161/#693 — a gap larger than one page opens at the tail, not t
     // one page.
     const cursorIndex = rows.length - 240;
     const lastReadRow = rows[cursorIndex];
-    if (!lastReadRow) throw new Error("#161 spec: seeded #bofh rows missing cursor index");
+    if (!lastReadRow) throw new Error("#161 spec: seeded #spec-wN rows missing cursor index");
     const rowsAfterCursor = rows.filter((r) => r.id > lastReadRow.id).length;
     // Guard the condition under test.
     expect(rowsAfterCursor).toBeGreaterThan(MAX_HTTP_LIMIT);

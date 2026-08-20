@@ -46,7 +46,7 @@
 // Runs on chromium desktop (no @webkit tag).
 //
 // CLEANUP: the wrapped `test` fixture auto-resets vjt after every spec
-// (restores autojoin to ["#bofh"], so BOTH staged channels are dropped even if
+// (restores autojoin to ["#spec-wN"], so BOTH staged channels are dropped even if
 // an assertion failed mid-spec, and restarts the session). afterEach only tears
 // down the peer.
 

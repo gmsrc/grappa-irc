@@ -7,7 +7,7 @@
 //
 // The negative assertion needs a sync point: we have to know that any
 // IRC activity from the peer that COULD have surfaced in cicchetto has had
-// time to propagate. We do that by chaining a second JOIN to #bofh
+// time to propagate. We do that by chaining a second JOIN to #spec-wN
 // (where grappa IS) and waiting for THAT join event to render in cicchetto
 // scrollback. Once that arrives, we know all earlier peer→IRC traffic
 // (including the #other JOIN) has been processed by the leaf and
@@ -30,10 +30,10 @@ const OUTSIDE_CHANNEL = "#m7-outside";
 test("M7 — peer JOIN on unbound channel does NOT add sidebar entry", async ({ page }) => {
   const vjt = specUser();
   await loginAs(page, vjt);
-  // Focus #bofh so the sync-point JOIN line lands in the currently-
+  // Focus #spec-wN so the sync-point JOIN line lands in the currently-
   // visible scrollback (avoids false-negatives where the line is
   // appended to a non-rendered window's store). The WS-ready guard
-  // also pins that the #bofh topic subscription has completed before
+  // also pins that the #spec-wN topic subscription has completed before
   // the peer fires.
   await selectChannel(page, NETWORK_SLUG, BOUND_CHANNEL, { ownNick: specNick() });
 
@@ -42,12 +42,12 @@ test("M7 — peer JOIN on unbound channel does NOT add sidebar entry", async ({ 
     // Peer joins the unbound channel first. Grappa is not a member of
     // OUTSIDE_CHANNEL, so the leaf does not forward this JOIN to grappa.
     await peer.join(OUTSIDE_CHANNEL);
-    // Peer joins #bofh — grappa IS in #bofh, so the leaf forwards this
+    // Peer joins #spec-wN — grappa IS in #spec-wN, so the leaf forwards this
     // JOIN to grappa, which pushes a `join` scrollback row to cicchetto via WS.
     await peer.join(BOUND_CHANNEL);
 
     // Sync point AND user@host render assertion. The peer JOIN row
-    // appearing in #bofh proves grappa has processed all earlier peer
+    // appearing in #spec-wN proves grappa has processed all earlier peer
     // activity in IRC stream order; anything #m7-outside was going to
     // surface in cicchetto would have by now.
     //

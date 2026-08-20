@@ -87,7 +87,7 @@ test.describe("#887 focused-window unread badge", () => {
     const rows = await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(rows.length).toBeGreaterThanOrEqual(UNREAD_DEPTH + 10);
     const lastRead = rows[rows.length - UNREAD_DEPTH];
-    if (!lastRead) throw new Error("#887 spec: seeded #bofh rows missing expected index");
+    if (!lastRead) throw new Error("#887 spec: seeded #spec-wN rows missing expected index");
 
     // Plant the cursor BEFORE login so the channel hydrates already behind.
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, lastRead.id);

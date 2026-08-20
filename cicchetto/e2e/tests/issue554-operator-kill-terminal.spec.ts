@@ -14,7 +14,7 @@
 // asserts the SERVER contract (the REST door of the same domain event,
 // per "one feature, one code path, every door").
 //
-// CLEANUP: afterEach reconnects the network + polls #bofh back to joined,
+// CLEANUP: afterEach reconnects the network + polls #spec-wN back to joined,
 // mirroring issue100-reconnecting-badge, so the next spec on the shared
 // testnet inherits a live session.
 

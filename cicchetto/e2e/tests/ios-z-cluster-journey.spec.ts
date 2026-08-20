@@ -21,7 +21,7 @@
 //     resolves to 0 here. The assertion confirms the CSS rule didn't
 //     break the layout (top-bar stays in-bounds); the real notch-clearance
 //     evidence is browser-smoke screenshots from a notched iPhone shape.
-//   * iOS-3 bottom-bar close × — open #bofh tab → tap × → tab gone
+//   * iOS-3 bottom-bar close × — open #spec-wN tab → tap × → tab gone
 //     (mirror of `ios-3-bottom-bar-close.spec.ts`).
 //   * iOS-4 font-size — open settings → pick XL → reload → still XL +
 //     `--font-size = 18px` (mirror of `ios-4-font-size.spec.ts`).
@@ -47,12 +47,12 @@ import { joinChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh
+const CHANNEL = AUTOJOIN_CHANNELS[0]; // #spec-wN
 
 // GREEN-CI batch 2 — iOS-3 arm below taps the close × which PARTs vjt
-// from #bofh on the bouncer. Without restoration, downstream
+// from #spec-wN on the bouncer. Without restoration, downstream
 // webkit-iphone-15 specs (ux-2-mobile-archive runs next alphabetically)
-// can't selectChannel(#bofh) — the tab is gone, locator times out at
+// can't selectChannel(#spec-wN) — the tab is gone, locator times out at
 // 30s. Re-join via REST in afterEach so the autojoin steady state
 // returns before the next spec.
 test.afterEach(async () => {

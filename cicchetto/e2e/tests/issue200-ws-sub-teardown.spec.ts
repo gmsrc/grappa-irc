@@ -56,7 +56,7 @@ const joinedTopicKeys = (page: import("@playwright/test").Page): Promise<string[
   );
 
 test.afterEach(async () => {
-  // Restore the seed state — if the assertion path left #bofh parted,
+  // Restore the seed state — if the assertion path left #spec-wN parted,
   // downstream specs that assume the autojoin seed (M1, BUG7, …) would fail.
   const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});
@@ -95,7 +95,7 @@ test("#200 — after own-PART teardown, compose /join re-subscribes AND focuses 
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect.poll(() => joinedTopicKeys(page), { timeout: 10_000 }).toContain(TOPIC_KEY);
 
-  // PART #bofh → subscription torn down, channel leaves the sidebar.
+  // PART #spec-wN → subscription torn down, channel leaves the sidebar.
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 10_000 });
   await expect.poll(() => joinedTopicKeys(page), { timeout: 10_000 }).not.toContain(TOPIC_KEY);

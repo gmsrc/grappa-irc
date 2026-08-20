@@ -86,7 +86,7 @@ test.describe("#1062 — the far-behind gesture is the bar's × and nothing else
     expect(rows.length).toBeGreaterThan(UNREAD_TARGET);
 
     const lastReadRow = rows[rows.length - UNREAD_TARGET];
-    if (!lastReadRow) throw new Error("#1062 spec: seeded #bofh rows missing cursor index");
+    if (!lastReadRow) throw new Error("#1062 spec: seeded #spec-wN rows missing cursor index");
     const rowsAfterCursor = rows.filter((r) => r.id > lastReadRow.id).length;
     // Guard the precondition: below this the pane never goes far behind and
     // the spec would pass by testing nothing.

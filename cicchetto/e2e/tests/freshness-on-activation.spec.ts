@@ -12,7 +12,7 @@
 // rows stayed invisible until a full app reload. Verbatim user report on #159.
 //
 // The gap is opened with `__cic_suppressChannelDeliveryForTests` (subscribe.ts):
-// it silences `phx.on("event")` for #bofh's topic ONLY, leaving the socket and
+// it silences `phx.on("event")` for #spec-wN's topic ONLY, leaving the socket and
 // every other channel live. Both tests assert the RENDERED message row appears
 // after activation (never a fetch spy, never after a reload) — the user-visible
 // contract. RED against pre-fix code (row never appears without reload) → GREEN
@@ -30,7 +30,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // under full-gate load a residual `msg-159-*-during-gap` row persisted by a
 // PRIOR execution of this spec (a Playwright retry, or a slow `_vjtReset`
 // truncate that lost the DB-lock race under #506/#539 contention) can survive
-// into this run's #bofh scrollback and satisfy the `hasText` substring,
+// into this run's #spec-wN scrollback and satisfy the `hasText` substring,
 // reddening the premise before the fix under test ever runs. A per-run UUID
 // makes THIS run's rows un-collidable with any neighbour's, so the premise
 // measures only the delivery gap it means to — never leftover state. Iso is
@@ -95,7 +95,7 @@ test("#159 — tab RE-SELECT after a socket-stays-open gap re-fetches the missed
     peer.privmsg(CHANNEL, before);
     await expect(scrollbackLine(page, "privmsg", before)).toBeVisible();
 
-    // Phase 2 — open the gap for #bofh only; the socket stays "open".
+    // Phase 2 — open the gap for #spec-wN only; the socket stays "open".
     await suppressChannelDelivery(page, NETWORK_SLUG, CHANNEL);
 
     // Phase 3 — peer posts during the gap. Server persists + broadcasts;
@@ -109,7 +109,7 @@ test("#159 — tab RE-SELECT after a socket-stays-open gap re-fetches the missed
     await expect(scrollbackLine(page, "privmsg", during)).toHaveCount(0);
 
     // Phase 4 — re-activate WITHOUT reload: switch to the server window and
-    // back to #bofh. The selection effect fires refreshScrollback for the
+    // back to #spec-wN. The selection effect fires refreshScrollback for the
     // re-activated channel (#159 item 1); loadInitialScrollback is a no-op
     // (load-once gate). The resume cursor is the Phase-1 high-water mark, so
     // `?after=<that id>` fetches the gap row and appends it (id-deduped).

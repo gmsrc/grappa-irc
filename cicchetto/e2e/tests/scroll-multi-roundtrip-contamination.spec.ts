@@ -116,10 +116,10 @@ test.describe("scroll-multi-roundtrip — N back-and-forths preserve destination
       .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
       .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
 
-    // Loop: scroll-up in #bofh (operator reading history), bounce to
+    // Loop: scroll-up in #spec-wN (operator reading history), bounce to
     // the empty query, return. Pre-fix `atBottom` stays false (the
     // scroll-up set it) and leaks into the empty query's pane mount,
-    // then back into #bofh — the destination length-effect skips the
+    // then back into #spec-wN — the destination length-effect skips the
     // auto-snap because `atBottom()` is stale-false. By round 2-3 the
     // scrollTop is visibly wrong.
     //
@@ -127,7 +127,7 @@ test.describe("scroll-multi-roundtrip — N back-and-forths preserve destination
     // on every transition, so each return lands at-bottom regardless
     // of how the operator scrolled the source.
     for (let i = 0; i < 5; i++) {
-      // Operator scrolls up to mid-history in #bofh.
+      // Operator scrolls up to mid-history in #spec-wN.
       await scrollScrollbackTo(page, 100);
       // Bounce: query → channel.
       await sidebarWindow(page, NETWORK_SLUG, EMPTY_QUERY_PEER)
@@ -139,7 +139,7 @@ test.describe("scroll-multi-roundtrip — N back-and-forths preserve destination
         .poll(async () => await scrollbackLines(page).count(), { timeout: 10_000 })
         .toBeGreaterThanOrEqual(REST_PAGE_SIZE);
 
-      // Contract: every return to #bofh lands at the bottom (no marker
+      // Contract: every return to #spec-wN lands at the bottom (no marker
       // in this scenario — cursor pre-set to tail in beforeEach). Polled
       // because scrollIntoView lands asynchronously vs the layout commit.
       await expect

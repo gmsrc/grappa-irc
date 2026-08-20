@@ -3,7 +3,7 @@
 // What this spec asserts:
 //   1. The 📇 channels ($list) sidebar row opens DirectoryPane.
 //   2. The server-issued LIST populates the directory; a peer-created
-//      channel (PEER_CHANNEL) and the seeded autojoin channel (#bofh)
+//      channel (PEER_CHANNEL) and the seeded autojoin channel (#spec-wN)
 //      both appear after clicking Refresh.
 //   3. Selecting the $list window fires NO GET /messages request
 //      (grappa-irc#81: kindHasScrollback("list") === false).
@@ -65,7 +65,7 @@ test("channel-directory — browse, no /messages fetch (#81 guard), search filte
 
     await loginAs(page, vjt);
 
-    // Focus #bofh and wait for its scrollback to land so the initial
+    // Focus #spec-wN and wait for its scrollback to land so the initial
     // GET /messages for the autojoin channel has already fired BEFORE
     // we arm the request collector.
     await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], {
@@ -78,7 +78,7 @@ test("channel-directory — browse, no /messages fetch (#81 guard), search filte
     // scrollback for the SELECTED window, i.e. cic's listMessages hits
     // GET .../channels/%24list/messages (encodeURIComponent("$list")).
     // Record ONLY that path: an unrelated forward gap-fill on the live
-    // autojoin #bofh (.../channels/%23bofh/messages?after=...) is legitimate
+    // autojoin #spec-wN (.../channels/%23spec-wN/messages?after=...) is legitimate
     // background activity — a peer is connected and seed traffic is real —
     // NOT the regression, and under full-gate load it can fire inside this
     // window and trip a global-zero collector (the load-only flake).
@@ -143,7 +143,7 @@ test("channel-directory — browse, no /messages fetch (#81 guard), search filte
 
     // (4) Search filter: typing the unique fragment ("e2edir") routes a
     // server-side query re-GET. Only PEER_CHANNEL should match;
-    // AUTOJOIN_CHANNELS[0] (#bofh) should be absent.
+    // AUTOJOIN_CHANNELS[0] (#spec-wN) should be absent.
     await page.locator(".directory-search").fill("e2edir");
     await expect(peerRow).toBeVisible({ timeout: 5_000 });
     await expect(bofhRow).toBeHidden({ timeout: 5_000 });

@@ -101,7 +101,7 @@ test.describe("#253 — keyboard/viewport resize must not yank a scrolled-up rea
 
     const sc = page.getByTestId("scrollback");
 
-    // #bofh seeds 200 lines → the pane overflows. Park the reader UP in history
+    // #spec-wN seeds 200 lines → the pane overflows. Park the reader UP in history
     // (well above the tail) so `atBottom()` is false — the case the bug yanks.
     //
     // `atBottom` flips false ONLY on a real scroll-UP: production `onScroll`
@@ -119,7 +119,7 @@ test.describe("#253 — keyboard/viewport resize must not yank a scrolled-up rea
         el.dispatchEvent(new Event("scroll"));
         // Park ABOVE the tail (atBottom=false) but BELOW the loadMore-older
         // trigger zone. #268 root cause (proven via a full-suite I253DBG dump):
-        // when #bofh renders SHORT — only the initial ~50-row REST page loaded,
+        // when #spec-wN renders SHORT — only the initial ~50-row REST page loaded,
         // so max ≈ 600px on the iPhone-15 viewport — `Math.floor(max * 0.3)`
         // lands at ~180px, INSIDE `maybeLoadOlder`'s `scrollTop <= 200` gate.
         // The scroll-up then FIRES an infinite-scroll prepend; the browser's

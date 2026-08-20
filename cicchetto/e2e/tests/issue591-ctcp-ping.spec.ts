@@ -89,7 +89,7 @@ test("#591 — /ping shows the round-trip time in the source window", async ({ p
     // The reply is CTCP-framed → grappa routes it to $server with typed ctcp
     // meta; cic ALWAYS subscribes to $server, correlates the token back to the
     // pending /ping, and synthesises the round-trip line in the SOURCE window
-    // (#bofh, where /ping was typed). The ms is wall-clock — assert the shape.
+    // (#spec-wN, where /ping was typed). The ms is wall-clock — assert the shape.
     await expect(
       scrollbackLine(page, "notice", new RegExp(`CTCP PING reply from ${peer.nick}: \\d+ ms`)),
     ).toBeVisible({ timeout: 15_000 });

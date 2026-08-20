@@ -1,6 +1,6 @@
 // CP14 B2 — scroll-up triggers loadMore on the focused channel.
 //
-// Production bug: server has 200 rows for #bofh, cic loads latest 50,
+// Production bug: server has 200 rows for #spec-wN, cic loads latest 50,
 // user scrolls to top, NOTHING happens — the older 150 rows are never
 // fetched. Root cause: `ScrollbackPane.tsx` `onScroll` only updates
 // the `atBottom` signal, never calls `loadMore` (which exists at
@@ -101,7 +101,7 @@ test.describe("CP14 B2 — scroll-up triggers loadMore (no end-of-history bounce
     // `restoreReadCursorToTail` in a fixture that #1078 deleted.
     const seeded = await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, CHANNEL);
     const tail = seeded[seeded.length - 1];
-    if (!tail) throw new Error("cp14-b2: seeded #bofh corpus is empty");
+    if (!tail) throw new Error("cp14-b2: seeded #spec-wN corpus is empty");
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tail.id);
 
     await loginAs(page, vjt);

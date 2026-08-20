@@ -46,8 +46,8 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // overflows there) but FEWER than the real device viewport can show (so it
 // does NOT overflow at cold mount). The default 200-row seed overflows even
 // the real viewport, which would make the not-overflowing baseline
-// unreachable — so re-seed #bofh to a small corpus for this spec. The
-// wrapped `test` fixture's afterEach truncates #bofh back to the 200-row
+// unreachable — so re-seed #spec-wN to a small corpus for this spec. The
+// wrapped `test` fixture's afterEach truncates #spec-wN back to the 200-row
 // baseline, so no manual cleanup is needed (same verb issue161 uses).
 // COUPLING: this count MUST stay small enough that the rows do NOT overflow
 // the `webkit-iphone-15` project viewport (393×659) — the not-overflowing
@@ -92,7 +92,7 @@ test("@webkit #245 — .scrollback re-measures overflow (touch-action) on visual
   const admin = getSeededAdmin();
   const vjt = specUser();
 
-  // Re-seed #bofh to a SMALL corpus so it does NOT overflow the real device
+  // Re-seed #spec-wN to a SMALL corpus so it does NOT overflow the real device
   // viewport (the not-overflowing baseline) but WILL overflow a
   // keyboard-shrunk viewport.
   await resetSubject(

@@ -29,7 +29,7 @@
 //
 //   Scenario 1 — no unreads → scroll lands at bottom, no marker.
 //     Setup: spec fetches the seeded rows via REST, identifies the
-//     server_time of the last row, writes `rc:bahamut-test:#bofh = T_last`
+//     server_time of the last row, writes `rc:bahamut-test:#spec-wN = T_last`
 //     into localStorage BEFORE page load. cicchetto boots, REST loads
 //     the latest 50 rows, `getReadCursor` returns T_last, the `rows`
 //     createMemo computes `unreadCount = msgs.filter(m => m.server_time > T_last).length = 0`,

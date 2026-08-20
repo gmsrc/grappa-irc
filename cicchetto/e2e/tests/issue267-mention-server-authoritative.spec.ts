@@ -63,20 +63,20 @@ test("#267 — mention landing during a WS gap surfaces from the server count on
   const body = mentionBody(runId);
 
   // Clean baseline: pin the read cursor to the current tail so any
-  // pre-existing unread mention on #bofh drops below the cursor and the
+  // pre-existing unread mention on #spec-wN drops below the cursor and the
   // window's mention count starts at 0. The one mention we send below is
   // then the ONLY row after the cursor → the count is deterministically 1.
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 
   await loginAs(page, vjt);
 
-  // Focus #bofh so its per-channel topic is subscribed (joinChannel fired
+  // Focus #spec-wN so its per-channel topic is subscribed (joinChannel fired
   // + JOIN echoed). Gate on the seeded member list before moving on.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await assertJoinedWithOwnMember(page);
 
   // Defocus to the Server window. The mention badge's focus-zero overlay
-  // renders 0 for the selected+visible window; #bofh must be UNFOCUSED
+  // renders 0 for the selected+visible window; #spec-wN must be UNFOCUSED
   // for its badge to surface. Server has no compose/JOIN so it can't
   // produce chatter that races the assertion.
   await selectChannel(page, NETWORK_SLUG, SERVER_WINDOW, { awaitWsReady: false });
@@ -111,7 +111,7 @@ test("#267 — mention landing during a WS gap surfaces from the server count on
       body,
     });
 
-    // Resume the socket. phoenix auto-rejoins #bofh; the join reply
+    // Resume the socket. phoenix auto-rejoins #spec-wN; the join reply
     // carries `window_counts.mentions: 1`, which `applyJoinReplyAndSeed`
     // feeds into `mentions.setServerMention` → the red badge shows "@1".
     // This is the load-bearing proof: cic NEVER saw the PRIVMSG, so the
@@ -145,8 +145,8 @@ test("#267 — mention on an unfocused channel fans out from the server to both 
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 
   // Two independent browser contexts = two devices/tabs of the SAME
-  // operator. Both subscribe to #bofh (autojoin), both defocus to Server
-  // so #bofh's badge is not focus-zero-overlaid in either.
+  // operator. Both subscribe to #spec-wN (autojoin), both defocus to Server
+  // so #spec-wN's badge is not focus-zero-overlaid in either.
   const ctxA = await browser.newContext();
   const ctxB = await browser.newContext();
   const pageA = await ctxA.newPage();
@@ -167,7 +167,7 @@ test("#267 — mention on an unfocused channel fans out from the server to both 
     try {
       await peer.join(CHANNEL);
 
-      // ONE mention. The server pushes `window_counts` on the #bofh topic
+      // ONE mention. The server pushes `window_counts` on the #spec-wN topic
       // to EVERY subscribed socket → both tabs' `setServerMention` fires.
       // A pre-#267 per-tab client bump would compute its count in
       // isolation; here both render the same server-sourced "@1".

@@ -676,7 +676,7 @@ export async function reapVisitors(
 
 // Poll GET /networks/:network_slug/channels/:channel/messages for a
 // row matching {sender, body}. Channel id in the URL is the channel
-// NAME (`#bofh`) — grappa's REST surface keys channels by slug-shape,
+// NAME (`#spec-wN`) — grappa's REST surface keys channels by slug-shape,
 // not integer FK (see GrappaWeb.Router scope; ResolveNetwork resolves
 // the network slug, the channel segment is the name). Response is a
 // flat JSON array of `Grappa.Scrollback.Wire.t()` shapes — see
@@ -846,7 +846,7 @@ export async function clearMutedConversations(token: string): Promise<void> {
 // JOIN a channel via REST POST (mirrors `cicchetto/src/lib/api.ts`'s
 // `postJoin`). Used by tests that PART a seeded channel and need to
 // restore it for subsequent specs (M9, in particular — without restore,
-// later specs that assume #bofh is joined fail at selectChannel because
+// later specs that assume #spec-wN is joined fail at selectChannel because
 // the BottomBar tab no longer exists). 200/201/202 = success; the body
 // shape isn't read.
 export async function joinChannel(
@@ -983,7 +983,7 @@ export async function getReadCursor(
 // PART verb (DELETE /networks/.../channels) strips the channel from
 // operator-config autojoin permanently (UX-1, m9-part-x-click,
 // cp15-b6 exercise this); without restoration, every subsequent
-// reset would see an empty autojoin list and the seed `#bofh`
+// reset would see an empty autojoin list and the seed `#spec-wN`
 // would never re-JOIN.
 //
 // `baselineSeed` (network_slug → [{name, seedCount, seedSender}])

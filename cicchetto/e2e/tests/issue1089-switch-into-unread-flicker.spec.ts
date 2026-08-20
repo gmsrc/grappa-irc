@@ -47,8 +47,8 @@
 // scrollTop does NOT change while the content does). The divider's on-screen
 // offset is the pixel the reader actually looks at.
 //
-// Harness mirrors scroll-on-window-switch scenario 3 (warm #bofh in the
-// background, focus $server, then click #bofh — a real key-change SWITCH) and
+// Harness mirrors scroll-on-window-switch scenario 3 (warm #spec-wN in the
+// background, focus $server, then click #spec-wN — a real key-change SWITCH) and
 // the #625 in-page sampler (a rAF loop, because case 2 is one frame wide and any
 // post-hoc snapshot false-greens).
 
@@ -250,7 +250,7 @@ test.describe("issue #1089 — switching into an unread window must not flicker"
     await delayMessageFetches(page, POST_SWITCH_LATENCY_MS);
     await installFlickerProbe(page, SAMPLE_WINDOW_MS);
 
-    // THE SWITCH — a real key-change from $server to #bofh.
+    // THE SWITCH — a real key-change from $server to #spec-wN.
     await sidebarWindow(page, NETWORK_SLUG, CHANNEL).locator(".sidebar-window-btn").click();
 
     await expect
@@ -335,7 +335,7 @@ async function seedMidPageCursor(token: string, channel: string): Promise<void> 
 }
 
 // Warmth gate: cic eagerly refreshes every joined channel on its Phoenix
-// join-ok, so #bofh loads in the background without us focusing it. A cold
+// join-ok, so #spec-wN loads in the background without us focusing it. A cold
 // switch would early-return in `scrollToActivation` (empty pane) and never arm
 // the path under test.
 //
@@ -349,8 +349,8 @@ async function warmUpChannel(page: Page, channel: string): Promise<void> {
   await waitForScrollbackRefreshed(page, NETWORK_SLUG, channel);
 }
 
-// FROM-window: the $server tab mounts ScrollbackPane WITHOUT touching #bofh's
-// read cursor (focusing #bofh first would fire the leave-arm and advance the
+// FROM-window: the $server tab mounts ScrollbackPane WITHOUT touching #spec-wN's
+// read cursor (focusing #spec-wN first would fire the leave-arm and advance the
 // cursor to the tail, erasing the unread under test).
 async function parkOnServerWindow(page: Page): Promise<void> {
   await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });

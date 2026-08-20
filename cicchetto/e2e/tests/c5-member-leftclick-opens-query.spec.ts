@@ -4,14 +4,14 @@
 // one-click variant the spec calls for.
 //
 // Pre-conditions:
-//   - vjt logged in, focused on #bofh (specNick() is the autojoin user;
+//   - vjt logged in, focused on #spec-wN (specNick() is the autojoin user;
 //     IrcPeer "c5-buddy" joins and shows up in members list).
 //
 // Asserts:
 //   - sidebar gains an entry for the buddy nick after click;
 //   - selected window switches to the buddy nick (TopicBar / scrollback
 //     surface keys on it);
-//   - members list still renders #bofh (we left the channel in the
+//   - members list still renders #spec-wN (we left the channel in the
 //     sidebar — close semantics for query windows is unrelated).
 
 import { loginAs, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";

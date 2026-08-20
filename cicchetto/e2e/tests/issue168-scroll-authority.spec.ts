@@ -22,7 +22,7 @@
 //
 // ## What this spec pins
 //
-// Seed a mid-page read cursor on `#bofh` (25 rows from the tail) so an
+// Seed a mid-page read cursor on `#spec-wN` (25 rows from the tail) so an
 // unread divider is present on first focus. Then SEND a line and assert:
 //   (a) the pane is pinned at the BOTTOM (distance-to-tail <= threshold),
 //   (b) the just-sent line is IN the viewport (did NOT jump to the marker),

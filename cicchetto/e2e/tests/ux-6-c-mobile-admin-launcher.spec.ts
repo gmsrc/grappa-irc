@@ -25,7 +25,7 @@
 // start, then reverts in afterEach. Reason: admin-vjt has no network bind in
 // the seeder (intentional — m9b-admin-sessions-actions hardcodes session count
 // = 2 and would break if admin-vjt had a bind). vjt has the bind + autojoined
-// #bofh; promoting it temporarily gives the full surface (admin gate + joined
+// #spec-wN; promoting it temporarily gives the full surface (admin gate + joined
 // channel + rail drawer) without ripple-affecting other specs.
 
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";

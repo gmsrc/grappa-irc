@@ -23,7 +23,7 @@
 // the mobile visualViewport-change fires — feedback_playwright_webkit_not_ios_
 // scroll means the real iOS path can't be emulated, but the authority is
 // window-level so a plain resize exercises it). Mirrors #196's harness: seeded
-// #bofh (200 lines → tall pane), deterministic mid-list scroll via evaluate, and
+// #spec-wN (200 lines → tall pane), deterministic mid-list scroll via evaluate, and
 // the anchor's OWN click to open the overlay without a Playwright scroll-into-
 // view.
 //
@@ -49,7 +49,7 @@ test("#219 — a resize while the image viewer is open must NOT snap the list to
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  // Upload an image so the scrollback carries a clickable media link. #bofh is
+  // Upload an image so the scrollback carries a clickable media link. #spec-wN is
   // seeded with 200 lines → the pane is genuinely tall and scrollable.
   const { slug } = await uploadViaPicker(
     page,

@@ -55,7 +55,7 @@ import { joinChannel, partChannel } from "../fixtures/grappaApi";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — the seeded autojoin channel
+const CHANNEL = AUTOJOIN_CHANNELS[0]; // #spec-wN — the seeded autojoin channel
 
 // The rail buttons a NON-admin (vjt) sees on a CHANNEL window, each paired with
 // the `.rail-action-label` text #473 gave it. Order mirrors the render order in
@@ -94,7 +94,7 @@ const RAIL_BUTTONS: ReadonlyArray<{ testid: string; label: string }> = [
 test.setTimeout(60_000);
 
 test.afterEach(async () => {
-  // Tests (c) + (d) PART #bofh into the archive; restore the seed-joined state
+  // Tests (c) + (d) PART #spec-wN into the archive; restore the seed-joined state
   // so downstream specs still find the autojoin channel. Idempotent — a 404 on
   // an already-joined channel is treated as success by joinChannel's caller
   // contract (mirrors ux-1 / ux-2 / cp15-b6).
@@ -245,7 +245,7 @@ test.describe("#473 — RailActions drawer + grouped ArchiveModal", () => {
 
     // PART → archived. Then reach the ONE archive door via the rail (openArchive
     // is viewport-aware: on mobile it opens the drawer then taps the always-on
-    // archive button). Expand the group → the lazy row load surfaces #bofh.
+    // archive button). Expand the group → the lazy row load surfaces #spec-wN.
     await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
     await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });
 

@@ -51,7 +51,7 @@ const PARK_REASON = "testing #248 lusers auto-surface";
 test.setTimeout(90_000);
 
 test.afterEach(async () => {
-  // Best-effort restore: reconnect + poll #bofh back to joined so a
+  // Best-effort restore: reconnect + poll #spec-wN back to joined so a
   // mid-run failure doesn't leave the network parked for the next spec
   // (same discipline as issue100-reconnecting-badge).
   const vjt = specUser();

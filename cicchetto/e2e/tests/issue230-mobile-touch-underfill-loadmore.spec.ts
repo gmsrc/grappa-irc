@@ -111,7 +111,7 @@ async function synthTouchDrag(page: Page, startY: number, endY: number): Promise
 async function seedCursorToHead(token: string, channel: string): Promise<void> {
   const asc = await fetchAllMessagesAsc(token, NETWORK_SLUG, channel);
   const head = asc[asc.length - 1];
-  if (!head) throw new Error("#bofh seed corpus empty — cannot seed read cursor to head");
+  if (!head) throw new Error("#spec-wN seed corpus empty — cannot seed read cursor to head");
   await setReadCursorToId(token, NETWORK_SLUG, channel, head.id);
 }
 

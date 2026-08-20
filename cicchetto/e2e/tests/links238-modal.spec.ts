@@ -18,7 +18,7 @@
 // connected tree) are the ground-truth witness that the parse order is right.
 //
 // Full path exercised:
-//   1. operator focused on a channel window (#bofh, seed-autojoined)
+//   1. operator focused on a channel window (#spec-wN, seed-autojoined)
 //   2. operator issues `/links` via composeSend
 //   3. grappa primes links_pending + sends LINKS upstream; Bahamut replies
 //      with the 364 burst; 365 RPL_ENDOFLINKS flushes the `links_bundle` event

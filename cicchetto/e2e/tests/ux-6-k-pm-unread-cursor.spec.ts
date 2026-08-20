@@ -104,7 +104,7 @@ test("UX-6 K — focus-leave on a peer DM window advances the server-side read c
     await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
     // Step 1 — focus the peer window. selection.ts's on(selectedChannel)
-    // effect runs; the leave-arm fires for the OLD selection (#bofh),
+    // effect runs; the leave-arm fires for the OLD selection (#spec-wN),
     // not the new one. No cursor is set for the peer YET (focus
     // alone doesn't set; only LEAVING a window does).
     await selectChannel(page, NETWORK_SLUG, peer.nick, { awaitWsReady: false });

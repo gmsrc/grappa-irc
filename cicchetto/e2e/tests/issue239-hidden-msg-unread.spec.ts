@@ -51,7 +51,7 @@ const SERVER_WINDOW = "Server";
 const PEER_NICK = "i239peer";
 const WITNESS = "issue-239-visible-witness";
 
-// Cursor was advanced mid-test (open #bofh → read). Restore to tail so
+// Cursor was advanced mid-test (open #spec-wN → read). Restore to tail so
 // downstream specs inherit a clean at-tail cursor (BUGHUNT-3 cascade rule).
 test.afterEach(async () => {
   const vjt = specUser();
@@ -64,12 +64,12 @@ test("#239 — hidden control message does NOT bump the unread badge; reading cl
   const vjt = specUser();
   await loginAs(page, vjt);
 
-  // Focus #bofh first so its per-channel WS topic is subscribed (the badge
+  // Focus #spec-wN first so its per-channel WS topic is subscribed (the badge
   // only updates live for a subscribed channel — see M2). ownNick sync waits
   // for the auto-joined self-JOIN line, proving REST + WS both landed.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  // Pin #bofh to HIDE presence via the production toggle (no need to seed
+  // Pin #spec-wN to HIDE presence via the production toggle (no need to seed
   // LARGE_CHANNEL_THRESHOLD members — the size-default math is unit-tested;
   // this is the interactive hide path). #500 folded the denoise toggle behind
   // the rail launcher menu;
@@ -87,7 +87,7 @@ test("#239 — hidden control message does NOT bump the unread badge; reading cl
   // peer traffic we are about to generate.
   await restoreReadCursorToTail(vjt.token, NETWORK_SLUG, CHANNEL);
 
-  // Defocus to the Server window so #bofh's badges are observable (a focused +
+  // Defocus to the Server window so #spec-wN's badges are observable (a focused +
   // visible window suppresses its own badge — decouple-unread-badge). Server
   // has no compose, so it can't produce client chatter that races the assert.
   await selectChannel(page, NETWORK_SLUG, SERVER_WINDOW, { awaitWsReady: false });
@@ -110,7 +110,7 @@ test("#239 — hidden control message does NOT bump the unread badge; reading cl
     //    "1" and could never be cleared by reading (the join never renders).
     await expect(sidebarEventsBadge(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0);
 
-    // 3. Reading clears the counter. Open #bofh — presence stays hidden, so the
+    // 3. Reading clears the counter. Open #spec-wN — presence stays hidden, so the
     //    own-JOIN line is suppressed; wait on the VISIBLE witness privmsg as the
     //    pane-ready signal instead of the (hidden) join line.
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { awaitWsReady: false });
@@ -121,7 +121,7 @@ test("#239 — hidden control message does NOT bump the unread badge; reading cl
     ).toBeVisible({ timeout: 10_000 });
 
     // Leave the window — the read cursor advances over the visible privmsg the
-    // operator saw. Back on Server, #bofh's badges are observable again.
+    // operator saw. Back on Server, #spec-wN's badges are observable again.
     await selectChannel(page, NETWORK_SLUG, SERVER_WINDOW, { awaitWsReady: false });
 
     // 4. Both badges are clear and STAY clear — the message was read, the

@@ -20,7 +20,7 @@
 // scrollToActivation("tail-only") authority the mobile visualViewport change
 // fires (feedback_playwright_webkit_not_ios_scroll — the real iOS path can't
 // be emulated, but the authority is window-level). Modelled on the #196/#219
-// harness: seeded #bofh (200 lines → tall pane), deterministic mid-list
+// harness: seeded #spec-wN (200 lines → tall pane), deterministic mid-list
 // scroll via evaluate, and the modal driven by the /names command.
 
 import { composeSend, loginAs, selectChannel } from "../fixtures/cicchettoPage";

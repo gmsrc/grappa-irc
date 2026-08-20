@@ -1,9 +1,9 @@
 // M2 — peer PRIVMSG to a channel cicchetto is NOT focused on.
 //
-// Manual matrix: irssi (peer) sends to #bofh while vjt is viewing a
+// Manual matrix: irssi (peer) sends to #spec-wN while vjt is viewing a
 // different window (Server). Expected:
 //   - the message is persisted server-side
-//   - the #bofh sidebar entry shows a msg-unread badge with "1"
+//   - the #spec-wN sidebar entry shows a msg-unread badge with "1"
 //
 // Cousin of M1, inverse of the focus invariant: M1 proves "focused
 // channel does not bump unread"; M2 proves "defocused channel does
@@ -29,7 +29,7 @@ const MESSAGE_BODY = "M2: defocused-channel inbound";
 test("M2 — peer PRIVMSG to defocused channel bumps msg-unread badge by 1", async ({ page }) => {
   const vjt = specUser();
   await loginAs(page, vjt);
-  // Visit #bofh FIRST with the WS-ready sync so we know the channel
+  // Visit #spec-wN FIRST with the WS-ready sync so we know the channel
   // topic subscription has landed (joinChannel fired + server-side
   // JOIN echoed). THEN defocus by switching to Server. Without this
   // up-front sync, the peer's PRIVMSG races the WS subscribe and the
@@ -39,7 +39,7 @@ test("M2 — peer PRIVMSG to defocused channel bumps msg-unread badge by 1", asy
   // Server window is always present and has no compose, so selecting
   // it can't accidentally produce client-side chatter that would race
   // the unread-bump assertion. WS-ready guard is off here — Server
-  // windows have no JOIN line to wait for and the #bofh topic was
+  // windows have no JOIN line to wait for and the #spec-wN topic was
   // already proven subscribed above.
   await selectChannel(page, NETWORK_SLUG, SERVER_WINDOW, { awaitWsReady: false });
 

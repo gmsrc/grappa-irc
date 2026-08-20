@@ -5,7 +5,7 @@
 //
 // This e2e is the interactive witness for the per-channel toggle + the
 // render-layer filter + localStorage persistence. It exercises REAL presence
-// events (a peer joins + parts #bofh) — NOT LARGE_CHANNEL_THRESHOLD spawned
+// events (a peer joins + parts #spec-wN) — NOT LARGE_CHANNEL_THRESHOLD spawned
 // peers: that many nicks from one IP risks bahamut flood/autokill
 // (feedback_e2e_multinet_live_needs_distinct_nicks), and there is no
 // window-exposed member-count seam in the e2e harness to inflate membership.
@@ -42,7 +42,7 @@ test("#222 — per-channel toggle hides join/part rows, persists across reload, 
   const channel = AUTOJOIN_CHANNELS[0];
   await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
 
-  // A dedicated peer produces REAL join + part presence events on #bofh.
+  // A dedicated peer produces REAL join + part presence events on #spec-wN.
   // Distinct single nick — no flood risk. try/finally tears it down.
   const peerNick = "pres222peer";
   const peer = await IrcPeer.connect({ nick: peerNick });

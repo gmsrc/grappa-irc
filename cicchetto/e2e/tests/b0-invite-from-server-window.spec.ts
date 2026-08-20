@@ -43,7 +43,7 @@ test("B0 — /invite from $server window (no channel context) reaches upstream +
   const vjt = specUser();
   await loginAs(page, vjt);
 
-  // Focus #bofh first to confirm login + ws-ready, then /join the
+  // Focus #spec-wN first to confirm login + ws-ready, then /join the
   // fresh per-spec channel so vjt is the first user and Bahamut
   // grants +o (so /invite has the privileges to send). Same template
   // as p0e-invite-ack.spec.ts:53-60.

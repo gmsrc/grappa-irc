@@ -5,7 +5,7 @@
 // ephemeral (NOT persisted in scrollback) and keyed per network.
 //
 // Pre-conditions:
-//   - vjt logged in, focused on #bofh.
+//   - vjt logged in, focused on #spec-wN.
 //   - IrcPeer "c2-target" connected so the upstream returns real WHOIS
 //     numerics (311 + 312 + 318 minimum from bahamut).
 //

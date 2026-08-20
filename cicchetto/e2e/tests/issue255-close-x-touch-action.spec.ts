@@ -39,7 +39,7 @@ import { loginAs, selectChannel, sidebarCloseButton } from "../fixtures/cicchett
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-// #bofh is autojoined → its tab renders a close-× on BOTH layouts.
+// #spec-wN is autojoined → its tab renders a close-× on BOTH layouts.
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 // Read the computed `touch-action` off the close × for the given

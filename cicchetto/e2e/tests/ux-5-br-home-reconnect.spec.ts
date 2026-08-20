@@ -194,7 +194,7 @@ test("UX-5 BR — Home pane [Reconnect] chip reconnects a parked network", async
   // of a "connected" home row is incidental to the operator goal.
   await expect(parkedRow).toHaveCount(0, { timeout: 30_000 });
 
-  // Autojoin re-lands: poll the channels REST endpoint until #bofh
+  // Autojoin re-lands: poll the channels REST endpoint until #spec-wN
   // re-joins. Without this assertion the test passes on a half-spawned
   // regression where the chip's PATCH succeeds but the spawn dance
   // silently fails. Same pattern as ux-5-bc-park-respawn.

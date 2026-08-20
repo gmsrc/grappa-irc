@@ -47,7 +47,7 @@ const PEER_NICK = "I973Peer";
 const FIRST_DM = "issue-973 first dm";
 const SECOND_DM = "issue-973 second dm";
 
-// The spec focuses #bofh (advancing its cursor on leave). Restore it to tail so
+// The spec focuses #spec-wN (advancing its cursor on leave). Restore it to tail so
 // downstream specs inherit a clean at-tail cursor (BUGHUNT-3 cascade rule).
 test.afterEach(async () => {
   const vjt = specUser();

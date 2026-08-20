@@ -56,7 +56,7 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
-  // Restore seeded baseline so the next spec sees #bofh joined.
+  // Restore seeded baseline so the next spec sees #spec-wN joined.
   const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });
@@ -122,7 +122,7 @@ test("@webkit UX-Z cluster — Dynamic Island clearance + RailActions archive + 
 
   // ── UX-2 — archive opened via the always-on RailActions button (#473) ──
   //
-  // The PART above moved #bofh into archive. #473 removed the ShellChrome
+  // The PART above moved #spec-wN into archive. #473 removed the ShellChrome
   // archive button; archive is now reached from the always-on archive button
   // in the RailActions rail drawer, reachable on EVERY window kind (not
   // selection-gated). After the PART bucket E's close-watcher lands selection
@@ -134,7 +134,7 @@ test("@webkit UX-Z cluster — Dynamic Island clearance + RailActions archive + 
   await expect(modal.locator(".archive-modal-header h2")).toHaveText("Archive");
 
   // Expand the seeded network's collapsible group (lazy row load) and find
-  // the archived #bofh row within it.
+  // the archived #spec-wN row within it.
   const group = await expandArchiveGroup(page, NETWORK_SLUG);
   const row = group.locator(".archive-modal-row", { hasText: CHANNEL });
   await expect(row).toHaveCount(1);

@@ -168,7 +168,7 @@ test("UX-5 BC — park then /connect from the same source IP succeeds (self-excl
   // up + autojoin re-landed). Without this assertion the test would
   // pass on a half-spawned regression where /connect returns 200 but
   // the autojoin loop silently fails. Polls /networks/:slug/channels
-  // until #bofh shows joined.
+  // until #spec-wN shows joined.
   let joined = false;
   for (let attempt = 0; attempt < 60; attempt++) {
     const channels = await fetchChannels(bearer).catch(() => null);

@@ -40,11 +40,11 @@ import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // #bofh — seeded autojoin
+const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // #spec-wN — seeded autojoin
 const CHANNEL_B = "#i71inc2"; // fresh channel joined for the away round-trip
 const AWAY_REASON = "inc2 lunch";
 
-// Per-invocation unique mention body suffix (see issue188's comment): `#bofh`
+// Per-invocation unique mention body suffix (see issue188's comment): `#spec-wN`
 // is truncated+reseeded by `_vjtReset` but `#i71inc2` is NOT, so a constant
 // body would let the scrollback-render wait match a STALE prior-iteration row
 // and false-pass. A fresh runId makes each wait a true "the FRESH mention
@@ -55,7 +55,7 @@ const mentionBody = (where: string, runId: string): string =>
 test.setTimeout(90_000);
 
 test.afterEach(async () => {
-  // The guardrail test PARTs #bofh into the archive; restore the seed-joined
+  // The guardrail test PARTs #spec-wN into the archive; restore the seed-joined
   // state so later specs keep working (mirrors issue71-inc1-sidebar-own-nick).
   const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL_A);
@@ -137,7 +137,7 @@ test.describe("#71 INC-2 — permanent right rail (desktop)", () => {
         )
         .toBe("2px");
 
-      // PART #bofh (server-side REST, no compose needed — the mentions window
+      // PART #spec-wN (server-side REST, no compose needed — the mentions window
       // has no ComposeBox) → the channel leaves the main network <ul> and moves
       // into the archive (now the grouped ArchiveModal, #473 — no longer an
       // inline Sidebar `<details class="sidebar-archive">`).

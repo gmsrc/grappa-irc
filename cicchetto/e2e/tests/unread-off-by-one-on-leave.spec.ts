@@ -55,7 +55,7 @@ test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
 
     await loginAs(page, vjt);
 
-    // Focus #bofh — the pane loads scrollback and pins to the bottom
+    // Focus #spec-wN — the pane loads scrollback and pins to the bottom
     // (`atBottom` starts true).
     await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
@@ -79,7 +79,7 @@ test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
 
       // LEAVE without reload: focus the always-present $server window
       // (windowName === slug maps to the server tab). This fires the
-      // leave/settle cursor write for #bofh via `lastFullyVisibleRowId`.
+      // leave/settle cursor write for #spec-wN via `lastFullyVisibleRowId`.
       await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, {
         awaitWsReady: false,
       });
@@ -93,7 +93,7 @@ test.describe("#163 off-by-one unread on leave (pinned to bottom)", () => {
         timeout: 5_000,
       });
 
-      // Re-select #bofh. Load-bearing assertion #2: NO `── 1 unread
+      // Re-select #spec-wN. Load-bearing assertion #2: NO `── 1 unread
       // message ──` divider is re-injected. The marker derives from the
       // cursor snapshot on focus; a one-short cursor re-injects it.
       await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });

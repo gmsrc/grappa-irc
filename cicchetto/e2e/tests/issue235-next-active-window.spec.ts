@@ -13,9 +13,9 @@
 //
 // Seeding produces exactly two unread windows on the seeded network:
 //   * a DM (query) window  → TIER 0 (a PM), even though it arrives LAST
-//   * #bofh ordinary line   → TIER 1 (plain channel traffic)
+//   * #spec-wN ordinary line   → TIER 1 (plain channel traffic)
 // so the tier precedence (DM before channel, regardless of arrival
-// order) is the thing under test. One peer drives both: it JOINs #bofh
+// order) is the thing under test. One peer drives both: it JOINs #spec-wN
 // and sends a plain line, then PRIVMSGs the operator's nick to open the
 // DM. Neither window is focused when the activity lands (focus parks on
 // the neutral $server window), so both accrue unread.
@@ -39,8 +39,8 @@ const DM_LINE = "235 direct message";
 const NEXT_ACTIVE_BTN = '[data-testid="next-active-btn"]';
 const NEXT_ACTIVE_COUNT = '[data-testid="next-active-btn"] .next-active-count';
 
-// Drive: read #bofh (clears its baseline unread), park focus on the
-// neutral $server window, then have `peer` produce one tier-1 (#bofh
+// Drive: read #spec-wN (clears its baseline unread), park focus on the
+// neutral $server window, then have `peer` produce one tier-1 (#spec-wN
 // plain line) and one tier-0 (DM) unread window. Returns the connected
 // peer so the caller can disconnect it. Asserts the seeding landed
 // (both windows unread) BEFORE returning, so a seeding failure is
@@ -50,9 +50,9 @@ async function seedTwoTierUnread(
   token: string,
   peerNick: string,
 ): Promise<IrcPeer> {
-  // Clear #bofh's baseline unread by focusing it (cursor baselines to
+  // Clear #spec-wN's baseline unread by focusing it (cursor baselines to
   // tail), then park focus on $server — a window that is NOT in the
-  // channel/query cycle — so #bofh and the DM both stay unfocused.
+  // channel/query cycle — so #spec-wN and the DM both stay unfocused.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });
   // The own-nick DM topic must be subscribed before the peer DMs, or

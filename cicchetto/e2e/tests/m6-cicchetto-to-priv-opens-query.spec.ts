@@ -43,7 +43,7 @@ test("M6 — cicchetto /msg opens query window, focuses, renders own-msg", async
   await loginAs(page, vjt);
   // Start in a real channel so the compose box is visible (Server
   // window has no compose). selectChannel + ownNick syncs WS-ready
-  // for #bofh — same pattern as M1/M2/M7.
+  // for #spec-wN — same pattern as M1/M2/M7.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await waitForDmListenerReady(page, NETWORK_SLUG);
 

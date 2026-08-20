@@ -15,7 +15,7 @@
 //
 // e2e shape (per feedback_ux_e2e_mandatory + feedback_cicchetto_browser_smoke
 // — jsdom can't prove the real compose → REST → self-echo → WS → render
-// round-trip): type `/me <tag>` into the focused #bofh composer, then
+// round-trip): type `/me <tag>` into the focused #spec-wN composer, then
 // assert BOTH the REST-persisted kind AND the rendered action row, plus
 // the negative invariant that no privmsg row carries the same tag.
 

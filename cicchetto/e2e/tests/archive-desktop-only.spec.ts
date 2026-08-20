@@ -97,7 +97,7 @@ test("desktop — archive modal rows inherit the canonical monospace style", asy
   // to the UA default (system serif). A unit test asserts the JSX class
   // string; here we read the live built DOM's computed value.
 
-  // PART so a channel lands in the archive (the fixture seed leaves #bofh
+  // PART so a channel lands in the archive (the fixture seed leaves #spec-wN
   // joined; partChannel's server-side broadcast moves it into the archive).
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });

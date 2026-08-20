@@ -6,14 +6,14 @@
 // invariant — folded in at the bottom of this spec. b4 deleted.
 //
 // Asserts the full archive lifecycle:
-//   1. PART a joined channel (#bofh, the seeded autojoin) → :parted
+//   1. PART a joined channel (#spec-wN, the seeded autojoin) → :parted
 //      effect → channel leaves active sidebar + appears in Archive.
 //   2. Open the grouped ArchiveModal + expand the network's group →
 //      lazy archive REST fetch → entry visible.
 //   3. Click archive entry → ScrollbackPane opens for the parted
 //      channel (read-only window — TopicBar still shows the name) and
 //      the modal closes.
-//   4. Type `/join #bofh` in compose → state goes pending → joined.
+//   4. Type `/join #spec-wN` in compose → state goes pending → joined.
 //      Sidebar entry returns to the active section (channelsBySlug
 //      branch); the archive entry MUST NOT re-appear in the archive
 //      (BUG-A regression guard — the cic-side `visibleArchiveForNetwork`
@@ -26,7 +26,7 @@
 //      appears there — `Scrollback.list_archive/3` filters $server out
 //      regardless of active_keyset.
 //
-// Cleanup: re-JOIN (assertion path itself) leaves #bofh in the
+// Cleanup: re-JOIN (assertion path itself) leaves #spec-wN in the
 // joined state, matching the seed → no afterEach restoration needed.
 // The PART side-effect on autojoin survives across runs otherwise.
 
@@ -45,7 +45,7 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
-  // Defensive restore — if the re-join assertion failed, #bofh would
+  // Defensive restore — if the re-join assertion failed, #spec-wN would
   // be left parted and subsequent specs that assume the seed state
   // (M1, BUG7) would fail.
   const vjt = specUser();
@@ -120,9 +120,9 @@ test("CP15 B6 — PART → archive → re-join: row moves from active to archive
   // active_keyset state — Scrollback.list_archive/3 filters $server out
   // unconditionally. Pin the rule here so a future regression in that
   // filter surfaces in e2e too. Verify with a POPULATED group: re-PART
-  // #bofh with the modal still open — the archive_changed broadcast
+  // #spec-wN with the modal still open — the archive_changed broadcast
   // reactively refreshes the already-expanded group (loadArchive re-fires),
-  // so #bofh reappears WITHOUT re-expanding, while $server never does.
+  // so #spec-wN reappears WITHOUT re-expanding, while $server never does.
   await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);
   await expect(sidebarWindow(page, NETWORK_SLUG, CHANNEL)).toHaveCount(0, { timeout: 5_000 });
   await expect(regroup.locator(".archive-modal-row", { hasText: CHANNEL })).toHaveCount(1, {

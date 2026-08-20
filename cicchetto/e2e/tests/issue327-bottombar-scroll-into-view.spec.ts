@@ -50,7 +50,7 @@ import { expect, specUser, test } from "../fixtures/test";
 
 const NEXT_ACTIVE_BTN = '[data-testid="next-active-btn"]';
 const NEXT_ACTIVE_COUNT = '[data-testid="next-active-btn"] .next-active-count';
-const SEEDED = AUTOJOIN_CHANNELS[0]; // #bofh — the seeded autojoin channel
+const SEEDED = AUTOJOIN_CHANNELS[0]; // #spec-wN — the seeded autojoin channel
 
 // Unique per run so a crashed prior run's residue can't collide on the
 // shared bahamut-test server.

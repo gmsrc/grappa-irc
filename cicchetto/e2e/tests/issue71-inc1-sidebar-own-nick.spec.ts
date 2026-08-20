@@ -25,7 +25,7 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
-  // The rail non-regression test PARTs #bofh to force it into the
+  // The rail non-regression test PARTs #spec-wN to force it into the
   // archive; restore the seed-time joined state so later specs keep
   // working (mirrors archive-desktop-only.spec.ts).
   const vjt = specUser();
@@ -85,7 +85,7 @@ test.describe("#71 INC-1 — sidebar hierarchy", () => {
       )
       .toBe("2px");
 
-    // PART #bofh → it leaves the main network <ul> (no longer a sidebar row)
+    // PART #spec-wN → it leaves the main network <ul> (no longer a sidebar row)
     // and lands in the archive, which is now the grouped ArchiveModal (#473),
     // NOT a sidebar `<details>`.
     await partChannel(vjt.token, NETWORK_SLUG, CHANNEL);

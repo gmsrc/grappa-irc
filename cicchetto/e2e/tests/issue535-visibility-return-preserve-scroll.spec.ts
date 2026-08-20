@@ -132,14 +132,14 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
 
     // Fully-read channel: seed the cursor to the newest row so NO divider
-    // renders (the auto-reset re-seeds #bofh with fresh-timestamped rows +
+    // renders (the auto-reset re-seeds #spec-wN with fresh-timestamped rows +
     // clears the cursor; without this seed cic would treat them as live-unread
     // and pin a marker to the top — same precondition as scroll-on-window-switch
     // scenario 1).
     const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
-    if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
+    if (!tailId) throw new Error("#spec-wN seed page empty — cannot seed cursor to tail");
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tailId);
 
     await loginAs(page, vjt);
@@ -251,7 +251,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
-    if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
+    if (!tailId) throw new Error("#spec-wN seed page empty — cannot seed cursor to tail");
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tailId);
 
     await loginAs(page, vjt);
@@ -298,7 +298,7 @@ test.describe("#535 — visibility-return preserves the mid-backlog reader's pos
     const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const tailId = headPage[0]?.id;
-    if (!tailId) throw new Error("#bofh seed page empty — cannot seed cursor to tail");
+    if (!tailId) throw new Error("#spec-wN seed page empty — cannot seed cursor to tail");
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, tailId);
 
     await loginAs(page, vjt);

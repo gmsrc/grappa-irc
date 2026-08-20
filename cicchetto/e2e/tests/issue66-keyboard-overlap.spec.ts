@@ -40,7 +40,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // below the iPhone 15 device viewport (393×659) so the shrink is real.
 // Same value names143 uses for the modal-occlusion contract.
 const FAKE_VISIBLE_PX = 300;
-// Per-run unique tag so retries / parallel rows in #bofh don't collide.
+// Per-run unique tag so retries / parallel rows in #spec-wN don't collide.
 const MESSAGE_BODY = `issue66 keyboard-overlap @ ${crypto.randomUUID().slice(0, 8)}`;
 
 test("@webkit issue66 — composer + last message stay inside the keyboard-shrunk viewport", async ({

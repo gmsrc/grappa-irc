@@ -12,8 +12,8 @@
 //
 // Expected:
 //   - PART row persists server-side (sender = specNick(), kind =
-//     :part, channel = #bofh)
-//   - sidebar entry for #bofh disappears
+//     :part, channel = #spec-wN)
+//   - sidebar entry for #spec-wN disappears
 //   - selectedChannel redirects via UX-4-E picker — with no other
 //     joined channel and the server window not always selectable
 //     in this test fixture's seed shape, lands on home pane
@@ -55,7 +55,7 @@ test.afterEach(async () => {
 test("M9 — sidebar X-button PARTs the channel and dismisses the window", async ({ page }) => {
   const vjt = specUser();
   await loginAs(page, vjt);
-  // Focus #bofh first so the WS subscription sync completes before
+  // Focus #spec-wN first so the WS subscription sync completes before
   // the PART. Without this, the BUG5a self-PART handler might not
   // be installed when the PART echo arrives.
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
@@ -90,7 +90,7 @@ test("M9 — sidebar X-button PARTs the channel and dismisses the window", async
   // Note: post-PART selection redirection is out of scope for this
   // spec — UX-4-E's MRU-→-server-→-home picker has subtle interactions
   // with the testnet's mid-flight rejoin races (other autojoined users
-  // can briefly re-introduce #bofh into channelsBySlug via concurrent
+  // can briefly re-introduce #spec-wN into channelsBySlug via concurrent
   // JOIN-syncs on the same channel). Sidebar absence + server-side
   // PART persistence are sufficient evidence the X-button worked;
   // selection routing is covered by the dedicated selection.ts

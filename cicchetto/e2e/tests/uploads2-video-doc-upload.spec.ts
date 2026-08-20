@@ -37,7 +37,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 const fixture = (name: string): Buffer =>
   readFileSync(fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url)));
 
-// Shared preamble: login as the seeded vjt + focus #bofh.
+// Shared preamble: login as the seeded vjt + focus #spec-wN.
 async function openChannel(page: Page): Promise<void> {
   const vjt = specUser();
   await loginAs(page, vjt);

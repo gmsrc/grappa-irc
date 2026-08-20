@@ -86,7 +86,7 @@ test.describe("#947 — the unread divider counts the conversation, not the page
     expect(rows.length).toBeGreaterThan(UNREAD_TARGET);
 
     const lastReadRow = rows[rows.length - UNREAD_TARGET];
-    if (!lastReadRow) throw new Error("#947 spec: seeded #bofh rows missing cursor index");
+    if (!lastReadRow) throw new Error("#947 spec: seeded #spec-wN rows missing cursor index");
     const rowsAfterCursor = rows.filter((r) => r.id > lastReadRow.id).length;
     // Guard the precondition: below this the pane never goes far behind and
     // the spec would pass by testing nothing.

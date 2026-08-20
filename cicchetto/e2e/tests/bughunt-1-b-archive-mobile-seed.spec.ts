@@ -37,7 +37,7 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 
 test.afterEach(async () => {
   // Restore the seed-time joined state so later specs that assume
-  // #bofh is joined keep working under retries. Mirror of cp15-b4.
+  // #spec-wN is joined keep working under retries. Mirror of cp15-b4.
   const vjt = specUser();
   await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL);
 });

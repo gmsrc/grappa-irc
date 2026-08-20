@@ -1,7 +1,7 @@
 // M3 — cicchetto-driven PRIVMSG to a channel: type in compose, assert
 // the row renders in scrollback as own-message.
 //
-// Manual matrix: vjt types a message in cicchetto's #bofh compose box.
+// Manual matrix: vjt types a message in cicchetto's #spec-wN compose box.
 // Expected:
 //   - the message persists server-side (round-trip through grappa →
 //     leaf → grappa echo path)

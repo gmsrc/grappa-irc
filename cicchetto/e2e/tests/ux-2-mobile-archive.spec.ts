@@ -24,7 +24,7 @@
 //      cic re-fetches → entry vanishes from the modal group.
 //   6. Close modal (× in header) → modal closed.
 //
-// Cleanup: re-JOIN the channel in afterEach so later specs see #bofh
+// Cleanup: re-JOIN the channel in afterEach so later specs see #spec-wN
 // joined (mirror of UX-1 / iOS-3 pattern).
 //
 // Per-class parity matrix per `feedback_e2e_user_class_parity_matrix`:

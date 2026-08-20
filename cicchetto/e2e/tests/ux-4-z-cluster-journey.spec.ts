@@ -69,8 +69,8 @@
 //     — this spec runs the registered class only (visitor pathway
 //     blocked), but the members-list-non-empty assertion satisfies
 //     that rule for the registered case.
-//   * K — scroll-on-activate: switch from #bofh → server window →
-//     #bofh; assert scrollback is scrolled to bottom (canonical
+//   * K — scroll-on-activate: switch from #spec-wN → server window →
+//     #spec-wN; assert scrollback is scrolled to bottom (canonical
 //     scrollToActivation routine fired).
 //   * L — settings overhaul: ShellChrome cog is always visible
 //     regardless of selected window kind. Assert cog visible on
@@ -102,7 +102,7 @@ import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, getSeededAdmin, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh
+const CHANNEL = AUTOJOIN_CHANNELS[0]; // #spec-wN
 
 type UserClass = {
   name: "registered" | "visitor" | "nickserv";
@@ -432,7 +432,7 @@ test("@webkit UX-4-Z cluster — case-fix + home + sidebar collapse + close-fall
       redirectedToHome > 0 || (selectedTabText !== null && !selectedTabText.includes(CHANNEL)),
     ).toBe(true);
 
-    // Re-join #bofh so the M arm has a settled scrollback (the M
+    // Re-join #spec-wN so the M arm has a settled scrollback (the M
     // arm reloads the page; without the re-join, the first selection
     // post-reload would land in a different state).
     await joinChannel(vjt.token, NETWORK_SLUG, CHANNEL).catch(() => {});

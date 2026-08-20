@@ -135,7 +135,8 @@ test.describe("#1019 — leaving a far-behind window marks it read", () => {
 
     const lastReadRow = rows[rows.length - UNREAD_TARGET];
     const tailRow = rows[rows.length - 1];
-    if (!lastReadRow || !tailRow) throw new Error("#1019 spec: seeded #bofh rows missing an index");
+    if (!lastReadRow || !tailRow)
+      throw new Error("#1019 spec: seeded #spec-wN rows missing an index");
 
     // Guard the precondition: below this the pane never goes far behind and
     // the spec would pass by testing nothing.
@@ -165,7 +166,7 @@ test.describe("#1019 — leaving a far-behind window marks it read", () => {
     expect(await getReadCursor(vjt.token, NETWORK_SLUG, CHANNEL)).toBe(lastReadRow.id);
 
     // THE gesture. The server window shares the `kindHasScrollback` Match with
-    // channels, so the pane stays mounted and the key arm fires with #bofh as
+    // channels, so the pane stays mounted and the key arm fires with #spec-wN as
     // the LEAVING key — a real selection change through the sidebar, not a
     // direct call to the dismiss.
     await selectChannel(page, NETWORK_SLUG, NETWORK_SLUG, { awaitWsReady: false });

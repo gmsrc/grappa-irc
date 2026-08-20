@@ -32,7 +32,7 @@ import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage"
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — vjt's seeded autojoin channel
+const CHANNEL = AUTOJOIN_CHANNELS[0]; // #spec-wN — the per-spec autojoin channel
 
 // Short enough that the action rows cannot all fit above the bottom-pinned
 // launcher, so the menu is pinned to its cap rather than to its content height.

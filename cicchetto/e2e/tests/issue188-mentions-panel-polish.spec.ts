@@ -2,7 +2,7 @@
 // clear-on-away lifecycle.
 //
 // This drives the REAL server path end to end — no synthetic bundle:
-//   1. operator joins two channels (#bofh autojoin + a fresh #m188)
+//   1. operator joins two channels (#spec-wN autojoin + a fresh #m188)
 //   2. operator goes `/away`
 //   3. a peer PRIVMSGs the operator's nick into BOTH channels while away
 //   4. operator comes back (bare `/away`) → server's
@@ -27,14 +27,14 @@ import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const PEER_NICK = "m188-peer";
-const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // "#bofh" — already joined at login
+const CHANNEL_A = AUTOJOIN_CHANNELS[0]; // "#spec-wN" — already joined at login
 const CHANNEL_B = "#m188"; // fresh channel this operator joins
 const AWAY_REASON = "lunch break";
 // Bodies mention the operator's nick at a word boundary so the server's
 // mention aggregation (own-nick regex) matches them. A per-invocation
 // `runId` suffix is LOAD-BEARING, not cosmetic: `#m188` is NOT in the
 // seeded autojoin set, so the wrapped `test` fixture's `_vjtReset`
-// (which truncates + reseeds only AUTOJOIN_CHANNELS = #bofh) leaves
+// (which truncates + reseeds only AUTOJOIN_CHANNELS = #spec-wN) leaves
 // prior-iteration `ping in m188` rows in #m188's scrollback. With a
 // constant body, the `scrollbackLine(...).first()` wait below would
 // match a STALE row and false-pass WITHOUT the fresh BODY_B having
@@ -70,10 +70,10 @@ test("#188 — away mentions panel: grouped restyle, open-button, close-x, clear
     await peer.join(CHANNEL_A);
     await peer.join(CHANNEL_B);
 
-    // Highlight in #bofh FIRST (focus it so the live push renders, which
+    // Highlight in #spec-wN FIRST (focus it so the live push renders, which
     // confirms the row persisted server-side before we unaway). Ordering
     // A-then-B makes the aggregated bundle deterministic (server_time ASC),
-    // so the groups render #bofh then #m188.
+    // so the groups render #spec-wN then #m188.
     await selectChannel(page, NETWORK_SLUG, CHANNEL_A, { awaitWsReady: false });
     peer.privmsg(CHANNEL_A, bodyA);
     await expect(scrollbackLine(page, "privmsg", `ping in bofh ${runId}`).first()).toBeVisible({
@@ -111,7 +111,7 @@ test("#188 — away mentions panel: grouped restyle, open-button, close-x, clear
     await expect(page.getByTestId("mentions-list")).toBeVisible();
 
     // Rows are clickable and jump to the source channel window (item 3 /
-    // C8.2). Click the #bofh row → panel closes, the #bofh window shows.
+    // C8.2). Click the #spec-wN row → panel closes, the #spec-wN window shows.
     const bofhRow = page
       .getByTestId("mentions-group")
       .filter({ hasText: CHANNEL_A })
@@ -136,7 +136,7 @@ test("#188 — away mentions panel: grouped restyle, open-button, close-x, clear
 
     // Clear-on-away lifecycle (item 7): going /away again drops the bundle,
     // so the Sidebar mentions row (gated on bundle existence) disappears.
-    // We're back on the #bofh window (close-x restored it), which has a
+    // We're back on the #spec-wN window (close-x restored it), which has a
     // compose box.
     await expect(mentionsRow).toBeVisible();
     await composeSend(page, "/away second time");

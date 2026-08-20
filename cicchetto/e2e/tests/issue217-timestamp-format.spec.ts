@@ -3,7 +3,7 @@
 // open scrollback live (the format is a Solid signal, not a boot-time DOM
 // write), and the choice persists across a reload (localStorage).
 //
-// Desktop project (untagged → chromium). Uses the seeded #bofh scrollback so
+// Desktop project (untagged → chromium). Uses the seeded #spec-wN scrollback so
 // there is always at least one message row carrying a `.scrollback-time` cell.
 
 import {
@@ -34,7 +34,7 @@ test("#217 — timestamp format defaults to seconds, toggles live from Settings,
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  // At least one message row is present (seeded #bofh).
+  // At least one message row is present (seeded #spec-wN).
   await expect.poll(async () => await scrollbackLines(page).count()).toBeGreaterThan(0);
 
   // Default (no stored preference) → WITH seconds.

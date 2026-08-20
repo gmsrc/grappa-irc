@@ -5,7 +5,7 @@
 // END of the scroll content — below the fold, UNREACHABLE on desktop (vjt's
 // staging report). A three-nick channel would pass against the broken build (no
 // overflow, everything fits) and prove nothing — the trap the issue explicitly
-// calls out. So this spec inflates #bofh with enough peers that the list
+// calls out. So this spec inflates #spec-wN with enough peers that the list
 // genuinely OVERFLOWS a short viewport, then asserts:
 //   (a) the members pane actually overflows (the meaningful precondition),
 //   (b) the launcher is still within the viewport — NOT pushed below the fold,
@@ -27,7 +27,7 @@ import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — vjt's seeded autojoin channel
+const CHANNEL = AUTOJOIN_CHANNELS[0]; // #spec-wN — the per-spec autojoin channel
 // vjt + PEER_COUNT peers. Four extra members overflow the short viewport below
 // with comfortable margin; kept modest so the burst stays well under the
 // testnet's per-IP clone/flood threshold (feedback_integration_bahamut_ip_autokill).
@@ -47,7 +47,7 @@ test.afterEach(async () => {
 test("#500 — an overflowing member list keeps the rail launcher reachable and openable", async ({
   page,
 }) => {
-  // Inflate #bofh so the member list is long enough to overflow. Sequential,
+  // Inflate #spec-wN so the member list is long enough to overflow. Sequential,
   // paced joins — a simultaneous burst risks the testnet fake-lag/split; four is
   // far under the split threshold.
   for (let i = 0; i < PEER_COUNT; i++) {

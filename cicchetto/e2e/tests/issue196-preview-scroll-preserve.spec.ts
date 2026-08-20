@@ -12,7 +12,7 @@
 // scroll physics, unlike webkit-iPhone emulation
 // (feedback_playwright_webkit_not_ios_scroll).
 //
-// Uses the seeded #bofh (200 lines → a genuinely tall, scrollable pane) so no
+// Uses the seeded #spec-wN (200 lines → a genuinely tall, scrollable pane) so no
 // live message flood is needed — a flood risks IRC flood-protection killing the
 // sender AND leaves the pane auto-scrolling, which is what hung the first
 // version. Scroll is driven DETERMINISTICALLY via evaluate to a middle
@@ -38,7 +38,7 @@ test("#196 — opening the image preview keeps the message-list scroll position 
   await loginAs(page, vjt);
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
 
-  // Upload an image so the scrollback carries a clickable media link. #bofh is
+  // Upload an image so the scrollback carries a clickable media link. #spec-wN is
   // seeded with 200 lines, so the pane is already tall enough to scroll — the
   // image lands at the tail (its exact position is irrelevant: it's opened via
   // el.click() below, not by scrolling to it).

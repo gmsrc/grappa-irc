@@ -24,7 +24,7 @@ test("CP13 S10 — peer's bold-formatted PRIVMSG renders with .scrollback-mirc-b
 }) => {
   const vjt = specUser();
   await loginAs(page, vjt);
-  // awaitWsReady=false: the bootstrap-time JOIN line for #bofh has
+  // awaitWsReady=false: the bootstrap-time JOIN line for #spec-wN has
   // already arrived in the shared grappa session by the time this
   // test runs in full-suite ordering, so the helper's "wait for a
   // fresh JOIN-self line" probe times out. The selectChannel itself
@@ -34,7 +34,7 @@ test("CP13 S10 — peer's bold-formatted PRIVMSG renders with .scrollback-mirc-b
   // Gate the peer.privmsg send on cic having a LIVE per-channel WS
   // subscription, otherwise the server's PubSub broadcast for the
   // boldpeer JOIN+PRIVMSG fires before cic.subscribe.ts joins the
-  // `grappa:user:.../channel:#bofh` Phoenix topic — broadcast lands
+  // `grappa:user:.../channel:#spec-wN` Phoenix topic — broadcast lands
   // in the void, scrollback row never renders, test times out.
   // members-pane rendering vjt-grappa is the cheapest live-WS
   // signal: it requires the after_join snapshot push of

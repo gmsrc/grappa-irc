@@ -35,10 +35,10 @@ test("#637 — /ping NickServ (a real service, token-less echo) renders the roun
   await selectChannel(page, NETWORK_SLUG, CHANNEL, { ownNick: specNick() });
   await expect(composeTextarea(page)).toBeVisible();
 
-  // /ping NickServ from #bofh. NickServ echoes a TOKEN-LESS CTCP PING; grappa
+  // /ping NickServ from #spec-wN. NickServ echoes a TOKEN-LESS CTCP PING; grappa
   // routes the CTCP-framed reply to $server; cic's correlation gate falls back
   // to the pending ping by nick and synthesises the RTT row in the source
-  // window (#bofh).
+  // window (#spec-wN).
   await composeSend(page, "/ping NickServ");
 
   await expect(scrollbackLine(page, "notice", /CTCP PING reply from NickServ: \d+ ms/)).toBeVisible(

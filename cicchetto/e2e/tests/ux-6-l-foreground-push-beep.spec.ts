@@ -59,7 +59,7 @@ test("inbound DM fires in-app beep (__lastBeepAt advances) on a non-focused wind
   // broadcast"; chasing that without console output is masochism.
   forwardPageDiagnostics(page);
   await loginAs(page, vjt);
-  // Stay focused on #bofh — peer DM lands in a NEW window we're NOT
+  // Stay focused on #spec-wN — peer DM lands in a NEW window we're NOT
   // looking at, so beep MUST fire (same focus-rule as the mention
   // gate).
   await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
@@ -123,7 +123,7 @@ test("channel mention fires in-app beep on a non-focused mention target", async 
     await page.locator(".compose-box textarea").press("Enter");
     await selectChannel(page, NETWORK_SLUG, MENTION_CHANNEL, { ownNick: specNick() });
 
-    // Re-focus #bofh so mention lands on a NON-focused window.
+    // Re-focus #spec-wN so mention lands on a NON-focused window.
     await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });
 
     const mentionBody = `${specNick()}: you there?`;

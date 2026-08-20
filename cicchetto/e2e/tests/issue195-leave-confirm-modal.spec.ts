@@ -19,7 +19,7 @@
 // The channel test uses a DEDICATED non-autojoin channel so it never
 // destabilises the shared seed #bofh; the network test parks the shared
 // network and the afterEach reconnects it (same pattern as
-// cp15-b6-parked-disconnect-reconnect), polling until autojoin restores #bofh.
+// cp15-b6-parked-disconnect-reconnect), polling until autojoin restores #spec-wN.
 
 import {
   confirmModal,
@@ -53,7 +53,7 @@ test.afterEach(async () => {
   // Idempotent cleanup, best-effort (both tolerate already-in-state):
   //   1. Drop the dedicated leave-channel in case a test failed pre-Yes.
   //   2. Reconnect the shared network in case the network test parked it,
-  //      then poll #bofh back to joined so the next serial spec inherits a
+  //      then poll #spec-wN back to joined so the next serial spec inherits a
   //      live session (skipping the poll cascades failures — see cp15-b6).
   await partChannel(vjt.token, NETWORK_SLUG, LEAVE_CHANNEL).catch(() => {});
   await patchNetworkConnectionState(vjt.token, NETWORK_SLUG, {

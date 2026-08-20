@@ -2,7 +2,7 @@
 // transitions and sidebar re-click.
 //
 // Repro flow (vjt 2026-05-19):
-//   1. Channel #bofh is selected and tab is FOCUSED.
+//   1. Channel #spec-wN is selected and tab is FOCUSED.
 //   2. Tab BLURS (visibilitychange → hidden).
 //   3. Peer messages arrive, one mentions the operator.
 //   4. Sidebar: blue ".sidebar-msg-unread" badge AND red ".sidebar-mention"

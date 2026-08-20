@@ -1,7 +1,7 @@
 // BUG7 — own message not visible in scrollback after compose-send on
 // iOS WebKit (the iPhone 15 device emulation surface).
 //
-// Manual matrix: vjt opens cicchetto on a real iPhone, types in #bofh
+// Manual matrix: vjt opens cicchetto on a real iPhone, types in #spec-wN
 // compose box, hits send. Expected the row to appear in scrollback
 // within 2s (same invariant as M3 on chromium). Observed: the row
 // either doesn't appear, appears late, or scrolls out of the visible
@@ -47,7 +47,7 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 // Per-run unique tag so retries / parallel runs don't strict-mode-collide
-// with persisted prior-run rows in #bofh.
+// with persisted prior-run rows in #spec-wN.
 const MESSAGE_BODY = `BUG7-ios: own-msg visibility @ ${crypto.randomUUID().slice(0, 8)}`;
 
 // Mirror of ScrollbackPane.SCROLL_BOTTOM_THRESHOLD_PX = 50 (not exported; kept

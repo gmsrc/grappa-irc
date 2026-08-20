@@ -7,7 +7,7 @@
 //     re-keys the append from own-nick to sender — see subscribe.ts
 //     "C4.1 / DM live-WS gap" comment)
 //   - msg-unread badge on the auto-opened window shows "1" (cicchetto is
-//     focused on #bofh, not the new DM window)
+//     focused on #spec-wN, not the new DM window)
 //   - clicking the DM window: scrollback renders the body AND the
 //     badge clears (selection.ts isSelected gate)
 //
@@ -40,7 +40,7 @@ const MESSAGE_BODY = "M4: inbound DM to nick";
 test("M4 — inbound DM auto-opens query window with unread, clears on focus", async ({ page }) => {
   const vjt = specUser();
   await loginAs(page, vjt);
-  // Stay focused on #bofh — the DM lands in a NEW window we're NOT
+  // Stay focused on #spec-wN — the DM lands in a NEW window we're NOT
   // looking at, so unread MUST bump. selectChannel here also doubles
   // as the WS-ready sync (own-nick subscribe.ts join for the dm-
   // listener topic happens off the same effect chain).
@@ -82,7 +82,7 @@ test("M4 — inbound DM auto-opens query window with unread, clears on focus", a
     // Sidebar gains exactly one entry for the sender nick.
     await expect(sidebarWindow(page, NETWORK_SLUG, peer.nick)).toHaveCount(1, { timeout: 5_000 });
 
-    // Unread badge "1" — cicchetto still on #bofh, query window is
+    // Unread badge "1" — cicchetto still on #spec-wN, query window is
     // unfocused by definition. Asserted BEFORE the click-to-inspect
     // because clicking would clear it (selection.ts isSelected gate).
     await expect(sidebarMessageBadge(page, NETWORK_SLUG, peer.nick)).toHaveText("1", {

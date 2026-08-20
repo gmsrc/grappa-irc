@@ -49,7 +49,7 @@
 // Seed shape: same as UX-6-C — PATCH the seeded `vjt` user to admin
 // via admin-vjt bearer at test start, revert in afterEach. admin-vjt
 // has no IRC bind (m9b session-count == 2 hardcode); vjt has the bind
-// + autojoined #bofh so it can reach the mobile launcher footer.
+// + autojoined #spec-wN so it can reach the mobile launcher footer.
 
 import type { Page } from "@playwright/test";
 import { loginAs, openRailMenu, selectChannel, sidebarWindow } from "../fixtures/cicchettoPage";

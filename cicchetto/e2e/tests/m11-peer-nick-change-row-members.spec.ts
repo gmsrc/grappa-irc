@@ -1,7 +1,7 @@
 // M11 — peer NICK change in a focused channel.
 //
 // Manual matrix: irssi (peer) types `/nick newname` while sitting in
-// #bofh with vjt. Expected:
+// #spec-wN with vjt. Expected:
 //   - server-side persists the rename as kind=:nick_change with
 //     sender=oldNick and meta.new_nick=newNick
 //   - cicchetto scrollback shows `* oldNick is now known as newNick`

@@ -43,7 +43,7 @@ test("members pane renders @-prefix + full op nick (not clipped)", async ({ page
   const vjt = specUser();
   await loginAs(page, vjt);
 
-  // Focus #bofh first to confirm login + ws-ready, then /join the
+  // Focus #spec-wN first to confirm login + ws-ready, then /join the
   // fresh per-spec channel so vjt is the first user and Bahamut
   // grants +o deterministically.
   await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });

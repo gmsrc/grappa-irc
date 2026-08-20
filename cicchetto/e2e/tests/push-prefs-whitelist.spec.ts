@@ -94,7 +94,7 @@ test("notification_prefs whitelist: messages in allow-list push, messages elsewh
       await selectChannel(page, NETWORK_SLUG, channel, { ownNick: specNick() });
     }
 
-    // Refocus #bofh — keep both target channels unfocused so neither
+    // Refocus #spec-wN — keep both target channels unfocused so neither
     // can be mistaken for "user is reading this" (irrelevant server-
     // side, but keeps the spec's semantics clean).
     await selectChannel(page, NETWORK_SLUG, AUTOJOIN_CHANNELS[0], { ownNick: specNick() });

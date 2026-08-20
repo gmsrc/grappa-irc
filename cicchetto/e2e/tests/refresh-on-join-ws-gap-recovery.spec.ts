@@ -19,7 +19,7 @@
 // the gap.
 //
 // This spec exercises the deterministic path:
-//   1. Operator focuses #bofh; cold REST seeds the pane.
+//   1. Operator focuses #spec-wN; cold REST seeds the pane.
 //   2. Peer privmsg lands live (sets the high-water mark).
 //   3. cic socket dropped via __cic_dropSocketForTests, which HOLDS it
 //      down (phoenix.js's explicit disconnect resets its reconnectTimer —

@@ -24,7 +24,7 @@
 // directly in `.shell-members .members-pane`, no mobile drawer.
 //
 // CLEANUP: the wrapped `test` fixture auto-resets vjt after every spec
-// (restores autojoin to ["#bofh"], clears last_joined, restarts the
+// (restores autojoin to ["#spec-wN"], clears last_joined, restarts the
 // session) — so the dynamically-joined NEW_CHANNEL is dropped for free.
 // afterEach only tears down the peer.
 

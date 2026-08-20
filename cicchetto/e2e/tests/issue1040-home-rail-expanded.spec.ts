@@ -36,7 +36,7 @@ import { loginAs, openRailMenu, selectChannel } from "../fixtures/cicchettoPage"
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-const CHANNEL = AUTOJOIN_CHANNELS[0]; // #bofh — vjt's seeded autojoin channel
+const CHANNEL = AUTOJOIN_CHANNELS[0]; // #spec-wN — the per-spec autojoin channel
 
 test("#1040 — the home rail lays its actions out expanded, in flow, with no launcher", async ({
   page,

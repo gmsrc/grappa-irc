@@ -10,7 +10,7 @@
 //      session-time, so any peer arrival with `server_time > cursor`
 //      spawns a marker. Cursor only advances on own-msg, so a focused
 //      send-then-reply leaves a "1 unread" mid-page.
-//   4. Switch to a TALL channel (#bofh has 100+ rows).
+//   4. Switch to a TALL channel (#spec-wN has 100+ rows).
 //      Pre-fix: viewport stays at top instead of bottom. Why:
 //      `markerRef` from the prior DM still holds a (now-disposed)
 //      ref; the key createEffect takes the marker branch and calls

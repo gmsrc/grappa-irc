@@ -71,7 +71,7 @@ const SCROLL_BOTTOM_THRESHOLD_PX = 50;
 // REST default page size (Grappa.Web.MessagesController.@default_limit).
 const REST_PAGE_SIZE = 50;
 
-// Shared body: focus an unread #bofh, tap the floating button, assert the cursor
+// Shared body: focus an unread #spec-wN, tap the floating button, assert the cursor
 // persists to the tail AND a subsequent peer line does not snap the view back.
 // `peerNick` is passed distinct per project so the two runs never collide on a
 // bahamut ghost-nick linger window (per-run-unique peer nicks, TESTING.md).
@@ -148,7 +148,7 @@ async function tapButtonPersistsCursorAndHolds(page: Page, peerNick: string): Pr
 }
 
 // The mid-page cursor + the tap advance the shared seeded vjt's cursor across
-// spec boundaries; restore to the tail after EACH run so a downstream #bofh spec
+// spec boundaries; restore to the tail after EACH run so a downstream #spec-wN spec
 // inherits a fully-read channel (cascade hygiene — feedback_cascade_poisoner_pattern).
 test.describe("#310 — scroll-to-bottom button persists the read cursor (desktop)", () => {
   test.use({ viewport: { width: 800, height: 300 } });

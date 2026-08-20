@@ -107,9 +107,9 @@ test("@webkit #285 reopen — .scrollback base is fail-open pan-y and the lock g
   const admin = getSeededAdmin();
   const vjt = specUser();
 
-  // Re-seed #bofh to a SMALL corpus so it does NOT overflow the real device
+  // Re-seed #spec-wN to a SMALL corpus so it does NOT overflow the real device
   // viewport (the not-overflowing baseline) but WILL overflow a shrunk one.
-  // The wrapped `test` fixture's afterEach truncates #bofh back to the 200-row
+  // The wrapped `test` fixture's afterEach truncates #spec-wN back to the 200-row
   // baseline (same verb #245 / #161 use), so no manual cleanup is needed.
   await resetSubject(
     admin.token,

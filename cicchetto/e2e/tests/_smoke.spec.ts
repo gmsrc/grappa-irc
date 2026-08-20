@@ -6,7 +6,7 @@
 //
 // Flow:
 //   1. login fixture provided by globalSetup (token seeded)
-//   2. spawn vjt-peer, JOIN #bofh, PRIVMSG, then disconnect
+//   2. spawn vjt-peer, JOIN #spec-wN, PRIVMSG, then disconnect
 //   3. poll grappa's REST messages endpoint until the row appears
 //
 // No cicchetto involvement — the harness signal we want is "grappa's
@@ -22,7 +22,7 @@ const PEER_NICK = "vjt-peer";
 const CHANNEL = AUTOJOIN_CHANNELS[0];
 const MESSAGE_BODY = "smoke-test hello from peer";
 
-test("peer PRIVMSG to #bofh persists in grappa scrollback", async () => {
+test("peer PRIVMSG to #spec-wN persists in grappa scrollback", async () => {
   const vjt = specUser();
 
   const peer = await IrcPeer.connect({ nick: PEER_NICK });

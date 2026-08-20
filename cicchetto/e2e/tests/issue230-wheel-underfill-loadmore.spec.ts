@@ -91,7 +91,7 @@ test.describe("issue #230 — wheel-up loads older history when content underfil
     const headPage = await fetchScrollbackPage(vjt.token, NETWORK_SLUG, CHANNEL);
     expect(headPage.length).toBeGreaterThanOrEqual(REST_PAGE_SIZE);
     const headId = headPage[0]?.id;
-    if (!headId) throw new Error("#bofh seed page empty — cannot seed read cursor to head");
+    if (!headId) throw new Error("#spec-wN seed page empty — cannot seed read cursor to head");
     await setReadCursorToId(vjt.token, NETWORK_SLUG, CHANNEL, headId);
 
     await loginAs(page, vjt);

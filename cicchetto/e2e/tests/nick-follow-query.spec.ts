@@ -65,9 +65,9 @@ test("query window follows a peer NICK change — relabels, keeps history, route
     // `channels != []`, i.e. OLD_NICK present in grappa's state.members).
     // `peer.join` above awaits only the peer's OWN join echo from bahamut —
     // NOT grappa's observation of it. Under full-gate load grappa can process
-    // the peer's #bofh JOIN late; a rename that lands first leaves
+    // the peer's #spec-wN JOIN late; a rename that lands first leaves
     // `channels == []` → no peer_nick_renamed → the sidebar never relabels
-    // and STEP 3 fails. Gate on the peer's JOIN line rendering in our #bofh
+    // and STEP 3 fails. Gate on the peer's JOIN line rendering in our #spec-wN
     // scrollback: grappa broadcasts that row from the SAME apply that adds
     // OLD_NICK to state.members, so its presence is the observable proof the
     // shared-membership precondition holds before we drive the rename.

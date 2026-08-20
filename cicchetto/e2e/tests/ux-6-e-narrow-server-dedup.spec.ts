@@ -1,12 +1,12 @@
 // UX-6-E — narrow-mode (mobile) Server-tab dedup.
 //
 // Pre-fix narrow shape:
-//   [freenode]  [Server]  [#bofh]  ...
+//   [freenode]  [Server]  [#spec-wN]  ...
 //   ^chip span  ^standalone tab     channel tabs
 //
 // Post-fix shape (matches wide mode, where the network header IS the
 // server entry):
-//   [⚙️ freenode]  [×]  [#bofh]  ...
+//   [⚙️ freenode]  [×]  [#spec-wN]  ...
 //   ^clickable header   ^channel tabs
 //
 // The chip + emoji + slug compose the Server-window entry; clicking it

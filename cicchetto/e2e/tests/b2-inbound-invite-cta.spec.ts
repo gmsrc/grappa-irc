@@ -123,7 +123,7 @@ test("B2 — inbound INVITE raises a banner naming the inviter; its [Join] mount
     // duration of the testnet container. Subsequent specs (notably
     // names-ux N-3) cold-load with `#b2-target` already :joined,
     // and since `Session.list_channels/2` returns alphabetically,
-    // `#b2-target` < `#bofh` ⇒ the auto-select effect picks
+    // `#b2-target` < `#spec-wN` ⇒ the auto-select effect picks
     // `#b2-target` instead. PART here restores pre-test state. The
     // helper swallows 404 (idempotent if test bailed before [Join]
     // click).

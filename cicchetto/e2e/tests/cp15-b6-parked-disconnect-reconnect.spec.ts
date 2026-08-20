@@ -75,22 +75,22 @@ test.afterEach(async () => {
   // live. Best-effort reconnect via the same fixture; ignore failure
   // (already-connected returns :not_parked, that's fine).
   //
-  // CRITICAL: also poll the REST surface until #bofh is not merely
+  // CRITICAL: also poll the REST surface until #spec-wN is not merely
   // joined but fully MEMBERS-SEEDED. /connect spawns a fresh
   // Session.Server but autojoin is async — without settling, the next
-  // spec starts before #bofh is back and its loginAs sees a sidebar
+  // spec starts before #spec-wN is back and its loginAs sees a sidebar
   // without the autojoin row. Observed during full integration suite
   // run: skipping this poll cascaded 18 failures across m1-m9 +
   // downstream cp15-b6-* specs because every following spec inherits a
   // half-spawned Session.
   //
   // #522: `joined` is NOT a sufficient settle signal. The channels
-  // endpoint reports `joined: true` the instant #bofh enters
+  // endpoint reports `joined: true` the instant #spec-wN enters
   // `state.members` — the self-JOIN echo (event_router.ex:457) — which
   // lands BEFORE the 353/366 NAMES burst seeds the member list. Return
   // at that point and we leak a mid-stabilization session (autojoin
   // NAMES still in flight) into the immediately-following
-  // cp15-b6-part-archive-rejoin spec (#53): it PARTs #bofh, and the
+  // cp15-b6-part-archive-rejoin spec (#53): it PARTs #spec-wN, and the
   // still-arriving 353/366 races its re-JOIN's members-seeding, flaking
   // the "members pane populates" assert ~60% of the time. Settle
   // deterministically instead — only return once GET /members returns
@@ -162,7 +162,7 @@ test("CP19 T32 — /disconnect parks network + redirects to Home; Reconnect ungr
   // await, so composeSend uses `expectUnmount: true` to wait for the
   // textarea-gone signal instead of textarea-empty (which would race
   // the unmount). Draft IS cleared in the composeByChannel signal
-  // regardless — re-navigating to #bofh later shows an empty compose.
+  // regardless — re-navigating to #spec-wN later shows an empty compose.
   await composeSend(page, `/disconnect ${NETWORK_SLUG} ${PARK_REASON}`, { expectUnmount: true });
 
   // Selection redirected to Home — HomePane renders the parked

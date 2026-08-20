@@ -13,7 +13,7 @@
 //   2. page.route() stubs the catbox multipart POST — no real
 //      network egress (cic's browser is sandboxed; the stub mirrors
 //      the original I-2 design pre-B2).
-//   3. Operator joined to #bofh, picker → modal (`Upload to
+//   3. Operator joined to #spec-wN, picker → modal (`Upload to
 //      litterbox.catbox.moe`) → Continue → upload completes →
 //      PRIVMSG auto-send → server echo → linkify.
 //   4. afterEach resets the active_host to "embedded" so subsequent
