@@ -54992,3 +54992,72 @@ is being cut anyway"*); where the 23 came from is not established, and it is
 not restated here. Nothing downstream rests on either number: the identity
 case is pinned by shape ("every tag that predates `v1.3.0-rc1`"), never by a
 count.
+<!-- entry #1523 -->
+
+---
+
+## 2026-08-20 — #1523: the leaf-promotion rule lands in CLAUDE.md, and the caveat it was hedged with names a mix task that does not exist
+
+The rule that #1398 and #1399 established — a boundary needing one schema
+promotes the schema to a leaf and declares that, instead of taking the whole
+context — lived in these entries and in a comment inside
+`networks/credential.ex`, but not in the file that is read as authority.
+#1399's own "not established" says so and hands the edit to vjt. vjt ruled
+on 2026-08-20: **carve-out**. The nesting the promotion creates (a boundary
+named `Grappa.Accounts.User` sitting as a *sibling* of `Grappa.Accounts` in
+the graph) is a price paid knowingly, not a defect to close. So the issue
+ships as documentation only: both halves of the rule plus an explicit
+carve-out sentence, no code.
+
+### The caveat was weaker than it reads, in a direction nobody checked
+
+Both #1399 and #1523 carry the same standing limitation: *`mix
+boundary.find_violations` has never been run on any commit named here.* True
+— and it cannot be made false. **Boundary 0.10.4 has no such task.** The
+string does not occur anywhere in `deps/boundary`, and the tasks it does
+define are `Boundary.Spec`, `Boundary.FindExternalDeps`,
+`Boundary.ExDocGroups`, `Boundary.Visualize{,.Funs,.Mods}` and
+`Mix.Tasks.Compile.Boundary`. The sentence reads as a debt somebody could
+pay in an afternoon; there is nothing to pay.
+
+That does **not** promote the rule to compiler-verified by substitution — a
+named-but-absent task is not evidence that a different mechanism covers the
+same ground, and no such equivalence is claimed here. What it does is move
+the question to the checker that exists: Boundary is wired into `compilers:`
+in `mix.exs`, and `cmd mix compile --warnings-as-errors` is the FIRST step of
+the `ci.check` alias precisely so violations fail the build instead of
+printing as advisory warnings. That compile is what enumerated #1521's blast
+radius (80 forbidden references over 8 boundaries for `User`, 8 over 3 for
+`Session`) and what turned the `Grappa.Subject` mutation from green to red.
+The mechanism claims the CLAUDE.md rule rests on come from that run — which
+also means the correct instruction for a future reader is "run the compiler",
+and the rule now says so rather than pointing at a task they would fail to
+find.
+
+### Two things the rule deliberately does not say
+
+**No census.** The tempting sentences — "the population that declares a whole
+context to name a schema is empty (was 12)", "nested `top_level?: true` goes
+11 → 15 → 17" — are point-in-time counts, and a rule that leans on one is
+false the day an eighth schema is promoted. CLAUDE.md gets the mechanism and
+the price; the counts stay here and in the issues. The carve-out sentence is
+written as a *convention* ("a promoted identity or FK schema is a deliberate
+carve-out, not a context internal") rather than as a budget, for the same
+reason #1399 gave: the thing A7 lacks is an oracle, not a smaller number.
+
+**Not `deps: []`.** Both the issue and the review shorthand the promotion as
+`top_level?: true, deps: []`. Read against the tree that is wrong for four of
+the seven promoted schemas: `Accounts.Session` is `[Grappa.Subject]`,
+`Networks.Network` and `Networks.FeaturedChannel` are `[Grappa.IRC]`,
+`Networks.Credential` is `[Grappa.IRC, Grappa.Subject]`; only
+`Accounts.User`, `Networks.Server` and `Visitors.Visitor` are empty. The code
+wins — the rule describes what is, and says the leaf's own `deps:` is
+measured from its own outbound edges rather than assumed empty. No code was
+changed to match the shorthand.
+
+_Not established: nothing here was compiled. This branch adds prose only, and
+every mechanism claim it repeats — `belongs_to`/`field`/`Mod.t()` carry no
+edge, `from(s in Mod)` does — is quoted from the `--force
+--warnings-as-errors` run recorded in #1521 (`03e7254b`), not re-measured on
+this branch. The one measurement taken here is the absence of
+`find_violations` from `deps/boundary` at 0.10.4._

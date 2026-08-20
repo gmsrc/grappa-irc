@@ -578,6 +578,43 @@ not the surrounding code.**
 - **Contexts at `lib/grappa/<context>.ex`.** Schemas live as
   `lib/grappa/<context>/<name>.ex`. Public API on the context module;
   schemas internal. Boundary library enforces.
+- **A boundary that needs only a SCHEMA declares the schema, not the
+  context — promote the schema to its own boundary (`use Boundary,
+  top_level?: true`, #1398 / #1399).** Declaring `Grappa.<Context>` to
+  name one struct also hands the consumer every exported verb, and the
+  checker then has nothing to say about a call nobody meant to allow —
+  measured, not argued (#1521, `03e7254b`): `Accounts.get_user!/1`
+  inserted into `Grappa.Subject` compiles GREEN while `Subject` declares
+  the whole `Grappa.Accounts`, and RED once it declares
+  `Grappa.Accounts.User` alone. The leaf's OWN `deps:` is measured from
+  ITS outbound edges, not assumed empty — `Accounts.User` is `[]`,
+  `Accounts.Session` is `[Grappa.Subject]`, `Networks.Credential` is
+  `[Grappa.IRC, Grappa.Subject]`. **Second half: often the right move
+  is to declare NOTHING, because the reference carries no edge.**
+  `belongs_to :x, Mod`, `field :x, Mod` and `Mod.t()` in a typespec are
+  module atoms in metadata, so the xref checker never sees them — why
+  `Networks.Credential` aliases `Accounts.User`, `Visitor` and
+  `EncryptedBinary` and declares none of them. `from(s in Mod)` in an
+  Ecto query IS an edge: declare-nothing does not compile there, and
+  that is why `Admission` and `Vhosts` had to narrow to the leaf rather
+  than drop the dep. **Verify with the COMPILER.** Boundary is wired
+  into `compilers:` (`mix.exs`), so `mix compile --force
+  --warnings-as-errors` IS the check and enumerates the blast radius
+  for you; **there is no `mix boundary.find_violations` task in
+  boundary 0.10.4** — don't go looking for one. Measure under
+  `--env=test` as well: `MIX_ENV=dev` never compiles `test/support`, so
+  a dev-only run under-counts by exactly the test-support boundaries,
+  silently. **Carve-out, accepted knowingly (vjt ruling, 2026-08-20):**
+  the promoted leaf keeps its `Grappa.<Context>.<Schema>` name while
+  being a SIBLING of `Grappa.<Context>` in the graph. Boundary's own
+  docs call that namespace/model mismatch discouraged and offer a
+  rename instead; we decline the rename — it moves files and renames
+  modules, which means beams disappearing and a COLD deploy, to buy a
+  naming nicety. Nothing breaks (Boundary still compiles, no runtime
+  effect); the price is a reader guessing the wrong owner from the
+  name. **A promoted identity or FK schema is a deliberate carve-out,
+  not a context internal** — that is the rule, not a smaller count of
+  nested `top_level?: true`.
 - **Controllers thin, contexts thick.** Controller responsibilities:
   parse params, call context, render. Logic lives in the context.
 - **`FallbackController` for `{:error, X}` returns.** Don't `case` on
