@@ -151,5 +151,28 @@ test.describe("I-2 litterbox path (admin-pinned host)", () => {
 
     await page.waitForTimeout(500);
     expect(routeHits).toBe(0);
+
+    // Positive control (#1117 / #1336). `routeHits` is only evidence of a
+    // suppressed upload if the route can fire at all — a URL the host
+    // moved, a pattern that stopped matching, or an active_host that
+    // never hydrated to `litterbox` all leave the counter at 0 while the
+    // Cancel button does nothing of the sort. The sibling happy-path test
+    // proves the pattern in ITS test; nothing proved it in THIS one, and
+    // a per-test route registration is a per-test apparatus.
+    //
+    // Same picker, same modal, Continue instead of Cancel: the stub is
+    // hit through the very registration asserted silent above.
+    const controlModal = await pickFile(
+      page,
+      {
+        name: "screenshot-control.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(TINY_PNG_HEX, "hex"),
+      },
+      LITTERBOX_MODAL_HEADING,
+    );
+    await controlModal.locator("button", { hasText: /continue/i }).click();
+    await expect(controlModal).toBeHidden({ timeout: 5_000 });
+    await expect.poll(() => routeHits, { timeout: 10_000 }).toBeGreaterThan(0);
   });
 });
