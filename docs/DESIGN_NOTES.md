@@ -55536,3 +55536,97 @@ unaffected — `status=` lands after it.
   the max `held_ms` or the observed `status` into the census — the summary
   that survives a green run — is a separate, cheaper change than the ring
   dump above, and is not made here.
+<!-- entry #1410b -->
+
+---
+
+## 2026-08-21 — #1410: the re-resolve costs nine queries, not three, and five of them nobody had counted
+
+The 2026-08-17 entry above corrected two sentences that denied
+`Grappa.Session.Server.init/1` reads the DB, and closed by declining to quote
+a boot cost: "nothing was executed ... the issue's `N x 3 queries` remains a
+derivation from the call chain, not a measurement". The issue's own "Not
+established" section says the same, and so does the read-only recon on it.
+Three refusals, one number nobody had. This entry is the measurement, and it
+moves the number.
+
+### What was measured, and how
+
+`test/grappa/session/refresh_plan_cost_test.exs` counts `[:grappa, :repo,
+:query]` telemetry events around each door. Telemetry handlers run in the
+process that emits the event, so the handler filters on `self()` and the file
+stays `async: true` — a query from another test runs in that test's process
+and never reaches this mailbox. The events fire synchronously, so the mailbox
+is complete the moment the measured call returns.
+
+The pin is the ORDERED LIST OF TABLES, not a total. A bare count says a number
+changed; the list says which read appeared or vanished, which is what makes it
+usable as a regression guard rather than a tripwire to be re-baselined.
+
+### The numbers
+
+| door | queries | tables |
+|---|---|---|
+| user SPAWN (`Bootstrap`'s own `resolve/1`, network preloaded) | **6** | `users` + the source-resolution five |
+| user RESPAWN (the `refresh_plan` closure `init/1` invokes) | **9** | `network_credentials`, `networks`, `network_servers`, `users` + five |
+| visitor RESPAWN | **9** | `visitors`, `networks`, `network_credentials`, `network_servers` + five |
+
+So `init/1` costs **nine**, and `Bootstrap` pays **fifteen per credential** —
+six in its own resolve, nine in the re-resolve that repeats it. The issue's
+`N x 3` is the right shape and the wrong magnitude, by a factor of three on
+the door it names and five on the loop.
+
+### The five nobody counted, and why the reading missed them
+
+Both the issue and the recon enumerate the same three call sites —
+`get_credential_by_ids/2`, `Repo.preload(network: :servers)`,
+`Accounts.get_user!/1` — and stop there, because that is where the *named*
+reads are. The rest is in the tail of `Networks.SessionPlan.base_plan/7`:
+`addressing_config/0` reads two `server_settings` keys (one `Repo.get_by` each,
+uncached — `ServerSettings` goes straight to the Repo), and
+`Vhosts.effective_source/3` reads `vhost_grants`, `vhosts` and the subject's
+persisted selection from `user_settings`.
+
+That is the general lesson, not an incidental one: **a call-chain reading
+counts the reads the reader is looking for, and a plan builder's tail is not
+where anyone looks.** Reading gives you the STRUCTURE and never the
+MAGNITUDE — the same lesson #1372's corpus work reached from the other end.
+It also explains the symmetry that would otherwise be a coincidence: the
+visitor door costs the same nine as the user door despite reading a different
+first four, because the shared five are paid by both producers on both doors.
+
+`Servers.pick_server!/2` was left open by the recon ("its body was not read").
+It is query-free — pure `Enum` over the already-preloaded `servers` list — and
+the measurement shows no query between the preload and the source resolution,
+which is the same fact from the other side.
+
+### What the magnitude does NOT change
+
+The verdict of the entry above stands, and the measurement was capable of
+overturning it. Both remedies remain blocked for reasons that are structural
+rather than quantitative:
+
+- Moving the reads to `handle_continue` still converts the spawn door's only
+  synchronous "subject no longer viable" signal into a silent death.
+- Skipping the re-resolve on the spawn door still cannot be expressed with a
+  flag, because `DynamicSupervisor` replays the spawn-time child spec on every
+  restart, so "already fresh" would persist into exactly the door that must
+  not trust it.
+
+A third option the fifteen makes worth naming, and which is NOT taken here:
+split `resolve/1` so the closure-construction half (cheap, and the reason
+`Bootstrap` must call it at all) is separable from the data half. That is a
+refactor of the plan producers, not a code-review fix, and it is out of the
+1.3 slice this work sits in.
+
+### Not established
+
+The wall-clock of the boot loop: still unmeasured. So is N on any real
+deployment — this lane has no production DB, so `15 x N` cannot be turned into
+a duration or a total here, and the per-credential factor is the whole of what
+is claimed. The counts hold for the DEFAULT addressing configuration only
+(mode 1, no `vhosts` rows, no grants); mode 2
+(`static_mapping_with_reservations`) walks another branch of
+`effective_source/3` and was not measured. Whether the five source-resolution
+reads are worth caching was not investigated — this entry establishes that
+they exist and are paid twice per boot, not what to do about it.
