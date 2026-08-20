@@ -119,8 +119,8 @@ URL. This keeps the credential out of access logs. The phoenix.js client
 does this for you via `new Socket(url, {authToken: token})`; a raw client
 sends the bearer subprotocol alongside `"phoenix"`. A missing/invalid
 bearer is rejected with **403**. Source:
-`lib/grappa_web/channels/user_socket.ex` (`connect/3:101`, `extract_token`)
-+ `lib/grappa_web/endpoint.ex:87` (`auth_token: true`).
+`lib/grappa_web/channels/user_socket.ex` (`connect/3`, `extract_token/1`)
++ `lib/grappa_web/endpoint.ex` (`auth_token: true`).
 
 ### 3b. Protocol version — the `client_proto` query param
 
@@ -145,16 +145,30 @@ wss://host/socket/websocket?client_proto=1&vsn=2.0.0
 - If you **omit** `client_proto` entirely, you are treated as **current**
   (the server sends you nothing new). This is the zero-friction path and
   is exactly what our own clients do until they need to negotiate.
+- If you send a value the server **cannot read as an integer** — a stray
+  suffix (`1/websocket`), a non-numeric string, or an array form
+  (`?client_proto[]=1`) — you are ALSO treated as current, and the connect
+  succeeds. Your declaration is discarded, so you get none of the
+  negotiation you asked for: **an accepted socket is not evidence that your
+  version was understood.** Since #1416 the server records which of the
+  three it saw (`client_proto=absent|declared|unreadable` on the connect
+  log line and in the `[:grappa, :ws, :connect]` telemetry metadata), so
+  ask your operator to grep that key if a declaration is not taking
+  effect. This is the trap that bit our own reference client: phoenix.js
+  concatenates the transport path onto the endpoint string, so a query
+  baked into the endpoint URL becomes part of a parameter VALUE — put the
+  version in the Socket's `params`, not in the endpoint.
 - There is **no upper bound**: declaring a version higher than the server
   speaks is fine (additive-only — a newer client tolerates an older
   server).
 
-Source: `lib/grappa_web/channels/user_socket.ex:135`
+Source: `lib/grappa_web/channels/user_socket.ex`
 (`check_protocol_version/1`) → returns `{:error, :upgrade_required}`,
 which the endpoint's `error_handler`
-(`user_socket.ex:166` `handle_ws_error/2`, wired at
-`endpoint.ex:90`) turns into the 426. The version check runs **before**
-auth, so a too-old client is refused regardless of its credential.
+(`user_socket.ex` `handle_ws_error/2`, wired on the `socket "/socket"`
+declaration in `endpoint.ex`) turns into the 426. The version check runs
+**before** auth, so a too-old client is refused regardless of its
+credential.
 
 ### 3c. The initial payload
 

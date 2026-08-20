@@ -53486,3 +53486,85 @@ The same deploy session surfaced a second `Log honesty` fault: the pull's
 `branch.<name>.rebase` config turns `git pull --ff-only` into a rebase pull,
 which refuses on any unstaged change with no divergence in sight). Different
 fault, different cure, so it is **#1603** rather than scope creep here.
+<!-- entry #1416 -->
+
+---
+
+## 2026-08-20 — #1416: the WS version gate now says what it read
+
+#447 made three different readings of `client_proto` share one answer. A
+declaration at or above the floor, a declaration the server cannot parse, and
+no declaration at all are all served as CURRENT — deliberately, and that part
+does not change here: unknown-is-never-fatal runs in both directions and
+existing clients must keep working untouched.
+
+What did change is that the three used to be indistinguishable in every
+output. `check_protocol_version/1` answered a bare `:ok` and the two connect
+emissions of `user_socket.ex` were a metadata-free `Logger.info("ws connect
+authenticated")` and a `[:grappa, :ws, :connect]` counter whose metadata #202
+had emptied. So a client that shipped a value the server could never honour
+produced, byte for byte, the connect of a client that negotiated correctly.
+
+That is not hypothetical. It is what let #1379 run for a release: cicchetto
+baked the query into the endpoint string, phoenix.js concatenated
+`/websocket` onto it, and the server received `client_proto=1/websocket`,
+which `Integer.parse/1` reads as `{1, "/websocket"}` — parseable head,
+unconsumed tail, straight into the silent arm. Every WebSocket in the
+application was broken and the version seam, the one component that had
+actually observed the malformed declaration, said nothing.
+
+The gate now returns a closed `:absent | :declared | :unreadable` and both
+emissions carry it. The Logger MESSAGE is byte-unchanged so #95's greppable
+line keeps working; the reading rides the metadata prefix beside it.
+
+### Presence, not parseability, is what separates absent from unreadable
+
+The catch-all clause was split in two. `?client_proto[]=1` decodes to a LIST,
+so it never reached the `is_binary(raw)` head and fell through to the same arm
+as a client that declared nothing. Reporting that as `:absent` would have been
+the same lie in a second costume — the client DID declare, and the server
+could not read it — so the key's presence alone now decides which of the two
+it is. The accept is identical either way; only the report differs.
+
+### The declared value is not repeated on our line, and the reason is measured
+
+Phoenix's own `[:phoenix, :socket_connected]` handler already prints
+`Parameters: <inspect>` (`deps/phoenix/lib/phoenix/logger.ex:363`) at a level
+that defaults to `:info` (`socket.ex:524`) which `endpoint.ex` does not
+override and which prod runs at. It comes out of the same transport process,
+and `:pid` is in the Logger metadata allowlist, so the two lines correlate
+exactly. Repeating the value would add a second unbounded
+attacker-controlled-text log site for a fact the operator already has one line
+away. What was missing was never the value — it was the server's READING of
+it.
+
+**Not pinned, and named as such.** No test in this repo can witness that
+phoenix line's production configuration. `Phoenix.ChannelTest.__connect__/4`
+synthesises its own socket options and never passes the endpoint's, so `log:`
+is hardcoded `:info` in every ChannelTest connect. Measured rather than
+assumed: injecting `log: false` into the endpoint's socket declaration killed
+ZERO of the 37 tests, which is how a first cut of this work — a test asserting
+the value on the captured log, written as a tripwire for exactly this
+dependency — was found to be a mirror and deleted. A future `log: false` would
+take the value away with no gate firing. The comment at the emission site
+carries that gap rather than leaving it implicit.
+
+### The allowlist is half the fix
+
+`:client_proto` goes into `config/config.exs`'s `:metadata` in the same
+commit, because an undeclared key is dropped at FORMAT time. Without that
+line the call site compiles, the telemetry twin fires, the telemetry tests
+pass — and the operator reads the same bare string as before. Deleting the key
+kills the three log tests and none of the telemetry ones, which is the
+evidence that those two halves measure different things rather than one thing
+twice.
+
+### What this does not establish
+
+No connect was observed against a running BEAM and no e2e ran; the signals are
+proven in-process through `Phoenix.ChannelTest`. The distinction is asserted on
+the emitted signal and not on the return value, because the return value is
+identical in both cases by design — that is the issue, not an omission. And
+nothing in `lib/` attaches to `[:grappa, :ws, :connect]` today, so the
+telemetry half remains a hook for a future exporter; the Logger line is what
+an operator can actually read now.

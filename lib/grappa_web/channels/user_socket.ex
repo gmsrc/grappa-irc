@@ -47,12 +47,24 @@ defmodule GrappaWeb.UserSocket do
   failure gets. Absent or unparseable → treated as current, so existing
   clients keep working untouched.
 
+  **The gate REPORTS its reading (#1416).** Because absent and unparseable
+  land on the same accept, the connect RESULT cannot distinguish a client
+  that negotiated from one whose declaration the server could not read —
+  and until #1416 nothing else could either, which is how #1379 shipped a
+  cicchetto dialling `client_proto=1/websocket` for a whole release with no
+  operator-visible signal. `check_protocol_version/1` therefore returns a
+  closed `t:declaration/0` and both connect emissions carry it. The
+  decision is untouched; only the observability is new.
+
   Every authenticated connect emits a `[:grappa, :ws, :connect]`
-  telemetry counter (`%{count: 1}`, empty metadata) + a greppable Logger
-  line — a cheap ops signal for connect churn. Neither carries the token
-  value (the raw bearer IS the session credential — S9). #95's
-  `auth_method` tag is gone (#202): once the query-string fallback was
-  removed it collapsed to a constant `:subprotocol`.
+  telemetry counter (`%{count: 1}`, metadata `%{client_proto:
+  declaration}`) + a greppable Logger line carrying the same key — a cheap
+  ops signal for connect churn and for declarations the server could not
+  read. Neither carries the token value (the raw bearer IS the session
+  credential — S9). #95's `auth_method` tag is gone (#202): once the
+  query-string fallback was removed it collapsed to a constant
+  `:subprotocol`; #1416 refilled the metadata with a key that does carry
+  information.
 
   The authenticated `Session` row carries an XOR FK (`user_id` xor
   `visitor_id`, per Q-A). `connect/3` dispatches on that XOR:
