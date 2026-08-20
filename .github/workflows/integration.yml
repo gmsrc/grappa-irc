@@ -44,8 +44,15 @@ name: integration
 #
 # Stack timing: cold ~6-8 min for the testnet+grappa+nginx images +
 # Playwright base pull; warm with cache it's faster but we don't cache
-# docker layers cross-runs (would need a registry push). Suite itself
-# runs in ~16s once everything is up.
+# docker layers cross-runs (would need a registry push). The "suite runs
+# in ~16s" that stood here was true of the first dozen specs and has not
+# been for a long time: measured 2026-08-20 it is 33.6 min of the 40.5,
+# which is what #1519 shards. The per-shard numbers are on the job below.
+#
+# The suite is split across FOUR jobs (#1519), one Playwright `--shard`
+# each, each with its OWN stack — sharding is N separate jobs, and it does
+# NOT touch `workers: 1`, which stays load-bearing inside every shard
+# (three long-lived users still share `#bofh`, see the issue).
 #
 # Failure artifacts: Playwright writes traces (zip), screenshots, and
 # videos to cicchetto/e2e/test-results/ on test failure (configured in
@@ -116,8 +123,44 @@ concurrency:
 
 jobs:
   e2e:
-    name: cicchetto + grappa + azzurra-testnet
+    name: cicchetto + grappa + azzurra-testnet (shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
+    # #1519 — FOUR jobs, each booting its own stack and running a quarter
+    # of the suite. Measured on the green run 32395956800 (2026-08-20),
+    # step timings read off the job log rather than estimated:
+    #
+    #   1.7 min  checkout (submodules) + compose plugin + GHCR login
+    #   4.6 min  `testnet up`: mix deps.get + Elixir compile, solanum
+    #            built from source, image assembly, container health
+    #  33.6 min  the Playwright suite — 759 passed, one worker
+    #   0.5 min  census + tear-down
+    #  ------
+    #  40.5 min  total
+    #
+    # Only the 33.6 divides. The other 6.8 min is fixed and every shard
+    # pays it in full, so four shards land at ~15 min wall clock, not the
+    # ~13.4 the issue's arithmetic gave (it counted the in-script boot and
+    # forgot the checkout and the tear-down). Eight would buy ~4 more
+    # minutes for double the runners; 4 is the knee.
+    #
+    # Paying the boot ONCE was considered and rejected on the numbers: a
+    # build-once job that publishes the images has to FINISH before any
+    # shard starts, so it adds a serial stage the same size as the thing
+    # it removes (~5 min), and 5 + pull + 8.4 is no better than four
+    # parallel 15s. Layer caching (`type=gha`) might shrink the per-shard
+    # build; it is NOT measured, so it is not claimed here.
+    #
+    # NOT measured, and it is the assumption the whole gain rests on: the
+    # account's runner concurrency. If four jobs cannot start together the
+    # arithmetic degrades towards the serial number.
+    strategy:
+      # A red shard must NOT cancel the other three. The suite's triage
+      # runbook (docs/TESTING.md) works by comparing what failed against
+      # what passed — cancelling the rest destroys exactly that evidence
+      # and turns one red into "three unknowns". The default is true.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     # 60, not 45 — third raise (25 -> 30 in 6478ef72, 30 -> 45, now 60),
     # and the reason to stop doing this arithmetic is measured in #1519:
     # across 85 green runs on main between 2026-08-11 and 2026-08-18 the
@@ -134,10 +177,13 @@ jobs:
     # only fire when something is actually wrong. #696 was killed at test
     # 589 of 590 by the cap alone, not by a failure; that must not recur.
     #
-    # This raise buys headroom, it fixes nothing. #1519 holds the
-    # breakdown and the three levers (cache the dep compile, shard the
-    # suite, or make it parallel-safe). If the cap is ever the thing
-    # tracking the suite's growth again, raise the issue, not the number.
+    # That raise bought headroom and fixed nothing; the SHARD below is the
+    # fix, and it is one of the three levers #1519 named (the other two —
+    # cache the dep compile, make the suite parallel-safe — are untouched).
+    # 60 stays: a backstop belongs far above the working range, and the
+    # working range just fell to ~15 min, so the cap is further from firing
+    # than it has ever been. If it is ever the thing tracking the suite's
+    # growth again, raise the issue, not the number.
     timeout-minutes: 60
     # `packages: read` so `docker login ghcr.io` can pull the
     # prebuilt bahamut + services images from `ghcr.io/vjt/*` (see
@@ -208,15 +254,27 @@ jobs:
         # Paths are RELATIVE to the CWD that scripts/{integration,
         # testnet}.sh cd into (cicchetto/e2e/), which is where both
         # compose files live.
+        #
+        # The shard denominator is `strategy.job-total`, NEVER a literal 4:
+        # it is the length of the matrix above, so the two cannot drift into
+        # a filter that silently drops or double-runs tests. Playwright's
+        # `--shard` reaches `npx playwright test` through the script's `"$@"`,
+        # the same door `--grep` uses, so no script change is needed and a
+        # local reproduction of shard 2 is `scripts/integration.sh --shard=2/4`.
         env:
           COMPOSE_FILE: compose.yaml:compose.ghcr-vjt.yaml
-        run: bash scripts/integration.sh
+        run: bash scripts/integration.sh --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       - name: Upload Playwright traces (on failure)
+        # Every artifact name below carries the shard (#1519). Not cosmetic:
+        # upload-artifact v4+ REFUSES a name that already exists in the run,
+        # so four shards uploading `playwright-traces` would fail the upload
+        # step of whichever lost the race — a red on top of the red being
+        # triaged, with the evidence missing.
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-traces
+          name: playwright-traces-shard-${{ matrix.shard }}
           path: cicchetto/e2e/test-results/
           # 14d is enough to triage; default 90d wastes storage on
           # a noisy suite during the early CI shakedown phase.
@@ -227,7 +285,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: playwright-report
+          name: playwright-report-shard-${{ matrix.shard }}
           path: cicchetto/e2e/playwright-report/
           retention-days: 14
           if-no-files-found: ignore
@@ -240,7 +298,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: container-logs
+          name: container-logs-shard-${{ matrix.shard }}
           path: cicchetto/e2e/container-logs/
           retention-days: 14
           if-no-files-found: ignore
@@ -253,7 +311,42 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: log-gap-census
+          name: log-gap-census-shard-${{ matrix.shard }}
           path: cicchetto/e2e/container-logs/gap-scan.tsv
           retention-days: 14
           if-no-files-found: ignore
+
+  # The one check name that cannot silently miss a shard (#1519).
+  #
+  # `needs.e2e.result` over a MATRIX is the aggregate of every leg: it is
+  # `success` only when all four succeeded, and `failure` as soon as one
+  # fails. So this job is the single place where "the suite passed" is
+  # stated, and it stays true if the matrix grows to eight without anyone
+  # remembering to add a name anywhere.
+  #
+  # `if: always()` is load-bearing and is the whole reason this is not a
+  # bare `needs:`. Without it, a failed shard makes this job SKIPPED — and
+  # a skipped check does not read as a failure to a human scanning the PR
+  # or to a required-check rule. Skipped would be the gate that lies.
+  #
+  # main today has no branch protection and no ruleset (measured, 2026-08-20:
+  # the protection API answers 404 and `/rulesets` is `[]`), so nothing is
+  # "required" by name yet. That is exactly why the stable name is worth
+  # having before it is needed: the day one is required, it is one entry,
+  # not four that a fifth shard would leave behind.
+  e2e-result:
+    name: integration (all shards)
+    if: always()
+    needs: e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail unless every shard succeeded
+        env:
+          SHARDS_RESULT: ${{ needs.e2e.result }}
+        run: |
+          echo "aggregate result of the shard matrix: $SHARDS_RESULT"
+          [ "$SHARDS_RESULT" = success ] || {
+            echo "at least one shard did not succeed — see the per-shard jobs" >&2
+            exit 1
+          }
