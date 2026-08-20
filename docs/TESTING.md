@@ -34,7 +34,7 @@ scripts/test.sh --cover                  # coverage
 
 # cic (Solid / TS)
 scripts/bun.sh run test                  # vitest
-scripts/bun.sh run check                 # biome + tsc — src AND e2e (#484)
+scripts/bun.sh run check                 # biome + tsc — src AND e2e (#484); all 3 stages, union of failures (#1469)
 
 # Full CI gate locally
 scripts/check.sh                         # mix ci.check + wireTypes drift gate + bats
@@ -119,6 +119,20 @@ new `error TS`), because it's typechecking main, not your branch. Always
 `cd <worktree-root>` first; verify a run hit the worktree by checking the
 count reflects your additions, or that a deliberate error is actually
 caught.
+
+**A red `run check` covers every stage, and says so (#1469).** It used to be
+`biome check && tsc --noEmit && tsc --noEmit -p e2e/tsconfig.json`, so a red
+told you the FIRST stage failed and nothing about the rest — and formatting,
+the cheapest and most frequent failure, sat first. Measured three times in one
+day, a cosmetic complaint hid two, then three, genuine type errors for as long
+as it lasted. `cicchetto/scripts/check.ts` now runs all three and exits
+non-zero if ANY did, closing with `check summary — 3 stages ran, N failed`.
+Read that line: it is what tells you the red is complete. It also passes
+`--max-diagnostics=none`, because biome's default ceiling of 20 truncated the
+one real error behind this tree's 59 standing warnings — a red naming no file
+at all. `run build` still short-circuits on purpose: there `tsc` is a
+precondition for `vite build`, which WRITES `dist/`, so the second stage must
+not run when the first is red.
 
 **`scripts/bun.sh run build`/`run check` can FALSE-PASS a type error in a
 `src/__tests__/*` file.** `tsc`'s incremental `*.tsbuildinfo` cache (under
