@@ -125,4 +125,26 @@ test("UX-6-B — privacy modal Cancel does NOT trigger upload (folded from i2 20
   // Give the orchestrator a moment to (not) fire the POST.
   await page.waitForTimeout(500);
   expect(uploadHits).toBe(0);
+
+  // Positive control (#1117 / #1336). The zero above is only evidence if
+  // this counter can count: a mistyped path, a `.endsWith` that stopped
+  // matching after a route change, or a listener attached to the wrong
+  // page all leave `uploadHits` at 0 with the guard broken, and the test
+  // is green in both worlds. Drive the SAME journey to Continue instead
+  // of Cancel — the real POST goes through the very predicate asserted
+  // empty, so a blind counter reds here.
+  //
+  // Deliberately AFTER the zero: a control placed first would leave a
+  // non-zero baseline the assertion above would have to subtract, and an
+  // off-by-one in that subtraction is exactly the silence being cured.
+  await uploadViaPicker(
+    page,
+    {
+      name: "ux-6-b-cancel-control.png",
+      mimeType: "image/png",
+      buffer: Buffer.from(TINY_PNG_HEX, "hex"),
+    },
+    { postTimeout: 10_000 },
+  );
+  await expect.poll(() => uploadHits, { timeout: 5_000 }).toBeGreaterThan(0);
 });
