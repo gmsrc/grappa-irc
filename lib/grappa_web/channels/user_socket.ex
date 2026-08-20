@@ -300,6 +300,35 @@ defmodule GrappaWeb.UserSocket do
       #     with long-lived tabs never saw the refresh banner trigger.
       :ok = WSPresence.register(socket.assigns.user_name, self())
 
+      # #1499 — a SECOND teardown address for this transport, keyed by
+      # SESSION, alongside the per-SUBJECT one Phoenix subscribes us to
+      # from the `id/1` callback. Both are plain id-topics carrying the
+      # same `"disconnect"` event, and `Phoenix.Socket.__info__/2` stops
+      # the transport on that event whatever topic it arrived on — so a
+      # door that wants ONE bearer's socket closed now has an address for
+      # it, and the doors that want the whole account off every device
+      # keep using the subject topic untouched.
+      #
+      # Strictly additive on purpose. Re-keying `id/1` itself was the
+      # other way to get per-session granularity (it is the one #1499's
+      # body names), and it is the wrong one: `id/1` yields ONE topic, so
+      # moving it to the session would leave the five account-wide doors
+      # — `delete_user/1`, `revoke_sessions_for_user/1`, the two
+      # `revoke_other_sessions_*`, the visitor destroy — with no address
+      # for a subject at all, and they would have to enumerate live
+      # sessions to rebuild one. Under-firing a revoke is the failure
+      # that matters (see `Grappa.Accounts.Revocations`), so the coarse
+      # address stays and the fine one is added beside it.
+      #
+      # Subscribed HERE rather than in `init/1` because `init/1` is
+      # generated non-overridably by `use Phoenix.Socket`. That makes
+      # this rest on the same guarantee `WSPresence.register/2` above
+      # already rests on — that `connect/3` runs in the process that will
+      # own the WebSocket. It holds for both transports Phoenix ships
+      # (the upgrade keeps the request process), and auto-away has been
+      # riding it in production since #182.
+      :ok = GrappaWeb.Endpoint.subscribe(id_for_session(session.id))
+
       # #95 + #202 — connect observability (NEVER the token). The Logger
       # line is greppable; the `[:grappa, :ws, :connect]` counter is a
       # cheap ops signal (a Phase-5 exporter can aggregate connect churn).
@@ -345,6 +374,23 @@ defmodule GrappaWeb.UserSocket do
   def id_for_subject(subject), do: id_for_user_name(Subject.topic_label(subject))
 
   @doc """
+  #1499: the teardown topic of ONE bearer session, as opposed to
+  `id_for_subject/1`'s topic for every socket of a subject.
+
+  Every authenticated transport subscribes to this at connect
+  (`authenticate_and_assign/2`), user and visitor alike — the session id
+  is the one identifier both branches always have.
+
+  It cannot collide with a subject topic, and not by luck: a user name
+  matches `~r/^[a-zA-Z][a-zA-Z0-9_\\-]*$/` (`Grappa.Accounts.User`) so it
+  can never contain a `:`, which is the same argument the pre-existing
+  `"user_socket:visitor:" <> id` shape already rests on.
+  """
+  @spec id_for_session(Ecto.UUID.t()) :: String.t()
+  def id_for_session(session_id) when is_binary(session_id),
+    do: id_for_user_name("session:" <> session_id)
+
+  @doc """
   Close the live WebSocket for `subject` by broadcasting `"disconnect"`
   to its id-topic (the topic the transport process subscribes to at
   connect time). Phoenix's socket `__info__` catch-all maps the event to
@@ -379,9 +425,36 @@ defmodule GrappaWeb.UserSocket do
   rejected on its next connect anyway).
   """
   @spec disconnect_user_name(String.t()) :: :ok
-  def disconnect_user_name(user_name) when is_binary(user_name) do
-    socket_id = id_for_user_name(user_name)
+  def disconnect_user_name(user_name) when is_binary(user_name),
+    do: user_name |> id_for_user_name() |> push_disconnect()
 
+  @doc """
+  Close the live WebSocket(s) carrying ONE bearer session, leaving every
+  other socket of the same subject serving (#1499).
+
+  The narrow twin of `disconnect_user_name/1`, for the doors that kill a
+  single row rather than an account: the idle-session reaper is the
+  first, and it is the one that made the difference visible, because it
+  fires on a timer with nobody behind it. Same id-topic broadcast, a
+  different address — one teardown code path, two granularities.
+
+  Usually one socket, not necessarily: two transports opened with the
+  same bearer share the session and both go down, which is correct —
+  the row under them is what died.
+
+  Fire-and-forget on the same terms as `disconnect_user_name/1`.
+  """
+  @spec disconnect_session(Ecto.UUID.t()) :: :ok
+  def disconnect_session(session_id) when is_binary(session_id),
+    do: session_id |> id_for_session() |> push_disconnect()
+
+  # The ONE socket-teardown broadcast, shared by both granularities. A
+  # PubSub-unreachable `{:error, _}` is logged and swallowed: the caller
+  # has already revoked or deleted the row, so the socket is refused at
+  # its next connect regardless, and a failed accelerator must never turn
+  # a completed revocation into a failed one.
+  @spec push_disconnect(String.t()) :: :ok
+  defp push_disconnect(socket_id) do
     case GrappaWeb.Endpoint.broadcast(socket_id, "disconnect", %{}) do
       :ok ->
         :ok

@@ -41,6 +41,37 @@ defmodule GrappaWeb.SessionRevocationListenerTest do
     assert_receive %Phoenix.Socket.Broadcast{topic: ^socket_id, event: "disconnect"}
   end
 
+  # #1499 — the narrow half of the contract, asserted on both topics at
+  # once. Checking only that the session topic fires would still pass if
+  # the listener had kept announcing the subject as well, which is the
+  # exact behaviour the issue reports.
+  test "a session announcement pushes disconnect on that session's topic and no other" do
+    session_id = Ecto.UUID.generate()
+    session_topic = UserSocket.id_for_session(session_id)
+    name = "owner-#{System.unique_integer([:positive])}"
+    subject_topic = UserSocket.id_for_subject({:user, %User{name: name}})
+
+    :ok = Endpoint.subscribe(session_topic)
+    :ok = Endpoint.subscribe(subject_topic)
+
+    :ok = Revocations.announce_session(session_id)
+
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^session_topic, event: "disconnect"}
+    refute_receive %Phoenix.Socket.Broadcast{topic: ^subject_topic}, 100
+  end
+
+  # The converse, so neither granularity can quietly absorb the other: a
+  # subject-wide revoke must NOT be narrowed into a per-session one, or
+  # the account-recovery doors would start leaving sockets up.
+  test "a subject announcement does not reach an unrelated session's topic" do
+    session_topic = UserSocket.id_for_session(Ecto.UUID.generate())
+    :ok = Endpoint.subscribe(session_topic)
+
+    :ok = Revocations.announce({:user, "revoked-#{System.unique_integer([:positive])}"})
+
+    refute_receive %Phoenix.Socket.Broadcast{topic: ^session_topic}, 100
+  end
+
   test "an announcement for one subject leaves another subject's socket alone" do
     bystander = "bystander-#{System.unique_integer([:positive])}"
     socket_id = UserSocket.id_for_subject({:user, %User{name: bystander}})

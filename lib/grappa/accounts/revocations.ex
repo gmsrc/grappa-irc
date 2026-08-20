@@ -34,16 +34,37 @@ defmodule Grappa.Accounts.Revocations do
   single hard-delete mechanic for visitor rows). A new door inherits the
   teardown by construction.
 
-  ## Granularity: per-subject, deliberately
+  ## Two granularities: per-subject and per-session (#1499)
 
-  `UserSocket.id/1` is keyed by subject, not by session, so the teardown
-  closes EVERY socket of the subject. On the "revoke all the OTHER
-  sessions" paths (TOTP enrolment/disable, passkey mode change) the
-  device that performed the operation is disconnected too. Its bearer is
-  still valid, so `phoenix.js` reconnects on its own: the cost is a blip.
-  Per-session granularity would require re-keying `UserSocket.id/1` and
-  teaching `Grappa.WSPresence` to carry `session_id`; it stays an open,
-  strictly additive question.
+  `announce/1` names a SUBJECT and closes every socket that subject has;
+  `announce_session/1` names ONE bearer session and closes only the
+  sockets carrying it. A door picks by what it actually killed.
+
+  Per-subject is right wherever the account itself changed hands or shape
+  — `delete_user/1`, `revoke_sessions_for_user/1`, the visitor destroy —
+  and on the "revoke all the OTHER sessions" paths (TOTP
+  enrolment/disable, passkey mode change), where the acting device is
+  disconnected too although its bearer survives. That one IS a blip:
+  `phoenix.js` reconnects on its own, and the operation was something the
+  account holder had just performed, so a reconnect is expected.
+
+  Per-subject was WRONG for the idle-session reaper, which is what #1499
+  reported. That door kills one stale row on a 60s timer with no request
+  and no operator behind it, so the sockets it took down belonged to
+  whoever happened to be connected — measured in production on
+  2026-08-17, where reaping a week-old row of an active account dropped
+  that account's IRC bridge and cost a full channel-rejoin storm on a
+  bearer that had never expired. Nothing about that is a blip, and
+  nothing about it was the account holder's doing.
+
+  The finer address is ADDITIVE: `UserSocket.id/1` stays keyed by
+  subject and every transport ALSO subscribes to
+  `UserSocket.id_for_session/1` at connect. Re-keying `id/1` onto the
+  session (the option #1499's body names, alongside teaching
+  `Grappa.WSPresence` to carry `session_id`) was rejected — `id/1` yields
+  ONE topic, so the account-wide doors would lose their address entirely
+  and have to enumerate live sessions to rebuild it. Under-firing is
+  still the failure that matters; a door in doubt announces the subject.
 
   ## Over-firing is the safe direction
 
@@ -78,8 +99,16 @@ defmodule Grappa.Accounts.Revocations do
   """
   @type subject :: {:user, String.t()} | {:visitor, String.t()}
 
-  @typedoc "The message a subscriber receives."
-  @type event :: {:sessions_revoked, subject()}
+  @typedoc """
+  The messages a subscriber receives.
+
+  Plural vs singular is the whole distinction and it is load-bearing:
+  `:sessions_revoked` carries a SUBJECT and means every bearer it has is
+  dead, `:session_revoked` carries ONE session id and means only that
+  one is. A listener that handles the plural shape must not be assumed
+  to handle the singular — they close different sets of sockets.
+  """
+  @type event :: {:sessions_revoked, subject()} | {:session_revoked, Ecto.UUID.t()}
 
   @doc """
   Subscribes the calling process to the revocation stream.
@@ -109,11 +138,7 @@ defmodule Grappa.Accounts.Revocations do
   """
   @spec announce(subject()) :: :ok
   def announce({tag, label} = subject) when tag in [:user, :visitor] and is_binary(label) do
-    case Phoenix.PubSub.broadcast(
-           Grappa.PubSub,
-           Topic.session_revocations(),
-           {:sessions_revoked, subject}
-         ) do
+    case broadcast({:sessions_revoked, subject}) do
       :ok ->
         :ok
 
@@ -126,4 +151,48 @@ defmodule Grappa.Accounts.Revocations do
         :ok
     end
   end
+
+  @doc """
+  Announces that ONE bearer session is dead (#1499).
+
+  The narrow twin of `announce/1`, for a door that killed a single row
+  rather than an account: `GrappaWeb.SessionRevocationListener` turns it
+  into `GrappaWeb.UserSocket.disconnect_session/1`, which closes the
+  sockets carrying that bearer and leaves the subject's other sockets
+  serving.
+
+  Use it only where the narrow claim is actually true. Announcing one
+  session where the account died would under-fire, and under-firing is
+  the failure this module exists to prevent — see the granularity
+  section above.
+
+  Fire-and-forget on the same terms as `announce/1`.
+  """
+  @spec announce_session(Ecto.UUID.t()) :: :ok
+  def announce_session(session_id) when is_binary(session_id) do
+    case broadcast({:session_revoked, session_id}) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        # No id on the line, and no `:subject_kind` either. The id is the
+        # bearer token itself (S9 — `accounts_sessions.id` is what the
+        # client presents), and `Grappa.Accounts.Session.handle/1`, which
+        # exists to make one greppable without printing it, is on the far
+        # side of this boundary's `deps`. `:subject_kind` is documented in
+        # `config/config.exs` as `:user | :visitor`, where anything else
+        # reads as an unknown-shape drop worth investigating — so a
+        # `:session` value there would send an operator hunting a bug that
+        # is not one. The distinct message carries the distinction instead.
+        Logger.warning("single-session revocation announce failed", reason: inspect(reason))
+
+        :ok
+    end
+  end
+
+  # The one publish. Both granularities ride the same topic and the same
+  # single subscriber; only the event shape and the failure line differ.
+  @spec broadcast(event()) :: :ok | {:error, term()}
+  defp broadcast(event),
+    do: Phoenix.PubSub.broadcast(Grappa.PubSub, Topic.session_revocations(), event)
 end

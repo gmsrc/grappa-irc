@@ -3,12 +3,18 @@ defmodule GrappaWeb.SessionRevocationListener do
   Translates the `Grappa.Accounts.Revocations` domain event into the
   existing socket teardown.
 
-  The whole web-side half of the fix: the contexts announce that a
-  subject's bearer sessions are dead, this process turns that into
-  `GrappaWeb.UserSocket.disconnect_user_name/1`. It exists so the kill
-  sites do not have to reach into the web layer — a context → web
-  dependency `Boundary` refuses, and rightly: `Grappa.Accounts` has no
-  business knowing that a WebSocket is what dies.
+  The whole web-side half of the fix: the contexts announce that bearer
+  sessions are dead, this process turns that into the matching socket
+  teardown — `GrappaWeb.UserSocket.disconnect_user_name/1` for a whole
+  subject, `disconnect_session/1` for one bearer (#1499). It exists so
+  the kill sites do not have to reach into the web layer — a context →
+  web dependency `Boundary` refuses, and rightly: `Grappa.Accounts` has
+  no business knowing that a WebSocket is what dies.
+
+  The granularity is chosen by the ANNOUNCER, not here: a door knows
+  what it killed and this process does not. Both events ride one topic
+  and one subscriber, so there is still exactly one place where a
+  revocation becomes a closed socket.
 
   Stateless and single-subscriber. It holds no socket registry of its
   own: the id-topic broadcast is addressed by label, and Phoenix's
@@ -65,6 +71,16 @@ defmodule GrappaWeb.SessionRevocationListener do
   @impl GenServer
   def handle_info({:sessions_revoked, subject}, state) do
     :ok = subject |> Subject.label() |> UserSocket.disconnect_user_name()
+    {:noreply, state}
+  end
+
+  # #1499 — the narrow half. Plural above closes every socket of a
+  # subject; singular here closes only the sockets carrying one bearer.
+  # Two clauses rather than one with a branch, because they are two
+  # different claims about what died and the pattern is where that is
+  # stated. The catch-all below still covers a shape neither models.
+  def handle_info({:session_revoked, session_id}, state) do
+    :ok = UserSocket.disconnect_session(session_id)
     {:noreply, state}
   end
 
