@@ -1062,6 +1062,30 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   regge e' `git -C .worktrees/<x> status --porcelain --ignored`.
   🥇 **E il vero salvagente non e' il check: e' che la worker se ne sia GIA' andata.** Verifica il suo cwd
   nel pane prima di potare — un controllo che non hai capito ti assolve solo per fortuna.
+- 🔴🔴 **SETTIMA ISTANZA, MECCANISMO NUOVO: UNA METRICA PER-FILE E' CIECA AL CONTENUTO SPOSTATO DI FILE**
+  (w1, 2026-08-20). La metrica "questo ramo trattiene lavoro?" chiedeva se una riga aggiunta stesse **nel
+  file OMONIMO** su main. `establish_deploy_env` era cercato in `scripts/deploy.sh`; su main vive in
+  `infra/lib/deploy_docker.sh` ⇒ **`main=0` su una riga che main ha in DUE copie**, e la fetta D-S3 di #1377
+  si presentava come "caduta" mentre era atterrata da giorni (commit `00554be3`).
+  🥇 **E il modo in cui e' stata chiusa vale piu' del difetto: la worker ha MISURATO il timore del suo
+  orchestratore invece di rassicurarlo.** Io avevo detto "se l'oracolo sbaglia in un verso puo' sbagliare
+  nell'altro, quindi anche i potabili sono sospetti" — prudenza ragionevole e **non misurata**. Lei ha
+  stabilito che **il per-file non puo' trovare piu' del repo-wide** (`manc_file >= manc_ovunque`, verificato
+  su tutti e nove: 22>=11, 203>=149, gli altri uguali) ⇒ **il difetto era STRUTTURALMENTE CONSERVATIVO: teneva
+  rami di troppo e non poteva produrre un falso "atterrato"**. La correzione infatti **aggiunge** un potabile
+  e non ne toglie nessuno. **Una prudenza non misurata perde contro una misura — anche quando la prudenza e'
+  mia.** ⚠️ E la mia ipotesi sulla causa (`main` locale di voyager stantio) e' stata **falsificata a due
+  lati** — `origin/main:scripts/deploy.sh = 0` **e** `main:scripts/deploy.sh = 0`, identiche: il main locale
+  era 120 commit indietro e **non c'entrava**. *Dare un sospetto e' utile; darlo come causa e' il mio errore
+  n.1 di sempre.*
+- 🥇🥇 **IL COROLLARIO CHE CHIUDE LA FAMIGLIA: IL CONTROLLO A RISPOSTA NOTA VA *DENTRO* LO STRUMENTO, NON
+  ACCANTO.** Ogni istanza dello zero falso e' stata beccata da un controllo **esterno e occasionale** (un
+  numero assurdo, un `grep` nudo, una taratura su `README.md`) — cioe' **per fortuna, e solo quando qualcuno
+  si e' ricordato di farlo**. La forma che regge: lo script porta i suoi controlli a risposta nota al suo
+  interno **ed esce SENZA STAMPARE NUMERI se uno fallisce** (w1 ne ha messi tre: valore noto = 2, completezza
+  dell'insieme = 0 assenti, riga inventata = assente). **Un output che non puo' esistere senza i controlli
+  non puo' mentire in silenzio; un controllo accanto allo strumento protegge solo il giro in cui te lo
+  ricordi.** Chiedilo nei brief per qualunque censimento o conteggio.
 - 🔴 **UN GREP SUL NOME NON MISURA LA DUPLICAZIONE:** ritirate 19 definizioni NOMINATE di
   `passthrough_handler`, lo stesso corpo sopravvive **INLINE 14 volte su 10 file**.
 - 🔴 **`git worktree remove … | tail; echo $?` STAMPA `fatal:` E POI rc=0 — `$?` E' DI `tail`** (w2,
