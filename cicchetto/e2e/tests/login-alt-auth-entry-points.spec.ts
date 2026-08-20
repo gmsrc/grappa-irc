@@ -143,6 +143,19 @@ test.describe("login alt-auth entry points — 390x480 (shortest supported viewp
     await passkeyButton(page).click();
     await expect(page.getByRole("alert")).toHaveText(/account name or email/i);
     expect(requested).toBe(false);
+
+    // Positive control (#1117 / #1336). `requested` stays false both when
+    // the client-side validator blocks the ceremony — what this test is
+    // for — and when the route glob stopped matching the passkey
+    // endpoints, which is a broken instrument reading as a pass. The
+    // sibling test below fires the ceremony, but it registers its own
+    // waiter: nothing in THIS test proves THIS registration is live.
+    // Fill the identifier the validator was missing and click again — the
+    // options POST then travels through the same `**/auth/passkeys/**`
+    // handler asserted silent above.
+    await page.getByLabel(/nick or email/i).fill(probeIdentifier());
+    await passkeyButton(page).click();
+    await expect.poll(() => requested, { timeout: 10_000 }).toBe(true);
   });
 
   test("Passkey with an identifier fires the ceremony request and reports the refusal", async ({
