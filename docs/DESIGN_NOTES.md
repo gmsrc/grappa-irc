@@ -54671,3 +54671,164 @@ lost coverage.
   said otherwise: `cicchetto/scripts/check.ts` runs four stages and the fourth
   is `tsc --noEmit -p e2e/tsconfig.json`, with `biome.json` including `e2e/**`
   (#484, #1469).
+<!-- entry #1484 -->
+
+---
+
+## 2026-08-20 — #1484: the archive listing costs 101ms at prod's size, and no index changes the class it is in
+
+#1484 asked two questions in one sentence — what ONE archive listing costs,
+and what the index actually serves — and stated plainly that neither had a
+number. Both now do. The listing is **kept as it is**; this entry is the
+outcome the issue itself named as possible, with the numbers and the
+conditions they hold under.
+
+### What was measured, and on what
+
+`Scrollback.list_archive/3` on a synthetic prod-shaped corpus, run through
+the app's own pool (SQLite plans are per-connection, so a hand-driven
+`sqlite3` would have measured a different thing), OUTSIDE the sandbox — the
+sandbox would have held the whole corpus in one open write transaction,
+which is not the state a production read sees. The plan is EXPLAINed off the
+SQL the production function EMITS, captured from `[:grappa, :repo, :query]`,
+never a local rebuild — #1372's rule, and the reason its blind pin is not
+repeated here.
+
+The corpus: one `(subject, network)` partition, 180 targets (30 channels on a
+heavy tail — one dominant, two busy, the rest thin — plus 150 DM peers with
+inbound rows at `channel = own_nick, dm_with = peer` and outbound at
+`channel = peer`, the CP14 B3 shape), ~8% presence events, ~4% own-authored.
+**The distribution is CHOSEN, not observed.** The SIZE is anchored: prod's
+`messages` was **654k rows on 2026-07-25**, measured live while #393 built
+its four indexes, and #1372 chose 650k as prod-shaped a month later. Today's
+prod count is not measured here — no prod copy on this lane.
+
+### One call, and how it grows
+
+Median of 5 warm reps, macOS host, Docker, `journal_mode=wal`,
+`cache_size=-64000`, no `sqlite_stat*` (prod has none either, so the planner
+works off default estimates in both places):
+
+| partition rows | `list_archive/3` |
+|---:|---:|
+| 10,000 | 1.13 ms |
+| 100,000 | 10.9 ms |
+| 650,000 | 101–104 ms |
+| 1,300,000 | 210 ms |
+
+**Linear, at ~0.16 ms per 1,000 rows in the partition** — which is what the
+issue argued from the query's shape, now with a slope. Extrapolated on the
+same law: 4M rows ≈ 640 ms.
+
+The cost is **partition-bound, not table-bound**: 300k rows belonging to a
+DIFFERENT subject added to the same table moved the median from 209.68 ms to
+210.16 ms. The subject-leading index seek isolates the partition, as
+intended.
+
+The Elixir side (`Enum.reject` + `Enum.map` + `Enum.sort_by` over the
+grouped result) is not the cost: `list_archive/3` and the bare SQL time
+within 1–3% of each other at every size, because those passes run over ~180
+entries, not over the partition.
+
+### The index question, answered: they are not stale, they are unused
+
+The plan at every size is
+`SEARCH m0 USING INDEX messages_user_id_network_id_dm_coalesce_fold_id_kind_index (user_id=? AND network_id=?)`.
+That is **#393's FOLDED coalesce index** — the one `20260729120000`
+re-folded to `lower()`. It matches the GROUP BY expression, so there is no
+temp B-tree; it is not COVERING, because `MAX(server_time)` and the SELECT's
+bare `COALESCE(dm_with, channel)` (kept unfolded on purpose, so the display
+casing survives) both live in the table.
+
+So `messages_archive_user_idx` / `messages_archive_visitor_idx`
+(`20260522073826`) never enter the plan. DESIGN_NOTES 17317-17332 recorded
+their #372 staleness and deliberately KEPT them; #1372 P-S4 left them alone
+on the same grounds. **Measured: dropping both leaves the plan and the
+median byte-for-byte where they were** (203.13 ms vs 201.76 ms at 1.3M, one
+rep-set apart). They are dead weight on the write path, not a read the
+deferral is protecting. Re-folding them instead — same index with
+`lower(COALESCE(dm_with, channel))` and `server_time` still at the tail —
+makes the planner pick them and buys **3%** (101.15 → 98.33 ms). The
+documented cleanup is therefore worth doing for INSERT cost if at all, and
+not for this query.
+
+### What an index CAN buy, and what it cannot
+
+Widening that refolded index to carry the display columns —
+`(user_id, network_id, lower(COALESCE(dm_with, channel)), server_time, dm_with, channel)`
+— makes the plan `SEARCH … USING COVERING INDEX` and takes 101.15 ms →
+**41.85 ms, 2.4x** (build: 1.4s at 650k, on this host). Dropping `row_count`
+from the same shape takes it to 37.87 ms, so **the count is ~10% of the
+cost, not the driver**.
+
+None of that changes the class: every one of those plans still visits every
+row of the partition, so all of them are linear and all of them grow with
+the account.
+
+**Only a different query SHAPE leaves the class.** A loose index scan — a
+recursive CTE that seeks group boundary to group boundary, one seek per
+target instead of one visit per row — answers the same 180 targets with
+`max(server_time)` in **0.50 ms, ~200x**, off the indexes already on main.
+Its cost tracks the number of TARGETS, not the partition, which is the
+property the issue's item 1 was reaching for with a row cap or a time floor —
+and it gets there without truncating the answer. It cannot carry
+`row_count`: a per-group count has to visit the rows.
+
+Worth recording next to that: **`row_count` has no consumer in cic**, and
+neither does `last_activity` except as the server-side sort key —
+`ArchiveModal.tsx` renders `target` and `kind` only. The wire contract is
+additive-only and does not remove fields (#447), so this is an observation
+about where the cost goes, not a proposal.
+
+### Cadence — the other half of the question
+
+Per-call cost is one axis; how often the client asks is the other, and they
+multiply. Four server-side triggers broadcast `archive_changed` on the USER
+topic — the `send_part` cast, the `:join_failed` arm, the `:kicked` arm
+(all `Session.Server`), and the `close_query_window` channel verb — plus
+`archive_purged` after a destructive archive delete. cic's `userTopic.ts`
+answers every one of them with `loadArchive(slug)` **unconditionally, in
+every open tab, whether or not the archive modal is open**; the only other
+call is one per modal group expand.
+
+The bucket that bounds this is per-`(subject, network)`, so tabs multiply
+requests but not the ceiling: capacity 20, refill 0.2/s (prod config).
+Against the measured 101 ms that puts the **sustained ceiling at ~20 ms of
+DB time per second — about 2% of one core** — and a full burst at ~2.0s of
+DB work, refused thereafter at zero query cost (the token is taken before
+the keyset is built). At 4M rows the same bucket would sustain ~13% of a
+core and a burst would be ~13s of DB work.
+
+The burst that is reachable without a scripted caller: a reconnect where
+autojoin fails on many channels emits one `archive_changed` per failed
+channel, so 30 failed autojoins across two tabs exhausts a 20-token bucket
+and the rest answer 429 — which is the bound working, not a defect.
+
+### Verdict
+
+**Acceptable as it stands**, at prod's measured size, under the rate bound
+that #1404 landed. The re-examination gate is the partition, not the
+calendar: at ~0.16 ms per 1,000 rows, 1M rows is ~160 ms and 4M is ~640 ms,
+and the second of those is a number worth acting on. Two cures are on the
+shelf with measurements attached — 2.4x by making the index covering, ~200x
+by changing the query shape — and neither is taken here, because the reading
+that makes one of them urgent has not happened yet.
+
+### Not established
+
+- **Prod's current row count.** 654k is the 2026-07-25 anchor; nothing on
+  this lane can read the m42 jail.
+- **Prod's per-call cost.** All figures are a warm macOS host in Docker.
+  The jail is unmeasured, and so is the cold-cache first call after a boot —
+  every rep here is warm.
+- **How often the triggers actually fire.** The trigger SET is read off the
+  code; the RATE is not observed. `Grappa.DbLatency` buckets by
+  `{source, op}`, so `messages`+`:select` mixes this read with the scrollback
+  fetch and cannot separate it — closing that gap needs either a per-shape
+  counter or an operator reading request logs on the jail.
+- **The corpus distribution**, as stated: chosen. A partition whose rows sit
+  in far fewer targets would change the group count, not the slope, but that
+  was not measured either.
+- **Write-side cost of the index changes.** The 2.4x covering index adds one
+  b-tree; its INSERT cost was not measured here (#1372 measured that
+  widening an existing index is free and that adding new ones is not).
