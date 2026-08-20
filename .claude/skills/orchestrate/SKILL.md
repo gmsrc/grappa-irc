@@ -1062,6 +1062,18 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   regge e' `git -C .worktrees/<x> status --porcelain --ignored`.
   🥇 **E il vero salvagente non e' il check: e' che la worker se ne sia GIA' andata.** Verifica il suo cwd
   nel pane prima di potare — un controllo che non hai capito ti assolve solo per fortuna.
+  🥇🥇 **PERCHE' NESSUN CENSIMENTO DI RAMI TI SALVERA' DA QUESTO: SONO DUE ASSI DIVERSI** (w2, 2026-08-20,
+  chiuso con la prova giusta). Trovato un file assente da main **dentro** una worktree il cui ramo era
+  dichiarato ATTERRATO — da una worker nel censimento e riprodotto **17 su 17** dall'altra. Sembrava il caso
+  peggiore possibile: **due strumenti che sbagliano nello stesso modo, dove la concordanza si traveste da
+  conferma.** Non lo era: **il blob non e' MAI entrato nell'object database** (`git hash-object` del file
+  preservato + `git cat-file -e` su quel blob → rc=1, con controllo **positivo** — blob di un file
+  committato, rc=0 — e **negativo** — contenuto inventato, rc=1); non e' passato nemmeno dall'index.
+  ⇒ **Un censimento sui COMMIT e' cieco all'untracked PER COSTRUZIONE, non per difetto**, e nessun accordo
+  fra strumenti commit-based dice una parola sull'asse DIRECTORY. **L'unica copertura di quell'asse e'
+  `git -C <worktree> status --porcelain --ignored` da DENTRO, prima di rimuovere.**
+  ⚠️ Limite dichiarato da lei e da tenere: puo' escludere la perdita solo per le worktree **esistenti
+  all'ora della misura** — una gia' rimossa prima e' invisibile a chiunque.
 - 🔴🔴 **SETTIMA ISTANZA, MECCANISMO NUOVO: UNA METRICA PER-FILE E' CIECA AL CONTENUTO SPOSTATO DI FILE**
   (w1, 2026-08-20). La metrica "questo ramo trattiene lavoro?" chiedeva se una riga aggiunta stesse **nel
   file OMONIMO** su main. `establish_deploy_env` era cercato in `scripts/deploy.sh`; su main vive in
