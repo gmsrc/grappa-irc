@@ -58,7 +58,18 @@ import {
 //     (admin-*, m9b-*) skip the guard, same as they get no per-spec
 //     subject. The media/upload surfaces that motivated this all
 //     import the wrapped `test`.
-interface CspViolation {
+//   - and the zero it asserts was, until #1336, unfalsifiable: a
+//     collector that never receives reads exactly like a CSP nobody
+//     violated. Renaming the binding, an init script that lands after
+//     the document listens, an event this engine spells differently —
+//     each leaves `violations` empty for 759 tests and the whole guard
+//     silently guards nothing. The array is therefore EXPOSED as the
+//     `cspViolations` fixture and `issue1336-csp-guard-control.spec.ts`
+//     provokes a real block through it, so a dead collector reds one
+//     spec instead of quietly passing all of them. That control is the
+//     apparatus's, not each test's: it proves this wiring is live once
+//     per run, and does NOT prove it re-armed for some particular test.
+export interface CspViolation {
   blockedURI: string;
   violatedDirective: string;
   documentURI: string;
@@ -72,6 +83,7 @@ interface CspViolation {
 // biome-ignore-start lint/suspicious/noConfusingVoidType: Playwright's auto-fixture declaration shape
 export const test = base.extend<{
   _specSubject: void;
+  cspViolations: CspViolation[];
   _cspGuard: void;
   _unrouteGuard: void;
 }>({
@@ -145,9 +157,18 @@ export const test = base.extend<{
     },
     { auto: true },
   ],
+  // The guard's collector, hoisted out of `_cspGuard`'s closure so the
+  // positive control can read it. Only ONE spec is expected to touch it
+  // (`issue1336-csp-guard-control`), which drains what it deliberately
+  // provoked; every other spec should ignore it and let the teardown
+  // below do the asserting.
+  // biome-ignore lint/correctness/noEmptyPattern: Playwright fixture-dependency declaration
+  cspViolations: async ({}, use) => {
+    await use([]);
+  },
   _cspGuard: [
-    async ({ context }, use) => {
-      const violations: CspViolation[] = [];
+    async ({ context, cspViolations }, use) => {
+      const violations = cspViolations;
       await context.exposeBinding("__grappaCspViolation", (_source, violation: CspViolation) => {
         violations.push(violation);
       });
