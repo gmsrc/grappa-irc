@@ -59,12 +59,32 @@ cadences: `shottino --version` and the package version agree, which they
 could not if the package were stamped with a bouncer release number.
 
 Its metadata takes `/usr/bin/shottino` over from the bouncer with
-`Replaces:` / `Breaks: grappa (<< 1.3.0)` (nfpm maps `replaces` to RPM's
+`Replaces:` / `Breaks: grappa (<< 1.3.0~)` (nfpm maps `replaces` to RPM's
 `Obsoletes`). That boundary is historical — the first release that stops
 shipping the file — so it is written as a constant and must not become
 `${GRAPPA_VERSION}`: at 1.4.0 that would assert grappa 1.3.0 shipped a file
 it did not. `deb.breaks` is also absent from nfpm's env-expansion list, so
 an interpolation there reaches the control file verbatim.
+
+**The trailing `~` is part of the boundary, not punctuation (#1594).** nfpm
+stamps a `1.3.0-rc1` VERSION file as `1.3.0~rc1`, and `~` sorts below the
+empty string in both dpkg and rpm ordering — so a bare `1.3.0` boundary
+captures 1.3.0's own release candidate, and cutting `v1.3.0-rc1` made the
+two packages mutually uninstallable (apt 100, dnf 1). `1.3.0~` means
+"everything strictly before 1.3.0, its pre-releases excluded". Any future
+`X.Y.Z` boundary written as a constant has the same hole and is written
+`X.Y.Z~`.
+
+### `pkgversion.sh` — the version nfpm stamps
+
+`version.sh <component>` answers *which file carries the number*.
+`pkgversion.sh <deb|rpm> <component>` answers *what the packager writes
+down*, and the two differ for any pre-release. The release workflow asserts
+all four packages (bouncer + client, deb + rpm) against it; before #1594 the
+bouncer's stamped number had no assertion in either format, so a restamp was
+invisible. The map (first `-` → `~`, and on rpm every further `-` → `_`) is
+measured against the pinned nfpm 2.43.0 — the table is in the script header
+and in `docs/DESIGN_NOTES.md` under #1594.
 
 **Where the split stands.** Done, in both halves at once. The bouncer
 package no longer ships `/usr/bin/shottino` — it is out of `nfpm.yaml`'s

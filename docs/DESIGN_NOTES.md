@@ -55310,3 +55310,149 @@ persist/retention axis remains unmeasured for `networks_controller_test.exs`.
 Whether `terminate/2`'s badmatch is reachable in production is #1613's
 question, not this one's — the cascade amplifier is still there, this fix
 removes the thing that fed it.
+<!-- entry #1594 -->
+
+---
+
+## 2026-08-20 — #1594: a pre-release crossed its own takeover boundary, and nothing was watching the number
+
+Cutting `v1.3.0-rc1` killed the `deb` and the `rpm` release jobs at the same
+step — *Install BOTH packages*, apt exit 100, dnf exit 1. Both packages BUILT
+correctly and their metadata was exactly what CI asked for. They were simply
+**mutually uninstallable**, and the reason is one character.
+
+### Two facts meeting
+
+**nfpm restamps a pre-release.** `build.sh` passes the VERSION string through
+untouched, and nfpm parses it as semver and re-spells the pre-release with a
+tilde, because `~` is how dpkg and rpm both say "sorts below the release it
+precedes". So `1.3.0-rc1` reached the resolvers as `1.3.0~rc1`.
+
+**`shottino` declared its takeover boundary at exactly `1.3.0`** — the first
+release that stops shipping `/usr/bin/shottino`, written as a constant on
+purpose (#1447, vjt 2026-08-17). And `~` sorts BELOW the empty string, so
+`1.3.0~rc1 < 1.3.0` is true and the boundary captured **the release candidate
+of the very release that defines the boundary**. shottino asserted that a
+grappa which does not own the path still owns it.
+
+The yaml comment had argued the constant at length against a *future* bump
+claiming too much. The hole came from the other direction, which the comment
+did not consider: the pre-release of the boundary version itself, falling
+below its own boundary.
+
+### The nfpm map, measured
+
+nfpm 2.43.0 — the version `build.sh` pins — against a minimal config, one
+package built per row, the field read off the ARTEFACT (`dpkg-deb -f`,
+`rpm -qp --queryformat`), on `ubuntu:24.04` and `fedora:43`, the two images the
+release jobs use. `1.3.0` is the positive control:
+
+| VERSION file | deb `Version` | rpm `Version` | rpm `Release` |
+|---|---|---|---|
+| `1.3.0` | `1.3.0` | `1.3.0` | `1` |
+| `1.3.0-rc1` | `1.3.0~rc1` | `1.3.0~rc1` | `1` |
+| `1.3.0-rc.1` | `1.3.0~rc.1` | `1.3.0~rc.1` | `1` |
+| `1.3.0-rc-1` | `1.3.0~rc-1` | `1.3.0~rc_1` | `1` |
+| `1.3.0+foo` | `1.3.0+foo` | `1.3.0+foo` | `1` |
+| `1.3.0-rc1+foo` | `1.3.0~rc1+foo` | `1.3.0~rc1+foo` | `1` |
+
+The rule: the FIRST `-` becomes `~` in both formats, and on rpm every FURTHER
+`-` becomes `_` (rpm reserves `-` as the Version/Release separator). A
+pre-release is **not** split out into `Release`, which stays nfpm's default
+`1` in every row. This closes the "rpm/deb side" non-measure #1591 declared.
+
+### The resolvers' verdict, measured — not the control file's contents
+
+A `Breaks` that *can* capture is not a `Breaks` that *has* captured, so the
+boundary was measured by building fixture packages and asking apt and dnf to
+install the pair. Two boundaries × four grappa versions, both formats,
+identical results:
+
+| grappa | `<< 1.3.0` (before) | `<< 1.3.0~` (after) |
+|---|---|---|
+| `1.2.0` | REFUSES | REFUSES |
+| `1.2.9` | REFUSES | REFUSES |
+| `1.3.0-rc1` → `1.3.0~rc1` | **REFUSES** | **INSTALLS** |
+| `1.3.0` | INSTALLS | INSTALLS |
+
+**Exactly one cell moves.** The guard is relocated, not disarmed — which is
+the row a `<< 0` "fix" would also have produced for rc1 and would have failed
+for 1.2.x. The pre-cure refusals reproduce the CI logs verbatim:
+`shottino : Breaks: grappa (< 1.3.0) but 1.3.0~rc1 is to be installed` and
+`package shottino-0.3.0-1.x86_64 from @commandline obsoletes grappa < 1.3.0
+provided by grappa-1.3.0~rc1-1.x86_64 from @commandline`.
+
+**The bare `1.3.0` row is the decision-relevant one, and it is green on both
+sides.** #1591 named it "the single most decision-relevant open question" and
+derived it from the ordering rule; measured, the derivation holds. Cutting
+1.3.0 FINAL was never blocked. Only pre-releases were — which is why this is
+a fix for the next tag and not a reason to touch the published `v1.3.0-rc1`.
+
+### The cure, and the class
+
+The three relations become `grappa (<< 1.3.0~)` (deb `breaks` +
+`overrides.deb.replaces`) and `grappa < 1.3.0~` (`overrides.rpm.replaces`,
+rendered `Obsoletes:`). `X.Y.Z~` is the spelling of "everything strictly
+before X.Y.Z, its own pre-releases excluded".
+
+**The general rule, and it is a class rather than this incident: a hard-coded
+lower-bound version constant in package metadata is crossed by the
+pre-release of that very version**, on both dpkg and rpm. Any future boundary
+written as a constant is written `X.Y.Z~` unless someone wants to capture that
+version's pre-releases deliberately.
+
+### The other half: the number itself had no gate
+
+The issue named a second hole worth as much as the cure. The release pipeline
+carried two package-version proofs, and **both compared against
+`version.sh shottino`** — the CLIENT's carrier, `frontends/shottino/version.h`,
+which a grappa bump does not touch. So the BOUNCER package's stamped number
+was unasserted in both formats: nfpm restamped it and nothing in the pipeline
+could have noticed. The `grappa eval` proof next door is a different claim —
+it reads the number the BEAM reports, which nfpm never touches.
+
+`infra/packaging/pkgversion.sh <deb|rpm> <component>` is the shared oracle for
+the measured map, and all four packages (bouncer + client, deb + rpm) now
+assert their stamped field against it. It is a SIBLING of `version.sh`, not a
+flag on it: `version.sh` answers *which file carries the number* and is the
+source of truth; this one answers *what the packager writes down*, and the two
+answers diverge the moment the number carries a pre-release. It takes the
+format explicitly and refuses on a missing or unknown one — an oracle that
+guessed would compare a `.rpm` against the deb spelling and agree on every
+version without a hyphen, which is every version this repo has ever cut but
+one.
+
+The `arch` job keeps reading `version.sh shottino` on purpose: makepkg
+REFUSES a hyphen in `pkgver` rather than re-spelling it (#1591), so routing it
+through an nfpm-shaped map would assert a transform pacman never performs.
+
+Two greps also had to be anchored, and the reason is the cure itself:
+`grappa < 1.3.0` is a PREFIX of `grappa < 1.3.0~`, so the rpm `Obsoletes`
+proof and the bats count could not have told the old boundary from the new one
+and would have passed on either.
+
+### Not established
+
+- **Nothing was run at a real tag.** Every measurement is fixture packages
+  built by the pinned nfpm from a minimal config, not the real 37 MB bouncer
+  package with its ERTS payload and maintainer scripts. The metadata fields
+  and the resolver decisions do not depend on the payload, but the claim here
+  is about the version relation, not about the release building.
+- **The new CI gates have not run in CI.** They are proven locally: each new
+  assertion was mutated back to the pre-cure tree and observed RED.
+- **amd64 only, on those two images.** Measured with
+  `--platform linux/amd64` on `ubuntu:24.04` and `fedora:43`; the deb job runs
+  on the `ubuntu-latest` runner rather than in that container, and arm64 was
+  not measured. Version ordering and nfpm's map are architecture-independent
+  by construction, but that is an argument, not a measurement.
+- **`Release` beyond the default.** Every row measured leaves it at `1` because
+  `nfpm.yaml` declares no `release:` key. What nfpm would do with one is not
+  measured — the rpm gate refuses a non-`1` value rather than guessing.
+- **The Arch leg.** Untouched here and unfixed; it is #1591's, and its defect
+  is a different mechanism (makepkg rejects the hyphen outright).
+- **Whether a partial release is the right failure mode.** #1591 recorded that
+  `publish` runs under `if: !cancelled()` and marks a partial release rather
+  than failing the cut. That is why "a documented limitation" was rejected as
+  the outcome here — a broken gate that ships publicly is not a limitation a
+  reader can route around — but the partial-release posture itself was neither
+  measured nor changed.
