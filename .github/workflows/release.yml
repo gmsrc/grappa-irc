@@ -1110,6 +1110,10 @@ jobs:
     # withhold the artifacts that built green: the attach step collects whatever
     # actually downloaded and fails loudly only if NOTHING did. The failed leg
     # stays red on its own, so the run is still marked failed and gets fixed.
+    # NARROWED BY #1591: the step still RUNS on a red leg, but it now refuses
+    # to CREATE a release from an incomplete set — that publication cannot be
+    # taken back. Topping up an EXISTING release is unchanged. The gate is in
+    # the attach step, not here, because it needs the downloaded asset set.
     # ALSO skipped on a docker-image dry-run dispatch (its needs are skipped and
     # there is nothing to publish) — else it would fail "no artifacts present".
     if: ${{ !cancelled() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation)) }}
@@ -1139,7 +1143,7 @@ jobs:
         with:
           path: assets
 
-      - name: Attach whatever built, audit the set, mark a partial release
+      - name: Audit the set, refuse to create a partial release, attach what built
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -1162,6 +1166,36 @@ jobs:
             exit 1
           fi
           printf 'attaching: %s\n' "${assets[@]}"
+
+          # #1591 — CREATING a release is irreversible in a way topping one up
+          # is not: `gh release create` publishes, and deleting the tag
+          # afterwards does not retract it. Cutting v1.3.0-rc1 did exactly
+          # that, with a dead Arch leg and a public release object. So the
+          # #504/#573 posture is kept where its reasoning holds — an existing
+          # release still gets whatever built, marked partial — and refused
+          # where it does not: the first run of a fresh tag must be complete.
+          # A re-run after the fix then CREATES the release cleanly, which the
+          # old order could not do at all.
+          #
+          # `gh release view` failing is read as "absent", the conservative
+          # side: a probe that errors for an unrelated reason makes this
+          # refuse, never publish.
+          release_state=absent
+          if gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            release_state=present
+          fi
+          if verdict="$(infra/packaging/release_assets.sh publishable assets "$release_state")"; then
+            [ -z "$verdict" ] || printf '%s\n' "$verdict"
+          else
+            printf '%s\n' "$verdict"
+            {
+              echo "## ⛔ Release NOT created"
+              echo
+              printf '%s\n' "$verdict"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::incomplete package set — refusing to create a new release for ${RELEASE_TAG} (#1591)"
+            exit 1
+          fi
 
           # Create the release on first run; on a re-run (or a #573 (b) repair
           # dispatch to an existing release) fall back to uploading with

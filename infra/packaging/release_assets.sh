@@ -13,6 +13,10 @@
 #                     file, one per line. Empty output = complete set.
 #   notice <dir>      nothing if complete; else a sentinel-delimited markdown
 #                     block naming the gap.
+#   publishable <dir> <absent|present>
+#                     exit 0 when publishing may proceed. Refuses (exit 1,
+#                     reason on stdout) for an INCOMPLETE set against a
+#                     release that does not exist yet — see below.
 #   apply-body <dir>  read a release body from STDIN, strip any existing
 #                     sentinel block, and — only if the set is incomplete —
 #                     PREPEND a fresh one. Print the result. Idempotent both
@@ -107,6 +111,57 @@ notice() {
 	notice_block "$dir"
 }
 
+# publishable <dir> <absent|present> — may the publish job proceed?
+#
+# #1591. `publish` runs under `if: !cancelled()`, so a red package leg still
+# reached `gh release create` and PUBLISHED — partial, marked as such, and
+# public. #504/#573 chose that deliberately: a distro breakage must not
+# withhold the artifacts that built green, and the failed leg stays red on its
+# own. That reasoning is sound for a release that ALREADY EXISTS, where
+# attaching what built is the only way to complete it, and it is what the
+# `#573 (b)` repair dispatch is for.
+#
+# It does not survive the FIRST run of a fresh tag. There the same rule turns
+# "one leg failed" into a public artefact, and publication is not an act CI
+# can take back: deleting the tag afterwards does not retract the release.
+# Cutting `v1.3.0-rc1` did exactly this — `assets=0` on a public release
+# object — which is why the axis is completeness × does-the-release-exist,
+# not completeness alone.
+#
+# The state is an ARGUMENT rather than a probe done here: this script is pure
+# filesystem + string logic with no network and no `gh`, and the caller
+# already holds a token. Unknown states are refused rather than defaulted,
+# because the permissive default is the one that publishes.
+publishable() {
+	local dir="$1" state="$2"
+
+	case "$state" in
+		absent | present) ;;
+		*)
+			printf 'unknown release state %s (want: absent | present)\n' "${state:-<empty>}" >&2
+			return 2
+			;;
+	esac
+
+	if is_complete "$dir"; then
+		return 0
+	fi
+
+	# Incomplete against an existing release: top it up (#504/#573).
+	if [ "$state" = present ]; then
+		printf 'release already exists — attaching what built, and marking it partial (#504/#573)\n'
+		return 0
+	fi
+
+	# Incomplete against no release: refuse. Name the gap — the operator's
+	# next move is to fix that leg and re-run, and a bare refusal makes them
+	# go find out which one.
+	printf 'refusing to CREATE a release from an incomplete set — publication cannot be retracted (#1591).\n'
+	printf 'missing:\n'
+	missing "$dir" | while IFS= read -r label; do printf -- '- %s\n' "$label"; done
+	return 1
+}
+
 # strip_block — remove every existing sentinel block (inclusive) from stdin.
 strip_block() {
 	awk -v s="$SENTINEL_START" -v e="$SENTINEL_END" '
@@ -144,6 +199,10 @@ main() {
 			[ "$#" -eq 2 ] || die_usage
 			apply_body "$2"
 			;;
+		publishable)
+			[ "$#" -eq 3 ] || die_usage
+			publishable "$2" "$3"
+			;;
 		*)
 			die_usage
 			;;
@@ -152,6 +211,7 @@ main() {
 
 die_usage() {
 	printf 'usage: %s {found|missing|notice|apply-body} <assets-dir>\n' "${0##*/}" >&2
+	printf '       %s publishable <assets-dir> {absent|present}\n' "${0##*/}" >&2
 	exit 2
 }
 

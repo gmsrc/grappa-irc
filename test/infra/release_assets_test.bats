@@ -212,6 +212,76 @@ seed_complete() {
     refute grep -q 'grappa:partial-release' <<<"$output"
 }
 
+# ── publishable: creating a release is irreversible, topping one up is not ──
+#
+# #1591. `publish` runs on `!cancelled()`, so a red package leg still reached
+# `gh release create` and PUBLISHED — a partial release, marked as such, but
+# public. #504/#573 chose that deliberately and for a good reason: a distro
+# breakage must not withhold the artifacts that built green. The reason holds
+# for a release that ALREADY EXISTS, where attaching what built is the only
+# way to complete it. It does not hold for the first run of a fresh tag, where
+# the same rule turns "one leg failed" into a public artefact that deleting
+# the tag does not retract.
+#
+# So the axis is not completeness alone — it is completeness × whether the
+# release object already exists. That decision lives here rather than in YAML
+# because it is the SAME table the rest of this script owns, and because a
+# two-variable rule inlined in a workflow step is exactly what #573 was filed
+# about.
+
+@test "publishable: a complete set may create a brand-new release" {
+    seed_complete
+    run "$SCRIPT" publishable "$ASSETS" absent
+    [ "$status" -eq 0 ]
+}
+
+@test "publishable: a complete set may top up an existing release" {
+    seed_complete
+    run "$SCRIPT" publishable "$ASSETS" present
+    [ "$status" -eq 0 ]
+}
+
+@test "publishable: a PARTIAL set must NOT create a new release (#1591)" {
+    # The irreversible act. `gh release create` publishes; deleting the tag
+    # afterwards does not retract what was published.
+    seed_complete
+    rm "$ASSETS/grappa-arch/grappa-0.8.0-1-x86_64.pkg.tar.zst"
+    run "$SCRIPT" publishable "$ASSETS" absent
+    [ "$status" -ne 0 ]
+    # It must name the gap, not just refuse: the operator's next move is to
+    # fix that leg and re-run, and a bare refusal makes them go find out which.
+    grep -q 'Arch package, bouncer' <<<"$output"
+}
+
+@test "publishable: a PARTIAL set MAY still top up an existing release (#504/#573 preserved)" {
+    # The converse, and the reason this is a two-variable rule rather than a
+    # completeness check: the repair dispatch of #573 (b) exists precisely to
+    # attach a leg that failed the first time, and it runs against a release
+    # that is already public. Refusing here would break the repair path in the
+    # name of protecting a publication that has already happened.
+    seed_complete
+    rm "$ASSETS/grappa-arch/grappa-0.8.0-1-x86_64.pkg.tar.zst"
+    run "$SCRIPT" publishable "$ASSETS" present
+    [ "$status" -eq 0 ]
+}
+
+@test "publishable: an unknown release state is refused, never read as 'present'" {
+    # Fail closed on the permissive side. The workflow computes this from
+    # `gh release view`, and a probe that errors for an unrelated reason (rate
+    # limit, token scope) must not be silently read as "already public,
+    # publish anyway".
+    seed_complete
+    rm "$ASSETS/grappa-arch/grappa-0.8.0-1-x86_64.pkg.tar.zst"
+    for state in "" maybe yes PRESENT; do
+        run "$SCRIPT" publishable "$ASSETS" "$state"
+        [ "$status" -ne 0 ]
+        # Named, so the refusal is distinguishable from the usage error an
+        # absent subcommand produces — otherwise this case is green today,
+        # against a script that has never heard of `publishable`.
+        grep -qi 'release state' <<<"$output"
+    done
+}
+
 @test "usage: an unknown subcommand fails loudly" {
     run "$SCRIPT" frobnicate "$ASSETS"
     [ "$status" -ne 0 ]
