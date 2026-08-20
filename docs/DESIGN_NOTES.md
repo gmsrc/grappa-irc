@@ -55206,3 +55206,107 @@ the app's own build dir (with restore and save compared against each other, not
 against a transcribed copy, since `cache/save` takes its own `path:`), and the
 two key namespaces staying disjoint. Its stated limit: it compares the key
 strings as written, `${{ }}` unexpanded.
+<!-- entry #1546 -->
+
+---
+
+## 2026-08-21 — #1546: cleanup that only runs when the test passes is not cleanup
+
+`Grappa.AdminEvents` is a singleton started by `Grappa.Application`. It
+outlives every sandbox checkout, so anything a test writes into its state is
+still there for the next test — and for the next FILE. Seven test files opened
+their `setup` by resetting it; #1397 gave those seven one shared verb,
+`AdmissionStateHelpers.reset_admin_events/0`, and a no-op mutant on that verb
+reddened 14–16 of 177, which is how #1546 got filed.
+
+The number was never the finding. `reset_admin_events/0` does **two** things —
+it empties the ring, and it rebuilds the struct, so `persist` and `retention`
+go back to their `defstruct` defaults — and a mutant that removes the whole
+function removes both at once. Separating the two axes is what changed the
+answer, and the second axis is the one the original ticket does not name.
+
+### The leak, and why it is not cosmetic
+
+`admin_events_test.exs` is the only file in all of `test/` that writes
+`persist` / `retention`. It restored them with straight-line statements in the
+test BODIES. A failing assertion above such a statement skips it: two windows,
+both requiring another test to have already failed.
+
+What escapes is not a stale flag. `persist: true` makes the singleton write to
+the Repo from its own pid, which is `Sandbox.allow`ed only inside that one
+file, so it dies inside some unrelated file's `setup`. The failure then names a
+file that did nothing wrong and the real one is already off screen (#1613 is
+the sibling defect that erases the reason on the way out). **That cascade is
+what the "not load-bearing" resets on the two zero-read files were actually
+suppressing** — which is why they could not simply be deleted: removing them
+without closing the leak first *introduces* the noise, it does not remove a
+redundancy.
+
+### The fix is a placement, not a verb
+
+One `on_exit(&AdmissionStateHelpers.reset_admin_events/0)` in the setup of the
+one file that dirties. Cleanup registered as a callback is off the happy path
+by construction — it runs on pass, on failure and on raise alike — so the two
+censused windows close and no future window can open in that file either,
+including in tests nobody has written yet. `session_log_persistence_test.exs`
+already had this shape; the general rule it embodies is worth stating plainly:
+**a restore belongs in `on_exit`, never in a test body.** A restore in the body
+is exactly as reliable as the assertions above it.
+
+`reset_admin_events/0` itself was deliberately not touched. The defect was
+where the restore sat, not what it did.
+
+### Gating an `on_exit` needs no seam
+
+The witness is a tag-gated test that dirties and deliberately never restores —
+the failing-assert path minus the failure. Its verdict is another `on_exit`,
+registered FIRST, because ExUnit runs the callbacks in reverse registration
+order: registered first means run last, which is the only position from which
+one callback can read what another left. A `raise` there reddens the test and
+the stacktrace names `ExUnit.OnExitHandler.exec_callback/1`. No exported seam,
+no test-only production API.
+
+Tag-gating is not decoration. An always-on watcher would have made one mutant
+redden the whole file; gated, dropping the restore kills exactly one assertion.
+
+### The pin is what keeps the argument true
+
+"The one file that writes those fields" is the load-bearing clause of the whole
+fix, and it was a hand-run grep. `admin_events_dirt_sources_test.exs` freezes
+it as a derived census: glob `test/`, count the sites reaching the singleton's
+state through `:sys`, require the set to equal the two known ones. It also
+asserts those two are non-empty — an anchor that drifted would otherwise turn
+the pin green by matching nothing, which is the vacuous green a positive
+control exists to refuse. Both halves were measured against mutants, not
+assumed. What the anchor cannot see is stated in its moduledoc: a `:sys` call
+through a pid bound earlier. It is a tripwire on the common shape, not a proof
+of impossibility.
+
+### Two of the three resets fell; the third did not, and that is the result
+
+With the leak closed, `users_controller_test.exs` and
+`credentials_controller_test.exs` lost their last function and went. Neither
+contains an `AdminEvents.*` call, so the ring they emptied is unobservable from
+inside them under any ordering; what they observe is the PubSub broadcast, and
+a broadcast is never re-emitted by a stale ring. The control that makes that
+green mean something: with `record/1` swallowing every synthetic event those
+two files fail 8 tests — 5 and 3, 100% of each file's emission describe.
+
+`networks_controller_test.exs` **keeps** its reset. It reads the ring, and the
+reset is protection against a false PASS: break the emission and a stale
+`:network_caps_updated` at the head still satisfies `[head | _]`, so the
+assertions pass on the wrong row. That is the ring axis, which this fix does
+not touch. A root fix that made all three fall would have been the tidier
+story; the third one staying is the evidence that the two axes are genuinely
+two, and the comment there now records which future change re-arms the trap
+(dropping the cap assertion, or adding a sibling that PATCHes user cap to 4).
+
+### Not established
+
+The 14/16 was never re-run and is not a target — it is seed-dependent and does
+not exist as a fixed quantity, which the ticket already said of its own
+numbers. Only the eight admin files were run, never the full suite. The
+persist/retention axis remains unmeasured for `networks_controller_test.exs`.
+Whether `terminate/2`'s badmatch is reachable in production is #1613's
+question, not this one's — the cascade amplifier is still there, this fix
+removes the thing that fed it.
