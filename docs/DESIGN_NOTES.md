@@ -53699,3 +53699,75 @@ The `EventRouter` per-kind shape table still read `required text` for `:notice`,
 already falsified. Both that cell and `:topic`'s now read `text or ""`, with the reason beneath
 the table — leaving one right and one wrong in the same table is how the next reader picks the
 wrong one.
+<!-- entry #1466 -->
+
+---
+
+## 2026-08-20 — #1466: a structural question, answered by reading the output
+
+`Mix.Tasks.Grappa.GenWireTypes.format_plain_typedef/2` decided whether a
+typedef was a UNION by looking for `" | "` in the string it had just rendered,
+and `reformat_to_multiline/2` then split on every occurrence of those three
+characters. Both halves asked a question about the TYPE and answered it from
+the TEXT, and both are wrong on the same inputs, in opposite directions: a body
+may carry `" | "` without being a union (a nested allowlisted-metadata bag
+renders `Partial<Record<"a" | "b", T>>[]`, which has no arms at all), and a
+union arm may carry `" | "` without that being an arm boundary (the same bag as
+one arm of a real union).
+
+The AST was two frames up the whole time. `pure_atom_union_arms/1` already
+pattern-matches `{:|, _, _}` for exactly this question, and the house rule was
+already written down one incident earlier: the session-state drift test reads
+"the COMPILED typespec via `Code.Typespec.fetch_types/1` — the type Dialyzer
+sees, not a re-parse of the source". A re-parse of the generator's OWN output
+is the same mistake with a shorter round trip.
+
+**Why it stayed latent, measured rather than assumed.** Exactly ONE type in the
+wire reaches that arm today: `Grappa.AdminEvents.Wire.event/0`. Its arms are
+bare alias references with no nested `" | "`, so string-replace and arm-join
+produce the same bytes. The other nine multiline typedefs in `wireTypes.ts`
+come from two different code paths — six from `format_derived_type/2`, three
+from `emit_auto_union/2`, which already built from a list of arms. There are
+zero lines over 100 columns in the committed artifact, which also means the
+`true -> inline_candidate` fallthrough emits nothing today.
+
+**What the defect actually costs, measured with `tsc --noEmit` on the emitted
+text.** #1466 left this open and guessed at the dangerous answer ("a
+valid-but-wrong type"). It is neither of the two options the issue named:
+
+* `" | "` between TYPE tokens — the two cases above — compiles, `rc=0`, and
+  denotes **exactly** the same type as the well-formatted form. Newlines are
+  insignificant between type tokens and a leading `|` is legal, so the token
+  stream is unchanged; an `Exact<A, B>` conditional-type probe compiles as
+  `true`. The damage is pure FORMATTING — and that is the worse regime in
+  practice, because biome reflows the line and the codegen drift gate then
+  disagrees with the cic format gate forever, with nothing failing loudly.
+  The same collision is what forced the `login_throttled` door and scope sets
+  to be NAMED rather than inlined (2026-08-06, a 102-character field).
+* `" | "` inside a STRING LITERAL — reachable from an atom like `:"a | b"` in a
+  mixed union — is `TS1002 unterminated string literal`. A hard syntax error
+  the cic gate catches. No such atom exists in the wire.
+
+So the severity is LOWER than the issue supposed on the axis it worried about,
+and the real exposure is the silent gate disagreement, not a type lie.
+
+**The cure.** The 100-column rule is unchanged; what changed is what it is
+applied to. The arm now matches `{:|, _, _}` on the stripped AST, renders each
+arm on its own and joins them — so an arm containing `" | "` stays one arm. The
+join moved into `multiline_union_typedef/2`, shared with `emit_auto_union/2`,
+so the two places that emit a broken-up union cannot drift apart.
+`reformat_to_multiline/2` is deleted.
+
+**Evidence, and the control's own cardinality.** `mix grappa.gen_wire_types
+--check` is green on BOTH artifacts, so no existing type moved a byte and there
+is no client-contract change. That green is only worth something if the changed
+arm is reached at all, so it was mutated: reversing the arm order inside
+`break_union_typedef/2` alone — not the shared helper, which `emit_auto_union/2`
+would also have reddened — takes `--check` to `OUT OF SYNC`, `rc=1`. The control
+is live, not vacuous.
+
+**Residual, deliberately untouched.** A non-union body over 100 columns still
+emits one long line, and an object body with an over-long field never wraps at
+all. That is the 2026-08-06 gate collision, not this defect, and nothing in the
+wire hits it today. Fixing it means reproducing biome's wrapping for arbitrary
+TS constructs, which is a different job and currently a speculative one.
