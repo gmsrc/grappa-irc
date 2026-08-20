@@ -54171,3 +54171,112 @@ three unknowns exactly when the comparison between them is the triage.
 - Whether any cross-file cascade actually changes verdict under the new
   grouping is **unknown until the first reds arrive**; the mechanism is
   argued above, the incidence is not.
+<!-- entry #1532 -->
+
+---
+
+## 2026-08-20 — #1532: the e2e prose named a room the subject had left
+
+`#1336` moved the per-spec subject off the shared `#bofh` onto
+`AUTOJOIN_CHANNELS[0]` = `` `#spec-w${TEST_PARALLEL_INDEX}` ``. The 292 callers
+followed the constant without being edited — that was the point of routing
+through a constant — and the prose did not follow anything, because prose has
+no callers. This entry records the census, the rule used to decide each
+occurrence one at a time, and the 66 that were deliberately left.
+
+### The count, because the issue said not to believe its own
+
+The issue filed `~135 files` and warned in the same breath: *"Measure with a
+bare grep before believing any count — a scoped grep in this tree has produced
+false zeros four separate ways."* Measured on `origin/main` `5d695a56`:
+
+| scope | files | lines |
+|---|---|---|
+| bare `git grep -F -i bofh`, whole tree | 195 | 770 |
+| `cicchetto/e2e` only | 138 | 399 |
+
+The `~135` was right about the order of magnitude and named the right tree; it
+is the e2e population, not the repo-wide one. The 399 lines split three ways
+and the split closes exactly — **12 + 355 + 32 = 399**:
+
+- **12** in the six e2e files that drive no per-spec subject at all
+  (`compose.yaml` and five generic fixtures whose `#bofh` is an illustrative
+  example: `` `#bofh` ⊂ `#bofh-test` ``, `` peer.join("#bofh") ``, a
+  `whois-card-channel` DOM sample);
+- **355** carrying the `#bofh` token inside a file that DOES drive the
+  per-spec subject — the domain of this change;
+- **32** carrying only a bare `bofh`: local identifiers (`const bofh`,
+  `bofhRow`, `bofhBadgeB`), the `mentionBody("bofh", runId)` message bodies,
+  `%23bofh`, and the `#BOFH`/`#BoFH` casing spellings.
+
+### The discriminator is measured, not assumed
+
+A file drives the per-spec subject when it reads
+`specUser`/`specNick`/`AUTOJOIN_CHANNELS`/`SEED_CHANNEL`/`specSubject`. **131 of
+the 138 do**; one (`seedData.ts`) legitimately speaks for both, and six speak
+for neither. In the 131, `#bofh` in a comment is false twice over: the subject
+autojoins `#spec-wN`, and `specSubject.ts` re-seeds the SAME 200 `seed-bot`
+rows into that channel, so "the seeded `#bofh` corpus" names the wrong room
+even where the row count is right.
+
+### 289 rewritten, 66 left — and the 66 are the interesting half
+
+Each occurrence was judged for meaning, per the issue's own rule that *"a blind
+`sed` would make the prose more wrong, not less"*. The test applied to each:
+**does replacing the token yield a TRUE sentence?** Where it does not, the line
+stays whole. The 66 fall into eight classes:
+
+| n | class |
+|---|---|
+| 22 | names the compose seeder or the bind of the three long-lived users (`vjt`, `m9b-test`, `m9b-victim`) — that really is `#bofh`, including the `(vjt, bahamut-test, #bofh)` DB-row tuples |
+| 14 | the token is qualified by a SHARING claim that #1336 removed ("the shared `#bofh`", "NOT the shared seeded autojoin") — renaming would assert the per-spec channel is shared, the opposite of what the move bought |
+| 7 | the other half of a sentence whose first half stays `#bofh`; renaming only one half makes one sentence name two rooms |
+| 7 | the `anti-#bofh-pollution` idiom — a named hazard of the shared room, not a channel reference |
+| 6 | a co-resident `+o` / three-way autojoin race, which only exists where co-residents do |
+| 5 | past-tense history ("earlier iterations drove", "used to leave the SHARED cursor") — true as written |
+| 4 | the #1336 comment set itself, which names the shared room on purpose |
+| 1 | `ux-4-z-cluster-journey`'s casing arm — see below |
+
+### Three things the census turned up that the issue did not claim
+
+**The premise "none of them is a value the suite acts on" is true of the 289
+and false of the population.** `issue188-mentions-panel-polish` and
+`issue71-inc2-permanent-rail-desktop` pass `mentionBody("bofh", runId)` and
+assert on the rendered `` `ping in bofh ${runId}` ``: those ARE values, they
+just carry a bare `bofh` rather than `#bofh`, and they were left alone for that
+reason. A future sweep that widens the pattern to bare `bofh` would be editing
+behaviour, not prose.
+
+**`ux-4-z-cluster-journey` bucket A describes an assertion it no longer makes.**
+Its header says *"channel case-insensitivity: `/join #BOFH` routes to the same
+window as `#bofh`"*, and the arm at `:194` focuses the autojoin channel via the
+canonical name and asserts a single tab — there is no uppercase actor anywhere
+in the file. Renaming the channel there would have laundered that divergence
+into a sentence that reads correct, so both lines were left and the divergence
+is recorded here instead. **Not fixed and not filed** — it is a test-content
+question, outside a prose issue.
+
+**A second axis is stale in the same comments, and is deliberately untouched.**
+Many of these lines say `vjt` where the subject is `specUser()`. The code does
+too — `const vjt = specUser()` is the standing spelling — so the name is
+#1078's debt rather than a signal about the room, and treating it as one is
+what would have turned a prose fix into a rename. Consequence, stated so it is
+not read as an oversight: **33 files now carry both spellings**, and that is
+correct by construction, because the two spellings name two different rooms.
+
+### Not established
+
+- **No spec was run.** The gate is `bun run check` (biome + both `tsc`
+  projects) and `bun run test`, both green; the argument that no e2e run is
+  needed is the issue's own — every occurrence touched is a comment, a test
+  title or a thrown message, none of them a value the suite acts on. That is a
+  reason, not a measurement, and it does not cover the two `mentionBody`
+  call sites above, which is why they were left.
+- **The 66 were not re-derived by a second tool.** They come from one pass with
+  an explicit per-line exclusion table; a different reader would move some
+  lines between "left" and "rewritten" at the margin.
+- **`#spec-wN` is a literal, and literals rot.** It replaces the lie without
+  curing the class: name the constant (`AUTOJOIN_CHANNELS[0]`) and the next
+  channel move needs no sweep at all. Rewriting 289 sentences that way was
+  judged a larger change than the issue asked for, and is left as the obvious
+  follow-up if the channel shape ever moves again.
