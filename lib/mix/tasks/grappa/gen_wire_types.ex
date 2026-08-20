@@ -282,16 +282,54 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
       "Partial<Record<#{key_ts_name}, #{do_render(value_ast)}>>;"
   end
 
+  # #1466 — "is this a union?" is a question about the TYPE, so it is asked of
+  # the AST. It used to be asked of `body`, the string this function had just
+  # rendered, via `String.contains?(body, " | ")` — and the split that followed
+  # was a blind `String.replace/3` over the same three characters. Both halves
+  # are wrong on the same inputs, in opposite directions: a body may carry
+  # `" | "` without being a union (`Partial<Record<"a" | "b", T>>[]`, a nested
+  # allowlisted-metadata bag), and a union arm may carry `" | "` without that
+  # being an arm boundary (the same bag as one arm of a real union). The first
+  # splits a type that has no arms; the second splits a real union INSIDE an
+  # arm.
+  #
+  # What that actually costs, MEASURED with `tsc --noEmit` on the emitted text
+  # rather than reasoned about, because the answer is not the obvious one and
+  # #1466 left it open. Two regimes, and NEITHER is the "valid but wrong type"
+  # the issue feared:
+  #
+  #   * `" | "` between TYPE tokens (both cases above): tsc exits 0 and the
+  #     type is EXACTLY equivalent to the well-formatted one — newlines are
+  #     insignificant and a leading `|` is legal, so the token stream is
+  #     unchanged. The damage is pure FORMATTING, which is the worse of the two
+  #     in practice: biome reflows it, so the codegen drift gate and the cic
+  #     format gate disagree forever, with nothing failing loudly. That is the
+  #     same collision that forced the `login_throttled` door/scope sets to be
+  #     NAMED rather than inlined (DESIGN_NOTES 2026-08-06).
+  #   * `" | "` inside a STRING LITERAL (an atom like `:"a | b"` in a mixed
+  #     union): TS1002 "unterminated string literal". A hard syntax error the
+  #     cic gate catches. No such atom exists in the wire today.
+  #
+  # The AST was two frames up the whole time — `pure_atom_union_arms/1` already
+  # pattern-matches `{:|, _, _}` for exactly this question. The 100-column rule
+  # is unchanged; what changed is what it is applied to.
+  #
+  # Residual, deliberately untouched: a NON-union body over 100 columns still
+  # emits one long line (the `true ->` arm, as before), and so does an object
+  # body with an over-long field (the `{` arm, which never wraps at all).
+  # Wrapping an arbitrary TS construct the way biome does is a different job,
+  # and it is the SAME gate collision described above rather than this defect.
+  # No type in the wire hits it today: measured, zero lines over 100 columns in
+  # the committed `wireTypes.ts`.
   defp format_plain_typedef(alias_name, stripped) do
     body = do_render(stripped)
-    sep = if String.starts_with?(body, "\n"), do: "", else: " "
     inline_candidate = "export type #{alias_name} = #{body};"
 
     cond do
-      String.starts_with?(body, "{") -> "export type #{alias_name} = #{body};"
-      String.starts_with?(body, "\n") -> "export type #{alias_name} =#{sep}#{body};"
+      String.starts_with?(body, "{") -> inline_candidate
+      String.starts_with?(body, "\n") -> "export type #{alias_name} =#{body};"
       String.length(inline_candidate) <= 100 -> inline_candidate
-      String.contains?(body, " | ") -> reformat_to_multiline(alias_name, body)
+      match?({:|, _, _}, stripped) -> break_union_typedef(alias_name, stripped)
       true -> inline_candidate
     end
   end
@@ -314,9 +352,19 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   defp atom_literal_arm?({:atom, _, [a]}) when a not in [nil, true, false], do: true
   defp atom_literal_arm?(_), do: false
 
-  defp reformat_to_multiline(alias_name, body) do
-    multi = String.replace(body, " | ", "\n  | ")
-    "export type #{alias_name} =\n  | #{multi};"
+  # Render each arm on its own, then join — so an arm that happens to contain
+  # `" | "` stays one arm. `flatten_union/2` preserves source order.
+  defp break_union_typedef(alias_name, union) do
+    arms = union |> flatten_union([]) |> Enum.map(&do_render/1)
+    multiline_union_typedef(alias_name, arms)
+  end
+
+  # biome's shape for a union that does not fit on one line: one arm per line,
+  # leading `|`, indent 2. Shared with the auto-emitted discriminated union
+  # (`emit_auto_union/2`) — same rule, one implementation, so the two shapes
+  # cannot drift apart.
+  defp multiline_union_typedef(alias_name, rendered_arms) do
+    "export type #{alias_name} =\n  | " <> Enum.join(rendered_arms, "\n  | ") <> ";"
   end
 
   defp module_from_path(path) do
@@ -934,7 +982,7 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
     if String.length(inline_line) <= 100 do
       "\n\n" <> inline_line
     else
-      "\n\nexport type #{union_name} =\n  | " <> Enum.join(rendered_arms, "\n  | ") <> ";"
+      "\n\n" <> multiline_union_typedef(union_name, rendered_arms)
     end
   end
 

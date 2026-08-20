@@ -4,6 +4,19 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
   alias Grappa.Themes.TokenModel
   alias Mix.Tasks.Grappa.GenWireTypes
 
+  # #1466 — the rendering of `Grappa.WireFixtureLongUnion`'s metadata bag. It
+  # carries `" | "` while being a single, indivisible TS construct, so it is
+  # the discriminator between "split on union arms" and "split on a substring".
+  @partial_body ~s(Partial<Record<"alpha_channel" | "beta_channel", unknown>>)
+
+  # What splitting on the substring produces: a break INSIDE the Record's key
+  # union. Measured with `tsc --noEmit`, this still COMPILES and denotes the
+  # same type — newlines are insignificant between type tokens — so tsc is not
+  # the thing that catches it. biome is: it reflows the line, and then the
+  # codegen drift gate and the cic format gate disagree forever. The assertion
+  # therefore has to be on the emitted TEXT; no type-level check would fail.
+  @over_split ~s(Partial<Record<"alpha_channel"\n  | "beta_channel")
+
   describe "type mapping" do
     test "renders atom literal as TS string literal" do
       assert GenWireTypes.render_type({:atom, [], [:foo]}) == ~s("foo")
@@ -514,6 +527,47 @@ defmodule Mix.Tasks.Grappa.GenWireTypesTest do
 
       refute full =~ "ThemesWireBuiltinBackground"
       refute full =~ "ThemesBuiltinBackgroundsT"
+    end
+  end
+
+  # #1466 — the over-100-column arm of `format_plain_typedef/2` used to ask
+  # "is this a union?" by looking for `" | "` in the string it had just
+  # rendered, and then split on EVERY occurrence of those three characters.
+  # Both halves read the output instead of the AST that produced it, so both
+  # are wrong on the same inputs: a body may contain `" | "` without being a
+  # union, and a union arm may contain `" | "` without being a boundary.
+  describe "over-long typedefs break on union ARMS, not on a string sniff (#1466)" do
+    test "a non-union body carrying \" | \" is not broken into union arms" do
+      output = GenWireTypes.render_module_for_test(Grappa.WireFixtureLongUnion)
+
+      assert output =~
+               "export type WireFixtureLongUnionNestedPartialList = " <> @partial_body <> "[];"
+
+      refute output =~ @over_split
+    end
+
+    test "a real union with \" | \" inside an arm breaks only at the arm boundary" do
+      output = GenWireTypes.render_module_for_test(Grappa.WireFixtureLongUnion)
+
+      assert output =~
+               "export type WireFixtureLongUnionNestedPartialOrNull =\n  | " <>
+                 @partial_body <> "\n  | null;"
+
+      refute output =~ @over_split
+    end
+
+    # The pin the cure must NOT move: a union of plain same-module refs is the
+    # shape every union that reaches this arm in the real wire actually has
+    # (`Grappa.AdminEvents.Wire.event/0` is the only one, measured against the
+    # committed artifact). String-replace and arm-join agree here — which is
+    # precisely why the defect stayed latent.
+    test "a union of plain refs splits identically to the string-replace it replaces" do
+      output = GenWireTypes.render_module_for_test(Grappa.WireFixtureLongUnion)
+
+      assert output =~
+               "export type WireFixtureLongUnionLongAliasUnion =\n" <>
+                 "  | WireFixtureLongUnionNestedPartialList\n" <>
+                 "  | WireFixtureLongUnionNestedPartialOrNull;"
     end
   end
 
