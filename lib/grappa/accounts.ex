@@ -1232,6 +1232,15 @@ defmodule Grappa.Accounts do
   Returns `{:ok, count}` with the number of rows removed; the count
   rides the audit log so a no-op sweep stays distinguishable from a
   productive one.
+
+  Announces one `Revocations.announce_session/1` per row swept, NOT a
+  `{:user, name}` for each owner (#1499). "Already un-reusable" above is
+  a claim about the ROW, and the socket is a separate object: a WebSocket
+  authenticates once, at connect, so a live one goes on serving over a
+  row that ages out beneath it. Both halves follow from that — the
+  announcement has to happen (or the socket outlives its bearer), and it
+  has to be narrow (or it takes down the account's other, valid sockets
+  with it, which is the production incident #1499 reports).
   """
   @spec delete_expired_sessions() :: {:ok, non_neg_integer()} | {:error, :db_unavailable}
   def delete_expired_sessions do
@@ -1251,8 +1260,8 @@ defmodule Grappa.Accounts do
     # owns the best-effort-DROP terminal — NO 503 (no web caller). Wrap the
     # `delete_all` in an `{:ok, _}` so it honours the `BusyRetry.run/1`
     # contract.
-    case Repo.BusyRetry.run(fn -> {:ok, {expired_user_names(query), Repo.delete_all(query)}} end) do
-      {:ok, {names, {deleted, _}}} ->
+    case Repo.BusyRetry.run(fn -> {:ok, {expired_session_ids(query), Repo.delete_all(query)}} end) do
+      {:ok, {ids, {deleted, _}}} ->
         # Suppressed on count=0: the reaper calls this every 60s, so an
         # unconditional line would flood the log with 1440 idle "reaped 0"
         # entries/day. A productive sweep logs once so the lifecycle stays
@@ -1261,7 +1270,26 @@ defmodule Grappa.Accounts do
         # was observed — N rows past the idle window — not merely "ran".)
         if deleted > 0, do: Logger.info("expired sessions reaped", affected: deleted)
 
-        Enum.each(names, &Revocations.announce({:user, &1}))
+        # #1499 — announced per SESSION, not per owner. This door deletes
+        # ONE row of an account that may have a dozen live sockets on
+        # other, perfectly valid bearers, and a `{:user, name}`
+        # announcement closes all of them: measured in production on
+        # 2026-08-17, where a week-old row of an active account crossed
+        # the window and dropped that account's IRC bridge, costing a
+        # full channel-rejoin storm downstream. Nothing here justifies
+        # the wide address — the sweep's own claim is exactly "these
+        # bearers are gone", never "this account is".
+        #
+        # The announcement is NOT optional, which is the other half of
+        # #1499 and the opposite of what its body proposed. The rows are
+        # dead in law the moment they cross the window, but a WebSocket
+        # authenticates once and never again (`authenticate/1` has three
+        # call sites and the WS one runs at connect), so `last_seen_at`
+        # freezes under a socket that is still serving and the row ages
+        # out beneath it. Dropping the announcement would leave that
+        # socket open on a row that no longer exists — pinned by
+        # `GrappaWeb.SocketLivenessVsSessionRowTest`.
+        Enum.each(ids, &Revocations.announce_session/1)
 
         {:ok, deleted}
 
@@ -1270,22 +1298,15 @@ defmodule Grappa.Accounts do
     end
   end
 
-  # The distinct owners of the rows `delete_expired_sessions/0` is about to
-  # remove, as socket id-topic labels. Read BEFORE the DELETE: the user rows
-  # survive the sweep, but the sessions that name them do not, so afterwards
-  # there is nothing left to join.
+  # The ids of the rows `delete_expired_sessions/0` is about to remove, as
+  # socket teardown addresses. Read BEFORE the DELETE, for the obvious
+  # reason that afterwards there is nothing left to read.
   #
   # A second statement on a 60s timer whose usual result is the empty list.
   # `delete_all(returning: …)` would avoid it, but the sweep is the reaper's
   # whole tick — there is no hot path to protect here.
-  @spec expired_user_names(Ecto.Query.t()) :: [String.t()]
-  defp expired_user_names(query) do
-    query
-    |> join(:inner, [s], u in User, on: u.id == s.user_id)
-    |> distinct(true)
-    |> select([_s, u], u.name)
-    |> Repo.all()
-  end
+  @spec expired_session_ids(Ecto.Query.t()) :: [Ecto.UUID.t()]
+  defp expired_session_ids(query), do: query |> select([s], s.id) |> Repo.all()
 
   # #1196 — a client token does not age out. The whole failure this
   # feature exists to remove is an unattended client coming back after a

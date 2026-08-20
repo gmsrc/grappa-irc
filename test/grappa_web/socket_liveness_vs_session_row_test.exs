@@ -63,6 +63,12 @@ defmodule GrappaWeb.SocketLivenessVsSessionRowTest do
     assert Process.alive?(chan.channel_pid)
   end
 
+  # The claim is unchanged from when this was written: nothing but the
+  # sweep's announcement closes a socket whose row has aged out under it.
+  # The ADDRESS changed with #1499 — the reaper now announces the session
+  # rather than its owner, so the teardown arrives on the per-session
+  # id-topic. Subscribing to the subject topic here would pass vacuously
+  # by never seeing anything either way, so the test follows the address.
   test "the reaper's announcement is the only thing that closes that socket" do
     {user, session} = user_and_session()
 
@@ -70,10 +76,15 @@ defmodule GrappaWeb.SocketLivenessVsSessionRowTest do
 
     :ok = age_past_idle_window(session.id)
 
+    GrappaWeb.Endpoint.subscribe(UserSocket.id_for_session(session.id))
     GrappaWeb.Endpoint.subscribe(UserSocket.id_for_subject({:user, user}))
 
     assert {:ok, 1} = Reaper.sweep()
 
-    assert_receive %Phoenix.Socket.Broadcast{event: "disconnect"}, 1_000
+    session_topic = UserSocket.id_for_session(session.id)
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^session_topic, event: "disconnect"}, 1_000
+
+    subject_topic = UserSocket.id_for_subject({:user, user})
+    refute_receive %Phoenix.Socket.Broadcast{topic: ^subject_topic}, 100
   end
 end

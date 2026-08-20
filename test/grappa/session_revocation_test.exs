@@ -135,21 +135,46 @@ defmodule Grappa.SessionRevocationTest do
       assert name == user.name
     end
 
-    test "delete_expired_sessions/0 announces every owner it swept" do
-      first = stale_session_owner()
-      second = stale_session_owner()
+    # #1499 — one announcement per ROW, naming the row. This used to
+    # announce `{:user, name}` per distinct owner, and that is the defect:
+    # the sweep's claim is "these bearers are gone", never "these accounts
+    # are", and the wide announcement closed every socket of each owner.
+    test "delete_expired_sessions/0 announces every session it swept, not their owners" do
+      first = stale_session()
+      second = stale_session()
 
       assert {:ok, 2} = Accounts.delete_expired_sessions()
 
-      assert_receive {:sessions_revoked, {:user, one}}
-      assert_receive {:sessions_revoked, {:user, two}}
-      assert Enum.sort([one, two]) == Enum.sort([first.name, second.name])
+      assert_receive {:session_revoked, one}
+      assert_receive {:session_revoked, two}
+      assert Enum.sort([one, two]) == Enum.sort([first.id, second.id])
+
+      # The absence is half the contract: a subject-wide announcement here
+      # is precisely what took the bystander sockets down.
+      refute_receive {:sessions_revoked, _}, 100
+    end
+
+    # The narrowing, stated at the door. `ReaperSocketBlastRadiusTest` is
+    # the same claim measured on live transports; this one keeps it
+    # falsifiable without standing any up, so a regression is attributed
+    # to the announcement rather than to the socket layer.
+    test "delete_expired_sessions/0 says nothing about the owner's surviving sessions" do
+      user = user_fixture()
+      stale_id = age_out(session_fixture(user)).id
+      fresh_id = session_fixture(user).id
+
+      assert {:ok, 1} = Accounts.delete_expired_sessions()
+
+      assert_receive {:session_revoked, ^stale_id}
+      refute_receive {:session_revoked, ^fresh_id}, 100
+      refute_receive {:sessions_revoked, _}, 100
     end
 
     test "delete_expired_sessions/0 announces nothing on an idle sweep" do
       assert {:ok, 0} = Accounts.delete_expired_sessions()
 
       refute_receive {:sessions_revoked, _}, 100
+      refute_receive {:session_revoked, _}, 100
     end
 
     test "Visitors.delete/1 announces the visitor" do
@@ -194,11 +219,17 @@ defmodule Grappa.SessionRevocationTest do
     :ok
   end
 
-  defp stale_session_owner do
-    {user, session} = user_and_session()
+  defp stale_session do
+    {_user, session} = user_and_session()
+    age_out(session)
+  end
+
+  # Backdates the row past the idle window and hands it back, so a caller
+  # can name the session the sweep is about to take.
+  defp age_out(%Session{} = session) do
     when_seen = DateTime.add(DateTime.utc_now(), -(@idle_seconds + 3600), :second)
     query = from(s in Session, where: s.id == ^session.id)
     {1, _} = Repo.update_all(query, set: [last_seen_at: when_seen])
-    user
+    session
   end
 end

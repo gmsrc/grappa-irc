@@ -25,11 +25,27 @@ defmodule Grappa.Accounts.Reaper do
   `Accounts.delete_expired_sessions/0` — a single set-based
   `Repo.delete_all` over USER sessions whose `last_seen_at` is older
   than the 7-day idle window (`Accounts.@idle_timeout_seconds`, the
-  same constant `authenticate/1` gates on). The rows removed are
-  already un-authenticatable at read-time, so the GC only reclaims
-  dead material; it changes no liveness semantics. Visitor sessions
-  are deliberately out of scope — they CASCADE from the visitor row
-  via `Grappa.Visitors.Reaper`.
+  same constant `authenticate/1` gates on). Visitor sessions are
+  deliberately out of scope — they CASCADE from the visitor row via
+  `Grappa.Visitors.Reaper`.
+
+  ## It DOES change liveness (#1499)
+
+  This moduledoc used to claim the sweep "only reclaims dead material;
+  it changes no liveness semantics", on the reading that a row past the
+  window can no longer authenticate so nothing can be resting on it.
+  That is true of the ROW and false of the SOCKET, and the distinction
+  is the whole of #1499: `GrappaWeb.UserSocket` calls
+  `Accounts.authenticate/1` once, at connect, and never again, so a
+  client that speaks only over the WebSocket never refreshes
+  `last_seen_at` and its row ages out underneath a connection that is
+  still serving. `GrappaWeb.SocketLivenessVsSessionRowTest` pins it.
+
+  So the sweep genuinely closes live sockets, and must: leaving one open
+  on a row it has just deleted is worse. What it must NOT do is close
+  the account's OTHER sockets, which is what a per-subject announcement
+  did until #1499 re-keyed it to `Revocations.announce_session/1` — one
+  announcement per row swept, addressed at that bearer alone.
 
   ## No AdminEvent
 
