@@ -559,6 +559,45 @@ Do **not** tag a spec on a hunch. A declaration is a claim that the spec
 was measured on both sides of the input; an unmeasured one is a guess
 wearing a gate's clothes, and it will red somebody else's run.
 
+## The cic gate's biome is NOT the one in `node_modules/.bin` (#1532)
+
+**Measured 2026-08-20, in the main checkout and in every worktree at
+once** (they all clone `node_modules` from the same source, so the drift
+propagates):
+
+```
+cicchetto/node_modules/.bin/biome --version   ->  2.4.13
+cicchetto/package.json "@biomejs/biome"       ->  2.5.8
+```
+
+On the same clean tree, `./node_modules/.bin/biome check
+--max-diagnostics=none` reported **7 errors** and `scripts/bun.sh run
+check` reported **0**. Two different binaries, two different verdicts.
+`cicchetto/scripts/check.ts` resolves the pinned version through bun and
+says so in its own comment — *"#1571 measured a `node_modules` whose
+biome was three minor versions behind"*; the `lock drift` stage exists
+for this family and passes anyway, because the `.bin` shim is not what
+it compares.
+
+**So the oracle for any biome number is `scripts/bun.sh run check`, run
+from the ROOT of the worktree — never the binary path.** A count taken
+from `.bin` is not comparable with the gate's, nor with another
+worktree's. When two runs disagree, check `--version` before you go
+looking for the cause in the code: the tree is usually innocent.
+
+Two follow-on tells from the same incident:
+
+- **The gate's biome reports lint and formatter separately, and the
+  errors are the `×` lines.** The `path:line lint/rule` headers above
+  them are frequently WARNINGS in files you never touched; reading those
+  as the failure sends you hunting a `_build`-style contamination that
+  is not there. Scroll to `×` and read what follows it.
+- **A prose edit that LENGTHENS a token can redden the formatter.**
+  #1532 replaced `#bofh` with `#spec-wN` (+3 characters) and pushed
+  exactly two lines past the 100-column `lineWidth`. The fix is to paste
+  the formatter's own printed output, not to shorten the sentence so it
+  fits.
+
 ## Five e2e gate traps that fake a green (or a red)
 
 These five each make a broken run *look* fine — or a fine run look
