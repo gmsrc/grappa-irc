@@ -99,18 +99,20 @@ defmodule Grappa.AdminEventsTest do
   # to (ExUnit.OnExitHandler.exec_callback/1) — that is the observation
   # point, and the stacktrace names it.
   defp maybe_watch_for_escaping_dirt(context) do
-    if context[:dirt_probe] do
-      on_exit(fn ->
-        defaults = %AdminEvents{}
-        left = :sys.get_state(AdminEvents)
+    if context[:dirt_probe], do: on_exit(&refute_escaping_dirt/0)
 
-        if {left.persist, left.retention} != {defaults.persist, defaults.retention} do
-          raise "AdminEvents config dirt escaped the test: " <>
-                  "persist=#{inspect(left.persist)} retention=#{inspect(left.retention)} " <>
-                  "(defaults persist=#{inspect(defaults.persist)} " <>
-                  "retention=#{inspect(defaults.retention)})"
-        end
-      end)
+    :ok
+  end
+
+  defp refute_escaping_dirt do
+    defaults = %AdminEvents{}
+    left = :sys.get_state(AdminEvents)
+
+    if {left.persist, left.retention} != {defaults.persist, defaults.retention} do
+      raise "AdminEvents config dirt escaped the test: " <>
+              "persist=#{inspect(left.persist)} retention=#{inspect(left.retention)} " <>
+              "(defaults persist=#{inspect(defaults.persist)} " <>
+              "retention=#{inspect(defaults.retention)})"
     end
 
     :ok

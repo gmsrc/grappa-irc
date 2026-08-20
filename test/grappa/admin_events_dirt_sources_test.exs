@@ -60,7 +60,7 @@ defmodule Grappa.AdminEventsDirtSourcesTest do
   test "only the censused files write the AdminEvents singleton's state" do
     by_file = writers()
 
-    assert Map.keys(by_file) |> Enum.sort() == Enum.sort(@allowed),
+    assert Enum.sort(Map.keys(by_file)) == Enum.sort(@allowed),
            """
            A file outside the #1546 census writes `Grappa.AdminEvents`'
            singleton state via :sys.
