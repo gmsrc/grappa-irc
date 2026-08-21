@@ -62,6 +62,23 @@ load_rc_config "$name"
 # because run_erl always creates its own `log/` subdir under
 # RELEASE_TMP. Operator override via /etc/rc.conf.d/grappa.
 : ${grappa_runtime_tmp:="/home/grappa/grappa/runtime"}
+# run_erl's CIRCULAR log ring — the node's only stdout/stderr history, and
+# the sole place an incident's evidence lives on this substrate.
+#
+# 🔴 The stock ring is 5 files x 100 KB = 500 KB, and it is too small to
+# survive one night. MEASURED on the jail 2026-08-22: the four surviving
+# `erlang.log.*` covered 22:52 -> 00:32, exactly 100 minutes, and the
+# generation in between had already been overwritten. TWO separate incidents
+# lost their evidence to that ring inside a single night — #1656 (the v1.3.0
+# cold deploy that ended with the node gone) and #1657 (42 queue timeouts, of
+# which the surviving files hold zero) — and both had to be filed with the
+# cause DELIBERATELY UNKNOWN because the log was already gone by morning.
+#
+# Sized from that measurement: ~400 KB per 100 min is ~240 KB/h, so
+# 20 x 2 MB = 40 MB holds roughly a week. The ring stays CIRCULAR and the
+# ceiling is hard — this buys retention, never unbounded growth.
+: ${grappa_log_generations:="20"}
+: ${grappa_log_maxsize:="2000000"}
 # Stop/start synchronization (defect #9, 2026-06-11 outage: `service
 # grappa restart` started the new BEAM while the old node was still
 # draining WS connections → "name grappa@grappa seems to be in use" →
@@ -126,7 +143,11 @@ grappa_runas() {
 	# and Dockerfile.release. An LC_ALL/LC_CTYPE inherited from root still
 	# outranks LANG (measured) — this pins the default, it does not fight an
 	# override.
-	su -m "${grappa_user}" -c "export RELEASE_TMP='${grappa_runtime_tmp}'; export LANG=C.UTF-8; export PATH=\"/usr/local/bin:/usr/local/sbin:\${PATH}\"; ${envsrc}${command} ${subcmd}"
+	# RUN_ERL_LOG_* are read by run_erl(1) from the environment of the process
+	# that spawns it, i.e. exactly here, on the `daemon` subcommand. They ride
+	# with the other exports because this is the one door every subcommand
+	# goes through; the other verbs simply never spawn a run_erl.
+	su -m "${grappa_user}" -c "export RELEASE_TMP='${grappa_runtime_tmp}'; export LANG=C.UTF-8; export RUN_ERL_LOG_GENERATIONS='${grappa_log_generations}'; export RUN_ERL_LOG_MAXSIZE='${grappa_log_maxsize}'; export PATH=\"/usr/local/bin:/usr/local/sbin:\${PATH}\"; ${envsrc}${command} ${subcmd}"
 }
 
 grappa_start() {
