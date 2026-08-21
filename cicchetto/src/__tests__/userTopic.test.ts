@@ -1648,9 +1648,12 @@ describe("userTopic", () => {
       expect(bc.setBanlistBundle).not.toHaveBeenCalled();
     });
 
-    // Unlike `links_bundle.mask`, which IS `string | null` in the typespec and
-    // so tolerates an explicit null, `mode` is non-nullable: a null is as
-    // impossible on the wire as a number.
+    // The VALUE axis, and the only axis on which `mode` and
+    // `links_bundle.mask` still differ: `mask` is `String.t() | nil` and so
+    // ACCEPTS an explicit null (a real value, meaning the bare full-mesh
+    // request), while `mode` is non-nullable and a null is as impossible on
+    // the wire as a number. On the KEY axis they are identical — both keys
+    // are required and both absences now reject (#1393d).
     it("drops payload with a null `mode`", async () => {
       const bc = await import("../lib/banlistCard");
       channelMock.fireEvent({
@@ -2213,10 +2216,19 @@ describe("narrowUserEvent — names_reply (#140)", () => {
   });
 });
 
-// #238 — links_bundle: the /links topology reply. Per-element narrowing on the
-// entries array (`narrowLinksEntry`); ANY malformed element drops the WHOLE
-// bundle (strict — a partial topology is a server bug). An EMPTY entries array
-// is VALID (the restricted/hidden-topology signal). Mirror of the banlist arm.
+// #238 — links_bundle: the /links topology reply. ANY malformed element drops
+// the WHOLE bundle (strict — a partial topology is a server bug). An EMPTY
+// entries array is VALID (the restricted/hidden-topology signal).
+//
+// #1393d — the arm that made the two axes worth separating out loud, because
+// conflating them is what kept its last tolerance alive for a whole slice:
+//
+//   * `mask: null` — a VALUE the server really emits, and it MEANS something
+//     (`null` ⇒ the bare full-mesh request, non-null ⇒ "no server matches
+//     <mask>"). Accepted, and the typespec `String.t() | nil` is why.
+//   * `mask` key ABSENT — not a value at all. `| nil` says nothing about
+//     whether the KEY may be missing, and the generated schema marks it
+//     required, so no grappa running this code omits it. Rejected.
 describe("narrowUserEvent — links_bundle (#238)", () => {
   it("narrows a well-formed topology", async () => {
     const { narrowUserEvent } = await import("../lib/userTopic");
@@ -2224,6 +2236,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
       narrowUserEvent({
         kind: "links_bundle",
         network: "azzurra",
+        mask: null,
         entries: [
           { server: "hub", linked_to: "hub", hopcount: 0, description: "the hub" },
           { server: "leaf", linked_to: "hub", hopcount: 1, description: null },
@@ -2240,14 +2253,11 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
     });
   });
 
-  it("narrows an empty topology with no mask → mask null (restricted / hidden — bare 365)", async () => {
+  it("narrows an empty topology with a null mask (restricted / hidden — bare 365)", async () => {
     const { narrowUserEvent } = await import("../lib/userTopic");
-    expect(narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: [] })).toEqual({
-      kind: "links_bundle",
-      network: "azzurra",
-      mask: null,
-      entries: [],
-    });
+    expect(
+      narrowUserEvent({ kind: "links_bundle", network: "azzurra", mask: null, entries: [] }),
+    ).toEqual({ kind: "links_bundle", network: "azzurra", mask: null, entries: [] });
   });
 
   it("#513a — carries a non-null mask on an empty bundle (matched-nothing signal)", async () => {
@@ -2257,11 +2267,15 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
     ).toEqual({ kind: "links_bundle", network: "azzurra", mask: "all", entries: [] });
   });
 
-  it("#513a — tolerates a missing mask field (older grappa) → null, bundle kept", async () => {
+  // The two axes in one test, side by side, because reading `| nil` as
+  // "optional field" is the specific mistake this slice was built out of.
+  // Same arm, same field, two inputs, opposite verdicts.
+  it("#1393d — a null mask is a VALUE and passes; an ABSENT mask key rejects", async () => {
     const { narrowUserEvent } = await import("../lib/userTopic");
-    // No `mask` key at all — additive-tolerant, unknown-is-never-fatal (#447).
-    const out = narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: [] });
-    expect(out).toEqual({ kind: "links_bundle", network: "azzurra", mask: null, entries: [] });
+    const base = { kind: "links_bundle", network: "azzurra", entries: [] };
+
+    expect(narrowUserEvent({ ...base, mask: null })).toEqual({ ...base, mask: null });
+    expect(narrowUserEvent(base)).toBeNull();
   });
 
   it("#513a — drops the bundle when mask is present but non-string / non-null", async () => {
@@ -2277,6 +2291,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
       narrowUserEvent({
         kind: "links_bundle",
         network: "azzurra",
+        mask: null,
         entries: [{ server: "lonely", linked_to: null, hopcount: null, description: null }],
       }),
     ).toEqual({
@@ -2289,7 +2304,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
 
   it("rejects a links_bundle missing the network field", async () => {
     const { narrowUserEvent } = await import("../lib/userTopic");
-    expect(narrowUserEvent({ kind: "links_bundle", entries: [] })).toBeNull();
+    expect(narrowUserEvent({ kind: "links_bundle", mask: null, entries: [] })).toBeNull();
   });
 
   it("drops the WHOLE bundle when one entry has a non-string server", async () => {
@@ -2298,6 +2313,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
       narrowUserEvent({
         kind: "links_bundle",
         network: "azzurra",
+        mask: null,
         entries: [
           { server: "hub", linked_to: "hub", hopcount: 0, description: null },
           { server: 42, linked_to: "hub", hopcount: 1, description: null },
@@ -2312,6 +2328,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
       narrowUserEvent({
         kind: "links_bundle",
         network: "azzurra",
+        mask: null,
         entries: [{ server: "hub", linked_to: "hub", hopcount: "zero", description: null }],
       }),
     ).toBeNull();
@@ -2320,7 +2337,7 @@ describe("narrowUserEvent — links_bundle (#238)", () => {
   it("rejects a links_bundle whose entries field is not an array", async () => {
     const { narrowUserEvent } = await import("../lib/userTopic");
     expect(
-      narrowUserEvent({ kind: "links_bundle", network: "azzurra", entries: "nope" }),
+      narrowUserEvent({ kind: "links_bundle", network: "azzurra", mask: null, entries: "nope" }),
     ).toBeNull();
   });
 });

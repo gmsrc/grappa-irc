@@ -1,13 +1,7 @@
 import type { Channel } from "phoenix";
 import { createEffect, untrack } from "solid-js";
 import { refreshAliases } from "./aliasList";
-import {
-  assertNever,
-  type LinksEntry,
-  type QueryWindowEntry,
-  type WhoisExtraLine,
-  type WireUserEvent,
-} from "./api";
+import { assertNever, type QueryWindowEntry, type WhoisExtraLine, type WireUserEvent } from "./api";
 import { loadArchive } from "./archive";
 import { clearLocalAuth, socketUserName, token } from "./auth";
 import { applyAutoAwayDebounceFromWire } from "./autoAway";
@@ -91,6 +85,7 @@ import {
   S_SessionWireDirectoryFailedPayload,
   S_SessionWireDirectoryProgressPayload,
   S_SessionWireInviteAckPayload,
+  S_SessionWireLinksBundlePayload,
   S_SessionWireMentionsBundlePayload,
   S_SessionWireNamesReplyPayload,
   S_SessionWireOwnNickChangedPayload,
@@ -223,31 +218,6 @@ function narrowWhoisExtraLine(raw: unknown): WhoisExtraLine | null {
   const r = raw as Record<string, unknown>;
   if (typeof r.numeric !== "number" || typeof r.text !== "string") return null;
   return { numeric: r.numeric, text: r.text };
-}
-
-// #238 — per-entry narrower for a `links_bundle` topology row. Mirror of
-// `Grappa.Session.Wire.links_entry/0` (pinned to SessionWireLinksEntry by
-// `_Assert_LinksEntry`). `server` is required; `linked_to`/`description` are
-// nullable strings; `hopcount` a nullable number. ANY malformed element drops
-// the whole bundle (strict — a partial topology is a server bug, not a
-// graceful-degradation case). Stays hand-written because the arm around it
-// does: `links_bundle.mask` keeps a declared absence tolerance (#513a).
-function narrowLinksEntry(raw: unknown): LinksEntry | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  if (
-    typeof r.server !== "string" ||
-    (r.linked_to !== null && typeof r.linked_to !== "string") ||
-    (r.hopcount !== null && typeof r.hopcount !== "number") ||
-    (r.description !== null && typeof r.description !== "string")
-  )
-    return null;
-  return {
-    server: r.server,
-    linked_to: r.linked_to as string | null,
-    hopcount: r.hopcount as number | null,
-    description: r.description as string | null,
-  };
 }
 
 // Maps a per-element narrower across an array; returns the array of
@@ -631,23 +601,27 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // one bad element exactly as the hand loop did. So it calls `validate`,
       // and `narrowBanlistEntry` went with it.
       return validate(S_SessionWireBanlistBundlePayload, r);
-    case "links_bundle": {
+    case "links_bundle":
       // #238 — LINKS topology bundle. All server nodes ship (a topology is a
-      // set). Per-element narrowing (`narrowLinksEntry`); ANY malformed element
-      // drops the whole bundle. An EMPTY entries array is valid (the
-      // restricted/hidden-topology signal) — the modal renders the empty
-      // state. Mirror of the banlist_bundle arm.
-      if (typeof r.network !== "string") return null;
-      const entries = narrowArray(r.entries, narrowLinksEntry);
-      if (entries === null) return null;
-      // #513a — the requested mask (null = full mesh). Additive-tolerant: an
-      // older grappa that predates the field omits it → treat as null (a
-      // full-mesh empty renders "hides topology", the pre-#513 behaviour), so
-      // a missing field is never fatal (unknown-is-never-fatal, #447).
-      if (r.mask !== undefined && r.mask !== null && typeof r.mask !== "string") return null;
-      const mask = typeof r.mask === "string" ? r.mask : null;
-      return { kind: "links_bundle", network: r.network, entries, mask };
-    }
+      // set). ANY malformed element drops the whole bundle. An EMPTY entries
+      // array is valid (the restricted/hidden-topology signal) — the modal
+      // renders the empty state.
+      //
+      // #1393d — this arm's last tolerance survived a whole slice on a
+      // distinction that does not exist. `mask` is `String.t() | nil`, and
+      // that was read as "the field is optional": it is not. `| nil` is about
+      // the VALUE, and the null is a real one carrying real meaning (`null` ⇒
+      // the bare full-mesh request, non-null ⇒ "no server matches <mask>").
+      // Whether the KEY may be MISSING is a different axis entirely, and the
+      // generated schema answers it — `mask` is required, exactly like
+      // `banlist_bundle.mode`, so no grappa running this code omits it and a
+      // peer old enough to is the protocol floor's business.
+      //
+      // `validate` keeps the value axis untouched (`{u: ["s", "z"]}` accepts
+      // the null) while closing the key axis, so the whole hand arm was the
+      // tolerance and nothing else. `narrowLinksEntry` went with it —
+      // `walkArray` drops the WHOLE array on one bad element, as it did.
+      return validate(S_SessionWireLinksBundlePayload, r);
     case "joined":
     case "join_failed":
     case "kicked":

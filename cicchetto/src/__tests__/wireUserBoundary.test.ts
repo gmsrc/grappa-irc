@@ -531,25 +531,17 @@ const DECLARED_TOLERANCES = {
   // this code cannot omit it, and the only peer that could — one predating
   // #1251 — is what the protocol floor reports now. With the coercion gone the
   // arm had nothing the schema does not say, so it calls `validate`.
-  links_bundle: {
-    mask: {
-      ops: ["drop"],
-      covers: "absent",
-      file: "userTopic",
-      quote: "older grappa that predates the field omits it",
-      // #1393d — measured and deliberately LEFT OPEN, on the orchestrator's
-      // explicit ruling. The discriminator that reached `banlist_bundle.mode`
-      // is whether the typespec admits `nil`: `mask` is `String.t() | nil` and
-      // the `nil` CARRIES MEANING (`mask == nil` ⇒ full-mesh request,
-      // `mask != nil` ⇒ "no server matches <mask>"), so an accepted null is a
-      // datum, not a tolerance. What stays declared here is narrower than
-      // that, and is the honest residue: the tolerance measured on this field
-      // is `drop` — the ABSENT KEY — and the generated schema makes the key
-      // required, so by the same argument used on `mode` this absence is
-      // unreachable for a current server too. It is held open, not resolved.
-      why: "#513a — a full-mesh empty renders 'hides topology', the pre-#513 behaviour. A present non-string non-null still rejects. #1393d measured this row as the same ABSENCE shape that `banlist_bundle.mode` carried and left it standing on an explicit ruling, because `mask`'s `nil` is a value the server really emits and the two questions were not worth conflating in one slice.",
-    },
-  },
+  //
+  // #1393d — `links_bundle` left with it, and its row is the one worth
+  // remembering how we got wrong. `mask/drop` survived a whole slice on the
+  // reading that `String.t() | nil` makes the field OPTIONAL. It does not.
+  // `| nil` is the VALUE axis — the null is real and carries meaning (`null`
+  // ⇒ the bare full-mesh request, non-null ⇒ "no server matches <mask>") and
+  // is still accepted. Whether the KEY may be MISSING is a different axis,
+  // and the generated schema answers it: `mask` is required, exactly like
+  // `banlist_bundle.mode`. Two axes, one `| nil`, and conflating them is what
+  // kept the tolerance alive. Both arms now call `validate`, which keeps the
+  // value axis and closes the key axis in the same call.
   // #1393d — `window_invited` and `connection_state_changed` had exactly one
   // declared tolerance each (`inviter`, `network.recoverable`), and losing it
   // left each arm at full parity with its schema on BOTH censuses. So both
@@ -719,7 +711,7 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtParity": 33,
+        "armsAtParity": 34,
         "armsCensused": 43,
         "armsWithSchema": 42,
         "brokenOracles": [],
@@ -761,14 +753,6 @@ describe("#1393 — user-topic boundary census", () => {
             "handAcceptsSchemaRejects": "casemapping/drop, casemapping/null, casemapping/wrong-type, casemapping/swap, maxlist/drop, maxlist/null, maxlist/wrong-type, maxlist.key/null, maxlist.key/wrong-type, nicklen/drop, nicklen/wrong-type, channellen/drop, channellen/wrong-type, topiclen/drop, topiclen/wrong-type, frame_budget_base/drop, frame_budget_base/null, frame_budget_base/wrong-type",
             "mutations": 81,
             "schema": "S_SessionWireIsupportChangedPayload",
-            "schemaAcceptsHandRejects": "-",
-            "schemaRejectsValid": false,
-          },
-          {
-            "arm": "links_bundle",
-            "handAcceptsSchemaRejects": "mask/drop",
-            "mutations": 29,
-            "schema": "S_SessionWireLinksBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
@@ -920,6 +904,9 @@ describe("#1393 — user-topic boundary census", () => {
     "join_failed",
     "joined",
     "kicked",
+    // #1393d, third slice — `links_bundle` lost the same key-axis tolerance
+    // `banlist_bundle` did, once `| nil` stopped being read as "optional".
+    "links_bundle",
     "mentions_bundle",
     "names_reply",
     "notify_list",
@@ -1470,6 +1457,53 @@ describe("#1393 — user-topic boundary census", () => {
             "network": "sample",
             "reason": "sample",
             "state": "kicked",
+          },
+        },
+        {
+          "arm": "links_bundle",
+          "matrix": {
+            "entries.0.description/drop": "reject",
+            "entries.0.description/null": "accept",
+            "entries.0.description/swap": "accept",
+            "entries.0.description/wrong-type": "reject",
+            "entries.0.hopcount/drop": "reject",
+            "entries.0.hopcount/null": "accept",
+            "entries.0.hopcount/wrong-type": "reject",
+            "entries.0.linked_to/drop": "reject",
+            "entries.0.linked_to/null": "accept",
+            "entries.0.linked_to/swap": "accept",
+            "entries.0.linked_to/wrong-type": "reject",
+            "entries.0.server/drop": "reject",
+            "entries.0.server/null": "reject",
+            "entries.0.server/swap": "accept",
+            "entries.0.server/wrong-type": "reject",
+            "entries.0/drop": "accept",
+            "entries.0/null": "reject",
+            "entries.0/wrong-type": "reject",
+            "entries/drop": "reject",
+            "entries/null": "reject",
+            "entries/wrong-type": "reject",
+            "mask/drop": "reject",
+            "mask/null": "accept",
+            "mask/swap": "accept",
+            "mask/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/swap": "accept",
+            "network/wrong-type": "reject",
+          },
+          "returns": {
+            "entries": [
+              {
+                "description": "sample",
+                "hopcount": 1,
+                "linked_to": "sample",
+                "server": "sample",
+              },
+            ],
+            "kind": "links_bundle",
+            "mask": "sample",
+            "network": "sample",
           },
         },
         {
@@ -2319,8 +2353,8 @@ describe("#1393 — user-topic boundary census", () => {
       stale: [...declared].filter((k) => !observed.has(k)).sort(),
     }).toMatchInlineSnapshot(`
       {
-        "declared": 60,
-        "measured": 60,
+        "declared": 59,
+        "measured": 59,
         "stale": [],
         "unexplained": [],
       }

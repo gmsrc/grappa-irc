@@ -56776,34 +56776,58 @@ What the ruling does reach is the class the census called
 `widerThanItsWrittenReason` (8) plus `noWrittenReason` (1): guards whose
 in-tree comment justifies an ABSENT key while the code also swallows a
 PRESENT malformed one, and one guard with no stated reason at all. Nine
-arms, 22 tolerance-operations, all closed. `deliberate` stayed at 27
-throughout — that number not moving is the evidence that only the open
-class was touched.
+arms, 22 tolerance-operations, all closed, and then `banlist_bundle.mode`
+and `links_bundle.mask` on top of them.
 
-The discriminator that decides whether a tolerance is reachable at all is
-**not** "is there a fallback", it is **whether the typespec admits `nil`**.
-A field typed `String.t() | nil` emits `nil` for real, so accepting it is
-reading a value, not tolerating a defect. A field typed `String.t()` cannot
-be absent from any server running the current code, so its absence
-tolerance only ever covered the cross-version window — which is now the
-protocol floor's job, and the floor SAYS SO instead of guessing.
+Measured, and the numbers are the argument: declared tolerances **83 → 59**,
+`widerThanItsWrittenReason` and `noWrittenReason` both **empty**,
+`armsAtParity` **30 → 34**, `brokenOracles: []`, and `deliberate`
+**27 throughout**. That last number not moving is the evidence that only the
+open class was touched — the 27 are the #447 additive invariant and removing
+them would break the contract this issue is defending.
 
-That discriminator closed `banlist_bundle.mode`: required, non-nullable,
-and its PRESENT-and-mangled half had already been closed earlier in this
-same issue (`5703d301`). Coercing a missing key to `b` rendered whatever
-list arrived under the "Bans" heading, which is the mis-attribution #1251
-was filed to end.
+### A nullable VALUE is not an optional KEY
 
-**`links_bundle.mask` is measured and deliberately left OPEN**, and the
-honest reason is narrower than the one first offered. Its `nil` carries
-meaning (`nil` ⇒ full-mesh request, non-`nil` ⇒ "no server matches
-`<mask>`"), so an accepted null is a datum — but that was never the
-tolerance in the tree. What the census actually records on that field is
-`ops: ["drop"]`, `covers: "absent"`: the ABSENT KEY, byte-identical in
-shape to what `banlist_bundle.mode` carried, and the generated schema makes
-that key required too. The same argument therefore reaches it. It stands on
-an explicit ruling, not on a distinction that survives measurement, and the
-census `why` now says which of the two questions is which.
+This is the distinction the slice was actually built out of, and it is
+recorded first because getting it wrong cost a whole round: **`| nil` in a
+typespec is about the VALUE, and says nothing whatsoever about whether the
+KEY may be missing.** Two axes, one piece of syntax.
+
+* **VALUE axis.** `String.t() | nil` means the server really does emit
+  `nil`, so accepting it is reading a datum, not tolerating a defect.
+* **KEY axis.** Whether the field may be ABSENT is answered by the
+  generated schema's required/optional marking, not by `| nil` at all. A
+  key the schema marks required cannot be missing from any server running
+  the current code, so a tolerance for its absence only ever covered the
+  cross-version window — which is now the protocol floor's job, and the
+  floor SAYS SO instead of guessing.
+
+Read `| nil` as "optional field" and the two collapse into one, at which
+point a key-axis tolerance looks like a value-axis fact and survives every
+review that only checks the typespec. That is exactly what happened here.
+
+`banlist_bundle.mode` — required, non-nullable — fell on the first pass;
+its PRESENT-and-mangled half had already been closed earlier in this same
+issue (`5703d301`), and coercing a missing key to `b` rendered whatever
+list arrived under the "Bans" heading, the mis-attribution #1251 was filed
+to end.
+
+`links_bundle.mask` was ruled OUT OF SCOPE on the first pass, on the
+argument that its `nil` carries meaning (`nil` ⇒ the bare full-mesh
+request, non-`nil` ⇒ "no server matches `<mask>`") and so should be
+accepted. **That argument is true and irrelevant**, and measuring the
+census row is what showed it: `mask` and `mode` carried the SAME row
+(`ops: ["drop"]`, `covers: "absent"`), the tolerance was on the ABSENT
+KEY, and `mask`'s `nil` was ALREADY accepted and never in question. The
+ruling was reversed on that measurement and `mask` closed too. Both arms
+now call `validate`, which keeps the value axis (`{u: ["s", "z"]}` accepts
+the null) and closes the key axis in one call — and both `narrowBanlistEntry`
+and `narrowLinksEntry` went with them, `walkArray` already dropping the
+whole array on one bad element exactly as the hand loops did.
+
+The pin snapshot now carries the distinction as data rather than prose:
+for `links_bundle`, `mask/null` reads `accept` and `mask/drop` reads
+`reject`, on the same line of the same matrix.
 
 ### The inverse register: a policy STRICTER than the schema
 
