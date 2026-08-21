@@ -3316,6 +3316,25 @@ Both hooks therefore run every deploy, forever, and both MUST be
 idempotent. "Hot vs cold deploy" above carries the per-substrate seed
 doors and the schema-then-data ordering.
 
+**A failed healthcheck says WHICH emergency it is (#1656).** When the
+budget runs out, the loop no longer stops at `healthcheck never returned
+200`. It prints the last `/healthz` answer, then asks
+`substrate_service_alive` and says one of three things: the daemon is
+**still RUNNING** (up but unhealthy — production is serving, read the
+answer before touching anything), the daemon is **GONE** (production is
+DOWN — that is the emergency, the healthcheck line was the symptom), or
+liveness is **UNKNOWN** (a consumer older than the hook; check by hand).
+It never restarts anything: that is the operator's decision, and a deploy
+that restarts what it just failed to health-check can drive a crash-loop
+back into the outage. `DEPLOY_RESTART_HINT` carries the per-substrate
+command to type.
+
+The probe itself changed shape for the same reason. `/healthz` answers a
+non-200 with a body naming the failing check (`ready` / `repo` / `ets`),
+and `curl -f` is both what turns a non-2xx into an error and what discards
+that body — so every `substrate_healthcheck` now re-asks WITHOUT `-f` on a
+red probe only. A healthy deploy still makes exactly one request.
+
 **A failed seed is non-fatal, and that is not a silent swallow.** On
 the cold path the seed runs after the migration and before the restart,
 so aborting there would leave a migrated DB, the old daemon still up,
@@ -4826,7 +4845,17 @@ it.
   the daemon), driven by `RELEASE_TMP=runtime` exported by
   `infra/freebsd/rc.d/grappa`. The rotation set survives
   `mix release --overwrite` (which would otherwise blow away
-  `_build/.../tmp/log/`). On the Linux/systemd substrate, `bin/grappa
+  `_build/.../tmp/log/`).
+  **The ring is CIRCULAR and it is the jail's only log history**, so its
+  size decides how far back an incident can be read. run_erl ships 5
+  files × 100 KB, which measured out at roughly two hours and cost #1656
+  and #1657 their evidence in one night; the rc.d now exports
+  `RUN_ERL_LOG_GENERATIONS` / `RUN_ERL_LOG_MAXSIZE` from
+  `grappa_log_generations` (20) and `grappa_log_maxsize` (2000000) —
+  a 40 MB ceiling, about a week. Retune per jail in
+  `/etc/rc.conf.d/grappa`; **a new value only takes effect on the next
+  COLD deploy**, because `run_erl` reads them when it spawns.
+  On the Linux/systemd substrate, `bin/grappa
   start` runs in the foreground (no `run_erl`), so logs go to
   `journalctl -u grappa` instead — no `runtime/log/` file story there.
 - **Config**: DB-driven (Phase 2 sub-task 2j replaced the TOML loader).

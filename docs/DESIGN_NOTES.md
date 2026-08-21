@@ -57274,3 +57274,124 @@ Left open, deliberately: whether `Bootstrap` was restarted by its supervisor
 after that crash and re-emitted the spawn plan. The mechanism is verified
 (`use Task, restart: :transient`, `bootstrap.ex:158`); the event was never
 observed, and the log that could have shown it is gone.
+<!-- entry #1656 -->
+
+---
+
+## 2026-08-22 — #1656: a failed healthcheck must never be able to hide a dead node
+
+The v1.3.0 cold deploy on m42 (2026-08-21 ~21:20 CEST, `--force-cold`)
+worked — migrations, seed, stop+start, users reconnected and were served —
+and then the healthcheck loop burned its 30×2s budget (first probes `503`,
+later `Connection refused`), exited `healthcheck never returned 200 after
+60s`, and production was down until a manual `service grappa start`.
+
+### The issue's causal order is inverted by its own evidence
+
+The issue reads *healthcheck fails → script exits → node dies*. But the
+teardown stops children in REVERSE start order, so `GrappaWeb.Endpoint`
+goes down BEFORE `Grappa.SessionSupervisor` finishes draining. A `503`
+therefore means the Endpoint is UP, and `Connection refused` means it is
+already gone — and both happened INSIDE the loop, before the script
+exited. `21:24:37` is not when the node died; it is when a long drain
+FINISHED. Nothing links the script's exit to the death, which is why the
+"what does the script leak into the daemon" hunt (ssh process group,
+`run_erl` detachment) had nothing to find.
+
+### F1 — what each way of killing this release actually logs (measured)
+
+Measured on a real `mix release` (`scripts/release-image.sh`, ERTS
+16.4.0.5, `start_permanent: Mix.env() == :prod`), one fresh boot per row:
+
+| death | log line | node | crash dump |
+|---|---|---|---|
+| `bin/grappa stop` | **nothing at all** | dies, exit 0 | no |
+| `SIGTERM` | `[notice] SIGTERM received - shutting down` | dies, exit 0 | no |
+| top supervisor gives up | `[notice] Application grappa exited: shutdown` + `Kernel pid terminated (application_controller) ("{application_terminated,grappa,shutdown}")` | dies, exit 1 | **yes** |
+| `Application.stop(:grappa)` | `Application grappa exited: :stopped` | **stays up** | no |
+
+The line the incident reported matches the third row and only the third
+row, down to the rendering: `shutdown` bare, where an `Application.stop`
+renders `:stopped` with the colon. So **nobody stopped that node** — not
+an operator stop (silent), not a signal (which announces itself). Its own
+top supervisor gave up, and because a release's own application is
+`:permanent`, that takes the whole runtime with it, orderly.
+
+This also settles a reasoning objection raised during triage: "an orderly
+shutdown is what SIGTERM produces, so *no signal in the log* proves
+nothing." Measured, that is wrong — OTP logs the signal explicitly. The
+issue's exclusion was sound.
+
+`Grappa.Supervisor` is started with no `max_restarts`, so it inherits
+**3 restarts in 5 seconds** — against `Grappa.SessionSupervisor`'s
+explicit `10_000/60`. A permanent child crash-looping past that ladder is
+sufficient to produce every observation: users served, sessions logging
+`reason=:shutdown clean=true`, Endpoint gone mid-loop, no SIGTERM.
+
+### What is NOT established
+
+The cause is still **unknown**, deliberately. F1 identifies the SHAPE of
+the death, not which child failed nor why. Two things keep it open:
+
+- **The crash dump.** The third row writes one (into the BEAM's CWD —
+  measured `/app` in the image, i.e. the release root on the jail), and
+  `ERL_CRASH_DUMP*` is set nowhere in this repo, so dumping is enabled.
+  The issue reports no dump. Either it landed where nobody looked, or the
+  mechanism is a fifth one not reproduced here.
+- **Why `/healthz` answered 503 while the box served users.** `mark_ready/0`
+  runs the instant `Supervisor.start_link` returns and `Grappa.Bootstrap`
+  is a `Task` that returns immediately, so a live session implies
+  `ready?` was already `true` — which leaves the `repo` or `ets` check as
+  the only thing that can 503 a serving node. That is inference from
+  code, not evidence: the run's logs had already rotated away.
+
+### The three cures, none of which need the cause
+
+**1. The failure arm reports liveness (`substrate_service_alive`).**
+A new hook in `infra/lib/deploy_common.sh`, correctness-posture (default
+ON, no fallback, like the #440 seed) so every substrate must answer it.
+"Healthcheck failed" and "production is DOWN" are different emergencies
+and printed the same sentence. A consumer that predates the hook reports
+**UNKNOWN**, never DOWN: an undefined function returns 127, and reading
+that as "dead" would fire the loudest alarm we own on no evidence —
+reachable, because `infra/docker/get.sh` mirrors the lib and the consumer
+as separate files.
+
+**It reports; it never acts.** Restarting production is the operator's
+decision, and a deploy that restarts what it just failed to health-check
+can drive a crash-loop straight back into the outage it is standing in.
+
+**2. The 503 body is no longer discarded.** `/healthz` answers a non-200
+with a body naming the failing check (`ready` / `repo` / `ets`) and its
+reason — and every substrate probed with `curl -fsS -o /dev/null`, where
+`-f` is simultaneously what makes a non-2xx an error and what throws the
+body away. The deploy held the diagnosis thirty times and dropped it each
+time. Each hook now re-asks WITHOUT `-f` on a red probe only (a healthy
+deploy still makes exactly one request) and the loop prints the last
+answer once, in the failure arm. `--fail-with-body` would be one flag
+instead of two requests; it was declined as a portability bet against a
+FreeBSD curl this branch cannot measure.
+
+**3. The run_erl log ring holds a week instead of an hour.** On the jail
+that circular ring is the node's ONLY history — no journald, no
+`docker logs` — and it ships at run_erl's stock 5 × 100 KB. Measured on
+the jail 2026-08-22: the four surviving `erlang.log.*` spanned 22:52 →
+00:32, one hundred minutes, with the generation between them already
+overwritten. **Two incidents lost their evidence to that ring in a single
+night** (#1656 and #1657, whose 42 queue timeouts appear zero times in
+what survived), and both had to be filed cause-unknown because of it.
+`grappa_log_generations=20` × `grappa_log_maxsize=2 MB` = a 40 MB hard
+ceiling, ~7 days at the measured ~240 KB/h, still circular and still
+bounded. The variable names were read out of the shipped `run_erl` binary,
+not remembered.
+
+**Deploy class: COLD.** `RUN_ERL_LOG_*` are read by `run_erl(1)` when it
+spawns, so the new ring only exists on a BEAM started after the change —
+and `jail_install_rcd.sh`, which installs the wrapper carrying it, runs
+only on the cold path's `substrate_restart`. A hot deploy neither installs
+the new wrapper nor restarts the daemon, so it changes nothing here.
+
+The jail rc.d is the only shipped service definition that spawns
+`run_erl`; systemd and both images run `bin/grappa start` in the
+foreground. A test holds that set, so a future substrate that adopts
+`daemon` cannot inherit the 500 KB ring in silence.
