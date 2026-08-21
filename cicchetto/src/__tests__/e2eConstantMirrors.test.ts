@@ -277,8 +277,8 @@ describe("e2e mirrors of production constants (#1646)", () => {
   }
 
   it("has no mirror outside the table", () => {
-    const pinned = new Set(MIRRORS.map((m) => `${m.file} ${m.name}`));
-    for (const known of KNOWN_UNPINNED) pinned.add(`${known.file} ${known.name}`);
+    const pinned = new Set(MIRRORS.map((m) => `${m.file}\0${m.name}`));
+    for (const known of KNOWN_UNPINNED) pinned.add(`${known.file}\0${known.name}`);
     const names = [...new Set(MIRRORS.map((m) => m.name))];
 
     const unlisted: string[] = [];
@@ -286,7 +286,7 @@ describe("e2e mirrors of production constants (#1646)", () => {
       const src = readFileSync(file, "utf8");
       for (const name of names) {
         if (declarationsOf(src, name).length === 0) continue;
-        if (!pinned.has(`${file} ${name}`)) unlisted.push(`${file} — ${name}`);
+        if (!pinned.has(`${file}\0${name}`)) unlisted.push(`${file} — ${name}`);
       }
     }
 
