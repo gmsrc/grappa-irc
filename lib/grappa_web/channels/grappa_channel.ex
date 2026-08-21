@@ -373,14 +373,16 @@ defmodule GrappaWeb.GrappaChannel do
   # renders a zero badge instead of branching on null. The cursor remains
   # `nil` in that same fall-through; cic uses that as the "no cursor yet"
   # signal, not the count.
-  # `:protocol_version => 1` is the literal (not `pos_integer()`) so the
+  # `:protocol_version => 2` is the literal (not `pos_integer()`) so the
   # spec matches `Grappa.Protocol.version/0`'s success typing under Dialyzer
   # `:underspecs` — same constant-literal idiom as `Grappa.Protocol` itself.
-  # A protocol bump updates both specs (a deliberate, reviewed event).
+  # A protocol bump updates both specs, and since #1393d that is every
+  # wire-shape change rather than a rare one — so this literal is the second
+  # place Dialyzer stops a bump that was only done half-way.
   @spec join_reply(Topic.parsed()) :: %{
           optional(:read_cursor) => integer() | nil,
           optional(:window_counts) => WindowCounts.t(),
-          optional(:protocol_version) => 1
+          optional(:protocol_version) => 2
         }
   defp join_reply({:channel, user_name, network_slug, channel}) do
     with {:ok, subject} <- resolve_subject(user_name),
