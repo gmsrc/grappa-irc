@@ -71,6 +71,24 @@ function wrongType(value: unknown): unknown {
   return "not-an-object";
 }
 
+// The fourth op, and the one the first three cannot express: a leaf of the
+// RIGHT type carrying a value the schema does not declare.
+//
+// `drop`, `null` and `wrong-type` all move the TYPE, so they leave a closed
+// set (`{e: [...]}`, `{l: "..."}`) and a free `"s"` indistinguishable — both
+// take a string, both refuse a number. But a token a server adds additively
+// IS a well-typed string, and that is precisely the case the wire contract
+// legislates (unknown-is-never-fatal, GH #447): several hand arms accept any
+// string ON PURPOSE where the typespec names a closed set, so that a newer
+// BEAM cannot make an older cic drop a terminal event. A type-only matrix
+// reports those arms at parity and would wave the migration through.
+//
+// Generated for STRING leaves only — on any other leaf it would be
+// `wrong-type` under a second name — and on a free-string field both
+// boundaries accept it, so the row costs a line and says nothing. It is the
+// closed-set fields where it separates them.
+const UNDECLARED_VALUE = "__undeclared_wire_value__";
+
 // Every position in a sample at which a field can be mutated, as a path.
 //
 // The matrix that landed with #1471 mutated TOP-LEVEL fields only, and that
@@ -94,7 +112,11 @@ function paths(value: unknown, prefix: readonly string[] = []): string[][] {
   return [];
 }
 
-function mutateAt(root: unknown, path: readonly string[], op: "drop" | "null" | "wrong-type") {
+type Op = "drop" | "null" | "wrong-type" | "swap";
+
+const OPS = ["drop", "null", "wrong-type", "swap"] as const;
+
+function mutateAt(root: unknown, path: readonly string[], op: Op) {
   const copy = JSON.parse(JSON.stringify(root));
   let parent = copy;
   for (const k of path.slice(0, -1)) parent = parent[k];
@@ -107,10 +129,18 @@ function mutateAt(root: unknown, path: readonly string[], op: "drop" | "null" | 
     else delete parent[leaf];
   } else if (op === "null") {
     parent[leaf] = null;
+  } else if (op === "swap") {
+    parent[leaf] = UNDECLARED_VALUE;
   } else {
     parent[leaf] = wrongType(parent[leaf]);
   }
   return copy;
+}
+
+function valueAt(root: unknown, path: readonly string[]): unknown {
+  let node = root;
+  for (const k of path) node = (node as Record<string, unknown>)[k];
+  return node;
 }
 
 type Mutation = { label: string; payload: unknown };
@@ -122,11 +152,15 @@ function mutations(valid: Record<string, unknown>): Mutation[] {
   return paths(valid)
     .filter((p) => !(p.length === 1 && p[0] === "kind"))
     .flatMap((p) =>
-      (["drop", "null", "wrong-type"] as const).map((op) => ({
+      opsFor(valueAt(valid, p)).map((op) => ({
         label: `${p.join(".")}/${op}`,
         payload: mutateAt(valid, p, op),
       })),
     );
+}
+
+function opsFor(leaf: unknown): readonly Op[] {
+  return typeof leaf === "string" ? OPS : OPS.filter((op) => op !== "swap");
 }
 
 function verdict(narrow: Narrower, payload: unknown): "accept" | "reject" {
@@ -382,15 +416,31 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtParity": 33,
+        "armsAtParity": 30,
         "armsCensused": 43,
         "armsWithSchema": 42,
         "brokenOracles": [],
         "divergent": [
           {
+            "arm": "web_session_severed",
+            "handAcceptsSchemaRejects": "-",
+            "mutations": 18,
+            "schema": "S_AdminEventsWireWebSessionSeveredEvent",
+            "schemaAcceptsHandRejects": "subject_id/swap, at/swap",
+            "schemaRejectsValid": false,
+          },
+          {
+            "arm": "web_session_severed",
+            "handAcceptsSchemaRejects": "code/swap",
+            "mutations": 4,
+            "schema": "S_RateLimitWireWebSessionSeveredEvent",
+            "schemaAcceptsHandRejects": "-",
+            "schemaRejectsValid": false,
+          },
+          {
             "arm": "bundle_hash",
             "handAcceptsSchemaRejects": "version/null, version/wrong-type",
-            "mutations": 6,
+            "mutations": 8,
             "schema": "S_CicWireBundleHashPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -398,7 +448,7 @@ describe("#1393 — user-topic boundary census", () => {
           {
             "arm": "connection_state_changed",
             "handAcceptsSchemaRejects": "network.recoverable/drop, network.recoverable/null, network.recoverable/wrong-type",
-            "mutations": 42,
+            "mutations": 53,
             "schema": "S_NetworksWireConnectionStateEvent",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -406,7 +456,7 @@ describe("#1393 — user-topic boundary census", () => {
           {
             "arm": "server_settings_changed",
             "handAcceptsSchemaRejects": "upload.video_max_duration_seconds/drop, upload.video_max_duration_seconds/null, upload.video_max_duration_seconds/wrong-type, http_host_aliases/drop, http_host_aliases/null, http_host_aliases/wrong-type, http_host_aliases.0/null, http_host_aliases.0/wrong-type",
-            "mutations": 30,
+            "mutations": 32,
             "schema": "S_ServerSettingsWireChangedPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -414,15 +464,15 @@ describe("#1393 — user-topic boundary census", () => {
           {
             "arm": "banlist_bundle",
             "handAcceptsSchemaRejects": "mode/drop",
-            "mutations": 24,
+            "mutations": 30,
             "schema": "S_SessionWireBanlistBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
             "arm": "isupport_changed",
-            "handAcceptsSchemaRejects": "list_modes_queryable/drop, list_modes_queryable/null, list_modes_queryable/wrong-type, list_modes_queryable.0/null, list_modes_queryable.0/wrong-type, prefix_order/drop, prefix_order/null, prefix_order/wrong-type, prefix_order.0/null, prefix_order.0/wrong-type, chantypes/drop, chantypes/null, chantypes/wrong-type, chantypes.0/null, chantypes.0/wrong-type, casemapping/drop, casemapping/null, casemapping/wrong-type, maxlist/drop, maxlist/null, maxlist/wrong-type, maxlist.key/null, maxlist.key/wrong-type, nicklen/drop, nicklen/wrong-type, channellen/drop, channellen/wrong-type, topiclen/drop, topiclen/wrong-type, frame_budget_base/drop, frame_budget_base/null, frame_budget_base/wrong-type",
-            "mutations": 72,
+            "handAcceptsSchemaRejects": "list_modes_queryable/drop, list_modes_queryable/null, list_modes_queryable/wrong-type, list_modes_queryable.0/null, list_modes_queryable.0/wrong-type, prefix_order/drop, prefix_order/null, prefix_order/wrong-type, prefix_order.0/null, prefix_order.0/wrong-type, chantypes/drop, chantypes/null, chantypes/wrong-type, chantypes.0/null, chantypes.0/wrong-type, casemapping/drop, casemapping/null, casemapping/wrong-type, casemapping/swap, maxlist/drop, maxlist/null, maxlist/wrong-type, maxlist.key/null, maxlist.key/wrong-type, nicklen/drop, nicklen/wrong-type, channellen/drop, channellen/wrong-type, topiclen/drop, topiclen/wrong-type, frame_budget_base/drop, frame_budget_base/null, frame_budget_base/wrong-type",
+            "mutations": 81,
             "schema": "S_SessionWireIsupportChangedPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -430,7 +480,7 @@ describe("#1393 — user-topic boundary census", () => {
           {
             "arm": "links_bundle",
             "handAcceptsSchemaRejects": "mask/drop",
-            "mutations": 24,
+            "mutations": 29,
             "schema": "S_SessionWireLinksBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -438,15 +488,31 @@ describe("#1393 — user-topic boundary census", () => {
           {
             "arm": "lusers_bundle",
             "handAcceptsSchemaRejects": "total_users/drop, total_users/wrong-type, invisible/drop, invisible/wrong-type, servers/drop, servers/wrong-type, operators/drop, operators/wrong-type, unknown_connections/drop, unknown_connections/wrong-type, channels_formed/drop, channels_formed/wrong-type, local_clients/drop, local_clients/wrong-type, local_servers/drop, local_servers/wrong-type, current_local/drop, current_local/wrong-type, max_local/drop, max_local/wrong-type, current_global/drop, current_global/wrong-type, max_global/drop, max_global/wrong-type",
-            "mutations": 39,
+            "mutations": 40,
             "schema": "S_SessionWireLusersBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
+            "arm": "recover_progress",
+            "handAcceptsSchemaRejects": "reason/swap",
+            "mutations": 16,
+            "schema": "S_SessionWireRecoverProgressPayload",
+            "schemaAcceptsHandRejects": "-",
+            "schemaRejectsValid": false,
+          },
+          {
+            "arm": "recover_result",
+            "handAcceptsSchemaRejects": "reason/swap",
+            "mutations": 12,
+            "schema": "S_SessionWireRecoverResultPayload",
+            "schemaAcceptsHandRejects": "-",
+            "schemaRejectsValid": false,
+          },
+          {
             "arm": "whois_bundle",
-            "handAcceptsSchemaRejects": "source/drop, source/null, source/wrong-type, extra_lines/drop",
-            "mutations": 102,
+            "handAcceptsSchemaRejects": "source/drop, source/null, source/wrong-type, source/swap, extra_lines/drop",
+            "mutations": 120,
             "schema": "S_SessionWireWhoisBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -454,7 +520,7 @@ describe("#1393 — user-topic boundary census", () => {
           {
             "arm": "window_invited",
             "handAcceptsSchemaRejects": "inviter/drop, inviter/null, inviter/wrong-type",
-            "mutations": 12,
+            "mutations": 16,
             "schema": "S_SessionWireWindowInvitedPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -622,6 +688,7 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network_slug/drop": "reject",
             "network_slug/null": "reject",
+            "network_slug/swap": "accept",
             "network_slug/wrong-type": "reject",
           },
           "returns": {
@@ -634,9 +701,11 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network_slug/drop": "reject",
             "network_slug/null": "reject",
+            "network_slug/swap": "accept",
             "network_slug/wrong-type": "reject",
             "target/drop": "reject",
             "target/null": "reject",
+            "target/swap": "accept",
             "target/wrong-type": "reject",
           },
           "returns": {
@@ -662,9 +731,11 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "state/drop": "reject",
             "state/null": "reject",
+            "state/swap": "reject",
             "state/wrong-type": "reject",
           },
           "returns": {
@@ -685,9 +756,11 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "state/drop": "reject",
             "state/null": "reject",
+            "state/swap": "reject",
             "state/wrong-type": "reject",
           },
           "returns": {
@@ -701,6 +774,7 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "total/drop": "reject",
             "total/null": "reject",
@@ -717,9 +791,11 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "reason/drop": "reject",
             "reason/null": "reject",
+            "reason/swap": "accept",
             "reason/wrong-type": "reject",
           },
           "returns": {
@@ -736,6 +812,7 @@ describe("#1393 — user-topic boundary census", () => {
             "count/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
           },
           "returns": {
@@ -749,12 +826,15 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "channel/drop": "reject",
             "channel/null": "reject",
+            "channel/swap": "accept",
             "channel/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "peer/drop": "reject",
             "peer/null": "reject",
+            "peer/swap": "accept",
             "peer/wrong-type": "reject",
           },
           "returns": {
@@ -769,18 +849,22 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "channel/drop": "reject",
             "channel/null": "reject",
+            "channel/swap": "accept",
             "channel/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "numeric/drop": "reject",
             "numeric/null": "accept",
             "numeric/wrong-type": "reject",
             "reason/drop": "reject",
             "reason/null": "accept",
+            "reason/swap": "accept",
             "reason/wrong-type": "reject",
             "state/drop": "reject",
             "state/null": "reject",
+            "state/swap": "reject",
             "state/wrong-type": "reject",
           },
           "returns": {
@@ -797,12 +881,15 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "channel/drop": "reject",
             "channel/null": "reject",
+            "channel/swap": "accept",
             "channel/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "state/drop": "reject",
             "state/null": "reject",
+            "state/swap": "reject",
             "state/wrong-type": "reject",
           },
           "returns": {
@@ -817,18 +904,23 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "by/drop": "reject",
             "by/null": "accept",
+            "by/swap": "accept",
             "by/wrong-type": "reject",
             "channel/drop": "reject",
             "channel/null": "reject",
+            "channel/swap": "accept",
             "channel/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "reason/drop": "reject",
             "reason/null": "accept",
+            "reason/swap": "accept",
             "reason/wrong-type": "reject",
             "state/drop": "reject",
             "state/null": "reject",
+            "state/swap": "reject",
             "state/wrong-type": "reject",
           },
           "returns": {
@@ -845,24 +937,31 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "away_ended_at/drop": "reject",
             "away_ended_at/null": "reject",
+            "away_ended_at/swap": "accept",
             "away_ended_at/wrong-type": "reject",
             "away_reason/drop": "reject",
             "away_reason/null": "accept",
+            "away_reason/swap": "accept",
             "away_reason/wrong-type": "reject",
             "away_started_at/drop": "reject",
             "away_started_at/null": "reject",
+            "away_started_at/swap": "accept",
             "away_started_at/wrong-type": "reject",
             "messages.0.body/drop": "reject",
             "messages.0.body/null": "accept",
+            "messages.0.body/swap": "accept",
             "messages.0.body/wrong-type": "reject",
             "messages.0.channel/drop": "reject",
             "messages.0.channel/null": "reject",
+            "messages.0.channel/swap": "accept",
             "messages.0.channel/wrong-type": "reject",
             "messages.0.kind/drop": "reject",
             "messages.0.kind/null": "reject",
+            "messages.0.kind/swap": "reject",
             "messages.0.kind/wrong-type": "reject",
             "messages.0.sender/drop": "reject",
             "messages.0.sender/null": "reject",
+            "messages.0.sender/swap": "accept",
             "messages.0.sender/wrong-type": "reject",
             "messages.0.server_time/drop": "reject",
             "messages.0.server_time/null": "reject",
@@ -875,6 +974,7 @@ describe("#1393 — user-topic boundary census", () => {
             "messages/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
           },
           "returns": {
@@ -899,15 +999,18 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "channel/drop": "reject",
             "channel/null": "reject",
+            "channel/swap": "accept",
             "channel/wrong-type": "reject",
             "members.0.modes.0/drop": "accept",
             "members.0.modes.0/null": "reject",
+            "members.0.modes.0/swap": "accept",
             "members.0.modes.0/wrong-type": "reject",
             "members.0.modes/drop": "reject",
             "members.0.modes/null": "reject",
             "members.0.modes/wrong-type": "reject",
             "members.0.nick/drop": "reject",
             "members.0.nick/null": "reject",
+            "members.0.nick/swap": "accept",
             "members.0.nick/wrong-type": "reject",
             "members.0/drop": "accept",
             "members.0/null": "reject",
@@ -917,6 +1020,7 @@ describe("#1393 — user-topic boundary census", () => {
             "members/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
           },
           "returns": {
@@ -938,12 +1042,14 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "networks.key.0.added_at/drop": "reject",
             "networks.key.0.added_at/null": "reject",
+            "networks.key.0.added_at/swap": "accept",
             "networks.key.0.added_at/wrong-type": "reject",
             "networks.key.0.network_id/drop": "reject",
             "networks.key.0.network_id/null": "reject",
             "networks.key.0.network_id/wrong-type": "reject",
             "networks.key.0.nick/drop": "reject",
             "networks.key.0.nick/null": "reject",
+            "networks.key.0.nick/swap": "accept",
             "networks.key.0.nick/wrong-type": "reject",
             "networks.key.0/drop": "accept",
             "networks.key.0/null": "reject",
@@ -976,6 +1082,7 @@ describe("#1393 — user-topic boundary census", () => {
             "network_id/wrong-type": "reject",
             "nick/drop": "reject",
             "nick/null": "reject",
+            "nick/swap": "accept",
             "nick/wrong-type": "reject",
           },
           "returns": {
@@ -989,12 +1096,15 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "message/drop": "reject",
             "message/null": "reject",
+            "message/swap": "accept",
             "message/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "peer/drop": "reject",
             "peer/null": "reject",
+            "peer/swap": "accept",
             "peer/wrong-type": "reject",
           },
           "returns": {
@@ -1015,15 +1125,19 @@ describe("#1393 — user-topic boundary census", () => {
             "network_id/wrong-type": "reject",
             "nick/drop": "reject",
             "nick/null": "reject",
+            "nick/swap": "accept",
             "nick/wrong-type": "reject",
             "presence/drop": "reject",
             "presence/null": "reject",
+            "presence/swap": "reject",
             "presence/wrong-type": "reject",
             "source/drop": "reject",
             "source/null": "reject",
+            "source/swap": "reject",
             "source/wrong-type": "reject",
             "ts/drop": "reject",
             "ts/null": "reject",
+            "ts/swap": "accept",
             "ts/wrong-type": "reject",
           },
           "returns": {
@@ -1041,12 +1155,14 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "detail/drop": "reject",
             "detail/null": "reject",
+            "detail/swap": "accept",
             "detail/wrong-type": "reject",
             "network_id/drop": "reject",
             "network_id/null": "reject",
             "network_id/wrong-type": "reject",
             "reason/drop": "reject",
             "reason/null": "reject",
+            "reason/swap": "reject",
             "reason/wrong-type": "reject",
           },
           "returns": {
@@ -1064,6 +1180,7 @@ describe("#1393 — user-topic boundary census", () => {
             "network_id/wrong-type": "reject",
             "nicks.key/drop": "accept",
             "nicks.key/null": "reject",
+            "nicks.key/swap": "reject",
             "nicks.key/wrong-type": "reject",
             "nicks/drop": "reject",
             "nicks/null": "reject",
@@ -1085,9 +1202,11 @@ describe("#1393 — user-topic boundary census", () => {
             "windows.key.0.network_id/wrong-type": "reject",
             "windows.key.0.opened_at/drop": "reject",
             "windows.key.0.opened_at/null": "reject",
+            "windows.key.0.opened_at/swap": "accept",
             "windows.key.0.opened_at/wrong-type": "reject",
             "windows.key.0.target_nick/drop": "reject",
             "windows.key.0.target_nick/null": "reject",
+            "windows.key.0.target_nick/swap": "accept",
             "windows.key.0.target_nick/wrong-type": "reject",
             "windows.key.0/drop": "accept",
             "windows.key.0/null": "reject",
@@ -1117,15 +1236,19 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "reason/drop": "reject",
             "reason/null": "accept",
+            "reason/swap": "accept",
             "reason/wrong-type": "reject",
             "status/drop": "reject",
             "status/null": "reject",
+            "status/swap": "reject",
             "status/wrong-type": "reject",
             "step/drop": "reject",
             "step/null": "reject",
+            "step/swap": "reject",
             "step/wrong-type": "reject",
           },
           "returns": {
@@ -1141,12 +1264,15 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "outcome/drop": "reject",
             "outcome/null": "reject",
+            "outcome/swap": "reject",
             "outcome/wrong-type": "reject",
             "reason/drop": "reject",
             "reason/null": "accept",
+            "reason/swap": "accept",
             "reason/wrong-type": "reject",
           },
           "returns": {
@@ -1161,15 +1287,18 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "lines.0/drop": "accept",
             "lines.0/null": "reject",
+            "lines.0/swap": "accept",
             "lines.0/wrong-type": "reject",
             "lines/drop": "reject",
             "lines/null": "reject",
             "lines/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "source/drop": "reject",
             "source/null": "reject",
+            "source/swap": "reject",
             "source/wrong-type": "reject",
           },
           "returns": {
@@ -1186,6 +1315,7 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "account/drop": "reject",
             "account/null": "accept",
+            "account/swap": "accept",
             "account/wrong-type": "reject",
             "identified/drop": "reject",
             "identified/null": "reject",
@@ -1206,6 +1336,7 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "modes.0/drop": "accept",
             "modes.0/null": "reject",
+            "modes.0/swap": "accept",
             "modes.0/wrong-type": "reject",
             "modes/drop": "reject",
             "modes/null": "reject",
@@ -1227,6 +1358,7 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "modes.0/drop": "accept",
             "modes.0/null": "reject",
+            "modes.0/swap": "accept",
             "modes.0/wrong-type": "reject",
             "modes/drop": "reject",
             "modes/null": "reject",
@@ -1248,6 +1380,7 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "code/drop": "reject",
             "code/null": "reject",
+            "code/swap": "accept",
             "code/wrong-type": "reject",
           },
           "returns": {
@@ -1260,33 +1393,42 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "target/drop": "reject",
             "target/null": "reject",
+            "target/swap": "accept",
             "target/wrong-type": "reject",
             "users.0.channel/drop": "reject",
             "users.0.channel/null": "reject",
+            "users.0.channel/swap": "accept",
             "users.0.channel/wrong-type": "reject",
             "users.0.hops/drop": "reject",
             "users.0.hops/null": "accept",
             "users.0.hops/wrong-type": "reject",
             "users.0.host/drop": "reject",
             "users.0.host/null": "reject",
+            "users.0.host/swap": "accept",
             "users.0.host/wrong-type": "reject",
             "users.0.modes/drop": "reject",
             "users.0.modes/null": "reject",
+            "users.0.modes/swap": "accept",
             "users.0.modes/wrong-type": "reject",
             "users.0.nick/drop": "reject",
             "users.0.nick/null": "reject",
+            "users.0.nick/swap": "accept",
             "users.0.nick/wrong-type": "reject",
             "users.0.realname/drop": "reject",
             "users.0.realname/null": "accept",
+            "users.0.realname/swap": "accept",
             "users.0.realname/wrong-type": "reject",
             "users.0.server/drop": "reject",
             "users.0.server/null": "reject",
+            "users.0.server/swap": "accept",
             "users.0.server/wrong-type": "reject",
             "users.0.user/drop": "reject",
             "users.0.user/null": "reject",
+            "users.0.user/swap": "accept",
             "users.0.user/wrong-type": "reject",
             "users.0/drop": "accept",
             "users.0/null": "reject",
@@ -1318,27 +1460,34 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "host/drop": "reject",
             "host/null": "accept",
+            "host/swap": "accept",
             "host/wrong-type": "reject",
             "logoff_time/drop": "reject",
             "logoff_time/null": "accept",
+            "logoff_time/swap": "accept",
             "logoff_time/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "not_found/drop": "reject",
             "not_found/null": "reject",
             "not_found/wrong-type": "reject",
             "realname/drop": "reject",
             "realname/null": "accept",
+            "realname/swap": "accept",
             "realname/wrong-type": "reject",
             "server/drop": "reject",
             "server/null": "accept",
+            "server/swap": "accept",
             "server/wrong-type": "reject",
             "target/drop": "reject",
             "target/null": "reject",
+            "target/swap": "accept",
             "target/wrong-type": "reject",
             "user/drop": "reject",
             "user/null": "accept",
+            "user/swap": "accept",
             "user/wrong-type": "reject",
           },
           "returns": {
@@ -1358,9 +1507,11 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "channel/drop": "reject",
             "channel/null": "reject",
+            "channel/swap": "accept",
             "channel/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
           },
           "returns": {
@@ -1374,12 +1525,15 @@ describe("#1393 — user-topic boundary census", () => {
           "matrix": {
             "channel/drop": "reject",
             "channel/null": "reject",
+            "channel/swap": "accept",
             "channel/wrong-type": "reject",
             "network/drop": "reject",
             "network/null": "reject",
+            "network/swap": "accept",
             "network/wrong-type": "reject",
             "state/drop": "reject",
             "state/null": "reject",
+            "state/swap": "reject",
             "state/wrong-type": "reject",
           },
           "returns": {
