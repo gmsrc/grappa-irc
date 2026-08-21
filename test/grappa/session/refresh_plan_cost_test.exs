@@ -55,19 +55,19 @@ defmodule Grappa.Session.RefreshPlanCostTest do
 
   describe "the user door" do
     test "the SPAWN door — Bootstrap's own resolve, network preloaded — costs six queries" do
-      {user, network, _cred} = user_with_credential(6667, %{})
+      {user, network, _} = user_with_credential(6667, %{})
       credential = Repo.preload(Credentials.get_credential!(user, network), network: :servers)
 
-      {{:ok, _plan}, sources} = measure(fn -> SessionPlan.resolve(credential) end)
+      {{:ok, _}, sources} = measure(fn -> SessionPlan.resolve(credential) end)
 
       assert sources == ["users"] ++ @source_resolution
     end
 
     test "the RESPAWN door — the refresh_plan closure init/1 invokes — costs nine queries" do
-      {user, network, _cred} = user_with_credential(6667, %{})
+      {user, network, _} = user_with_credential(6667, %{})
       {:ok, plan} = SessionPlan.resolve(Credentials.get_credential!(user, network))
 
-      {{:ok, _fresh}, sources} = measure(plan.refresh_plan)
+      {{:ok, _}, sources} = measure(plan.refresh_plan)
 
       assert sources ==
                ["network_credentials", "networks", "network_servers", "users"] ++
@@ -77,13 +77,13 @@ defmodule Grappa.Session.RefreshPlanCostTest do
 
   describe "the visitor door" do
     test "the RESPAWN door costs nine queries too, on a different first four" do
-      {network, _server} =
+      {network, _} =
         network_with_server(port: 6667, slug: "vis-#{System.unique_integer([:positive])}")
 
       visitor = visitor_fixture(network_slug: network.slug)
       {:ok, plan} = VisitorSessionPlan.resolve(visitor, network)
 
-      {{:ok, _fresh}, sources} = measure(plan.refresh_plan)
+      {{:ok, _}, sources} = measure(plan.refresh_plan)
 
       assert sources ==
                ["visitors", "networks", "network_credentials", "network_servers"] ++
@@ -114,7 +114,7 @@ defmodule Grappa.Session.RefreshPlanCostTest do
 
   @doc false
   @spec forward_query([atom()], map(), map(), {pid(), reference()}) :: :ok
-  def forward_query(_event, _measurements, metadata, {test_pid, ref}) do
+  def forward_query(_, _, metadata, {test_pid, ref}) do
     if self() == test_pid, do: send(test_pid, {ref, Map.get(metadata, :source)})
     :ok
   end
