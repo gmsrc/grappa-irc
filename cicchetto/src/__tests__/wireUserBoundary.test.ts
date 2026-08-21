@@ -85,6 +85,27 @@ function isObjectNode(node: WireNode): node is { o: Record<string, WireNode> } {
   return typeof node !== "string" && "o" in node;
 }
 
+// Key order is not part of the boundary contract, so it must not be part of
+// the comparison: an arm that builds `{kind, network}` and a schema that
+// declares `{network, kind}` hand the dispatcher the same object.
+function canon(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canon);
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, v]) => [k, canon(v)]),
+    );
+  }
+  return value;
+}
+
+function keysOf(value: unknown): string[] {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? Object.keys(value as Record<string, unknown>).sort()
+    : [];
+}
+
 // Every generated schema that carries a `kind` literal, indexed by it.
 function schemasByKind(): Map<string, Candidate[]> {
   const out = new Map<string, Candidate[]>();
@@ -386,6 +407,238 @@ describe("#1393 — user-topic boundary census", () => {
           },
         ],
       }
+    `);
+  });
+
+  // The census above measures ACCEPT/REJECT and nothing else, and that is not
+  // the whole boundary. `narrowUserEvent` returns the object the dispatcher
+  // then consumes, and `validate` builds its OWN object from the schema's
+  // declared fields — `wireValidate.ts`'s `walkObject` drops undeclared keys
+  // rather than rejecting them (additive-only, GH #447), exactly as the hand
+  // arms drop them by constructing a fresh literal.
+  //
+  // So two narrowers can agree on every verdict in the matrix above and still
+  // hand the dispatcher DIFFERENT objects, whenever the schema declares a
+  // field the hand arm does not copy out. Swapping one for the other would
+  // ship that difference, and the verdict census cannot see it. "At parity"
+  // therefore needs both axes before an arm is safe to migrate; this measures
+  // the second one.
+  it("censuses the VALUE each boundary returns, not just its verdict", () => {
+    const pairs = ARMS.filter(accepts).flatMap((k) =>
+      candidatesFor(k).map(({ name, node }) => ({ arm: k, schema: name, node })),
+    );
+
+    // A pair is comparable only when BOTH sides produced a value. The
+    // ambiguous `kind` literal leaves some arms carrying a candidate from the
+    // WRONG Wire module, whose sample the hand narrower rightly rejects —
+    // there is no value there to compare, and scoring it as a value
+    // divergence would report the ambiguity as a defect. Skipped pairs are
+    // COUNTED, not dropped, so the arithmetic stays closed.
+    const comparable = pairs.filter(
+      ({ node }) =>
+        verdict(hand, sample(node)) === "accept" &&
+        verdict((raw) => validate(node, raw), sample(node)) === "accept",
+    );
+
+    const divergent = comparable
+      .map(({ arm, schema, node }) => {
+        const valid = sample(node);
+        const byHand = hand(valid);
+        const bySchema = validate(node, valid);
+        const handKeys = keysOf(byHand);
+        const schemaKeys = keysOf(bySchema);
+        return {
+          arm,
+          schema,
+          onlyHand: handKeys.filter((f) => !schemaKeys.includes(f)),
+          onlySchema: schemaKeys.filter((f) => !handKeys.includes(f)),
+          sameValue: JSON.stringify(canon(byHand)) === JSON.stringify(canon(bySchema)),
+        };
+      })
+      .filter((r) => !r.sameValue);
+
+    expect({
+      pairs: pairs.length,
+      comparablePairs: comparable.length,
+      skippedOneSideRejected: pairs.length - comparable.length,
+      armsAtValueParity:
+        new Set(comparable.map((p) => p.arm)).size - new Set(divergent.map((r) => r.arm)).size,
+      divergent,
+    }).toMatchInlineSnapshot(`
+      {
+        "armsAtValueParity": 42,
+        "comparablePairs": 42,
+        "divergent": [],
+        "pairs": 43,
+        "skippedOneSideRejected": 1,
+      }
+    `);
+  });
+
+  // Slice 1 of the migration this file measured.
+  //
+  // The two censuses above compare the hand narrower against the schema. The
+  // moment an arm's `case` calls `validate` with its own generated schema,
+  // both of them compare that schema against ITSELF for that arm and report
+  // parity BY CONSTRUCTION — still printing 34 and 42, still green, and
+  // measuring nothing. A migration that quietly converts its own oracle into
+  // a tautology is a gate that lies, so the property the migration has to
+  // preserve gets an oracle that never consults a schema to JUDGE.
+  //
+  // A schema is still the only available source of a valid payload, so it
+  // generates the inputs; the recorded verdict and returned value are the
+  // narrower's alone. Taken BEFORE the migration this is a record of what the
+  // boundary did, and an unchanged snapshot afterwards is the evidence that
+  // it still does it. A schema edit moves the inputs and therefore the
+  // snapshot — that is a signal, not noise.
+  //
+  // Extend the list with each slice. An arm left off it is migrated with no
+  // oracle at all.
+  const MIGRATED_ARMS = [
+    "away_confirmed",
+    "presence_changed",
+    "presence_error",
+    "session_identity_changed",
+    "umode_changed",
+  ] as const;
+
+  it("pins what the migrated arms accept and return, judged without a schema", () => {
+    const pinned = MIGRATED_ARMS.map((arm) => {
+      const candidates = candidatesFor(arm);
+      // An ambiguous `kind` literal would make `[0]` a coin toss between two
+      // Wire modules. None of slice 1 is ambiguous; a later slice that adds
+      // one has to say which module it means, rather than inherit whichever
+      // the walk happened to see first.
+      if (candidates.length !== 1) {
+        throw new Error(
+          `"${arm}" has ${candidates.length} candidate schemas — pick one explicitly`,
+        );
+      }
+      const node = candidates[0].node;
+      const valid = sample(node) as Record<string, unknown>;
+
+      const matrix: Record<string, string> = {};
+      for (const f of Object.keys(valid).filter((k) => k !== "kind")) {
+        for (const [label, mutated] of [
+          ["drop", without(valid, f)],
+          ["null", { ...valid, [f]: null }],
+          ["wrong-type", { ...valid, [f]: wrongType(valid[f]) }],
+        ] as const) {
+          matrix[`${f}/${label}`] = verdict(hand, mutated);
+        }
+      }
+      return { arm, returns: canon(hand(valid)), matrix };
+    });
+
+    expect(pinned).toMatchInlineSnapshot(`
+      [
+        {
+          "arm": "away_confirmed",
+          "matrix": {
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "state/drop": "reject",
+            "state/null": "reject",
+            "state/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "away_confirmed",
+            "network": "sample",
+            "state": "present",
+          },
+        },
+        {
+          "arm": "presence_changed",
+          "matrix": {
+            "initial/drop": "reject",
+            "initial/null": "reject",
+            "initial/wrong-type": "reject",
+            "network_id/drop": "reject",
+            "network_id/null": "reject",
+            "network_id/wrong-type": "reject",
+            "nick/drop": "reject",
+            "nick/null": "reject",
+            "nick/wrong-type": "reject",
+            "presence/drop": "reject",
+            "presence/null": "reject",
+            "presence/wrong-type": "reject",
+            "source/drop": "reject",
+            "source/null": "reject",
+            "source/wrong-type": "reject",
+            "ts/drop": "reject",
+            "ts/null": "reject",
+            "ts/wrong-type": "reject",
+          },
+          "returns": {
+            "initial": true,
+            "kind": "presence_changed",
+            "network_id": 1,
+            "nick": "sample",
+            "presence": "online",
+            "source": "monitor",
+            "ts": "sample",
+          },
+        },
+        {
+          "arm": "presence_error",
+          "matrix": {
+            "detail/drop": "reject",
+            "detail/null": "reject",
+            "detail/wrong-type": "reject",
+            "network_id/drop": "reject",
+            "network_id/null": "reject",
+            "network_id/wrong-type": "reject",
+            "reason/drop": "reject",
+            "reason/null": "reject",
+            "reason/wrong-type": "reject",
+          },
+          "returns": {
+            "detail": "sample",
+            "kind": "presence_error",
+            "network_id": 1,
+            "reason": "list_full",
+          },
+        },
+        {
+          "arm": "session_identity_changed",
+          "matrix": {
+            "account/drop": "reject",
+            "account/null": "accept",
+            "account/wrong-type": "reject",
+            "identified/drop": "reject",
+            "identified/null": "reject",
+            "identified/wrong-type": "reject",
+            "network_id/drop": "reject",
+            "network_id/null": "reject",
+            "network_id/wrong-type": "reject",
+          },
+          "returns": {
+            "account": "sample",
+            "identified": true,
+            "kind": "session_identity_changed",
+            "network_id": 1,
+          },
+        },
+        {
+          "arm": "umode_changed",
+          "matrix": {
+            "modes/drop": "reject",
+            "modes/null": "reject",
+            "modes/wrong-type": "reject",
+            "network_id/drop": "reject",
+            "network_id/null": "reject",
+            "network_id/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "umode_changed",
+            "modes": [
+              "sample",
+            ],
+            "network_id": 1,
+          },
+        },
+      ]
     `);
   });
 });
