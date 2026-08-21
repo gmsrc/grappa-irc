@@ -1242,6 +1242,27 @@ jobs:
             exit 1
           fi
 
+          # #1636 — DERIVE the pre-release marker from the tag being published.
+          # This call used to carry no marker at all, so every candidate was
+          # published as a full release: v1.3.0-rc1 reads as a pre-release only
+          # because a human flipped it after the run, and v1.3.0-rc2 was missed.
+          # GitHub picks "Latest" among the non-draft, non-pre-release releases,
+          # so a green candidate run is the only thing between a release
+          # candidate and the repository's landing page.
+          #
+          # The tag, not the checked-out VERSION: on a #573 (b) repair dispatch
+          # the tree is the DISPATCHED ref while the release object is keyed by
+          # the dispatched tag input, and the two need not agree.
+          #
+          # A tag the script cannot classify STOPS the step. The permissive
+          # answer is the one that publishes, so an unparseable tag must not be
+          # silently treated as a stable release.
+          if ! prerelease_flag="$(infra/packaging/prerelease_flag.sh "${RELEASE_TAG}")"; then
+            echo "::error::cannot classify ${RELEASE_TAG} — refusing to publish a release whose marker was never derived (#1636)"
+            exit 1
+          fi
+          echo "release marker for ${RELEASE_TAG}: ${prerelease_flag}"
+
           # Create the release on first run; on a re-run (or a #573 (b) repair
           # dispatch to an existing release) fall back to uploading with
           # --clobber. BUILD ≠ PUBLISH TO AUR: the PKGBUILD/.SRCINFO ride along
@@ -1250,6 +1271,7 @@ jobs:
                 --repo "${GITHUB_REPOSITORY}" \
                 --title "grappa ${RELEASE_TAG}" \
                 --generate-notes \
+                "${prerelease_flag}" \
                 "${assets[@]}"; then
             gh release upload "${RELEASE_TAG}" \
               --repo "${GITHUB_REPOSITORY}" --clobber \
