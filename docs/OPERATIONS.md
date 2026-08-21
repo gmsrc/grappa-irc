@@ -608,6 +608,17 @@ and only then tripped the worktree check — dist swapped, then a
 non-zero exit. `ALLOW_DEPLOY_FROM_BRANCH=1` overrides the branch half
 of the check (a pre-existing knob, for the cases where you mean it).
 
+**The assertion is about WHERE and WHICH BRANCH — never about
+FRESHNESS.** `require_main_checkout` (`scripts/_lib.sh:177`) compares
+`SRC_ROOT` against `REPO_ROOT` and reads `git rev-parse --abbrev-ref
+HEAD`. It does not fetch, and it never compares `HEAD` against
+`origin/main`. So "both deploy scripts assert a checkout on main" is
+true of both and tells you NOTHING about whether that checkout is
+current: a main checkout parked twenty commits behind origin passes the
+guard unchanged. `deploy.sh` closes that gap itself by pulling;
+`deploy-cic.sh` does not close it at all, which is why it carries its
+own pre-flight — see its section below.
+
 ### `scripts/deploy.sh` — the Docker substrate consumer
 
 **It is a thin consumer of `infra/lib/deploy_common.sh` (#503).** The
@@ -714,6 +725,60 @@ copies must not drift apart.
 needs a server restart, and a server deploy never triggers a cic
 refresh. Edit `cicchetto/src/`, run this, and connected browsers see
 the refresh banner within seconds.
+
+**🔴 It does NOT update the checkout — it builds whatever is on disk.**
+Its entire source closure is `scripts/_lib.sh` + `infra/lib/cic_dist.sh`,
+and neither contains a `git pull`, a `git fetch` or a `git checkout`. A
+main checkout sitting behind origin therefore builds and ships an OLD
+bundle, and every signal the run emits stays green while it does.
+Measured 2026-08-21: a staging cic deploy from a checkout at `b1d09c95`
+served a bundle missing already-merged work for a minute, with a clean
+run start to finish. The stale checkout showed up in exactly one place —
+`git rev-parse HEAD`. **So the pre-flight is yours, and it is two
+lines that must match:**
+
+```sh
+# from the main checkout (the script refuses to run anywhere else)
+git fetch origin main
+git rev-parse HEAD           # must equal...
+git rev-parse origin/main    # ...this
+scripts/deploy-cic.sh
+```
+
+**The contrast with `scripts/deploy.sh` is the trap.** That script DOES
+update the checkout — but not in its own body, where the only literal
+`git pull` is a comment. `deploy_main` (`infra/lib/deploy_common.sh:373`)
+calls `substrate_pull`, whose Docker implementation
+(`infra/lib/deploy_docker.sh:106`) records `PREV_SHA`, runs `git pull
+--ff-only` on the current branch, and records `NEW_SHA` — skipped only
+by `NO_PULL=1`, which deploys the working tree as-is on purpose. Prod
+differs again: `scripts/deploy-m42.sh --cic` runs
+`infra/freebsd/jail_deploy_cic.sh`, which pulls inside the jail, and the
+host wrapper refuses to start when local main is ahead of origin.
+**`scripts/deploy-cic.sh` is the one cic path where nobody pulls for
+you.**
+
+**What proves a cic deploy actually happened: the mtime of the SERVED
+artefact**, `ls -l runtime/cicchetto-dist/assets/*.js` (or under
+`CIC_DIST_ROOT` where a packaged install relocated it).
+`cic_dist_promote` (`infra/lib/cic_dist.sh:52`) builds into
+`<served>.next` and swaps with two renames, so every successful deploy
+replaces the served directory with freshly written files — the mtime
+moves even for a byte-identical rebuild. Two things that look like
+proof and are not:
+
+- **The hash.** `Grappa.Cic.Bundle` parses Vite's
+  `/assets/index-<hash>.js`, and that hash is a chunk-CONTENT
+  fingerprint. Identical source rebuilds to an identical hash, so an
+  unchanged hash does not mean the deploy failed — and a changed one
+  does not mean the source was current.
+- **The final `✓ cic dist built + broadcast hash=…` line.** It reports
+  that the build ran and the broadcast fired, never what it was built
+  FROM. It is green on a stale checkout. (The 204 guard below is a
+  different failure: a bundle the server cannot READ.)
+
+The mtime proves the SWAP; the `rev-parse` proves the SOURCE. Neither
+substitutes for the other.
 
 **How the banner fires.** `POST /admin/cic-bundle-changed` makes the
 server re-read the new `index.html` via
