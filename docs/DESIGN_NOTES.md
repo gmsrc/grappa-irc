@@ -56296,3 +56296,82 @@ _Not claimed: that any of the three widened values was ever observed on the
 wire. The finding is an instrument gap, measured in the source. Nothing here
 changes what the server emits, and the per-channel boundary in
 `wireNarrow.ts` has not been censused at all._
+<!-- entry #1646 -->
+
+---
+
+## 2026-08-21 — #1646: the e2e mirrors get a witness, and the reason they exist gets corrected
+
+The e2e tree hand-copies 13 production constants into 53 declarations and
+nothing compared a copy with its original. The copies are deliberate and their
+comments say so — *"kept in lockstep by hand"* — but the hand had no witness:
+every one of them could be edited, or its original could move, and every gate
+in the repo stayed green.
+
+### The reason those comments gave was false
+
+Nine of them explained the mirror with module resolution: *"the e2e tsconfig
+does not resolve src/ imports"*, *"the e2e package does not import from src"*,
+*"the e2e tree never imports it"*, and in `fixtures/push.ts` *"would require a
+path alias in `cicchetto/e2e/tsconfig.json`"*. `fixtures/grappaApi.ts:25`
+type-imports `../../src/lib/wireTypes` with a plain relative import and no
+alias, and `tsc --noEmit -p e2e/tsconfig.json` is green. Resolution was never
+the obstacle.
+
+The true reason is the one `grappaApi.ts` states in its own header and
+`push.ts` in its second half: the runner keeps src **values** out of its
+runtime graph, because a value import reaches solid-js / solid-router. Only
+the false half was replaced.
+
+This is not tidiness. A wrong reason is what makes a copy look unavoidable:
+reading *"the tsconfig cannot resolve src/"*, nobody re-examines the mirror.
+53 declarations grew under that sentence.
+
+### The pin, and why it reads text
+
+`src/__tests__/e2eConstantMirrors.test.ts` reads the e2e declaration as TEXT
+and compares it with the production constant IMPORTED. The two sides come from
+different places — a module import and a file the test never imports — which is
+what makes the comparison able to fail, in both directions.
+
+It lives in `src/__tests__/` rather than `e2e/fixtures/` (which the vitest lane
+also collects) precisely BECAUSE of the rule it guards: a pin inside `e2e/`
+would need a src value import, the edge that package refuses. Reading the specs
+as text creates no import edge at all.
+
+Two of the six pinned constants are DERIVED in production
+(`UNREAD_RETENTION_CAP = PAGE_LIMIT`, `PULL_COMMIT_PX = SWIPE_MIN_PX * 2`) —
+the case where the copy freezes a number that can be moved from a module the
+copy does not even name. Importing the constant pins the computed value, and
+the mutants confirm it: `PAGE_LIMIT` 200→199 and `SWIPE_MIN_PX` 40→41 each kill
+exactly their arm.
+
+### Scope: six of thirteen, and the rest is a product call
+
+Pinned: the 6 constants whose production side is TypeScript and ALREADY
+exported — 11 of the 53 declarations. NOT pinned, deliberately: 5 are
+module-private in production (25 declarations) and 2 are Elixir module
+attributes (17 declarations). Exporting a constant to be testable, moving it
+to `lib/`, or extending `mix grappa.gen_wire_types` with its drift gate are
+product decisions, and this work does not take them.
+
+A pin over an exported constant is the part that needed no permission.
+
+_Not claimed: that a value import from `src` survives the **playwright**
+transform. The pin's import runs under vitest, from `src/`. What is measured
+is that a relative `src/` import resolves and typechecks under
+`e2e/tsconfig.json` — which is what falsifies the comments — not that a spec
+could import one at runtime. That question is what decides "export and import"
+versus "export and pin", and it stays open._
+
+_Not fixed: a mirror that has ALREADY drifted is invisible here. Every row of
+#1646's census was found because the two sides carry the same literal today; a
+copy that already disagrees cannot be found that way, and this pin inherits the
+same blind spot — it can only watch the pairs the census listed. The six
+`SERVER_WINDOW = "Server"` declarations are the one place that gap is named
+rather than papered over: whether they mirror a live production string, a
+retired one, or nothing was not established, so they are listed as unpinned
+with the reason instead of being asserted against `SERVER_WINDOW_NAME`._
+
+_Not watched: `canonicalChannel`'s mirror in `fixtures/cicchettoPage.ts` is a
+FUNCTION. It drifted twice before (#973) and a constant pin cannot see it._
