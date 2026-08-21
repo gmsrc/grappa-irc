@@ -56975,3 +56975,24 @@ write from a worktree, and redirecting the task's output makes a read-only
 failure indistinguishable from success. Two whole measurement runs were
 conducted against a generator that had never written anything. The control
 that unmasks it is counting `^Wrote ` lines — there must be exactly 2.
+
+### The client floor's obligation is unenforced, and that is named debt
+
+`MIN_SERVER_PROTOCOL_VERSION` only protects what its author remembered to
+raise it for. Measured during review: **no test ties the constant to
+`Grappa.Protocol.version/0`, and no line anywhere states that tightening a
+narrower obliges a floor raise.** A future slice that makes a v5 field
+mandatory while leaving the floor at 2 will accept a v2–v4 server, drop
+every envelope missing that field, and show no banner — the precise silent
+mode this half of the slice was built to end, reproduced by the mechanism
+meant to end it.
+
+vjt's ruling: the SENTENCE now, the GATE in an issue of its own. The
+sentence is in place beside the constant, so the next reader inherits the
+obligation instead of deducing it. The gate is deferred because a real one
+needs the field → version-that-introduced-it history and the pin holds a
+digest, not a history; inventing that history inside this slice would be an
+unmeasured mechanism shipped under deadline, which is the failure mode this
+entry spends its length arguing against. Recorded here as debt with a name,
+not as a detail — an unenforced obligation that nobody wrote down is
+indistinguishable from one that does not exist.

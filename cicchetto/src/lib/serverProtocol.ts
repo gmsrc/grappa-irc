@@ -50,6 +50,21 @@ import { type Accessor, createSignal } from "solid-js";
 //
 // Mirrors `Grappa.Protocol.min_version/0`'s naming, pointed at the peer this
 // side is judging.
+//
+// 🔴 THE OBLIGATION, and nothing enforces it. Narrowing any guard to REQUIRE
+// a field introduced by protocol version N obliges you to raise this number
+// to N in the same change. Measured, not assumed: no test ties this constant
+// to `Grappa.Protocol.version/0`, and no line anywhere says that tightening a
+// narrower costs a floor raise — so nothing will remind you. Forget it and a
+// bundle needing a v5 field goes on accepting a v2–v4 server, drops every
+// envelope missing that field and shows NO banner: the silent mode this
+// module was written to end, reintroduced by the module itself.
+//
+// Named debt, not an oversight (DESIGN_NOTES 2026-08-21, #1393d): a real gate
+// needs the field → version-that-introduced-it history, and
+// `priv/wire/shape.pin` holds a digest, not a history. Inventing that history
+// inside this slice would be an unmeasured mechanism, so it is a separate
+// issue rather than a hurried one here.
 export const MIN_SERVER_PROTOCOL_VERSION = 2;
 
 // `null` until the user-topic join reply lands (or if it carries no number
