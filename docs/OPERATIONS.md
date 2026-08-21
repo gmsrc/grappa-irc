@@ -4326,6 +4326,14 @@ the repository's landing page. `GET /releases/latest` still answered
 what every cloud first boot would install. The marker is what keeps a
 release candidate out of a fresh production install.
 
+**And the window was open.** GitHub documents `GET /releases/latest` as the
+most recent non-prerelease, non-draft release sorted by the underlying
+tag's `created_at`; both candidates were published unmarked with tags newer
+than `v1.2.0`'s. `updated_at` bounds the hand-edit from above: `v1.3.0-rc1`
+≤ 9m28s after publication, `v1.3.0-rc2` ≤ 16m27s. Derived from the
+documented rule and the measured timestamps, not observed — nobody polled
+the endpoint during either window.
+
 `infra/packaging/prerelease_flag.sh` derives the flag from the TAG:
 
     prerelease_flag.sh v1.3.0      -> --prerelease=false

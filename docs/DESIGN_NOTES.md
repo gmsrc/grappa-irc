@@ -55891,6 +55891,34 @@ boot would have taken the candidate. That is what makes this a defect and not
 a label: the marker is what keeps a release candidate out of a fresh
 production install.
 
+### The window was open, for a bounded and measured time
+
+The issue reads the exposure as potential — "no release candidate has ever
+displaced the stable release". Measured NOW that is what the API says. But the
+reading holds only for the state after each hand-edit, and the timestamps say
+there was a state before it.
+
+GitHub documents `GET /releases/latest` as *the most recent non-prerelease,
+non-draft release, sorted by the `created_at` of the underlying git tag*. Both
+candidates were published WITHOUT the marker and both tags are newer than
+`v1.2.0`'s, so by that rule the endpoint answered the candidate until the flag
+was flipped. The API keeps no history, but a release object carries
+`updated_at`, which bounds the flip from above:
+
+    v1.3.0-rc1  published 2026-08-20T10:03:10Z  updated 10:12:38Z   <= 9m28s
+    v1.3.0-rc2  published 2026-08-20T23:40:56Z  updated 23:57:23Z   <= 16m27s
+    v1.2.0      published 2026-08-15T08:55:25Z  updated 08:58:15Z
+
+DERIVED, not observed: nobody polled `releases/latest` during either window,
+and `updated_at` is the LAST edit, so it is an upper bound on when the marker
+was set and not the moment itself. What the derivation does say is that the
+exposure was live rather than hypothetical — and that the two windows differ
+in what they could have cost. rc1 carried ZERO assets, so `latest_deb_url`
+would have found no `grappa_*_amd64.deb` and first-boot would have DIED
+("no grappa_*_amd64.deb asset in the latest release") rather than install
+anything. rc2 carried all eleven. Still no observed damage; the claim being
+declined here is the stronger one, that the window never existed.
+
 ### The tag is the oracle, not the carrier
 
 `infra/packaging/version.sh` reads the repo-root `VERSION` of the CHECKED-OUT
