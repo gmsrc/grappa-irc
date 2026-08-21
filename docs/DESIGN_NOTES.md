@@ -55630,3 +55630,116 @@ is claimed. The counts hold for the DEFAULT addressing configuration only
 `effective_source/3` and was not measured. Whether the five source-resolution
 reads are worth caching was not investigated — this entry establishes that
 they exist and are paid twice per boot, not what to do about it.
+<!-- entry #1593 -->
+
+---
+
+## 2026-08-21 — #1593: the reconnect fires two backfills and drops the only one that could work
+
+A message written by the server between a reconnect's backfill and that
+reconnect's subscription going live was never delivered and never reconciled.
+cic kept the row's id — it advanced the read cursor to it, off the `POST
+/messages` 201 body — but the row never rendered, and no later fetch went back
+for it. Reproduced in the field on the Android PWA (a ~60 s blind window, then
+eight lines landing at once) and caught once on CI, as the single red
+`integration` run 32351074283 on main `41190db8`
+(`issue254-own-echo-live.spec.ts:235`).
+
+### The mechanism, and how it was settled
+
+The issue stopped at two readings: **(A)** the subscription was not yet useful
+when the broadcast fired, or **(B)** it was live and the echo was lost
+downstream. (B) was already falsified from the server log (the per-channel
+`JOINED` for `#spec-w0` completed 16 ms *after* the backfill fetch, so the
+backfill cannot have been triggered by the join ACK).
+
+What settled the rest was an instrument nobody had opened: **`0-trace.network`
+inside the `playwright-traces` artefact** — the client-side HTTP request log,
+with `startedDateTime` in wall-clock UTC and a per-request duration. The issue
+had established that the Playwright trace carries no WebSocket frames, which is
+true, and concluded the trace "does not contain the information". It contains a
+different piece of it, and that piece is decisive:
+
+| key | the sweep's `?after=` GET, on the wire | that topic's `JOINED` (server log) |
+|---|---|---|
+| `s45dcf513` | 09:08:32.725 → .752 | 09:08:32.737 — 15 ms inside |
+| `$server` | 09:08:32.726 → .759 | 09:08:32.749 — 10 ms inside |
+| `#spec-w0` | 09:08:32.727 → .756 | 09:08:32.754 — 2 ms inside |
+
+Those three GETs are the signature of one code path: `subscribe.ts`'s
+socket-open effect, which on `socketHealth().state` → `"open"` calls
+`refetchNetworks()` (`/networks`, .722), `refetchChannels()`
+(`/…/channels`, .724) and then sweeps `refreshScrollback` over every
+`joined.keys()` (.725/.726/.727). That sweep runs **before any per-channel
+topic has rejoined**, so by construction it cannot cover rows written after its
+own query.
+
+The refresh that *can* is the per-channel join-ok one (CP29 R-5). All three of
+them landed inside their own key's in-flight window and hit
+`refreshScrollback`'s guard, which **returned**. Row 53749 was persisted at
+.751 — after the sweep's query, into a topic that had no subscriber — and the
+trace carries no further `?after=` request for any of those keys, ever, while
+the same client kept issuing HTTP at .774, .779 (×2) and .874. That last row is
+the positive control: the absence is an absence, not a gap in capture.
+
+So the answer is (A), but the actionable half is not the ordering. The ordering
+hole is inherent and cic already owns the verb that closes it. The defect is
+that **the verb was being thrown away by a guard whose comment claimed the
+overlap was safe** ("the per-key in-flight guard + id-dedupe make it safe to
+overlap with a rejoin's own join-ok refresh").
+
+### The rule
+
+**A coalescing guard must not DROP the caller that loses the race.** The two
+callers are not interchangeable: the one that arrives mid-flight asked *after*
+the running fetch issued its query, so it is the only one that can observe
+anything written since. Dropping it discards the observation, and — because
+nothing else ever re-asks — permanently.
+
+`refreshScrollback` therefore queues the loser (`refreshQueued`, a sibling Set
+to `refreshInFlight`, reset on identity transition like every other lock in
+that block) and re-runs once when the leading fetch settles. The guard keeps
+its real job: never two `?after=` for one key on the wire at once.
+
+This closes the hole rather than narrowing it. The re-run is triggered *by* the
+post-subscription caller, so its response covers the server past the point the
+subscription went live, and everything after that arrives over the WS. Cost is
+at most one extra short `?after=` per in-flight window per key; a caller
+arriving during the re-run coalesces into the same slot, so the chain is
+bounded by event arrivals, not by caller count.
+
+The #552 completion seam (`__cic_scrollbackRefreshed`) is withheld while a
+re-run is owed. The seam means "nothing in flight *and* nothing about to
+start"; stamping it when the leading run finishes would hand
+`waitForScrollbackRefreshed` precisely the false all-clear it was added to
+remove.
+
+### What is deliberately left standing
+
+- **The read cursor can still advance past a row that never rendered.**
+  `sendMessage` advances it off the 201 body, gated on "the pane holds some
+  rendered row" (the #50 anti-poison gate), not on "this row rendered". With
+  this change the row does get fetched and rendered, so in the #1593 shape the
+  advance becomes retroactively honest — but the ordering is unchanged, and a
+  cure for it would be a separate change.
+- **No polling.** A periodic reconcile of any topic whose high-water mark
+  trails the server was the general cure on the table and is rejected: it is
+  polling REST from a connected client, which CLAUDE.md rules out.
+- **No client-originated state.** The cure re-asks for a range; it never
+  invents a row.
+
+### What was not measured
+
+- **The Android field incident was not discriminated directly.** The instrument
+  vjt named for it is the server log of that one-minute window, and prod (the
+  m42 jail) is unreachable from the worker sandbox — the ssh identity is
+  blocked, `Permission denied (publickey)`. The field report is *consistent*
+  with this mechanism (any reconnect fires the same sweep-then-join sequence),
+  but n=1 on CI is what is measured, and the field case is argued, not proven.
+- **Incidence.** Still n=1. The `:235` spec ran 474 times on main over the
+  preceding 30 days with this as its only failure; nothing here changes that
+  number or explains why the webkit twin `:244` passed in the same run.
+- **The 2 ms margin on `#spec-w0` alone.** The join reply's client-side arrival
+  is not timestamped anywhere; that key's overlap is established by the total
+  absence of a later `?after=` GET, and by the 15 ms and 10 ms margins on the
+  two sibling keys in the same reconnect, not by the 2 ms figure on its own.
