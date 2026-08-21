@@ -206,10 +206,24 @@ defmodule GrappaWeb.UserSocket do
   # unparseable → treated as CURRENT: the server sends nothing new to a
   # silent client, so
   # cicchetto/shottino (which declare no version) keep working untouched —
-  # negotiation is opt-in on the client side. A version ABOVE what the
-  # server speaks is still accepted: additive-only means a newer client
-  # tolerates an older server (unknown-is-never-fatal), so there is no
-  # upper bound.
+  # negotiation is opt-in on the client side.
+  #
+  # A version ABOVE what the server speaks is still accepted — there is no
+  # upper bound and there will not be one. The DECISION is unchanged; its
+  # justification is not. This comment used to read "additive-only means a
+  # newer client tolerates an older server", and #1393d withdrew that
+  # sentence everywhere it appeared: additivity describes what the SERVER
+  # emits and says nothing about what a CLIENT requires, and cic now DOES
+  # require fields an older BEAM never sends. The reason the ceiling is
+  # absent is a different one, and it is load-bearing rather than an
+  # oversight: what a client made mandatory is not a fact this server
+  # holds, so refusing a newer-than-us client here would be the server
+  # ruling on a floor that is the CLIENT's to rule on — and it would
+  # refuse the one socket that carries the evidence. The user-topic JOIN
+  # REPLY publishes `Grappa.Protocol.version/0`, cic compares it against
+  # its own `MIN_SERVER_PROTOCOL_VERSION` (`serverProtocol.ts`) and raises
+  # the "server outdated" banner. That banner exists only because this
+  # gate lets the connection through.
   # #1416 — the gate also REPORTS what it made of the declaration, because
   # the accept/reject answer alone cannot: `:declared` and `:unreadable`
   # are the same `{:ok, _}` by design, so a client bug that discards the

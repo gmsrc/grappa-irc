@@ -56880,12 +56880,31 @@ served, so it stays at 1 while `version/0` goes to 2. The recurring cost is
 real and was accepted knowingly: a shape change in an admin-only payload no
 client reads still demands a bump.
 
-Withdrawn by this entry, in CLAUDE.md, `docs/CLIENT_PROTOCOL.md`,
-`Grappa.Protocol`'s moduledoc and `socket.ts`: the sentence *"may appear at
-ANY time WITHOUT a version bump"*, and its corollary in the client doc that
-*"a newer client tolerates an older server"* — an inference from wire
-additivity that holds for the server's emissions and not for the client's
-requirements.
+Withdrawn by this entry: the sentence *"may appear at ANY time WITHOUT a
+version bump"*, and its corollary *"a newer client tolerates an older
+server"* — an inference from wire additivity that holds for the server's
+emissions and not for the client's requirements. It was carried in **six**
+places, and the last two were found by review rather than by the grep that
+found the first four: CLAUDE.md, `docs/CLIENT_PROTOCOL.md`,
+`Grappa.Protocol`'s moduledoc, `socket.ts`, **`user_socket.ex`
+(`check_protocol_version/1`)** and **`user_socket_test.exs`** (the
+above-the-ceiling test, in its comment AND in its name). The fifth is the
+one that stung: `CLIENT_PROTOCOL.md` repudiates the sentence under a ⚠️ and
+cites `user_socket.ex (check_protocol_version/1)` as its Source, so the
+corrected doc pointed straight at the file still saying it.
+
+In all six the DECISION is untouched — there is no upper bound on
+`client_proto` and there will not be one. Only the justification changed,
+and the replacement is not a smaller version of the old one: what a client
+made mandatory is not a fact the server holds, so refusing a
+newer-than-us client would be the server ruling on a floor that is the
+client's to rule on, AND it would withhold the join reply carrying
+`protocol_version` — the very evidence cic needs to raise its
+outdated-server banner. The absent ceiling is that banner's precondition.
+
+The #447 entry of 2026-07-27 still contains the sentence and is left
+alone: the log records what was decided then, and rewriting it would erase
+the fact that the rule ever held.
 
 ### Why the gate is a new task and not a flag on the old one
 

@@ -144,9 +144,12 @@ defmodule GrappaWeb.UserSocketTest do
                connect_with_proto(Integer.to_string(Protocol.min_version()), session.id)
     end
 
-    test "client_proto ABOVE the server version still connects — no upper bound (additive-only)" do
-      # A newer client tolerates an older server (unknown-is-never-fatal),
-      # so the gate has no upper bound — only a floor.
+    test "client_proto ABOVE the server version still connects — no upper bound" do
+      # The gate has a floor and no ceiling. Its reason is NOT the
+      # "a newer client tolerates an older server" this comment used to
+      # give — #1393d withdrew that. What a client made mandatory is not a
+      # fact this server holds, and refusing the socket would withhold the
+      # join reply cic reads to raise its own outdated-server banner.
       {_, session} = user_and_session(name: "vjt-#{System.unique_integer([:positive])}")
 
       assert {:ok, _} =
