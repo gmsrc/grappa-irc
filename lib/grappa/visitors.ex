@@ -72,6 +72,10 @@ defmodule Grappa.Visitors do
       Grappa.Networks.Network,
       Grappa.Repo,
       Grappa.Session,
+      # #1398 §7 — added alongside `Grappa.Session`: three `Backoff` references
+      # (`visitors.ex` forget, `login.ex` reset, `session_plan.ex`
+      # failure_count) against five others into the session context.
+      Grappa.Session.Backoff,
       Grappa.SpawnOrchestrator,
       Grappa.Subject,
       Grappa.Themes,

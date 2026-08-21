@@ -80,6 +80,11 @@ if Mix.env() in [:dev, :test] do
         Grappa.Repo,
         Grappa.Scrollback,
         Grappa.Session,
+        # #1398 §7 — `Grappa.Session` STAYS, correcting the issue's §7 census:
+        # it lists this module as one of the two boundaries whose ONLY session
+        # reference is `Backoff`, but `respawn_connected/5` calls
+        # `Session.stop_session/2` (`:339`). So the leaf is an addition.
+        Grappa.Session.Backoff,
         Grappa.TestSupport.SubjectSession,
         Grappa.Uploads,
         Grappa.UserSettings,

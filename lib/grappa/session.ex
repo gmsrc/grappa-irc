@@ -90,6 +90,11 @@ defmodule Grappa.Session do
       Grappa.Push,
       Grappa.QueryWindows,
       Grappa.Scrollback,
+      # #1398 §7 — `Backoff` was an EXPORT of this boundary; it is now a leaf
+      # of its own, so `Session.Server`'s four `Backoff.*` calls need it as a
+      # dep like any other sibling. A leaf that leaves `exports:` enters
+      # `deps:` — the same trade #1399 made for the identity schemas.
+      Grappa.Session.Backoff,
       Grappa.SessionLog,
       Grappa.Subject,
       Grappa.Notify,
@@ -102,7 +107,7 @@ defmodule Grappa.Session do
     # secret the on-wire `SET PASSWD` rotates, and both must refuse exactly
     # what Azzurra's services refuse. Sharing the one chain beats a copy that
     # drifts. It is a pure module with no process or state behind it.
-    exports: [Backoff, NSInterceptor, Server, Wire]
+    exports: [NSInterceptor, Server, Wire]
 
   alias Grappa.IRC.{AuthFSM, CTCP, Identifier}
   alias Grappa.Session.{Deps, FloodAllowance, ISupport, Server}

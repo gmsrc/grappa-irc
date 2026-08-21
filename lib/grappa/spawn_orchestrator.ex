@@ -218,7 +218,10 @@ defmodule Grappa.SpawnOrchestrator do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Admission, Grappa.Session]
+    # #1398 §7 — `Grappa.Session` STAYS: `Backoff.reset/2` is two of this
+    # boundary's five references into the session context, so the leaf is an
+    # addition here, not a narrowing.
+    deps: [Grappa.Admission, Grappa.Session, Grappa.Session.Backoff]
 
   alias Grappa.{Admission, Session}
   alias Grappa.Session.Backoff

@@ -56110,3 +56110,99 @@ leaker was identified by CONSTRUCTION (which fixtures return without waiting
 for the session to be dead) and the fix is gated by mutants rather than by a
 red turning green. A green run of the victim suite was never evidence of
 absence, in either direction.
+<!-- entry #1398b -->
+
+---
+
+## 2026-08-21 — #1398b: Session.Backoff becomes a leaf boundary, and the compiler corrects the census that proposed it
+
+#1398 §7 proposed promoting `Grappa.Session.Backoff` to `use Boundary,
+top_level?: true, deps: []` — the pattern #415, #1398 and #1399 set for the
+identity schemas. It is landed here as an annotation change: no module moved,
+no code moved, eight files touched and all of them boundary declarations.
+
+The §7 analysis said plainly what it was: *"nothing outside §1 was compiled"* —
+arithmetic on a hand-built graph, with arcs added and cut by hand. So the
+compiler was run as the gate (Boundary sits in `compilers:`), and it corrected
+the census twice.
+
+### `deps: []` is measured, not assumed
+
+`backoff.ex` makes exactly seven in-app references and all seven are
+`Session.subject()` in a `@spec`/`@typep`. A type name is a module atom in
+metadata, so the xref checker sees no edge — the same rule that lets
+`Networks.Credential` alias three modules and declare none of them. Everything
+the body calls is stdlib: `Application.compile_env`, `Bitwise`, `Enum`,
+`GenServer`, `System`, `:ets`.
+
+### The blast radius: SIX boundaries, not the five the census named
+
+Promote, add nothing, read `compile --force --warnings-as-errors`. Nine
+forbidden references across six boundaries:
+
+| boundary | sites | outcome |
+|---|---|---|
+| `Grappa.Health` | `health.ex:156` | **narrowed** — `Grappa.Session` → `Grappa.Session.Backoff` |
+| `Grappa.AdmissionStateHelpers` | `admission_state_helpers.ex:180` | **narrowed** |
+| `Grappa.Networks` | `networks/session_plan.ex:197` | added; keeps `Session` |
+| `Grappa.SpawnOrchestrator` | `spawn_orchestrator.ex:277,288` | added; keeps `Session` |
+| `Grappa.Visitors` | `visitors.ex:846`, `login.ex:642`, `session_plan.ex:289` | added; keeps `Session` |
+| `Grappa.TestSupport.SubjectReset` | `subject_reset.ex:320` | added; keeps `Session` |
+
+`Grappa.Session` itself moves `Backoff` out of `exports:` and into `deps:` —
+`Session.Server` makes four `Backoff.*` calls, so the leaf it used to contain
+is now a sibling it must declare.
+
+**Correction 1 — the test-support boundary the census could not see.**
+`Grappa.AdmissionStateHelpers` appears in no §7 table. It surfaces ONLY under
+`--env=test`: `MIX_ENV=dev` never compiles `test/support`, so a dev-only run
+under-counts by exactly the test-support boundaries, silently. Both envs were
+run for that reason.
+
+**Correction 2 — `SubjectReset` does NOT reference `Session` through `Backoff`
+alone.** §7 names it as one of the two boundaries that shed their whole
+`X → Session` edge. Measured: `respawn_connected/5` calls
+`Session.stop_session/2` at `subject_reset.ex:339`, so it keeps the context dep
+and merely gains the leaf. Exactly ONE boundary in the repo — `Grappa.Health` —
+loses its session edge in `lib/`, plus `AdmissionStateHelpers` in
+`test/support`.
+
+### What it buys: zero cycles, and §7 said so first
+
+Neither `Health` nor `AdmissionStateHelpers` sits in the SCC, so all 13 runtime
+cycles survive. The gain is shape: a supervised child that shares nothing with
+session orchestration stops being reachable through it, and `Health` now
+declares the one ETS-owning module it names instead of the whole session
+context. §7's own table is the honest counterweight — the highest-leverage
+single arc is `LiveIntrospection → Session` at 6 of 13, and that is not this
+work.
+
+### Positive control, because a green boundary run proves nothing by itself
+
+`def __boundary_control__, do: Grappa.Session.stop_session({:user, 1}, 1)`
+inserted into `Grappa.Health` compiles **RED** after this change
+(`forbidden reference to Grappa.Session ... health.ex:182`) and would have
+compiled **GREEN** before it, when `Health` declared the whole context. The
+narrowing bites. The nine forbidden references the bare promotion produced are
+the matching control for the leaf itself: the checker had a known answer and
+gave it.
+
+### Carve-out, restated because it is a price and not an accident
+
+The leaf keeps the nested name `Grappa.Session.Backoff` while being a SIBLING of
+`Grappa.Session` in the graph. Boundary's docs discourage that mismatch and
+offer a rename; declined on vjt's 2026-08-20 ruling — a rename moves modules and
+beams, which forces a COLD deploy, to buy a naming nicety. The price is a reader
+guessing the owner from the name.
+
+### Not established
+
+- **`Grappa.Session.Control`.** #1398's other half is untouched and out of
+  scope: as written it does not compile, and the version that works moves five
+  boundaries.
+- **Dialyzer.** Not run. The change adds no function, alters no signature and
+  moves no code; a cold PLT on a fresh cache id was judged disproportionate to
+  that. Stated rather than implied.
+- **Whether any boundary would now be caught that a source scan would miss.**
+  The control proves the mechanism on `Health`; it was not repeated per
+  boundary.

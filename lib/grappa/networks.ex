@@ -65,6 +65,10 @@ defmodule Grappa.Networks do
       Grappa.Networks.Network,
       Grappa.Networks.Server,
       Grappa.Session,
+      # #1398 §7 — added alongside `Grappa.Session`, not instead of it:
+      # `SessionPlan` reads `Backoff.failure_count/2`, but this boundary makes
+      # nine other references into the session context.
+      Grappa.Session.Backoff,
       Grappa.Subject,
       Grappa.Vault,
       Grappa.Vhosts,

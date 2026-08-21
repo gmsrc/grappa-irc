@@ -142,6 +142,28 @@ defmodule Grappa.Session.Backoff do
   failure_count}/2`) MUST stay `async: false` so the same constraint
   applies even if `max_cases` is later relaxed for a faster lane.
   """
+  # #1398 §7 — a leaf boundary, on the pattern #415 / #1398 / #1399 set for the
+  # identity schemas. `deps: []` is MEASURED, not assumed: this module's only
+  # in-app references are seven `Session.subject()` typespecs, and a type name
+  # is a module atom in metadata, so the xref checker sees no edge. Everything
+  # it calls at runtime is stdlib (`Application`, `Bitwise`, `Enum`,
+  # `GenServer`, `System`, `:ets`, `:telemetry`).
+  #
+  # The carve-out is the one vjt accepted in #1523: the leaf keeps the nested
+  # name `Grappa.Session.Backoff` while being a SIBLING of `Grappa.Session` in
+  # the graph. Boundary's docs discourage that mismatch and offer a rename; the
+  # rename moves modules and beams, which means a COLD deploy, to buy a naming
+  # nicety. Declined knowingly — the price is a reader guessing the owner from
+  # the name.
+  #
+  # Honest about what it buys: **zero cycles.** A boundary sheds its
+  # `X → Session` edge only if EVERY reference it makes into `Session` is a
+  # `Backoff` one, and only `Grappa.Health` and `Grappa.TestSupport.SubjectReset`
+  # qualify — neither is in the SCC, so all 13 runtime cycles survive. The gain
+  # is shape: a supervised child that shares nothing with the session
+  # orchestration stops being reachable through it.
+  use Boundary, top_level?: true, deps: []
+
   use GenServer
 
   alias Grappa.Session

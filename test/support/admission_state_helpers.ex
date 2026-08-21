@@ -58,7 +58,13 @@ defmodule Grappa.AdmissionStateHelpers do
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Admission, Grappa.AdminEvents, Grappa.Session]
+    # #1398 §7 — NARROWED to the leaf: this helper's only code reference into
+    # `Grappa.Session` is `Backoff` (the `Grappa.Session{Registry,Supervisor}`
+    # names it passes to `Registry`/`DynamicSupervisor` are process names, not
+    # modules of that boundary). It surfaces ONLY under `--env=test`, because
+    # `MIX_ENV=dev` never compiles `test/support` — the issue's §7 census never
+    # saw it.
+    deps: [Grappa.Admission, Grappa.AdminEvents, Grappa.Session.Backoff]
 
   alias Grappa.AdminEvents
   alias Grappa.Admission.NetworkCircuit

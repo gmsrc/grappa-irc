@@ -45,7 +45,11 @@ defmodule Grappa.Health do
       # reviewer LOW-1) — single-sourced, so renaming the @table atom in
       # any of them surfaces a Health check failure on next deploy rather
       # than silently diverging here.
-      Grappa.Session,
+      # #1398 §7 — NARROWED, not added: measured, Health's only code reference
+      # into `Grappa.Session` was `Backoff.table_name()` at `:156`. Now that the
+      # leaf is its own boundary, declaring the whole session context would hand
+      # Health every session verb to name one ETS table.
+      Grappa.Session.Backoff,
       Grappa.Admission,
       Grappa.Net.PtrCache
     ]
