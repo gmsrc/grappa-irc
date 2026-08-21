@@ -73,19 +73,40 @@ import {
   narrowWhoUsers,
   narrowWindowStateEvent,
 } from "./wireNarrow";
-// #1393 slice 1 — the arms below narrow through their GENERATED schema
-// instead of a hand-written field walk. Both are already emitted; the hand
-// copy was the duplicate. Which arms may move is not a judgement call:
-// `wireUserBoundary.test.ts` measured hand and schema to accept and reject
-// the same inputs AND to return the same object, arm by arm, and only arms
-// at parity on both axes are here. The eight measured divergent stay hand-
-// written until each is ruled on individually.
+// #1393 — the arms below narrow through their GENERATED schema instead of a
+// hand-written field walk. Both are already emitted; the hand copy was the
+// duplicate. Which arms may move is not a judgement call:
+// `wireUserBoundary.test.ts` measures hand and schema against the same
+// mutation matrix — drop, null, wrong-type AND a value the schema does not
+// declare — and against the object each one RETURNS, arm by arm. Only arms
+// at parity on both axes are here.
+//
+// Every arm still narrowed by hand below is one the measurement separated,
+// and each carries at its `case` the tolerance the typespec does not: an
+// additive field the server may omit, a token set the wire contract forbids
+// us to close (#447), a per-field degrade that beats dropping the payload.
+// Do not migrate one of those without re-measuring it first.
 import {
+  S_ScrollbackWireArchiveChangedPayload,
+  S_ScrollbackWireArchivePurgedPayload,
   S_SessionWireAwayConfirmedPayload,
+  S_SessionWireChannelsChangedPayload,
+  S_SessionWireConnectionProgressPayload,
+  S_SessionWireDirectoryCompletePayload,
+  S_SessionWireDirectoryFailedPayload,
+  S_SessionWireDirectoryProgressPayload,
+  S_SessionWireInviteAckPayload,
+  S_SessionWireOwnNickChangedPayload,
+  S_SessionWirePeerAwayPayload,
   S_SessionWirePresenceChangedPayload,
   S_SessionWirePresenceErrorPayload,
   S_SessionWireSessionIdentityChangedPayload,
+  S_SessionWireSupportedUmodesChangedPayload,
   S_SessionWireUmodeChangedPayload,
+  S_SessionWireWhowasBundlePayload,
+  S_SessionWireWindowInviteDeclinedPayload,
+  S_SessionWireWindowPendingPayload,
+  S_UserSettingsWireAutoAwayDebounceChangedPayload,
 } from "./wireSchema";
 import type { ServerSettingsWireUploadView, SessionWireServerReplySource } from "./wireTypes";
 // #410 — the connection_state runtime guard derives from the generated const
@@ -386,7 +407,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
   if (typeof r.kind !== "string") return null;
   switch (r.kind) {
     case "channels_changed":
-      return { kind: "channels_changed" };
+      return validate(S_SessionWireChannelsChangedPayload, r);
     case "query_windows_list": {
       // S43 — validate each entry instead of a bare cast.
       const windows = narrowWindowsMap(r.windows);
@@ -415,12 +436,10 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
     case "away_confirmed":
       return validate(S_SessionWireAwayConfirmedPayload, r);
     case "connection_progress":
-      // #100 — transient reconnect badge signal. Closed state set enforced
-      // at the boundary (mirrors away_confirmed) so a malformed value can't
-      // corrupt the reconnectingByNetwork store.
-      if (typeof r.network !== "string" || (r.state !== "connecting" && r.state !== "connected"))
-        return null;
-      return { kind: "connection_progress", network: r.network, state: r.state };
+      // #100 — transient reconnect badge signal. The closed state set is the
+      // schema's own `{e: [...]}`, so a malformed value still cannot corrupt
+      // the reconnectingByNetwork store.
+      return validate(S_SessionWireConnectionProgressPayload, r);
     case "notify_list": {
       // #247 — validate each entry, same strictness as query_windows_list.
       const networks = narrowNotifyMap(r.networks);
@@ -438,8 +457,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       return { kind: "presence_snapshot", network_id: r.network_id, nicks };
     }
     case "own_nick_changed":
-      if (typeof r.network_id !== "number" || typeof r.nick !== "string") return null;
-      return { kind: "own_nick_changed", network_id: r.network_id, nick: r.nick };
+      return validate(S_SessionWireOwnNickChangedPayload, r);
     case "umode_changed":
       // #229 — per-session umode set. `modes` is a string[] (sorted umode
       // letters, sign stripped); any non-string element drops the whole
@@ -449,19 +467,11 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // #388 — the NORMALIZED services-identity verdict. `account` is
       // nullable and display-only; `identified` is the verdict.
       return validate(S_SessionWireSessionIdentityChangedPayload, r);
-    case "supported_umodes_changed": {
-      // #249 — per-session SUPPORTED umode set. User-topic-only, narrowed
-      // inline here (mirror of umode_changed). `modes` must be a string[]
-      // (sorted advertised umode letters); any non-string element drops the
-      // whole payload.
-      if (typeof r.network_id !== "number" || !Array.isArray(r.modes)) return null;
-      if (!r.modes.every((m) => typeof m === "string")) return null;
-      return {
-        kind: "supported_umodes_changed",
-        network_id: r.network_id,
-        modes: r.modes as string[],
-      };
-    }
+    case "supported_umodes_changed":
+      // #249 — per-session SUPPORTED umode set (mirror of umode_changed).
+      // `modes` is the sorted advertised umode letters, and the schema's
+      // `{a: "s"}` already drops the whole payload on a non-string element.
+      return validate(S_SessionWireSupportedUmodesChangedPayload, r);
     case "isupport_changed":
       // #216 — dual-topic event: this is the LIVE 005 edge on the user
       // topic (the per-channel cold-snapshot goes through the identical
@@ -469,14 +479,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // flat CHANMODES/PREFIX shape is validated in exactly one place.
       return narrowIsupportChanged(r);
     case "window_pending":
-      if (typeof r.network !== "string" || typeof r.channel !== "string" || r.state !== "pending")
-        return null;
-      return {
-        kind: "window_pending",
-        network: r.network,
-        channel: r.channel,
-        state: "pending",
-      };
+      return validate(S_SessionWireWindowPendingPayload, r);
     case "window_invited":
       if (typeof r.network !== "string" || typeof r.channel !== "string" || r.state !== "invited")
         return null;
@@ -494,16 +497,11 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         inviter: typeof r.inviter === "string" && r.inviter !== "" ? r.inviter : "*",
       };
     case "window_invite_declined":
-      // #976 — no `state` to validate: a declined invite lands in no window
-      // state, so the payload carries none (see the server's
+      // #976 — no `state` in the schema either: a declined invite lands in no
+      // window state, so the payload carries none (see the server's
       // `window_invite_declined_payload`). Network + channel are the whole
       // contract; a payload missing either names no window and is dropped.
-      if (typeof r.network !== "string" || typeof r.channel !== "string") return null;
-      return {
-        kind: "window_invite_declined",
-        network: r.network,
-        channel: r.channel,
-      };
+      return validate(S_SessionWireWindowInviteDeclinedPayload, r);
     case "connection_state_changed": {
       // REV-J M15: pre-fix this arm carried only the wider transition
       // fields and HomePane patched its row from a separate
@@ -704,18 +702,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // (network, channel, peer); cic appends a synthetic row to the
       // per-network store keyed on target channel and renders inline
       // in the $server window scrollback.
-      if (
-        typeof r.network !== "string" ||
-        typeof r.channel !== "string" ||
-        typeof r.peer !== "string"
-      )
-        return null;
-      return {
-        kind: "invite_ack",
-        network: r.network,
-        channel: r.channel,
-        peer: r.peer,
-      };
+      return validate(S_SessionWireInviteAckPayload, r);
     case "bundle_hash": {
       if (typeof r.hash !== "string" || r.hash === "") return null;
       // #292 — version is optional on the wire (omitted when the deployed
@@ -779,13 +766,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // P-0b — standalone 301 RPL_AWAY. cic dm-listener routes by
       // `peer:` field; banner renders inline at the top of the
       // peer's DM scrollback when that window is selected.
-      if (
-        typeof r.network !== "string" ||
-        typeof r.peer !== "string" ||
-        typeof r.message !== "string"
-      )
-        return null;
-      return { kind: "peer_away", network: r.network, peer: r.peer, message: r.message };
+      return validate(S_SessionWirePeerAwayPayload, r);
     case "lusers_bundle": {
       // P-0d — LUSERS bundle. All counts are integer-or-null (253
       // RPL_LUSERUNKNOWN is optional; defensive nullability covers
@@ -820,28 +801,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // P-0c — WHOWAS bundle. `not_found` discriminates the 406 case;
       // when true, historical fields are nil. cic owns the rendering
       // (single card per network, last-write-wins per /whowas).
-      if (
-        typeof r.network !== "string" ||
-        typeof r.target !== "string" ||
-        typeof r.not_found !== "boolean" ||
-        (r.user !== null && typeof r.user !== "string") ||
-        (r.host !== null && typeof r.host !== "string") ||
-        (r.realname !== null && typeof r.realname !== "string") ||
-        (r.server !== null && typeof r.server !== "string") ||
-        (r.logoff_time !== null && typeof r.logoff_time !== "string")
-      )
-        return null;
-      return {
-        kind: "whowas_bundle",
-        network: r.network,
-        target: r.target,
-        user: r.user as string | null,
-        host: r.host as string | null,
-        realname: r.realname as string | null,
-        server: r.server as string | null,
-        logoff_time: r.logoff_time as string | null,
-        not_found: r.not_found,
-      };
+      return validate(S_SessionWireWhowasBundlePayload, r);
     case "banlist_bundle": {
       // #376/#1251 — channel LIST-MODE bundle. All entries ship (a list mode
       // is a set of rows). cic owns the rendering (single card per network,
@@ -912,16 +872,10 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // → "reuses the verb, not the noun").
       return narrowWindowStateEvent(r);
     case "auto_away_debounce_changed":
-      // #348 — the auto-away preference moved. `null` (no preference)
-      // is a MEANINGFUL value here, not a missing field, so the
-      // narrower admits it explicitly and rejects anything that is
-      // neither null nor a number.
-      if (r.auto_away_debounce_seconds !== null && typeof r.auto_away_debounce_seconds !== "number")
-        return null;
-      return {
-        kind: "auto_away_debounce_changed",
-        auto_away_debounce_seconds: r.auto_away_debounce_seconds,
-      };
+      // #348 — the auto-away preference moved. `null` (no preference) is a
+      // MEANINGFUL value here, not a missing field, and the typespec says so:
+      // `{u: ["i", "z"]}` admits it and rejects anything that is neither.
+      return validate(S_UserSettingsWireAutoAwayDebounceChangedPayload, r);
     case "archive_changed":
       // UX-1 (2026-05-17) — server broadcasts after a successful PART
       // (channel moves into archive list). Single-field envelope: cic
@@ -930,8 +884,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // reconnect replay). For the DESTRUCTIVE
       // `DELETE /networks/:slug/archive/:target` path the server now
       // broadcasts `archive_purged` instead — see below (UX-7-B).
-      if (typeof r.network_slug !== "string") return null;
-      return { kind: "archive_changed", network_slug: r.network_slug };
+      return validate(S_ScrollbackWireArchiveChangedPayload, r);
     case "archive_purged":
       // UX-7-B (2026-05-22) — server broadcasts after a successful
       // DELETE /networks/:slug/archive/:target. Two fields: the slug
@@ -940,17 +893,13 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // target)]` so the pre-delete rows don't ghost in the live Solid
       // store on re-JOIN — refreshScrollback's `?after=cursor` fetch
       // is past every deleted row, masking the gap without the purge).
-      if (typeof r.network_slug !== "string" || typeof r.target !== "string") return null;
-      return { kind: "archive_purged", network_slug: r.network_slug, target: r.target };
+      return validate(S_ScrollbackWireArchivePurgedPayload, r);
     case "directory_progress":
-      if (typeof r.network !== "string" || typeof r.count !== "number") return null;
-      return { kind: "directory_progress", network: r.network, count: r.count };
+      return validate(S_SessionWireDirectoryProgressPayload, r);
     case "directory_complete":
-      if (typeof r.network !== "string" || typeof r.total !== "number") return null;
-      return { kind: "directory_complete", network: r.network, total: r.total };
+      return validate(S_SessionWireDirectoryCompletePayload, r);
     case "directory_failed":
-      if (typeof r.network !== "string" || typeof r.reason !== "string") return null;
-      return { kind: "directory_failed", network: r.network, reason: r.reason };
+      return validate(S_SessionWireDirectoryFailedPayload, r);
     case "recover_progress":
       // #581 — one recovery-step transition. `step` + `status` are closed
       // sets, narrowed strictly (an unknown value drops this ONE presentational
