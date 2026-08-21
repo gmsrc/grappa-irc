@@ -56022,3 +56022,91 @@ runner. What is proven is that the derivation answers correctly and that the
 publish job splices it into the create call; what is NOT proven is that the
 published release object comes back `isPrerelease: true`. The next candidate
 tag is the only thing that measures that.
+<!-- entry #1551 -->
+
+---
+
+## 2026-08-21 — #1551: a teardown addressed to a pid does not hold for a process that respawns
+
+`Grappa.Session.Server` is `:transient` under `Grappa.SessionSupervisor`, and
+in a test the fake `Grappa.IRCServer` dies with the test pid — so an abnormal
+Client exit at end-of-test is the ROUTINE case, not the exotic one. Against
+that, `AuthFixtures` registered its `on_exit` teardown against the pid it had
+just spawned and called one `DynamicSupervisor.terminate_child/2` on it. The
+supervisor restarts the child, the new pid re-registers the SAME key,
+`terminate_child/2` on the original pid answers `{:error, :not_found}`, the
+value is discarded, and the respawned session outlives the test — still
+registered, still emitting session-lifecycle telemetry into whichever suite
+runs next.
+
+### The mode, stated without the anecdote
+
+**A teardown's postcondition is about the KEY, not the pid.** Any
+`:transient` child that re-registers a stable key on restart turns a
+pid-addressed teardown into a no-op *that reports success* — the round that
+missed returns a value nobody reads, and the caller cannot tell "already
+gone" from "gone and replaced". The cure is to chase the KEY: re-read it each
+round rather than trust a pid, put a flush barrier between rounds so a
+restart still in flight is observed instead of missed, and fail LOUDLY when
+the key is still taken after the budget.
+
+Production already shipped that verb. `Grappa.Session.stop_session/2` does
+those three things — `stop_registered/3` over `@stop_chase_rounds`,
+`flush_pending_restarts/0` between rounds, `Logger.error` naming the key when
+they run out — and its own comment states the reason: *"How many times a stop
+re-terminates a key that a restart refilled under it … a session respawning
+faster than we can stop it must end in a loud log, not an unbounded chase."*
+The fixture was a weaker copy of a verb we already ship, so it now calls the
+verb. Both entry points already hold `(subject, network_id)` at the spawn, so
+no call site changed.
+
+### The witness, and why it needs no seam
+
+`on_exit` runs after the test body, so a teardown looks ungateable from
+inside a test. It is not: ExUnit runs the callbacks in REVERSE registration
+order, so an assertion registered BEFORE the fixture spawns runs AFTER the
+fixture's own teardown and reads the state that teardown left behind
+(`test/grappa/auth_fixtures_teardown_test.exs`). The body kills the spawned
+pid, waits on a condition for the `:transient` successor, and runs the
+superseded gesture inline as a positive control — `terminate_child/2` on the
+dead predecessor answers `{:error, :not_found}` and leaves the key taken, so
+the scenario is proven real rather than assumed. Two mutants, each killed on
+that one assertion: emptying the `on_exit` body, and reverting the
+registration to the pid form.
+
+The first attempt instead exposed the callback body as a public seam and
+asserted on that. Measurement killed the idea: reverting the registration
+left such a test GREEN, because a seam test gates the verb, and the verb is
+already gated deterministically by `session_stop_session_test.exs` (#854). It
+bought one thing nothing else could break, at the price of a test-only public
+API.
+
+### The `Sandbox.allow` was never the door
+
+The suite this surfaced in, `session_log_persistence_test.exs`, carried a
+`Sandbox.allow/3` for the `Grappa.SessionLog` sink, and both its moduledoc and
+`SessionLog`'s own "Restart / test isolation" section presented that as the
+reason the sink's writes land in the test transaction. They were wrong, and
+the wrongness was load-bearing: the cure list reasoned entirely about that
+`allow`, so it aimed at a door that was never the door. `Grappa.DataCase`
+opens every `async: false` suite with `start_owner!(Grappa.Repo, shared: not
+tags[:async])`, and SHARED mode already routes every ownerless process in the
+VM — the sink included — onto the running test's connection. Measured by
+deleting the line and re-running: green, with the suite's seven tests as their
+own positive control, since each reads back rows the sink wrote. The door is
+the ATTACH.
+
+### What this does NOT claim
+
+It closed the leaker it found, not "the" leaker. The exposure the attach
+creates stays open BY CONSTRUCTION: while that handler is attached, a
+lifecycle event from ANY session in the VM writes a row into whichever test is
+running. Closing that is a different question from this one; the comments now
+name it instead of leaving the next reader to rediscover it.
+
+Nor does anything here rest on a reproduction. The original red is not
+reproducible on demand — a seed fixes the ORDER, not the TIMING — so the
+leaker was identified by CONSTRUCTION (which fixtures return without waiting
+for the session to be dead) and the fix is gated by mutants rather than by a
+red turning green. A green run of the victim suite was never evidence of
+absence, in either direction.
