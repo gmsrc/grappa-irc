@@ -56529,3 +56529,110 @@ SERVER, which this census has never compared — it compares two client-side
 boundaries. No narrower was touched: the diff is 461 added lines and zero
 deleted, so the census the previous slice landed still reads byte for byte the
 same._
+<!-- entry #1398c -->
+
+---
+
+## 2026-08-21 — #1398c: `nil` was never a default on `Session.Deps`, it was a function of the subject tag
+
+Bucket **I dependency-inversion** of the 2026-08-15 architecture review had two
+halves. The first — five `dirty_xrefs` waivers manufacturing an acyclic Boundary
+graph, and the 31 elementary cycles over 12 boundaries they hid — was already
+dead when this landed: #1399's schema-owns-itself work removed every active
+waiver, so the cycles are gone rather than waived, and the `Grappa.Session.Control`
+extraction the review proposed would have broken none of them (it needs `Server`,
+so it cannot be the leaf the review wanted). §7, `Grappa.Session.Backoff` as a
+leaf, landed separately as `ae4c52be`.
+
+This entry is the remaining half: the ten closures injected into `Session.Server`,
+which no compile-time checker can see. **A closure carries no module reference**,
+so Boundary cannot follow the edge. Built with `Map.get(opts, :key)`, an omitted
+injection was not a compile error, not a crash and not a log line — it was a `nil`
+field, and the first path that reached for it simply did not persist. Silently, for
+as long as nobody compared the DB against the live session.
+
+### The measurement that gives the design
+
+`nil` could not just be banned: it is correct half the time. There are **exactly
+two producers and they inject disjoint sets** —
+`Grappa.Networks.SessionPlan` (registered users) and
+`Grappa.Visitors.SessionPlan` (visitors). Measured against the live output of
+both: two shared (`credential_failer`, `last_joined_persister`), three user-only
+(`away_persister`, `credential_committer`, `registration_committer`), four
+visitor-only (`recover_source`, `visitor_committer`, `visitor_nick_persister`,
+`visitor_password_rotator`).
+
+So an absent `away_persister` on a **user** session is a bug and the same absence
+on a **visitor** session is correct by construction, and before this change the two
+were indistinguishable. `Deps` is therefore not one struct with ten optional
+fields: it is **two variants discriminated by the subject tag**, which
+`Grappa.Subject` already carries.
+
+`Deps.from_opts/2` takes the subject and validates the set due for that tag,
+raising `Grappa.Session.DepsInjectionError` naming the offending keys.
+`Deps.required_injections/1` is the single source of truth for the two sets, and
+it carries **arity as well as presence** — a closure of the wrong shape fails at
+the call site, deep inside a running session on the rare path that reaches it,
+which is the same late-and-silent failure the presence check exists to end. An
+**explicit `nil` counts as missing**: that is the exact shape the old `Map.get/2`
+door swallowed. A key due for the *other* tag is refused as alien.
+
+Neither producer can name `Deps` — both their boundaries already dep
+`Grappa.Session`, so the reverse edge would close the very cycle the closures
+exist to dodge. The two sides are held in step by `Grappa.Session.DepsTest`, which
+measures each producer's real resolved plan against the table, in both directions:
+a closure added to a plan with no table entry is red, and so is a table entry no
+plan injects.
+
+### Why raising is safe under a `:transient` child
+
+The raise happens in `do_init/1`, before registration and before the upstream
+socket. `start_link/1` then returns `{:error, {exception, _}}` and
+`DynamicSupervisor.start_child/2` propagates it — a child that never started is
+not restarted, so a mis-wired plan fails loudly and **once** instead of entering a
+respawn loop. A later respawn cannot reach the state either: the supervisor
+replays the cached child spec, and `refresh_plan`'s `Map.merge/2` can only add
+keys. The `{:hold, _}` arm of `init_or_hold/1` returns `:ignore` before any state
+is built, so held sessions never pay the check.
+
+### Two counts that do not match, and why
+
+The review's "ten closures" and the ten fields of the `Deps` struct are **different
+sets overlapping in nine**. The review's ten is the union of what the two producers
+inject, which includes `refresh_plan`; the struct's ten replaces it with
+`query_window_open?`, which neither producer injects. Both stay outside the guard,
+for different reasons:
+
+* `query_window_open?` is due on neither tag. It has a real production default
+  (`&QueryWindows.open?/3`) and the injection point exists so a test can keep
+  `EventRouter` a sandbox-free classifier. Accepted on both tags, required on
+  neither.
+* `refresh_plan` is not a `Deps` field at all, though both producers inject it and
+  it shares the silent-absence class. `Server.init/1` consumes it from the raw opts
+  *before* `do_init/1` builds the struct, because its return value replaces the
+  opts the struct would be built from. **It stays unguarded — a documented
+  limitation of this guard, not an oversight.**
+
+### What the guard found on its way in
+
+Three test sites built a partial plan on purpose, and the strict door is what
+surfaced them. `server_test.exs`'s `derived_alias_opts/4` hand-built a full user
+connect plan carrying none of the five user closures; it now resolves the real plan
+and **drops `refresh_plan` by name**, so the one exclusion the test genuinely needs
+(the DB-wins closure would re-resolve its two overrides away) is a line of code
+instead of a silence. Two hand-built visitor plans now come from
+`Visitors.SessionPlan.resolve/2`.
+
+One of those two carried a **false premise in its comment**: "no
+`credential_failer` — visitor plans don't include it". `Visitors.SessionPlan` has
+injected one since CP24 bucket E — it calls `Visitors.mark_failed/2`, expiring the
+visitor row so Bootstrap stops respawning. The hand-built plan is what kept the lie
+invisible; the guard is what made it fail.
+
+_Not claimed. That an omitted injection has ever fired in production: the failure
+mode is silent by construction, so the absence of reports is not evidence either
+way, and nothing here measured it. That `refresh_plan` has no legitimate absent
+case — both producers inject it, but the one test site that omits it does so
+deliberately, which is why it is excluded by scope rather than declared safe. No
+boundary was added, removed or re-declared; the graph is byte-for-byte the one
+`2ed5fb51` carried._
