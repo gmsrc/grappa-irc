@@ -73,6 +73,20 @@ import {
   narrowWhoUsers,
   narrowWindowStateEvent,
 } from "./wireNarrow";
+// #1393 slice 1 — the arms below narrow through their GENERATED schema
+// instead of a hand-written field walk. Both are already emitted; the hand
+// copy was the duplicate. Which arms may move is not a judgement call:
+// `wireUserBoundary.test.ts` measured hand and schema to accept and reject
+// the same inputs AND to return the same object, arm by arm, and only arms
+// at parity on both axes are here. The eight measured divergent stay hand-
+// written until each is ruled on individually.
+import {
+  S_SessionWireAwayConfirmedPayload,
+  S_SessionWirePresenceChangedPayload,
+  S_SessionWirePresenceErrorPayload,
+  S_SessionWireSessionIdentityChangedPayload,
+  S_SessionWireUmodeChangedPayload,
+} from "./wireSchema";
 import type { ServerSettingsWireUploadView, SessionWireServerReplySource } from "./wireTypes";
 // #410 — the connection_state runtime guard derives from the generated const
 // (mirror of `Grappa.Networks.Credential.connection_state/0`), single-sourced
@@ -82,6 +96,7 @@ import {
   NETWORKS_CREDENTIAL_CONNECTION_STATE,
   SESSION_WIRE_SERVER_REPLY_SOURCE,
 } from "./wireTypes";
+import { validate } from "./wireValidate";
 
 // Per-user PubSub topic subscriber. Module-singleton side-effect:
 // imports for effect, exports nothing public. `main.tsx` imports this
@@ -398,9 +413,7 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       };
     }
     case "away_confirmed":
-      if (typeof r.network !== "string" || (r.state !== "present" && r.state !== "away"))
-        return null;
-      return { kind: "away_confirmed", network: r.network, state: r.state };
+      return validate(S_SessionWireAwayConfirmedPayload, r);
     case "connection_progress":
       // #100 — transient reconnect badge signal. Closed state set enforced
       // at the boundary (mirrors away_confirmed) so a malformed value can't
@@ -415,37 +428,9 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       return { kind: "notify_list", networks };
     }
     case "presence_changed":
-      if (
-        typeof r.network_id !== "number" ||
-        typeof r.nick !== "string" ||
-        (r.presence !== "online" && r.presence !== "offline") ||
-        typeof r.initial !== "boolean" ||
-        (r.source !== "monitor" && r.source !== "watch") ||
-        typeof r.ts !== "string"
-      )
-        return null;
-      return {
-        kind: "presence_changed",
-        network_id: r.network_id,
-        nick: r.nick,
-        presence: r.presence,
-        initial: r.initial,
-        source: r.source,
-        ts: r.ts,
-      };
+      return validate(S_SessionWirePresenceChangedPayload, r);
     case "presence_error":
-      if (
-        typeof r.network_id !== "number" ||
-        r.reason !== "list_full" ||
-        typeof r.detail !== "string"
-      )
-        return null;
-      return {
-        kind: "presence_error",
-        network_id: r.network_id,
-        reason: r.reason,
-        detail: r.detail,
-      };
+      return validate(S_SessionWirePresenceErrorPayload, r);
     case "presence_snapshot": {
       if (typeof r.network_id !== "number") return null;
       const nicks = narrowPresenceMap(r.nicks);
@@ -455,28 +440,15 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
     case "own_nick_changed":
       if (typeof r.network_id !== "number" || typeof r.nick !== "string") return null;
       return { kind: "own_nick_changed", network_id: r.network_id, nick: r.nick };
-    case "umode_changed": {
-      // #229 — per-session umode set. User-topic-only (unlike isupport's
-      // dual-topic snapshot), so narrowed inline here. `modes` must be a
-      // string[] (sorted umode letters, sign stripped); any non-string
-      // element drops the whole payload.
-      if (typeof r.network_id !== "number" || !Array.isArray(r.modes)) return null;
-      if (!r.modes.every((m) => typeof m === "string")) return null;
-      return { kind: "umode_changed", network_id: r.network_id, modes: r.modes as string[] };
-    }
-    case "session_identity_changed": {
-      // #388 — the NORMALIZED services-identity verdict. User-topic-only, so
-      // narrowed inline here (mirror of umode_changed). `account` is
-      // nullable and is display data only — `identified` is the verdict.
-      if (typeof r.network_id !== "number" || typeof r.identified !== "boolean") return null;
-      if (r.account !== null && typeof r.account !== "string") return null;
-      return {
-        kind: "session_identity_changed",
-        network_id: r.network_id,
-        identified: r.identified,
-        account: r.account,
-      };
-    }
+    case "umode_changed":
+      // #229 — per-session umode set. `modes` is a string[] (sorted umode
+      // letters, sign stripped); any non-string element drops the whole
+      // payload, which is what the schema's `{a: "s"}` already says.
+      return validate(S_SessionWireUmodeChangedPayload, r);
+    case "session_identity_changed":
+      // #388 — the NORMALIZED services-identity verdict. `account` is
+      // nullable and display-only; `identified` is the verdict.
+      return validate(S_SessionWireSessionIdentityChangedPayload, r);
     case "supported_umodes_changed": {
       // #249 — per-session SUPPORTED umode set. User-topic-only, narrowed
       // inline here (mirror of umode_changed). `modes` must be a string[]
