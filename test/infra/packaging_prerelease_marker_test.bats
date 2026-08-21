@@ -201,8 +201,17 @@ workflow_code() {
     # The derived value reaches the CREATE call, which is the irreversible one:
     # `gh release create` publishes, and deleting the tag afterwards does not
     # retract it (#1591).
-    create="$(awk '/gh release create/ { f = 1 } f { print } f && /assets\[@\]/ { exit }' <<<"$job")"
+    #
+    # Anchored on the COMMAND — the `if !` line and its backslash
+    # continuations, to the `; then` that closes it. Not on a mention of
+    # `gh release create`: the #1591 comment block twenty lines above names
+    # the command in prose, and starting there swept the derivation itself
+    # into the "create call", so this assertion held with the flag removed.
+    # Measured — the mutant that drops the splice survived until this line
+    # was anchored.
+    create="$(awk '/^[[:space:]]*if ! gh release create/ { f = 1 } f { print; if (/; then$/) exit }' <<<"$job")"
     [ -n "$create" ]
+    grep -qF 'gh release create' <<<"$create"
     grep -qF 'prerelease_flag' <<<"$create"
 }
 
