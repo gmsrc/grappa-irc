@@ -13249,4 +13249,132 @@ defmodule Grappa.Session.ServerTest do
       refute Process.alive?(pid)
     end
   end
+
+  # #1657 — the 1.3.0 herd's loss count was taken by grepping `scrollback row
+  # dropped` out of the jail log. That grep could only ever have found a
+  # SUBSET: of the five `Persistor.persist_and_broadcast/3` call sites, only
+  # two reported the loss (the inbound `:persist` effect and `:join_failed`);
+  # the three outbound doors returned `{:error, _}` to their caller and logged
+  # nothing. So the incident's "ten rows" was a FLOOR by construction, and no
+  # re-reading of the log could have said by how much — the evidence for the
+  # other three never existed.
+  #
+  # The describe below pins the property the census depends on: a `messages`
+  # row that dies leaves a line behind, whichever door it died at.
+  #
+  # ⚠️ Reporting the loss is NOT preventing it. Every test there asserts that
+  # a row was lost LOUDLY; none of them assert the row survived.
+
+  # Drive one persist door with every retry loop in the session pid saturated,
+  # and hand back what it logged. `fire_on: 1` faults the persist's own first
+  # attempt (after the handshake the session is idle, so no `BusyRetry.run`
+  # precedes it on this pid); 10_000 armed faults outlast the wall-clock
+  # budget, so the op degrades rather than recovering. Disarmed before the
+  # stop so `terminate/2` runs clean.
+  defp capture_saturated_persist(pid, fun) do
+    Repo.BusyRetry.arm_faults(pid, 10_000, fire_on: 1)
+    on_exit(fn -> Repo.BusyRetry.disarm_faults(pid) end)
+
+    log = capture_log(fun)
+
+    Repo.BusyRetry.disarm_faults(pid)
+    log
+  end
+
+  defp session_past_handshake do
+    {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+    {user, network, _} = setup_user_and_network(port, %{nick: "vjt"})
+    pid = start_session_for(user, network)
+    :ok = IRCServer.await_handshake(server, 1_000)
+    %{server: server, user: user, network: network, pid: pid}
+  end
+
+  describe "a dropped scrollback row is never silent, at EVERY persist door (#1657)" do
+    test "outbound PRIVMSG (persist_and_send_fragments/5) reports the dropped row" do
+      %{user: user, network: network, pid: pid} = session_past_handshake()
+
+      log =
+        capture_saturated_persist(pid, fn ->
+          assert {:error, :persist_unavailable} =
+                   Session.send_privmsg({:user, user.id}, network.id, "#sniffo", "ciao")
+        end)
+
+      assert log =~ "scrollback row dropped"
+      # #336: a lost row degrades the session, it never takes it down.
+      assert Process.alive?(pid)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "outbound NOTICE (persist_and_send_notice_fragments/5) reports the dropped row" do
+      %{user: user, network: network, pid: pid} = session_past_handshake()
+
+      log =
+        capture_saturated_persist(pid, fn ->
+          assert {:error, :persist_unavailable} =
+                   Session.send_notice({:user, user.id}, network.id, "#sniffo", "carol", "heads up")
+        end)
+
+      assert log =~ "scrollback row dropped"
+      assert Process.alive?(pid)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test "outbound CTCP (handle_ctcp_send/4) reports the dropped row" do
+      %{user: user, network: network, pid: pid} = session_past_handshake()
+
+      log =
+        capture_saturated_persist(pid, fn ->
+          assert {:error, :persist_unavailable} =
+                   Session.send_ctcp({:user, user.id}, network.id, "#sniffo", "carol", "\x01PING 1\x01")
+        end)
+
+      assert log =~ "scrollback row dropped"
+      assert Process.alive?(pid)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    # The two doors that ALREADY reported. Green before the change and
+    # after it — they are here because the cure MOVES the line to the one
+    # place every door passes through, and a relocation that drops an
+    # existing report would otherwise be invisible.
+    test "inbound :persist effect still reports the dropped row" do
+      %{server: server, pid: pid} = session_past_handshake()
+
+      log =
+        capture_saturated_persist(pid, fn ->
+          IRCServer.feed(server, ":alice!~a@host PRIVMSG #sniffo :hey there\r\n")
+          # DB-free FIFO barrier: the PONG is answered from the same serial
+          # mailbox, so it proves the PRIVMSG's effects have fully run, and
+          # the armed fault cannot starve it (no Repo call on that path).
+          IRCServer.feed(server, "PING :drop-barrier\r\n")
+          assert {:ok, _} = IRCServer.wait_for_line(server, &String.contains?(&1, "PONG"), 2_000)
+        end)
+
+      assert log =~ "scrollback row dropped"
+      assert Process.alive?(pid)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+
+    test ":join_failed effect still reports the dropped row" do
+      %{server: server, pid: pid} = session_past_handshake()
+
+      log =
+        capture_saturated_persist(pid, fn ->
+          # 474 ERR_BANNEDFROMCHAN — a terminal join failure, so the arm
+          # persists its notice row and that persist is the one that dies.
+          IRCServer.feed(server, ":irc.test 474 vjt #sniffo :Cannot join channel (+b)\r\n")
+          IRCServer.feed(server, "PING :join-failed-barrier\r\n")
+          assert {:ok, _} = IRCServer.wait_for_line(server, &String.contains?(&1, "PONG"), 2_000)
+        end)
+
+      assert log =~ "scrollback row dropped"
+      assert Process.alive?(pid)
+
+      :ok = GenServer.stop(pid, :normal, 1_000)
+    end
+  end
 end

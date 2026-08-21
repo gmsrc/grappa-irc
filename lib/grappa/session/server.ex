@@ -5113,9 +5113,16 @@ defmodule Grappa.Session.Server do
     )
   end
 
-  defp log_persist_failure(:persist_unavailable, metadata) do
-    Logger.warning("scrollback row dropped: SQLite pool saturated — session continues", metadata)
-  end
+  # #1657 — the DROP's census line moved to `Persistor.persist_and_broadcast/3`,
+  # the one door every persist passes through, because only two of its five
+  # call sites ever reached this clause: the herd's loss count was a floor by
+  # construction. This arm stays (and stays a no-op) for two reasons — the atom
+  # must still MATCH here or the pre-#336 CaseClauseError this whole helper
+  # exists to prevent comes straight back, and a second line per drop would
+  # double the census. Nothing diagnostic is lost: `Persistor` derives channel,
+  # kind and network from the attrs it is holding, and `numeric` rides
+  # `attrs.meta` on the one arm that carries it.
+  defp log_persist_failure(:persist_unavailable, _metadata), do: :ok
 
   # #422 — a just-persisted DM (query-window) content row ensures its
   # server-side query window exists, next to the persist, so a bouncer

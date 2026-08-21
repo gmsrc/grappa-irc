@@ -28,14 +28,40 @@ defmodule Grappa.Session.Persistor do
 
   ## Failure ownership
 
-  This module never logs and never crashes the caller on a persist error:
-  it returns `{:error, term()}` so each caller owns its failure-mode
-  message + metadata (the outbound path surfaces it as the HTTP reply; the
-  effect arms log via `log_persist_failure/2` and continue). The `:ok =`
-  match on the broadcast/push is deliberate — those are in-node operations
-  that do not fail on the documented path, and a surprise there is a bug
-  we want loud (CLAUDE.md "no silent-swallow at boundaries").
+  The caller still owns its failure-mode RESPONSE: this module never
+  crashes it, and returns `{:error, term()}` so each site decides what to
+  do (the outbound paths surface it as the HTTP reply; the effect arms log
+  their own context and continue). The `:ok =` match on the broadcast/push
+  is deliberate — those are in-node operations that do not fail on the
+  documented path, and a surprise there is a bug we want loud (CLAUDE.md
+  "no silent-swallow at boundaries").
+
+  ## The census line is OURS, not the caller's (#1657)
+
+  What this module DOES own is the one-line record that a scrollback row
+  died. It used to be the caller's, and the 1.3.0 herd is what that cost:
+  of the five call sites, only two logged it, so the incident's loss was
+  grepped out of the jail log as "ten rows" when three of the five doors
+  had never been able to contribute a single line. The count was a FLOOR
+  by construction and nothing in the log could say by how much.
+
+  A drop is not a per-caller event — it is the same fact at every door
+  (`messages` is the product, and a row of it vanished), and this module
+  is the ONE door: `Grappa.Scrollback.persist_event/1` has no other
+  production caller. Deriving the line here from the attrs we already hold
+  makes the property structural instead of five separate disciplines, and
+  a sixth call site inherits it for free.
+
+  ⚠️ **Reporting a loss is not preventing one.** This line exists so the
+  next herd is COUNTABLE, not so it is survivable — the row is still gone.
+  Prevention is a different axis (`Grappa.Repo.BusyRetry`'s classification
+  and budget); do not read this as the drop being handled.
+
+  A validation failure is NOT a drop and does not log here: the row never
+  had a right to exist, the caller's changeset arm owns that message.
   """
+
+  require Logger
 
   alias Grappa.IRC.Identifier
   alias Grappa.PubSub.Topic
@@ -86,9 +112,41 @@ defmodule Grappa.Session.Persistor do
 
         {:ok, message}
 
+      {:error, :persist_unavailable} = err ->
+        log_row_dropped(attrs, ctx)
+        err
+
       {:error, _} = err ->
         err
     end
+  end
+
+  # #1657 — the census line for a lost scrollback row, emitted at the one
+  # door every persist passes through.
+  #
+  # CLAUDE.md "log honesty": the message names WHAT was observed here (a row
+  # of the product is gone) and NOT why, because this frame cannot know why —
+  # `:persist_unavailable` is a single atom covering a budget-exhausted
+  # transient fault AND the non-transient rescue in
+  # `Scrollback.with_pool_retry/1`. The old caller-side wording asserted
+  # "SQLite pool saturated" unconditionally, and it was measurably wrong: the
+  # engine line printed immediately before it on the same drop reads "SQLite
+  # write lock held by another writer" whenever the fault was `busy_locked`.
+  # The cause belongs to the engine's own terminal line, which observed it.
+  #
+  # 🔴 The `scrollback row dropped` prefix is the #1429 census anchor
+  # (`scripts/log-gap-scan.awk` `CNT["dropped"]`, pinned in
+  # `test/scripts/log_gap_scan_test.bats`). Only the tail may move; changing
+  # the prefix silently zeroes that counter, and zero is what a clean run
+  # looks like.
+  @spec log_row_dropped(map(), session_ctx()) :: :ok
+  defp log_row_dropped(attrs, ctx) do
+    Logger.warning(
+      "scrollback row dropped: persistence unavailable — session continues",
+      channel: Map.get(attrs, :channel),
+      kind: Map.get(attrs, :kind),
+      network: ctx.network_slug
+    )
   end
 
   # Post-persist push obligations, fired only for inbound rows
