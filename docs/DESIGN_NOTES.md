@@ -56375,3 +56375,63 @@ with the reason instead of being asserted against `SERVER_WINDOW_NAME`._
 
 _Not watched: `canonicalChannel`'s mirror in `fixtures/cicchettoPage.ts` is a
 FUNCTION. It drifted twice before (#973) and a constant pin cannot see it._
+<!-- entry #1645 -->
+
+---
+
+## 2026-08-21 — #1645: a case named for a line can leave that line untested
+
+`infra/packaging/aur/pkgver.sh:103` is the line the whole mapper is named
+for — `pkgver="${core}$(printf '%s' "${pre}" | tr -d '\055')"`, the hyphen
+deletion #1591 measured against pacman's comparator. The suite carried a case
+called *"the hyphen makepkg refuses is deleted, and nothing is put in its
+place"*. That case never reached the line.
+
+The hyphen a semver pre-release is named for is removed by the **split**
+(`core="${version%%-*}"`, `pre="${version#*-}"`, then concatenated), not by
+the `tr`. On `1.3.0-rc1` the `tr` is handed `rc1` and does nothing. It fires
+only on a pre-release carrying a hyphen of its **own** — a version with two
+or more hyphens. Census of every literal the suite feeds the script: 21
+invocations, 19 with a value, 12 distinct, **0** with a second hyphen.
+
+Measured on `origin/main` b1d09c95, in a detached worktree, with a one-shot
+injector that refuses unless the needle occurs exactly once:
+
+| tree | rc | plan | ok | not ok |
+|---|---|---|---|---|
+| unmutated | 0 | 633 | 633 | 0 |
+| M6a (`tr '\055' '_'`) | 0 | 633 | 633 | 0 |
+
+The two TAP transcripts are byte-identical — same md5, `cmp` silent. Not an
+equivalent mutant, though: over the suite's own 12 literals the two scripts
+agree 12/12, and on three untested witnesses they differ 3/3 (`1.3.0-rc-1` →
+`1.3.0rc1` vs `1.3.0rc_1`).
+
+The cure is one case, and it was proven as an oracle rather than assumed:
+with M6a applied the suite reports rc=1, 11 ok, 1 not ok, and the failure is
+the new case and only it; with M6a reverted, rc=0, 12 ok, 0 not ok. One
+mutant, one assertion.
+
+The input chosen is not arbitrary. `pkgver.sh`'s header (`:47-51`) declares
+the mapping **NOT INJECTIVE, deliberately** — `1.3.0-rc-1` lands on the same
+`pkgver` as `1.3.0-rc1`. Under M6a that documented collision quietly stops
+holding while **both of the script's own guards still pass**: `_` is not in
+makepkg's refused class `[[:space:]/:-]`, and the tie-break character is
+still the letter `r`. Neither the script nor the suite would report it; only
+the published package name would differ. Pinning a documented decision beats
+pinning a magic string.
+
+**The transferable rule: a test named after a line is not evidence that the
+line runs.** When a mapper composes several transformations, ask which of
+them each input actually reaches — the split can be doing the work the
+assertion credits to the substitution. Mutating one clause and reading which
+named tests redden answers it; a green count does not.
+
+_Not claimed: that the input can occur in this project. 23 `v*` tags, 2
+pre-releases, 0 with two hyphens, and `VERSION` has held 16 distinct values
+with the same split — the uncovered branch has never been taken. That bears
+on priority, not on coverage. Also not measured here: `vercmp 1.3.0rc_1
+1.3.0` (no pacman on the host), the `arch` job's own gates (they compare the
+mapper against itself), and the coverage of the rest of `pkgver.sh` — one
+mutant, one line. The pre-existing `bats #44` red the briefing warned about
+did not appear on this base: test 44 is green in all runs above._
