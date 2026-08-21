@@ -56206,3 +56206,93 @@ guessing the owner from the name.
 - **Whether any boundary would now be caught that a source scan would miss.**
   The control proves the mechanism on `Health`; it was not repeated per
   boundary.
+<!-- entry #1393b -->
+
+---
+
+## 2026-08-21 — #1393b: a boundary may be WIDER than its typespec, and only a value swap can see it
+
+The #1393 census mutates every field of every user-topic arm and compares
+the hand narrower against the generated schema. Its verdict authorises the
+migration: an arm at parity on both axes can swap its field walk for
+`validate(S_…, r)` and lose nothing. That verdict was wrong for three arms,
+and the reason it was wrong is a property of the matrix, not of the arms.
+
+### Three ops that all move the same thing
+
+`drop`, `null` and `wrong-type` each change the TYPE of a leaf. None of them
+can tell a closed set apart from a free string: `{e: ["ok", "failed"]}` and
+`"s"` both take a string and both refuse a number, so every mutation the
+matrix could build scored them identically. A token a server adds
+additively, however, is a perfectly well-typed string — and that is exactly
+the case the wire contract legislates (unknown-is-never-fatal, GH #447).
+
+So the matrix gained a fourth op: replace a string leaf with a value no
+schema declares. Generated for string leaves only, because on anything else
+it is `wrong-type` under a second name, and on a free-string field both
+boundaries accept it and the row says nothing.
+
+### What it took
+
+Parity fell from 33 arms to 30.
+
+| arm | field | typespec says | the boundary does | since |
+|---|---|---|---|---|
+| `recover_progress` | `reason` | one of four recovery tokens | any string | #581 |
+| `recover_result` | `reason` | one of four recovery tokens | any string | #581 |
+| `web_session_severed` | `code` | the literal `rate_limit_flood` | any string | #1338 X-S14 |
+
+All three widenings are deliberate and were already argued in the source.
+Migrating them would have closed the set again — silently, under a green
+census — and the consequence is not cosmetic: an unrecognised sever `code`
+would drop a TERMINAL event and strand the client on a dead shell holding a
+revoked bearer, which is the precise failure #1338 removed.
+
+### The rule, stated generally
+
+**The typespec is the server's promise about what it sends; it is not
+automatically the client's rule for what it accepts.** A client that
+deploys independently of its server is entitled to accept more than the
+current typespec describes, and where it does, the codegen schema is
+STRICTER than the boundary and swapping one in is a regression. A migration
+onto generated schemas must therefore measure a VALUE swap, not only a type
+mutation — otherwise every deliberately-open token set reads as parity.
+
+The earlier figures in this log (34 arms at parity, then 33) were not
+mistaken when written; they were measured with a matrix that could not
+express this. Recording the revision rather than editing them is the point
+— what changed is the instrument.
+
+### Where the migration stopped
+
+27 of the 42 arms now narrow through their generated schema. Of the 15 that
+do not, 12 are measured divergent and each carries its issue-numbered
+rationale at the `case` — including the three above, which now name the
+schema they decline and the census row that separates them.
+
+The last three, `joined` / `join_failed` / `kicked`, are at parity and are
+still NOT migrated. Their arm here is already one line delegating to
+`narrowWindowStateEvent`, and every hand line they cost lives in
+`wireNarrow.ts`, where the per-channel cold-snapshot arm keeps calling the
+same helper — so migrating the call site would delete nothing and would
+leave one trio of events narrowed two different ways depending on which
+topic delivered it. That trade belongs to a measurement of the per-channel
+boundary, which has not been made.
+
+### The oracle that survives its own migration
+
+The moment an arm calls `validate` with its own schema, any census that
+judges it with that schema compares the schema to itself and reports parity
+by construction. So the property the migration must preserve is pinned by a
+test that never consults a schema to JUDGE: schemas generate the inputs, the
+recorded verdict and returned value are the hand narrower's alone, and the
+pin was recorded with `userTopic.ts` restored to its pre-migration state.
+An unchanged snapshot afterwards is the evidence. Re-recording it with `-u`
+after a migration would rewrite the evidence into a description of the new
+code — the fourth op is in the pin too, so from here the class is
+machine-checked rather than re-argued.
+
+_Not claimed: that any of the three widened values was ever observed on the
+wire. The finding is an instrument gap, measured in the source. Nothing here
+changes what the server emits, and the per-channel boundary in
+`wireNarrow.ts` has not been censused at all._
