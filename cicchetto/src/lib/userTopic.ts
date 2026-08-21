@@ -769,6 +769,13 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // sets, narrowed strictly (an unknown value drops this ONE presentational
       // ping, not the terminal result). `reason` is a nullable string (cic
       // localizes it in RecoverModal).
+      //
+      // #1393 — and that last sentence is why this arm does NOT move onto
+      // `S_SessionWireRecoverProgressPayload`. The typespec CLOSES `reason`
+      // over four tokens; this boundary takes any string, deliberately, so a
+      // BEAM that adds a fifth cannot make an older cic drop the ping
+      // (unknown-is-never-fatal, #447). The census only sees that once its
+      // matrix swaps a VALUE instead of a type — `reason/swap`.
       if (
         typeof r.network !== "string" ||
         (r.step !== "identify" &&
@@ -792,6 +799,10 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // stays a nullable string (NOT hardened to the known token union) so an
       // additive server reason token can never drop a terminal result event
       // (unknown-is-never-fatal, #447); RecoverModal localizes the known tokens.
+      //
+      // #1393 — so this arm stays hand-written for the same reason as
+      // `recover_progress` above, and here the stakes are a TERMINAL event
+      // rather than a presentational ping.
       if (
         typeof r.network !== "string" ||
         (r.outcome !== "succeeded" && r.outcome !== "failed") ||
@@ -813,6 +824,11 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // on a dead shell holding a revoked bearer. The value is carried
       // verbatim — it selects copy, nothing else. A missing or non-string
       // `code` is malformed rather than additive, and still drops.
+      //
+      // #1393 — `S_RateLimitWireWebSessionSeveredEvent` pins `code` to the
+      // single literal `rate_limit_flood`, so validating against it would
+      // undo #1338 exactly. The arm stays hand-written; `code/swap` in the
+      // census is the row that says so.
       if (typeof r.code !== "string") return null;
       return { kind: "web_session_severed", code: r.code };
     default:
