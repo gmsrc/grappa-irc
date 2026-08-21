@@ -63,6 +63,7 @@ import {
   setKicked,
   setPending,
 } from "./windowState";
+import { noteWireDrop } from "./wireDrop";
 import { narrowIsupportChanged, narrowWindowStateEvent } from "./wireNarrow";
 // #1393 — the arms below narrow through their GENERATED schema instead of a
 // hand-written field walk. Both are already emitted; the hand copy was the
@@ -921,6 +922,10 @@ moduleRoot(() => {
         // handler. Pre-fix `as WireUserEvent` cast would have let this
         // reach the dispatch arm and either crash a setter or corrupt
         // store state silently.
+        // #1393d — and SAY so. A `console.warn` is a signal for whoever has
+        // devtools open, which on a phone PWA is nobody; strict narrowing
+        // made drops routine enough that silence is the failure mode.
+        noteWireDrop(raw);
         console.warn("[userTopic] dropped malformed payload", raw);
         return;
       }

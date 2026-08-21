@@ -20,6 +20,11 @@ import {
 } from "../lib/errorBanners";
 import { acceptPushOptin, shouldShowPushOptinBanner } from "../lib/pushOptin";
 import {
+  __resetServerProtocolForTests,
+  MIN_SERVER_PROTOCOL_VERSION,
+  setServerProtocol,
+} from "../lib/serverProtocol";
+import {
   __resetSocketHealthForTests,
   ERROR_THRESHOLD,
   recordSocketClose,
@@ -28,6 +33,7 @@ import {
 } from "../lib/socketHealth";
 import { __resetSwRegistrationForTests, recordSwRegError } from "../lib/swRegistration";
 import { forceParted, setInvited, setJoined } from "../lib/windowState";
+import { __resetWireDropForTests, noteWireDrop } from "../lib/wireDrop";
 
 // The bundle-refresh source depends on `bootBundleHash`, which reads a
 // `<script src="/assets/index-…">` tag that only exists in a real vite build
@@ -93,6 +99,8 @@ describe("errorBanners registry", () => {
     __resetSocketHealthForTests();
     __setConnectivityForTests(true);
     __resetSwRegistrationForTests();
+    __resetServerProtocolForTests();
+    __resetWireDropForTests();
     __resetDismissedForTests();
     mockShouldShowRefresh.mockReturnValue(false);
     mockShouldShowPushOptin.mockReturnValue(false);
@@ -116,6 +124,57 @@ describe("errorBanners registry", () => {
     expect(sw?.message).toContain("origin not allowed");
     // A diagnostic, not a user action.
     expect(sw?.actionHint).toBeUndefined();
+  });
+
+  // #1393d — the two new sources. They are asserted SEPARATELY, and the
+  // separation is the point: one names a cause the server stated about
+  // itself, the other reports that data went missing. A test that only
+  // checked "some banner appears" would pass against the folded-into-one
+  // design that was deliberately rejected.
+  it("emits a 'server-outdated' error entry when the server names a protocol below the floor", () => {
+    setServerProtocol(MIN_SERVER_PROTOCOL_VERSION - 1);
+    const stale = activeBanners().find((e) => e.source === "server-outdated");
+    expect(stale).toBeDefined();
+    expect(stale?.severity).toBe("error");
+    expect(stale?.message).toContain(String(MIN_SERVER_PROTOCOL_VERSION));
+    // No reload action: re-fetching the same bundle against the same BEAM
+    // changes nothing, and a button that reliably does nothing is how a
+    // banner teaches people to ignore banners.
+    expect(stale?.actionHint).toBeUndefined();
+  });
+
+  it("emits no 'server-outdated' entry for a server AT or ABOVE the floor", () => {
+    setServerProtocol(MIN_SERVER_PROTOCOL_VERSION);
+    expect(activeBanners().find((e) => e.source === "server-outdated")).toBeUndefined();
+  });
+
+  it("emits a 'wire-drop' warn entry naming the kind that was discarded", () => {
+    noteWireDrop({ kind: "isupport_changed" });
+    const drop = activeBanners().find((e) => e.source === "wire-drop");
+    expect(drop).toBeDefined();
+    expect(drop?.severity).toBe("warn");
+    expect(drop?.message).toContain("isupport_changed");
+  });
+
+  // The two are independent sources, not one condition seen twice. A drop
+  // with no protocol mismatch is a DIFFERENT incident (a mangling proxy),
+  // and it must not tell the operator to go update a server that is fine.
+  it("raises the drop entry ALONE when the server protocol is current", () => {
+    setServerProtocol(MIN_SERVER_PROTOCOL_VERSION);
+    noteWireDrop({ kind: "whois_bundle" });
+    const sources = activeBanners().map((e) => e.source);
+    expect(sources).toContain("wire-drop");
+    expect(sources).not.toContain("server-outdated");
+  });
+
+  // …and both when both are true, with the CAUSE above the SYMPTOM: a reader
+  // told the server is stale does not need to be told separately that data
+  // went missing.
+  it("stacks the stale-server cause ABOVE the dropped-payload symptom", () => {
+    setServerProtocol(MIN_SERVER_PROTOCOL_VERSION - 1);
+    noteWireDrop({ kind: "isupport_changed" });
+    const sources = activeBanners().map((e) => e.source);
+    expect(sources.indexOf("server-outdated")).toBeLessThan(sources.indexOf("wire-drop"));
   });
 
   it("emits a 'ws' error entry with the real close code once the threshold trips", () => {

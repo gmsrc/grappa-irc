@@ -4,6 +4,7 @@ import { requestBundleRefreshNow } from "./bundleRefreshNotice";
 import { acceptInvite, declineInvite } from "./channelJoin";
 import { isOffline } from "./connectivity";
 import { acceptPushOptin, declinePushOptin, shouldShowPushOptinBanner } from "./pushOptin";
+import { serverOutdatedMessage, shouldShowServerOutdatedBanner } from "./serverProtocol";
 import {
   clearShareTargetBlock,
   shareTargetBannerMessage,
@@ -12,6 +13,7 @@ import {
 import { shouldShowBanner, socketHealth } from "./socketHealth";
 import { shouldShowSwRegBanner, swRegistration } from "./swRegistration";
 import { type InvitedWindow, invitedWindows } from "./windowState";
+import { shouldShowWireDropBanner, wireDropMessage } from "./wireDrop";
 
 // #119 — unified stacked error-banner registry.
 //
@@ -43,6 +45,21 @@ import { type InvitedWindow, invitedWindows } from "./windowState";
 export const BANNER_SOURCES = [
   "connectivity",
   "ws",
+  // #1393d — two NEW members, and they are deliberately two.
+  //
+  // `server-outdated` is the DIAGNOSIS: the server named a wire protocol
+  // below what this bundle requires, which it does in the user-topic join
+  // reply before any payload arrives. `wire-drop` is the SYMPTOM: a narrower
+  // rejected something and cic threw it away, which a mangling proxy causes
+  // just as readily as a stale BEAM.
+  //
+  // Folding them into one entry was the tempting move and it is wrong: a
+  // drop with no protocol mismatch is a DIFFERENT incident from a stale
+  // BEAM, and one that told the operator to go update the server would send
+  // them after a cause that is not there. Same seam #120 used — one enum
+  // member, one derivation, each signal still the sole owner of its state.
+  "server-outdated",
+  "wire-drop",
   "sw-registration",
   "bundle-refresh",
   "push-optin",
@@ -184,6 +201,36 @@ export function activeBanners(): BannerEntry[] {
       source: "ws",
       severity: "error",
       message: wsMessage(),
+    });
+  }
+
+  // #1393d — the server is older than this bundle can talk to. `error`, and
+  // ABOVE the drop banner below, because it is the cause of it whenever both
+  // are up: a reader who has been told the server is stale does not need to
+  // be told separately that data went missing.
+  //
+  // No `actionHint`. Every other user-actionable entry here offers something
+  // the READER can do, and there is nothing: reloading re-fetches the same
+  // bundle against the same BEAM. Offering a reload would be a button that
+  // reliably changes nothing, which is how a banner teaches people to ignore
+  // banners.
+  if (shouldShowServerOutdatedBanner()) {
+    entries.push({
+      source: "server-outdated",
+      severity: "error",
+      message: serverOutdatedMessage(),
+    });
+  }
+
+  // #1393d — cic discarded an update it could not read. `warn`, not `error`:
+  // the pane it belonged to is stale, the app is not broken. Sticky, because
+  // the drop already happened and nothing later un-drops it; the × is the
+  // reader saying they have seen it.
+  if (shouldShowWireDropBanner()) {
+    entries.push({
+      source: "wire-drop",
+      severity: "warn",
+      message: wireDropMessage(),
     });
   }
 

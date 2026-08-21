@@ -399,6 +399,41 @@ describe("joinUser consumes the join reply's protocol_version (#1379)", () => {
     }
   });
 
+  // #1393d — the join reply is where the floor gets its evidence, and this
+  // is the seam that carries it there. Until this slice `noteServerProtocol`
+  // read the number and threw it away after a `console.warn`; the comment
+  // above it said a difference was "not actionable", and it was right while
+  // cic invented every field it did not receive. It no longer does, so the
+  // number has to reach `serverProtocol.ts`.
+  it("feeds the reply's protocol_version to the client-side floor", async () => {
+    const sp = await import("../lib/serverProtocol");
+    sp.__resetServerProtocolForTests();
+    const warn = await joinAndReply({ protocol_version: 1 });
+    try {
+      expect(sp.serverProtocol()).toBe(1);
+      expect(sp.shouldShowServerOutdatedBanner()).toBe(true);
+    } finally {
+      warn.mockRestore();
+      sp.__resetServerProtocolForTests();
+    }
+  });
+
+  // …and a reply with no number leaves the floor UNSET rather than at zero.
+  // "Unknown" and "ancient" are different states and only one of them is
+  // something cic observed.
+  it("leaves the floor unset when the reply carries no protocol_version", async () => {
+    const sp = await import("../lib/serverProtocol");
+    sp.__resetServerProtocolForTests();
+    const warn = await joinAndReply({});
+    try {
+      expect(sp.serverProtocol()).toBeNull();
+      expect(sp.shouldShowServerOutdatedBanner()).toBe(false);
+    } finally {
+      warn.mockRestore();
+      sp.__resetServerProtocolForTests();
+    }
+  });
+
   it("stays silent when the server speaks the same protocol — the normal case", async () => {
     const { CLIENT_PROTOCOL_VERSION } = await import("../lib/socket");
     const warn = await joinAndReply({ protocol_version: CLIENT_PROTOCOL_VERSION });

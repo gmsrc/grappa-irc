@@ -45,6 +45,7 @@ import {
   windowIsPresent,
   windowStateByChannel,
 } from "./windowState";
+import { noteWireDrop } from "./wireDrop";
 import { narrowChannelEvent } from "./wireNarrow";
 
 // WS subscription installer. Reactive side-effect module: imports for
@@ -442,6 +443,10 @@ moduleRoot(() => {
       // without crashing the WS handler.
       const payload = narrowChannelEvent(raw);
       if (payload === null) {
+        // #1393d — same class as the user-topic drop, same latch. Wiring
+        // only the user topic would have missed `isupport_changed`, which
+        // is dual-topic: a stale BEAM drops it on BOTH doors.
+        noteWireDrop(raw);
         console.warn("[subscribe] dropped malformed channel payload", raw);
         return;
       }
@@ -684,6 +689,7 @@ moduleRoot(() => {
       // shares the same boundary class.
       const payload = narrowChannelEvent(raw);
       if (payload === null) {
+        noteWireDrop(raw);
         console.warn("[subscribe] dropped malformed DM payload", raw);
         return;
       }

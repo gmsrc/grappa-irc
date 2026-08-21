@@ -5,6 +5,7 @@ import { token } from "./auth";
 import { canonicalChannel } from "./channelKey";
 import { isOffline } from "./connectivity";
 import { moduleRoot } from "./moduleRoot";
+import { setServerProtocol } from "./serverProtocol";
 import {
   recordConnectAttempt,
   recordSocketClose,
@@ -68,13 +69,21 @@ let _socket: Socket | null = null;
 // routine here. The refusal exists for exactly this client; declaring arms it.
 //
 // The number is the CONTRACT version (`Grappa.Protocol.version/0`), NOT the
-// software release in `<meta cicchetto-version>`. Bump it only when cic is
-// changed to speak a new protocol the additive-only rule cannot express — a
-// new event kind or field is free and never moves it. `Grappa.Protocol`'s
-// floor and this constant are pinned against each other server-side in
+// software release in `<meta cicchetto-version>`. `Grappa.Protocol`'s floor
+// and this constant are pinned against each other server-side in
 // `test/grappa/protocol_test.exs`; raising `min_version/0` past this number
 // means every un-updated cic bundle is refused, so the two move together.
-export const CLIENT_PROTOCOL_VERSION = 1;
+//
+// #1393d — 1 → 2. The old rule written here ("bump it only when cic is
+// changed to speak a new protocol the additive-only rule cannot express — a
+// new event kind or field is free and never moves it") is gone with its
+// server-side twin: the wire version now moves on EVERY shape change.
+//
+// This is what cic SPEAKS. What it REQUIRES of the server is a separate
+// constant in `serverProtocol.ts` (`MIN_SERVER_PROTOCOL_VERSION`), and the
+// two are deliberately not the same number — a later bundle may speak v5
+// and still cope with a v2 server.
+export const CLIENT_PROTOCOL_VERSION = 2;
 
 // #193 — force the correct WS scheme from the page origin, absolutely.
 //
@@ -365,26 +374,57 @@ if (typeof window !== "undefined") {
 
 // #447/#1379 — the user topic is the first topic cic joins, so its join reply
 // is the initial WS payload and carries `protocol_version`: the contract
-// version the SERVER speaks. cic received it and dropped it.
+// version the SERVER speaks.
 //
-// What it is good for is diagnosis, and only diagnosis. A difference is NOT an
-// error by the additive-only rule — a newer server sends a client nothing it
-// must understand, and a newer client tolerates an older server — so there is
-// nothing here to gate on and no UX to raise. The floor is the only actionable
-// number and it is enforced one layer down, at the handshake. What a
-// difference DOES tell whoever is reading a console is that the bundle and the
-// BEAM were built against different contracts, which on a service-worker
-// cached PWA is the single most likely explanation for otherwise-inexplicable
-// behaviour, and is invisible from every other signal.
+// #1393d — WHAT THIS COMMENT USED TO SAY, AND WHY IT IS NO LONGER TRUE.
+//
+// It said the number was "good for diagnosis, and only diagnosis", because
+// "a newer client tolerates an older server — so there is nothing here to
+// gate on and no UX to raise", and it reduced the whole fact to a one-shot
+// `console.warn`. Both halves of that have since failed, in opposite ways,
+// and it is worth recording which:
+//
+//   * The PREMISE was repealed. A newer client tolerated an older server
+//     only because cic INVENTED every field it did not receive. #1393d
+//     stopped: a payload missing a required field is dropped whole. So a
+//     newer client no longer tolerates an older server, and a `--cic`-only
+//     deploy — bundle ships, BEAM is not restarted, a routine class here —
+//     silently kills /banlist, the /mode toggles and the invited tab.
+//
+//   * The MECHANISM this comment implied would not have worked either, and
+//     that is the part worth measuring rather than asserting. Comparing
+//     against `protocol_version` was useless while the additive-only rule
+//     stood: measured on this repo, the number sat at `1` from #447
+//     (2026-07-27) through five additive field adds — `recoverable`,
+//     `inviter`, `list_modes_queryable`, `chantypes`, `prefix_order` — every
+//     one of which cic came to require. A floor of `1` is satisfied by
+//     exactly the servers that break.
+//
+// What makes it actionable is not this file: it is vjt's ruling (2026-08-21)
+// that the server bumps `Grappa.Protocol.version/0` on EVERY wire-shape
+// change from now on, additive included. Only then does "server >= N" mean
+// "the server has everything N had", and only then is a floor honest.
+//
+// So the number is now FED to `serverProtocol.ts`, which owns the floor and
+// the comparison; this function's whole job is to hand it over. The
+// `console.warn` stays for a mismatch in EITHER direction (a server AHEAD of
+// this bundle is still nothing to gate on — that direction really is
+// additive, and additive really is tolerated) because on a
+// service-worker-cached PWA a bundle/BEAM skew is the single most likely
+// explanation for otherwise-inexplicable behaviour, and it is invisible from
+// every other signal.
 //
 // Logged once per bundle load, not once per join: joinUser's "ok" hook
 // re-fires on every phoenix auto-rejoin, and a PWA re-joins on every network
-// blip.
+// blip. The FLOOR is not rate-limited that way — it is a signal, not a log,
+// and setting it twice to the same value is a no-op.
 let _serverProtocolLogged = false;
 
 function noteServerProtocol(reply: unknown): void {
   const server = (reply as { protocol_version?: unknown } | null | undefined)?.protocol_version;
-  if (typeof server !== "number" || server === CLIENT_PROTOCOL_VERSION) return;
+  if (typeof server !== "number") return;
+  setServerProtocol(server);
+  if (server === CLIENT_PROTOCOL_VERSION) return;
   if (_serverProtocolLogged) return;
   _serverProtocolLogged = true;
   console.warn(
