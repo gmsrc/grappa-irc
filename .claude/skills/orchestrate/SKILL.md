@@ -210,10 +210,11 @@ is DELETE-then-write, never append-only:
 - **BATCH ALL DEPLOYS — never deploy per-issue (vjt STANDING ORDER 2026-07-17).** A per-issue
   `--cic` bundle deploy (OR cold restart) spams live users with a BundleRefreshBanner every
   ~20min. So: as each issue completes, worker MERGES + pushes to origin/main (the CI-green
-  gate still gates the merge) — but does **NOT** deploy. Accumulate in `soon`. Ship ONE batched
+  gate still gates the merge) — but does **NOT** deploy. **The issue CLOSES at that merge**
+  (#1632); the merged-and-closed issues then accumulate as the pending deploy batch. Ship ONE batched
   deploy only when **~4–5 issues are resolved (merged, awaiting deploy)**, carrying all of them in
-  a single bundle broadcast, then ONE announce covering the batch + close all + strip their
-  `status:soon`. Merge ≠ deploy: the m42 jail only pulls origin/main when `deploy-m42` runs, so
+  a single bundle broadcast, then ONE announce covering the batch — **nothing left to close or
+  unlabel at that point.** Merge ≠ deploy: the m42 jail only pulls origin/main when `deploy-m42` runs, so
   merging freely does not touch prod. This SUPERSEDES per-issue ship-on-green in dispatch briefs —
   tell the worker to merge+HOLD, not deploy. Deploy rules stack: this batching gate + the **CI-green-before-ship** gate
   (`integration` must be green before ANY merge/ship) + the **night-cold-deploy** window (cold-
@@ -227,12 +228,21 @@ is DELETE-then-write, never append-only:
   banner), just never HOLD a hot-ready batch for a cold restart it does not need. When the two
   rules pull against each other, the tiebreak is **users see one banner per batch, and no work
   sits waiting on a restart it does not require**.
-- 🔴 **EVERY ISSUE CLOSED AT A RELEASE GETS A COMMENT NAMING THAT RELEASE (vjt STANDING ORDER 2026-08-04).**
-  Closing is not enough: the closing comment must say **which release the work shipped in** (e.g. *"shipped in
-  v0.11.1"*), because a self-hoster reading the issue needs to know **which tag to pull** — that is the same
-  reason `soon` ends at the release and not at our deploy. **And strip `status:soon` from everything that
-  goes into the release, in the same pass.** Close + release-comment + label-strip are ONE action, never
-  three chores to remember separately. Do it for every issue in the batch, not just the headline ones.
+- 🔴 **"WHICH TAG DO I PULL" IS ANSWERED AT THE RELEASE CUT — NOT BY A CLOSING COMMENT, AND NOT BY THE
+  MILESTONE (vjt STANDING ORDER 2026-08-04, REWORDED 2026-08-20/21 by #1632).** The original order said
+  every issue closed at a release gets a closing comment **naming that release**, because a self-hoster
+  reading the issue needs to know **which tag to pull**. Closing now happens at the MERGE, when no tag
+  exists yet. **The obligation survives; its carrier is the RELEASE CUT** — the tag plus its release
+  notes — and the final `vX.Y.0` cut is vjt's. So: **no release-time closing comment, no release-time
+  close pass, no label to strip.**
+  ⚠️ **The MILESTONE does NOT carry it (vjt, 2026-08-21).** A milestone is a **PLANNING** label: which
+  release the work is **INTENDED** to go out in, an intention that can still change because he
+  **dogfoods on staging before committing to a release**. It is not a promise about which tag contains
+  the code. **Never cite a milestone as evidence that something shipped.**
+  🔴 **Accepted price, say it out loud:** a merge-closed issue **names no release**. That is deliberate,
+  not a gap to paper over with an invented comment.
+  ℹ️ **WHEN a milestone is assigned or moved is NOT specified** — vjt has not given that rule, and this
+  file does not invent one.
 - **RELEASE-CUTTING + NEWS.JSON (vjt STANDING ORDERS 2026-07-24).** After a batch DEPLOYS to
   Azzurra + verifies healthy: cut a GitHub **release + tag** (tag ≡ CTCP VERSION exactly, #391),
   THEN produce the site's **News/Releases `news.json` entry** — bilingual, curated by vjt, and
@@ -251,36 +261,48 @@ is DELETE-then-write, never append-only:
   worker to remove its worktree after merging. NEVER force-remove an UNmerged or DIRTY worktree — it belongs to a
   concurrent session's in-flight work (also the source of the "sibling stashed my changes" pitfall). Codified in
   CLAUDE.md Development Cycle too.
-- **`status:*` label discipline (WIP board — grappa-irc #258, mandatory 2026-07-15).** The
-  grappa.chat WIP board renders directly from three mutually-exclusive grappa-irc labels —
-  `status:queued` (accepted, in build queue, not started), `status:cooking` (worker STILL ON IT —
+- **`status:*` label discipline (WIP board — grappa-irc #258, mandatory 2026-07-15; cut to TWO
+  labels 2026-08-20 by #1632).** There are **two** mutually-exclusive grappa-irc labels —
+  `status:queued` (accepted, in build queue, not started) and `status:cooking` (worker STILL ON IT —
   building, in code-review, waiting on CI **including post-merge CI polling**, addressing findings:
-  ANY active worker attention on the issue), `status:soon` (worker FULLY DONE + handed off, no
-  active work and NO CI-wait remaining, **awaiting a RELEASE**). The board's two
+  ANY active worker attention on the issue). **A closed issue carries neither.** The board's two
   plain-link columns are derived: **backlog = open issues with NO `status:*` label** (shown
-  before Queued), **closed = closed issues** (after Soon) — both exclude `status:*`. The
+  before Queued), **closed = closed issues** — both exclude `status:*`. The
   orchestrator OWNS keeping these labels truthful, or the board drifts from reality:
-  - **`cooking → soon` fires ONLY at the worker's HAND-OFF, NEVER at merge (vjt order 2026-07-18).**
-    Waiting on CI — PR checks OR post-merge main CI — is STILL cooking, not soon. A merged issue
-    whose worker is still polling its post-merge run stays `cooking`. The ORCHESTRATOR flips it to
-    `soon` in the SAME turn it processes the worker's DONE hand-back (worker idle, CI settled, moved
-    on) — the worker does NOT self-flip to soon at merge. (Prior rule "worker merge+soon" flipped
-    prematurely during CI-wait → the exact drift vjt caught. Worker now: merge+HOLD, STAYS cooking.)
+  - 🔴 **`status:soon` is DEAD (#1632) — the state machine is `queued → cooking → closed`.** It
+    meant "merged, awaiting release". Measured before it was retired: **75 open `status:soon`
+    issues, 71 already in milestone 1.3, and zero `status:soon` issues ever closed** in the repo's
+    history. The label still EXISTS on GitHub (deleting it is a separate, irreversible call for vjt)
+    but **nothing sets it**: an issue carrying one is drift.
+    ⚠️ The grappa.chat board's Soon column follows in the OTHER repo — filed as **vjt/grappa-www#6**,
+    routing is vjt's. **Do not "fix" the board from here.**
+  - **`cooking → closed` fires ONLY at the worker's HAND-OFF, NEVER mid-CI (the 2026-07-18 order,
+    carried over from `cooking → soon`).** Waiting on CI — PR checks OR post-merge main CI — is
+    STILL cooking. A merged issue whose worker is still polling its post-merge run stays `cooking`.
+    The ORCHESTRATOR closes it in the SAME turn it processes the worker's DONE hand-back (worker
+    idle, CI settled, moved on) — the worker does NOT self-close at merge. (Prior rule "worker
+    merge+advance" flipped prematurely during CI-wait → the exact drift vjt caught. Worker now:
+    merge+HOLD, STAYS cooking.)
+  - 🔴 **A merge that covers only ONE LEG of a multi-part issue does NOT close it.** #96 shipped one
+    leg of three and vjt said explicitly the rest stays open. Epics and multi-leg issues close **leg
+    by leg, when the last leg lands** — check each one. (Was a release-cut caveat in
+    `docs/OPERATIONS.md`; closing moved to merge, so it moved too.)
   - **Enqueue (`→ status:queued`) is done by the ircbot or vjt, NOT you** — that label is how
     work enters the queue (the ircbot no longer pings you to hand issues over; the label IS the
     handover). Your first touch is `status:queued → status:cooking` when the worker starts
     building. Move, don't add — mutually exclusive
     (`gh issue edit N --remove-label status:X --add-label status:Y`).
-  - 🔴 **`soon` ENDS AT THE RELEASE, NOT AT THE DEPLOY (vjt, #grappa 2026-08-03 13:1x — this SUPERSEDES
-    the old deploy-ends-soon rule and the "se son deployate son chiuse" ruling).** His reason, and it is
-    the whole point: **we are not the only deployment.** Self-hosters exist (Mezmerize's instance, the
-    #503 one-click AWS installer, the docker path), so "deployed" describes only what the m42 jail
-    pulled — for every other operator the work exists when **there is a tag to pull**. So:
-    **`gh issue close` + strip `status:*` both fire at the RELEASE CUT**, not when m42 deploys.
-    A deploy to m42 is an internal event that changes NO label and closes NO issue.
-    ⚠️ Consequence to keep in mind: the board's **Soon column will hold code that is already LIVE on
-    m42** — it means "shipped, not yet in a named release", not "not yet running". If that reads wrong
-    on grappa.chat, the column name is vjt's call, not a reason to bend the label.
+  - 🔴 **CLOSING FIRES AT THE MERGE, NOT AT THE DEPLOY AND NOT AT THE RELEASE (vjt, #grappa
+    2026-08-20: *"si chiudiamo al merge"* — #1632; SUPERSEDES the 2026-08-03 `soon`-ends-at-the-
+    release rule, the older deploy-ends-soon rule, and the "se son deployate son chiuse" ruling).**
+    What survives from 2026-08-03 is its REASON: **we are not the only deployment.** Self-hosters
+    exist (Mezmerize's instance, the #503 one-click AWS installer, the docker path), so "deployed"
+    describes only what the m42 jail pulled — for every other operator the work exists when **there
+    is a tag to pull**. That reader still has to be told which tag, and **the RELEASE CUT is what
+    tells them** (tag + release notes), since the close now happens before any tag exists — NOT the
+    milestone, which is a planning label only. So:
+    **`gh issue close` + strip `status:*` both fire at the MERGE.**
+    A deploy to m42 changes NO label and closes NO issue; neither does a release cut.
   - A newly-filed backlog issue gets NO `status:*` label (it lives under the backlog link until
     triaged into the queue). The board is a shared artifact — keep it honest every transition.
   - **ANTI-DRIFT (vjt caught two misses 2026-07-16 — stale `cooking` on closed #268; forgotten
@@ -289,10 +311,12 @@ is DELETE-then-write, never append-only:
     - The `queued→cooking` edit goes in the **SAME Bash block as the clear-and-dispatch send-keys**
       (dispatch and label move as one tool call — you cannot dispatch without moving the label).
     - The `strip status:*` edit goes in the **SAME handling turn as processing the worker's
-      shipped/closed report** (alongside `gh issue close` + the announce brief).
+      merged/DONE report** (alongside the `gh issue close` that turn now also carries — the
+      announce comes later, with the batched deploy).
     - **`lib/board-check.sh [--cooking N]` is the STANDING GUARD.** Run it at EVERY handoff-flush
       and EVERY `/orchestrate` resume (Step 0). It fails (exit 1) on: a CLOSED issue with a
-      `status:*` label, any issue with >1 status label, or (with `--cooking N`) a cooking set that
+      `status:*` label, any issue with >1 status label, an OPEN issue still carrying the RETIRED
+      `status:soon` (#1632), or (with `--cooking N`) a cooking set that
       doesn't match the in-flight issue you believe is building. It bakes in `--limit 300` — plain
       `gh issue list` defaults to 30 and silently truncates older issues (that truncation masked
       the drift twice). If it prints DRIFT, fix it BEFORE doing anything else.
@@ -300,8 +324,11 @@ is DELETE-then-write, never append-only:
   execution queue — there is no hand-managed list. When the worker is free and nothing is in
   flight, read the open queued set (`gh issue list --state open --label status:queued --json
   number,title,labels`) and dispatch the next per the placement rules in
-  `/srv/grappa/docs/ISSUE_PIPELINE.md` (P0 first / never preempt in-flight, then
-  similarity-group, else lowest number), moving it `status:queued → status:cooking`. This
+  `/srv/grappa/docs/ISSUE_PIPELINE.md` — **P0 first / never preempt in-flight, otherwise the
+  LOWEST-NUMBERED queued issue, absolute FIFO, no exceptions.** (The old
+  "similarity → group" tier was deleted 2026-08-20, #1632: it legitimised jumping the queue
+  whenever the next issue looked adjacent to what just shipped.) Move it
+  `status:queued → status:cooking`. This
   REPLACES waiting for an ircbot handover. Only when the queued set is **EMPTY** do you ping
   vjt "what next?" — don't invent work.
 - **Auto-clearer**: `lib/auto-clear-watch.sh start|status grappa-orch` runs an external
@@ -590,8 +617,8 @@ local artefact the container NEVER serves — do not read deploy state from it.*
 exactly like a broken deploy; one `ls -l` on the served path ended it.
 ℹ️ A `✓ built in 70ms` line is the **service-worker sub-build**, not the bundle — read the whole log before
 calling a build suspiciously fast.
-Worker MERGES + pushes, **never deploys**; stays `cooking` until its DONE hand-off; ORCH flips to `soon`.
-ONE batched deploy (~4–5 issues), ONE dual-net announce, then close all + strip labels.
+Worker MERGES + pushes, **never deploys**; stays `cooking` until its DONE hand-off; ORCH then CLOSES it
+at that merge (#1632). ONE batched deploy (~4–5 already-closed issues), ONE dual-net announce.
 - **COLD:** `/srv/grappa/scripts/deploy-m42.sh --force-cold` · **HOT:** `--force-hot` **THEN `--cic`** — a HOT deploy is
   TWO runs; one alone ships half the range. ABSOLUTE path, **redirect to a file** (a pipe SIGPIPEs the remote deploy).
 - 🔴 **RUN DEPLOYS DETACHED** (`nohup` + `disown`). Tonight the `--cic` run was **HARNESS-REAPED mid-`vite build`**
@@ -674,7 +701,8 @@ clearing on unverified edits leaves the next session unable to tell whether they
 ## 🏷️ LABEL DISCIPLINE
 `lib/board-check.sh [--cooking "N M"]` at EVERY flush + resume. Moves are ATOMIC: `queued→cooking` rides the SAME Bash
 block as the dispatch send-keys; `strip status:*` rides the SAME turn as processing the shipped report.
-**`cooking→soon` only at the worker's DONE hand-off — CI-wait is still cooking.** A closed issue carries NO `status:*`.
+**`cooking→closed` only at the worker's DONE hand-off — CI-wait is still cooking.** A closed issue carries NO
+`status:*` and `status:soon` is DEAD (#1632). **A milestone is PLANNING, never proof that code is in a tag.**
 **Enqueue is vjt's or the ircbot's** — except when he says "fix it" in conversation: that IS the enqueue (#526, #522).
 
 ## 🔀 PR / MERGE / GATING MECHANICS (learned the hard way 2026-08-01 — permanent)

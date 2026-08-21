@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # board-check.sh — orchestrator label drift-guard for the grappa.chat WIP board.
 #
-# WHY: the board renders from three mutually-exclusive status:* labels on
-# vjt/grappa-irc (queued / cooking / soon). The orchestrator OWNS keeping them
+# WHY: the board renders from the mutually-exclusive status:* labels on
+# vjt/grappa-irc. Since #1632 (vjt, 2026-08-20) there are TWO — queued / cooking
+# — and the machine is `queued → cooking → closed at the MERGE`. A milestone is a
+# PLANNING label (which release the work is INTENDED for), never proof that code
+# is in a tag, so this script does not audit milestones. `status:soon` is RETIRED:
+# the label still exists on GitHub (deleting it is vjt's call) but nothing sets
+# it, so an issue still carrying one is drift and check 3 below fails on it.
+# The orchestrator OWNS keeping these labels
 # truthful, but the transitions are manual side-effects that are easy to forget
 # (missed queued→cooking on a #273 dispatch; left status:cooking on the closed
 # #268 — both caught by vjt, 2026-07-16). This script is the STANDING GUARD:
@@ -59,18 +65,28 @@ if [ -n "$multi" ]; then
   drift=1
 fi
 
-# 3) Board snapshot (OPEN only — the three live columns).
-cooking=$(gh issue list --repo "$REPO" --state open --limit "$LIMIT" --label status:cooking \
+# 3) HARD DRIFT: status:soon is RETIRED (#1632) — nothing sets it any more, so an
+#    OPEN issue still carrying it was left behind by the old four-state machine.
+#    Closed ones are already caught by check 1, so this looks at OPEN only.
+retired=$(gh issue list --repo "$REPO" --state open --limit "$LIMIT" --label status:soon \
   --json number -q '[.[].number] | sort | map("#"+(tostring)) | join(" ")')
-soon=$(gh issue list --repo "$REPO" --state open --limit "$LIMIT" --label status:soon \
+if [ -n "$retired" ]; then
+  echo "✗ DRIFT — OPEN issue carrying the RETIRED status:soon label (#1632):"
+  echo "    $retired"
+  echo "    → the machine is queued→cooking→closed-at-merge; close it if its work"
+  echo "      merged, else move it back to status:queued. Never re-add soon."
+  drift=1
+fi
+
+# 4) Board snapshot (OPEN only — the two live columns).
+cooking=$(gh issue list --repo "$REPO" --state open --limit "$LIMIT" --label status:cooking \
   --json number -q '[.[].number] | sort | map("#"+(tostring)) | join(" ")')
 queued=$(gh issue list --repo "$REPO" --state open --limit "$LIMIT" --label status:queued \
   --json number -q '[.[].number] | sort | map("#"+(tostring)) | join(" ")')
 echo "  cooking: ${cooking:-<none>}"
-echo "  soon   : ${soon:-<none>}"
 echo "  queued : ${queued:-<none>}"
 
-# 4) Optional: assert cooking matches what the orchestrator believes is in-flight.
+# 5) Optional: assert cooking matches what the orchestrator believes is in-flight.
 if [ -n "$expect_cooking" ]; then
   want=$(norm "$expect_cooking")
   got=$(norm "$cooking")

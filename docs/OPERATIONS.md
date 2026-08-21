@@ -1625,14 +1625,25 @@ sequence:
    **Division of labor:** ORCHESTRATOR = create the GH release + ping vjt with
    (tag, URL, 2-line highlight), and write + push the news entry whenever he
    hands that lane over. vjt = the call on whether he writes the copy himself.
-5. **Dual-net announce** (#grappa on Azzurra + Libera via the ircbot) + `gh issue
-   close` the closed-at-release issues + strip their `status:soon`.
+5. **Dual-net announce** (#grappa on Azzurra + Libera via the ircbot).
+   **There is no issue-closing pass at the release** (#1632, vjt 2026-08-20:
+   *"si chiudiamo al merge"*): every issue in the cut was already closed when its
+   change merged. So there is no `gh issue close` sweep, no `status:soon` to
+   strip, and **no closing comment naming the release** — at the merge the tag did
+   not exist yet, so a merge-closed issue names no release at all. That is an
+   accepted price, not an oversight.
+   🔴 **This step is where the duty survives.** The 2026-08-04 standing order was
+   *reworded, not repealed*: a self-hoster still has to be told **which tag to
+   pull**, and now **the tag and its release notes are what tell them** — this
+   cut, not a per-issue comment. ⚠️ **The milestone does NOT carry that** (vjt,
+   2026-08-21): it is a **PLANNING** label saying which release the work is
+   *intended* for, an intention that can still change because he dogfoods on
+   staging first. Never quote a milestone as evidence that code is in a tag.
+   The multi-leg caveat (#96: one leg of three shipped, the issue stays open)
+   moved with the close, to `docs/ISSUE_PIPELINE.md` → *Label state machine*.
    ⚠️ **A TAG-ONLY release (no deploy) does NOT get the "we shipped" announce** —
    nothing changed for a user of the hosted instance, and saying otherwise is
    simply false. What is worth one line is that self-hosters have a tag to pull.
-   🔴 **Not every `status:soon` issue is DONE.** #96 shipped one leg of three in
-   v0.12.0 and vjt said explicitly the rest stays open: at the sweep it got the
-   release comment and its label stripped, but was NOT closed. Check each one.
 
 ### The published release image (ghcr.io) — #503 unit C
 
