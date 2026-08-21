@@ -25,7 +25,13 @@ import { enablePush, pushAvailable } from "./push";
 // The PERSISTED × decline. Per-browser is correct: it shadows a per-browser
 // Notification permission, so — unlike #449's move to server-side prefs — this
 // stays in localStorage and does NOT sync across devices.
-const PUSH_OPTIN_DECLINED_KEY = "cic.pushOptinDeclined";
+//
+// EXPORTED (#1646): a localStorage key is already a public contract — the slot
+// is readable and writable by anything sharing the origin — so naming it costs
+// no encapsulation that `localStorage` had not already given away. The e2e spec
+// that seeds a declined state mirrors this string by hand; exporting it lets
+// `src/__tests__/e2eConstantMirrors.test.ts` hold the two copies together.
+export const PUSH_OPTIN_DECLINED_KEY = "cic.pushOptinDeclined";
 
 // SESSION-scoped hide, reactive so the banner drops the instant the user acts
 // (accept or ×) without waiting for another source signal to re-derive the

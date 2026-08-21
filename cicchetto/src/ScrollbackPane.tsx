@@ -60,6 +60,7 @@ import {
   refreshScrollback,
   scrollbackByChannel,
 } from "./lib/scrollback";
+import { LOAD_MORE_THRESHOLD_PX, SCROLL_BOTTOM_THRESHOLD_PX } from "./lib/scrollThresholds";
 import { scrollToBottomRequest } from "./lib/scrollToBottomCommand";
 import { setCursorIfAdvances, setSelectedChannel } from "./lib/selection";
 import type { Point } from "./lib/swipe";
@@ -154,8 +155,6 @@ export type Props = {
   kind: WindowKind;
 };
 
-const SCROLL_BOTTOM_THRESHOLD_PX = 50;
-
 // UX-8 (b): scroll-settle debounce — fire the cursor update 500ms after
 // the last scroll event. Resets on every scroll, so iOS momentum
 // scrolling (events fire for 1-2s after finger lift) settles to a
@@ -202,15 +201,6 @@ const SCROLL_KEYS = new Set<string>([
   "ArrowDown",
   " ", // Space — page-down convention
 ]);
-
-// CP14 B2: trigger `loadMore` when the user scrolls within this many
-// pixels of the top. 200px is a standard infinite-scroll threshold —
-// fires before the user actually hits the top so the new rows can
-// land while there's still scroll runway, avoiding the "land at the
-// very top, brief stutter, then content shifts" UX. The verb itself
-// (lib/scrollback.ts loadMore) gates the burst and end-of-history
-// cases; this constant only controls when to *try*.
-const LOAD_MORE_THRESHOLD_PX = 200;
 
 // #285 reopen part (3) — defensive post-mount settle re-measure schedule. The
 // reported cold-iOS-PWA relaunch latch corrects via a viewport settle that

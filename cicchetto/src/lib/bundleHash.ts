@@ -98,7 +98,12 @@ export function shouldShowRefreshBanner(): boolean {
 // without the hash suffix the two sides would read identically and the
 // signal would go dead. `git`-style 7 chars is a familiar, sufficient
 // content fingerprint.
-const SHORT_HASH_LEN = 7;
+//
+// EXPORTED (#1646): this length is part of the RENDERED string, so the e2e spec
+// that asserts the refresh banner has to reconstruct the same truncation and
+// mirrors the number by hand. It is a display-format rule the assertion side
+// legitimately shares, not an internal of the shortening.
+export const SHORT_HASH_LEN = 7;
 
 function shortHash(hash: string | null): string | null {
   return hash !== null && hash !== "" ? hash.slice(0, SHORT_HASH_LEN) : null;
