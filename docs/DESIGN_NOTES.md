@@ -56996,3 +56996,106 @@ unmeasured mechanism shipped under deadline, which is the failure mode this
 entry spends its length arguing against. Recorded here as debt with a name,
 not as a detail — an unenforced obligation that nobody wrote down is
 indistinguishable from one that does not exist.
+<!-- entry #1658 -->
+
+---
+
+## 2026-08-21 — #1658: the pull affordance's two ends, and the cap that could not be a number
+
+vjt pulled the channel directory down on a phone against 1.3.0 and
+reported three things: the list does not follow the finger, the spinner
+overlaps the first row, and the spinner stays hung after the refresh. Two
+are defects and are fixed here; the third is a change of behaviour and is
+not started, awaiting vjt's own word rather than a relay of it.
+
+### The paint outlived the gesture
+
+`unpaintPull` is the only thing that removes the inline `transform` and
+`opacity` the pull writes onto the slot, and it was bound to `onRelease`
+alone. `bindPullGesture` does not report a COMMITTING release through
+`onRelease`: it calls `onCommit()` and returns. The paint was therefore
+cleared on every terminal except the one a working gesture takes, and the
+slot kept the last touchmove's transform at full opacity for the life of
+the pane.
+
+The fix is in the pane — `onCommit` unpaints before it refreshes — because
+the binder writes no paint of its own by design, and that is the entire
+reason it reports progress instead of moving anything.
+
+The interesting part is the class, not the instance. `bindDismissGesture`
+(`mediaViewerGesture.ts`) has the IDENTICAL terminal shape and has never
+shown this bug, because its commit CLOSES the modal it painted: the
+element carrying the stale paint stops existing in the same tick. So the
+requirement — *a consumer whose painted element SURVIVES a commit must
+clear the paint itself* — was true from the first binder and written down
+nowhere, and `pullGesture`, the fourth binder over that core, inherited a
+shape that was only ever safe by accident of its first consumer's
+lifecycle. Both `onCommit` docs now state it. The pattern is what
+propagates in this codebase; an implicit precondition attached to a
+pattern propagates with it, silently, until it meets a consumer that
+violates it.
+
+### The cap was a number where no number exists
+
+The paint followed the finger up to `PULL_COMMIT_PX` (80px, `SWIPE_MIN_PX
+* 2`), while the slot is parked one slot-height above the list's top edge.
+At full travel the slot therefore sat `80 - slotHeight` PAST that edge —
+a whole spinner inside the rows. The comment above the cap said it existed
+so that extra travel would not "drag the spinner into the rows it is
+supposed to sit above". The prose was right and the number contradicted it.
+
+The issue reported the overlap as 40px, from `2.5rem = 40px`. Measured, it
+is not: `html { font-size: var(--font-size) }` with `--font-size: 14px`
+(`default.css`), so 1rem is 14px here and the slot is 35px. Two comments
+in that same stylesheet already warn about exactly this trap, which is why
+`--chrome-tap-min` and `--tap-min` are absolute px.
+
+The load-bearing correction is the next one. `--font-size` is a USER
+PREFERENCE: `lib/fontSize.ts` writes it on `<html>` from a five-value set,
+S=12px through XXL=20px. The slot is therefore 30px…50px, changeable while
+the pane is open, and the overlap was 50/45/40/35/30px depending on a
+setting. There is no px constant to write in TS that is right for more
+than one of the five, so the cap moved into the CSS as `min(dy, 100%)`: a
+percentage in `translateY` resolves against the element's own height, so
+the cap and the parked `-100%` become the same unit and the same fact,
+resolved live by the engine. A defect whose magnitude is a user preference
+cannot be fixed by a better constant — only by removing the constant.
+
+The opacity ramp deliberately did not follow the travel down. They are
+independent axes: the travel is the placement, the ramp is the affordance
+that says where the release starts spending a capture. Driving opacity
+from the capped travel would top the spinner out at
+`slotHeight / PULL_COMMIT_PX` — 0.44 at the default size — so it would
+never reach full where full is the whole point. That is the likeliest
+wrong fix, so it has a test whose oracle is the wrong fix rather than the
+defect: the test is green before this change and after it, and red only
+under the mistake.
+
+### The invariant we can state, and the one we cannot
+
+Capping at the slot's own height does NOT stop the spinner covering a row,
+and the code and the specs both say so. The slot is `position: absolute;
+top: 0` inside a scroller whose rows also start at y=0, so every position
+where the spinner is visible at all is a position where it covers the top
+band of the first row; the only non-overlapping position is the invisible
+one. What the cap buys is the weaker, true statement: **the slot never
+travels past the list's top edge**. The strong statement becomes available
+only when the rows move with the finger, which is the third report and a
+separate change.
+
+Stating the weaker invariant and naming why the stronger one is
+unavailable is the point, not a hedge. A comment or a test asserting "no
+overlap" would have been asserting something false about code that had
+just been changed to make it look true.
+
+### What is not proven
+
+The FEEL, as ever: a synthesized TouchEvent drives no compositor and
+Playwright's webkit does not reproduce iOS scroll physics, so nothing here
+says the follow is smooth or that 80px is the right commit distance. The
+browser assertions are DOM facts — the inline paint is gone after a
+commit, and the slot's top edge lands on the list's at three different
+root font sizes, with the slot height asserted alongside each so that a
+`--font-size` write that silently failed cannot pass three identical
+measurements off as three sizes. Whether any of it feels like a pull is a
+device call and stays vjt's.
