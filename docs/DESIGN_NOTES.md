@@ -55743,3 +55743,120 @@ remove.
   is not timestamped anywhere; that key's overlap is established by the total
   absence of a later `?after=` GET, and by the 15 ms and 10 ms margins on the
   two sibling keys in the same reconnect, not by the 2 ms figure on its own.
+<!-- entry #1336-m2-controls -->
+
+---
+
+## 2026-08-21 — #1336: M2 closed by census, and the guard that guarded nothing
+
+Slice (1) of the instruments epic named two mechanisms: M1, a barrier that
+awaits the CLASS instead of the effect, and M2, an assertion of absence that
+an empty recorder satisfies. **Both of M2's briefed populations are dead** —
+`#1117`'s three sites were cured by `038a33ca` and `#1152`'s seven by
+`36ea566b` + `ba1bdc20`, all ancestors of `origin/main` at `3b62059a`
+(oracle calibrated both ways: a cure sha answers yes, an unmerged branch tip
+answers no). What was NOT dead is the rest of the mechanism, which nobody had
+enumerated. This entry closes that remainder and records how its edge was
+drawn.
+
+### The population, and why it is closed
+
+An **apparatus** is a variable mutated by a callback registered on an
+asynchronous event source in the e2e harness — `page.on`, `context.on`,
+`ws.on`, `page.route`, `context.route`, `context.exposeBinding`. A **site**
+is an absence assertion read off one. A site is **controlled** iff the same
+apparatus is shown, in the same test, to yield at least one element.
+
+That edge is drawn where it is because an event collector's silence is not
+observable from inside the test, while a synchronous read's is: the two
+nearest neighbours — `issue184`'s `expect(rows).toHaveLength(0)` over a REST
+body and `issue276`'s filter of a `$server` fetch — are absences over a
+SERVER QUERY, whose apparatus reports its own success (`res.ok`) and which
+this pass deliberately did not touch. Neither did it touch `toHaveCount(0)`
+over a DOM locator, several hundred sites whose vacuity is a selector
+question, not a recorder one. Both exclusions are choices, not oversights.
+
+Measured on `3b62059a` by a census that refuses to print a number unless four
+known-answer controls pass (a known value: `issue160` must read controlled and
+by a `toBeGreaterThan`; a complete set: its file list must equal a NAKED
+`git grep -lE` intersection, plus one declared multi-line site the one-line
+grep cannot see; an invented file and identifier must be absent; the
+positive/absence classifier must be right in both directions):
+
+**17 apparatuses carry an absence assertion. 12 were controlled. 5 were not.**
+
+Two traps the census hit, both worth the next reader's time. A naive
+comment-stripper eats the rest of a file from the `/*` inside
+`page.route("**/*", …)` — 14 statements survived a 350-line spec before the
+scanner was made string-aware. And `git grep -E` is POSIX ERE with no `\s`
+or `\b`, so a matcher wrapped across lines (`).toBe(\n  false,\n)` in
+`issue375`) is invisible to it: that site is declared in the census rather
+than silently missing from it.
+
+### The five, and their cures
+
+| apparatus | the absence | the control now proving it can fire |
+|---|---|---|
+| `ux-6-b-embedded-upload` `uploadHits` | `toBe(0)` after modal Cancel | the real `uploadViaPicker` journey, after the zero |
+| `i2b-litterbox` `routeHits` | `toBe(0)` after modal Cancel | the same picker driven to Continue, hitting the stub |
+| `issue220` `popupOpened` | `toBe(false)` for the topic-bar link | clicking the modal's own `target=_blank` anchor |
+| `login-alt-auth` `requested` | `toBe(false)` for an empty identifier | filling the identifier and clicking Passkey again |
+| `fixtures/test.ts` `cspViolations` | `toEqual([])` in EVERY spec's teardown | one spec provoking a real `connect-src` block |
+
+Each control is a REAL production stimulus through the SAME predicate, never a
+synthetic probe, and each is placed AFTER the zero it certifies: armed first,
+it would leave a baseline the assertion has to subtract, and an off-by-one in
+that subtraction is the same silence wearing a different hat.
+
+### The CSP guard is the one that mattered
+
+`_cspGuard` asserts zero `securitypolicyviolation` events at the teardown of
+every spec importing the wrapped `test` — roughly 750 assertions off ONE
+apparatus, where the empty array is the NORMAL outcome. Rename the exposed
+binding, land the init script after the document has already listened, or meet
+an engine that reports the event differently, and all of them go quiet
+together. Nothing in the suite could tell that world from a clean one.
+
+The collector is now the `cspViolations` fixture, and
+`issue1336-csp-guard-control.spec.ts` provokes a fetch to a reserved-TLD host
+(RFC 2606 `.invalid`) that `connect-src` refuses before any network I/O, then
+asserts the guard's own array caught it and that the forwarded payload still
+names the directive. It drains only what it provoked; anything else the page
+produced still reds the teardown.
+
+**ONE control per APPARATUS, not per test** — the distinction is deliberate
+and is stated in the spec. The wiring is a single shared fixture, so proving
+it live once per run is what a control on it can honestly mean. A per-test
+control would cost a provoked violation in all ~750 and would fail, for the
+harness's reasons rather than the product's, on any page with no enforced CSP.
+What remains uncovered is a context that armed here and not there; that gap is
+narrower than the one it replaces, and named rather than papered over.
+
+### The measurement, two-sided
+
+Five mutants, one per apparatus, each breaking the RECORDER and touching no
+assertion, applied by an injector that refuses to run unless every needle
+occurs exactly once. `M-B` is `routeHits += 0` rather than a broken URL on
+purpose: breaking the glob also disables the stub, so the upload would hang
+and red a DIFFERENT assertion — one mutant, one assert.
+
+| round | tree | mutants | result |
+|---|---|---|---|
+| 1 | `3b62059a` (pre-fix) | none | 4 passed — baseline |
+| 2 | `3b62059a` (pre-fix) | all 5 | **5 passed** — the defect |
+| 3 | cured | all 5 | **5 failed**, each on its own control |
+| 4 | cured | none | 5 passed |
+
+Round 2 is the finding: on `origin/main` today, breaking five recorders
+outright changes nothing that any test can see. Round 3 is the claim: after
+the cure the same five breakages are five reds.
+
+### Not established
+
+The four spec-level controls prove their own test's apparatus, per test. The
+CSP control proves the fixture's wiring once per run, NOT per context. No
+rate or reproduction is claimed for any of the five: nothing here says a
+recorder ever HAS gone blind in CI, only that nothing would have said so. The
+M1 half of slice (1) is untouched — its briefed site is cured, and the live
+residue (`enablePushFromSettings` plus a heuristic ≤7 spec-level barriers)
+needs per-site geometry this pass did not do.
