@@ -74,12 +74,42 @@ import { MircBody } from "./MircText";
 // Two `translateY` functions rather than one `calc`: they compose to the same
 // matrix, and the resolved form a test can read is `-slotHeight + dy` either
 // way — but this one is legible in an assertion and needs no CSS arithmetic.
-const pulledTransform = (dy: number): string => `translateY(-100%) translateY(${dy}px)`;
+//
+// #1658 — the travel caps at `100%`, the slot's OWN height, and the cap lives
+// in the CSS rather than in JS because there is no number to put in JS. The
+// slot is `2.5rem` and cic's root font-size is a USER PREFERENCE
+// (`lib/fontSize.ts` writes `--font-size` on <html>: S=12px … XXL=20px), so
+// the slot is anywhere from 30px to 50px and can change while this pane is
+// open. A px constant would be right for one of the five sizes; a percentage
+// in `translateY` resolves against the element's own height, so the cap and
+// the parked offset are the same unit, the same fact, and read live.
+//
+// It used to cap at `PULL_COMMIT_PX` (80), which is more than the slot at
+// every size: at full travel the slot sat 30-50px BELOW the list's top edge —
+// a whole spinner parked inside the rows, which is the overlap vjt reported
+// on 1.3.0. The old comment claimed the cap existed to stop exactly that.
+//
+// 🔴 What this buys is the WEAKER of the two invariants available, on purpose:
+// the slot never travels PAST the list's top edge. It does not buy "the slot
+// never overlaps a row", and that one is not on offer here — the slot is
+// `position: absolute; top: 0` inside a scroller whose rows also start at
+// y=0, so every position where the spinner is visible at all is a position
+// where it covers the top band of the first row. Making the rows move out of
+// its way is a different change (#1658 point 3, not started), and until it
+// lands the honest statement is the flush line. Asserting the strong one here
+// would be asserting something false.
+const pulledTransform = (dy: number): string => `translateY(-100%) translateY(min(${dy}px, 100%))`;
 
-// How far the paint is allowed to follow the finger. Past the commit distance
-// the slot stops moving and the gesture is already spent, so more travel would
-// only drag the spinner into the rows it is supposed to sit above.
-const paintedTravel = (dy: number): number => Math.min(dy, PULL_COMMIT_PX);
+// The spinner is legible before the commit point, not after it: the ramp
+// reaches full exactly where the release starts spending a capture, so the
+// affordance itself says where the line is.
+//
+// #1658 — a DIFFERENT axis from the travel above and it keeps its own
+// distance. The travel is the placement, the ramp is the affordance; tying the
+// ramp to the capped travel would top the spinner out at
+// slotHeight/PULL_COMMIT_PX (0.44 at the default font size) and it would never
+// reach full at the one distance where full is the point.
+const pulledOpacity = (dy: number): number => Math.min(dy, PULL_COMMIT_PX) / PULL_COMMIT_PX;
 
 // Quiet window after the last keystroke before the filter GET fires. Long
 // enough to swallow a burst of typing, short enough that a deliberate pause
@@ -349,12 +379,8 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   const paintPull = (dy: number): void => {
     const slot = pullSlotRef;
     if (slot === undefined) return;
-    const travel = paintedTravel(dy);
-    slot.style.transform = pulledTransform(travel);
-    // The spinner is legible before the commit point, not after it: the ramp
-    // reaches full exactly where the release starts spending a capture, so the
-    // affordance itself says where the line is.
-    slot.style.opacity = String(travel / PULL_COMMIT_PX);
+    slot.style.transform = pulledTransform(dy);
+    slot.style.opacity = String(pulledOpacity(dy));
   };
 
   const unpaintPull = (): void => {

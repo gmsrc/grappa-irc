@@ -904,14 +904,19 @@ describe("DirectoryPane", () => {
       expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
     });
 
+    // #1658 — 20px, not half the commit distance as this drag used to be. The
+    // travel now caps at the slot's OWN height, and the slot is `2.5rem`
+    // against a root font-size the user picks (`lib/fontSize.ts`: S=12px …
+    // XXL=20px ⇒ 30px … 50px). 40px is over that cap at three of the five
+    // sizes; 20px is under it at all five, so this reads the follow and not
+    // the clamp. The clamp has its own test below.
     it("the slot follows the finger while it is down", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
 
-      const travel = Math.round(PULL_COMMIT_PX / 2);
-      pullTo(listIn(container), travel);
+      pullTo(listIn(container), 20);
 
-      expect(slotIn(container).style.transform).toContain(`translateY(${travel}px)`);
+      expect(slotIn(container).style.transform).toContain("translateY(min(20px, 100%))");
     });
 
     it("keeps the slot's parked offset in the pulled transform (an inline transform replaces the rule)", () => {
@@ -928,15 +933,54 @@ describe("DirectoryPane", () => {
       expect(slotIn(container).style.transform).toContain("translateY(-100%)");
     });
 
-    it("the paint stops at the commit distance however far the finger goes", () => {
+    // #1658 — the cap used to be `PULL_COMMIT_PX`, which is TWICE the slot at
+    // the default font size: the paint drove the slot a whole extra
+    // slot-height past the list's top edge and parked the spinner inside the
+    // rows. What this pins is not a smaller number but the ABSENCE of a
+    // number: the finger's distance goes through unclamped and the clamp is
+    // `100%` — the slot's own height, resolved by the engine against whatever
+    // the root font-size currently is. Reinstating any JS clamp turns the
+    // received string into a bare `translateY(<n>px)` and this red.
+    //
+    // jsdom resolves no layout, so this is the CONTRACT and not the geometry.
+    // That the slot actually stops flush with the list's top edge — at three
+    // font sizes, which is what proves the cap is slot-relative and not a 35
+    // in disguise — is asserted in the browser, in
+    // e2e/tests/issue1445-directory-pull-refresh.spec.ts.
+    it("the paint is capped by the slot's OWN height, not by the commit distance", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
 
-      pullTo(listIn(container), PULL_COMMIT_PX * 4);
+      const far = PULL_COMMIT_PX * 4;
+      pullTo(listIn(container), far);
 
       const painted = slotIn(container).style.transform;
-      expect(painted).toContain(`translateY(${PULL_COMMIT_PX}px)`);
-      expect(painted).not.toContain(`translateY(${PULL_COMMIT_PX * 4}px)`);
+      expect(painted).toBe(`translateY(-100%) translateY(min(${far}px, 100%))`);
+    });
+
+    // #1658 — the ramp and the travel are INDEPENDENT axes, and the fix for
+    // the travel is what puts the ramp at risk: computing opacity from the
+    // capped travel would top the spinner out at slotHeight/PULL_COMMIT_PX —
+    // 0.44 at the default font size — so it would never reach full at the one
+    // distance where reaching full is the whole point. The ramp says where the
+    // release starts spending a capture; the travel says where the slot sits.
+    //
+    // Green before this issue and green after it, deliberately: its oracle is
+    // the naive fix, not the defect. Compute the opacity from the capped
+    // travel and it goes red on the last two assertions.
+    it("the opacity ramp still reaches full at the commit distance", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      const list = listIn(container);
+      pullTo(list, Math.round(PULL_COMMIT_PX / 2));
+      expect(slotIn(container).style.opacity).toBe("0.5");
+
+      pullTo(list, PULL_COMMIT_PX);
+      expect(slotIn(container).style.opacity).toBe("1");
+
+      pullTo(list, PULL_COMMIT_PX * 4);
+      expect(slotIn(container).style.opacity).toBe("1");
     });
 
     it("the release wipes the paint", () => {
