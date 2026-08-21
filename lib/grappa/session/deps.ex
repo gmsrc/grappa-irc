@@ -15,13 +15,54 @@ defmodule Grappa.Session.Deps do
   contract stops carrying a bare closure among fields that are genuinely
   state: what it sees now is one typed field it can project as a whole.
 
-  The struct is built by `from_opts/1` from the SAME `start_link/1` keyword
-  API as before — the ten option keys are unchanged, so no producer of a
+  The struct is built by `from_opts/2` from the SAME `start_link/1` keyword
+  API as before — the option keys are unchanged, so no producer of a
   session plan had to move.
+
+  ## Why the door takes the subject (#1398)
+
+  A closure carries no module reference, so `Boundary` cannot follow the
+  edge and nothing at compile time can see these ten. Built with
+  `Map.get/2`, an omitted injection produced a `nil` field, and a `nil`
+  field is a persist that silently does not happen — not a compile error,
+  not a crash, not a log line.
+
+  `nil` could not simply be banned, because it is correct half the time.
+  There are exactly TWO producers and they inject DISJOINT sets:
+
+  * `Grappa.Networks.SessionPlan` (registered users) —
+    `away_persister`, `credential_committer`, `credential_failer`,
+    `last_joined_persister`, `registration_committer`;
+  * `Grappa.Visitors.SessionPlan` (visitors) — `credential_failer`,
+    `last_joined_persister`, `recover_source`, `visitor_committer`,
+    `visitor_nick_persister`, `visitor_password_rotator`.
+
+  Two shared, three user-only, four visitor-only. So `nil` is not a
+  default at all: it is a function of the SUBJECT TAG, which
+  `Grappa.Subject` already carries. `from_opts/2` validates the set due
+  for that tag and raises `Grappa.Session.DepsInjectionError` naming the
+  offending keys — the failure moves to spawn, loud, instead of surfacing
+  as a missing row weeks later. `required_injections/1` is the single
+  source of truth for the two sets; `Grappa.Session.DepsTest` pins it
+  against the live output of both producers, since neither can reference
+  this module (both their boundaries already dep `Grappa.Session`, so the
+  reverse edge would close a cycle — the same reason these are closures).
+
+  Two keys sit outside that rule, both measured:
+
+  * `query_window_open?` is due on NEITHER tag. Neither producer injects
+    it, it carries a real production default, and it exists as a seam so
+    a test can keep `EventRouter` sandbox-free. Accepted on both tags,
+    required on neither.
+  * `refresh_plan` is not a field here at all, though both producers
+    inject it and it shares the silent-absence class. `Server.init/1`
+    consumes it from the raw opts BEFORE `do_init/1` builds this struct,
+    because its return value REPLACES the opts the struct is built from.
+    It is outside this struct's authority and stays unguarded.
   """
 
   alias Grappa.QueryWindows
-  alias Grappa.Session.EventRouter
+  alias Grappa.Session.{DepsInjectionError, EventRouter}
 
   @typedoc """
   Optional opaque callback the visitor-side `SessionPlan` injects into
@@ -187,9 +228,14 @@ defmodule Grappa.Session.Deps do
   @type away_persister :: (String.t() | nil, DateTime.t() | nil -> :ok | {:error, term()})
 
   @typedoc """
-  The ten injected callbacks. Nine default to `nil` — a plan that does not
-  supply one is declaring the session cannot do that thing (a user session
-  has no `recover_source`; a visitor session has no `away_persister`).
+  The ten injected callbacks. Nine field defaults are `nil`, and a `nil`
+  on a LIVE session still means "this session cannot do that thing" (a
+  user session has no `recover_source`; a visitor session has no
+  `away_persister`) — but which nils are legitimate is decided at the
+  door by `from_opts/2`, per subject tag, not by this struct. The
+  defaults remain so `%__MODULE__{}` stays constructible for the
+  hot-deploy fallback in `Session.Server` (a pre-#1390 live process has
+  no `:deps` key at all).
 
   `query_window_open?` is the exception and does NOT default to `nil`: it
   has a real production default, `&QueryWindows.open?/3`. A session always
@@ -221,14 +267,103 @@ defmodule Grappa.Session.Deps do
             away_persister: nil,
             query_window_open?: &QueryWindows.open?/3
 
-  @doc """
-  Reads the ten callbacks out of a resolved `Grappa.Session.start_opts/0`.
+  # The two due sets, key => the arity the consumer calls the closure at.
+  # Arity is part of the contract, not decoration: a closure of the wrong
+  # shape fails at the call site — deep inside a running session, on the
+  # rare path that reaches for it — which is the same silent-until-late
+  # failure the presence check exists to end.
+  @user_injections %{
+    away_persister: 2,
+    credential_committer: 1,
+    credential_failer: 1,
+    last_joined_persister: 2,
+    registration_committer: 1
+  }
 
-  Absent keys take the struct defaults, which is the same rule `init/1`
-  applied when these lived as ten separate `Map.get(opts, :key)` lines.
+  @visitor_injections %{
+    credential_failer: 1,
+    last_joined_persister: 2,
+    recover_source: 0,
+    visitor_committer: 3,
+    visitor_nick_persister: 2,
+    visitor_password_rotator: 2
+  }
+
+  # Derived, never listed twice: the alien check needs the union, and a
+  # union computed from the two tables cannot drift away from them.
+  @injectable_keys Enum.sort(Enum.uniq(Map.keys(@user_injections) ++ Map.keys(@visitor_injections)))
+
+  @typedoc """
+  The closed set of injectable closure keys — NINE, not ten.
+
+  Nine and not ten because the review's ten is the UNION OF WHAT THE TWO
+  PRODUCERS INJECT, and one member of that union is `refresh_plan`, which
+  this struct does not carry. Measured, not assumed:
+
+  * it is absent from `defstruct` above and always has been;
+  * `Server.init/1` reads it with its own `Map.get(opts, :refresh_plan)`
+    and, on `{:ok, fresh_plan}`, calls `init_or_hold(Map.merge(opts,
+    fresh_plan))`. So it is consumed BEFORE `do_init/1` and its return
+    value REPLACES the opts this struct is then built from — a check here
+    would run after the fact, on a map that already reflects the closure's
+    own output.
+
+  Excluded by that structure, therefore, not by oversight and not because
+  its absence is safe: both producers inject it, so it belongs to the same
+  silent-absence class as these nine, and it stays UNGUARDED. That is the
+  documented limitation of this door. `query_window_open?` is the tenth
+  STRUCT field and is likewise not here, for the opposite reason — no
+  producer injects it and it has a real production default.
   """
-  @spec from_opts(map()) :: t()
-  def from_opts(opts) when is_map(opts) do
+  @type injectable ::
+          :away_persister
+          | :credential_committer
+          | :credential_failer
+          | :last_joined_persister
+          | :recover_source
+          | :registration_committer
+          | :visitor_committer
+          | :visitor_nick_persister
+          | :visitor_password_rotator
+
+  @doc """
+  The closures due for `subject`'s tag, as `%{key => arity}`.
+
+  The single source of truth for both sets. `Grappa.Session.DepsTest`
+  pins it against the live output of `Grappa.Networks.SessionPlan` and
+  `Grappa.Visitors.SessionPlan`, so a closure added to a producer without
+  an entry here — or an entry no producer injects — is red.
+  """
+  @spec required_injections(Grappa.Session.subject()) :: %{injectable() => arity()}
+  def required_injections({:user, _}), do: @user_injections
+  def required_injections({:visitor, _}), do: @visitor_injections
+
+  @doc """
+  Every key either producer may inject — the union of the two due sets,
+  and never empty.
+
+  A key in this list that is not due for the session's tag is ALIEN: a
+  visitor closure on a user session is a mis-wired plan, not a spare
+  capability, and `from_opts/2` refuses it. See `t:injectable/0` for why
+  the list holds nine keys and not the review's ten.
+  """
+  @spec injectable_keys() :: [injectable(), ...]
+  def injectable_keys, do: @injectable_keys
+
+  @doc """
+  Builds the struct from a resolved `Grappa.Session.start_opts/0`,
+  validating the injected set against `subject`'s tag.
+
+  Raises `Grappa.Session.DepsInjectionError` when a due key is absent, is
+  present as `nil` (the shape the old `Map.get/2` door swallowed), is
+  present at the wrong arity, or when a key due for the OTHER tag is
+  present. Never returns a partially-injected struct: the plan is either
+  complete for its subject or the spawn fails naming what is wrong.
+  """
+  @spec from_opts(Grappa.Session.subject(), map()) :: t()
+  def from_opts(subject, opts) when is_map(opts) do
+    :ok = validate!(subject, opts)
+
     %__MODULE__{
       visitor_committer: Map.get(opts, :visitor_committer),
       visitor_password_rotator: Map.get(opts, :visitor_password_rotator),
@@ -241,5 +376,46 @@ defmodule Grappa.Session.Deps do
       away_persister: Map.get(opts, :away_persister),
       query_window_open?: Map.get(opts, :query_window_open?, &QueryWindows.open?/3)
     }
+  end
+
+  defp validate!(subject, opts) do
+    due = required_injections(subject)
+    {missing, wrong_arity} = due_faults(due, opts)
+    alien = Enum.filter(@injectable_keys -- Map.keys(due), &(Map.get(opts, &1) != nil))
+
+    if missing == [] and wrong_arity == [] and alien == [] do
+      :ok
+    else
+      raise DepsInjectionError,
+        subject_tag: elem(subject, 0),
+        missing: missing,
+        alien: alien,
+        wrong_arity: wrong_arity
+    end
+  end
+
+  # One pass over the due set, splitting it into "not supplied at all" and
+  # "supplied at the wrong shape". Sorted input (a map's key order is
+  # already sorted for atoms) keeps the message stable across runs.
+  defp due_faults(due, opts) do
+    {missing, wrong_arity} =
+      Enum.reduce(due, {[], []}, fn {key, arity}, {missing, wrong_arity} ->
+        case Map.get(opts, key) do
+          fun when is_function(fun, arity) ->
+            {missing, wrong_arity}
+
+          fun when is_function(fun) ->
+            {:arity, got} = Function.info(fun, :arity)
+            {missing, [{key, arity, got} | wrong_arity]}
+
+          # Absent, or present as something that is not a function at all —
+          # `nil` included, which is the exact value the old `Map.get/2`
+          # door accepted in silence. Both are MISSING, not "supplied".
+          _ ->
+            {[key | missing], wrong_arity}
+        end
+      end)
+
+    {Enum.reverse(missing), Enum.reverse(wrong_arity)}
   end
 end

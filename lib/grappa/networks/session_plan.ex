@@ -109,6 +109,18 @@ defmodule Grappa.Networks.SessionPlan do
         cred.nick
       )
 
+    # #1398 — the closures below are the USER half of a two-variant
+    # contract. `Grappa.Session.Deps.required_injections({:user, _})` is
+    # its single source of truth, and `Grappa.Session.Deps.from_opts/2`
+    # raises at spawn if this map does not match it, key for key and
+    # arity for arity. This module cannot name that one (Session is
+    # already a dep of Networks, so the reverse edge would close the very
+    # Boundary cycle these closures exist to dodge) — the two are held in
+    # step by `Grappa.Session.DepsTest`, which measures THIS function's
+    # output against the table. Adding a closure here without adding it
+    # there is red; so is the reverse. `refresh_plan` is the one below
+    # that is NOT part of that set: `Server.init/1` consumes it from the
+    # raw opts before the struct is built.
     Map.merge(base, %{
       # Opaque callback injected so Session.Server can transition the
       # credential to :failed on hard upstream errors (k-line, permanent

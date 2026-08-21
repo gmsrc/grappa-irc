@@ -1050,7 +1050,12 @@ defmodule Grappa.Session.Server do
       pending_password: pending_password_from_opts(opts),
       perform_list: Map.get(opts, :perform_list),
       oper_pass: Map.get(opts, :oper_pass),
-      deps: Deps.from_opts(opts),
+      # #1398 — the subject tag decides WHICH closures are due, so the
+      # door takes it: a user plan missing `away_persister` raises here,
+      # a visitor plan without one is correct by construction. Reached
+      # only from `do_init/1`, so the `{:hold, _}` arm above (which
+      # `:ignore`s before any state is built) never pays the check.
+      deps: Deps.from_opts(opts.subject, opts),
       ghost_recovery: nil,
       ghost_timer: nil,
       parked_nick_fallback: nil,

@@ -166,6 +166,17 @@ defmodule Grappa.Visitors.SessionPlan do
         "Grappa Visitor"
       )
 
+    # #1398 — the closures below are the VISITOR half of a two-variant
+    # contract, disjoint from the user half on all but `credential_failer`
+    # and `last_joined_persister`.
+    # `Grappa.Session.Deps.required_injections({:visitor, _})` is its
+    # single source of truth and `Grappa.Session.Deps.from_opts/2` raises
+    # at spawn if this map does not match it. Same reason this module
+    # cannot name that one (Visitors deps Session via Login), same keeper:
+    # `Grappa.Session.DepsTest` measures THIS function's output against
+    # the table, so a closure added on either side alone is red.
+    # `refresh_plan` is outside that set — `Server.init/1` consumes it
+    # from the raw opts before the struct exists.
     Map.merge(base, %{
       # Task 15 / #561: opaque function-reference indirection. Session.Server
       # cannot statically alias Grappa.Visitors (closes a Boundary
