@@ -54,8 +54,22 @@ export type PullGestureParams = {
   // read as "no pull", never as an upward paint.
   onProgress: (dy: number) => void;
   // Released past the commit distance: ask for the refresh.
+  //
+  // 🔴 TERMINAL, and `onRelease` does NOT also fire on this path: the two are
+  // the ends of a claimed gesture and exactly one of them runs. So if the
+  // element `onProgress` painted OUTLIVES the commit, clear the paint HERE
+  // yourself — the binder writes no paint and cannot clear one.
+  //
+  // Measured (#1658): the channel directory's slot does outlive it, and it
+  // kept the last touchmove's transform at full opacity for the life of the
+  // pane. `bindDismissGesture` (mediaViewerGesture.ts) has the same terminal
+  // shape and never showed the bug, because its commit CLOSES the modal it
+  // painted — so the requirement stayed implicit until the first consumer
+  // whose element survived a commit paid for it. Written down here, where the
+  // fifth binder over this core will read it.
   onCommit: () => void;
-  // Claimed but not committed, or cancelled: put the slot back.
+  // Claimed but not committed, or cancelled: put the slot back. NOT the sole
+  // cleanup hook — see `onCommit`.
   onRelease: () => void;
 };
 

@@ -952,6 +952,29 @@ describe("DirectoryPane", () => {
       expect(slotIn(container).style.transform).toBe("");
     });
 
+    // #1658 — the release that COMMITS is a terminal too, and the pane hangs
+    // `unpaintPull` off `onRelease` alone, which the binder skips on exactly
+    // that path (`onCommit()` then `return`). The slot keeps the inline
+    // transform and opacity the last touchmove wrote, at full opacity, for as
+    // long as the pane lives — the spinner vjt saw hung after the refresh on
+    // 1.3.0.
+    //
+    // A separate test from "the release wipes the paint" above rather than a
+    // widening of it: that one lifts SHORT of the commit distance, which is
+    // precisely why it stayed green through the whole defect.
+    it("a release that COMMITS wipes the paint too", () => {
+      directoryPageMock.mockReturnValue(FRESH_PAGE);
+      const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
+
+      pullAndLift(listIn(container), PULL_COMMIT_PX * 3);
+
+      // Pre-state, not decoration: without it a binder that never armed would
+      // satisfy both assertions below by having painted nothing at all.
+      expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
+      expect(slotIn(container).style.transform).toBe("");
+      expect(slotIn(container).style.opacity).toBe("");
+    });
+
     it("a drag that starts scrolled away from the top is left to native scroll", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);

@@ -378,7 +378,19 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
       // THE SAME DOOR the button and the stale CTA use. A second refresh path
       // would sidestep the store latch that makes those two honest (F1), and
       // re-open the double-capture this issue closed.
-      onCommit: onRefresh,
+      //
+      // #1658 — and it unpaints FIRST, because a committing release is a
+      // terminal the binder does not report through `onRelease`: it calls
+      // `onCommit()` and returns. `onRelease: unpaintPull` alone therefore
+      // cleared the paint on every path EXCEPT the one the user takes when the
+      // gesture works, and the slot kept the last touchmove's transform and
+      // full opacity for as long as the pane lived — vjt's hung spinner on
+      // 1.3.0. The paint belongs to this pane (the binder writes none of its
+      // own), so ending it on both terminals belongs here too.
+      onCommit: () => {
+        unpaintPull();
+        onRefresh();
+      },
       onRelease: unpaintPull,
     });
   };

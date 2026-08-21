@@ -54,8 +54,16 @@ export type DismissGestureParams = {
   // Past the distance or the velocity: close, through the caller's normal
   // close path (#1121 / #535 — a dismiss that bypassed it would strand the
   // reader exactly the way those two issues closed).
+  //
+  // 🔴 TERMINAL, and `onRelease` does NOT also fire on this path — exactly one
+  // of the two runs. This viewer gets away with painting and never clearing
+  // because committing UNMOUNTS the element it painted; a consumer whose
+  // painted element survives the commit must clear it here. Stated because it
+  // was implicit and cost #1658 in the sibling binder (`pullGesture.ts`),
+  // whose slot does survive: it hung at full opacity for the life of the pane.
   onCommit: () => void;
-  // Claimed but not committed, or cancelled: put it back.
+  // Claimed but not committed, or cancelled: put it back. NOT the sole cleanup
+  // hook — see `onCommit`.
   onRelease: () => void;
 };
 
