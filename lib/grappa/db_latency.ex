@@ -42,7 +42,8 @@ defmodule Grappa.DbLatency do
           the sender's own `handle_call` queued behind a busy channel's
           synchronous inbound inserts.
         - **mechanism 2 (single-writer contention):** the `contention`
-          row — `queue_timeout` / `busy_locked` counts, and `dropped`
+          row — `queue_timeout` / `busy_locked` / `interrupted` counts (#1657
+          added the third: a checkout the pool served and then revoked), and `dropped`
           (budget-exhausted rows lost).
         - **mechanism 3 (pure insert / index write-amplification):** the
           `persist` row `mean_ms` on its own, watched as the table grows.
@@ -125,6 +126,11 @@ defmodule Grappa.DbLatency do
           n: non_neg_integer(),
           queue_timeout: non_neg_integer(),
           busy_locked: non_neg_integer(),
+          # #1657 — the pool cancelling a checkout it had already served.
+          # Counted apart from `queue_timeout` (never granted) and
+          # `busy_locked` (granted, then blocked on the file lock) because
+          # the three name three different places the write died.
+          interrupted: non_neg_integer(),
           dropped: non_neg_integer()
         }
 
@@ -156,7 +162,7 @@ defmodule Grappa.DbLatency do
   defstruct queries: %{},
             send_privmsg: %{n: 0, total: 0, outcomes: %{}},
             persist: %{n: 0, total: 0, outcomes: %{}},
-            contention: %{n: 0, queue_timeout: 0, busy_locked: 0, dropped: 0},
+            contention: %{n: 0, queue_timeout: 0, busy_locked: 0, interrupted: 0, dropped: 0},
             lock_stalls: []
 
   @type t :: %__MODULE__{
@@ -260,6 +266,7 @@ defmodule Grappa.DbLatency do
     case Map.get(metadata, :fault) do
       :queue_timeout -> %{state | contention: %{counted | queue_timeout: counted.queue_timeout + 1}}
       :busy_locked -> %{state | contention: %{counted | busy_locked: counted.busy_locked + 1}}
+      :interrupted -> %{state | contention: %{counted | interrupted: counted.interrupted + 1}}
       _ -> %{state | contention: counted}
     end
   end

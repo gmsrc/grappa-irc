@@ -21,10 +21,10 @@ defmodule Grappa.Repo.BusyRetry do
       the op. Passed straight through, **never retried** (it is not a
       fault).
     * `{:error, :db_unavailable}` — a TRANSIENT fault
-      (`DBConnection.ConnectionError` / a busy-or-locked `%Exqlite.Error{}`)
-      that persisted for the whole retry budget. A web caller routes this
-      through `FallbackController` to a clean **503** (#518) instead of a
-      500 raise.
+      (`DBConnection.ConnectionError`, or a busy-or-locked / INTERRUPTED
+      `%Exqlite.Error{}` — see `classify/1`) that persisted for the whole
+      retry budget. A web caller routes this through `FallbackController`
+      to a clean **503** (#518) instead of a 500 raise.
 
   A **non-transient** `%Exqlite.Error{}` (syntax / corruption) is NOT
   saturation: retrying only spins. It **re-raises** with its original
@@ -56,6 +56,19 @@ defmodule Grappa.Repo.BusyRetry do
       first attempt has therefore already overshot the deadline by the time it
       returns, so the loop makes EXACTLY ONE attempt and the linear backoff
       below never runs.
+    * an `:interrupted` fault (#1657) shares that second regime, and saying
+      so is the point. It is raised when DBConnection's own `:timeout`
+      (15_000ms by default, 10x the budget) cancels the statement, so the
+      first attempt has ALREADY overshot by the time it returns and the loop
+      makes exactly one attempt here too. 🔴 So do not read #1657's
+      reclassification as "the row now gets retried" — in the live topology
+      it does not. What changed is that a pool-induced cancellation stops
+      being reported as CORRUPTION: it degrades to `{:error, :db_unavailable}`
+      (a 503 on a stateless web write, an honest drop in `Scrollback`)
+      instead of re-raising as a 500, and it is countable as its own state.
+      Making the budget actually REACH this regime is the same
+      re-dimensioning question #1421 prices, and it is not this module's to
+      take unilaterally.
 
   A third topology WOULD fall inside the budget — a deferred read->write
   upgrade raises an immediate `SQLITE_BUSY` that `busy_timeout` does not cover
@@ -79,7 +92,7 @@ defmodule Grappa.Repo.BusyRetry do
   @backoff_ms Application.compile_env(:grappa, [:busy_retry, :backoff_ms], 25)
   @backoff_cap_ms Application.compile_env(:grappa, [:busy_retry, :backoff_cap_ms], 200)
 
-  @type fault_kind :: :queue_timeout | :busy_locked
+  @type fault_kind :: :queue_timeout | :busy_locked | :interrupted
 
   @typedoc """
   Per-contention observer. Called once per RIDDEN-OUT transient attempt with
@@ -160,9 +173,15 @@ defmodule Grappa.Repo.BusyRetry do
   # Prose only: same retry, same `{:error, :db_unavailable}`, same metadata.
   # Splitting it also lets the #1429 census count the two apart
   # (`saturated` / `lockheld` in `scripts/log-gap-scan.awk`).
+  #
+  # #1657 adds the third. Its phrase names what the victim OBSERVED — its
+  # statement was cancelled mid-flight — and not the pool deadline that
+  # caused it, which this frame never sees and which is already the subject
+  # of the timing-out client's own `queue_timeout` line elsewhere in the log.
   @spec observed_state(fault_kind()) :: String.t()
   defp observed_state(:queue_timeout), do: "SQLite pool saturated"
   defp observed_state(:busy_locked), do: "SQLite write lock held by another writer"
+  defp observed_state(:interrupted), do: "SQLite statement cancelled by a pool timeout"
 
   # The same rule, applied to the NUMBER on that line (#1421). It used to read
   # "for the full #{@budget_ms}ms retry budget", which is false in the regime
@@ -198,27 +217,71 @@ defmodule Grappa.Repo.BusyRetry do
 
   @doc """
   Is this caught exception a TRANSIENT write-contention fault (retry) or a
-  permanent one (surface at once)? A pool `queue_timeout` is always
-  transient; for an `%Exqlite.Error{}` the message text ("busy"/"locked")
-  is the only discriminator SQLite gives us. Public so the scrollback
-  wrapper reuses the SAME classifier rather than forking one.
+  permanent one (surface at once)? Derived from `classify/1` so there is
+  exactly ONE table mapping a driver exception to a verdict. Public so the
+  scrollback wrapper reuses the SAME classifier rather than forking one.
   """
   @spec transient_fault?(Exception.t()) :: boolean()
-  def transient_fault?(%DBConnection.ConnectionError{}), do: true
+  def transient_fault?(error), do: classify(error) != :permanent
 
-  def transient_fault?(%Exqlite.Error{message: message}) when is_binary(message) do
+  @doc """
+  The single classifier: driver exception → fault kind, or `:permanent`.
+
+  A pool `queue_timeout` is always transient. For an `%Exqlite.Error{}` the
+  message text is the only discriminator SQLite gives us, and there are two
+  transient shapes, not one:
+
+    * `"interrupted"` — SQLITE_INTERRUPT. **The pool cancelling its own
+      victim (#1657).** Traced through the deps: a checkout deadline fires
+      (`db_connection/connection_pool.ex:190`) → `Holder.handle_disconnect/2`
+      → `Exqlite.Connection.disconnect/2` → `Sqlite3.cancel/1` →
+      `sqlite3_interrupt()`, and the statement in flight returns
+      SQLITE_INTERRUPT. So an interrupt is contention BY CONSTRUCTION —
+      the only way to earn one is for the pool to have run out of time.
+      It was classified `:permanent` until #1657, which meant the one
+      fault the retry budget exists for spent none of it, and — because a
+      permanent fault re-raises — a pool timeout surfaced as a dropped row
+      in `Scrollback`, a 500 on a stateless web write, and a crash
+      anywhere unwrapped (`Grappa.Bootstrap` died exactly this way on the
+      1.3.0 herd).
+    * `"busy"` / `"locked"` — a writer held the file lock past
+      `busy_timeout`.
+
+  Anything else (syntax, corruption) is `:permanent`: retrying only spins.
+
+  🔴 It earns its OWN kind rather than borrowing one. #1420 split
+  `observed_state/1` in two precisely because one label was worn by a fault
+  it did not describe; folding an interrupt into `:busy_locked` would print
+  "write lock held by another writer" about a fault that never touched the
+  write lock — the same defect, re-introduced. `:queue_timeout` is nearer
+  (the pool IS the cause) but still names the wrong observation: that
+  client's checkout was SERVED, and then revoked.
+  """
+  @spec classify(Exception.t()) :: fault_kind() | :permanent
+  def classify(%DBConnection.ConnectionError{}), do: :queue_timeout
+
+  def classify(%Exqlite.Error{message: message}) when is_binary(message) do
     downcased = String.downcase(message)
-    String.contains?(downcased, "busy") or String.contains?(downcased, "locked")
+
+    cond do
+      String.contains?(downcased, "interrupted") -> :interrupted
+      String.contains?(downcased, "busy") or String.contains?(downcased, "locked") -> :busy_locked
+      true -> :permanent
+    end
   end
 
-  def transient_fault?(%Exqlite.Error{}), do: false
+  def classify(%Exqlite.Error{}), do: :permanent
 
-  # Only reached after `transient_fault?/1` returned true, so an
-  # `%Exqlite.Error{}` here is always busy/locked and a `ConnectionError`
-  # always a pool queue_timeout.
+  # Only reached after `transient_fault?/1` returned true, so `classify/1`
+  # cannot answer `:permanent` here — but the clause is explicit rather than
+  # a bare pass-through, so a future transient kind that forgets to teach
+  # `observed_state/1` fails LOUD at the case instead of printing a stray atom.
   @spec fault_kind(DBConnection.ConnectionError.t() | Exqlite.Error.t()) :: fault_kind()
-  defp fault_kind(%DBConnection.ConnectionError{}), do: :queue_timeout
-  defp fault_kind(%Exqlite.Error{}), do: :busy_locked
+  defp fault_kind(error) do
+    case classify(error) do
+      kind when kind in [:queue_timeout, :busy_locked, :interrupted] -> kind
+    end
+  end
 
   ## ----- Test-only fault injection ------------------------------------
   #

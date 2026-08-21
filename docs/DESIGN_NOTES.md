@@ -57177,3 +57177,100 @@ which imports the production constant and compares it to the literal. A
 comment describing a guarantee that has been removed is worse than no
 comment, because it is the thing a reader consults instead of checking —
 the same class #1393 spent a day deleting.
+<!-- entry #1657 -->
+
+---
+
+## 2026-08-22 — #1657: a lost scrollback row must be countable before it can be prevented
+
+The 1.3.0 cold restart put ~70 sessions through their scrollback restore at
+once, exhausted the SQLite pool, and lost message rows. Two things came out of
+the investigation that outlive the incident, and neither is "raise POOL_SIZE".
+
+### The attribution is NOT establishable, and that is the finding
+
+Three callers were seen in the burst's stacks — `MeController.show/2` →
+`WindowCounts.bulk_snapshot/4` → `ReadCursor.bulk_unread_content_tails/2`,
+`SessionLog`, and `Bootstrap.validate_credential_servers!/1` — with no ranking
+between them. The ranking DID exist: `db_connection` appends the client's
+sampled stack to every checkout-deadline line it logs
+(`connection_pool.ex:196`, `Process.info(pid, :current_stacktrace)`), so the 42
+timeout lines carried 42 attributions. `run_erl`'s log rotation overwrote them
+before anyone grouped them, and the surviving generations all postdate the
+herd. So the ranking is gone, permanently, and the saturation axis is frozen
+rather than guessed at.
+
+`Grappa.DbLatency` cannot substitute, for a reason worth recording because it
+looks like it should: its counters are cumulative-since-boot with only a manual
+`reset/0`, so a burst cannot be windowed out — but more decisively, its
+`[:grappa, :repo, :query]` fold keys on `{source, op}` and never reads
+`metadata.result`. Ecto populates that field for failed queries
+(`ecto_sql/lib/ecto/adapters/sql.ex:1302`, and `db_connection.ex:1695` routes
+checkout errors into the same log callback), so the discriminator reaches the
+sink and the sink discards it. The instrument cannot tell a slow-but-served
+read from one of the 42 victims at any time resolution.
+
+### Counting a loss is a different axis from preventing one
+
+`messages` is the product. A row of it vanishing is a defect on its own terms,
+and it needed no ranking to work on — so it went first.
+
+**The count was a floor by construction.** Of the five
+`Persistor.persist_and_broadcast/3` call sites, only two logged the drop; the
+three outbound doors returned `{:error, _}` and said nothing. The grep that
+produced "ten rows lost" could only ever have seen a subset, and no re-reading
+of the log could have said by how much. The line therefore moved to the door
+rather than to the call sites: `Scrollback.persist_event/1` has exactly one
+production caller, so a census line in `Persistor` covers all five by
+construction and a sixth inherits it. Proven by mutation — removing that one
+line turns all five tests red, not three.
+
+Its wording drops the cause it could not vouch for. The old caller-side text
+asserted "SQLite pool saturated" unconditionally, and the red run printed the
+engine's own verdict for the same drop as "SQLite write lock held by another
+writer". `:persist_unavailable` is one atom over several causes; the cause
+stays on the engine's terminal line, which observed it. The
+`scrollback row dropped` prefix is unchanged, so the #1429 census keeps
+matching.
+
+**And one drop was not contention at all — it was contention misfiled as
+corruption.** `%Exqlite.Error{message: "interrupted"}` is what the pool does to
+its own victim: the checkout deadline fires
+(`db_connection/connection_pool.ex:190`) → `Holder.handle_disconnect/2` →
+`Exqlite.Connection.disconnect/2` → `Sqlite3.cancel/1` → `sqlite3_interrupt()`,
+and the statement in flight returns SQLITE_INTERRUPT. `transient_fault?/1`
+matched only "busy"/"locked", so it called that `:permanent` and re-raised: a
+dropped row in `Scrollback`, a 500 on a stateless web write, and a crash
+anywhere unwrapped — which is how `Bootstrap` died in the incident, on a READ
+(`bootstrap.ex:635`, `Visitors.list_active/0`) that no retry wraps.
+
+It earns a third fault kind rather than borrowing one. #1420 split
+`observed_state/1` in two precisely because a label was worn by a fault it did
+not describe; folding an interrupt into `:busy_locked` would print "write lock
+held by another writer" about a fault that never touched the write lock.
+`:queue_timeout` is nearer but still wrong: that client's checkout was SERVED,
+and then revoked.
+
+### 🔴 What this does NOT fix
+
+Reporting a loss is not preventing one, and the reclassification is not a
+retry. An interrupt arrives only after DBConnection's 15_000ms `:timeout` has
+already blown the 1_500ms budget, so the loop still makes exactly one attempt —
+the same regime #1421 documents for `busy_locked`, for the same reason. What
+changed is the verdict, not the retry count: a 503 instead of a 500, an honest
+drop instead of a corruption alarm, and a counter of its own. Making the budget
+actually reach that regime is #1421's re-dimensioning question and was not
+taken here.
+
+A durable write spool WOULD close the loss axis, and is declined: #340 already
+rejected a serialized writer, and a spool adds ordering against `messages.id`,
+replay-on-boot, and a second durability story for the FK that `read_cursors`
+hangs off — heavier than the problem. `pool_size` is declined for a different
+reason: it lives in `config/runtime.exs`, so it is a COLD deploy that drops
+every IRC session, and admitting more concurrent readers to a single-writer
+file is not obviously a cure for a writer being starved by readers.
+
+Left open, deliberately: whether `Bootstrap` was restarted by its supervisor
+after that crash and re-emitted the spawn plan. The mechanism is verified
+(`use Task, restart: :transient`, `bootstrap.ex:158`); the event was never
+observed, and the log that could have shown it is gone.

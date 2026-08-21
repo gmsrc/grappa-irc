@@ -99,6 +99,11 @@ function count_signatures(line) {
     # the phrase that names the topology is the stable half, and it is the
     # half this counter is about.
     if (line ~ /SQLite pool saturated/) CNT["saturated"]++
+    # #1657 — the third BusyRetry terminal state. Its own counter, not folded
+    # into `saturated`: a cancelled statement had ALREADY been served a
+    # connection, so counting it as a checkout that never happened would
+    # misreport where the write died.
+    if (line ~ /statement cancelled by a pool timeout/) CNT["interrupted"]++
 
     # `index` before the three regexes: every lock signature carries the
     # literal "lock", and the stream is ~10^6 lines. The known-answer
@@ -119,7 +124,8 @@ function zero_counters(   i) {
 function summary_line(svc, nlines, mg, mat) {
     return sprintf(SUMFMT, svc, nlines, mg, mat, THRESH, ngap, \
         CNT["db30"], CNT["idle30"], CNT["dropped"], CNT["saturated"], \
-        CNT["lockheld"], CNT["lockstall"], CNT["lockstall_resolved"])
+        CNT["interrupted"], CNT["lockheld"], CNT["lockstall"], \
+        CNT["lockstall_resolved"])
 }
 
 function bail(msg) {
@@ -189,7 +195,7 @@ BEGIN {
     }
 
     SUMFMT = "%s\tSUMMARY\tlines=%d\tmaxgap=%.1f\tmaxgap_at=%s\tgaps_ge_%d=%d" \
-        "\tdb30=%d\tidle30=%d\tdropped=%d\tsaturated=%d" \
+        "\tdb30=%d\tidle30=%d\tdropped=%d\tsaturated=%d\tinterrupted=%d" \
         "\tlockheld=%d\tlockstall=%d\tlockstall_resolved=%d\n"
 
     # Samples copied from the emitting call site. Keep them verbatim: a
@@ -197,6 +203,7 @@ BEGIN {
     #   db30 / idle30      — Ecto's own query log (`Grappa.DbLatency`).
     #   dropped            — Grappa.Scrollback, #336 never-crash contract.
     #   saturated          — Repo.BusyRetry, pool queue_timeout arm.
+    #   interrupted        — Repo.BusyRetry, interrupted arm (#1657).
     #   lockheld           — Repo.BusyRetry, busy_locked arm (#1420).
     #   lockstall{,_resolved} — Grappa.Repo.LockWatch's two episode edges.
     sig("db30", "QUERY OK source=\"messages\" db=30064.1ms queue=0.1ms")
@@ -205,6 +212,9 @@ BEGIN {
     sig("saturated", \
         "db write unavailable: SQLite pool saturated for 1512ms across 14 attempts" \
         " (1500ms retry budget) — returning :db_unavailable")
+    sig("interrupted", \
+        "db write unavailable: SQLite statement cancelled by a pool timeout for 15042ms" \
+        " across 1 attempts (1500ms retry budget) — returning :db_unavailable")
     sig("lockheld", \
         "db write unavailable: SQLite write lock held by another writer for 30067ms" \
         " across 1 attempts (1500ms retry budget) — returning :db_unavailable")

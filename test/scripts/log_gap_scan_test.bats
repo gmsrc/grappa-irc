@@ -24,11 +24,15 @@ setup() {
     # Verbatim from the call sites, so a pin that drifts from production
     # prose fails here rather than reporting a confident zero.
     #   lock_watch.ex — the two edges of one stall episode
-    #   busy_retry.ex — the two terminal arms, one per fault kind
+    #   busy_retry.ex — the three terminal arms, one per fault kind
     LOCKSTALL_LINE='db lock stall: holder #PID<0.512.0> has held RESERVED for 30123ms with 2 waiter(s) queued — holder status=:runnable at :gen_server.loop/7, stack: a <- b'
     LOCKRESOLVED_LINE='db lock stall RESOLVED: holder #PID<0.512.0> released RESERVED after 30456ms'
     LOCKHELD_LINE='db write unavailable: SQLite write lock held by another writer for 30067ms across 1 attempts (1500ms retry budget) — returning :db_unavailable'
     SATURATED_LINE='db write unavailable: SQLite pool saturated for 1512ms across 14 attempts (1500ms retry budget) — returning :db_unavailable'
+    # #1657 — the third arm. The elapsed is ~15s because a cancellation is
+    # raised only once DBConnection's own `:timeout` has expired, which is
+    # also why its attempt count is 1 and not 14 like the saturated line.
+    INTERRUPTED_LINE='db write unavailable: SQLite statement cancelled by a pool timeout for 15042ms across 1 attempts (1500ms retry budget) — returning :db_unavailable'
 }
 
 # The scanner as integration.sh invokes it: a service label and a
@@ -93,12 +97,15 @@ stamp() {
         stamp '12:00:04.' "$LOCKHELD_LINE"
         stamp '12:00:05.' "$LOCKSTALL_LINE"
         stamp '12:00:06.' "$LOCKRESOLVED_LINE"
+        stamp '12:00:07.' "$INTERRUPTED_LINE"
     } | scan 10 )"
 
     grep -q 'db30=1' <<<"$out"
     grep -q 'idle30=1' <<<"$out"
     grep -q 'dropped=1' <<<"$out"
     grep -q 'saturated=1' <<<"$out"
+    # #1657 — and specifically NOT folded into `saturated`, which stays 1.
+    grep -q 'interrupted=1' <<<"$out"
     grep -q 'lockheld=1' <<<"$out"
     grep -q 'lockstall=1' <<<"$out"
     grep -q 'lockstall_resolved=1' <<<"$out"

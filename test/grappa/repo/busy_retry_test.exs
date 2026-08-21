@@ -41,6 +41,12 @@ defmodule Grappa.Repo.BusyRetryTest do
     raise %Exqlite.Error{message: "near \"SLECT\": syntax error", statement: nil}
   end
 
+  # #1657 — the pool cancelling its own victim's statement at the checkout
+  # deadline. Transient by construction; see the describe block below.
+  defp raise_interrupted do
+    raise %Exqlite.Error{message: "interrupted", statement: nil}
+  end
+
   # Every captured terminal line tagged with this fault kind. The `fault=`
   # metadata is what the prose has to agree with, so it is also what selects
   # the lines to judge.
@@ -114,6 +120,91 @@ defmodule Grappa.Repo.BusyRetryTest do
 
       assert_raise Exqlite.Error, ~r/syntax error/, fn -> BusyRetry.run(op) end
       assert Agent.get(counter, & &1) == 1
+    end
+  end
+
+  describe "SQLITE_INTERRUPT is contention, not corruption (#1657)" do
+    # The 2026-08-21 1.3.0 herd lost scrollback rows to
+    # `%Exqlite.Error{message: "interrupted"}` on ordinary `INSERT INTO
+    # messages`. That string is not a corruption signature — it is what the
+    # POOL does to its own victim, traced through the deps in tree:
+    #
+    #   db_connection/lib/db_connection/connection_pool.ex:190
+    #     the checkout deadline fires -> Holder.handle_disconnect(holder, exc)
+    #   exqlite/lib/exqlite/connection.ex:230
+    #     disconnect/2 -> Sqlite3.cancel(db) -> sqlite3_interrupt()
+    #   -> the statement in flight returns SQLITE_INTERRUPT
+    #
+    # So an interrupt is transient contention BY CONSTRUCTION: the only way
+    # to earn one is for the pool to have run out of time. Classifying it
+    # non-transient spends none of the retry budget on the one fault the
+    # budget exists for, and — because a non-transient re-raises — turns a
+    # 503-shaped degrade into a raise: a dropped row in Scrollback (whose
+    # #336 rescue catches it), a 500 on a stateless web write, and a crash
+    # anywhere unwrapped (`Bootstrap` died exactly this way in the incident).
+    #
+    # It earns its OWN fault kind rather than borrowing one. #1420 split
+    # `observed_state/1` in two precisely because one label was worn by a
+    # fault it did not describe, and folding an interrupt into
+    # `:busy_locked` would make the terminal line read "SQLite write lock
+    # held by another writer" about a fault that never touched the write
+    # lock — the same defect, re-introduced. `:queue_timeout` is nearer
+    # (the pool IS the cause) but still names the wrong observation: that
+    # client's checkout was served, and then revoked.
+    test "transient_fault?/1 classifies an interrupt as TRANSIENT" do
+      assert BusyRetry.transient_fault?(%Exqlite.Error{message: "interrupted", statement: nil})
+    end
+
+    test "an interrupt is RIDDEN OUT — the op that recovers on the third attempt succeeds" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      op = fn ->
+        n = Agent.get_and_update(counter, fn n -> {n, n + 1} end)
+        if n < 2, do: raise_interrupted(), else: {:ok, :served}
+      end
+
+      assert {:ok, :served} = BusyRetry.run(op)
+      assert Agent.get(counter, & &1) == 3
+    end
+
+    test "a persistent interrupt degrades to {:error, :db_unavailable} — it never re-raises" do
+      assert {:error, :db_unavailable} = BusyRetry.run(fn -> raise_interrupted() end)
+    end
+
+    test "a persistent interrupt is no longer one-and-done BY CLASSIFICATION" do
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      op = fn ->
+        Agent.update(counter, &(&1 + 1))
+        raise_interrupted()
+      end
+
+      assert {:error, :db_unavailable} = BusyRetry.run(op)
+      # The discriminator against the old behaviour: a `:permanent`
+      # classification re-raises after EXACTLY one attempt, whatever the
+      # clock says. Here the loop re-entered, so the single attempt is no
+      # longer forced by the VERDICT.
+      #
+      # ⚠️ What this does NOT claim: that a production interrupt gets
+      # retried. This op raises instantly, so the budget is still intact on
+      # attempt 2; a real one arrives only after DBConnection's 15_000ms
+      # `:timeout` has already blown the 1_500ms budget, so the live regime
+      # is one attempt anyway — for a reason of LATENCY, not of verdict
+      # (moduledoc, "How far the budget REACHES"). This test pins the
+      # verdict; nothing here pins a retry count in prod.
+      assert Agent.get(counter, & &1) > 1
+    end
+
+    test "the observer sees a distinct :interrupted kind — never :busy_locked" do
+      {:ok, observed} = Agent.start_link(fn -> [] end)
+      on_contention = fn kind, _attempt, _terminal? -> Agent.update(observed, &[kind | &1]) end
+
+      assert {:error, :db_unavailable} =
+               BusyRetry.run(fn -> raise_interrupted() end, on_contention: on_contention)
+
+      kinds = Agent.get(observed, & &1)
+      assert kinds != []
+      assert Enum.all?(kinds, &(&1 == :interrupted))
     end
   end
 

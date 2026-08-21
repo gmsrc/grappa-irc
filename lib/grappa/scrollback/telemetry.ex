@@ -36,12 +36,16 @@ defmodule Grappa.Scrollback.Telemetry do
 
     * `[:grappa, :scrollback, :persist, :contention]`
       measurements: `%{attempt: pos_integer()}`
-      metadata: `%{fault: :queue_timeout | :busy_locked, dropped: boolean()}`
+      metadata: `%{fault: :queue_timeout | :busy_locked | :interrupted, dropped: boolean()}`
 
       Emitted from `Grappa.Scrollback.with_pool_retry/3` on each transient
       SQLite write-contention fault — mechanism 2 (single-writer contention):
-      `:queue_timeout` (the pool could not serve a checkout) or `:busy_locked`
-      (a slow writer held the single write-lock past `busy_timeout`).
+      `:queue_timeout` (the pool could not serve a checkout), `:busy_locked`
+      (a slow writer held the single write-lock past `busy_timeout`), or
+      `:interrupted` (#1657 — the pool's checkout deadline cancelled a
+      statement it had already served; counted apart because it is the only
+      one of the three that says the connection was TAKEN BACK rather than
+      never granted).
       `dropped: false` = ridden out (a retry follows); `dropped: true` = the
       wall-clock budget was exhausted and the row was dropped — the telemetry
       companion of the existing "SQLite pool saturated" `Logger.warning`, so a
@@ -90,9 +94,10 @@ defmodule Grappa.Scrollback.Telemetry do
   out. Fires ONLY on the contention path — already the slow path — so it adds
   zero cost to an uncontended insert.
   """
-  @spec contention(:queue_timeout | :busy_locked, pos_integer(), boolean()) :: :ok
+  @spec contention(:queue_timeout | :busy_locked | :interrupted, pos_integer(), boolean()) :: :ok
   def contention(fault, attempt, dropped)
-      when fault in [:queue_timeout, :busy_locked] and is_integer(attempt) and attempt > 0 and
+      when fault in [:queue_timeout, :busy_locked, :interrupted] and is_integer(attempt) and
+             attempt > 0 and
              is_boolean(dropped) do
     :telemetry.execute(
       [:grappa, :scrollback, :persist, :contention],
