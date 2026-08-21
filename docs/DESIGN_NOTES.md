@@ -56435,3 +56435,97 @@ on priority, not on coverage. Also not measured here: `vercmp 1.3.0rc_1
 mapper against itself), and the coverage of the rest of `pkgver.sh` — one
 mutant, one line. The pre-existing `bats #44` red the briefing warned about
 did not appear on this base: test 44 is green in all runs above._
+<!-- entry #1393c -->
+
+---
+
+## 2026-08-21 — #1393c: a declared tolerance, and why the typespec is not what widens
+
+The #1393 census left **12 arms** where cic's hand narrower ACCEPTS what the
+generated schema rejects. vjt's ruling (2026-08-21) fixed the direction — *if
+the behaviour is correct, we do not change it* — and asked that each tolerance
+be written down so "a later census cannot silently reverse it". This entry
+records what that turned out to mean, because the obvious reading of it is
+wrong.
+
+### The schema that widens is the CENSUS's basis, never the typespec
+
+"Widen the schema" reads as "widen the Elixir `@type` the schema is emitted
+from". That would be a load-bearing lie. **The typespec is the SERVER's promise
+about what it SENDS; every one of these tolerances exists for a payload the
+current server never sends** — an older BEAM predating a field, or a token a
+newer one adds additively (#447). Writing `frame_budget_base :: integer() |
+nil` would state that THIS server may omit it, which is false, and the emitter
+would hand that false statement to every client at once, cic included.
+
+The split is already law in two places and this entry only names it:
+`wireValidate.ts:18-31` ("a TOLERANCE toward a payload minted by a peer of a
+different vintage … stays hand-written at the call site, named as policy") and
+the #1338 X-S14 note in `api.ts` ("the generated literal stays the SERVER's
+honest statement of what it emits today; tolerance is the client's job"). So
+the widening is DECLARATIVE and sits with the census, in the census's own
+path-and-op vocabulary: `DECLARED_TOLERANCES` in
+`cicchetto/src/__tests__/wireUserBoundary.test.ts`.
+
+### Three axes, because a pin with one is decoration
+
+Each is proved by a production-side mutant, restored after — asserted would
+not be enough, this issue already paid for an oracle that compared a schema
+with itself:
+
+1. **The (arm, path, op) set, reconciled BOTH ways.** An undeclared tolerance
+   is `unexplained`; a tolerance REMOVED — sanitised into agreement, which the
+   ruling forbids — leaves its declaration `stale`. Deleting the
+   `window_invited.inviter` tolerance reddens `stale` with its three ops;
+   deleting `links_bundle`'s `mask` type guard reddens `unexplained` with
+   `mask/wrong-type`. One direction alone would miss half of it.
+2. **The citation.** Each entry's `quote` must still occur verbatim in the file
+   carrying the guard, and each resolves to exactly one line. Deleting the
+   `#1108` comment while LEAVING the guard reddens this and **nothing else** —
+   the census cannot see a comment, so this is the axis the pin adds.
+3. **Containment of the type-level registry.** `DeliberatelyWidened` is now
+   exported and the runtime table must subsume it, arm and field: a widening
+   the TYPE exempts while the narrower still rejects is a boundary that drops
+   at ingress the payload it advertises. Adding `presence_error: "detail"`
+   there reddens `tsc` on those two lines alone.
+
+### What the classification found, and what stays open
+
+Of 83 measured (arm, path, op) holes, **27 declarations carry a reason that
+covers a PRESENT-but-unusable value** ("malformed", "unmodelled", "garbled",
+"non-number", or a positive-test guard that by construction admits everything
+else). Those are group 1: deliberate, now pinned.
+
+Two sets are DERIVED from `covers` against `ops` rather than restated, and both
+stay **unchanged**:
+
+- **8 tolerances written for an ABSENT key that also swallow a PRESENT mangled
+  one** — the three `narrowStringArray(…) ?? fallback` fields in
+  `narrowIsupportChanged` and their elements, `window_invited.inviter`,
+  `connection_state_changed.network.recoverable`. This is not the
+  additive-vintage class #447 covers, and it is **the class this issue's own
+  earlier slice already closed once**, on `banlist_bundle.mode` (`5703d301`):
+  there, coercing a mangled `mode` to `b` rendered whatever list arrived under
+  the "Bans" heading. Whether the other eight deserve the same is a behaviour
+  change and wants a ruling per arm.
+- **1 with no written reason at all**: `whois_bundle.extra_lines`. The only
+  in-tree statement calls the list optional while the typespec makes it
+  required-and-nullable and `reverse_extra_lines/1` always emits the key; the
+  `!== undefined` guard shipped in the same commit as the field (`05551231`)
+  with no rationale.
+
+**The transferable rule: a client boundary may accept MORE than its typespec
+on purpose, so the generated schema is the NARROWER of the two and migrating
+onto it is a regression a type-shaped mutation matrix will wave through.** The
+declaration is what keeps the difference legible; closing it is a separate
+decision from recording it.
+
+_Not claimed: that the 8 are defects — only that their written reason does not
+reach the case their guard handles. Not claimed: that `covers` is
+machine-checked — the quote's EXISTENCE is, its reading is a human judgement,
+so widening a comment to cover the case it already handles is the legitimate
+way to move an entry. Not measured: agreement between these schemas and the
+SERVER, which this census has never compared — it compares two client-side
+boundaries. No narrower was touched: the diff is 461 added lines and zero
+deleted, so the census the previous slice landed still reads byte for byte the
+same._
