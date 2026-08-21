@@ -6,8 +6,6 @@ import {
   type BanlistEntry,
   type ConnectionState,
   type LinksEntry,
-  type MentionsBundleMessage,
-  type NotifyEntry,
   type QueryWindowEntry,
   type WhoisExtraLine,
   type WireUserEvent,
@@ -67,7 +65,6 @@ import {
   setPending,
 } from "./windowState";
 import {
-  isMessageKind,
   narrowIsupportChanged,
   narrowMembers,
   narrowWhoUsers,
@@ -87,6 +84,8 @@ import {
 // us to close (#447), a per-field degrade that beats dropping the payload.
 // Do not migrate one of those without re-measuring it first.
 import {
+  S_NotifyWireNotifyListPayload,
+  S_QueryWindowsWireWindowsListPayload,
   S_ScrollbackWireArchiveChangedPayload,
   S_ScrollbackWireArchivePurgedPayload,
   S_SessionWireAwayConfirmedPayload,
@@ -96,10 +95,12 @@ import {
   S_SessionWireDirectoryFailedPayload,
   S_SessionWireDirectoryProgressPayload,
   S_SessionWireInviteAckPayload,
+  S_SessionWireMentionsBundlePayload,
   S_SessionWireOwnNickChangedPayload,
   S_SessionWirePeerAwayPayload,
   S_SessionWirePresenceChangedPayload,
   S_SessionWirePresenceErrorPayload,
+  S_SessionWirePresenceSnapshotPayload,
   S_SessionWireSessionIdentityChangedPayload,
   S_SessionWireSupportedUmodesChangedPayload,
   S_SessionWireUmodeChangedPayload,
@@ -213,29 +214,9 @@ function isUploadActiveHost(v: unknown): v is UploadActiveHost {
 // element (server bug, proxy mangling, partial response) would slip
 // through the boundary and crash a downstream renderer that read a
 // missing field. Now each element is narrowed against its wire
-// shape; any failure drops the whole bundle (loud, log-once).
-
-function narrowMentionsBundleMessage(raw: unknown): MentionsBundleMessage | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  if (
-    typeof r.server_time !== "number" ||
-    typeof r.channel !== "string" ||
-    typeof r.sender !== "string" ||
-    (r.body !== null && typeof r.body !== "string") ||
-    // S14 — gate `kind` against the shared `Message.kind()` closed set
-    // (same as `narrowScrollbackMessage`), not a bare `typeof string`.
-    !isMessageKind(r.kind)
-  )
-    return null;
-  return {
-    server_time: r.server_time,
-    channel: r.channel,
-    sender: r.sender,
-    body: r.body as string | null,
-    kind: r.kind,
-  };
-}
+// shape; any failure drops the whole bundle (loud, log-once). The
+// ones below survive because their arm is still hand-narrowed; the
+// rest went with theirs (#1393).
 
 // `whois_bundle.channels` is `string[] | null`. Wire elements arrive
 // as IRC mode-prefixed channel names (`@#italia`, `+#grappa`). Reject
@@ -300,28 +281,6 @@ function narrowLinksEntry(raw: unknown): LinksEntry | null {
   };
 }
 
-// S43 — per-entry narrower for `query_windows_list`. Mirror of
-// `Grappa.QueryWindows.Wire.windows_entry/0` (pinned to the generated
-// `QueryWindowsWireWindowsEntry` by `_Assert_QueryWindowEntry`).
-// Replaces the pre-S43 bare `as Record<string, QueryWindowEntry[]>`
-// cast that admitted any shape — closing the "narrow every WS payload"
-// gap for this arm.
-function narrowQueryWindowEntry(raw: unknown): QueryWindowEntry | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  if (
-    typeof r.network_id !== "number" ||
-    typeof r.target_nick !== "string" ||
-    typeof r.opened_at !== "string"
-  )
-    return null;
-  return {
-    network_id: r.network_id,
-    target_nick: r.target_nick,
-    opened_at: r.opened_at,
-  };
-}
-
 // Maps a per-element narrower across an array; returns the array of
 // narrowed values or null if any element fails. Strict — partial
 // bundles are server bugs, not graceful-degradation cases.
@@ -332,62 +291,6 @@ function narrowArray<T>(raw: unknown, narrow: (el: unknown) => T | null): T[] | 
     const n = narrow(el);
     if (n === null) return null;
     out.push(n);
-  }
-  return out;
-}
-
-// S43 — narrows the `query_windows_list` `windows` map: a
-// network-id-keyed object whose values are arrays of query-window
-// entries. Every entry is validated (`narrowQueryWindowEntry`); a
-// single malformed entry drops the whole map (strict, matching the
-// bundle narrowers). Returns null on a non-object or any bad entry.
-function narrowWindowsMap(raw: unknown): Record<string, QueryWindowEntry[]> | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const out: Record<string, QueryWindowEntry[]> = {};
-  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
-    const entries = narrowArray(val, narrowQueryWindowEntry);
-    if (entries === null) return null;
-    out[key] = entries;
-  }
-  return out;
-}
-
-// #247 — per-entry narrower for `notify_list`. Mirror of
-// `Grappa.Notify.Wire.entry/0` (pinned to the generated
-// `NotifyWireEntry` by `_Assert_NotifyEntry`).
-function narrowNotifyEntry(raw: unknown): NotifyEntry | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  if (
-    typeof r.network_id !== "number" ||
-    typeof r.nick !== "string" ||
-    typeof r.added_at !== "string"
-  )
-    return null;
-  return { network_id: r.network_id, nick: r.nick, added_at: r.added_at };
-}
-
-// #247 — narrows the `notify_list` `networks` map (network-id-keyed
-// object of entry arrays; strict like narrowWindowsMap).
-function narrowNotifyMap(raw: unknown): Record<string, NotifyEntry[]> | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const out: Record<string, NotifyEntry[]> = {};
-  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
-    const entries = narrowArray(val, narrowNotifyEntry);
-    if (entries === null) return null;
-    out[key] = entries;
-  }
-  return out;
-}
-
-// #247 — narrows the `presence_snapshot` folded-nick → state map. A
-// value outside the closed presence set drops the whole map (strict).
-function narrowPresenceMap(raw: unknown): Record<string, "online" | "offline" | "unknown"> | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const out: Record<string, "online" | "offline" | "unknown"> = {};
-  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
-    if (val !== "online" && val !== "offline" && val !== "unknown") return null;
-    out[key] = val;
   }
   return out;
 }
@@ -408,31 +311,17 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
   switch (r.kind) {
     case "channels_changed":
       return validate(S_SessionWireChannelsChangedPayload, r);
-    case "query_windows_list": {
-      // S43 — validate each entry instead of a bare cast.
-      const windows = narrowWindowsMap(r.windows);
-      if (windows === null) return null;
-      return { kind: "query_windows_list", windows };
-    }
-    case "mentions_bundle": {
-      if (
-        typeof r.network !== "string" ||
-        typeof r.away_started_at !== "string" ||
-        typeof r.away_ended_at !== "string" ||
-        (r.away_reason !== null && typeof r.away_reason !== "string")
-      )
-        return null;
-      const messages = narrowArray(r.messages, narrowMentionsBundleMessage);
-      if (messages === null) return null;
-      return {
-        kind: "mentions_bundle",
-        network: r.network,
-        away_started_at: r.away_started_at,
-        away_ended_at: r.away_ended_at,
-        away_reason: r.away_reason as string | null,
-        messages,
-      };
-    }
+    case "query_windows_list":
+      // S43 — every entry is validated, not a bare cast: the schema's
+      // `{r: {a: …}}` rejects the whole map on one malformed entry.
+      return validate(S_QueryWindowsWireWindowsListPayload, r);
+    case "mentions_bundle":
+      // no-silent-drops B6.10 HIGH-11 — the `messages` elements are narrowed
+      // one by one and a malformed element drops the whole bundle, which is
+      // what the schema's `{a: <message>}` says; `kind` inside a message is
+      // gated on the shared `Message.kind()` closed set the same way, now via
+      // the generated `S_ScrollbackMessageKind` rather than a second copy.
+      return validate(S_SessionWireMentionsBundlePayload, r);
     case "away_confirmed":
       return validate(S_SessionWireAwayConfirmedPayload, r);
     case "connection_progress":
@@ -440,22 +329,17 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // schema's own `{e: [...]}`, so a malformed value still cannot corrupt
       // the reconnectingByNetwork store.
       return validate(S_SessionWireConnectionProgressPayload, r);
-    case "notify_list": {
-      // #247 — validate each entry, same strictness as query_windows_list.
-      const networks = narrowNotifyMap(r.networks);
-      if (networks === null) return null;
-      return { kind: "notify_list", networks };
-    }
+    case "notify_list":
+      // #247 — every entry validated, same strictness as query_windows_list.
+      return validate(S_NotifyWireNotifyListPayload, r);
     case "presence_changed":
       return validate(S_SessionWirePresenceChangedPayload, r);
     case "presence_error":
       return validate(S_SessionWirePresenceErrorPayload, r);
-    case "presence_snapshot": {
-      if (typeof r.network_id !== "number") return null;
-      const nicks = narrowPresenceMap(r.nicks);
-      if (nicks === null) return null;
-      return { kind: "presence_snapshot", network_id: r.network_id, nicks };
-    }
+    case "presence_snapshot":
+      // #247 — a value outside the closed presence set drops the whole map,
+      // which is the schema's `{r: {e: [...]}}`.
+      return validate(S_SessionWirePresenceSnapshotPayload, r);
     case "own_nick_changed":
       return validate(S_SessionWireOwnNickChangedPayload, r);
     case "umode_changed":
