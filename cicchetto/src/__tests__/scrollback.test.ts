@@ -1186,7 +1186,10 @@ describe("refreshScrollback (CP29 R-5)", () => {
     expect(list[0]?.body).toBe("live");
   });
 
-  it("guards against overlapping in-flight refreshes on the same topic", async () => {
+  it("never runs two refreshes CONCURRENTLY on the same topic", async () => {
+    // The in-flight guard's surviving job after #1593: no two `?after=`
+    // fetches for one key on the wire at the same time. What it must NOT do
+    // is DROP the second caller — that is the next test.
     localStorage.setItem("grappa-token", "tok");
     const api = await import("../lib/api");
     const scrollback = await import("../lib/scrollback");
@@ -1196,6 +1199,9 @@ describe("refreshScrollback (CP29 R-5)", () => {
     const firstPromise = new Promise<ScrollbackMessage[]>((res) => {
       resolveFirst = res;
     });
+    // Persistent (not `…Once`): the queued re-run consumes it, and an
+    // unconsumed `…Once` would leak its queue into the next test in the file.
+    vi.mocked(api.listMessagesAfter).mockResolvedValue([]);
     vi.mocked(api.listMessagesAfter).mockReturnValueOnce(firstPromise);
 
     const a = scrollback.refreshScrollback("freenode", "#grappa");
@@ -1205,6 +1211,98 @@ describe("refreshScrollback (CP29 R-5)", () => {
 
     resolveFirst([]);
     await Promise.all([a, b]);
+  });
+
+  it("re-runs once after the in-flight refresh settles, ingesting the row written in between (#1593)", async () => {
+    // #1593 — the reconnect fires TWO refreshes per already-joined key, and
+    // only the SECOND one can close the gap:
+    //
+    //   * the socket-open sweep (subscribe.ts, `socketHealth().state` → open)
+    //     runs over `joined.keys()` BEFORE any per-channel topic has rejoined;
+    //   * the per-channel join-ok refresh runs AFTER that topic's subscription
+    //     is live.
+    //
+    // Measured on CI run 32351074283 (`0-trace.network`, the failing
+    // `issue254-own-echo-live.spec.ts:235` trace): the sweep's GET for
+    // `#spec-w0` was on the wire 09:08:32.727 → .756; the row was written at
+    // .751 (after the sweep's query) and the topic's join completed at .754
+    // (inside the sweep's window). The join-ok refresh — the only one that
+    // could have seen 53749 — hit `refreshInFlight` and returned. The trace
+    // carries no further `?after=` request for that key, ever.
+    //
+    // A refresh requested while one is in flight therefore must be QUEUED,
+    // not dropped: it was asked for AFTER the in-flight fetch issued its
+    // query, so it is the only caller that can observe rows written since.
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+    mockGetResumeCursor.mockReturnValue(5);
+
+    let resolveSweep: (v: ScrollbackMessage[]) => void = () => {};
+    const sweepPage = new Promise<ScrollbackMessage[]>((res) => {
+      resolveSweep = res;
+    });
+    // The row lands on the server while the sweep's GET is still on the wire,
+    // so only a fetch issued AFTER that GET can see it. Persistent, so an
+    // unconsumed `…Once` cannot leak into the next test in the file.
+    vi.mocked(api.listMessagesAfter).mockResolvedValue([sample(6, "written-mid-flight")]);
+    // The sweep itself queried before the row existed: it comes back empty.
+    vi.mocked(api.listMessagesAfter).mockReturnValueOnce(sweepPage);
+
+    const sweep = scrollback.refreshScrollback("freenode", "#grappa");
+    const joinOk = scrollback.refreshScrollback("freenode", "#grappa");
+
+    resolveSweep([]);
+    await Promise.all([sweep, joinOk]);
+
+    await vi.waitFor(() => {
+      expect(scrollback.scrollbackByChannel()[key]?.map((m) => m.id)).toEqual([6]);
+    });
+  });
+
+  it("withholds the #552 completion seam until the queued re-run settles (#1593)", async () => {
+    // `__cic_scrollbackRefreshed` means "no backfill is in flight for this
+    // key, and none is about to start". Stamping it when the LEADING run
+    // finishes while a queued re-run is still owed would hand
+    // `waitForScrollbackRefreshed` a false all-clear — the very race #552
+    // added the seam to remove.
+    localStorage.setItem("grappa-token", "tok");
+    const api = await import("../lib/api");
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+    mockGetResumeCursor.mockReturnValue(5);
+    // The seam lives on `window`, which `vi.resetModules()` does not clear —
+    // an earlier test in this file may already have stamped this key. Read it
+    // through a getter so clearing it here doesn't narrow the type to `never`
+    // for the assertions below.
+    const seamKeys = (): Set<string> | undefined =>
+      (window as unknown as { __cic_scrollbackRefreshed?: Set<string> }).__cic_scrollbackRefreshed;
+    (window as unknown as { __cic_scrollbackRefreshed?: Set<string> }).__cic_scrollbackRefreshed =
+      undefined;
+
+    let resolveSweep: (v: ScrollbackMessage[]) => void = () => {};
+    const sweepPage = new Promise<ScrollbackMessage[]>((res) => {
+      resolveSweep = res;
+    });
+    let resolveTrailing: (v: ScrollbackMessage[]) => void = () => {};
+    const trailingPage = new Promise<ScrollbackMessage[]>((res) => {
+      resolveTrailing = res;
+    });
+    vi.mocked(api.listMessagesAfter).mockReturnValue(trailingPage);
+    vi.mocked(api.listMessagesAfter).mockReturnValueOnce(sweepPage);
+
+    const sweep = scrollback.refreshScrollback("freenode", "#grappa");
+    const joinOk = scrollback.refreshScrollback("freenode", "#grappa");
+
+    resolveSweep([]);
+    await Promise.all([sweep, joinOk]);
+    expect(seamKeys()?.has(key) ?? false).toBe(false);
+
+    resolveTrailing([]);
+    await vi.waitFor(() => {
+      expect(seamKeys()?.has(key) ?? false).toBe(true);
+    });
   });
 
   it("releases the in-flight guard on REST error — subsequent refreshes can retry", async () => {

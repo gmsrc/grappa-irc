@@ -921,9 +921,12 @@ moduleRoot(() => {
         const phx = joinChannel(name, slug, ch.name, (reply) => {
           applyJoinReplyAndSeed(slug, ch.name, reply);
           // CP29 R-5: refresh on EVERY successful join (initial + every
-          // auto-rejoin). The per-key in-flight guard inside
-          // refreshScrollback dedupes bursty rejoins; the resume-cursor
-          // heuristic short-circuits when there's nothing to fetch.
+          // auto-rejoin). This is the ONLY refresh ordered after the
+          // subscription is live, so it is the one that closes the
+          // subscribe-vs-backfill gap (#1593); the socket-open sweep cannot.
+          // The per-key guard inside refreshScrollback keeps bursty rejoins
+          // off the wire concurrently and QUEUES the loser (never drops it);
+          // the resume-cursor heuristic keeps the fetch short.
           void refreshScrollback(slug, ch.name);
           // #79: this callback fires on the join ACK (subscribed), NOT the
           // `joined.set(key, phx)` below which fires on join-ATTEMPT. Stamp
@@ -1255,9 +1258,16 @@ moduleRoot(() => {
         // per-channel fan-out severed without a socket close) leaves the
         // gap unhealed until a full reload. Drive `refreshScrollback` for
         // EVERY already-joined key directly so reconnect recovery no
-        // longer depends on the per-channel rejoin completing. The verb's
-        // per-key in-flight guard + id-dedupe make it safe to overlap with
-        // a rejoin's own join-ok refresh.
+        // longer depends on the per-channel rejoin completing.
+        //
+        // #1593 — this sweep is a FLOOR, never the whole recovery: it runs
+        // before any per-channel topic has rejoined, so rows written after
+        // its own query and before that subscription goes live are outside
+        // it by construction. The join-ok refresh is what covers that span,
+        // and on CI the two are ~30 ms apart — i.e. they reliably overlap on
+        // the wire. What keeps the later one alive is `refreshScrollback`'s
+        // QUEUE, not its in-flight guard: the guard used to DROP it, which is
+        // exactly how #1593's row was lost. Do not "optimise" the queue away.
         for (const joinedKey of joined.keys()) {
           const decoded = decodeChannelKey(joinedKey);
           if (decoded !== null) {

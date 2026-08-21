@@ -35,8 +35,9 @@ import { getResumeCursor, recordSeen } from "./reconnectBackfill";
 // overlap in a small race window — the same row would otherwise
 // appear twice. `id` is monotonic per the schema's auto-increment column.
 //
-// Identity-scoped state via identityScopedStore (dup-A3 close): eleven resets
-// registered (see the registration block below). The factory preserves the A1
+// Identity-scoped state via identityScopedStore (dup-A3 close): thirteen
+// resets registered (see the registration block below, which is the SSOT for
+// the count — this line has been stale before). The factory preserves the A1
 // invariant — registration runs before any verb fires, so no rotation can be
 // missed for want of a registered reset.
 //
@@ -436,10 +437,11 @@ const exports = identityScopedStore((onIdentityChange) => {
   });
 
   // Identity-transition cleanup, and the SSOT for what an identity transition
-  // clears. Twelve registered resets fired by the factory's
-  // createEffect(on(token, ...)) — seven Set.clear() (loadedChannels +
+  // clears. Thirteen registered resets fired by the factory's
+  // createEffect(on(token, ...)) — eight Set.clear() (loadedChannels +
   // loadMore{InFlight,Exhausted} + loadNewer{InFlight,Exhausted}, #161 +
-  // refreshInFlight + jumpInFlight, #788) + five signal flushes
+  // refreshInFlight + refreshQueued, #1593 + jumpInFlight, #788) + five
+  // signal flushes
   // (scrollbackByChannel + lastOwnSend + ownSendSubmitted, #580 +
   // farBehindByChannel, #693 + measuredUnreadByChannel, #947). Order matches
   // the pre-A3 inline shape.
@@ -466,6 +468,7 @@ const exports = identityScopedStore((onIdentityChange) => {
   onIdentityChange(() => loadNewerInFlight.clear());
   onIdentityChange(() => loadNewerExhausted.clear());
   onIdentityChange(() => refreshInFlight.clear());
+  onIdentityChange(() => refreshQueued.clear());
   onIdentityChange(() => jumpInFlight.clear());
   onIdentityChange(() => setScrollbackByChannel({}));
   onIdentityChange(() => setLastOwnSend(null));
@@ -1225,17 +1228,51 @@ const exports = identityScopedStore((onIdentityChange) => {
   //      capped at 200 server-side so this is bounded even on a busy
   //      channel.
   //
-  // In-flight guard: per-key Set prevents double-fetch under bursty
-  // rejoin sequences (phoenix.js's `Push.resend()` can fire
-  // `.receive("ok")` twice for stale outbound pushes that succeed
-  // post-rejoin — see socket.ts moduledoc). Released in `finally` so a
-  // transient REST error doesn't latch out future retries.
+  // In-flight guard: per-key Set prevents two `?after=` fetches for the same
+  // key being on the wire CONCURRENTLY under bursty rejoin sequences
+  // (phoenix.js's `Push.resend()` can fire `.receive("ok")` twice for stale
+  // outbound pushes that succeed post-rejoin — see socket.ts moduledoc).
+  // Released in `finally` so a transient REST error doesn't latch out future
+  // retries.
+  //
+  // #1593 — the guard QUEUES the loser, it does not DROP it. A caller that
+  // arrives mid-flight asked AFTER the running fetch issued its query, so it
+  // is the only one that can observe rows written since; dropping it throws
+  // away the observation and nothing ever goes back for those rows. That is
+  // not hypothetical — it is the reconnect's normal shape, because
+  // `subscribe.ts` fires TWO refreshes per already-joined key and they
+  // reliably overlap:
+  //
+  //   * the socket-open sweep (`socketHealth().state` → "open", #159 item 3)
+  //     runs over `joined.keys()` the moment the transport is back — BEFORE
+  //     any per-channel topic has rejoined, so by construction it cannot
+  //     cover rows written after its own query;
+  //   * the per-channel join-ok refresh (CP29 R-5) runs once that topic's
+  //     subscription is live, and is the only one whose fetch is ordered
+  //     after the subscription that will carry everything later.
+  //
+  // Measured on CI run 32351074283 (`0-trace.network` of the failing
+  // `issue254-own-echo-live.spec.ts:235`): the sweep put three GETs on the
+  // wire at 09:08:32.725/.726/.727, each still unresolved when its own
+  // topic's join completed (.737, .749, .754 server-side) — all three join-ok
+  // refreshes were dropped, and the row persisted at .751 into a topic that
+  // had no subscriber was never fetched again by any later request in the
+  // whole trace.
+  //
+  // The re-run closes the hole rather than narrowing it: it is triggered BY
+  // the post-subscription caller, so its response covers the server up to a
+  // point after the subscription went live, and everything past that arrives
+  // over the WS. Cost is at most one extra short `?after=` per in-flight
+  // window per key — and a caller arriving during the re-run coalesces into
+  // the same single slot, so the chain is bounded by the arrival of new
+  // events, not by the number of callers.
   //
   // High-water mark rolls forward as we ingest so a SECOND disconnect
   // mid-refresh resumes from the new highest id rather than the
   // original cursor — same property the pre-CP29-R5 reconnectBackfill
   // ran inside `runBackfill`, preserved here for the same reason.
   const refreshInFlight = new Set<ChannelKey>();
+  const refreshQueued = new Set<ChannelKey>();
 
   // #552 — pure test seam: stamp `__cic_scrollbackRefreshed` (a Set of the
   // module composite key) when a refreshScrollback COMPLETES for a key.
@@ -1259,7 +1296,11 @@ const exports = identityScopedStore((onIdentityChange) => {
     const t = token();
     if (!t) return;
     const key = channelKey(slug, name);
-    if (refreshInFlight.has(key)) return;
+    if (refreshInFlight.has(key)) {
+      // #1593 — queue, never drop. See the `refreshQueued` declaration.
+      refreshQueued.add(key);
+      return;
+    }
     let cursor = getResumeCursor(slug, name);
     if (cursor === null) {
       // Local-pane fallback (cp13-S5 race shape). The REST seed has
@@ -1326,9 +1367,24 @@ const exports = identityScopedStore((onIdentityChange) => {
     } finally {
       if (!identityMoved(t)) {
         refreshInFlight.delete(key);
-        // #552 — mark this backfill DONE (success or error): no more in-flight
-        // DOM recreation for this key, so a spec awaiting it can safely proceed.
-        stampScrollbackRefreshed(key);
+        if (refreshQueued.delete(key)) {
+          // #1593 — a caller landed while this fetch was on the wire. Run it
+          // now, from a freshly resolved resume cursor (the page we just
+          // ingested has already rolled the high-water mark forward, so this
+          // asks only for what is still missing). Fire-and-forget: the
+          // re-run owns its own errors, and awaiting it here would make the
+          // LEADING caller's promise mean something different from every
+          // other caller's.
+          void refreshScrollback(slug, name);
+        } else {
+          // #552 — mark this backfill DONE (success or error): no more
+          // in-flight DOM recreation for this key, so a spec awaiting it can
+          // safely proceed. Deliberately NOT stamped when a re-run is owed —
+          // the seam means "and none is about to start", so stamping here
+          // would hand `waitForScrollbackRefreshed` the false all-clear the
+          // seam exists to remove.
+          stampScrollbackRefreshed(key);
+        }
       }
     }
   };
