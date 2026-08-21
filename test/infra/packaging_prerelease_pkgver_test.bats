@@ -81,6 +81,30 @@ arch_job() {
     [ "$output" = "1.3.0rc1" ]
 }
 
+@test "#1645 a pre-release carrying its OWN hyphen loses that one too" {
+    # The case above does NOT exercise the line it reads like it does. The
+    # hyphen a semver pre-release is named for is removed by the SPLIT
+    # (`core=${version%%-*}`, `pre=${version#*-}`, then concatenated), never by
+    # the `tr`. The `tr` fires only on a pre-release that carries a hyphen of
+    # its OWN — i.e. on a version with two or more hyphens — and #1645 censused
+    # every literal this suite feeds the script: 21 invocations, 19 with a
+    # value, 12 distinct, and ZERO with a second hyphen. So the deletion had no
+    # test, and a mutant that turns it into a substitution (`tr '\055' '_'`)
+    # left the whole host bats set byte-identically green: 633 ok, 0 not ok,
+    # same md5 as the unmutated transcript.
+    #
+    # This input is also the mapper's documented NOT-INJECTIVE decision (see
+    # the header, `pkgver.sh:47-51`): `1.3.0-rc-1` is legal semver and lands on
+    # the same pkgver as `1.3.0-rc1`, deliberately. Under the substitution it
+    # becomes `1.3.0rc_1` — a different published package name — while both of
+    # the script's own guards still pass: `_` is not in makepkg's refused class
+    # `[[:space:]/:-]`, and the tie-break character is still the letter `r`.
+    # Nothing but this assertion would notice the line changing.
+    run "$PKGVER_SH" 1.3.0-rc-1
+    [ "$status" -eq 0 ]
+    [ "$output" = "1.3.0rc1" ]
+}
+
 @test "#1591 no mapped pkgver carries a character makepkg's lint refuses" {
     # The refused class is makepkg's own bracket expression, transcribed:
     # `[[ $ver = *[[:space:]/:-]* ]]` in lint_pkgbuild/pkgver.sh.
