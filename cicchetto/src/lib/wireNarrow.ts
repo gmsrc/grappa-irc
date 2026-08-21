@@ -2,7 +2,6 @@ import type {
   AdminSnapshotPayload,
   MessageKind,
   ScrollbackMessage,
-  WhoUser,
   WireAdminEvent,
   WireChannelEvent,
 } from "./api";
@@ -315,42 +314,12 @@ export function narrowMembers(raw: unknown): MemberEntry[] | null {
   return out;
 }
 
-// #169 — narrow the `who_reply` per-user rows. Superset of MemberEntry;
-// `modes` is a raw WHO flags STRING (not a prefix list). `hops`/`realname`
-// are nullable (RFC-violating servers may omit the trailing field). A single
-// malformed element drops the whole payload (mirror of narrowMembers) so the
-// modal never renders a half-typed row.
-export function narrowWhoUsers(raw: unknown): WhoUser[] | null {
-  if (!Array.isArray(raw)) return null;
-  const out: WhoUser[] = [];
-  for (const u of raw) {
-    if (typeof u !== "object" || u === null) return null;
-    const e = u as Record<string, unknown>;
-    if (
-      typeof e.nick !== "string" ||
-      typeof e.user !== "string" ||
-      typeof e.host !== "string" ||
-      typeof e.server !== "string" ||
-      typeof e.modes !== "string" ||
-      typeof e.channel !== "string" ||
-      (e.hops !== null && typeof e.hops !== "number") ||
-      (e.realname !== null && typeof e.realname !== "string")
-    ) {
-      return null;
-    }
-    out.push({
-      nick: e.nick,
-      user: e.user,
-      host: e.host,
-      server: e.server,
-      modes: e.modes,
-      hops: e.hops as number | null,
-      realname: e.realname as string | null,
-      channel: e.channel,
-    });
-  }
-  return out;
-}
+// #1393 — `narrowWhoUsers` lived here, next to `narrowMembers`, on the
+// assumption that a `who_reply` row narrower would end up shared the way the
+// member one is. It never was: the user topic was its only caller, and that
+// arm now validates against `S_SessionWireWhoReplyPayload`, whose
+// `{a: <who_user>}` is the same typespec this transcribed. Deleted rather
+// than left exported — an unused export reads as a contract somebody keeps.
 
 // REV-A H1 — shared narrower for the three window-state terminal-event
 // arms (joined / join_failed / kicked). F1 (visitor-parity 2026-05-15)

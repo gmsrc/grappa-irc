@@ -64,12 +64,7 @@ import {
   setKicked,
   setPending,
 } from "./windowState";
-import {
-  narrowIsupportChanged,
-  narrowMembers,
-  narrowWhoUsers,
-  narrowWindowStateEvent,
-} from "./wireNarrow";
+import { narrowIsupportChanged, narrowWindowStateEvent } from "./wireNarrow";
 // #1393 — the arms below narrow through their GENERATED schema instead of a
 // hand-written field walk. Both are already emitted; the hand copy was the
 // duplicate. Which arms may move is not a judgement call:
@@ -96,28 +91,29 @@ import {
   S_SessionWireDirectoryProgressPayload,
   S_SessionWireInviteAckPayload,
   S_SessionWireMentionsBundlePayload,
+  S_SessionWireNamesReplyPayload,
   S_SessionWireOwnNickChangedPayload,
   S_SessionWirePeerAwayPayload,
   S_SessionWirePresenceChangedPayload,
   S_SessionWirePresenceErrorPayload,
   S_SessionWirePresenceSnapshotPayload,
+  S_SessionWireServerReplyPayload,
   S_SessionWireSessionIdentityChangedPayload,
   S_SessionWireSupportedUmodesChangedPayload,
   S_SessionWireUmodeChangedPayload,
+  S_SessionWireWhoReplyPayload,
   S_SessionWireWhowasBundlePayload,
   S_SessionWireWindowInviteDeclinedPayload,
   S_SessionWireWindowPendingPayload,
   S_UserSettingsWireAutoAwayDebounceChangedPayload,
 } from "./wireSchema";
-import type { ServerSettingsWireUploadView, SessionWireServerReplySource } from "./wireTypes";
+import type { ServerSettingsWireUploadView } from "./wireTypes";
 // #410 — the connection_state runtime guard derives from the generated const
 // (mirror of `Grappa.Networks.Credential.connection_state/0`), single-sourced
-// like the leaf-enum allowlists in wireNarrow.ts. #992 adds the server_reply
-// source set on the same footing.
-import {
-  NETWORKS_CREDENTIAL_CONNECTION_STATE,
-  SESSION_WIRE_SERVER_REPLY_SOURCE,
-} from "./wireTypes";
+// like the leaf-enum allowlists in wireNarrow.ts. #992's server_reply source
+// set was the second reader here until #1393 moved that arm onto its schema,
+// which reaches the same const through `S_SessionWireServerReplySource`.
+import { NETWORKS_CREDENTIAL_CONNECTION_STATE } from "./wireTypes";
 import { validate } from "./wireValidate";
 
 // Per-user PubSub topic subscriber. Module-singleton side-effect:
@@ -541,46 +537,30 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         extra_lines: extraLines,
       };
     }
-    case "names_reply": {
-      // #140 — /names roster bundle. Per-element narrowing on the
-      // members array (shared `narrowMembers` with the channel-topic
-      // members_seeded arm) — a malformed member element drops the whole
-      // payload rather than rendering a half-typed row.
-      if (typeof r.network !== "string" || typeof r.channel !== "string") return null;
-      const members = narrowMembers(r.members);
-      if (members === null) return null;
-      return { kind: "names_reply", network: r.network, channel: r.channel, members };
-    }
-    case "who_reply": {
-      // #169 — /who roster bundle. Per-element narrowing on the users array
-      // (`narrowWhoUsers`) — a malformed row drops the whole payload rather
-      // than rendering a half-typed table.
-      if (typeof r.network !== "string" || typeof r.target !== "string") return null;
-      const users = narrowWhoUsers(r.users);
-      if (users === null) return null;
-      return { kind: "who_reply", network: r.network, target: r.target, users };
-    }
-    case "server_reply": {
-      // #127/#992 — /info, /version, /motd, /admin reply bundle. Validate the
-      // typed `source` discriminant + the raw line array; a malformed payload
-      // drops rather than rendering a half-typed modal.
+    case "names_reply":
+      // #140 — /names roster bundle. A malformed member element drops the
+      // whole payload rather than rendering a half-typed row, which is the
+      // schema's `{a: <member>}`. `narrowMembers` stays in `wireNarrow.ts`:
+      // the per-channel `members_seeded` arm still calls it.
+      return validate(S_SessionWireNamesReplyPayload, r);
+    case "who_reply":
+      // #169 — /who roster bundle. A malformed row drops the whole payload
+      // rather than rendering a half-typed table. Unlike names_reply this
+      // arm was `narrowWhoUsers`'s ONLY caller, so the helper goes with it.
+      return validate(S_SessionWireWhoReplyPayload, r);
+    case "server_reply":
+      // #127/#992 — /info, /version, /motd, /admin reply bundle. A malformed
+      // payload drops rather than rendering a half-typed modal.
       //
-      // #992 — the discriminant is checked against the
-      // SESSION_WIRE_SERVER_REPLY_SOURCE SSOT, not a hand-written `!==`
-      // chain. The chain was a second, silent copy of the closed set: adding
-      // `admin` server-side left it rejecting a legitimate reply as "unknown
-      // source", so the modal never opened and the failure was invisible.
-      if (typeof r.network !== "string") return null;
-      if (!SESSION_WIRE_SERVER_REPLY_SOURCE.includes(r.source as SessionWireServerReplySource))
-        return null;
-      if (!Array.isArray(r.lines) || !r.lines.every((l) => typeof l === "string")) return null;
-      return {
-        kind: "server_reply",
-        network: r.network,
-        source: r.source as SessionWireServerReplySource,
-        lines: r.lines as string[],
-      };
-    }
+      // #992 — the `source` discriminant is checked against the closed set
+      // ONCE, never a hand-written `!==` chain: that chain was a second,
+      // silent copy, and adding `admin` server-side left it rejecting a
+      // legitimate reply as "unknown source" with the modal never opening.
+      // The membership test was already reading the generated
+      // SESSION_WIRE_SERVER_REPLY_SOURCE; the schema's
+      // `S_SessionWireServerReplySource` is that same const, so the SSOT is
+      // unchanged and only the transcription around it is gone.
+      return validate(S_SessionWireServerReplyPayload, r);
     case "invite_ack":
       // P-0e + P-0f — 341 RPL_INVITING ack. Server emits structured
       // (network, channel, peer); cic appends a synthetic row to the
