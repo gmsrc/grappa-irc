@@ -220,8 +220,13 @@ defmodule Mix.Tasks.Grappa.WirePin do
     #
     # The two facts below belong together. `protocol_version` is the value of
     # `Grappa.Protocol.version/0` at the moment `shape_digest` was taken over
-    # the generated `wireSchema.ts`. A shape change with a still number is the
-    # violation the gate exists for, and --update refuses to write it away.
+    # BOTH generated artefacts — `wireTypes.ts` and `wireSchema.ts`,
+    # concatenated. A shape change with a still number is the violation the
+    # gate exists for, and --update refuses to write it away.
+    #
+    # This line states the COVERAGE on purpose: widening or narrowing what
+    # the digest spans is not a wire-shape change, the gate cannot tell one
+    # from the other, and reading the pin is the only place a review sees it.
     protocol_version = #{pin.protocol_version}
     shape_digest = #{pin.shape_digest}
     """

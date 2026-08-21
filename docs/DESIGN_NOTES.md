@@ -56928,6 +56928,16 @@ the gate cannot tell, and `--update` refused. The route is to delete the
 pin and re-create it — a deleted tracked file is visible in review, while a
 `--force` flag would be the hole the refusal exists to close.
 
+The widening left one thing behind, and review caught it: `render_pin/1`
+kept the first design's wording, so the generated header of the committed
+`priv/wire/shape.pin` announced a digest taken over `wireSchema.ts` alone
+while `shape_text/0` spanned both. Exactly the defect class this issue
+exists to close — prose asserting something the code does not do — and
+worse here than elsewhere, because the pin's header is the ONE place a
+coverage change is visible to a reviewer: the gate itself cannot tell a
+widened digest from a violated rule. Corrected, and the header now says so
+in as many words.
+
 ### `priv/` is a shared mount, and a pin cannot live in it
 
 Building this turned up a trap worth recording on its own. The pin first

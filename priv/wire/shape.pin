@@ -2,7 +2,12 @@
 #
 # The two facts below belong together. `protocol_version` is the value of
 # `Grappa.Protocol.version/0` at the moment `shape_digest` was taken over
-# the generated `wireSchema.ts`. A shape change with a still number is the
-# violation the gate exists for, and --update refuses to write it away.
+# BOTH generated artefacts — `wireTypes.ts` and `wireSchema.ts`,
+# concatenated. A shape change with a still number is the violation the
+# gate exists for, and --update refuses to write it away.
+#
+# This line states the COVERAGE on purpose: widening or narrowing what
+# the digest spans is not a wire-shape change, the gate cannot tell one
+# from the other, and reading the pin is the only place a review sees it.
 protocol_version = 2
 shape_digest = sha256:c6e9ac1e7f398f949c387158fa56c97182bb4445d9b08f8f662cf5472334851c
