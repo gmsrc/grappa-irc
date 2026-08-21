@@ -456,7 +456,12 @@ type NoArms<Message extends string, T> = [T] extends [never]
 // The generated type describes the server we ship; a widened field
 // describes the set of servers cic must survive. That is why these are not
 // drift — and why the widening still has to be bounded.
-type DeliberatelyWidened = {
+// Exported for its runtime twin. #1393 declares the same tolerances again as
+// DATA, because a widening the TYPE exempts is only half the boundary: the
+// runtime narrower has to be tolerant too, or cic drops at ingress the very
+// payload the type says it accepts. Exporting the registry lets that table
+// be checked to SUBSUME this one instead of being a second hand-kept list.
+export type DeliberatelyWidened = {
   isupport_changed: "frame_budget_base";
   recover_progress: "reason";
   recover_result: "reason";

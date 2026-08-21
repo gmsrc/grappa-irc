@@ -1,6 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { narrowUserEvent } from "../lib/userTopic";
 import * as schemas from "../lib/wireSchema";
+import type { DeliberatelyWidened } from "../lib/wireTypesAssert";
 import type { WireNode } from "../lib/wireValidate";
 import { validate } from "../lib/wireValidate";
 
@@ -333,6 +335,343 @@ const HAND_SWITCH_ARMS = [
   "window_invited",
   "window_pending",
 ] as const;
+
+// ── The divergent arms, declared ────────────────────────────────────────
+//
+// The census below ends in a list of arms where the hand narrower ACCEPTS
+// what the generated schema rejects. That list is a MEASUREMENT and nothing
+// more: it records that the two boundaries disagree, never whether the
+// disagreement is MEANT. Duplication A6 puts it exactly — "with no pin, a
+// deliberate widening and an accidental one look identical".
+//
+// vjt's ruling (2026-08-21) settles the direction — *if the behaviour is
+// correct, we do not change it* — and asks for each tolerance to be written
+// down where a later census cannot silently reverse it. This table is that
+// record, and it is stated in the census's OWN path-and-op vocabulary so the
+// two cannot describe different things.
+//
+// ## Why the GENERATED schema is not what moves
+//
+// The literal reading of "widen the schema" is to widen the Elixir typespec
+// it is emitted from. That would be a lie, and a load-bearing one: the
+// typespec is the server's promise about what it SENDS, while every
+// tolerance below exists for a payload the CURRENT server never sends — an
+// older BEAM predating the field, or a token a newer one may add. Widening
+// `frame_budget_base` to `integer() | nil` would state that THIS server may
+// omit it, which is false, and the next reader would believe it.
+//
+// The posture is already in tree, twice: `wireValidate.ts:18-31` ("a
+// TOLERANCE toward a payload minted by a peer of a different vintage …
+// stays hand-written at the call site, named as policy") and the #1338 X-S14
+// note in `api.ts` ("the generated literal stays the SERVER's honest
+// statement of what it emits today; tolerance is the client's job"). So the
+// schema that widens is the one the CENSUS compares against, declaratively.
+//
+// ## What is machine-checked, and what is not
+//
+// Checked in BOTH directions: the (arm, path, op) set against the measured
+// divergence. A tolerance nobody declared is `unexplained`; a declaration no
+// longer describing a real divergence is `stale`. Deleting a tolerance from
+// a narrower reddens the second, adding one reddens the first.
+//
+// Checked: `quote` must still occur VERBATIM in the file carrying the guard.
+// Deleting the comment that justifies a tolerance turns this red — which is
+// what keeps a citation an oracle rather than decoration.
+//
+// DERIVED, never restated: `covers` against `ops` yields the two sets the
+// ruling asks to be REPORTED rather than closed.
+//
+// NOT checked: the issue numbers in `why`. Prose, for humans.
+
+// The files carrying the hand guards. Read as TEXT — vitest runs from the
+// cicchetto dir, so `src` is at cwd (the idiom `moduleRootGuard` and
+// `versionSource` already use; `?raw` is stubbed to empty under vitest).
+const GUARD_SOURCE = {
+  userTopic: readFileSync("src/lib/userTopic.ts", "utf8"),
+  wireNarrow: readFileSync("src/lib/wireNarrow.ts", "utf8"),
+} as const;
+
+type Coverage =
+  // The in-tree comment states the tolerance for an ABSENT key, and says
+  // nothing about a key that is PRESENT carrying an unusable value — which
+  // the same guard also absorbs. The gap is the point of recording it.
+  | "absent"
+  // …and for a present-but-unusable value too: an explicit "malformed",
+  // "garbled", "unmodelled", "non-number", or a positive-test policy that by
+  // construction admits every other value.
+  | "any-unusable-value"
+  // No in-tree statement of this tolerance was located at all.
+  | "none";
+
+type Declared = {
+  readonly ops: readonly Op[];
+  readonly covers: Coverage;
+  readonly file: keyof typeof GUARD_SOURCE;
+  /** An exact, single-line substring of the comment that states the tolerance. */
+  readonly quote: string;
+  readonly why: string;
+};
+
+// Twelve LUSERS counts behind ONE guard (`intOrNull`). Stating the reason
+// once is not compression for its own sake: twelve copies of a sentence are
+// twelve things that have to stay true.
+const LUSERS_COUNTS = [
+  "total_users",
+  "invisible",
+  "servers",
+  "operators",
+  "unknown_connections",
+  "channels_formed",
+  "local_clients",
+  "local_servers",
+  "current_local",
+  "max_local",
+  "current_global",
+  "max_global",
+] as const;
+
+const LUSERS_COUNT_TOLERANCE: Declared = {
+  ops: ["drop", "wrong-type"],
+  covers: "any-unusable-value",
+  file: "userTopic",
+  quote: "Per-field null-coercion of a non-number is",
+  why: "P-0d + S44 — a display-only card in the $server window. A truncated response omits a count and a garbled one mistypes it; either renders as a dash rather than blowing away the eleven good counts beside it.",
+};
+
+const DECLARED_TOLERANCES = {
+  isupport_changed: {
+    // The three `narrowStringArray(…) ?? <fallback>` fields. Each fallback
+    // carries its own issue and its own reason for the VALUE it falls back
+    // to. What none of the three states is what should happen when the key
+    // is PRESENT carrying something unusable — which the same `??` absorbs
+    // all the same. That gap is what `covers: "absent"` records here.
+    list_modes_queryable: {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "absent",
+      file: "wireNarrow",
+      quote: "absent means a server that predates the field",
+      why: '#1251 — such a server can query exactly one list, so the fallback is ["b"]; the empty set would silently remove /banlist.',
+    },
+    "list_modes_queryable.0": {
+      ops: ["null", "wrong-type"],
+      covers: "absent",
+      file: "wireNarrow",
+      quote: "absent means a server that predates the field",
+      why: "#1251 — the same `??`, reached by a mangled ELEMENT of a present array. The comment does not reach that case.",
+    },
+    prefix_order: {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "absent",
+      file: "wireNarrow",
+      quote: "#1302 — absent means a server predating the field",
+      why: "#1302 — the empty list is the honest answer for an unknown rank; falling back to the map's key order would reinstate the mis-ranking the field exists to end.",
+    },
+    "prefix_order.0": {
+      ops: ["null", "wrong-type"],
+      covers: "absent",
+      file: "wireNarrow",
+      quote: "#1302 — absent means a server predating the field",
+      why: "#1302 — the same `??`, reached by a mangled element.",
+    },
+    chantypes: {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "absent",
+      file: "wireNarrow",
+      quote: "#1255 — same posture as the two fallbacks around it",
+      why: "#1255 — the RFC 2812 sigil class is exactly what cic assumed while the fact was being dropped at ingress; rejecting the envelope would take the /mode toggles down with it.",
+    },
+    "chantypes.0": {
+      ops: ["null", "wrong-type"],
+      covers: "absent",
+      file: "wireNarrow",
+      quote: "#1255 — same posture as the two fallbacks around it",
+      why: "#1255 — the same `??`, reached by a mangled element.",
+    },
+    casemapping: {
+      ops: ["drop", "null", "wrong-type", "swap"],
+      covers: "any-unusable-value",
+      file: "wireNarrow",
+      quote: "is a closed set server-side; an unmodelled value",
+      why: "#1255 — degrading to `ascii` is the same call `Grappa.Session.ISupport` makes, so client and server cannot disagree about which fold a network got. Too lax beats merging identities the ircd keeps apart.",
+    },
+    maxlist: {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "wireNarrow",
+      quote: "so a malformed value degrades to them",
+      why: "#1255 — no advertised cap is an honest absent state; a number nobody advertised is not.",
+    },
+    "maxlist.key": {
+      ops: ["null", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "wireNarrow",
+      quote: "A single bad entry voids",
+      why: "#1255 — one bad entry voids the whole map rather than half-capping the modal from a payload we cannot trust.",
+    },
+    nicklen: {
+      ops: ["drop", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "wireNarrow",
+      quote: "so a malformed value degrades to them",
+      why: "#1255 — `narrowPositiveInt`: zero and negatives are not caps, they are values that would reject everything, so they read as unadvertised.",
+    },
+    channellen: {
+      ops: ["drop", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "wireNarrow",
+      quote: "so a malformed value degrades to them",
+      why: "#1255 — `narrowPositiveInt`, as `nicklen`.",
+    },
+    topiclen: {
+      ops: ["drop", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "wireNarrow",
+      quote: "so a malformed value degrades to them",
+      why: "#1255 — `narrowPositiveInt`, as `nicklen`.",
+    },
+    frame_budget_base: {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "wireNarrow",
+      quote: "absent or malformed means ABSENT",
+      why: "#1108, recorded intentional by #1406 and named by vjt's ruling. The /mode toggles this payload seeds must survive a server predating the budget, and cic's own rule for an unknown budget is to show no warning at all.",
+    },
+  },
+  lusers_bundle: Object.fromEntries(
+    LUSERS_COUNTS.map((field) => [field, LUSERS_COUNT_TOLERANCE]),
+  ) as Record<(typeof LUSERS_COUNTS)[number], Declared>,
+  whois_bundle: {
+    source: {
+      ops: ["drop", "null", "wrong-type", "swap"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "Tolerant, NOT a drop condition (old servers omit it)",
+      why: '#606 — request origin, add-only. The guard is a POSITIVE test (`r.source === "rail" ? "rail" : "user"`), so by construction every other value normalises to the safe /whois card path; only an explicit "rail" opts into rail-only routing.',
+    },
+    extra_lines: {
+      ops: ["drop"],
+      covers: "none",
+      file: "userTopic",
+      quote: "extra_lines: optional list of",
+      why: "#221 — the only in-tree statement calls the list optional, while the typespec makes it required-and-nullable (`[whois_extra_line()] | nil`) and `reverse_extra_lines/1` always emits the key. The `!== undefined` guard shipped in the same commit as the field (05551231) with no rationale, and none was located. REPORTED, not closed.",
+    },
+  },
+  banlist_bundle: {
+    mode: {
+      ops: ["drop"],
+      covers: "absent",
+      file: "userTopic",
+      quote: "the tolerance is for ABSENCE only",
+      why: "#1251 + this issue's own earlier slice (5703d301) — absence means a grappa that could only ever have sent the ban list. A key that IS present carrying a non-string is mangling, and was made to REJECT rather than render under the wrong heading. The narrowest declaration in this table, and the shape the three isupport fallbacks above do not have.",
+    },
+  },
+  links_bundle: {
+    mask: {
+      ops: ["drop"],
+      covers: "absent",
+      file: "userTopic",
+      quote: "older grappa that predates the field omits it",
+      why: "#513a — a full-mesh empty renders 'hides topology', the pre-#513 behaviour. A present non-string non-null still rejects, like `banlist_bundle.mode`.",
+    },
+  },
+  window_invited: {
+    inviter: {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "absent",
+      file: "userTopic",
+      quote: "#902 — TOLERATE an absent",
+      why: "#902 — a newer bundle can meet an older BEAM with no such field, and dropping the payload would lose the whole invite rather than the nick. The comment names ABSENCE; the guard also sends a null or a number to the same anonymous-sender sentinel.",
+    },
+  },
+  connection_state_changed: {
+    "network.recoverable": {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "absent",
+      file: "userTopic",
+      quote: "missing additive field must never be fatal",
+      why: "#581 (D2) — an additive field, deliberately outside the reject-guard so an older server cannot drop the whole state update. The comment names a MISSING field; the guard also defaults a present null or non-boolean to `false`.",
+    },
+  },
+  server_settings_changed: {
+    "upload.video_max_duration_seconds": {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "Absent / malformed →",
+      why: "#201 — lenient unlike the byte caps beside it: hard-narrowing would drop the WHOLE settings push against a pre-#201 server and strand those caps too.",
+    },
+    http_host_aliases: {
+      ops: ["drop", "null", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "Lenient: a malformed /",
+      why: "#324 — degrades to [] (page origin only) rather than dropping the settings push.",
+    },
+    "http_host_aliases.0": {
+      ops: ["null", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "Filter to strings so a proxy-mangled element",
+      why: "#324 — a mangled element is filtered out so it cannot poison mediaLink's host-membership check.",
+    },
+  },
+  bundle_hash: {
+    version: {
+      ops: ["null", "wrong-type"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "Normalise absent / malformed → null",
+      why: "#292 (cross-surface S2) — the consumer always sees `string | null`. Absence is not in `ops` because the schema already declares the key optional. Registered type-side as `DiscriminatorOnlyArm` (wireTypesAssert.ts): a conversion, not a superset, which is why it is not in `DeliberatelyWidened`.",
+    },
+  },
+  recover_progress: {
+    reason: {
+      ops: ["swap"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "over four tokens; this boundary takes any string, deliberately",
+      why: "#581 + #447 — the typespec closes `reason` over four tokens; a BEAM that adds a fifth must not make an older cic drop the ping. Only the value-swap op can see this class at all.",
+    },
+  },
+  recover_result: {
+    reason: {
+      ops: ["swap"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "additive server reason token can never drop a terminal result event",
+      why: "#581 + #447 — as `recover_progress`, and here the stakes are a TERMINAL event rather than a presentational ping.",
+    },
+  },
+  web_session_severed: {
+    code: {
+      ops: ["swap"],
+      covers: "any-unusable-value",
+      file: "userTopic",
+      quote: "from the closed literal to any string",
+      why: "#630 + #1338 X-S14 — the drop-to-login action does not depend on the code; it selects copy. Dropping a terminal event over an unrecognised token would strand the client on a dead shell holding a revoked bearer.",
+    },
+  },
+} satisfies Record<string, Record<string, Declared>>;
+
+type Assert<T extends true> = T;
+
+// Two registries, one boundary: `DeliberatelyWidened` exempts a field in the
+// TS TYPE, this table declares the RUNTIME tolerance that must go with it. A
+// type that says cic accepts a wider `code` while the narrower still rejects
+// it is a boundary that drops at ingress the payload it advertises. So the
+// runtime table has to SUBSUME the type-level one, arm AND field — the check
+// that keeps them from being two hand-kept lists.
+type TypeWideningIsDeclaredAtRuntime = Assert<
+  {
+    [K in keyof DeliberatelyWidened]: K extends keyof typeof DECLARED_TOLERANCES
+      ? DeliberatelyWidened[K] extends keyof (typeof DECLARED_TOLERANCES)[K]
+        ? true
+        : false
+      : false;
+  }[keyof DeliberatelyWidened] extends true
+    ? true
+    : false
+>;
 
 describe("#1393 — user-topic boundary census", () => {
   it("detects a weakened boundary (control for the matrix itself)", () => {
@@ -1544,6 +1883,128 @@ describe("#1393 — user-topic boundary census", () => {
           },
         },
       ]
+    `);
+  });
+
+  // Every (arm, path, op) the census measured as a hole, against the table.
+  // Two-sided on purpose: one direction alone is not an oracle. Without
+  // `unexplained` a new undeclared tolerance lands silently; without `stale`
+  // a tolerance can be REMOVED — "sanitised into agreement", which the
+  // ruling forbids — and the table would keep asserting a reason for a
+  // divergence that no longer exists.
+  //
+  // The reverse-direction column (`schemaAcceptsHandRejects`) is not folded
+  // in: its only occurrence is `web_session_severed` against
+  // `S_AdminEventsWireWebSessionSeveredEvent`, the OTHER Wire module that
+  // emits this kind literal, whose sample the user-topic arm rightly
+  // rejects. That is the candidate ambiguity, not a tolerance — and it is
+  // already pinned, verbatim, in the census snapshot above.
+  it("declares every measured tolerance, and declares nothing it did not measure", () => {
+    const observed = new Set<string>();
+    for (const kind of ARMS.filter(accepts)) {
+      for (const { name, node } of candidatesFor(kind)) {
+        const report = censusArm(kind, name, node);
+        if (report.handAcceptsSchemaRejects === "-") continue;
+        for (const label of report.handAcceptsSchemaRejects.split(", ")) {
+          observed.add(`${kind} ${label}`);
+        }
+      }
+    }
+
+    const declared = new Set<string>();
+    for (const [arm, paths] of Object.entries(DECLARED_TOLERANCES)) {
+      for (const [path, entry] of Object.entries<Declared>(paths)) {
+        for (const op of entry.ops) declared.add(`${arm} ${path}/${op}`);
+      }
+    }
+
+    expect({
+      measured: observed.size,
+      declared: declared.size,
+      unexplained: [...observed].filter((k) => !declared.has(k)).sort(),
+      stale: [...declared].filter((k) => !observed.has(k)).sort(),
+    }).toMatchInlineSnapshot(`
+      {
+        "declared": 83,
+        "measured": 83,
+        "stale": [],
+        "unexplained": [],
+      }
+    `);
+  });
+
+  // The citation, made load-bearing. A `why` nobody can fail is decoration;
+  // this is the part a deletion reddens. Each `quote` resolves to exactly
+  // one line in the file it names (verified when the table was written), so
+  // removing the comment that justifies a tolerance — the cheapest way to
+  // quietly un-declare one — shows up here rather than nowhere.
+  // A test whose green is a `tsc` fact, not a runtime one: the annotation is
+  // the assertion, and the body only gives it somewhere to live (a bare
+  // `_Assert_*` alias is `noExportsInTest` if exported and TS6196 if not).
+  // Should the runtime table stop covering an arm or a field the type-level
+  // registry exempts, `TypeWideningIsDeclaredAtRuntime` resolves to `false`
+  // and this line stops compiling.
+  it("subsumes the type-level widening registry, arm and field", () => {
+    const subsumed: TypeWideningIsDeclaredAtRuntime = true;
+    expect(subsumed).toBe(true);
+  });
+
+  it("keeps every declared reason present in the guard it cites", () => {
+    const missing = Object.entries(DECLARED_TOLERANCES).flatMap(([arm, paths]) =>
+      Object.entries<Declared>(paths)
+        .filter(([, entry]) => !GUARD_SOURCE[entry.file].includes(entry.quote))
+        .map(([path, entry]) => `${arm} ${path} → ${entry.file}: ${entry.quote}`),
+    );
+    expect(missing).toMatchInlineSnapshot(`[]`);
+  });
+
+  // What the ruling asks to be REPORTED rather than closed, derived from the
+  // table instead of restated beside it.
+  //
+  // `widerThanItsWrittenReason` is the class this issue's own earlier slice
+  // already closed once, on `banlist_bundle.mode` (5703d301): a guard
+  // written for an ABSENT key that also swallows a PRESENT mangled one. It
+  // is not the additive-vintage tolerance the #447 posture covers, and vjt's
+  // ruling — *if the behaviour is correct, we do not change it* — does not
+  // reach it, because whether it is correct is exactly what is unsettled.
+  // Named here, unchanged, until vjt rules per arm.
+  //
+  // `noWrittenReason` is the group the ruling says to report and not touch.
+  //
+  // A number moving in this snapshot is a REPORT changing, not a gate
+  // breaking: closing one of these is a behaviour change and needs its own
+  // ruling, and widening a comment to cover the case it already handles is
+  // a legitimate way to move an entry from the first list to `deliberate`.
+  it("names the tolerances the ruling leaves open instead of closing them", () => {
+    const entries = Object.entries(DECLARED_TOLERANCES).flatMap(([arm, paths]) =>
+      Object.entries<Declared>(paths).map(([path, entry]) => ({ arm, path, ...entry })),
+    );
+    const beyondAbsence = (entry: (typeof entries)[number]) =>
+      entry.ops.filter((op) => op !== "drop");
+
+    expect({
+      deliberate: entries.filter((e) => e.covers === "any-unusable-value").length,
+      widerThanItsWrittenReason: entries
+        .filter((e) => e.covers === "absent" && beyondAbsence(e).length > 0)
+        .map((e) => `${e.arm} ${e.path}/${beyondAbsence(e).join("+")}`),
+      noWrittenReason: entries.filter((e) => e.covers === "none").map((e) => `${e.arm} ${e.path}`),
+    }).toMatchInlineSnapshot(`
+      {
+        "deliberate": 27,
+        "noWrittenReason": [
+          "whois_bundle extra_lines",
+        ],
+        "widerThanItsWrittenReason": [
+          "isupport_changed list_modes_queryable/null+wrong-type",
+          "isupport_changed list_modes_queryable.0/null+wrong-type",
+          "isupport_changed prefix_order/null+wrong-type",
+          "isupport_changed prefix_order.0/null+wrong-type",
+          "isupport_changed chantypes/null+wrong-type",
+          "isupport_changed chantypes.0/null+wrong-type",
+          "window_invited inviter/null+wrong-type",
+          "connection_state_changed network.recoverable/null+wrong-type",
+        ],
+      }
     `);
   });
 });
