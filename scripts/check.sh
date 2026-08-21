@@ -7,8 +7,8 @@
 # Same gates as the `ci` GitHub workflow, in two stages:
 #
 #   stage 1: the `mix ci.check` alias in mix.exs (the gate list lives there).
-#   stage 2 (this script): the cic↔server wire-shape drift gate, then the
-#            host-side bats suite.
+#   stage 2 (this script): the cic↔server wire-shape drift gate, the #1393d
+#            wire-shape pin, then the host-side bats suite.
 #
 # Pins MIX_ENV=dev via scripts/mix.sh (credo / sobelow / ex_doc are dev-only
 # deps). Two sub-steps inside the alias shell out with `cmd env MIX_ENV=test`:
@@ -30,4 +30,11 @@ cd "$REPO_ROOT"
 # Drift gate for cicchetto/src/lib/wireTypes.ts — regenerates the file in
 # memory and diffs it against the committed copy.
 "$SRC_ROOT/scripts/mix.sh" --env=dev grappa.gen_wire_types --check
+#
+# #1393d — the wire-shape pin: fails when the generated shape moved and
+# `Grappa.Protocol.version/0` did not. A SEPARATE gate from the line above
+# because that one has no BEFORE — it diffs the artefact against its own
+# source, so a regenerated additive field reads `in sync.`, which is the
+# case this rule exists for. The BEFORE is priv/wire/shape.pin; no network.
+"$SRC_ROOT/scripts/mix.sh" --env=dev grappa.wire_pin --check
 "$SRC_ROOT/scripts/bats.sh"

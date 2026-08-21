@@ -445,6 +445,44 @@ without it the task hits a read-only filesystem, and the default RO
 mount is what protects cic source from accidental container-side
 mutation during ordinary mix tasks.
 
+⚠️ **`WRITABLE_CIC=1` has a matching FALSE-GREEN trap: redirect the
+task's output to `/dev/null` and a read-only failure is indistinguishable
+from success.** The control that unmasks it is counting the `^Wrote `
+lines — there must be exactly **2** (`wireTypes.ts` + `wireSchema.ts`).
+Two whole measurement runs were once conducted against a generator that
+had never written anything (#1393d).
+
+### `mix grappa.wire_pin` — the wire-shape / protocol-version gate (#1393d)
+
+Since 2026-08-21 `Grappa.Protocol.version/0` bumps on EVERY wire-shape
+change, additive fields included (`docs/CLIENT_PROTOCOL.md` §2a). This
+task is what enforces it:
+
+```sh
+scripts/mix.sh --env=dev grappa.wire_pin --check    # the gate; in check.sh + CI
+scripts/mix.sh --env=dev grappa.wire_pin --update   # refresh the pin after a bump
+```
+
+The BEFORE is `priv/wire/shape.pin`, holding the digest of everything the
+wire codegen emits together with the protocol version it was taken at.
+`--update` REFUSES when the digest moved and the version did not, which is
+what makes the gate un-greenable without the bump. No network, no git — a
+CI runner with no remote gates identically.
+
+Two things a reader will otherwise trip on:
+
+* **It is NOT a duplicate of `grappa.gen_wire_types --check`, and that one
+  provably cannot host it.** `--check` diffs the artefact against its own
+  SOURCE, so adding a field and regenerating answers `in sync.`. Measured
+  side by side: with an extra field and the version untouched,
+  `gen_wire_types --check` exits 0 while `wire_pin --check` exits 1.
+* **`priv/wire/` has its own worktree bind-mount, deliberately.** `priv/`
+  is not mounted from a worktree (it carries the shared `priv/plts`), so a
+  pin written straight into `priv/` lands in the MAIN checkout and every
+  worktree then measures against a pin belonging to no branch — measured
+  while this was being built, complete with a green test suite reading
+  main's copy.
+
 ### `GRAPPA_CACHE_ID` — opt-in per-worker build caches (#1263)
 
 The shared cache above is why two people (or two agents) on one host

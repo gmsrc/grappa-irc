@@ -80,6 +80,19 @@ jobs:
         # MIX_ENV=test yields the same file check.sh generates in :dev.
         run: mix grappa.gen_wire_types --check
 
+      - name: Wire shape pin (protocol version bumped with the shape)
+        # #1393d — the OTHER half, and the step above provably cannot host
+        # it. `gen_wire_types --check` compares the artefact against its own
+        # SOURCE, so adding a field and regenerating answers `in sync.` —
+        # green in exactly the case to catch. Measured: with an extra field
+        # in `window_invited_payload/0` and the version untouched, that step
+        # exits 0 on both artefacts while this one exits 1.
+        #
+        # Offline like its sibling: the BEFORE is `priv/wire/shape.pin` in
+        # the tree, never `origin/main` or a tag, so a runner with no remote
+        # gates identically.
+        run: mix grappa.wire_pin --check
+
       - name: Format check
         run: mix format --check-formatted
 

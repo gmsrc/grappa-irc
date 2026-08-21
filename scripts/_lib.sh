@@ -79,6 +79,15 @@ if [ "$SRC_ROOT" != "$REPO_ROOT" ]; then
         -v "$SRC_ROOT/test:/app/test"
         -v "$SRC_ROOT/config:/app/config"
         -v "$SRC_ROOT/priv/repo:/app/priv/repo"
+        # priv/wire/ — the #1393d wire-shape pin. RW: `mix grappa.wire_pin
+        # --update` writes it. Its OWN directory, not a file directly under
+        # priv/, because priv/ cannot be mounted wholesale (it carries the
+        # SHARED priv/plts cache) and a file-bind of a path that does not yet
+        # exist on the host makes docker create a directory there instead.
+        # Without this override the pin resolves to MAIN's priv/ — measured
+        # while #1393d was being built: --update wrote it into the main
+        # checkout and the suite went green against a pin from no branch.
+        -v "$SRC_ROOT/priv/wire:/app/priv/wire"
         -v "$SRC_ROOT/infra:/app/infra:ro"
         -v "$SRC_ROOT/cicchetto/src:/app/cicchetto/src:$cic_mode"
         -v "$SRC_ROOT/mix.exs:/app/mix.exs:ro"
