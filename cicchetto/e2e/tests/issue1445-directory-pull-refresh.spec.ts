@@ -48,6 +48,29 @@
 //      altogether, and the scroller's own `pan-y` alone would leave the ROW
 //      — the hit-test target across nearly the whole list — still reading
 //      `auto`, which is the shape #913 measured as insufficient.
+//   3b. THE CAP, RESOLVED BY THE ENGINE THE BUG CAME FROM (#1658, @webkit):
+//      the declaration the pane writes at full travel is applied straight to
+//      the slot and the engine's own geometry is read back. vjt reported this
+//      from iOS Safari, and the cap is `translateY(min(<px>, 100%))` — a CSS
+//      math function over MIXED UNITS inside a transform. Chromium resolving
+//      it says nothing about WebKit, and a WebKit that did not resolve it
+//      would leave the slot parked out of sight: not "the cap is a few px
+//      off" but the pull no longer following the finger, on the only engine
+//      the reporter has, with 2b and every other gate here GREEN. That is the
+//      empty-green class — a gate that passes because it does not look where
+//      the defect lives — and this is the assertion that closes it.
+//      NO GESTURE, deliberately and not for convenience: `new Touch(...)` is
+//      an `Illegal constructor` on Playwright's WebKit (measured; issue230's
+//      header records the same limit for its own drag), so the production
+//      gesture cannot be synthesized on that project at all. What 3b buys is
+//      the ENGINE half; the PANE half — that the pane writes this declaration
+//      from a real finger — is 2b's, on chromium. Each is honest about which
+//      half it owns, and neither pretends to the other.
+//      It carries a plain-px ARITHMETIC CONTROL ahead of the capped reading,
+//      because the first draft of it had none and measured the slot's 150ms
+//      snap-back transition instead of the resolved transform: every
+//      declaration read as "parked" on BOTH engines and it looked like a
+//      total WebKit failure. The control fails loudly in that state.
 //
 // NOT PROVEN ANYWHERE, on purpose rather than by omission:
 //
@@ -61,6 +84,22 @@
 //     before that claim lands. Test 3 asserts the CSS that is supposed to
 //     prevent it; only a phone can say whether it does. That is a vjt call, as
 //     it was for #213 and #1438.
+//   * That Playwright's WebKit IS iOS Safari. Test 3b measures the same engine
+//     family under a phone viewport, which is the closest thing reachable from
+//     CI and strictly more than a chromium-only reading — it answers "does
+//     WebKit resolve a mixed-unit `min()` inside a transform", a question
+//     chromium cannot answer at all. It does not answer "does it resolve the
+//     same way on vjt's phone", and no assertion here claims it does.
+//   * The GESTURE on WebKit, by anything here. `new Touch(...)` throws
+//     `Illegal constructor` there, so no test in this file drives the binder
+//     on that project. MEASURED while looking for a way round it, and recorded
+//     because the next person will look too: `document.createTouch` DOES
+//     exist and returns a usable Touch, `document.createEvent("TouchEvent")`
+//     succeeds but has no `initTouchEvent`, and `new TouchEvent(type, {...})`
+//     accepts a `document.createTouchList(...)` for its touch sequences while
+//     rejecting a plain array with `TypeError: Type error`. So a WebKit drag
+//     is reachable — nobody has built it, and whether the wiring half is worth
+//     proving twice is a product call, not this file's.
 //   * Interaction with the pane's scroll preservation. A progress ping that
 //     lands WHILE a finger is down rewrites `scrollTop` from a queueMicrotask
 //     (DirectoryPane's entry-count effect). Nothing here holds a finger across
@@ -86,14 +125,24 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 const LIST_WINDOW_NAME = "$list";
 
 // PULL_COMMIT_PX from src/lib/pullGesture.ts (SWIPE_MIN_PX * 2). Hardcoded for
-// the same reason — but unlike the window name this copy CHECKS itself: test 2
-// drags half of it and asserts the paint moved by that much, and the paint is
-// capped at the real constant. Lower the real one and this spec reads the cap
-// instead of the drag and goes red, naming the drift.
+// the same reason as the window name above.
 //
-// #1646 adds a static second witness that needs no testnet, and it watches the
-// number this comment does NOT name: the production side is DERIVED, so moving
-// `SWIPE_MIN_PX` in src/lib/swipe.ts moves the cap while leaving 80 here.
+// #1658 — and unlike the window name this copy no longer CHECKS ITSELF. It
+// did: test 2 dragged half of it against a paint capped at the real constant,
+// so lowering the real one made this spec read the cap instead of the drag and
+// go red. Both halves of that are gone — the travel caps at the slot's own
+// height now, and test 2 drags a literal 20 to stay under it at every font
+// size. The only use left is a drag MAGNITUDE (`PULL_COMMIT_PX * 3` in test
+// 1), which reds only if the real constant grows past 240 and says nothing at
+// all if it shrinks. Leaving the old claim here would have left a comment
+// standing where a witness used to be, which is the failure #1393 spent a day
+// removing.
+//
+// What pins it is #1646's static witness, which needs no testnet:
+// src/__tests__/e2eConstantMirrors.test.ts imports the production constant and
+// compares it to this literal. It watches the number this file does NOT name —
+// the production side is DERIVED, so moving `SWIPE_MIN_PX` in src/lib/swipe.ts
+// moves the commit distance while leaving 80 sitting here.
 const PULL_COMMIT_PX = 80;
 
 // Open the directory pane and hand back its two moving parts.
@@ -215,10 +264,17 @@ async function slotInlinePaint(list: Locator): Promise<{ transform: string; opac
 // LIST_WINDOW_NAME above. The gesture ends on a touchCANCEL, not a touchend:
 // cancel puts the slot back without committing, so measuring three sizes in
 // one test does not spend three upstream LIST captures.
+//
+// `transform` comes back as the INLINE string, not a computed one, and it is
+// the discriminator #1658's webkit arm needs: setting an unparseable value on
+// a CSSStyleDeclaration is a silent no-op, so an engine that refuses
+// `min(<px>, 100%)` inside `translateY` leaves this empty while the geometry
+// merely reads "parked". Empty means the declaration was refused; non-empty
+// with a non-zero offset means it was accepted and resolved elsewhere.
 async function measureAtFullTravel(
   list: Locator,
   rootFontSize: string,
-): Promise<{ slotTop: number; listTop: number; slotHeight: number }> {
+): Promise<{ slotTop: number; listTop: number; slotHeight: number; transform: string }> {
   return list.evaluate((el, size) => {
     document.documentElement.style.setProperty("--font-size", size);
     const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
@@ -246,9 +302,60 @@ async function measureAtFullTravel(
     fire("touchmove", at(y0 + 400));
     const slotRect = slot.getBoundingClientRect();
     const listRect = el.getBoundingClientRect();
+    const transform = slot.style.transform;
     fire("touchcancel", at(y0 + 400));
-    return { slotTop: slotRect.top, listTop: listRect.top, slotHeight: slotRect.height };
+    return {
+      slotTop: slotRect.top,
+      listTop: listRect.top,
+      slotHeight: slotRect.height,
+      transform,
+    };
   }, rootFontSize);
+}
+
+// The three root font sizes that bracket cic's range, and the slot height each
+// produces. From lib/fontSize.ts's SIZES; the slot is `2.5rem`.
+const FONT_SIZES = [
+  ["12px", 30],
+  ["14px", 35],
+  ["20px", 50],
+] as const;
+
+// One paint applied DIRECTLY to the slot, with no gesture in front of it, and
+// the geometry the engine resolves it to. This is how the @webkit arm reaches
+// the cap at all: `new Touch(...)` is an `Illegal constructor` on Playwright's
+// WebKit (measured, and issue230's header records the same for its own drag),
+// so the production gesture cannot be synthesized there and the question
+// "does THIS ENGINE resolve THIS DECLARATION" has to be asked directly.
+//
+// 🔴 `pull-gesture-active` is not decoration. The slot carries
+// `transition: transform 150ms ease-out`, which production drops through that
+// exact class for the length of a claimed pull. Without it every reading here
+// is the ease at t=0 — MEASURED: all eight candidate declarations, on BOTH
+// engines, read as the parked position and the table looked like a total
+// engine failure. Killing the transition the way production kills it is what
+// turned that into a table with two distinct answers in it.
+async function resolveTransform(
+  list: Locator,
+  rootFontSize: string,
+  declaration: string,
+): Promise<{ offset: number; slotHeight: number; computed: string }> {
+  return list.evaluate(
+    (el, opts) => {
+      document.documentElement.style.setProperty("--font-size", opts.rootFontSize);
+      const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
+      if (slot === null) throw new Error("no pull slot inside the directory list");
+      el.classList.add("pull-gesture-active");
+      slot.style.transform = opts.declaration;
+      const computed = getComputedStyle(slot).transform;
+      const slotRect = slot.getBoundingClientRect();
+      const offset = slotRect.top - el.getBoundingClientRect().top;
+      slot.style.removeProperty("transform");
+      el.classList.remove("pull-gesture-active");
+      return { offset, slotHeight: slotRect.height, computed };
+    },
+    { rootFontSize, declaration },
+  );
 }
 
 test("#1445 — a downward pull on the directory asks for the refresh (chromium)", async ({
@@ -305,27 +412,78 @@ test("#1658 — at full travel the slot stops flush with the list's top edge, at
   test.slow();
   const { list } = await openDirectory(page, "sidebar");
 
-  // S, M (the default) and XXL, from lib/fontSize.ts's SIZES. The slot is
-  // `2.5rem`, so these are three DIFFERENT slot heights — 30, 35 and 50px —
-  // and that is the point: the cap is only the slot's own height if the
-  // flush reading survives all three. A hardcoded 35 reads +5 here and -15
-  // there; the old `PULL_COMMIT_PX` cap reads +50, +45 and +30.
-  for (const [size, expectedSlotHeight] of [
-    ["12px", 30],
-    ["14px", 35],
-    ["20px", 50],
-  ] as const) {
-    const { slotTop, listTop, slotHeight } = await measureAtFullTravel(list, size);
+  // S, M (the default) and XXL — three DIFFERENT slot heights, and that is the
+  // point: the cap is only the slot's own height if the flush reading survives
+  // all three. A hardcoded 35 reads +5 at S and -15 at XXL; the old
+  // `PULL_COMMIT_PX` cap reads +50, +45 and +30.
+  for (const [size, expectedSlotHeight] of FONT_SIZES) {
+    const { slotTop, listTop, slotHeight, transform } = await measureAtFullTravel(list, size);
 
     // Known-answer control, and without it this whole test is theatre: if the
     // `--font-size` write did not take, all three iterations would measure the
     // same slot and three identical readings would look like proof.
     expect(slotHeight, `slot height at --font-size: ${size}`).toBeCloseTo(expectedSlotHeight, 0);
+    // Read this one FIRST when the pair goes red: an EMPTY inline transform is
+    // the engine refusing the declaration outright (the CSSOM setter drops an
+    // unparseable value silently), which is a different defect and a different
+    // fix from an engine that accepted it and resolved it somewhere else.
+    expect(transform, `inline transform at --font-size: ${size}`).not.toBe("");
     // The flush line. NOT "the slot clears the first row" — it cannot, it is
     // absolutely positioned over rows that start at the same y — but it never
     // travels PAST the edge, which is the whole of what #1658 point 2 can buy
     // before the rows themselves move (point 3, not started).
     expect(slotTop - listTop, `flush offset at --font-size: ${size}`).toBeCloseTo(0, 0);
+  }
+});
+
+test("@webkit #1658 — WebKit resolves the travel cap against the slot's own height (iPhone 15)", async ({
+  page,
+}) => {
+  test.slow();
+  // The mobile door, for the reason `openDirectory` states: the $list window
+  // has no BottomBar tab, so `selectChannel` cannot reach it on this layout.
+  const { list } = await openDirectory(page, "list-command");
+
+  for (const [size, expectedSlotHeight] of FONT_SIZES) {
+    // The ARITHMETIC CONTROL, and it runs first because everything below is
+    // worthless without it. A plain px translate under the cap must move the
+    // slot by exactly that much from its parked -100%. If this reads the
+    // parked position instead, the harness is measuring a transition or a
+    // stale layout and the capped reading beneath it means nothing — which is
+    // the exact hole the first draft of this test fell into.
+    const control = await resolveTransform(list, size, "translateY(-100%) translateY(20px)");
+    expect(control.slotHeight, `slot height at --font-size: ${size}`).toBeCloseTo(
+      expectedSlotHeight,
+      0,
+    );
+    expect(control.offset, `plain-px control at --font-size: ${size}`).toBeCloseTo(
+      20 - expectedSlotHeight,
+      0,
+    );
+
+    // The declaration the pane actually writes at full travel, resolved by the
+    // engine the bug was reported from. `min(<px>, 100%)` is a CSS math
+    // function over MIXED UNITS inside a transform: chromium resolving it says
+    // nothing about WebKit, and if WebKit did not resolve it the slot would
+    // stay parked out of sight — not "the cap is off by a few px" but the pull
+    // no longer following the finger at all, on the only engine vjt has, with
+    // every other gate in this repo green. That is the empty-green class, and
+    // this line is what closes it.
+    //
+    // Coupled BY HAND to `pulledTransform` in src/DirectoryPane.tsx: this is an
+    // ENGINE contract, so it names the declaration rather than importing it,
+    // exactly as the CSS-contract test below names `pan-y`. Change the cap's
+    // FORM in the pane and this string must move with it — the chromium arm
+    // above is what keeps the pane honest about producing it.
+    const capped = await resolveTransform(
+      list,
+      size,
+      "translateY(-100%) translateY(min(400px, 100%))",
+    );
+    expect(capped.offset, `capped travel at --font-size: ${size} (${capped.computed})`).toBeCloseTo(
+      0,
+      0,
+    );
   }
 });
 

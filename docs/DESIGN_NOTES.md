@@ -57099,3 +57099,81 @@ root font sizes, with the slot height asserted alongside each so that a
 `--font-size` write that silently failed cannot pass three identical
 measurements off as three sizes. Whether any of it feels like a pull is a
 device call and stays vjt's.
+
+### The cap is a CSS math function, and chromium could not vouch for it
+
+The cure above puts the cap in the CSS — `translateY(min(<px>, 100%))` —
+and every assertion behind it ran on chromium. The bug was reported from
+iOS Safari. `min()` over MIXED UNITS inside a transform is exactly the
+kind of declaration an engine can accept syntactically and then resolve to
+nothing, and had WebKit done that the slot would have stayed parked out of
+sight: not a cap a few pixels off, but the pull no longer following the
+finger at all — the first defect of this issue restored, on the only
+engine the reporter has, with every gate in this repo green. That is the
+empty-green class, and a fix for an iOS bug whose mechanism is unmeasured
+on WebKit has not been measured at all.
+
+MEASURED, on Playwright's `webkit-iphone-15` (WebKit 605.1.15,
+Version/26.4) against chromium 147, reading the resolved geometry off the
+real slot:
+
+| declaration | chromium | webkit |
+|---|---|---|
+| `translateY(-100%) translateY(20px)` | `off=-15` | `off=-15` |
+| `translateY(-100%) translateY(min(400px, 100%))` | `off=0` | `off=0` |
+
+Identical, row for row. **`min()` holds on WebKit**; the feared hole is
+not there. The first row is the arithmetic control and it earns its place
+below.
+
+### The measurement that lied first, and what makes it honest
+
+The first pass of that table read "parked" for every candidate on BOTH
+engines and looked like a total WebKit failure. It was the harness: the
+slot carries `transition: transform 150ms ease-out`, and production drops
+it through the `pull-gesture-active` class for exactly as long as a
+claimed pull runs. A reading taken without that class is the ease at t=0,
+which is the parked position, for every declaration ever written. The fix
+is to kill the transition the way production kills it, and the guard
+against believing the lie again is the plain-px control row: it must read
+`20 - slotHeight`, and it reads the parked position under precisely the
+harness fault that produced the false table. A cross-engine claim with no
+control in it is a claim about the harness.
+
+### Why the WebKit arm asserts CSS and not the gesture
+
+It sets the declaration on the slot directly. Not for convenience:
+`new Touch(...)` throws `Illegal constructor` on Playwright's WebKit, so
+the production gesture cannot be synthesized on that project at all —
+`issue230`'s header had already recorded the same limit for its own drag,
+as prose, without a measurement next to it. So the two arms own two
+halves and each says which: chromium proves the PANE writes this
+declaration from a real finger; WebKit proves the ENGINE resolves it.
+Neither pretends to the other, and the pair is what closes the hole.
+
+Recorded for whoever tries again, because they will: `document.createTouch`
+DOES exist there and returns a usable Touch;
+`document.createEvent("TouchEvent")` succeeds but carries no
+`initTouchEvent`; and `new TouchEvent(type, {…})` accepts a
+`document.createTouchList(…)` for its touch sequences while rejecting a
+plain array with `TypeError: Type error`. A WebKit drag is therefore
+reachable. Nobody has built one, and whether the wiring half is worth
+proving on a second engine is a product call, not a gap this change left
+open by accident.
+
+### A comment that outlived its witness
+
+The e2e copy of `PULL_COMMIT_PX` carried a paragraph claiming it checked
+itself: the displacement test dragged half the constant against a paint
+capped at the real one, so lowering the real one made the spec read the
+cap instead of the drag. Both halves of that died in this change — the
+travel caps at the slot's own height now, and the displacement test drags
+a literal 20 to stay under the cap at every font size. The only use left
+is a drag magnitude, which reds if the constant grows past 240 and says
+nothing at all if it shrinks.
+
+The comment is now what it is: a copy pinned by #1646's static witness,
+which imports the production constant and compares it to the literal. A
+comment describing a guarantee that has been removed is worse than no
+comment, because it is the thing a reader consults instead of checking —
+the same class #1393 spent a day deleting.
