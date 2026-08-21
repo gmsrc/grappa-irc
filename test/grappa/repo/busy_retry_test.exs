@@ -197,7 +197,7 @@ defmodule Grappa.Repo.BusyRetryTest do
 
     test "the observer sees a distinct :interrupted kind — never :busy_locked" do
       {:ok, observed} = Agent.start_link(fn -> [] end)
-      on_contention = fn kind, _attempt, _terminal? -> Agent.update(observed, &[kind | &1]) end
+      on_contention = fn kind, _, _ -> Agent.update(observed, &[kind | &1]) end
 
       assert {:error, :db_unavailable} =
                BusyRetry.run(fn -> raise_interrupted() end, on_contention: on_contention)

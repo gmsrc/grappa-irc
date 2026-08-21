@@ -61,13 +61,13 @@ defmodule Grappa.Session.Persistor do
   had a right to exist, the caller's changeset arm owns that message.
   """
 
-  require Logger
-
   alias Grappa.IRC.Identifier
   alias Grappa.PubSub.Topic
   alias Grappa.Push.Triggers, as: PushTriggers
   alias Grappa.{Scrollback, WindowCounts}
   alias Grappa.Scrollback.Wire
+
+  require Logger
 
   @typedoc """
   The Session.Server state slice this module reads, passed as the full

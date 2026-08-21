@@ -5122,7 +5122,7 @@ defmodule Grappa.Session.Server do
   # double the census. Nothing diagnostic is lost: `Persistor` derives channel,
   # kind and network from the attrs it is holding, and `numeric` rides
   # `attrs.meta` on the one arm that carries it.
-  defp log_persist_failure(:persist_unavailable, _metadata), do: :ok
+  defp log_persist_failure(:persist_unavailable, _), do: :ok
 
   # #422 — a just-persisted DM (query-window) content row ensures its
   # server-side query window exists, next to the persist, so a bouncer
