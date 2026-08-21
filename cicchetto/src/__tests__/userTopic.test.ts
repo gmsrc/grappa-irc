@@ -1509,6 +1509,7 @@ describe("userTopic", () => {
         kind: "banlist_bundle",
         network: "azzurra",
         channel: "#test",
+        mode: "b",
         entries: [
           { mask: "*!*@banned.host", setter: "op!u@h", set_ts: "1784572878" },
           { mask: "evil!*@spam.net", setter: "mod!u@h", set_ts: "1784564620" },
@@ -1517,8 +1518,6 @@ describe("userTopic", () => {
       expect(bc.setBanlistBundle).toHaveBeenCalledWith("azzurra", {
         network: "azzurra",
         channel: "#test",
-        // #1251 — a payload with no `mode` is a pre-#1251 server, which could
-        // only ever have sent the ban list (unknown-is-never-fatal, #447).
         mode: "b",
         entries: [
           { mask: "*!*@banned.host", setter: "op!u@h", set_ts: "1784572878" },
@@ -1550,6 +1549,7 @@ describe("userTopic", () => {
         kind: "banlist_bundle",
         network: "azzurra",
         channel: "#empty",
+        mode: "b",
         entries: [],
       });
       expect(bc.setBanlistBundle).toHaveBeenCalledWith(
@@ -1564,6 +1564,7 @@ describe("userTopic", () => {
         kind: "banlist_bundle",
         network: "azzurra",
         channel: "#old",
+        mode: "b",
         entries: [{ mask: "*!*@old.host", setter: null, set_ts: null }],
       });
       expect(bc.setBanlistBundle).toHaveBeenCalledWith(
@@ -1580,6 +1581,7 @@ describe("userTopic", () => {
         kind: "banlist_bundle",
         network: "azzurra",
         channel: "#test",
+        mode: "b",
         entries: "nope",
       });
       expect(bc.setBanlistBundle).not.toHaveBeenCalled();
@@ -1591,6 +1593,7 @@ describe("userTopic", () => {
         kind: "banlist_bundle",
         network: "azzurra",
         channel: "#test",
+        mode: "b",
         entries: [
           { mask: "*!*@ok.host", setter: "op", set_ts: "111" },
           { setter: "op", set_ts: "222" },
@@ -1605,18 +1608,34 @@ describe("userTopic", () => {
         kind: "banlist_bundle",
         network: "azzurra",
         channel: 42,
+        mode: "b",
         entries: [],
       });
       expect(bc.setBanlistBundle).not.toHaveBeenCalled();
     });
 
-    // #1393 — the #1251 tolerance is for a server that predates `mode`, and
-    // that server sends no key at all. A key that IS there carrying something
-    // other than a letter is mangling, and coercing it to "b" renders whatever
-    // list arrived under the "Bans" heading — the exact mis-attribution #1251
-    // added the field to end. `Grappa.Session.Wire.banlist_bundle_payload/0`
-    // declares `mode` a plain required string, so neither of these two shapes
-    // can come from any grappa.
+    // #1393d — the LAST of the three shapes, and the one the earlier slice
+    // (5703d301) left open. `mode` is a plain required string in
+    // `Grappa.Session.Wire.banlist_bundle_payload/0`, so a grappa running this
+    // code CANNOT omit it: the only peer that could was one predating #1251,
+    // and the protocol floor (`MIN_SERVER_PROTOCOL_VERSION`) is what tells the
+    // user about that peer now — a silent coercion to "b" told them nothing and
+    // rendered a possibly-wrong list under the "Bans" heading either way.
+    // Distinct from the two below: this is ABSENCE, they are PRESENT-malformed.
+    it("drops payload with no `mode` key at all (absence is no longer a vintage)", async () => {
+      const bc = await import("../lib/banlistCard");
+      channelMock.fireEvent({
+        kind: "banlist_bundle",
+        network: "azzurra",
+        channel: "#test",
+        entries: [{ mask: "*!*@banned.host", setter: "op", set_ts: "1" }],
+      });
+      expect(bc.setBanlistBundle).not.toHaveBeenCalled();
+    });
+
+    // #1393 — a key that IS there carrying something other than a letter is
+    // mangling, and coercing it to "b" renders whatever list arrived under the
+    // "Bans" heading — the exact mis-attribution #1251 added the field to end.
     it("drops payload with a non-string `mode` (mangled, not an older server)", async () => {
       const bc = await import("../lib/banlistCard");
       channelMock.fireEvent({

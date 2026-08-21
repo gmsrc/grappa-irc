@@ -523,22 +523,31 @@ const DECLARED_TOLERANCES = {
     // the key is always on the wire, so its absence is not a vintage, and
     // `null` — which the server really does emit — is still accepted.
   },
-  banlist_bundle: {
-    mode: {
-      ops: ["drop"],
-      covers: "absent",
-      file: "userTopic",
-      quote: "the tolerance is for ABSENCE only",
-      why: "#1251 + this issue's own earlier slice (5703d301) — absence means a grappa that could only ever have sent the ban list. A key that IS present carrying a non-string is mangling, and was made to REJECT rather than render under the wrong heading. The narrowest declaration in this table, and the shape the three isupport fallbacks above do not have.",
-    },
-  },
+  // #1393d — `banlist_bundle` is gone from this table and off the hand switch.
+  // Its one declared tolerance was `mode/drop`, the narrowest row the census
+  // ever carried, and the earlier slice of this same issue (5703d301) had
+  // already closed the PRESENT-and-mangled half. vjt's strict ruling closes
+  // the absent half: `mode` is a plain required string, so a grappa running
+  // this code cannot omit it, and the only peer that could — one predating
+  // #1251 — is what the protocol floor reports now. With the coercion gone the
+  // arm had nothing the schema does not say, so it calls `validate`.
   links_bundle: {
     mask: {
       ops: ["drop"],
       covers: "absent",
       file: "userTopic",
       quote: "older grappa that predates the field omits it",
-      why: "#513a — a full-mesh empty renders 'hides topology', the pre-#513 behaviour. A present non-string non-null still rejects, like `banlist_bundle.mode`.",
+      // #1393d — measured and deliberately LEFT OPEN, on the orchestrator's
+      // explicit ruling. The discriminator that reached `banlist_bundle.mode`
+      // is whether the typespec admits `nil`: `mask` is `String.t() | nil` and
+      // the `nil` CARRIES MEANING (`mask == nil` ⇒ full-mesh request,
+      // `mask != nil` ⇒ "no server matches <mask>"), so an accepted null is a
+      // datum, not a tolerance. What stays declared here is narrower than
+      // that, and is the honest residue: the tolerance measured on this field
+      // is `drop` — the ABSENT KEY — and the generated schema makes the key
+      // required, so by the same argument used on `mode` this absence is
+      // unreachable for a current server too. It is held open, not resolved.
+      why: "#513a — a full-mesh empty renders 'hides topology', the pre-#513 behaviour. A present non-string non-null still rejects. #1393d measured this row as the same ABSENCE shape that `banlist_bundle.mode` carried and left it standing on an explicit ruling, because `mask`'s `nil` is a value the server really emits and the two questions were not worth conflating in one slice.",
     },
   },
   // #1393d — `window_invited` and `connection_state_changed` had exactly one
@@ -710,7 +719,7 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtParity": 32,
+        "armsAtParity": 33,
         "armsCensused": 43,
         "armsWithSchema": 42,
         "brokenOracles": [],
@@ -744,14 +753,6 @@ describe("#1393 — user-topic boundary census", () => {
             "handAcceptsSchemaRejects": "upload.video_max_duration_seconds/drop, upload.video_max_duration_seconds/null, upload.video_max_duration_seconds/wrong-type, http_host_aliases/drop, http_host_aliases/null, http_host_aliases/wrong-type, http_host_aliases.0/null, http_host_aliases.0/wrong-type",
             "mutations": 32,
             "schema": "S_ServerSettingsWireChangedPayload",
-            "schemaAcceptsHandRejects": "-",
-            "schemaRejectsValid": false,
-          },
-          {
-            "arm": "banlist_bundle",
-            "handAcceptsSchemaRejects": "mode/drop",
-            "mutations": 30,
-            "schema": "S_SessionWireBanlistBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
@@ -897,6 +898,9 @@ describe("#1393 — user-topic boundary census", () => {
     "archive_purged",
     "auto_away_debounce_changed",
     "away_confirmed",
+    // #1393d, second slice — `banlist_bundle` lost its last tolerance and
+    // moved onto `validate` with it.
+    "banlist_bundle",
     "channels_changed",
     "connection_progress",
     // #1393d — the four arms this slice touched. Two moved onto `validate`
@@ -1032,6 +1036,54 @@ describe("#1393 — user-topic boundary census", () => {
             "kind": "away_confirmed",
             "network": "sample",
             "state": "present",
+          },
+        },
+        {
+          "arm": "banlist_bundle",
+          "matrix": {
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/swap": "accept",
+            "channel/wrong-type": "reject",
+            "entries.0.mask/drop": "reject",
+            "entries.0.mask/null": "reject",
+            "entries.0.mask/swap": "accept",
+            "entries.0.mask/wrong-type": "reject",
+            "entries.0.set_ts/drop": "reject",
+            "entries.0.set_ts/null": "accept",
+            "entries.0.set_ts/swap": "accept",
+            "entries.0.set_ts/wrong-type": "reject",
+            "entries.0.setter/drop": "reject",
+            "entries.0.setter/null": "accept",
+            "entries.0.setter/swap": "accept",
+            "entries.0.setter/wrong-type": "reject",
+            "entries.0/drop": "accept",
+            "entries.0/null": "reject",
+            "entries.0/wrong-type": "reject",
+            "entries/drop": "reject",
+            "entries/null": "reject",
+            "entries/wrong-type": "reject",
+            "mode/drop": "reject",
+            "mode/null": "reject",
+            "mode/swap": "accept",
+            "mode/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/swap": "accept",
+            "network/wrong-type": "reject",
+          },
+          "returns": {
+            "channel": "sample",
+            "entries": [
+              {
+                "mask": "sample",
+                "set_ts": "sample",
+                "setter": "sample",
+              },
+            ],
+            "kind": "banlist_bundle",
+            "mode": "sample",
+            "network": "sample",
           },
         },
         {
@@ -2267,8 +2319,8 @@ describe("#1393 — user-topic boundary census", () => {
       stale: [...declared].filter((k) => !observed.has(k)).sort(),
     }).toMatchInlineSnapshot(`
       {
-        "declared": 61,
-        "measured": 61,
+        "declared": 60,
+        "measured": 60,
         "stale": [],
         "unexplained": [],
       }
@@ -2336,6 +2388,68 @@ describe("#1393 — user-topic boundary census", () => {
         "noWrittenReason": [],
         "widerThanItsWrittenReason": [],
       }
+    `);
+  });
+
+  // #1393d — the INVERSE register, and the reason it has to exist separately.
+  //
+  // `DECLARED_TOLERANCES` records where the hand guard is WIDER than the
+  // schema. This slice created the opposite: an arm that calls `validate` and
+  // then rejects a value the schema types as legal. `window_invited` types
+  // `inviter` as a free `"s"`, so `""` passes the schema — and no IRC nick is
+  // empty, so the guard drops it.
+  //
+  // The census cannot see this, and that is the whole hazard: its mutation
+  // matrix produces absent / null / wrong-type / swap, never an empty string,
+  // so the divergence is measured as parity. A reader diffing the guard
+  // against the schema six months from now finds an unexplained extra check
+  // and reads it as drift to tidy away. Named here so it reads as policy.
+  //
+  // Recorded in a table of its own rather than as a `DECLARED_TOLERANCES` row:
+  // that table's contract is `measured === declared` against the observed
+  // mutation set, and an entry the matrix can never observe would land in
+  // `stale` forever. Same discipline though — the citation is load-bearing,
+  // and it quotes the CHECK rather than the comment above it, because deleting
+  // the check is the failure this exists to catch.
+  const DECLARED_STRICTNESSES = [
+    {
+      arm: "window_invited",
+      schema: "S_SessionWireWindowInvitedPayload",
+      path: "inviter",
+      value: "",
+      file: "userTopic",
+      quote: 'invited.inviter === "" ? null : invited',
+      why: '#902 + #1393d — `""` IS a valid `String.t()`, so this is a policy STRICTER than the generated schema, not a consequence of it. The hand guard this arm replaced rejected an empty inviter, and dropping the check while migrating to `validate` would have been a silent strictness loss. An empty nick names nobody: it is present-and-unusable, the class the strict ruling rejects.',
+    },
+  ] as const;
+
+  it("declares every policy stricter than its schema, and measures each one live", () => {
+    const measured = DECLARED_STRICTNESSES.map((s) => {
+      const node = candidatesFor(s.arm).find(({ name }) => name === s.schema)?.node;
+      // Not defensive noise: `find` is how the schema is resolved by NAME
+      // rather than by position, and a renamed schema must redden here rather
+      // than silently measure nothing.
+      if (node === undefined) throw new Error(`no schema ${s.schema} for arm ${s.arm}`);
+      const payload = { ...(sample(node) as Record<string, unknown>), [s.path]: s.value };
+      return {
+        case: `${s.arm}.${s.path} = ${JSON.stringify(s.value)}`,
+        // The divergence, both halves. Either one flipping means the policy
+        // stopped being a policy: the schema tightening makes it redundant,
+        // the guard loosening makes it gone.
+        schemaAccepts: validate(node, payload) !== null,
+        handRejects: verdict(hand, payload) === "reject",
+        cited: GUARD_SOURCE[s.file].includes(s.quote),
+      };
+    });
+    expect(measured).toMatchInlineSnapshot(`
+      [
+        {
+          "case": "window_invited.inviter = """,
+          "cited": true,
+          "handRejects": true,
+          "schemaAccepts": true,
+        },
+      ]
     `);
   });
 });

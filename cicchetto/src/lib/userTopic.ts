@@ -3,7 +3,6 @@ import { createEffect, untrack } from "solid-js";
 import { refreshAliases } from "./aliasList";
 import {
   assertNever,
-  type BanlistEntry,
   type LinksEntry,
   type QueryWindowEntry,
   type WhoisExtraLine,
@@ -85,6 +84,7 @@ import {
   S_ScrollbackWireArchiveChangedPayload,
   S_ScrollbackWireArchivePurgedPayload,
   S_SessionWireAwayConfirmedPayload,
+  S_SessionWireBanlistBundlePayload,
   S_SessionWireChannelsChangedPayload,
   S_SessionWireConnectionProgressPayload,
   S_SessionWireDirectoryCompletePayload,
@@ -225,33 +225,13 @@ function narrowWhoisExtraLine(raw: unknown): WhoisExtraLine | null {
   return { numeric: r.numeric, text: r.text };
 }
 
-// #376 — per-element narrower for the BANLIST `entries` array. Mirror of
-// `Grappa.Session.Wire.banlist_entry/0` — `{mask, setter, set_ts}`. `mask`
-// is required; `setter`/`set_ts` are nullable (older ircds omit them). A
-// malformed element drops the WHOLE bundle (strict, matching
-// narrowWhoisExtraLine) so a bad wire element can't crash the card.
-function narrowBanlistEntry(raw: unknown): BanlistEntry | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const r = raw as Record<string, unknown>;
-  if (
-    typeof r.mask !== "string" ||
-    (r.setter !== null && typeof r.setter !== "string") ||
-    (r.set_ts !== null && typeof r.set_ts !== "string")
-  )
-    return null;
-  return {
-    mask: r.mask,
-    setter: r.setter as string | null,
-    set_ts: r.set_ts as string | null,
-  };
-}
-
 // #238 — per-entry narrower for a `links_bundle` topology row. Mirror of
 // `Grappa.Session.Wire.links_entry/0` (pinned to SessionWireLinksEntry by
 // `_Assert_LinksEntry`). `server` is required; `linked_to`/`description` are
 // nullable strings; `hopcount` a nullable number. ANY malformed element drops
 // the whole bundle (strict — a partial topology is a server bug, not a
-// graceful-degradation case). Mirror of `narrowBanlistEntry`.
+// graceful-degradation case). Stays hand-written because the arm around it
+// does: `links_bundle.mask` keeps a declared absence tolerance (#513a).
 function narrowLinksEntry(raw: unknown): LinksEntry | null {
   if (typeof raw !== "object" || raw === null) return null;
   const r = raw as Record<string, unknown>;
@@ -636,41 +616,21 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       // when true, historical fields are nil. cic owns the rendering
       // (single card per network, last-write-wins per /whowas).
       return validate(S_SessionWireWhowasBundlePayload, r);
-    case "banlist_bundle": {
+    case "banlist_bundle":
       // #376/#1251 — channel LIST-MODE bundle. All entries ship (a list mode
       // is a set of rows). cic owns the rendering (single card per network,
-      // last-write-wins per query). Each element is narrowed against
-      // the wire shape; ANY malformed element drops the whole bundle.
-      if (
-        typeof r.network !== "string" ||
-        typeof r.channel !== "string" ||
-        !Array.isArray(r.entries)
-      )
-        return null;
-      // #1251 — WHICH list this is, and the tolerance is for ABSENCE only: a
-      // grappa predating the field omits the key entirely and could only ever
-      // have sent the ban list, so absent means `b` (unknown-is-never-fatal,
-      // #447). #1393 — a key that IS present carrying a non-string is
-      // mangling, not an older peer, and coercing it to `b` would render
-      // whatever list arrived under the "Bans" heading: the mis-attribution
-      // #1251 exists to end. Stricter than `links_bundle`'s `mask`, which this
-      // arm used to claim to mirror, only because the typespecs differ —
-      // `mask` is `string | null`, `mode` is a plain required string.
-      if (r.mode !== undefined && typeof r.mode !== "string") return null;
-      const entries: BanlistEntry[] = [];
-      for (const raw of r.entries) {
-        const entry = narrowBanlistEntry(raw);
-        if (entry === null) return null;
-        entries.push(entry);
-      }
-      return {
-        kind: "banlist_bundle",
-        network: r.network,
-        channel: r.channel,
-        mode: typeof r.mode === "string" ? r.mode : "b",
-        entries,
-      };
-    }
+      // last-write-wins per query).
+      //
+      // #1393d — this arm was hand-written for exactly one reason: the `mode`
+      // absence tolerance, which coerced a missing key to `b`. `mode` is a
+      // plain required string in the typespec, so no grappa running this code
+      // omits it; the only peer that could was one predating #1251, and the
+      // protocol floor is what reports that peer now. With the coercion gone
+      // the arm had nothing left the schema does not already say — including
+      // the per-element strictness, since `walkArray` drops the WHOLE array on
+      // one bad element exactly as the hand loop did. So it calls `validate`,
+      // and `narrowBanlistEntry` went with it.
+      return validate(S_SessionWireBanlistBundlePayload, r);
     case "links_bundle": {
       // #238 — LINKS topology bundle. All server nodes ship (a topology is a
       // set). Per-element narrowing (`narrowLinksEntry`); ANY malformed element
