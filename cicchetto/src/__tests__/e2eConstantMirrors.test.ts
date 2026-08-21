@@ -1,9 +1,12 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { SHORT_HASH_LEN } from "../lib/bundleHash";
 import { PULL_COMMIT_PX } from "../lib/pullGesture";
+import { PUSH_OPTIN_DECLINED_KEY } from "../lib/pushOptin";
 import { REPLY_QUOTE_BODY_LIMIT, REPLY_QUOTE_TAIL } from "../lib/replyQuote";
 import { UNREAD_RETENTION_CAP } from "../lib/scrollback";
+import { LOAD_MORE_THRESHOLD_PX, SCROLL_BOTTOM_THRESHOLD_PX } from "../lib/scrollThresholds";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "../lib/windowKinds";
 
 // #1646 — the e2e tree hand-copies production constants, and until this file
@@ -32,22 +35,27 @@ import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "../lib/windowKinds";
 // `versionSource.test.ts` — vitest runs from the cicchetto dir, so both `src`
 // and `e2e` are at cwd.
 //
-// ⚠️ SCOPE, and it is narrow. #1646 measured 13 production constants copied
-// into 53 e2e declarations. Pinned here: the 6 whose production side is
-// TypeScript and ALREADY exported — 11 declarations. The other 7 are not
-// pinnable without a decision that is not this file's to take:
-//   - 5 are module-private in production (`SCROLL_BOTTOM_THRESHOLD_PX`,
-//     `LOAD_MORE_THRESHOLD_PX`, `PUSH_OPTIN_DECLINED_KEY`, `SHORT_HASH_LEN`,
-//     `AWAY_SET_LINE`) — 25 declarations, the two largest clusters among them.
-//     Exporting a constant to be testable, or moving it into `lib/`, is a
-//     product call.
-//   - 2 are Elixir module attributes (`MessagesController.@default_limit` and
-//     `@max_http_limit`) — 17 declarations. There is precedent for shipping a
-//     server number to the client mechanically (`mix grappa.gen_wire_types`
-//     with the drift gate in `scripts/check.sh`), and picking it is likewise a
-//     product call.
-// Neither is worked around here. A pin over an exported constant is the part
-// that needed no permission.
+// ⚠️ SCOPE. #1646 measured 13 production constants copied into 53 e2e
+// declarations. Slice 1 pinned the 6 whose production side was TypeScript and
+// ALREADY exported — 11 declarations — and left the other 7 to a product call.
+// Slice 2 took that call (vjt, 2026-08-21) and closed all of them:
+//   - `SCROLL_BOTTOM_THRESHOLD_PX` + `LOAD_MORE_THRESHOLD_PX` (22 declarations)
+//     MOVED out of `ScrollbackPane.tsx` into `src/lib/scrollThresholds.ts`,
+//     which argues its own case. They are `MIRRORS` rows like any other now.
+//   - `PUSH_OPTIN_DECLINED_KEY` + `SHORT_HASH_LEN` (1 each) were already under
+//     `lib/` and only lacked `export`; each declaration says why exporting it
+//     gives away nothing it had.
+//   - `AWAY_SET_NOTICE` (1) stays private, and is pinned by `TEXT_MIRRORS` —
+//     the weaker text-vs-text oracle. See that table for the refusal.
+//   - the 2 Elixir module attributes (17 declarations) are pinned SERVER-SIDE,
+//     in `test/grappa_web/controllers/messages_limit_mirror_test.exs`. They
+//     cannot be pinned from here: `scripts/bun.sh` bind-mounts ONLY
+//     `cicchetto/` at `/app`, so no path from this file reaches `lib/*.ex`.
+//     Do not try — `../lib` RESOLVES inside that container, to the Debian
+//     image's own `/lib`, and only the read fails.
+// `mix grappa.gen_wire_types` was considered for the Elixir pair and declined:
+// it ships wire TYPES, and teaching it to carry arbitrary constants inflates it
+// for two numbers a text read already covers.
 //
 // ⚠️ What this CANNOT do: it cannot find a mirror that has ALREADY drifted.
 // Every declaration below was found because the two sides carry the same
@@ -129,6 +137,104 @@ const MIRRORS: readonly Mirror[] = [
     name: "PULL_COMMIT_PX",
     production: PULL_COMMIT_PX,
     origin: "PULL_COMMIT_PX = SWIPE_MIN_PX * 2 (src/lib/pullGesture.ts)",
+  },
+
+  // The scroll-edge pair (#1646 slice 2). `SCROLL_BOTTOM_THRESHOLD_PX` is the
+  // most-copied constant in the tree by a wide margin — 20 declarations, one
+  // per spec that has to decide "is this pane at its tail".
+  ...[
+    "e2e/fixtures/scrollGesture.test.ts",
+    "e2e/tests/bug7-ios-own-msg-visible.spec.ts",
+    "e2e/tests/bug7-m6-ios-dm-own-msg-visible.spec.ts",
+    "e2e/tests/cp14-b1-scroll-marker-vs-bottom.spec.ts",
+    "e2e/tests/issue1089-switch-into-unread-flicker.spec.ts",
+    "e2e/tests/issue1121-overlay-close-tail-reader.spec.ts",
+    "e2e/tests/issue168-scroll-authority.spec.ts",
+    "e2e/tests/issue196-preview-scroll-live-arrival.spec.ts",
+    "e2e/tests/issue243-tap-active-scroll-bottom.spec.ts",
+    "e2e/tests/issue253-kbd-resize-scroll-preserve.spec.ts",
+    "e2e/tests/issue280-button-coexist.spec.ts",
+    "e2e/tests/issue289-float-btn-opacity.spec.ts",
+    "e2e/tests/issue310-scroll-to-bottom-btn-cursor.spec.ts",
+    "e2e/tests/issue360-scroll-to-bottom-mention-badge.spec.ts",
+    "e2e/tests/issue535-visibility-return-preserve-scroll.spec.ts",
+    "e2e/tests/issue580-send-snap-independent-of-post.spec.ts",
+    "e2e/tests/issue625-single-send-scroll-jump.spec.ts",
+    "e2e/tests/scroll-multi-roundtrip-contamination.spec.ts",
+    "e2e/tests/scroll-on-window-switch.spec.ts",
+    "e2e/tests/scroll-to-bottom-button-contamination.spec.ts",
+  ].map(
+    (file): Mirror => ({
+      file,
+      name: "SCROLL_BOTTOM_THRESHOLD_PX",
+      production: SCROLL_BOTTOM_THRESHOLD_PX,
+      origin: "SCROLL_BOTTOM_THRESHOLD_PX (src/lib/scrollThresholds.ts)",
+    }),
+  ),
+  ...[
+    "e2e/tests/cp14-b2-scroll-up-loadmore.spec.ts",
+    "e2e/tests/issue253-kbd-resize-scroll-preserve.spec.ts",
+  ].map(
+    (file): Mirror => ({
+      file,
+      name: "LOAD_MORE_THRESHOLD_PX",
+      production: LOAD_MORE_THRESHOLD_PX,
+      origin: "LOAD_MORE_THRESHOLD_PX (src/lib/scrollThresholds.ts)",
+    }),
+  ),
+
+  {
+    file: "e2e/tests/push-459-optin-banner.spec.ts",
+    name: "PUSH_OPTIN_DECLINED_KEY",
+    production: PUSH_OPTIN_DECLINED_KEY,
+    origin: "PUSH_OPTIN_DECLINED_KEY (src/lib/pushOptin.ts)",
+  },
+  {
+    file: "e2e/tests/issue1063-refresh-visible-feedback.spec.ts",
+    name: "SHORT_HASH_LEN",
+    production: SHORT_HASH_LEN,
+    origin: "SHORT_HASH_LEN (src/lib/bundleHash.ts)",
+  },
+];
+
+/**
+ * A mirror whose production side is read as TEXT rather than imported.
+ *
+ * A WEAKER oracle than `Mirror`, and used only where importing the original
+ * would mean changing production to suit a test. Both sides are read off disk,
+ * so this catches the two copies drifting apart — the defect #1646 names — but
+ * unlike `Mirror` it never observes the value the product actually computes.
+ * Prefer `Mirror`; reach for this when the alternative is moving or exporting a
+ * constant that has no business being moved or exported.
+ */
+type TextMirror = {
+  /** e2e file, relative to the cicchetto dir. */
+  readonly file: string;
+  /** The name the e2e side gives it. */
+  readonly name: string;
+  /** The production file, relative to the cicchetto dir. */
+  readonly originFile: string;
+  /** The production spelling — regularly NOT the e2e spelling. */
+  readonly originName: string;
+};
+
+// `AWAY_SET_NOTICE` stays private in `ComposeBox.tsx` (#1646 slice 2), and this
+// is the pin that costs production nothing to get.
+//
+// It is one half of a PAIR — `AWAY_UNSET_NOTICE` is its twin and has no e2e
+// mirror at all — and its own comment places it in a family kept beside the
+// component that renders it ("Same lowercase-topic register as the other
+// notices"). Moving it to `lib/` would split the pair and make it the only
+// centralised notice string in the tree, to buy a pin on ONE declaration; the
+// scroll-edge pair moved because the concept was already shared, and this one
+// is not. Exporting it in place would be the same trade with a smaller radius.
+// So both sides are read as text instead.
+const TEXT_MIRRORS: readonly TextMirror[] = [
+  {
+    file: "e2e/tests/issue1226-away-seam-feedback.spec.ts",
+    name: "AWAY_SET_LINE",
+    originFile: "src/ComposeBox.tsx",
+    originName: "AWAY_SET_NOTICE",
   },
 ];
 
@@ -276,10 +382,40 @@ describe("e2e mirrors of production constants (#1646)", () => {
     });
   }
 
+  for (const mirror of TEXT_MIRRORS) {
+    it(`${mirror.file} — ${mirror.name} still equals ${mirror.originName} (${mirror.originFile}, read as text)`, () => {
+      // Deliberately the SAME extractor on both sides. The production file is a
+      // `.tsx` component this test must not import — that is the whole reason
+      // the pin is here — so "read the declaration as text" is applied twice
+      // rather than once, and each side must yield exactly one plain literal.
+      const sides = [
+        { label: mirror.originFile, name: mirror.originName },
+        { label: mirror.file, name: mirror.name },
+      ].map((side) => {
+        const declarations = declarationsOf(readFileSync(side.label, "utf8"), side.name);
+        expect(declarations, `no \`${side.name}\` declaration in ${side.label}`).toHaveLength(1);
+
+        const declaration = declarations[0] as Declaration;
+        const value = parseLiteral(declaration.literal);
+        expect(
+          value,
+          `${side.label}:${declaration.line} — \`${declaration.literal}\` is not a plain literal, so this pin no longer reads it`,
+        ).not.toBeNull();
+        return value;
+      });
+
+      expect(
+        sides[1],
+        `${mirror.file} — the copy of ${mirror.originName} (${mirror.originFile}) has drifted`,
+      ).toBe(sides[0]);
+    });
+  }
+
   it("has no mirror outside the table", () => {
     const pinned = new Set(MIRRORS.map((m) => `${m.file}\0${m.name}`));
+    for (const text of TEXT_MIRRORS) pinned.add(`${text.file}\0${text.name}`);
     for (const known of KNOWN_UNPINNED) pinned.add(`${known.file}\0${known.name}`);
-    const names = [...new Set(MIRRORS.map((m) => m.name))];
+    const names = [...new Set([...MIRRORS, ...TEXT_MIRRORS].map((m) => m.name))];
 
     const unlisted: string[] = [];
     for (const file of e2eSourceFiles("e2e")) {
