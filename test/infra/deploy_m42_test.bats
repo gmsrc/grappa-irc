@@ -32,7 +32,11 @@ setup() {
 #!/bin/sh
 printf 'ssh %s\n' "$*" >> "$SSH_LOG"
 case "$*" in
-    *curl*healthz*) exit "${HEALTH_RC:-0}" ;;
+    # #1656 — `-fsS` is the PROBE (body discarded, non-zero on non-2xx); the
+    # same URL without it is the diagnostic re-ask that PRINTS the body.
+    *"curl -fsS"*healthz*) exit "${HEALTH_RC:-0}" ;;
+    *curl*healthz*)        printf '%s' "${HEALTHZ_BODY:-}"; exit 0 ;;
+    *"service grappa status"*) exit "${SERVICE_STATUS_RC:-0}" ;;
     *) exit 0 ;;
 esac
 EOF
@@ -148,4 +152,39 @@ EOF
 @test "unknown flag is a usage error (64)" {
     run_m42 --bogus
     [ "$status" -eq 64 ]
+}
+
+# --- #1656: the host-side --full-restart loop told the same half-truth -------
+
+@test "#1656 --full-restart: a failed healthcheck reports what /healthz said" {
+    export HEALTH_RC=1
+    export HEALTHZ_BODY='{"status":"fail","checks":[{"name":"ready","reason":"supervision tree boot not complete"}]}'
+    run_m42 --full-restart
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"supervision tree boot not complete"* ]]
+}
+
+@test "#1656 --full-restart: healthcheck red + daemon gone shouts PRODUCTION IS DOWN" {
+    export HEALTH_RC=1 SERVICE_STATUS_RC=1
+    run_m42 --full-restart
+    [ "$status" -ne 0 ]
+    grep -q "service grappa status" "$SSH_LOG"
+    [[ "$output" == *"PRODUCTION IS DOWN"* ]]
+    refute grep -q "last-deployed-sha" "$SSH_LOG"
+}
+
+@test "#1656 --full-restart: healthcheck red + daemon alive says it is still RUNNING" {
+    export HEALTH_RC=1 SERVICE_STATUS_RC=0
+    run_m42 --full-restart
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"still RUNNING"* ]]
+    refute grep -q "PRODUCTION IS DOWN" <<<"$output"
+}
+
+@test "#1656 --full-restart: a dead jail is never restarted for you" {
+    export HEALTH_RC=1 SERVICE_STATUS_RC=1
+    run_m42 --full-restart
+    [ "$status" -ne 0 ]
+    refute grep -q "service grappa start" "$SSH_LOG"
+    refute grep -q "bastille start" "$SSH_LOG"
 }

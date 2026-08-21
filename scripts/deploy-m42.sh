@@ -118,7 +118,28 @@ if [ "$full_restart" -eq 1 ]; then
     sleep "$FULL_RESTART_HC_SLEEP"
   done
   if [ "$hc_ok" -ne 1 ]; then
-    die "healthcheck never returned 200 after $((FULL_RESTART_HC_RETRIES * FULL_RESTART_HC_SLEEP))s — jail may be unhealthy; marker NOT written, fix and rerun"
+    # "The healthcheck failed" and "production is DOWN" are different
+    # emergencies, and this arm used to print one sentence for both (#1656 —
+    # the v1.3.0 cold deploy exited on the healthcheck budget while the node
+    # had already terminated). Same policy as the in-jail loop in
+    # infra/lib/deploy_common.sh; the mechanism differs because this door only
+    # reaches the jail over ssh, so it cannot share that hook.
+    echo "deploy-m42: ERROR: healthcheck never returned 200 after $((FULL_RESTART_HC_RETRIES * FULL_RESTART_HC_SLEEP))s — marker NOT written" >&2
+
+    # The probe above runs `curl -fsS`, and `-f` discards the body. /healthz
+    # answers a non-200 with a body naming the failing check — ask once more
+    # WITHOUT `-f` so that answer reaches the operator instead of /dev/null.
+    echo "deploy-m42: last /healthz answer:" >&2
+    # shellcheck disable=SC2029  # intentional client-side expansion of vars
+    ssh "$M42_HOST" "sudo bastille cmd ${JAIL} curl -sS ${FULL_RESTART_HC_URL}" >&2 || true
+    echo >&2
+
+    # shellcheck disable=SC2029  # intentional client-side expansion of vars
+    if ssh "$M42_HOST" "sudo bastille cmd ${JAIL} service grappa status" >/dev/null 2>&1; then
+      die "the daemon is still RUNNING — up but not answering a healthy /healthz. The jail is serving; read the answer above before touching it, then fix and rerun"
+    fi
+    echo "deploy-m42: nothing was restarted — that is your call, not the deploy's." >&2
+    die "the daemon is GONE — PRODUCTION IS DOWN. Bring it back with: ssh ${M42_HOST} sudo bastille cmd ${JAIL} service grappa start"
   fi
 
   # Write the marker INSIDE the jail (deploy.sh reads it as the
