@@ -19,6 +19,26 @@
 //      stable number because `pull-gesture-active` drops the slot's snap-back
 //      transition — without it getComputedStyle returns wherever the ease
 //      happened to be.
+//   2b. THE FLUSH LINE (#1658, chromium): at a travel far past any cap the
+//      slot's top edge lands exactly ON the list's top edge — it stops flush
+//      instead of sinking into the rows, which is what it did on 1.3.0 (the
+//      cap was `PULL_COMMIT_PX`, larger than the slot at every font size, so
+//      the spinner parked 30-50px inside the list). Asserted at THREE root
+//      font sizes because the slot is `2.5rem` against a size the user picks,
+//      and the reading is 0 at all three only if the cap is the slot's own
+//      height: a hardcoded 35 would read +5 at S and -15 at XXL. The slot
+//      height is asserted alongside it, so a `--font-size` write that silently
+//      failed cannot make three identical measurements look like three sizes.
+//      What this does NOT say is that the slot never covers a row: it is
+//      `position: absolute; top: 0` over rows that start at y=0, so every
+//      visible position overlaps the first row's top band. Only moving the
+//      rows fixes that (#1658 point 3, not started) — the flush line is the
+//      strongest TRUE statement available here.
+//   2c. NO PAINT AFTER THE COMMIT (#1658, chromium): the committing release
+//      leaves no inline transform and no inline opacity on the slot. The
+//      binder does not call `onRelease` on that path, so the pane clears the
+//      paint from `onCommit` — before the fix the spinner stayed exactly where
+//      the finger left it, at full opacity, for the life of the pane.
 //   3. CSS CONTRACT (@webkit, iPhone 15): on the real target browser the row
 //      container refuses its own overscroll (so the iOS rubber-band does not
 //      fight the slot at the one scroll position the pull lives at) while
@@ -174,6 +194,63 @@ async function pullList(
   );
 }
 
+// The slot's inline style, which is the whole of the paint: the rule in
+// default.css sets the parked transform and `opacity: 0`, and the gesture
+// writes over both. Empty strings mean the pane handed the slot back to the
+// stylesheet.
+async function slotInlinePaint(list: Locator): Promise<{ transform: string; opacity: string }> {
+  return list.evaluate((el) => {
+    const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
+    if (slot === null) throw new Error("no pull slot inside the directory list");
+    return { transform: slot.style.transform, opacity: slot.style.opacity };
+  });
+}
+
+// One pull driven far past any cap, at a chosen root font size, measured with
+// the finger still down — the only moment the paint exists.
+//
+// The font size is written as the CSS var on <html>, which is exactly what
+// `lib/fontSize.ts`'s `writeCssVar` does; set here rather than imported to
+// keep src VALUES out of the e2e runtime graph, the same call as
+// LIST_WINDOW_NAME above. The gesture ends on a touchCANCEL, not a touchend:
+// cancel puts the slot back without committing, so measuring three sizes in
+// one test does not spend three upstream LIST captures.
+async function measureAtFullTravel(
+  list: Locator,
+  rootFontSize: string,
+): Promise<{ slotTop: number; listTop: number; slotHeight: number }> {
+  return list.evaluate((el, size) => {
+    document.documentElement.style.setProperty("--font-size", size);
+    const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
+    if (slot === null) throw new Error("no pull slot inside the directory list");
+    const at = (y: number): Touch =>
+      new Touch({ identifier: 1, target: el, clientX: 200, clientY: y });
+    const fire = (type: string, touch: Touch): void => {
+      const points = type === "touchend" || type === "touchcancel" ? [] : [touch];
+      el.dispatchEvent(
+        new TouchEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          touches: points,
+          targetTouches: points,
+          changedTouches: [touch],
+        }),
+      );
+    };
+    el.scrollTop = 0;
+    const y0 = 200;
+    fire("touchstart", at(y0));
+    fire("touchmove", at(y0 + 20));
+    // Far past every cap in play — the old one (80), the slot at its largest
+    // (50). Whatever stops the slot, it is not the finger running out.
+    fire("touchmove", at(y0 + 400));
+    const slotRect = slot.getBoundingClientRect();
+    const listRect = el.getBoundingClientRect();
+    fire("touchcancel", at(y0 + 400));
+    return { slotTop: slotRect.top, listTop: listRect.top, slotHeight: slotRect.height };
+  }, rootFontSize);
+}
+
 test("#1445 — a downward pull on the directory asks for the refresh (chromium)", async ({
   page,
 }) => {
@@ -190,6 +267,14 @@ test("#1445 — a downward pull on the directory asks for the refresh (chromium)
   // anywhere else would leave it reading "Refresh".
   await expect(refresh).toHaveText(/^Refreshing/, { timeout: 5_000 });
   await expect(refresh).toBeDisabled();
+
+  // #1658 — and the committing release cleaned up after itself. The binder
+  // reports a commit through `onCommit` and returns WITHOUT calling
+  // `onRelease`, so a pane that hangs its cleanup off `onRelease` alone leaves
+  // the slot painted where the finger left it, at full opacity, forever. The
+  // two assertions above are the pre-state that makes this one evidence: the
+  // gesture really did take the committing path.
+  expect(await slotInlinePaint(list)).toEqual({ transform: "", opacity: "" });
 });
 
 test("#1445 — mid-pull the slot moves by the finger's travel, parked offset intact (chromium)", async ({
@@ -198,15 +283,50 @@ test("#1445 — mid-pull the slot moves by the finger's travel, parked offset in
   test.slow();
   const { list } = await openDirectory(page, "sidebar");
 
-  // Half the commit distance: under the cap, so a correct paint moves the slot
-  // by exactly what the finger did. The rest position contributes -slotHeight
-  // to this same component, so a paint that dropped it would read
-  // +slotHeight + travel instead. The two failure modes are far apart and the
-  // browser does the arithmetic.
-  const travel = PULL_COMMIT_PX / 2;
+  // 20px, and it used to be half the commit distance. #1658 capped the travel
+  // at the slot's OWN height — `2.5rem`, so 30px at the smallest root font
+  // size cic offers — and 40px is over that cap at three of the five sizes,
+  // which would make this read the clamp instead of the follow. 20px is under
+  // it at all five. The cap has its own test below.
+  //
+  // Under the cap a correct paint moves the slot by exactly what the finger
+  // did. The rest position contributes -slotHeight to this same component, so
+  // a paint that dropped it would read +slotHeight + travel instead. The two
+  // failure modes are far apart and the browser does the arithmetic.
+  const travel = 20;
   const { before, after } = await pullList(list, travel, false);
 
   expect(after - before).toBeCloseTo(travel, 0);
+});
+
+test("#1658 — at full travel the slot stops flush with the list's top edge, at every font size (chromium)", async ({
+  page,
+}) => {
+  test.slow();
+  const { list } = await openDirectory(page, "sidebar");
+
+  // S, M (the default) and XXL, from lib/fontSize.ts's SIZES. The slot is
+  // `2.5rem`, so these are three DIFFERENT slot heights — 30, 35 and 50px —
+  // and that is the point: the cap is only the slot's own height if the
+  // flush reading survives all three. A hardcoded 35 reads +5 here and -15
+  // there; the old `PULL_COMMIT_PX` cap reads +50, +45 and +30.
+  for (const [size, expectedSlotHeight] of [
+    ["12px", 30],
+    ["14px", 35],
+    ["20px", 50],
+  ] as const) {
+    const { slotTop, listTop, slotHeight } = await measureAtFullTravel(list, size);
+
+    // Known-answer control, and without it this whole test is theatre: if the
+    // `--font-size` write did not take, all three iterations would measure the
+    // same slot and three identical readings would look like proof.
+    expect(slotHeight, `slot height at --font-size: ${size}`).toBeCloseTo(expectedSlotHeight, 0);
+    // The flush line. NOT "the slot clears the first row" — it cannot, it is
+    // absolutely positioned over rows that start at the same y — but it never
+    // travels PAST the edge, which is the whole of what #1658 point 2 can buy
+    // before the rows themselves move (point 3, not started).
+    expect(slotTop - listTop, `flush offset at --font-size: ${size}`).toBeCloseTo(0, 0);
+  }
 });
 
 test("@webkit #1445 — the directory list refuses its own overscroll and declares its one pan axis (iPhone 15)", async ({
