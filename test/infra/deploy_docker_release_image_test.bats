@@ -53,6 +53,22 @@ printf 'docker %s\n' "$*" >> "$ARGV_LOG"
 case "$1" in
   inspect)
     [ -n "${FAKE_CONTAINER_EXISTS:-}" ] || exit 1
+    # #1656 — liveness asks for the STATE, not for existence.
+    case "$*" in
+      *"{{.State.Running}}"*) printf '%s' "${FAKE_CONTAINER_RUNNING:-true}" ;;
+    esac
+    exit 0 ;;
+  exec)
+    # #1656 — /healthz, modelled as real curl: `-f` discards the body and
+    # exits non-zero on a non-2xx; without it curl exits 0 and PRINTS it.
+    case "$*" in
+      *healthz*)
+        case "$*" in
+          *"curl -fsS"*) [ "${HEALTHZ_STATUS:-200}" = 200 ] || exit 22 ;;
+          *)             printf '%s' "${HEALTHZ_BODY:-}" ;;
+        esac
+        ;;
+    esac
     exit 0 ;;
 esac
 exit 0
@@ -300,4 +316,32 @@ EOF
     run "$DEPLOY"
     [ "$status" -eq 0 ]
     grep -q "pull ghcr.io/vjt/grappa:latest" "$ARGV_LOG"
+}
+
+# --- #1656: the release-image arm defines its OWN hook set, so it needs its
+# own proof that the failed-healthcheck arm tells the truth.
+
+@test "#1656 update: healthcheck red + container gone shouts PRODUCTION IS DOWN" {
+    seed_env_file
+    export FAKE_CONTAINER_EXISTS=1 FAKE_CONTAINER_RUNNING=false
+    # this arm's cold budget is 120x2s — a red probe would burn four minutes
+    export HEALTHZ_STATUS=503 COLD_HEALTHCHECK_RETRIES=2 COLD_HEALTHCHECK_SLEEP=0
+    export HEALTHZ_BODY='{"status":"fail","checks":[{"name":"repo","reason":"Repo.query failed"}]}'
+
+    run "$DEPLOY" update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"Repo.query failed"* ]]
+    [[ "$output" == *"PRODUCTION IS DOWN"* ]]
+}
+
+@test "#1656 update: healthcheck red + container running says it is still RUNNING" {
+    seed_env_file
+    export FAKE_CONTAINER_EXISTS=1 FAKE_CONTAINER_RUNNING=true
+    # this arm's cold budget is 120x2s — a red probe would burn four minutes
+    export HEALTHZ_STATUS=503 COLD_HEALTHCHECK_RETRIES=2 COLD_HEALTHCHECK_SLEEP=0
+
+    run "$DEPLOY" update
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"still RUNNING"* ]]
+    refute grep -q "PRODUCTION IS DOWN" <<<"$output"
 }
