@@ -48,6 +48,7 @@ defmodule Grappa.Session.ServerTest do
   }
 
   alias Grappa.SessionStateHelpers
+  alias Grappa.Visitors.SessionPlan, as: VisitorSessionPlan
   alias Grappa.WindowCounts.PushSource
 
   # #543 INC-6 — the armed static-mapping prefix the test alias-manager binds
@@ -101,31 +102,27 @@ defmodule Grappa.Session.ServerTest do
     end
   end
 
-  # #543 INC-6 — a full synthetic connect plan (no `refresh_plan`, so the
-  # injected `managed_source_alias` isn't re-resolved away by the DB-wins
-  # closure) pointing at the in-process `IRCServer` fake. `source_address` is
-  # `nil` so the loopback connect actually binds: INC-6 acquire/release keys on
-  # `managed_source_alias`, which the plan sets equal to `source_address` in
-  # prod (asserted at the SessionPlan layer) but which we decouple here to
-  # isolate the alias-lifecycle from the orthogonal socket-bind concern.
-  defp derived_alias_opts(user, network, port, managed_alias) do
-    %{
-      subject: {:user, user.id},
-      subject_label: Grappa.Subject.label({:user, user.name}),
-      network_slug: network.slug,
-      nick: "vjt",
-      ident: "vjt",
-      realname: "vjt",
-      sasl_user: "vjt",
-      auth_method: :none,
-      password: nil,
-      autojoin_channels: [],
-      host: "127.0.0.1",
-      port: port,
-      tls: false,
-      source_address: nil,
-      managed_source_alias: managed_alias
-    }
+  # #543 INC-6 — the connect plan production builds, with two keys
+  # overridden. `source_address` is `nil` so the loopback connect actually
+  # binds: INC-6 acquire/release keys on `managed_source_alias`, which the
+  # plan sets equal to `source_address` in prod (asserted at the
+  # SessionPlan layer) but which we decouple here to isolate the
+  # alias-lifecycle from the orthogonal socket-bind concern.
+  #
+  # `refresh_plan` is dropped EXPLICITLY, because it is the DB-wins closure
+  # and would re-resolve both overrides away inside `init/1`. It used to be
+  # absent by virtue of the whole plan being hand-built — a synthetic map
+  # that also carried none of the five USER closures, which #1398 turned
+  # from an invisible omission into a spawn-time raise
+  # (`Grappa.Session.Deps.from_opts/2`). Resolving the real plan and
+  # naming the one key this test must NOT have is the honest shape: the
+  # exclusion is now a line of code instead of a silence.
+  defp derived_alias_opts(user, network, managed_alias) do
+    {:ok, plan} = SessionPlan.resolve(Credentials.get_credential!(user, network))
+
+    plan
+    |> Map.drop([:refresh_plan])
+    |> Map.merge(%{source_address: nil, managed_source_alias: managed_alias})
   end
 
   # #211 phase 7 — the visitor nick lives on its per-network credential now
@@ -829,7 +826,7 @@ defmodule Grappa.Session.ServerTest do
       expect(Grappa.Net.SourceAliasMock, :release_source, fn ^addr, @inc6_prefix -> :ok end)
 
       {:ok, pid} =
-        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, port, addr))
+        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, addr))
 
       IRCServer.await_handshake(server, 1_000)
 
@@ -853,7 +850,7 @@ defmodule Grappa.Session.ServerTest do
       expect(Grappa.Net.SourceAliasMock, :release_source, fn ^addr, @inc6_prefix -> :ok end)
 
       {:ok, pid} =
-        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, port, addr))
+        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, addr))
 
       IRCServer.await_handshake(server, 1_000)
       :ok = GenServer.stop(pid, :normal, 1_000)
@@ -873,10 +870,10 @@ defmodule Grappa.Session.ServerTest do
       expect(Grappa.Net.SourceAliasMock, :release_source, fn ^addr, @inc6_prefix -> :ok end)
 
       {:ok, pid1} =
-        Session.start_session({:user, user1.id}, net1.id, derived_alias_opts(user1, net1, port1, addr))
+        Session.start_session({:user, user1.id}, net1.id, derived_alias_opts(user1, net1, addr))
 
       {:ok, pid2} =
-        Session.start_session({:user, user2.id}, net2.id, derived_alias_opts(user2, net2, port2, addr))
+        Session.start_session({:user, user2.id}, net2.id, derived_alias_opts(user2, net2, addr))
 
       IRCServer.await_handshake(server1, 1_000)
       IRCServer.await_handshake(server2, 1_000)
@@ -897,7 +894,7 @@ defmodule Grappa.Session.ServerTest do
       # managed_source_alias nil → NO ensure_source (no expect set — an
       # unexpected call fails verify_on_exit!), and no holder registration.
       {:ok, pid} =
-        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, port, nil))
+        Session.start_session({:user, user.id}, network.id, derived_alias_opts(user, network, nil))
 
       IRCServer.await_handshake(server, 1_000)
 
@@ -924,7 +921,7 @@ defmodule Grappa.Session.ServerTest do
 
       opts =
         user
-        |> derived_alias_opts(network, port, addr)
+        |> derived_alias_opts(network, addr)
         |> Map.put(:network_id, network.id)
 
       Process.flag(:trap_exit, true)
@@ -987,32 +984,23 @@ defmodule Grappa.Session.ServerTest do
       # Task 6.5 isolation guarantee. The registry key is
       # `{:session, subject, network_id}` — different first-tuple-element
       # discriminates user from visitor even when the underlying UUID
-      # happens to coincide. Visitor.SessionPlan + visitor wiring land
-      # in Task 7+; this test hand-crafts the visitor opts to isolate
-      # the subject-tuple registry behavior at the Session boundary.
+      # happens to coincide. Both subjects are spawned from the plan their
+      # own producer builds — this used to hand-craft the visitor opts
+      # ("Visitor.SessionPlan lands in Task 7+"), which by now means a map
+      # carrying none of the six visitor closures; #1398's spawn-time guard
+      # refuses that, and the producer has existed since Task 7 anyway.
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
       {user, network, _} = setup_user_and_network(port)
       user_pid = start_session_for(user, network)
 
-      visitor_id = Ecto.UUID.generate()
-      visitor_subject = {:visitor, visitor_id}
+      visitor =
+        visitor_fixture(
+          nick: "vsh-#{System.unique_integer([:positive])}",
+          network_slug: network.slug
+        )
 
-      visitor_plan = %{
-        subject: visitor_subject,
-        subject_label: "visitor:" <> visitor_id,
-        network_slug: network.slug,
-        nick: "vsh",
-        ident: "vsh",
-        realname: "Grappa Visitor",
-        sasl_user: "vsh",
-        auth_method: :none,
-        password: nil,
-        autojoin_channels: [],
-        host: "127.0.0.1",
-        port: port,
-        tls: false,
-        source_address: nil
-      }
+      visitor_subject = {:visitor, visitor.id}
+      {:ok, visitor_plan} = VisitorSessionPlan.resolve(visitor, network)
 
       Process.flag(:trap_exit, true)
       {:ok, visitor_pid} = Session.start_session(visitor_subject, network.id, visitor_plan)
@@ -8920,32 +8908,27 @@ defmodule Grappa.Session.ServerTest do
     end
 
     test "visitor session: 465 terminates cleanly with :normal (no credential row to mark)" do
-      # Visitors have ephemeral credentials — connection_state is irrelevant
-      # and there is no credential_failer in the plan. The session simply
-      # exits :normal without attempting any DB write.
+      # Visitors have ephemeral credentials, so no `network_credentials`
+      # row transitions to `:failed` here the way the user arm's does.
+      #
+      # The note that used to stand here — "no credential_failer — visitor
+      # plans don't include it" — was FALSE, and the hand-built plan below
+      # it was what kept the lie invisible: `Visitors.SessionPlan` has
+      # injected a `credential_failer` since CP24 bucket E (it calls
+      # `Visitors.mark_failed/2`, expiring the visitor ROW so Bootstrap
+      # stops respawning). #1398's spawn-time guard refuses a visitor plan
+      # missing it, which is how the false premise surfaced. The real plan
+      # is used now; the failer runs detached under `Grappa.TaskSupervisor`
+      # and this test deliberately pins only the exit reason, not that
+      # asynchronous effect.
       {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
-      visitor_id = Ecto.UUID.generate()
-      visitor_subject = {:visitor, visitor_id}
-
       {_, network, _} = setup_user_and_network(port)
 
-      visitor_plan = %{
-        subject: visitor_subject,
-        subject_label: "visitor:" <> visitor_id,
-        network_slug: "test-visitor-#{System.unique_integer([:positive])}",
-        nick: "visitor-test",
-        ident: "visitor-test",
-        realname: "Visitor",
-        sasl_user: "visitor-test",
-        auth_method: :none,
-        password: nil,
-        autojoin_channels: [],
-        host: "127.0.0.1",
-        port: port,
-        tls: false,
-        source_address: nil
-        # Note: no credential_failer — visitor plans don't include it
-      }
+      visitor =
+        visitor_fixture(nick: "visitor-test", network_slug: network.slug)
+
+      visitor_subject = {:visitor, visitor.id}
+      {:ok, visitor_plan} = VisitorSessionPlan.resolve(visitor, network)
 
       {:ok, visitor_pid} = Grappa.Session.start_session(visitor_subject, network.id, visitor_plan)
       ref = Process.monitor(visitor_pid)
