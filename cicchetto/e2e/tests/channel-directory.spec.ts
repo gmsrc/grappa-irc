@@ -32,9 +32,13 @@ import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-// "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded
-// here because the e2e tsconfig does not resolve src/ imports. A
-// rename of the constant must be propagated to this file manually.
+// "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts, mirrored rather than
+// imported to keep src VALUES out of the e2e runtime graph (see the header of
+// fixtures/grappaApi.ts). NOT because "the e2e tsconfig does not resolve src/
+// imports", which is what this comment said until #1646 and is false: that same
+// fixture type-imports from src and `tsc -p e2e/tsconfig.json` is green.
+// The copy is pinned — src/__tests__/e2eConstantMirrors.test.ts fails if either
+// side moves.
 const LIST_WINDOW_NAME = "$list";
 
 // Unique channel per run: avoids persistent state bleed across

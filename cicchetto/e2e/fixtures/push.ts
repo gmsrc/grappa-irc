@@ -194,9 +194,12 @@ export async function resetPushCatcher(): Promise<void> {
  * `Grappa.UserSettings.default_notification_prefs/0` AND
  * `cicchetto/src/lib/userSettings.ts:DEFAULT_NOTIFICATION_PREFS`.
  *
- * Re-importing from `cicchetto/src/lib/userSettings.ts` would require
- * a path alias in `cicchetto/e2e/tsconfig.json` and a transitive
- * import of solid-router types — heavier than this small literal.
+ * Re-importing from `cicchetto/src/lib/userSettings.ts` would pull in a
+ * transitive import of solid-router types — heavier than this small literal.
+ * (It would NOT need "a path alias in `cicchetto/e2e/tsconfig.json`", which is
+ * what this comment claimed until #1646: `grappaApi.ts` reaches `src` with a
+ * plain relative import and no alias. The dependency graph is the reason; the
+ * module resolution never was.)
  * The drift class is real but bounded: a new pref key would silently
  * keep writing the old shape AND break cic's TypeScript at the same
  * time; the latter is the loud failure mode.

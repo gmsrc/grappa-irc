@@ -27,9 +27,10 @@ import { IrcPeer } from "../fixtures/ircClient";
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-// "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded here
-// because the e2e tsconfig does not resolve src/ imports. A rename of the
-// constant must be propagated to this file manually.
+// "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts, mirrored rather than
+// imported to keep src VALUES out of the e2e runtime graph (fixtures/grappaApi.ts).
+// NOT because the e2e tsconfig cannot resolve src/ — it can, and that fixture
+// proves it (#1646). Pinned by src/__tests__/e2eConstantMirrors.test.ts.
 const LIST_WINDOW_NAME = "$list";
 
 test.describe("#244 directory tap foregrounds the joined window", () => {

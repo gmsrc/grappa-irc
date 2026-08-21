@@ -24,8 +24,10 @@ import { loginAs, sidebarWindow } from "../fixtures/cicchettoPage";
 import { NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 
-// LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded — the e2e
-// tsconfig does not resolve src/ imports; a rename must be mirrored here.
+// LIST_WINDOW_NAME from src/lib/windowKinds.ts, mirrored rather than imported to
+// keep src VALUES out of the e2e runtime graph (fixtures/grappaApi.ts). NOT
+// because the e2e tsconfig cannot resolve src/ — it can, and that fixture proves
+// it (#1646). Pinned by src/__tests__/e2eConstantMirrors.test.ts.
 const LIST_WINDOW_NAME = "$list";
 
 const CAPTURED_AT = "2026-08-02T12:00:00Z";

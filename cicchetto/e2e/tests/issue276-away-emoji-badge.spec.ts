@@ -33,6 +33,11 @@ import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
 const SEED_CHANNEL = AUTOJOIN_CHANNELS[0];
+
+// `SERVER_WINDOW_NAME` in src/lib/windowKinds.ts, mirrored rather than imported
+// to keep src VALUES out of the e2e runtime graph (fixtures/grappaApi.ts).
+// Pinned by src/__tests__/e2eConstantMirrors.test.ts (#1646) — it carried no
+// note at all until then, which is how a copy stops being recognised as one.
 const SERVER_WINDOW = "$server";
 
 // 60s — login + channel seed + two AWAY round-trips against the real

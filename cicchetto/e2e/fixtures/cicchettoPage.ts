@@ -576,11 +576,17 @@ export async function waitForQueryWindowReady(
   );
 }
 
-// Mirror of `cicchetto/src/lib/channelKey.ts:canonicalChannel` — the e2e
-// tree MIRRORS src, never imports it (separate build context; see
-// fixtures/push.ts). MUST stay byte-identical to the src twin, or the
-// composite key this rebuilds won't match the one subscribe.ts stamped
-// into `__cic_channelReady`.
+// Mirror of `cicchetto/src/lib/channelKey.ts:canonicalChannel` — the e2e tree
+// MIRRORS src rather than importing its VALUES, to keep the runner's runtime
+// graph free of the app's (see the header of fixtures/grappaApi.ts, and
+// fixtures/push.ts). "Never imports it" is what this comment said until #1646
+// and it is not true: grappaApi.ts type-imports from `src/lib/wireTypes`, a
+// plain relative import that resolves and typechecks under e2e/tsconfig.json.
+// MUST stay byte-identical to the src twin, or the composite key this rebuilds
+// won't match the one subscribe.ts stamped into `__cic_channelReady`.
+//
+// This one is a FUNCTION, so #1646's constant pin cannot watch it — the drift
+// below was found by hand, and would be again.
 //
 // #973 — this mirror had drifted two ways and was silently rebuilding keys
 // nothing had stamped. It was still the PRE-#537 shape: sigil-gated (a nick

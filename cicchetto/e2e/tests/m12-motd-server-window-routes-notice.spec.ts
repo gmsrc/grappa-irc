@@ -28,6 +28,10 @@ import { GRAPPA_BASE_URL } from "../fixtures/grappaApi";
 import { NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specUser, test } from "../fixtures/test";
 
+// `SERVER_WINDOW_NAME` in src/lib/windowKinds.ts, mirrored rather than imported
+// to keep src VALUES out of the e2e runtime graph (fixtures/grappaApi.ts).
+// Pinned by src/__tests__/e2eConstantMirrors.test.ts (#1646) — it carried no
+// note at all until then, which is how a copy stops being recognised as one.
 const SERVER_CHANNEL = "$server";
 
 // Match the testnet's leaf hostnames — leaf4.azzurra.chat | leaf6.azzurra.chat

@@ -59,9 +59,10 @@ import { composeSend, loginAs, selectChannel, sidebarWindow } from "../fixtures/
 import { AUTOJOIN_CHANNELS, NETWORK_SLUG } from "../fixtures/seedData";
 import { expect, specNick, specUser, test } from "../fixtures/test";
 
-// "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts. Hardcoded here
-// because the e2e tsconfig does not resolve src/ imports; a rename must be
-// propagated by hand, as in every other spec that opens this window.
+// "$list" — LIST_WINDOW_NAME from src/lib/windowKinds.ts, mirrored rather than
+// imported to keep src VALUES out of the e2e runtime graph (fixtures/grappaApi.ts).
+// NOT because the e2e tsconfig cannot resolve src/ — it can, and that fixture
+// proves it (#1646). Pinned by src/__tests__/e2eConstantMirrors.test.ts.
 const LIST_WINDOW_NAME = "$list";
 
 // PULL_COMMIT_PX from src/lib/pullGesture.ts (SWIPE_MIN_PX * 2). Hardcoded for
@@ -69,6 +70,10 @@ const LIST_WINDOW_NAME = "$list";
 // drags half of it and asserts the paint moved by that much, and the paint is
 // capped at the real constant. Lower the real one and this spec reads the cap
 // instead of the drag and goes red, naming the drift.
+//
+// #1646 adds a static second witness that needs no testnet, and it watches the
+// number this comment does NOT name: the production side is DERIVED, so moving
+// `SWIPE_MIN_PX` in src/lib/swipe.ts moves the cap while leaving 80 here.
 const PULL_COMMIT_PX = 80;
 
 // Open the directory pane and hand back its two moving parts.

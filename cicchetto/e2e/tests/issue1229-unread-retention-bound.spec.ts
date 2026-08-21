@@ -97,6 +97,10 @@ const CHANNEL = AUTOJOIN_CHANNELS[0];
 // `isFarBehind` already draws the line at. Mirrored rather than imported: the
 // e2e bundle is the built app, and a spec that imported the source constant
 // would keep passing if the shipped bundle disagreed with it.
+//
+// #1646 — src/__tests__/e2eConstantMirrors.test.ts pins this copy to the
+// production constant, which is DERIVED (`= PAGE_LIMIT`): the number can move
+// from a module this comment does not name, and until that pin nothing noticed.
 const UNREAD_BOUND = 200;
 
 // Enough history that the pane has a read context to be scrolled up INTO,

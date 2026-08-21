@@ -61,8 +61,13 @@ const FILLER =
 // measured is unchanged: the caret's geometry after an append.
 //
 // Hardcoded in lockstep with `REPLY_QUOTE_BODY_LIMIT` / `REPLY_QUOTE_ELLIPSIS`
-// in `src/lib/replyQuote.ts` — the e2e package does not import from `src`, and
-// the house convention here is a mirrored constant with a lockstep comment.
+// in `src/lib/replyQuote.ts`: the house convention is a mirrored constant, so
+// that src VALUES stay out of the e2e runtime graph (fixtures/grappaApi.ts).
+// The e2e package DOES import from `src` — one type-only import, in that same
+// fixture — so "does not import from src", which this comment said until #1646,
+// was false. `QUOTED_BODY_LIMIT` is pinned to the production constant by
+// src/__tests__/e2eConstantMirrors.test.ts; `REPLY_QUOTE_ELLIPSIS` is not
+// mirrored here as a constant and so is not pinned.
 const QUOTED_BODY_LIMIT = 100;
 const QUOTED_ELLIPSIS = "...";
 const REPLIES = 3;
@@ -74,10 +79,11 @@ function cappedQuotedBody(body: string): string {
     : chars.slice(0, QUOTED_BODY_LIMIT).join("") + QUOTED_ELLIPSIS;
 }
 
-// Hardcoded in lockstep with `REPLY_QUOTE_TAIL` in `src/lib/replyQuote.ts`,
-// the same convention as the two constants above and for the same reason:
-// `e2e/tsconfig.json` spans `e2e/` only, so no spec in this suite imports from
-// `src`.
+// Hardcoded in lockstep with `REPLY_QUOTE_TAIL` in `src/lib/replyQuote.ts`, the
+// same convention as the two constants above and for the same reason. The reason
+// is the runtime graph, not the tsconfig: `e2e/tsconfig.json` spans `e2e/` only,
+// but a relative import out of it resolves and typechecks all the same (#1646).
+// Pinned by src/__tests__/e2eConstantMirrors.test.ts.
 const REPLY_QUOTE_TAIL = " << ";
 
 // What the draft holds after `replies` swipes on the same row. #1357: vjt
