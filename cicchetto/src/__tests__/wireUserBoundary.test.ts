@@ -71,10 +71,62 @@ function wrongType(value: unknown): unknown {
   return "not-an-object";
 }
 
-function without(obj: Record<string, unknown>, field: string): Record<string, unknown> {
-  const copy = { ...obj };
-  delete copy[field];
+// Every position in a sample at which a field can be mutated, as a path.
+//
+// The matrix that landed with #1471 mutated TOP-LEVEL fields only, and that
+// cannot see a tolerance nested inside an object field. `connection_state_changed`
+// is the measured instance: its hand arm defaults `network.recoverable` to
+// `false` when the server omits it (#581, additive-field tolerance), while
+// `S_NetworksWireHomeNetworkRow` declares that field REQUIRED. One level down
+// the two boundaries disagree; at the top level they look identical, and the
+// arm was therefore counted among the 34 at parity. So the matrix walks the
+// whole sample instead of its first layer.
+function paths(value: unknown, prefix: readonly string[] = []): string[][] {
+  if (Array.isArray(value)) {
+    return value.flatMap((v, i) => [[...prefix, String(i)], ...paths(v, [...prefix, String(i)])]);
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) => [
+      [...prefix, k],
+      ...paths(v, [...prefix, k]),
+    ]);
+  }
+  return [];
+}
+
+function mutateAt(root: unknown, path: readonly string[], op: "drop" | "null" | "wrong-type") {
+  const copy = JSON.parse(JSON.stringify(root));
+  let parent = copy;
+  for (const k of path.slice(0, -1)) parent = parent[k];
+  const leaf = path[path.length - 1] as string;
+  if (op === "drop") {
+    // Deleting an array index would leave a hole that reads as `undefined`
+    // rather than a shorter array, which is a third mutation nobody asked
+    // for. Splice keeps "drop" meaning the same thing at every position.
+    if (Array.isArray(parent)) parent.splice(Number(leaf), 1);
+    else delete parent[leaf];
+  } else if (op === "null") {
+    parent[leaf] = null;
+  } else {
+    parent[leaf] = wrongType(parent[leaf]);
+  }
   return copy;
+}
+
+type Mutation = { label: string; payload: unknown };
+
+// `kind` is excluded at the TOP level only — mutating the discriminator tests
+// dispatch, not field validation. A nested `kind` belongs to a nested shape
+// and is an ordinary field there.
+function mutations(valid: Record<string, unknown>): Mutation[] {
+  return paths(valid)
+    .filter((p) => !(p.length === 1 && p[0] === "kind"))
+    .flatMap((p) =>
+      (["drop", "null", "wrong-type"] as const).map((op) => ({
+        label: `${p.join(".")}/${op}`,
+        payload: mutateAt(valid, p, op),
+      })),
+    );
 }
 
 function verdict(narrow: Narrower, payload: unknown): "accept" | "reject" {
@@ -125,7 +177,7 @@ type Candidate = { name: string; node: WireNode };
 type ArmReport = {
   arm: string;
   schema: string;
-  fields: number;
+  mutations: number;
   handAcceptsSchemaRejects: string;
   schemaAcceptsHandRejects: string;
   schemaRejectsValid: boolean;
@@ -134,27 +186,21 @@ type ArmReport = {
 function censusArm(kind: string, schemaName: string, node: WireNode): ArmReport {
   const generated: Narrower = (raw) => validate(node, raw);
   const valid = sample(node) as Record<string, unknown>;
-  const fields = Object.keys(valid).filter((f) => f !== "kind");
+  const matrix = mutations(valid);
 
   const holes: string[] = [];
   const losses: string[] = [];
-  for (const f of fields) {
-    for (const [label, mutated] of [
-      ["drop", without(valid, f)],
-      ["null", { ...valid, [f]: null }],
-      ["wrong-type", { ...valid, [f]: wrongType(valid[f]) }],
-    ] as const) {
-      const byHand = verdict(hand, mutated);
-      const bySchema = verdict(generated, mutated);
-      if (byHand === "accept" && bySchema === "reject") holes.push(`${f}/${label}`);
-      if (bySchema === "accept" && byHand === "reject") losses.push(`${f}/${label}`);
-    }
+  for (const { label, payload } of matrix) {
+    const byHand = verdict(hand, payload);
+    const bySchema = verdict(generated, payload);
+    if (byHand === "accept" && bySchema === "reject") holes.push(label);
+    if (bySchema === "accept" && byHand === "reject") losses.push(label);
   }
 
   return {
     arm: kind,
     schema: schemaName,
-    fields: fields.length,
+    mutations: matrix.length,
     handAcceptsSchemaRejects: holes.length === 0 ? "-" : holes.join(", "),
     schemaAcceptsHandRejects: losses.length === 0 ? "-" : losses.join(", "),
     // The oracle's own sanity check: a schema that rejects its OWN sample
@@ -336,71 +382,79 @@ describe("#1393 — user-topic boundary census", () => {
       divergent,
     }).toMatchInlineSnapshot(`
       {
-        "armsAtParity": 34,
+        "armsAtParity": 33,
         "armsCensused": 43,
         "armsWithSchema": 42,
         "brokenOracles": [],
         "divergent": [
           {
             "arm": "bundle_hash",
-            "fields": 2,
             "handAcceptsSchemaRejects": "version/null, version/wrong-type",
+            "mutations": 6,
             "schema": "S_CicWireBundleHashPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
+            "arm": "connection_state_changed",
+            "handAcceptsSchemaRejects": "network.recoverable/drop, network.recoverable/null, network.recoverable/wrong-type",
+            "mutations": 42,
+            "schema": "S_NetworksWireConnectionStateEvent",
+            "schemaAcceptsHandRejects": "-",
+            "schemaRejectsValid": false,
+          },
+          {
             "arm": "server_settings_changed",
-            "fields": 2,
-            "handAcceptsSchemaRejects": "http_host_aliases/drop, http_host_aliases/null, http_host_aliases/wrong-type",
+            "handAcceptsSchemaRejects": "upload.video_max_duration_seconds/drop, upload.video_max_duration_seconds/null, upload.video_max_duration_seconds/wrong-type, http_host_aliases/drop, http_host_aliases/null, http_host_aliases/wrong-type, http_host_aliases.0/null, http_host_aliases.0/wrong-type",
+            "mutations": 30,
             "schema": "S_ServerSettingsWireChangedPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
             "arm": "banlist_bundle",
-            "fields": 4,
             "handAcceptsSchemaRejects": "mode/drop",
+            "mutations": 24,
             "schema": "S_SessionWireBanlistBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
             "arm": "isupport_changed",
-            "fields": 15,
-            "handAcceptsSchemaRejects": "list_modes_queryable/drop, list_modes_queryable/null, list_modes_queryable/wrong-type, prefix_order/drop, prefix_order/null, prefix_order/wrong-type, chantypes/drop, chantypes/null, chantypes/wrong-type, casemapping/drop, casemapping/null, casemapping/wrong-type, maxlist/drop, maxlist/null, maxlist/wrong-type, nicklen/drop, nicklen/wrong-type, channellen/drop, channellen/wrong-type, topiclen/drop, topiclen/wrong-type, frame_budget_base/drop, frame_budget_base/null, frame_budget_base/wrong-type",
+            "handAcceptsSchemaRejects": "list_modes_queryable/drop, list_modes_queryable/null, list_modes_queryable/wrong-type, list_modes_queryable.0/null, list_modes_queryable.0/wrong-type, prefix_order/drop, prefix_order/null, prefix_order/wrong-type, prefix_order.0/null, prefix_order.0/wrong-type, chantypes/drop, chantypes/null, chantypes/wrong-type, chantypes.0/null, chantypes.0/wrong-type, casemapping/drop, casemapping/null, casemapping/wrong-type, maxlist/drop, maxlist/null, maxlist/wrong-type, maxlist.key/null, maxlist.key/wrong-type, nicklen/drop, nicklen/wrong-type, channellen/drop, channellen/wrong-type, topiclen/drop, topiclen/wrong-type, frame_budget_base/drop, frame_budget_base/null, frame_budget_base/wrong-type",
+            "mutations": 72,
             "schema": "S_SessionWireIsupportChangedPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
             "arm": "links_bundle",
-            "fields": 3,
             "handAcceptsSchemaRejects": "mask/drop",
+            "mutations": 24,
             "schema": "S_SessionWireLinksBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
             "arm": "lusers_bundle",
-            "fields": 13,
             "handAcceptsSchemaRejects": "total_users/drop, total_users/wrong-type, invisible/drop, invisible/wrong-type, servers/drop, servers/wrong-type, operators/drop, operators/wrong-type, unknown_connections/drop, unknown_connections/wrong-type, channels_formed/drop, channels_formed/wrong-type, local_clients/drop, local_clients/wrong-type, local_servers/drop, local_servers/wrong-type, current_local/drop, current_local/wrong-type, max_local/drop, max_local/wrong-type, current_global/drop, current_global/wrong-type, max_global/drop, max_global/wrong-type",
+            "mutations": 39,
             "schema": "S_SessionWireLusersBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
             "arm": "whois_bundle",
-            "fields": 30,
             "handAcceptsSchemaRejects": "source/drop, source/null, source/wrong-type, extra_lines/drop",
+            "mutations": 102,
             "schema": "S_SessionWireWhoisBundlePayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
           },
           {
             "arm": "window_invited",
-            "fields": 4,
             "handAcceptsSchemaRejects": "inviter/drop, inviter/null, inviter/wrong-type",
+            "mutations": 12,
             "schema": "S_SessionWireWindowInvitedPayload",
             "schemaAcceptsHandRejects": "-",
             "schemaRejectsValid": false,
@@ -495,43 +549,114 @@ describe("#1393 — user-topic boundary census", () => {
   // Extend the list with each slice. An arm left off it is migrated with no
   // oracle at all.
   const MIGRATED_ARMS = [
+    "archive_changed",
+    "archive_purged",
+    "auto_away_debounce_changed",
     "away_confirmed",
+    "channels_changed",
+    "connection_progress",
+    "directory_complete",
+    "directory_failed",
+    "directory_progress",
+    "invite_ack",
+    "join_failed",
+    "joined",
+    "kicked",
+    "mentions_bundle",
+    "names_reply",
+    "notify_list",
+    "own_nick_changed",
+    "peer_away",
     "presence_changed",
     "presence_error",
+    "presence_snapshot",
+    "query_windows_list",
+    "recover_progress",
+    "recover_result",
+    "server_reply",
     "session_identity_changed",
+    "supported_umodes_changed",
     "umode_changed",
+    "web_session_severed",
+    "who_reply",
+    "whowas_bundle",
+    "window_invite_declined",
+    "window_pending",
   ] as const;
 
   it("pins what the migrated arms accept and return, judged without a schema", () => {
     const pinned = MIGRATED_ARMS.map((arm) => {
-      const candidates = candidatesFor(arm);
-      // An ambiguous `kind` literal would make `[0]` a coin toss between two
-      // Wire modules. None of slice 1 is ambiguous; a later slice that adds
-      // one has to say which module it means, rather than inherit whichever
-      // the walk happened to see first.
-      if (candidates.length !== 1) {
+      // An ambiguous `kind` literal must not be resolved by taking `[0]` —
+      // that is a coin toss between two Wire modules, and for
+      // `web_session_severed` the loser is the admin one, whose shape this
+      // topic never carries. Resolve it by MEASUREMENT rather than by a
+      // hard-coded name: the right candidate is the one whose sample the hand
+      // narrower accepts, and exactly one must, or the disambiguation is not
+      // a fact and the pin refuses to guess.
+      const candidates = candidatesFor(arm).filter(
+        ({ node }) => verdict(hand, sample(node)) === "accept",
+      );
+      // `only === undefined` is not defensive noise: a length check does not
+      // narrow an index under `noUncheckedIndexedAccess`, and the two
+      // conditions are the same fact stated where the compiler can see it.
+      const [only] = candidates;
+      if (candidates.length !== 1 || only === undefined) {
         throw new Error(
-          `"${arm}" has ${candidates.length} candidate schemas — pick one explicitly`,
+          `"${arm}": ${candidates.length} candidates produce a sample the hand narrower accepts — expected exactly 1`,
         );
       }
-      const node = candidates[0].node;
+      const node = only.node;
       const valid = sample(node) as Record<string, unknown>;
 
       const matrix: Record<string, string> = {};
-      for (const f of Object.keys(valid).filter((k) => k !== "kind")) {
-        for (const [label, mutated] of [
-          ["drop", without(valid, f)],
-          ["null", { ...valid, [f]: null }],
-          ["wrong-type", { ...valid, [f]: wrongType(valid[f]) }],
-        ] as const) {
-          matrix[`${f}/${label}`] = verdict(hand, mutated);
-        }
+      for (const { label, payload } of mutations(valid)) {
+        matrix[label] = verdict(hand, payload);
       }
       return { arm, returns: canon(hand(valid)), matrix };
     });
 
     expect(pinned).toMatchInlineSnapshot(`
       [
+        {
+          "arm": "archive_changed",
+          "matrix": {
+            "network_slug/drop": "reject",
+            "network_slug/null": "reject",
+            "network_slug/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "archive_changed",
+            "network_slug": "sample",
+          },
+        },
+        {
+          "arm": "archive_purged",
+          "matrix": {
+            "network_slug/drop": "reject",
+            "network_slug/null": "reject",
+            "network_slug/wrong-type": "reject",
+            "target/drop": "reject",
+            "target/null": "reject",
+            "target/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "archive_purged",
+            "network_slug": "sample",
+            "target": "sample",
+          },
+        },
+        {
+          "arm": "auto_away_debounce_changed",
+          "matrix": {
+            "auto_away_debounce_seconds/drop": "reject",
+            "auto_away_debounce_seconds/null": "accept",
+            "auto_away_debounce_seconds/wrong-type": "reject",
+          },
+          "returns": {
+            "auto_away_debounce_seconds": 1,
+            "kind": "auto_away_debounce_changed",
+          },
+        },
         {
           "arm": "away_confirmed",
           "matrix": {
@@ -546,6 +671,337 @@ describe("#1393 — user-topic boundary census", () => {
             "kind": "away_confirmed",
             "network": "sample",
             "state": "present",
+          },
+        },
+        {
+          "arm": "channels_changed",
+          "matrix": {},
+          "returns": {
+            "kind": "channels_changed",
+          },
+        },
+        {
+          "arm": "connection_progress",
+          "matrix": {
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "state/drop": "reject",
+            "state/null": "reject",
+            "state/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "connection_progress",
+            "network": "sample",
+            "state": "connecting",
+          },
+        },
+        {
+          "arm": "directory_complete",
+          "matrix": {
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "total/drop": "reject",
+            "total/null": "reject",
+            "total/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "directory_complete",
+            "network": "sample",
+            "total": 1,
+          },
+        },
+        {
+          "arm": "directory_failed",
+          "matrix": {
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "reason/drop": "reject",
+            "reason/null": "reject",
+            "reason/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "directory_failed",
+            "network": "sample",
+            "reason": "sample",
+          },
+        },
+        {
+          "arm": "directory_progress",
+          "matrix": {
+            "count/drop": "reject",
+            "count/null": "reject",
+            "count/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+          },
+          "returns": {
+            "count": 1,
+            "kind": "directory_progress",
+            "network": "sample",
+          },
+        },
+        {
+          "arm": "invite_ack",
+          "matrix": {
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "peer/drop": "reject",
+            "peer/null": "reject",
+            "peer/wrong-type": "reject",
+          },
+          "returns": {
+            "channel": "sample",
+            "kind": "invite_ack",
+            "network": "sample",
+            "peer": "sample",
+          },
+        },
+        {
+          "arm": "join_failed",
+          "matrix": {
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "numeric/drop": "reject",
+            "numeric/null": "accept",
+            "numeric/wrong-type": "reject",
+            "reason/drop": "reject",
+            "reason/null": "accept",
+            "reason/wrong-type": "reject",
+            "state/drop": "reject",
+            "state/null": "reject",
+            "state/wrong-type": "reject",
+          },
+          "returns": {
+            "channel": "sample",
+            "kind": "join_failed",
+            "network": "sample",
+            "numeric": 1,
+            "reason": "sample",
+            "state": "failed",
+          },
+        },
+        {
+          "arm": "joined",
+          "matrix": {
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "state/drop": "reject",
+            "state/null": "reject",
+            "state/wrong-type": "reject",
+          },
+          "returns": {
+            "channel": "sample",
+            "kind": "joined",
+            "network": "sample",
+            "state": "joined",
+          },
+        },
+        {
+          "arm": "kicked",
+          "matrix": {
+            "by/drop": "reject",
+            "by/null": "accept",
+            "by/wrong-type": "reject",
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "reason/drop": "reject",
+            "reason/null": "accept",
+            "reason/wrong-type": "reject",
+            "state/drop": "reject",
+            "state/null": "reject",
+            "state/wrong-type": "reject",
+          },
+          "returns": {
+            "by": "sample",
+            "channel": "sample",
+            "kind": "kicked",
+            "network": "sample",
+            "reason": "sample",
+            "state": "kicked",
+          },
+        },
+        {
+          "arm": "mentions_bundle",
+          "matrix": {
+            "away_ended_at/drop": "reject",
+            "away_ended_at/null": "reject",
+            "away_ended_at/wrong-type": "reject",
+            "away_reason/drop": "reject",
+            "away_reason/null": "accept",
+            "away_reason/wrong-type": "reject",
+            "away_started_at/drop": "reject",
+            "away_started_at/null": "reject",
+            "away_started_at/wrong-type": "reject",
+            "messages.0.body/drop": "reject",
+            "messages.0.body/null": "accept",
+            "messages.0.body/wrong-type": "reject",
+            "messages.0.channel/drop": "reject",
+            "messages.0.channel/null": "reject",
+            "messages.0.channel/wrong-type": "reject",
+            "messages.0.kind/drop": "reject",
+            "messages.0.kind/null": "reject",
+            "messages.0.kind/wrong-type": "reject",
+            "messages.0.sender/drop": "reject",
+            "messages.0.sender/null": "reject",
+            "messages.0.sender/wrong-type": "reject",
+            "messages.0.server_time/drop": "reject",
+            "messages.0.server_time/null": "reject",
+            "messages.0.server_time/wrong-type": "reject",
+            "messages.0/drop": "accept",
+            "messages.0/null": "reject",
+            "messages.0/wrong-type": "reject",
+            "messages/drop": "reject",
+            "messages/null": "reject",
+            "messages/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+          },
+          "returns": {
+            "away_ended_at": "sample",
+            "away_reason": "sample",
+            "away_started_at": "sample",
+            "kind": "mentions_bundle",
+            "messages": [
+              {
+                "body": "sample",
+                "channel": "sample",
+                "kind": "privmsg",
+                "sender": "sample",
+                "server_time": 1,
+              },
+            ],
+            "network": "sample",
+          },
+        },
+        {
+          "arm": "names_reply",
+          "matrix": {
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/wrong-type": "reject",
+            "members.0.modes.0/drop": "accept",
+            "members.0.modes.0/null": "reject",
+            "members.0.modes.0/wrong-type": "reject",
+            "members.0.modes/drop": "reject",
+            "members.0.modes/null": "reject",
+            "members.0.modes/wrong-type": "reject",
+            "members.0.nick/drop": "reject",
+            "members.0.nick/null": "reject",
+            "members.0.nick/wrong-type": "reject",
+            "members.0/drop": "accept",
+            "members.0/null": "reject",
+            "members.0/wrong-type": "reject",
+            "members/drop": "reject",
+            "members/null": "reject",
+            "members/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+          },
+          "returns": {
+            "channel": "sample",
+            "kind": "names_reply",
+            "members": [
+              {
+                "modes": [
+                  "sample",
+                ],
+                "nick": "sample",
+              },
+            ],
+            "network": "sample",
+          },
+        },
+        {
+          "arm": "notify_list",
+          "matrix": {
+            "networks.key.0.added_at/drop": "reject",
+            "networks.key.0.added_at/null": "reject",
+            "networks.key.0.added_at/wrong-type": "reject",
+            "networks.key.0.network_id/drop": "reject",
+            "networks.key.0.network_id/null": "reject",
+            "networks.key.0.network_id/wrong-type": "reject",
+            "networks.key.0.nick/drop": "reject",
+            "networks.key.0.nick/null": "reject",
+            "networks.key.0.nick/wrong-type": "reject",
+            "networks.key.0/drop": "accept",
+            "networks.key.0/null": "reject",
+            "networks.key.0/wrong-type": "reject",
+            "networks.key/drop": "accept",
+            "networks.key/null": "reject",
+            "networks.key/wrong-type": "reject",
+            "networks/drop": "reject",
+            "networks/null": "reject",
+            "networks/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "notify_list",
+            "networks": {
+              "key": [
+                {
+                  "added_at": "sample",
+                  "network_id": 1,
+                  "nick": "sample",
+                },
+              ],
+            },
+          },
+        },
+        {
+          "arm": "own_nick_changed",
+          "matrix": {
+            "network_id/drop": "reject",
+            "network_id/null": "reject",
+            "network_id/wrong-type": "reject",
+            "nick/drop": "reject",
+            "nick/null": "reject",
+            "nick/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "own_nick_changed",
+            "network_id": 1,
+            "nick": "sample",
+          },
+        },
+        {
+          "arm": "peer_away",
+          "matrix": {
+            "message/drop": "reject",
+            "message/null": "reject",
+            "message/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "peer/drop": "reject",
+            "peer/null": "reject",
+            "peer/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "peer_away",
+            "message": "sample",
+            "network": "sample",
+            "peer": "sample",
           },
         },
         {
@@ -601,6 +1057,131 @@ describe("#1393 — user-topic boundary census", () => {
           },
         },
         {
+          "arm": "presence_snapshot",
+          "matrix": {
+            "network_id/drop": "reject",
+            "network_id/null": "reject",
+            "network_id/wrong-type": "reject",
+            "nicks.key/drop": "accept",
+            "nicks.key/null": "reject",
+            "nicks.key/wrong-type": "reject",
+            "nicks/drop": "reject",
+            "nicks/null": "reject",
+            "nicks/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "presence_snapshot",
+            "network_id": 1,
+            "nicks": {
+              "key": "online",
+            },
+          },
+        },
+        {
+          "arm": "query_windows_list",
+          "matrix": {
+            "windows.key.0.network_id/drop": "reject",
+            "windows.key.0.network_id/null": "reject",
+            "windows.key.0.network_id/wrong-type": "reject",
+            "windows.key.0.opened_at/drop": "reject",
+            "windows.key.0.opened_at/null": "reject",
+            "windows.key.0.opened_at/wrong-type": "reject",
+            "windows.key.0.target_nick/drop": "reject",
+            "windows.key.0.target_nick/null": "reject",
+            "windows.key.0.target_nick/wrong-type": "reject",
+            "windows.key.0/drop": "accept",
+            "windows.key.0/null": "reject",
+            "windows.key.0/wrong-type": "reject",
+            "windows.key/drop": "accept",
+            "windows.key/null": "reject",
+            "windows.key/wrong-type": "reject",
+            "windows/drop": "reject",
+            "windows/null": "reject",
+            "windows/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "query_windows_list",
+            "windows": {
+              "key": [
+                {
+                  "network_id": 1,
+                  "opened_at": "sample",
+                  "target_nick": "sample",
+                },
+              ],
+            },
+          },
+        },
+        {
+          "arm": "recover_progress",
+          "matrix": {
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "reason/drop": "reject",
+            "reason/null": "accept",
+            "reason/wrong-type": "reject",
+            "status/drop": "reject",
+            "status/null": "reject",
+            "status/wrong-type": "reject",
+            "step/drop": "reject",
+            "step/null": "reject",
+            "step/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "recover_progress",
+            "network": "sample",
+            "reason": "wrong_password",
+            "status": "running",
+            "step": "identify",
+          },
+        },
+        {
+          "arm": "recover_result",
+          "matrix": {
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "outcome/drop": "reject",
+            "outcome/null": "reject",
+            "outcome/wrong-type": "reject",
+            "reason/drop": "reject",
+            "reason/null": "accept",
+            "reason/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "recover_result",
+            "network": "sample",
+            "outcome": "succeeded",
+            "reason": "wrong_password",
+          },
+        },
+        {
+          "arm": "server_reply",
+          "matrix": {
+            "lines.0/drop": "accept",
+            "lines.0/null": "reject",
+            "lines.0/wrong-type": "reject",
+            "lines/drop": "reject",
+            "lines/null": "reject",
+            "lines/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "source/drop": "reject",
+            "source/null": "reject",
+            "source/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "server_reply",
+            "lines": [
+              "sample",
+            ],
+            "network": "sample",
+            "source": "info",
+          },
+        },
+        {
           "arm": "session_identity_changed",
           "matrix": {
             "account/drop": "reject",
@@ -621,8 +1202,32 @@ describe("#1393 — user-topic boundary census", () => {
           },
         },
         {
+          "arm": "supported_umodes_changed",
+          "matrix": {
+            "modes.0/drop": "accept",
+            "modes.0/null": "reject",
+            "modes.0/wrong-type": "reject",
+            "modes/drop": "reject",
+            "modes/null": "reject",
+            "modes/wrong-type": "reject",
+            "network_id/drop": "reject",
+            "network_id/null": "reject",
+            "network_id/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "supported_umodes_changed",
+            "modes": [
+              "sample",
+            ],
+            "network_id": 1,
+          },
+        },
+        {
           "arm": "umode_changed",
           "matrix": {
+            "modes.0/drop": "accept",
+            "modes.0/null": "reject",
+            "modes.0/wrong-type": "reject",
             "modes/drop": "reject",
             "modes/null": "reject",
             "modes/wrong-type": "reject",
@@ -636,6 +1241,152 @@ describe("#1393 — user-topic boundary census", () => {
               "sample",
             ],
             "network_id": 1,
+          },
+        },
+        {
+          "arm": "web_session_severed",
+          "matrix": {
+            "code/drop": "reject",
+            "code/null": "reject",
+            "code/wrong-type": "reject",
+          },
+          "returns": {
+            "code": "rate_limit_flood",
+            "kind": "web_session_severed",
+          },
+        },
+        {
+          "arm": "who_reply",
+          "matrix": {
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "target/drop": "reject",
+            "target/null": "reject",
+            "target/wrong-type": "reject",
+            "users.0.channel/drop": "reject",
+            "users.0.channel/null": "reject",
+            "users.0.channel/wrong-type": "reject",
+            "users.0.hops/drop": "reject",
+            "users.0.hops/null": "accept",
+            "users.0.hops/wrong-type": "reject",
+            "users.0.host/drop": "reject",
+            "users.0.host/null": "reject",
+            "users.0.host/wrong-type": "reject",
+            "users.0.modes/drop": "reject",
+            "users.0.modes/null": "reject",
+            "users.0.modes/wrong-type": "reject",
+            "users.0.nick/drop": "reject",
+            "users.0.nick/null": "reject",
+            "users.0.nick/wrong-type": "reject",
+            "users.0.realname/drop": "reject",
+            "users.0.realname/null": "accept",
+            "users.0.realname/wrong-type": "reject",
+            "users.0.server/drop": "reject",
+            "users.0.server/null": "reject",
+            "users.0.server/wrong-type": "reject",
+            "users.0.user/drop": "reject",
+            "users.0.user/null": "reject",
+            "users.0.user/wrong-type": "reject",
+            "users.0/drop": "accept",
+            "users.0/null": "reject",
+            "users.0/wrong-type": "reject",
+            "users/drop": "reject",
+            "users/null": "reject",
+            "users/wrong-type": "reject",
+          },
+          "returns": {
+            "kind": "who_reply",
+            "network": "sample",
+            "target": "sample",
+            "users": [
+              {
+                "channel": "sample",
+                "hops": 1,
+                "host": "sample",
+                "modes": "sample",
+                "nick": "sample",
+                "realname": "sample",
+                "server": "sample",
+                "user": "sample",
+              },
+            ],
+          },
+        },
+        {
+          "arm": "whowas_bundle",
+          "matrix": {
+            "host/drop": "reject",
+            "host/null": "accept",
+            "host/wrong-type": "reject",
+            "logoff_time/drop": "reject",
+            "logoff_time/null": "accept",
+            "logoff_time/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "not_found/drop": "reject",
+            "not_found/null": "reject",
+            "not_found/wrong-type": "reject",
+            "realname/drop": "reject",
+            "realname/null": "accept",
+            "realname/wrong-type": "reject",
+            "server/drop": "reject",
+            "server/null": "accept",
+            "server/wrong-type": "reject",
+            "target/drop": "reject",
+            "target/null": "reject",
+            "target/wrong-type": "reject",
+            "user/drop": "reject",
+            "user/null": "accept",
+            "user/wrong-type": "reject",
+          },
+          "returns": {
+            "host": "sample",
+            "kind": "whowas_bundle",
+            "logoff_time": "sample",
+            "network": "sample",
+            "not_found": true,
+            "realname": "sample",
+            "server": "sample",
+            "target": "sample",
+            "user": "sample",
+          },
+        },
+        {
+          "arm": "window_invite_declined",
+          "matrix": {
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+          },
+          "returns": {
+            "channel": "sample",
+            "kind": "window_invite_declined",
+            "network": "sample",
+          },
+        },
+        {
+          "arm": "window_pending",
+          "matrix": {
+            "channel/drop": "reject",
+            "channel/null": "reject",
+            "channel/wrong-type": "reject",
+            "network/drop": "reject",
+            "network/null": "reject",
+            "network/wrong-type": "reject",
+            "state/drop": "reject",
+            "state/null": "reject",
+            "state/wrong-type": "reject",
+          },
+          "returns": {
+            "channel": "sample",
+            "kind": "window_pending",
+            "network": "sample",
+            "state": "pending",
           },
         },
       ]
