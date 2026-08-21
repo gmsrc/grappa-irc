@@ -155,6 +155,10 @@ vi.mock("../lib/supportedUmodes", () => ({
 
 // #100 — builds a valid connection_state_changed payload (the narrower
 // requires the full set of top-level + nested `network` fields).
+//
+// #1393d — `recoverable` joined that set. It was omitted here while the arm
+// defaulted a missing one to `false`; `Grappa.Networks.Wire.home_network_row/0`
+// declares it a plain `boolean()`, so a row without it is not a row.
 function connectionStateChanged(slug: string, to: "connected" | "parked" | "failed") {
   return {
     kind: "connection_state_changed",
@@ -171,6 +175,7 @@ function connectionStateChanged(slug: string, to: "connected" | "parked" | "fail
       connection_state: to,
       connection_state_reason: to === "connected" ? null : "test reason",
       connection_state_changed_at: "2026-07-10T00:00:00Z",
+      recoverable: false,
     },
   };
 }
@@ -403,37 +408,40 @@ describe("userTopic", () => {
 
   // #216 — isupport_changed seeds the per-network capability store.
   describe("isupport_changed event (#216)", () => {
+    // #1393d — the three arrays are part of the envelope now, so the
+    // fixture that seeds a capability table has to carry them.
+    const isupportEvent = (overrides: Record<string, unknown> = {}) => ({
+      kind: "isupport_changed",
+      network_id: 7,
+      chanmodes_a: ["b", "e", "I"],
+      chanmodes_b: ["k"],
+      chanmodes_c: ["l"],
+      chanmodes_d: ["n", "t", "s"],
+      list_modes_queryable: ["b", "e", "I"],
+      prefix: { q: "~", o: "@", v: "+" },
+      prefix_order: ["q", "o", "v"],
+      chantypes: ["#", "&"],
+      ...overrides,
+    });
+
     it("calls seedIsupport with the narrowed capability table", async () => {
       const isupport = await import("../lib/isupport");
-      channelMock.fireEvent({
-        kind: "isupport_changed",
-        network_id: 7,
-        chanmodes_a: ["b", "e", "I"],
-        chanmodes_b: ["k"],
-        chanmodes_c: ["l"],
-        chanmodes_d: ["n", "t", "s"],
-        prefix: { q: "~", o: "@", v: "+" },
-      });
+      channelMock.fireEvent(isupportEvent());
       expect(isupport.seedIsupport).toHaveBeenCalledWith(7, {
         chanmodes: { a: ["b", "e", "I"], b: ["k"], c: ["l"], d: ["n", "t", "s"] },
         prefix: { q: "~", o: "@", v: "+" },
-        // #1251 — this envelope predates `list_modes_queryable`, and such a
-        // server can only ever answer one list. Deriving the set from
-        // `chanmodes_a` here would offer +e and +I queries it cannot serve.
-        listModesQueryable: ["b"],
-        // #1302 — and no rank either: this envelope predates `prefix_order`,
-        // so the narrower seeds the EMPTY order rather than inferring one
-        // from the map's key sequence. "rank unknown" degrades the mode
-        // editor to the classic op/halfop pair; a guessed rank would go on
-        // mis-ranking founders exactly as before the field existed.
-        prefixOrder: [],
-        // #1255 — same story for the widened facts: this envelope predates
-        // them, so the narrower supplies exactly what cic assumed while the
-        // server was dropping them at ingress — the RFC 2812 sigil class,
-        // the ASCII fold, and no caps. A rejected envelope here would take
-        // the whole capability table down with it.
-        chantypes: ["#", "&", "+", "!"],
+        // #1393d — all three come off the wire now. The values the narrower
+        // used to invent here (["b"], [], the RFC 2812 sigil class) were the
+        // subject of vjt's strict ruling: the typespec makes every one of
+        // them required, so an envelope without them is not an envelope from
+        // an older grappa — it is not an envelope.
+        listModesQueryable: ["b", "e", "I"],
+        prefixOrder: ["q", "o", "v"],
+        chantypes: ["#", "&"],
         casemapping: "ascii",
+        // Still tolerant, and deliberately so: `maxlist` / `nicklen` /
+        // `channellen` / `topiclen` / the frame budget degrade to "nothing
+        // advertised", which is a state the server can genuinely be in.
         maxlist: {},
         nicklen: null,
         channellen: null,
@@ -443,24 +451,37 @@ describe("userTopic", () => {
       });
     });
 
+    // #1393d — the behaviour this slice changed, at the dispatch door rather
+    // than in the narrower: an envelope from a BEAM that predates the three
+    // fields no longer seeds a half-invented capability table, it seeds
+    // nothing at all. That is the trade the ruling bought — a visible dead
+    // /banlist over an invisible wrong one.
+    it("drops an envelope predating the three required arrays", async () => {
+      const isupport = await import("../lib/isupport");
+      vi.mocked(isupport.seedIsupport).mockClear();
+      const {
+        list_modes_queryable: _a,
+        prefix_order: _b,
+        chantypes: _c,
+        ...predating
+      } = isupportEvent();
+      channelMock.fireEvent(predating);
+      expect(isupport.seedIsupport).not.toHaveBeenCalled();
+    });
+
     // #1255 — the live door, carrying what the network really advertised.
     it("seeds the widened per-network facts a 005 published", async () => {
       const isupport = await import("../lib/isupport");
-      channelMock.fireEvent({
-        kind: "isupport_changed",
-        network_id: 7,
-        chanmodes_a: ["b", "e", "I"],
-        chanmodes_b: ["k"],
-        chanmodes_c: ["l"],
-        chanmodes_d: ["n", "t", "s"],
-        prefix: { q: "~", o: "@", v: "+" },
-        chantypes: ["#", "&"],
-        casemapping: "rfc1459",
-        maxlist: { b: 100, e: 100, I: 100 },
-        nicklen: 30,
-        channellen: 200,
-        topiclen: 307,
-      });
+      channelMock.fireEvent(
+        isupportEvent({
+          chantypes: ["#", "&"],
+          casemapping: "rfc1459",
+          maxlist: { b: 100, e: 100, I: 100 },
+          nicklen: 30,
+          channellen: 200,
+          topiclen: 307,
+        }),
+      );
       expect(isupport.seedIsupport).toHaveBeenCalledWith(
         7,
         expect.objectContaining({
@@ -478,16 +499,7 @@ describe("userTopic", () => {
     // the compose box's warning is dark until it lands here.
     it("seeds the frame budget the 005 published", async () => {
       const isupport = await import("../lib/isupport");
-      channelMock.fireEvent({
-        kind: "isupport_changed",
-        network_id: 7,
-        chanmodes_a: ["b", "e", "I"],
-        chanmodes_b: ["k"],
-        chanmodes_c: ["l"],
-        chanmodes_d: ["n", "t", "s"],
-        prefix: { q: "~", o: "@", v: "+" },
-        frame_budget_base: 393,
-      });
+      channelMock.fireEvent(isupportEvent({ frame_budget_base: 393 }));
       expect(isupport.seedIsupport).toHaveBeenCalledWith(
         7,
         expect.objectContaining({ frameBudgetBase: 393 }),
@@ -667,23 +679,45 @@ describe("userTopic", () => {
       expect(ws.setInvited).toHaveBeenCalledWith(channelKey("freenode", "#random"), "alice");
     });
 
-    // #902 — a newer cic against an older BEAM that has no `inviter` field.
-    // The invite MUST still land: dropping the payload for a missing additive
-    // field would lose the whole notification over a cosmetic gap. Degrade to
-    // the same "*" sentinel the server emits for a prefix-less INVITE.
-    it("substitutes the anonymous-sender sentinel when the server sends no inviter", async () => {
+    // #1393d — these two tests used to assert the OPPOSITE, and they are the
+    // record of what the ruling reversed.
+    //
+    // #902 read the missing `inviter` as a newer cic meeting an older BEAM
+    // and degraded to `"*"`, the sentinel the SERVER emits for a prefix-less
+    // INVITE. Two things were wrong with that. `inviter` is a plain
+    // `String.t()` in `window_invited_payload/0` and the emitter always
+    // fills it, so no grappa omits it; and `"*"` is a value with a MEANING —
+    // "the INVITE carried no prefix" — so minting it locally tells the user
+    // a fact about the invite that nobody on the wire ever stated.
+    //
+    // The `inviter: 42` case was never covered by that reasoning at all: the
+    // comment spoke of absence and the guard swallowed a present number too.
+    it("drops a window_invited payload with NO inviter instead of minting the sentinel", async () => {
       const ws = await import("../lib/windowState");
-      const { channelKey } = await import("../lib/channelKey");
       channelMock.fireEvent({
         kind: "window_invited",
         network: "freenode",
         channel: "#random",
         state: "invited",
       });
-      expect(ws.setInvited).toHaveBeenCalledWith(channelKey("freenode", "#random"), "*");
+      expect(ws.setInvited).not.toHaveBeenCalled();
     });
 
-    it("substitutes the sentinel for a non-string inviter rather than leaking it", async () => {
+    it("drops a window_invited payload whose inviter is present but not a string", async () => {
+      const ws = await import("../lib/windowState");
+      channelMock.fireEvent({
+        kind: "window_invited",
+        network: "freenode",
+        channel: "#random",
+        state: "invited",
+        inviter: 42,
+      });
+      expect(ws.setInvited).not.toHaveBeenCalled();
+    });
+
+    // The server's own anonymous-sender sentinel still arrives as data and
+    // must still render — what changed is that cic no longer INVENTS it.
+    it("still accepts the sentinel when the SERVER is the one that sent it", async () => {
       const ws = await import("../lib/windowState");
       const { channelKey } = await import("../lib/channelKey");
       channelMock.fireEvent({
@@ -691,7 +725,7 @@ describe("userTopic", () => {
         network: "freenode",
         channel: "#random",
         state: "invited",
-        inviter: 42,
+        inviter: "*",
       });
       expect(ws.setInvited).toHaveBeenCalledWith(channelKey("freenode", "#random"), "*");
     });
@@ -1787,6 +1821,11 @@ describe("userTopic", () => {
       secure: false,
       secure_cipher: null,
       certfp: null,
+      // #1393d — and `extra_lines` joined that list. It is nullable, not
+      // optional (`[whois_extra_line()] | nil`), and `reverse_extra_lines/1`
+      // puts the key on the wire on every emit — so a mock without it is a
+      // shape no grappa sends, and the narrower now says so.
+      extra_lines: null,
     };
 
     it("accepts well-formed channels array", async () => {
@@ -2297,5 +2336,205 @@ describe("narrowUserEvent — web_session_severed (#630, #1338)", () => {
   it("rejects a non-string code", async () => {
     const { narrowUserEvent } = await import("../lib/userTopic");
     expect(narrowUserEvent({ kind: "web_session_severed", code: 42 })).toBeNull();
+  });
+});
+
+// #1393d — the three user-topic arms vjt's strict ruling reaches.
+//
+// Each one carried a guard whose written comment justified a fallback for an
+// ABSENT key while the code applied that same fallback to a PRESENT key
+// carrying an unusable value. Those are two different events and the old
+// guards could not tell them apart, so every field below is exercised as
+// BOTH: a suite that only covered absence would re-create exactly the
+// conflation it exists to pin.
+//
+// `whois_bundle.extra_lines` is the odd one and stays nullable on purpose:
+// `Grappa.Session.Wire.whois_bundle_payload/0` declares it
+// `[whois_extra_line()] | nil` and `reverse_extra_lines(nil)` really does
+// emit `nil`, so `null` is a value the server SENDS. What it never sends is
+// no key at all.
+describe("narrowUserEvent — #1393d strict arms", () => {
+  const invited = (overrides: Record<string, unknown> = {}) => ({
+    kind: "window_invited",
+    network: "azzurra",
+    channel: "#grappa",
+    state: "invited",
+    inviter: "alice",
+    ...overrides,
+  });
+
+  const stateChanged = (networkOverrides: Record<string, unknown> = {}) => ({
+    kind: "connection_state_changed",
+    user_id: "u1",
+    network_id: 1,
+    network_slug: "azzurra",
+    from: "parked",
+    to: "connected",
+    reason: null,
+    at: "2026-08-21T00:00:00Z",
+    network: {
+      slug: "azzurra",
+      nick: "vjt",
+      connection_state: "connected",
+      connection_state_reason: null,
+      connection_state_changed_at: "2026-08-21T00:00:00Z",
+      recoverable: true,
+      ...networkOverrides,
+    },
+  });
+
+  const whois = (overrides: Record<string, unknown> = {}) => ({
+    kind: "whois_bundle",
+    network: "azzurra",
+    target: "alice",
+    source: "user",
+    user: null,
+    host: null,
+    realname: null,
+    server: null,
+    server_info: null,
+    is_operator: false,
+    oper_text: null,
+    idle_seconds: null,
+    signon: null,
+    channels: null,
+    using_ssl: false,
+    is_registered: false,
+    is_admin: false,
+    is_services_admin: false,
+    is_helper: false,
+    is_chanop: false,
+    is_agent: false,
+    is_java: false,
+    umodes: null,
+    away_message: null,
+    actually_host: null,
+    actually_ip: null,
+    account: null,
+    secure: false,
+    secure_cipher: null,
+    certfp: null,
+    extra_lines: null,
+    ...overrides,
+  });
+
+  describe("window_invited.inviter (#902 — was: mint the `*` sentinel)", () => {
+    it("carries a real inviter through", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(invited())).toMatchObject({ inviter: "alice" });
+    });
+
+    it("rejects an ABSENT inviter", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      const { inviter: _drop, ...without } = invited();
+      expect(narrowUserEvent(without)).toBeNull();
+    });
+
+    it("rejects a null inviter (present, unusable)", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(invited({ inviter: null }))).toBeNull();
+    });
+
+    it("rejects a non-string inviter (present, unusable)", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(invited({ inviter: 42 }))).toBeNull();
+    });
+
+    // The generated schema types `inviter` as a free `"s"`, so validating
+    // against it alone would ACCEPT the empty string where the hand guard
+    // rejected it — a strictness loss the census cannot see, because its
+    // mutation matrix never produces `""`. No nick is empty on IRC: an empty
+    // inviter is a present-and-unusable value, which is precisely the class
+    // this slice rejects.
+    it("rejects an EMPTY inviter, which the schema alone would let through", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(invited({ inviter: "" }))).toBeNull();
+    });
+
+    it("never mints the `*` sentinel from a payload that did not carry it", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      for (const bad of [null, 42, "", {}]) {
+        expect(narrowUserEvent(invited({ inviter: bad }))).toBeNull();
+      }
+      const { inviter: _drop, ...without } = invited();
+      expect(narrowUserEvent(without)).toBeNull();
+    });
+  });
+
+  describe("connection_state_changed.network.recoverable (#581 — was: default false)", () => {
+    it("carries a true recoverable through", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(stateChanged())).toMatchObject({
+        network: { recoverable: true },
+      });
+    });
+
+    it("carries a false recoverable through as data, not as a default", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(stateChanged({ recoverable: false }))).toMatchObject({
+        network: { recoverable: false },
+      });
+    });
+
+    it("rejects an ABSENT recoverable", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      const payload = stateChanged();
+      delete (payload.network as Record<string, unknown>).recoverable;
+      expect(narrowUserEvent(payload)).toBeNull();
+    });
+
+    it("rejects a null recoverable (present, unusable)", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(stateChanged({ recoverable: null }))).toBeNull();
+    });
+
+    it("rejects a non-boolean recoverable (present, unusable)", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(stateChanged({ recoverable: "true" }))).toBeNull();
+    });
+
+    // The old guard answered every one of those with `false` — the value
+    // that hides the /recover button. Silently withdrawing an affordance is
+    // worse than dropping the update, because the update recurs and the
+    // missing button does not announce itself.
+    it("never defaults a malformed recoverable to false", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      for (const bad of [null, "true", 0, {}]) {
+        expect(narrowUserEvent(stateChanged({ recoverable: bad }))).toBeNull();
+      }
+    });
+  });
+
+  describe("whois_bundle.extra_lines (#221 — the tolerance with no written reason)", () => {
+    it("accepts an explicit null, which the server really does emit", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(whois())).toMatchObject({ extra_lines: null });
+    });
+
+    it("carries a populated list through", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      const lines = [{ numeric: 320, text: "is a bot" }];
+      expect(narrowUserEvent(whois({ extra_lines: lines }))).toMatchObject({
+        extra_lines: lines,
+      });
+    });
+
+    // The one case the `!== undefined` guard swallowed, and the only one
+    // that separates this arm from a plain nullable field.
+    it("rejects an ABSENT extra_lines key", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      const { extra_lines: _drop, ...without } = whois();
+      expect(narrowUserEvent(without)).toBeNull();
+    });
+
+    it("still rejects a malformed element (unchanged)", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(whois({ extra_lines: [{ numeric: "320" }] }))).toBeNull();
+    });
+
+    it("still rejects a non-array extra_lines (unchanged)", async () => {
+      const { narrowUserEvent } = await import("../lib/userTopic");
+      expect(narrowUserEvent(whois({ extra_lines: "nope" }))).toBeNull();
+    });
   });
 });

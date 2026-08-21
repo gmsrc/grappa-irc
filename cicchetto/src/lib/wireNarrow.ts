@@ -256,7 +256,39 @@ export function narrowIsupportChanged(
   const c = narrowStringArray(r.chanmodes_c);
   const d = narrowStringArray(r.chanmodes_d);
   const prefix = narrowStringRecord(r.prefix);
-  if (a === null || b === null || c === null || d === null || prefix === null) return null;
+  // #1393d — `list_modes_queryable` (#1251), `prefix_order` (#1302) and
+  // `chantypes` (#1255) sat BELOW this guard behind a `?? <fallback>`, and
+  // now sit in it, beside the CHANMODES classes they were always the same
+  // shape as. All three are `[String.t()]` in
+  // `Grappa.Session.Wire.isupport_changed_payload/0` — required and
+  // non-nullable — and the emitter fills them on every emit, so there is no
+  // grappa that omits one and no value a fallback could stand in for.
+  //
+  // Each of the three fallbacks was written for an ABSENT key and applied
+  // itself to a PRESENT one carrying a null, a non-array or a mangled
+  // element as well. That is the class 5703d301 closed on
+  // `banlist_bundle.mode`, where a coerced `b` put an arbitrary list under
+  // the "Bans" heading: the field is there, it is wrong, and we answer by
+  // showing the user a value we made up and attributed to the server.
+  //
+  // The cross-version window those comments named was real and is now paid
+  // for where it belongs — a `--cic`-only deploy leaves the BEAM behind and
+  // the envelope is DROPPED rather than half-invented, which the drop
+  // banner (`wireDrop.ts`) turns into something the operator can read.
+  const listModesQueryable = narrowStringArray(r.list_modes_queryable);
+  const prefixOrder = narrowStringArray(r.prefix_order);
+  const chantypes = narrowStringArray(r.chantypes);
+  if (
+    a === null ||
+    b === null ||
+    c === null ||
+    d === null ||
+    prefix === null ||
+    listModesQueryable === null ||
+    prefixOrder === null ||
+    chantypes === null
+  )
+    return null;
   return {
     kind: "isupport_changed",
     network_id: r.network_id,
@@ -264,25 +296,10 @@ export function narrowIsupportChanged(
     chanmodes_b: b,
     chanmodes_c: c,
     chanmodes_d: d,
-    // #1251 — absent means a server that predates the field (a cic-only
-    // bundle deploy is the realistic case), and that server can query
-    // exactly one list: `b`. Falling back to the empty set would silently
-    // remove /banlist; deriving the set from `chanmodes_a` would offer
-    // queries that server cannot answer.
-    list_modes_queryable: narrowStringArray(r.list_modes_queryable) ?? ["b"],
+    list_modes_queryable: listModesQueryable,
     prefix,
-    // #1302 — absent means a server predating the field. The empty list is
-    // the honest answer: rank is UNKNOWN, and `editorSigils` degrades to the
-    // classic op/halfop pair, which is exactly what it computed while the
-    // order was being dropped. Falling back to the map's key order instead
-    // would reinstate the very mis-ranking this field exists to end.
-    prefix_order: narrowStringArray(r.prefix_order) ?? [],
-    // #1255 — same posture as the two fallbacks around it: absent means a
-    // server predating the widening, and the fallback is exactly what cic
-    // assumed while the fact was being dropped at ingress — the RFC 2812
-    // sigil class and the ASCII fold. Rejecting the envelope instead would
-    // take the /mode toggles down with it.
-    chantypes: narrowStringArray(r.chantypes) ?? ["#", "&", "+", "!"],
+    prefix_order: prefixOrder,
+    chantypes,
     casemapping: narrowCasemapping(r.casemapping),
     // No advertised cap and no advertised limit are the honest absent
     // states, so a malformed value degrades to them rather than to a

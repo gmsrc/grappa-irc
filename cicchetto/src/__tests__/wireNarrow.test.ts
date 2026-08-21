@@ -198,6 +198,11 @@ describe("narrowChannelEvent (bucket G H4+U3)", () => {
   // back to the default table forever). Shared shape with userTopic's
   // live-005 arm (both call narrowIsupportChanged).
   describe("kind: isupport_changed (dual-topic; cold-snapshot path)", () => {
+    // #1393d — this fixture used to OMIT `list_modes_queryable`,
+    // `prefix_order` and `chantypes` and still call itself complete, because
+    // the narrower invented all three. It cannot any more: the typespec
+    // declares them required and non-nullable, so a complete envelope is one
+    // that carries them.
     const valid = {
       kind: "isupport_changed",
       network_id: 1,
@@ -205,7 +210,10 @@ describe("narrowChannelEvent (bucket G H4+U3)", () => {
       chanmodes_b: ["k"],
       chanmodes_c: ["l"],
       chanmodes_d: ["n", "t", "s"],
+      list_modes_queryable: ["b", "e", "I"],
       prefix: { o: "@", h: "%", v: "+" },
+      prefix_order: ["o", "h", "v"],
+      chantypes: ["#", "&"],
     };
 
     it("narrows a complete envelope on the channel topic", () => {
@@ -225,6 +233,68 @@ describe("narrowChannelEvent (bucket G H4+U3)", () => {
     it("rejects a prefix map with a non-string sigil", () => {
       expect(narrowChannelEvent({ ...valid, prefix: { o: 1 } })).toBeNull();
     });
+
+    // ── #1393d — the three invented arrays ────────────────────────────────
+    //
+    // `list_modes_queryable` (#1251), `prefix_order` (#1302) and `chantypes`
+    // (#1255) each carried a `narrowStringArray(…) ?? <fallback>`. Every one
+    // of the three comments justified the fallback for an ABSENT key, and
+    // every one of the three applied it to a PRESENT key carrying a null, a
+    // non-array, or an array with a mangled element — the class 5703d301
+    // already closed once on `banlist_bundle.mode`, where a coerced `b`
+    // rendered an arbitrary list under the "Bans" heading.
+    //
+    // vjt's ruling (2026-08-21) is strict on BOTH: the typespec declares all
+    // three required and non-nullable, so no grappa can omit one and an
+    // invented value can only ever be a lie told to the user in the server's
+    // name. The cases are enumerated one by one rather than folded into a
+    // table because ABSENT and PRESENT-BUT-MALFORMED are exactly what the
+    // old guard conflated — a suite that covered only absence would re-create
+    // the bug it is here to pin.
+    const INVENTED_ARRAYS = [
+      { field: "list_modes_queryable", was: ["b"] },
+      { field: "prefix_order", was: [] },
+      { field: "chantypes", was: ["#", "&", "+", "!"] },
+    ] as const;
+
+    for (const { field, was } of INVENTED_ARRAYS) {
+      it(`carries a valid \`${field}\` through verbatim`, () => {
+        const out = narrowChannelEvent({ ...valid, [field]: ["z"] });
+        expect(out).toMatchObject({ [field]: ["z"] });
+      });
+
+      it(`rejects an ABSENT \`${field}\` instead of inventing one`, () => {
+        const { [field]: _omitted, ...without } = valid;
+        expect(narrowChannelEvent(without)).toBeNull();
+      });
+
+      it(`rejects a null \`${field}\` (present, unusable)`, () => {
+        expect(narrowChannelEvent({ ...valid, [field]: null })).toBeNull();
+      });
+
+      it(`rejects a non-array \`${field}\` (present, unusable)`, () => {
+        expect(narrowChannelEvent({ ...valid, [field]: "not-an-array" })).toBeNull();
+      });
+
+      it(`rejects a mangled ELEMENT of \`${field}\` rather than voiding the array`, () => {
+        expect(narrowChannelEvent({ ...valid, [field]: ["ok", 42] })).toBeNull();
+      });
+
+      // The fallback is gone, not merely bypassed: no reachable input may
+      // still produce the value the `??` used to mint. Without this the four
+      // rejections above would also pass against a guard that kept the `??`
+      // and rejected somewhere else entirely.
+      it(`never mints the old \`${field}\` fallback from any malformed input`, () => {
+        for (const bad of [undefined, null, "x", 42, ["ok", 42], {}]) {
+          const payload =
+            bad === undefined
+              ? (({ [field]: _drop, ...rest }) => rest)(valid)
+              : { ...valid, [field]: bad };
+          const out = narrowChannelEvent(payload) as Record<string, unknown> | null;
+          expect(out?.[field]).not.toEqual(was);
+        }
+      });
+    }
 
     // #1108 — the frame budget rides this payload. It must narrow through…
     it("carries the frame budget base through", () => {

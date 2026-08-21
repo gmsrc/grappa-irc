@@ -4147,7 +4147,14 @@ describe("subscribe — #1108 the cold snapshot seeds the frame budget", () => {
       chanmodes_b: ["k"],
       chanmodes_c: ["l"],
       chanmodes_d: ["n", "t", "s"],
+      // #1393d — required on the wire now, so a fixture that omits them is
+      // a payload no grappa sends and the narrower drops it. The budget the
+      // assertion below reads rides the SAME envelope, so leaving them out
+      // would have made this test pass for the wrong reason.
+      list_modes_queryable: ["b"],
       prefix: { o: "@", v: "+" },
+      prefix_order: ["o", "v"],
+      chantypes: ["#"],
       frame_budget_base: 481,
     });
 

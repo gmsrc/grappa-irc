@@ -4,7 +4,6 @@ import { refreshAliases } from "./aliasList";
 import {
   assertNever,
   type BanlistEntry,
-  type ConnectionState,
   type LinksEntry,
   type QueryWindowEntry,
   type WhoisExtraLine,
@@ -79,6 +78,7 @@ import { narrowIsupportChanged, narrowWindowStateEvent } from "./wireNarrow";
 // us to close (#447), a per-field degrade that beats dropping the payload.
 // Do not migrate one of those without re-measuring it first.
 import {
+  S_NetworksWireConnectionStateEvent,
   S_NotifyWireNotifyListPayload,
   S_QueryWindowsWireWindowsListPayload,
   S_ScrollbackWireArchiveChangedPayload,
@@ -104,16 +104,11 @@ import {
   S_SessionWireWhoReplyPayload,
   S_SessionWireWhowasBundlePayload,
   S_SessionWireWindowInviteDeclinedPayload,
+  S_SessionWireWindowInvitedPayload,
   S_SessionWireWindowPendingPayload,
   S_UserSettingsWireAutoAwayDebounceChangedPayload,
 } from "./wireSchema";
 import type { ServerSettingsWireUploadView } from "./wireTypes";
-// #410 — the connection_state runtime guard derives from the generated const
-// (mirror of `Grappa.Networks.Credential.connection_state/0`), single-sourced
-// like the leaf-enum allowlists in wireNarrow.ts. #992's server_reply source
-// set was the second reader here until #1393 moved that arm onto its schema,
-// which reaches the same const through `S_SessionWireServerReplySource`.
-import { NETWORKS_CREDENTIAL_CONNECTION_STATE } from "./wireTypes";
 import { validate } from "./wireValidate";
 
 // Per-user PubSub topic subscriber. Module-singleton side-effect:
@@ -169,18 +164,15 @@ function parseWindowsMap(raw: Record<string, QueryWindowEntry[]>): Record<number
   return result;
 }
 
-// REV-H H2 (2026-05-22) — runtime narrower for ConnectionState. #410 — the
-// value set IS the codegen-emitted `NETWORKS_CREDENTIAL_CONNECTION_STATE`
-// const (mirror of `Grappa.Networks.Credential.connection_state/0`), so a
-// fourth server state regenerates the const and flows here with no hand
-// edit; any string outside the set drops the payload (drop + log via
-// narrowUserEvent's downstream dispatch).
-function isConnectionState(value: unknown): value is ConnectionState {
-  return (
-    typeof value === "string" &&
-    (NETWORKS_CREDENTIAL_CONNECTION_STATE as readonly string[]).includes(value)
-  );
-}
+// #1393d — `isConnectionState` lived here. REV-H H2 wrote it as the runtime
+// narrower for `ConnectionState`, and #410 re-sourced its value set from the
+// codegen-emitted `NETWORKS_CREDENTIAL_CONNECTION_STATE` so a fourth server
+// state would flow through with no hand edit. Its last two readers were the
+// `from`/`to`/`connection_state` checks in `connection_state_changed`, and
+// that arm now validates against `S_NetworksWireConnectionStateEvent`, whose
+// `S_NetworksCredentialConnectionState` node is the same closed set reached
+// from the same codegen run. Deleted rather than left in place: an unused
+// guard reads as a contract somebody still keeps.
 
 // S15 — exhaustive `Record<Host, true>` over the generated
 // `ServerSettingsWireUploadView["active_host"]` closed set so a new
@@ -360,84 +352,50 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
       return narrowIsupportChanged(r);
     case "window_pending":
       return validate(S_SessionWireWindowPendingPayload, r);
-    case "window_invited":
-      if (typeof r.network !== "string" || typeof r.channel !== "string" || r.state !== "invited")
-        return null;
-      return {
-        kind: "window_invited",
-        network: r.network,
-        channel: r.channel,
-        state: "invited",
-        // #902 — TOLERATE an absent `inviter`. cic deploys independently of
-        // the server, so a newer bundle can meet an older BEAM that has no
-        // such field; rejecting the payload here would silently drop the
-        // whole invite rather than the nick. Degrade to the SAME "*"
-        // anonymous-sender sentinel the server uses for a prefix-less
-        // INVITE, so the banner has one nameless shape, not two.
-        inviter: typeof r.inviter === "string" && r.inviter !== "" ? r.inviter : "*",
-      };
+    case "window_invited": {
+      // #1393d — was hand-narrowed for ONE reason: a `?? "*"` on `inviter`,
+      // written for an absent key (#902, older BEAM) and applied to a
+      // present null or number as well. `inviter` is a plain `String.t()`
+      // that the emitter always fills, and `"*"` is not a neutral filler —
+      // it is the server's own statement that the INVITE carried no prefix.
+      // Minting it locally puts a fact in the server's mouth. With the
+      // tolerance gone the arm IS its schema, so it validates against it.
+      const invited = validate(S_SessionWireWindowInvitedPayload, r);
+      // The one thing the schema cannot say. It types `inviter` as a free
+      // `"s"`, so `""` would pass — and the guard this replaces rejected it.
+      // Dropping that check would be a silent strictness LOSS the census
+      // cannot see, its mutation matrix never producing an empty string. No
+      // IRC nick is empty: `""` is present-and-unusable, the exact class the
+      // ruling rejects.
+      return invited === null || invited.inviter === "" ? null : invited;
+    }
     case "window_invite_declined":
       // #976 — no `state` in the schema either: a declined invite lands in no
       // window state, so the payload carries none (see the server's
       // `window_invite_declined_payload`). Network + channel are the whole
       // contract; a payload missing either names no window and is dropped.
       return validate(S_SessionWireWindowInviteDeclinedPayload, r);
-    case "connection_state_changed": {
+    case "connection_state_changed":
       // REV-J M15: pre-fix this arm carried only the wider transition
       // fields and HomePane patched its row from a separate
       // `home_network_state_changed` event. Folded — the `network`
       // field carries the same `HomeNetworkRow` HomePane consumed
       // before. One logical event, one wire payload, one broadcast.
-      const net = r.network;
-      if (
-        // #211 phase 6 — user_id is nullable now (a VISITOR credential
-        // has visitor_id set, user_id null — the XOR FK). cic acts on
-        // `payload.network` only (patchHomeNetwork + refetchNetworks), so
-        // user_id is diagnostic; accept string OR null.
-        !(typeof r.user_id === "string" || r.user_id === null) ||
-        typeof r.network_id !== "number" ||
-        typeof r.network_slug !== "string" ||
-        !isConnectionState(r.from) ||
-        !isConnectionState(r.to) ||
-        (r.reason !== null && typeof r.reason !== "string") ||
-        (r.at !== null && typeof r.at !== "string") ||
-        typeof net !== "object" ||
-        net === null
-      )
-        return null;
-      const n = net as Record<string, unknown>;
-      if (
-        typeof n.slug !== "string" ||
-        typeof n.nick !== "string" ||
-        !isConnectionState(n.connection_state) ||
-        (n.connection_state_reason !== null && typeof n.connection_state_reason !== "string") ||
-        (n.connection_state_changed_at !== null &&
-          typeof n.connection_state_changed_at !== "string")
-      )
-        return null;
-      return {
-        kind: "connection_state_changed",
-        user_id: r.user_id,
-        network_id: r.network_id,
-        network_slug: r.network_slug,
-        from: r.from,
-        to: r.to,
-        reason: r.reason as string | null,
-        at: r.at as string | null,
-        network: {
-          slug: n.slug,
-          nick: n.nick,
-          connection_state: n.connection_state,
-          connection_state_reason: n.connection_state_reason as string | null,
-          connection_state_changed_at: n.connection_state_changed_at as string | null,
-          // #581 (D2) — additive field. NOT in the reject-guard above: a
-          // missing additive field must never be fatal (client-protocol
-          // invariant), so tolerate absence with a `false` default rather
-          // than dropping the whole connection_state_changed update.
-          recoverable: typeof n.recoverable === "boolean" ? n.recoverable : false,
-        },
-      };
-    }
+      //
+      // #1393d — forty lines of hand transcription survived only because of
+      // ONE nested default: `network.recoverable ?? false` (#581 D2). The
+      // census could not even see it until the matrix learned to mutate
+      // below the top level, and what it found is that `false` is not a
+      // neutral fallback — it is the value that HIDES the /recover button.
+      // Withdrawing an affordance is worse than dropping the update: the
+      // update recurs on the next transition, the missing button never
+      // announces itself. `home_network_row/0` declares `recoverable` a
+      // plain `boolean()`, so absence is not a shape any grappa emits.
+      //
+      // With that gone the arm was measured at full parity with its schema
+      // — verdict AND returned value, both censuses — so the transcription
+      // goes and the generated schema stands in its place.
+      return validate(S_NetworksWireConnectionStateEvent, r);
     case "whois_bundle": {
       // C2 — every numeric-derived field is nullable; only network +
       // target are required. is_operator + channels also tolerate
@@ -491,10 +449,21 @@ export function narrowUserEvent(raw: unknown): WireUserEvent | null {
         channels = narrowArray(r.channels, narrowWhoisChannel);
         if (channels === null) return null;
       }
-      // #221 — extra_lines: optional list of {numeric, text}; a malformed
+      // #221 — extra_lines: a list of {numeric, text}, or null; a malformed
       // element drops the whole bundle (strict, matching channels above).
+      //
+      // #1393d — the `!== undefined` half of that guard is gone. It was the
+      // ONE tolerance in the whole census with no written reason anywhere:
+      // it shipped in the same commit as the field (05551231) and nothing
+      // in tree ever said why an absent key should be read as an empty
+      // bundle. The typespec says `[whois_extra_line()] | nil` — required
+      // and nullable — and `reverse_extra_lines(nil)` really does emit
+      // `nil`, so the KEY is always on the wire. `null` therefore stays a
+      // legitimate value and is carried as one; a missing key is a shape no
+      // grappa produces, and is now treated as such.
+      if (!("extra_lines" in r)) return null;
       let extraLines: WhoisExtraLine[] | null = null;
-      if (r.extra_lines !== null && r.extra_lines !== undefined) {
+      if (r.extra_lines !== null) {
         extraLines = narrowArray(r.extra_lines, narrowWhoisExtraLine);
         if (extraLines === null) return null;
       }
