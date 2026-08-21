@@ -53,6 +53,15 @@ test.describe("#447 protocol handshake + /api/config discovery", () => {
   // bump `protocol_version`, and gating on the release string is
   // forbidden: a third-party client holding an undecryptable payload
   // otherwise cannot tell an old server from its own broken decryptor.
+  //
+  // #1393d — that still holds, and the boundary is now worth stating,
+  // because `protocol_version` bumps on EVERY wire-shape change since
+  // 2026-08-21, additive included (docs/CLIENT_PROTOCOL.md §2a). "Wire
+  // shape" means the generated schema — what `mix grappa.wire_pin` takes
+  // its digest over. A content coding for push payloads is not in it, so
+  // this capability is still a capability and not a version, and the
+  // reason above is the reason, not an inference from the old
+  // additive-means-no-bump rule that #1393d withdrew.
   test("GET /api/config — publishes the push content coding capability", async ({ request }) => {
     const res = await request.get("/api/config");
     expect(res.status()).toBe(200);

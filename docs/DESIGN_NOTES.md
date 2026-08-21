@@ -56751,3 +56751,174 @@ client's unexported `PAGE_LIMIT` too; the two agree at 200 today and could
 diverge. No already-drifted copy was found — but the census that would find one
 compares literals that already match, so that is a statement about names, not
 about values._
+<!-- entry #1393d -->
+
+---
+
+## 2026-08-21 — #1393d: the wire narrowers go strict, and `protocol_version` starts moving every time
+
+Two rulings landed on this slice, and the second one reversed a rule this
+repo had carried since #447. The narrowing work is the smaller half; the
+versioning policy is the part someone will want the reasoning for in six
+months.
+
+### The strict ruling, and what "all the fallbacks" could not mean
+
+vjt's ruling was to remove the tolerances in cic's user-topic narrowers —
+strict, absent included. Taken literally that reaches all 83 tolerances the
+#1393 census had measured, and it cannot be meant literally: among the 27
+the census classes `deliberate` are `recover_result.reason/swap` and
+`web_session_severed.code/swap`, which ARE the #447 additive invariant. A
+client that rejects an unrecognised token there stops tolerating exactly
+what the wire contract promises will appear. The 27 stay.
+
+What the ruling does reach is the class the census called
+`widerThanItsWrittenReason` (8) plus `noWrittenReason` (1): guards whose
+in-tree comment justifies an ABSENT key while the code also swallows a
+PRESENT malformed one, and one guard with no stated reason at all. Nine
+arms, 22 tolerance-operations, all closed. `deliberate` stayed at 27
+throughout — that number not moving is the evidence that only the open
+class was touched.
+
+The discriminator that decides whether a tolerance is reachable at all is
+**not** "is there a fallback", it is **whether the typespec admits `nil`**.
+A field typed `String.t() | nil` emits `nil` for real, so accepting it is
+reading a value, not tolerating a defect. A field typed `String.t()` cannot
+be absent from any server running the current code, so its absence
+tolerance only ever covered the cross-version window — which is now the
+protocol floor's job, and the floor SAYS SO instead of guessing.
+
+That discriminator closed `banlist_bundle.mode`: required, non-nullable,
+and its PRESENT-and-mangled half had already been closed earlier in this
+same issue (`5703d301`). Coercing a missing key to `b` rendered whatever
+list arrived under the "Bans" heading, which is the mis-attribution #1251
+was filed to end.
+
+**`links_bundle.mask` is measured and deliberately left OPEN**, and the
+honest reason is narrower than the one first offered. Its `nil` carries
+meaning (`nil` ⇒ full-mesh request, non-`nil` ⇒ "no server matches
+`<mask>`"), so an accepted null is a datum — but that was never the
+tolerance in the tree. What the census actually records on that field is
+`ops: ["drop"]`, `covers: "absent"`: the ABSENT KEY, byte-identical in
+shape to what `banlist_bundle.mode` carried, and the generated schema makes
+that key required too. The same argument therefore reaches it. It stands on
+an explicit ruling, not on a distinction that survives measurement, and the
+census `why` now says which of the two questions is which.
+
+### The inverse register: a policy STRICTER than the schema
+
+`window_invited` rejects `inviter: ""`. `""` is a valid `String.t()`, so
+this is a policy the generated schema does not express, and the census
+cannot see it — its mutation matrix produces absent / null / wrong-type /
+swap, never an empty string, so the divergence measures as PARITY. Left
+undeclared, a reader diffing guard against schema finds an unexplained
+extra check and reads it as drift to tidy away.
+
+It gets `DECLARED_STRICTNESSES`, a table of its own. Not a
+`DECLARED_TOLERANCES` row: that table's contract is
+`measured === declared` against the observed mutation set, and an entry the
+matrix can never observe would sit in `stale` forever. The register
+MEASURES rather than asserts — it feeds the arm a schema-valid payload
+carrying the empty inviter and pins both halves (schema accepts, hand
+rejects) plus the citation, which quotes the CHECK and not the comment
+above it, because deleting the check is the failure it exists to catch.
+
+### The proposal that fell, and the measurement that felled it
+
+The plan for the client half was to have cic tolerate an older server by
+reading `protocol_version` and degrading. Measuring what that number
+actually was killed it: **`@protocol_version` had sat at `1` from #447
+(2026-07-27) through five additive field additions** — `recoverable`,
+`inviter`, `list_modes_queryable`, `chantypes`, `prefix_order` — every one
+of which cic later came to require. Under the rule of the day that was all
+correct, and it meant the number could not distinguish a server that had
+those fields from one that did not. There was nothing to degrade against.
+
+### vjt's ruling: bump it every time
+
+So the rule changed. `protocol_version` now moves on EVERY wire-shape
+change, additive included. Two reasons, and the second is load-bearing:
+
+1. **Additivity describes what the server EMITS, not what a client
+   REQUIRES.** The moment a client stops tolerating a missing field and
+   starts requiring it, it can no longer talk to a server predating that
+   field — and nothing was added or removed server-side to express it. The
+   break runs new-client → old-server, which is the direction the number
+   exists for.
+2. **The number is only worth comparing against if it is TOTAL.** A client
+   reading `server >= N` as "has everything N had" is entitled to. One
+   un-bumped addition makes that reading false, permanently. A floor that
+   lies is worse than no floor, because the client believed it checked.
+
+`min_protocol_version` is a DIFFERENT axis and does not follow: it rises
+only when old clients can no longer be SERVED. Every v1 client is still
+served, so it stays at 1 while `version/0` goes to 2. The recurring cost is
+real and was accepted knowingly: a shape change in an admin-only payload no
+client reads still demands a bump.
+
+Withdrawn by this entry, in CLAUDE.md, `docs/CLIENT_PROTOCOL.md`,
+`Grappa.Protocol`'s moduledoc and `socket.ts`: the sentence *"may appear at
+ANY time WITHOUT a version bump"*, and its corollary in the client doc that
+*"a newer client tolerates an older server"* — an inference from wire
+additivity that holds for the server's emissions and not for the client's
+requirements.
+
+### Why the gate is a new task and not a flag on the old one
+
+The obvious home was `mix grappa.gen_wire_types --check`. It provably
+cannot host the rule, and this was measured rather than argued:
+
+* `--check` compares the REGENERATED artefact against the committed one,
+  byte for byte. Grepping the task for `System.cmd|git|:httpc|HTTPoison|Req\.|:inets`
+  returns nothing, so the question "against `origin/main` or against the
+  tag?" does not arise: it has no BEFORE at all.
+* Experiment A — reformat a typespec (blank line, comment inside the map
+  literal): both artefacts byte-identical. No false positive.
+* Experiment B — add `invited_at: String.t()` to `window_invited_payload/0`
+  WITHOUT bumping, then regenerate: `gen_wire_types --check` answers
+  `in sync.` on both artefacts and exits **0**. Green in exactly the case
+  the rule exists to catch.
+
+It is not missing a condition, it is missing a BEFORE — the same shape as
+the reason `scripts/union-rebase.sh` is a VERB and not a check inside
+`design-notes-gate.sh`.
+
+`mix grappa.wire_pin` supplies the BEFORE as `priv/wire/shape.pin`: the
+digest of everything the wire codegen emits, stored TOGETHER with the
+`Grappa.Protocol.version/0` it was taken at. Pairing them is the mechanism
+— `--update` REFUSES to rewrite the digest while the version stands still,
+so the only way to green a shape change is to bump the number. On the same
+Experiment B state it exits **1**, before and after regeneration alike.
+
+Local by construction: no git, no network, no subprocess, so a CI runner
+with no remote gates identically. `wire_pin_test.exs` asserts that property
+against the task's own source rather than trusting this paragraph.
+
+The digest covers BOTH generated artefacts. Covering only `wireSchema.ts`
+was the first design and it rested on an unmeasured claim about typedoc
+prose; measured, neither artefact carries any, so there was no
+false-positive argument for excluding either and no evidence the two cannot
+move independently. Widening it also produced the first real encounter with
+the refusal: changing what the digest COVERS is not a wire-shape change,
+the gate cannot tell, and `--update` refused. The route is to delete the
+pin and re-create it — a deleted tracked file is visible in review, while a
+`--force` flag would be the hole the refusal exists to close.
+
+### `priv/` is a shared mount, and a pin cannot live in it
+
+Building this turned up a trap worth recording on its own. The pin first
+went to `priv/wire_shape.pin`, `--update` reported creating it, and the
+test suite went GREEN. The file was in the MAIN checkout: `scripts/_lib.sh`
+bind-mounts `priv/repo` from a worktree but not `priv/`, because `priv/`
+carries the shared `priv/plts` cache. Every worktree was measuring against
+a pin belonging to no branch — the same class as the `_build`/`deps`
+contamination CLAUDE.md already warns about, in a directory it did not name.
+`priv/wire/` now has its own override, as a DIRECTORY: `priv/` cannot be
+mounted wholesale, and a file-bind of a path absent on the host makes
+docker create a directory there instead.
+
+Sibling trap, same session: `WRITABLE_CIC=1` is required for the codegen to
+write from a worktree, and redirecting the task's output makes a read-only
+failure indistinguishable from success. Two whole measurement runs were
+conducted against a generator that had never written anything. The control
+that unmasks it is counting `^Wrote ` lines — there must be exactly 2.

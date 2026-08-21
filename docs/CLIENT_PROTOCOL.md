@@ -27,11 +27,16 @@ GET /api/config
 {
   "server": "grappa",
   "version": "1.4.2-abc1234",
-  "protocol_version": 1,
+  "protocol_version": 2,
   "min_protocol_version": 1,
   "push_content_encoding": "aes128gcm"
 }
 ```
+
+> The numbers above are an ILLUSTRATION, not a specification. Since
+> 2026-08-21 `protocol_version` moves on every wire-shape change (§2a), so
+> any figure written into a document is stale by design. Read them from
+> this endpoint; the server's own source of truth is `Grappa.Protocol`.
 
 | field | meaning |
 |-------|---------|
@@ -85,10 +90,10 @@ There are **two** numbers, and they mean different things:
 - **`protocol_version`** — what the server speaks *now*.
 - **`min_protocol_version`** — the floor. A client below it is refused.
 
-**The contract is additive-only.** Both sides MUST follow it:
+**The WIRE is additive-only.** Both sides MUST follow it:
 
 - New **frame kinds**, new **event types**, and new **fields** may appear
-  at ANY time, WITHOUT a `protocol_version` bump.
+  at ANY time.
 - An **unknown verb or field is never fatal, in BOTH directions.** A
   client MUST ignore fields and events it does not recognise. The server,
   symmetrically, replies to an unknown client verb with a non-fatal error
@@ -96,13 +101,61 @@ There are **two** numbers, and they mean different things:
 - **Existing fields are never repurposed or removed.** A field means the
   same thing forever.
 
-Because of this, `protocol_version` bumps **only** for a change the
-additive rule cannot express (a field's meaning changes, or a frame is
-withdrawn). Such a change also raises `min_protocol_version` when clients
-below it can no longer be served. **Practical consequence for you:** pin
-the LOWEST `protocol_version` whose features you use, ignore everything
-you don't recognise, and you will keep working across additive upgrades
-without a code change.
+That half is unchanged, and it is what keeps an OLD client working
+against a NEW server.
+
+### 2a. `protocol_version` moves on EVERY wire-shape change (2026-08-21)
+
+⚠️ **This reverses what this section said until 2026-08-21.** It used to
+say an additive change lands *"WITHOUT a `protocol_version` bump"*, and
+that `protocol_version` moves only for a change the additive rule cannot
+express. **Both sentences are withdrawn.** The number now moves for every
+change to the wire shape, additive included.
+
+**Why, because the reason is the part you need:** additivity describes
+what the SERVER emits, and it says nothing about what a CLIENT requires.
+The moment a client stops tolerating a missing field and starts requiring
+it, that client can no longer talk to a server predating the field — and
+no additive statement can express that, because nothing was added or
+removed *on the server*. The direction of the break is new-client →
+old-server, which is precisely the direction `protocol_version` exists to
+describe.
+
+The second reason is that the number is only worth comparing against if
+it is **total**. A client testing `server_protocol >= N` is entitled to
+read that as *"the server has everything N had"*. One un-bumped field
+addition makes that reading false, and it stays false forever after. A
+floor that lies is worse than no floor, because the client believed it
+checked.
+
+Measured, and it is why the rule changed: `protocol_version` sat at `1`
+from its introduction (2026-07-27) through **five** additive field
+additions — `recoverable`, `inviter`, `list_modes_queryable`,
+`chantypes`, `prefix_order` — every one of which the reference client
+later came to require. Under the old rule that was all correct, and the
+number told nobody anything.
+
+**`min_protocol_version` is a different axis and does NOT follow.** It
+rises only when old clients can no longer be *served*. An additive field
+strands nobody, so the ordinary bump leaves the floor exactly where it
+is: at the time of writing `protocol_version` is `2` and
+`min_protocol_version` is still `1`.
+
+### 2b. What this means for you, as a client author
+
+- **A bump is not a breakage notice.** Under this rule most bumps carry
+  nothing you must react to. Read `min_protocol_version` for that — it is
+  the only number that can refuse you.
+- **Compare, don't equal.** Test `protocol_version >= N` for the newest
+  feature you require; never `== N`, and never gate on the `version`
+  release string.
+- **Keep ignoring what you don't recognise.** The wire is still
+  additive-only, so a server ahead of you sends you fields you can drop.
+- **If you make a server field mandatory, you have raised your own
+  floor.** Record the `protocol_version` that introduced it and refuse —
+  or degrade, loudly — below it. A client that silently invents a value
+  for a field an old server never sent is putting a fact in that server's
+  mouth; that is the failure this rule was written after.
 
 ---
 
@@ -159,8 +212,16 @@ wss://host/socket/websocket?client_proto=1&vsn=2.0.0
   baked into the endpoint URL becomes part of a parameter VALUE — put the
   version in the Socket's `params`, not in the endpoint.
 - There is **no upper bound**: declaring a version higher than the server
-  speaks is fine (additive-only — a newer client tolerates an older
-  server).
+  speaks is accepted, and the socket opens.
+  ⚠️ **Accepted is not the same as safe, and this bullet used to conflate
+  the two.** It read *"a newer client tolerates an older server"* — an
+  inference from wire additivity that holds for the server's emissions and
+  not for your requirements. The server cannot know which of its fields
+  you made mandatory, so it cannot refuse you on that basis; there is no
+  `max_protocol_version` and there will not be one. Comparing
+  `protocol_version` from `/api/config` against the version that
+  introduced the fields you require is **your** side of the handshake
+  (§2b), and the socket opening tells you nothing about it.
 
 Source: `lib/grappa_web/channels/user_socket.ex`
 (`check_protocol_version/1`) → returns `{:error, :upgrade_required}`,
@@ -177,7 +238,7 @@ reply is your **initial payload** and carries `protocol_version`, so a
 client that skipped `/api/config` still learns it on connect:
 
 ```
-join "grappa:user:vjt" → {:ok, {"protocol_version": 1}}
+join "grappa:user:vjt" → {:ok, {"protocol_version": 2}}   ← illustrative, see §2a
 ```
 
 Source: `lib/grappa_web/channels/grappa_channel.ex:332`

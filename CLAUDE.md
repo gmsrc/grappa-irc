@@ -214,14 +214,37 @@ Key invariants — break only with deliberate cause + DESIGN_NOTES entry:
   #447).** `Grappa.Protocol` is the SSOT for the wire `protocol_version`
   + `min_protocol_version` (DISTINCT from `Grappa.Version`, the software
   release string — a client keys compatibility off `protocol_version`,
-  never the release string). **Additive-only:** new frame kinds, event
-  types, and fields may appear at ANY time WITHOUT a version bump; a
+  never the release string). **The WIRE is additive-only:** new frame
+  kinds, event types, and fields may appear at ANY time; a
   client MUST ignore verbs/fields it does not recognise
   (unknown-is-never-fatal, BOTH directions — an unknown client verb
   earns a non-fatal error frame and the socket stays open); existing
-  fields are NEVER repurposed or removed. Bump `protocol_version` ONLY
-  for a change the additive rule cannot express, and raise
-  `min_protocol_version` too when old clients can no longer be served —
+  fields are NEVER repurposed or removed. **🔴 But `protocol_version`
+  BUMPS ON EVERY WIRE-SHAPE CHANGE, ADDITIVE INCLUDED (vjt's ruling,
+  2026-08-21, #1393d — reversing this file's own former "may appear at
+  ANY time WITHOUT a version bump").** Two reasons, and the second is
+  the load-bearing one. (1) Additivity describes what the SERVER emits
+  and says nothing about what a CLIENT requires: the moment a client
+  stops tolerating a missing field and starts REQUIRING it, it can no
+  longer talk to a server predating that field, and nothing was added
+  or removed server-side to express that. The break runs new-client →
+  old-server, which is the direction the number exists for. (2) The
+  number is only worth comparing against if it is TOTAL — a client
+  reading `server >= N` as "has everything N had" is entitled to, and
+  ONE un-bumped addition makes that reading false forever after. A
+  floor that lies is worse than no floor, because the client believed
+  it checked. **Measured, and it is why the rule fell:**
+  `@protocol_version` sat at `1` from #447 (2026-07-27) through FIVE
+  additive fields (`recoverable`, `inviter`, `list_modes_queryable`,
+  `chantypes`, `prefix_order`), every one of which cic later came to
+  require. Enforced, not merely written: `mix grappa.wire_pin --check`
+  (in `scripts/check.sh` + CI) holds a digest of the generated wire
+  shape NEXT TO the version it was taken at, so a shape change with a
+  still number is RED — `mix grappa.gen_wire_types --check` cannot host
+  this, measured, because it compares the artefact with its own SOURCE
+  and answers `in sync.` in exactly the case to catch (DESIGN_NOTES
+  2026-08-21). `min_protocol_version` is a DIFFERENT axis and does NOT
+  follow the bump: raise it only when old clients can no longer be served —
   the WS handshake then 426s a `?client_proto=` below the floor via the
   endpoint `error_handler` (`UserSocket.handle_ws_error/2`); a below-min
   return is `{:error, :upgrade_required}` (426), an auth failure is bare
