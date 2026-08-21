@@ -296,6 +296,11 @@ defmodule Mix.Tasks.Grappa.WirePin do
     Mix.shell().info("#{verb} #{@pin_path} — protocol #{version}, #{digest}")
   end
 
+  # Declared `no_return()` because it is one: Dialyzer flags the missing
+  # local return, and the constraint is right — every caller is a tail
+  # position that must not continue. Silencing it by giving `abort/1` a
+  # returning path would make a failed gate fall through into success.
+  @spec abort(String.t()) :: no_return()
   defp abort(message) do
     Mix.shell().error(message)
     exit({:shutdown, 1})
