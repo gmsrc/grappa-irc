@@ -4307,6 +4307,71 @@ then creates the release cleanly, which the old order could not do at
 all. An incomplete set against `present` proceeds and marks the release
 partial, unchanged.
 
+### `prerelease_flag.sh` — the release marker, derived from the tag (#1636)
+
+**Every release the pipeline ever cut was published as a full release.**
+`gh release create` carried no pre-release flag at all, so the marker
+depended on a human remembering to flip it afterwards. Measured on the
+repository's own release list (2026-08-21): `v1.3.0-rc1` reads
+`isPrerelease: true` only because it was set BY HAND after the run, and
+`v1.3.0-rc2` was published `false` and flipped by hand as well. GitHub
+picks "Latest" among the releases that are neither draft nor pre-release,
+so a green candidate run is the only thing between a release candidate and
+the repository's landing page. `GET /releases/latest` still answered
+`v1.2.0` when this was written — exposure, not damage.
+
+**That slot has a machine consumer.** `infra/cloud/first-boot.sh` defaults
+`GITHUB_API` to `.../releases/latest` and installs the
+`grappa_*_amd64.deb` it finds there, so a candidate in the "Latest" slot is
+what every cloud first boot would install. The marker is what keeps a
+release candidate out of a fresh production install.
+
+`infra/packaging/prerelease_flag.sh` derives the flag from the TAG:
+
+    prerelease_flag.sh v1.3.0      -> --prerelease=false
+    prerelease_flag.sh v1.3.0-rc2  -> --prerelease=true
+    prerelease_flag.sh v1.3        -> refused, exit 2
+
+**The tag, not `version.sh`.** On the `#573 (b)` repair dispatch the
+checked-out tree is the DISPATCHED ref while the release object is keyed by
+the dispatched `tag` input, and the two need not agree — the tag is what
+names the release being marked.
+
+**The rule is semver's, measured against `Version.parse/1`.** A non-empty
+`pre` is exactly the condition for the flag: `1.3.0-rc1` → `pre: ["rc1"]`,
+`1.3.0-1` → `pre: [1]`, `1.3.0+foo-bar` → `pre: []` with build metadata
+`"foo-bar"`. That last row fixes the implementation order — build metadata
+comes AFTER the pre-release in semver, so a `+` reached before any `-`
+means the hyphen belongs to the build and there is no pre-release.
+
+**Neither mapper next door could serve as the oracle**, and that was
+falsified by measurement rather than by taste. `aur/pkgver.sh 1.3.0-1`
+exits 2 — it refuses a legal semver pre-release, correctly for pacman
+ordering (#1591) — so as an oracle it would kill the publish step instead
+of marking the release; and both `aur/pkgver.sh` and the `pkgversion.sh`
+deb map CHANGE `1.3.0+foo-bar` (to `1.3.0+foobar` and `1.3.0+foo~bar`),
+which would publish a stable release as a candidate. They answer "what does
+this packager stamp", a different question.
+
+**It refuses rather than answering "release".** The permissive answer is
+the one that publishes, so a tag the script cannot classify stops the
+publish step (`::error::`, exit 1) instead of taking the "Latest" slot. The
+core check is a shape floor (`N.N.N`), NOT a second semver parser:
+reproducing the grammar here would be the drift the script exists to
+prevent, and a number that shape-passes but fails semver cannot reach a tag
+anyway (`VERSION` feeds `mix.exs` and the OTP application vsn).
+
+**It always prints a token.** `--prerelease=false` is spelled out rather
+than omitted, so "this is a release" and "the derivation produced nothing"
+are not the same byte string. Gate:
+`test/infra/packaging_prerelease_marker_test.bats`.
+
+**Not reconciled: releases created before this landed, or by hand.** The
+flag rides on `gh release create`. The `--clobber` upload fallback (a re-run
+or a repair dispatch against an existing release) does not touch the
+marker, and neither does the body-reconciliation `gh release edit` below
+it. rc1 and rc2 are already correct because they were fixed by hand.
+
 ### The packaged operator CLI and the migrate path (#419)
 
 **`/usr/bin/grappa` is the only door to the release on a packaged host.**

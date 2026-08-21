@@ -55860,3 +55860,137 @@ recorder ever HAS gone blind in CI, only that nothing would have said so. The
 M1 half of slice (1) is untouched — its briefed site is cured, and the live
 residue (`enablePushFromSettings` plus a heuristic ≤7 spec-level barriers)
 needs per-site geometry this pass did not do.
+<!-- entry #1636 -->
+
+---
+
+## 2026-08-21 — #1636: the release marker was a human's memory, so derive it from the tag
+
+`gh release create` in `release.yml`'s `publish` job carried no pre-release
+flag. Not the wrong one — none. So the pipeline's answer for every tag it has
+ever cut was "full release", and the marker on a release candidate existed only
+where somebody remembered to set it afterwards.
+
+Measured on the repository's own release list (GitHub API, 2026-08-21, all 23
+releases): `v1.3.0-rc1` reads `isPrerelease: true` because vjt set it by hand
+after the run; `v1.3.0-rc2` was published `false` and was flipped by hand as
+well. Twenty-one bare `X.Y.Z` releases, two candidates, and the two candidates
+are precisely the two whose marker no machine produced.
+
+The blast radius is worth stating exactly, because it is exposure and not
+damage: GitHub picks *Latest* among the releases that are neither draft nor
+pre-release. `GET /repos/vjt/grappa-irc/releases/latest` still answered
+`v1.2.0`, so no candidate has ever displaced the stable release — but nothing
+in the pipeline was stopping the next green candidate run from doing it.
+
+And that slot has a MACHINE consumer, not only a landing page.
+`infra/cloud/first-boot.sh:54` defaults `GITHUB_API` to
+`.../releases/latest` and installs the `grappa_*_amd64.deb` it finds there
+(`latest_deb_url`, `:110-114`, then `apt-get install`), so every cloud first
+boot would have taken the candidate. That is what makes this a defect and not
+a label: the marker is what keeps a release candidate out of a fresh
+production install.
+
+### The tag is the oracle, not the carrier
+
+`infra/packaging/version.sh` reads the repo-root `VERSION` of the CHECKED-OUT
+tree. That is the wrong source here, and the workflow already says why one step
+above: on the `#573 (b)` repair dispatch the checkout takes the DISPATCHED ref
+while the release object is keyed by the dispatched `tag` input, and an old tag
+"predates this work entirely". The tag is what names the release being marked.
+
+### The rule is semver's, and it was measured
+
+`elixir -e` on the pinned toolchain, `Version.parse/1` — the same parser
+`mix.exs` hands the OTP application vsn to:
+
+    1.3.0          pre: []                        release
+    1.3.0-rc1      pre: ["rc1"]                   pre-release
+    1.3.0-rc.1     pre: ["rc", 1]                 pre-release
+    1.3.0-rc-1     pre: ["rc-1"]                  pre-release
+    1.3.0-1        pre: [1]                       pre-release
+    1.3.0+foo      pre: [],  build: "foo"         release
+    1.3.0+foo-bar  pre: [],  build: "foo-bar"     release
+    1.3.0-rc1+foo  pre: ["rc1"], build: "foo"     pre-release
+    1.3, v1.3.0    :error
+
+A non-empty `pre` is exactly the condition for `--prerelease`. The `+foo-bar`
+row is the one that decides the implementation: semver puts build metadata
+AFTER the pre-release, so a `+` reached before any `-` means the hyphen belongs
+to the build and there is no pre-release at all. Strip the build first, then
+split on the first hyphen.
+
+### Why not reuse either mapper already in that directory — falsified, not judged
+
+`aur/pkgver.sh` (#1591) and the `pkgversion.sh` deb map (#1594) are both
+pre-release-aware, so "did the mapping change the string" looks like a free
+oracle that spells the rule zero extra times. Measured, it is wrong in both
+directions:
+
+    aur/pkgver.sh 1.3.0-1        rc=2, refuses
+    aur/pkgver.sh 1.3.0+foo-bar  -> 1.3.0+foobar    changed, yet pre: []
+    sed 's/-/~/'  1.3.0+foo-bar  -> 1.3.0+foo~bar   changed, yet pre: []
+
+`1.3.0-1` is a legal semver pre-release that `aur/pkgver.sh` refuses on
+purpose, because `1.3.01` would outrank `1.3.0` for pacman — correct there, and
+as an oracle here it would kill the publish step instead of marking the
+release. And both mappers change a string whose `pre` is empty, which would
+publish a stable release as a candidate. They answer "what does this packager
+stamp"; the question here is "does semver call this a pre-release", and the two
+coincide only by accident. Hence a third script rather than a clever reuse —
+but the rule itself is still written exactly once.
+
+### The shape the derivation takes
+
+`infra/packaging/prerelease_flag.sh <tag>` prints `--prerelease=true` or
+`--prerelease=false`, and refuses (exit 2) a tag it cannot classify.
+
+**It always prints a token.** `gh release create` defaults a missing
+`--prerelease` to false, so "no output" and "this is a release" would be the
+same byte string — and a derivation that silently produced nothing would look
+exactly like the bug being closed. `--prerelease=false` was measured as
+accepted by gh 2.93.0: `gh release create --prerelease=false` errors with "tag
+required", not "unknown flag" (an unknown flag was run as the control).
+
+**It refuses rather than answering "release."** The permissive answer is the
+one that publishes — the same posture `release_assets.sh publishable` takes on
+an unknown release state. The workflow reads the refusal explicitly (`if !
+prerelease_flag=…`, `::error::`, `exit 1`) instead of leaning on the runner's
+`-e`.
+
+**The core check is a shape floor, not a second semver parser**, deliberately.
+It rejects a tag that is not `vN.N.N…`; it does not reproduce semver's finer
+refusals (`1.03.0` has a leading zero, `Version.parse/1` says `:error`, this
+answers `--prerelease=false`). Transcribing the grammar here would be a second
+writing of a rule the repo already has one of, which is what #1591, #1594 and
+this issue all are. A number that shape-passes but fails semver cannot reach a
+tag anyway: `VERSION` feeds `mix.exs` and the OTP application vsn.
+
+### What is NOT covered
+
+The flag rides on `gh release create` only. The `--clobber` upload fallback (a
+re-run, or a repair dispatch against an existing release) does not touch the
+marker, and neither does the body-reconciliation `gh release edit` below it. A
+release created before this landed keeps whatever marker it has; rc1 and rc2
+are correct only because they were fixed by hand. Reconciling an existing
+release's marker would mean overwriting a human's deliberate edit, which is a
+different decision from "publish it right in the first place".
+
+`--latest` is untouched. gh documents its default as "automatic based on date
+and version", and a pre-release is excluded from *Latest* by GitHub regardless,
+so the marker alone closes the exposure this entry names.
+
+### The gate, and what it does not exercise
+
+`test/infra/packaging_prerelease_marker_test.bats`, beside the #1591 and #1594
+packaging gates. It pins the derivation row by row against the measured
+`Version.parse/1` table, counts the 23-release corpus (21 bare, 2 candidates)
+so the positive control cannot go vacuous, pins the refusals to exit code 2
+specifically, and asserts that the workflow spells the flag NOWHERE in code —
+a literal in the YAML would be a second writing by definition.
+
+It is a bats proxy, exactly as #1594's is: no real `gh`, no GitHub API, no
+runner. What is proven is that the derivation answers correctly and that the
+publish job splices it into the create call; what is NOT proven is that the
+published release object comes back `isPrerelease: true`. The next candidate
+tag is the only thing that measures that.
