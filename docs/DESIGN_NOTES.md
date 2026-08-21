@@ -56636,3 +56636,118 @@ case — both producers inject it, but the one test site that omits it does so
 deliberately, which is why it is excluded by scope rather than declared safe. No
 boundary was added, removed or re-declared; the graph is byte-for-byte the one
 `2ed5fb51` carried._
+<!-- entry #1646b -->
+
+---
+
+## 2026-08-21 — #1646b: the seven mirrors slice 1 could not take on its own
+
+Slice 1 pinned the 6 e2e-mirrored constants whose production side was already
+exported and left 7 open, each needing a call it was not entitled to make: 5
+were module-private in TypeScript, 2 are Elixir module attributes on
+`GrappaWeb.MessagesController`. vjt ruled both forks on 2026-08-21 — move the
+private ones into `lib/`, pin the Elixir pair by reading the `.ex` as text —
+and this entry records the reasoning, since the pins themselves are mechanics.
+
+### Why `lib/` and not `export`, and why one constant refused both
+
+`SCROLL_BOTTOM_THRESHOLD_PX` (20 copies) and `LOAD_MORE_THRESHOLD_PX` (2) moved
+out of `ScrollbackPane.tsx` into a new `src/lib/scrollThresholds.ts`. The test
+applied was **does this read as shared vocabulary or as one component's private
+detail**, and the answer is not the importer count — `ScrollbackPane` is still
+the only consumer in `src/`. It is that the concept had already escaped the
+component twice, each time by routing around the absent module:
+`readingAtTail.ts` exists because the pane's *"within threshold of the tail"*
+answer has to cross a module boundary for the badge derivation, and
+`e2e/fixtures/scrollTrace.ts` takes `thresholdPx` as an OPTION rather than a
+mirror *"so the classifier cannot drift away from the assertion it explains"*.
+Two workarounds for one missing home is what shared vocabulary looks like
+before someone names it. They live together because they are one concept at two
+edges, and because `issue253-kbd-resize-scroll-preserve.spec.ts` already
+declares both and passes them as a single `{ bottomThreshold, loadMoreThreshold }`
+pair.
+
+`PUSH_OPTIN_DECLINED_KEY` and `SHORT_HASH_LEN` were already under `lib/` and
+only lacked `export`. Neither export concedes anything the module still held: a
+localStorage key names a slot every script on the origin can already read, and
+`pushOptin.ts` ships a `__resetPushOptinForTests()` seam that is a wider hole
+than the key itself; `SHORT_HASH_LEN` is part of the rendered banner string, so
+the assertion side reconstructs that truncation whether or not we name it.
+
+`AWAY_SET_NOTICE` was **refused**, and the refusal is the point of having a
+test rather than an order. It is half a pair — `AWAY_UNSET_NOTICE` has no e2e
+mirror at all — and its own comment places it in a family of notice strings
+kept beside the component that renders them. Moving it to `lib/` would split
+the pair and make it the only centralised notice in the tree, to buy a pin on
+ONE declaration; exporting it in place is the same trade with a smaller radius.
+It is pinned instead by a second, explicitly weaker table (`TEXT_MIRRORS`) that
+reads BOTH sides as text: that still catches the two copies drifting, which is
+the defect #1646 names, while never observing the value the product computes.
+**A constant that lands in `lib/` only to become importable is the same smell
+as exporting one to make it testable** — the move has to be right on its own.
+
+### The Elixir pair moved LANE, not technique
+
+The ruling said "read the `.ex` as text", and the natural home looked like the
+vitest file holding the other eleven. It cannot go there, and the measurement
+that says so is the eighth instance of this repo's plausible false zero — with
+a mechanism none of the previous seven had.
+
+`scripts/bun.sh` bind-mounts **only** `cicchetto/` at `/app` (`-w /app`); the
+script says so itself, which is why `GRAPPA_VERSION` is computed on the host
+and passed as env. Probed from inside that container:
+
+```
+../lib                                  = EXISTS
+../lib/…/messages_controller.ex         = ENOENT
+../VERSION, ../mix.exs                  = ENOENT
+e2e/tests (control)                     = EXISTS
+```
+
+**`../lib` resolves — to the Debian base image's own `/lib`.** An existence
+check on the directory passes, a `readdir` returns `systemd dpkg apt`, and only
+the read of the actual file fails. A guard written to probe-then-skip would
+have reported itself healthy forever over a path that was never the repo's.
+The general rule: *when a container gives you a partial mount, the parent of
+your mount point is not absent — it is the IMAGE's, and it will answer.*
+
+So the pin is server-side, in
+`test/grappa_web/controllers/messages_limit_mirror_test.exs`. No new
+infrastructure was needed: `scripts/_lib.sh` already bind-mounts
+`cicchetto/e2e` read-only into the Elixir test container for exactly this
+purpose, with `Grappa.Infra.KeepaliveIdleOrderingTest` (#1030) as the
+precedent. `mix grappa.gen_wire_types` was considered and declined — it ships
+wire TYPES, and teaching it to carry arbitrary constants inflates it for two
+integers a text read already covers.
+
+The reader must match the DEFINITION and nothing else, because both names also
+appear interpolated inside the controller's own `@doc` (`#{@default_limit}`,
+`#{@max_http_limit}`) and in the body of `parse_limit/1`. Anchoring on
+`^[ \t]*@name[ \t]+` excludes all of them, and that is asserted twice: as a
+predicate test over the interpolated shapes, and by adding a fresh
+`#{@default_limit}` decoy to the real file and observing the pin stay green.
+
+### A raw NUL byte, invisible to every gate
+
+Slice 1's own file carried three literal NUL bytes where the source meant the
+escape `\0` — the composite-key separator in its out-of-table sweep. It was the
+only file in `cicchetto/src` or `cicchetto/e2e` holding a raw control
+character, measured across every `.ts`/`.tsx` in both trees, and nothing could
+have caught it: `git diff --numstat` reports the file as `101 0` rather than
+binary, so three invisible bytes read as ordinary spaces in the diff, in the
+PR and in the editor, and a NUL inside a template literal is valid TypeScript
+that biome and tsc both accept. The separator is a good idea and is kept — NUL
+cannot occur in a path or an identifier — only its spelling changed.
+
+_What this does NOT establish: that 25 and 17 are the true mirror counts. Both
+censuses are NAME-driven, so a copy spelled differently is invisible to them —
+`e2e/fixtures/scrollTrace.test.ts` declares `THRESHOLD = 50` and feeds it to
+the same `thresholdPx` parameter, but `ClassifyOptions` documents that
+threshold as deliberately passed-in rather than mirrored, so whether it mirrors
+production or merely exercises the classifier could not be established and it
+was left unpinned rather than asserted. `MAX_HTTP_LIMIT` is likewise pinned to
+the server attribute alone, though its spec comment claims it mirrors the
+client's unexported `PAGE_LIMIT` too; the two agree at 200 today and could
+diverge. No already-drifted copy was found — but the census that would find one
+compares literals that already match, so that is a statement about names, not
+about values._
