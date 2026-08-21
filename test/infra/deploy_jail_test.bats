@@ -115,19 +115,39 @@ esac
 exit 0
 EOF
 
-    # curl: reload POST answers a clean reload; healthcheck answers 200.
+    # curl: reload POST answers a clean reload; healthcheck answers
+    # $HEALTHZ_STATUS (200 by default).
+    #
+    # #1656: the /healthz probe is modelled as REAL curl behaves, because the
+    # whole point of the fix is which invocation keeps the body. `-f` discards
+    # the response body and exits 22 on a non-2xx; the same URL without `-f`
+    # exits 0 and PRINTS the body. A stub that failed both ways would let a
+    # cure that never re-asks pass.
     cat > "$FAKE_DIR/curl" <<'EOF'
 #!/bin/sh
 printf 'curl %s\n' "$*" >> "$ARGV_LOG"
 case "$*" in
-    *"-X POST"*reload*) printf '{"loaded":[],"failed":[]}' ;;
+    *"-X POST"*reload*) printf '{"loaded":[],"failed":[]}'; exit 0 ;;
+esac
+case "$*" in
+    *-f*)
+        [ "${HEALTHZ_STATUS:-200}" = 200 ] || exit 22
+        ;;
+    *)
+        printf '%s' "${HEALTHZ_BODY:-}"
+        ;;
 esac
 exit 0
 EOF
 
+    # service: every verb succeeds except `status`, which answers
+    # $SERVICE_STATUS_RC (0 = running, like rc.subr's status_cmd).
     cat > "$FAKE_DIR/service" <<'EOF'
 #!/bin/sh
 printf 'service %s\n' "$*" >> "$ARGV_LOG"
+case "$*" in
+    *status*) exit "${SERVICE_STATUS_RC:-0}" ;;
+esac
 exit 0
 EOF
 
@@ -525,4 +545,103 @@ EOF
     # mutation until the second refute was added.
     refute grep -q "NOT materialised" <<<"$output"
     refute grep -q "reminder:" <<<"$output"
+}
+
+# --- #1656: a failed healthcheck must not hide a dead node -------------------
+#
+# The 2026-08-21 v1.3.0 cold deploy exhausted the healthcheck budget and exited
+# saying "healthcheck never returned 200". The fact on the ground was that the
+# BEAM was GONE and production was down. Those are different emergencies and
+# the script rendered them identical.
+#
+# The probes also HAD the diagnosis and threw it away: `/healthz` answers 503
+# with a body naming the failing check (ready/repo/ets), and `curl -f` discards
+# a non-2xx body.
+
+@test "#1656: a failed healthcheck reports the last /healthz answer" {
+    export HEALTHZ_STATUS=503
+    export HEALTHZ_BODY='{"status":"fail","checks":[{"name":"repo","reason":"Repo.query failed: database is locked"}]}'
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"never returned 200"* ]]
+    [[ "$output" == *"database is locked"* ]]
+}
+
+@test "#1656: healthcheck red + daemon alive reports the daemon is still RUNNING" {
+    export HEALTHZ_STATUS=503 SERVICE_STATUS_RC=0
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"still RUNNING"* ]]
+    refute grep -q "PRODUCTION IS DOWN" <<<"$output"
+}
+
+@test "#1656: healthcheck red + daemon gone shouts that production is DOWN" {
+    export HEALTHZ_STATUS=503 SERVICE_STATUS_RC=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PRODUCTION IS DOWN"* ]]
+    refute grep -q "still RUNNING" <<<"$output"
+}
+
+@test "#1656: the failure arm asks the service manager, it does not infer" {
+    export HEALTHZ_STATUS=503 SERVICE_STATUS_RC=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    grep -q "service grappa status" "$ARGV_LOG"
+}
+
+@test "#1656: a dead daemon is NOT restarted by the deploy — that is a decision" {
+    export HEALTHZ_STATUS=503 SERVICE_STATUS_RC=1
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    # Exactly one `service grappa start`: the cold path's own. A second one
+    # would mean the failure arm took the operator's decision for them.
+    [ "$(grep -c 'service grappa start' "$ARGV_LOG")" -eq 1 ]
+}
+
+@test "#1656: the HOT path inherits the same liveness report" {
+    # The loop is shared. If the report lived in the cold hook instead of the
+    # loop, a hot deploy would keep telling the old half-truth.
+    export HEALTHZ_STATUS=503 SERVICE_STATUS_RC=1
+    export PREFLIGHT_RC=0
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-hot
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"PRODUCTION IS DOWN"* ]]
+}
+
+@test "#1656: a healthy deploy says nothing about liveness" {
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 0 ]
+    refute grep -q "PRODUCTION IS DOWN" <<<"$output"
+    refute grep -q "still RUNNING" <<<"$output"
+}
+
+@test "#1656: a consumer with no liveness hook reports UNKNOWN, never DOWN" {
+    # infra/docker/get.sh mirrors the lib and the consumer as separate files,
+    # so new-lib/old-consumer is reachable on an operator's box. An undefined
+    # function returns 127, and reading that as "dead" would fire the loudest
+    # alarm we own on no evidence at all.
+    run bash -c '
+        set -eu
+        . "'"$BATS_TEST_DIRNAME"'/../../infra/lib/deploy_common.sh"
+        _deploy_report_liveness
+    '
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"UNKNOWN"* ]]
+    refute grep -q "PRODUCTION IS DOWN" <<<"$output"
+    refute grep -q "still RUNNING" <<<"$output"
 }

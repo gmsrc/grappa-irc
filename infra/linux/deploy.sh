@@ -46,6 +46,7 @@ DEPLOY_FEATURE_REEXEC=1
 DEPLOY_FEATURE_MARKER=1
 DEPLOY_FEATURE_PREV_SHA_CARRY=1
 DEPLOY_SEED_RETRY_HINT="sudo -u ${GRAPPA_USER} -H bash -c \"cd ${REPO_ROOT} && set -a; . ${ENV_FILE}; set +a; MIX_ENV=prod mix grappa.seed_themes\""
+DEPLOY_RESTART_HINT="sudo systemctl start grappa"
 
 run_as_grappa() {
 	sudo -u "${GRAPPA_USER}" -H bash -c "
@@ -173,7 +174,16 @@ substrate_restart() {
 }
 
 substrate_healthcheck() {
-	curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/healthz"
+	# On a red probe re-ask WITHOUT `-f` so the 503 body (which names the
+	# failing check) reaches the loop instead of /dev/null — see #1656 and the
+	# hook contract in infra/lib/deploy_common.sh.
+	curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/healthz" && return 0
+	curl -sS "http://127.0.0.1:${PORT}/healthz" 2>&1
+	return 1
+}
+
+substrate_service_alive() {
+	systemctl is-active --quiet grappa
 }
 
 substrate_done_banner() {

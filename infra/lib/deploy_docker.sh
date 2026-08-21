@@ -290,6 +290,19 @@ substrate_restart() {
 
 substrate_healthcheck() {
 	# Probe /healthz from INSIDE the container so the check is independent of
-	# host port binding.
-	"${DOCKER_COMPOSE[@]}" exec -T grappa curl -fsS -o /dev/null http://localhost:4000/healthz
+	# host port binding. On a red probe re-ask WITHOUT `-f` so the 503 body
+	# (which names the failing check) reaches the loop instead of /dev/null —
+	# see #1656 and the hook contract in infra/lib/deploy_common.sh.
+	"${DOCKER_COMPOSE[@]}" exec -T grappa curl -fsS -o /dev/null http://localhost:4000/healthz && return 0
+	"${DOCKER_COMPOSE[@]}" exec -T grappa curl -sS http://localhost:4000/healthz 2>&1
+	return 1
+}
+
+substrate_service_alive() {
+	# `compose ps -q` names the container whether or not it runs, so ask docker
+	# for the actual state rather than reading existence as liveness.
+	local cid
+	cid="$("${DOCKER_COMPOSE[@]}" ps -q grappa 2>/dev/null | head -1)"
+	[ -n "$cid" ] || return 1
+	[ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" = "true" ]
 }

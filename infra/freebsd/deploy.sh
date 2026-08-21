@@ -53,6 +53,9 @@ DEPLOY_FEATURE_MARKER=1
 DEPLOY_FEATURE_PREV_SHA_CARRY=1
 DEPLOY_FEATURE_RECONCILE=1
 DEPLOY_SEED_RETRY_HINT="sudo bastille cmd grappa ${REPO_ROOT}/infra/freebsd/jail_release.sh eval 'Grappa.Release.seed_themes()'"
+# Host-side spelling, like the seed hint above: what the operator types, not
+# what this script (already inside the jail) would run.
+DEPLOY_RESTART_HINT="sudo bastille cmd grappa service grappa start"
 
 # Run one build step as the grappa user. `su -l` strips the environment,
 # so PATH/MIX_ENV/MIX_OS_CONCURRENCY_LOCK are re-set inside every
@@ -191,7 +194,21 @@ substrate_restart() {
 }
 
 substrate_healthcheck() {
-	curl -fsS -o /dev/null "${HEALTHCHECK_URL}"
+	# `-f` is what turns a non-2xx into a non-zero exit — and it is also what
+	# throws the BODY away. /healthz answers 503 with a body naming the failing
+	# check (`ready` / `repo` / `ets`) and its reason, so on a red probe ask
+	# again WITHOUT `-f` and hand that answer up. Two requests happen only on
+	# a probe that already failed; a healthy deploy still makes exactly one.
+	# Why: the #1656 cold deploy discarded that answer 30 times.
+	curl -fsS -o /dev/null "${HEALTHCHECK_URL}" && return 0
+	curl -sS "${HEALTHCHECK_URL}" 2>&1
+	return 1
+}
+
+substrate_service_alive() {
+	# rc.subr's status_cmd → `bin/grappa pid` RPC against the live node. Same
+	# probe grappa_start polls, so "alive" means the same thing to both.
+	service grappa status >/dev/null 2>&1
 }
 
 substrate_done_banner() {

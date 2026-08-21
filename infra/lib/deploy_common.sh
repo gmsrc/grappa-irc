@@ -42,7 +42,13 @@
 #   substrate_cic             cic bundle build (cold only)
 #   substrate_migrate         ecto migrate (cold only)
 #   substrate_restart         stop/start the daemon (cold only; may exit on defer)
-#   substrate_healthcheck     one /healthz probe; 0=200, nonzero=not yet
+#   substrate_healthcheck     one /healthz probe; 0=200, nonzero=not yet AND
+#                             stdout carries whatever the substrate could learn
+#                             about WHY (the 503 body, the curl error) — see
+#                             _deploy_healthcheck_loop
+#   substrate_service_alive   0 iff the daemon/container/unit is running RIGHT
+#                             NOW; asked only when the healthcheck budget ran
+#                             out (#1656)
 #   substrate_done_banner N   print the success line (N = retries taken);
 #                             the wording is substrate-specific
 #
@@ -251,13 +257,21 @@ _deploy_resolve_mode() {
 # $1 retries, $2 sleep. Writes the completed-deploy marker on the first
 # 200 (gated on the MARKER feature) — the marker is the "deploy fully
 # applied" barrier, so it is written LAST, after the app answers.
+#
+# The probe's output is CAPTURED, not discarded (#1656). /healthz answers a
+# non-200 with a body naming the failing check (`ready` / `repo` / `ets`) and
+# its reason, and a connection error carries curl's own diagnosis — that is
+# the only evidence of WHY a deploy went red, and it used to go to
+# /dev/null 30 times in a row. The last answer is printed once, in the
+# failure arm, where the operator is already reading.
 _deploy_healthcheck_loop() {
 	retries="$1"
 	sleep_s="$2"
 	deploy_log "healthcheck loop ($retries x ${sleep_s}s)"
 	i=0
+	hc_answer=""
 	while [ "$i" -lt "$retries" ]; do
-		if substrate_healthcheck; then
+		if hc_answer=$(substrate_healthcheck 2>&1); then
 			if [ "$DEPLOY_FEATURE_MARKER" = 1 ]; then
 				substrate_write_marker
 			fi
@@ -269,7 +283,41 @@ _deploy_healthcheck_loop() {
 		sleep "$sleep_s"
 	done
 	deploy_error "healthcheck never returned 200 after $((retries * sleep_s))s"
+	if [ -n "$hc_answer" ]; then
+		printf '[deploy]   last /healthz answer: %s\n' "$hc_answer" >&2
+	fi
+	_deploy_report_liveness
 	exit 1
+}
+
+# ---- liveness report on an exhausted healthcheck budget (#1656) ------
+# "The healthcheck failed" and "production is DOWN" are different
+# emergencies, and until now they printed the same sentence. Measured: the
+# v1.3.0 cold deploy on m42 (2026-08-21) exited `healthcheck never returned
+# 200 after 60s` while the node had already terminated — an operator who did
+# not go and look at the jail was holding a message about the wrong problem.
+#
+# This REPORTS, it never acts. Restarting production is the operator's
+# decision: a deploy that restarts what it just failed to health-check can
+# drive a crash-loop straight back into the outage it is standing in.
+: "${DEPLOY_RESTART_HINT:=the service manager on this substrate}"
+
+_deploy_report_liveness() {
+	# A consumer that predates this hook must not be read as "the daemon is
+	# dead" — an undefined function returns 127, which would fire the loudest
+	# alarm we own on no evidence at all. `infra/docker/get.sh` mirrors the lib
+	# and the consumer separately, so old-consumer/new-lib is reachable.
+	if ! command -v substrate_service_alive >/dev/null 2>&1; then
+		deploy_error "this substrate defines no substrate_service_alive hook — whether the daemon survived is UNKNOWN. Check it by hand before walking away."
+		return 0
+	fi
+
+	if substrate_service_alive; then
+		deploy_error "the daemon is still RUNNING — it is up but not answering a healthy /healthz. Production is serving; read the answer above before touching anything."
+	else
+		deploy_error "the daemon is GONE — PRODUCTION IS DOWN. The healthcheck failure above is the symptom; this is the emergency."
+		printf '[deploy]   nothing was restarted — that is your call, not the deploy'"'"'s. Bring it back with: %s\n' "${DEPLOY_RESTART_HINT}" >&2
+	fi
 }
 
 # ---- seed (versioned built-in data) ---------------------------------

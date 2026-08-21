@@ -153,12 +153,26 @@ case "$*" in
         fi
         ;;
 esac
+# #1656 — the /healthz probe, modelled as real curl behaves: `-f` discards the
+# body and exits non-zero on a non-2xx, the same URL without `-f` exits 0 and
+# PRINTS it.
+case "$*" in
+    *-f*)
+        [ "${HEALTHZ_STATUS:-200}" = 200 ] || exit 22
+        ;;
+    *healthz*)
+        printf '%s' "${HEALTHZ_BODY:-}"
+        ;;
+esac
 exit 0
 EOF
 
     cat > "$FAKE_DIR/systemctl" <<'EOF'
 #!/bin/sh
 printf 'systemctl %s\n' "$*" >> "$ARGV_LOG"
+case "$*" in
+    *is-active*) exit "${SYSTEMCTL_ACTIVE_RC:-0}" ;;
+esac
 exit 0
 EOF
 
@@ -505,4 +519,30 @@ run_deploy() {
     # mutation until the second refute was added.
     refute grep -q "NOT materialised" <<<"$output"
     refute grep -q "reminder:" <<<"$output"
+}
+
+# --- #1656: the failed-healthcheck arm is the shared lib's, so systemd
+# inherits it — but only if this substrate actually wires the hook.
+
+@test "#1656: healthcheck red + unit dead shouts PRODUCTION IS DOWN and names the restart" {
+    export HEALTHZ_STATUS=503 SYSTEMCTL_ACTIVE_RC=3
+    export HEALTHZ_BODY='{"status":"fail","checks":[{"name":"repo","reason":"Repo.query failed"}]}'
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"Repo.query failed"* ]]
+    [[ "$output" == *"PRODUCTION IS DOWN"* ]]
+    [[ "$output" == *"systemctl start grappa"* ]]
+    grep -q "systemctl is-active" "$ARGV_LOG"
+}
+
+@test "#1656: healthcheck red + unit active reports the daemon is still RUNNING" {
+    export HEALTHZ_STATUS=503 SYSTEMCTL_ACTIVE_RC=0
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"still RUNNING"* ]]
+    refute grep -q "PRODUCTION IS DOWN" <<<"$output"
 }

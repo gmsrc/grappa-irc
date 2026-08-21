@@ -618,6 +618,7 @@ cmd_update() {
 	DEPLOY_FEATURE_MARKER=1
 	DEPLOY_FEATURE_PREV_SHA_CARRY=1
 	DEPLOY_SEED_RETRY_HINT="${COMPOSE[*]} --profile prod run --rm grappa mix grappa.seed_themes"
+	DEPLOY_RESTART_HINT="${COMPOSE[*]} --profile prod up -d grappa"
 	# ---- substrate hooks --------------------------------------------
 	# ONE hook set for this substrate, shared with `scripts/deploy.sh`
 	# (#1384). The healthcheck knobs come with it: two doors onto one
@@ -879,6 +880,7 @@ cmd_update_release() {
 	DEPLOY_FEATURE_MARKER=0
 	DEPLOY_FEATURE_PREV_SHA_CARRY=0
 	DEPLOY_SEED_RETRY_HINT="docker run --rm --env-file $ENV_FILE -v ${GRAPPA_DATA_VOLUME}:/data $GRAPPA_IMAGE eval 'Grappa.Release.seed_themes()'"
+	DEPLOY_RESTART_HINT="infra/docker/deploy.sh start"
 	COLD_HEALTHCHECK_RETRIES="${COLD_HEALTHCHECK_RETRIES:-120}"
 	COLD_HEALTHCHECK_SLEEP="${COLD_HEALTHCHECK_SLEEP:-2}"
 
@@ -910,7 +912,17 @@ cmd_update_release() {
 		release_start_container
 	}
 	substrate_healthcheck() {
-		docker exec "$GRAPPA_CONTAINER" curl -fsS -o /dev/null http://localhost:4000/healthz
+		# On a red probe re-ask WITHOUT `-f` so the 503 body (which names the
+		# failing check) reaches the loop instead of /dev/null — see #1656 and
+		# the hook contract in infra/lib/deploy_common.sh.
+		docker exec "$GRAPPA_CONTAINER" curl -fsS -o /dev/null http://localhost:4000/healthz && return 0
+		docker exec "$GRAPPA_CONTAINER" curl -sS http://localhost:4000/healthz 2>&1
+		return 1
+	}
+	substrate_service_alive() {
+		# Existence is not liveness: release_container_exists answers yes for a
+		# container that has already exited.
+		[ "$(docker inspect -f '{{.State.Running}}' "$GRAPPA_CONTAINER" 2>/dev/null)" = "true" ]
 	}
 	substrate_done_banner() {
 		say "grappa updated — cold (image pulled + container recreated) 🎉"

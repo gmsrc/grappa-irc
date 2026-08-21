@@ -41,6 +41,7 @@ DEPLOY_FEATURE_REEXEC=1
 DEPLOY_FEATURE_MARKER=1
 DEPLOY_FEATURE_PREV_SHA_CARRY=1
 DEPLOY_SEED_RETRY_HINT="scripts/mix.sh grappa.seed_themes"
+DEPLOY_RESTART_HINT="scripts/deploy.sh --force-cold"
 
 # ---- substrate hooks ------------------------------------------------
 # ONE hook set for this substrate, shared with `infra/docker/deploy.sh

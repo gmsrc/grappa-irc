@@ -134,6 +134,19 @@ case "$*" in
             printf '{"loaded":[],"failed":[]}'
         fi
         ;;
+    # #1656 — /healthz, modelled as real curl behaves: `-f` discards the body
+    # and exits non-zero on a non-2xx; without `-f` it exits 0 and PRINTS it.
+    *"exec -T grappa curl"*healthz*)
+        # NB: `*-f*` would also match compose's own `-f <file>`, so key on the
+        # curl flags themselves.
+        case "$*" in
+            *"curl -fsS"*) [ "${HEALTHZ_STATUS:-200}" = 200 ] || exit 22 ;;
+            *)             printf '%s' "${HEALTHZ_BODY:-}" ;;
+        esac
+        ;;
+    # #1656 — container liveness. Existence is not liveness, so the stub
+    # answers the state knob rather than the id.
+    "inspect -f {{.State.Running}} "*) printf '%s' "${CONTAINER_RUNNING:-true}" ;;
 esac
 exit 0
 EOF
@@ -453,4 +466,34 @@ seed_mix_env() {
     run_deploy
     [ "$status" -ne 0 ]
     [[ "$output" == *"GRAPPA_CACHE_ID"* ]]
+}
+
+# --- #1656: the failed-healthcheck arm is the shared lib's, so the compose
+# substrate inherits it — but only if this consumer actually wires the hook.
+
+@test "#1656: healthcheck red + container gone shouts PRODUCTION IS DOWN" {
+    export HEALTHZ_STATUS=503 CONTAINER_RUNNING=false
+    # the cold budget is 120x2s by default — a red probe would burn 4 minutes
+    export COLD_HEALTHCHECK_RETRIES=2 COLD_HEALTHCHECK_SLEEP=0
+    export HEALTHZ_BODY='{"status":"fail","checks":[{"name":"ets","reason":"ETS table missing"}]}'
+    make_env
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"ETS table missing"* ]]
+    [[ "$output" == *"PRODUCTION IS DOWN"* ]]
+}
+
+@test "#1656: healthcheck red + container running reports it is still RUNNING" {
+    export HEALTHZ_STATUS=503 CONTAINER_RUNNING=true
+    # the cold budget is 120x2s by default — a red probe would burn 4 minutes
+    export COLD_HEALTHCHECK_RETRIES=2 COLD_HEALTHCHECK_SLEEP=0
+    make_env
+    commit_upstream lib/base.txt > /dev/null
+
+    run_deploy --force-cold
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"still RUNNING"* ]]
+    refute grep -q "PRODUCTION IS DOWN" <<<"$output"
 }
