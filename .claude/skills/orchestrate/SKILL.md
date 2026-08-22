@@ -1162,3 +1162,49 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   va DETTO, non letto come 4/4 ≡ 5/5. ✅ E **mergiarla non innesca `integration` su main**.
 - 🪞 **DEPISTAGGIO: il primo nome che il log offre non e' il fallimento.** Un `test/*.exs:NN` puo' essere
   solo **un frame di stack dentro una cattura di warning**. **Il fallimento e' il blocco `1)`** — cercalo.
+
+## 🧭 REGOLE NATE IL 2026-08-22 (permanenti — spostate qui dall'handoff, che è stato)
+- 🥇🥇 **DERIVA quando la cosa approvata è un RAPPORTO; scrivi il LETTERALE quando la cosa misurata è
+  una DISTANZA.** Nata su #1671: `PULL_COMMIT_PX` diventa un nudo `160` (vjt l'ha misurata col pollice
+  su un telefono) **mentre nello stesso commit `PULL_MAX_OFFSET_PX = PULL_COMMIT_PX * 2` RESTA derivato**,
+  perché lì l'approvato è la forma dell'elastico *rispetto* al punto di commit, non un viaggio.
+  ⚠️ **Perché la derivazione era la scelta SBAGLIATA lì**, ed è il pezzo generalizzabile: `SWIPE_MIN_PX`
+  risponde a una domanda DIVERSA ("è stato un gesto?") per QUATTRO binder, quindi `* 4` asserirebbe una
+  causalità che non esiste — ricalibrare quel floor trascinerebbe una distanza che nessuno ha rimisurato.
+  **E morde al contrario: la prossima misura può non cadere su un multiplo, e una costante scrivibile solo
+  a passi di 40 invita ad ARROTONDARE LA MISURA per far tornare il moltiplicatore.**
+- 🥇🥇 **Un numero stantio in una entry DATATA di `DESIGN_NOTES` è STORIA e RESTA; lo stesso numero in un
+  COMMENTO DI MODULO è un'affermazione sul PRESENTE e si MUOVE.** Un find-and-replace sulle entry datate
+  **distrugge l'evidenza che una ricalibrazione sia mai avvenuta** e rende incoerenti le entry che
+  argomentano PROPRIO dal fatto che nulla era stato misurato. La cura per il log è **una entry NUOVA**.
+  ⚠️ Ordinare quel find-and-replace è un errore che l'orchestratore ha commesso (#1671): una worker che lo
+  rifiuta con questa ragione ha ragione.
+- 🔴🔴 **IL `Waiting…` FANTASMA — quattro volte in una mattina su w1, non è sfortuna.** Il tell è il
+  **TIMER DELLO SPINNER FERMO ALLO STESSO VALORE IN DUE LETTURE SUCCESSIVE** (`Marinating… (1m 8s)`,
+  `Envisioning… (1m 2s)`) mentre l'artefatto è già scritto e sull'host `pgrep` è VUOTO.
+  🥇 **Si diagnostica PROBANDO L'HOST** (processi + **mtime**), MAI aspettando che se ne accorga.
+  `Escape` sblocca **e mangia il messaggio in coda: ri-manda SEMPRE l'ordine dopo.**
+  ⚠️ Costo reale: una volta si è appesa PRIMA di potare tre ref remote, e le ha dovute potare l'orch.
+- 🔴 **Un monitor CI NON si chiava sulla `conclusion`**: quella di una check-run in corso è la **stringa
+  VUOTA**, non `null`, quindi `// "PENDING"` non scatta mai e un filtro di esclusione non matcha nulla —
+  si legge "zero pendenti" senza aver misurato niente. **Chiave giusta: `.status == "COMPLETED"`**, più una
+  guardia a risposta nota DENTRO lo strumento (meno di N check ⇒ non stampa numeri).
+- 🔴 **`git fetch origin 'refs/pull/N/head:refs/tmp/prN'` SENZA `+` NON aggiorna una ref che esiste già** ⇒
+  restituisce la SHA pre-rebase e fa leggere `FF PURO: NO` su un dato vecchio. **Refspec sempre forzato.**
+- ⚠️ **`gh run rerun` su un run ancora `in_progress` risponde *"its workflow file may be broken"***:
+  messaggio fuorviante, non è rotto niente — aspetta il settle.
+- 🥇 **Un rosso e2e si attribuisce leggendo l'ARTEFATTO che Playwright salva al fallimento** (lo snapshot
+  DOM, `error-context.md`), non ragionando sul codice. Su #1658 lo snapshot diceva `0 channels`: **non era
+  una corsa**, e un timeout più alto avrebbe comprato solo un rosso più lento. Il verde altrove era
+  **dipendenza dall'ordine fra spec**. Cura: la riga **si FA**, non si aspetta.
+
+- 🔴🔴 **IL WATCHDOG AUTO-CLEAR MUORE IN SILENZIO, ED E' LA QUARTA COSTUME DI "non puoi accorgerti del
+  silenzio" (2026-08-22).** `lib/auto-clear-watch.sh` era **`not running` da DUE GIORNI** (log fermo al
+  20-08 21:55) e l'orchestratore se n'e' accorto solo perche' **vjt gli ha chiesto perche' fosse all'80%**.
+  Un watchdog morto e un contesto che cresce piano sono lo stesso osservabile: **niente**.
+  🥇 **Cura: `auto-clear-watch.sh status grappa-orch` a OGNI resume, insieme a `daemon.sh status` e al
+  TaskStop dei monitor.** ⚠️ **`pgrep -fl 'auto-clear-watch'` NON basta**: matcha il tuo stesso comando e
+  restituisce un pid che sembra il watchdog. **La prova e' `status` + l'mtime del log.**
+  ⚠️ E il danno NON e' il contesto: e' che **l'auto-clear e' anche il salvagente del flush dell'handoff**
+  (prompta il flush PRIMA di clearare). Morto lui, se l'orchestratore non flusha a mano, un clear
+  manuale o un crash perde tutto.
