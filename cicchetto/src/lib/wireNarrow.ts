@@ -29,6 +29,7 @@ import {
   S_SessionLogWireListResult,
   S_SessionLogWireSessionsResult,
   S_SessionLogWireT,
+  S_SessionWireMembersIndexPayload,
   S_ThemesWireActivePair,
   S_ThemesWireIndexPayload,
   S_ThemesWireT,
@@ -55,6 +56,7 @@ import type {
   SessionLogWireListResult,
   SessionLogWireSessionsResult,
   SessionLogWireT,
+  SessionWireMembersIndexPayload,
   ThemesWireActivePair,
   ThemesWireIndexPayload,
   ThemesWireT,
@@ -912,6 +914,18 @@ export function narrowArchiveResponse(raw: unknown): ScrollbackWireArchiveWireIn
 /** `GET /networks/:slug/channels`. */
 export function narrowChannelListResponse(raw: unknown): NetworksWireChannelJson[] {
   return narrowRest({ a: S_NetworksWireChannelJson }, raw, "channel list");
+}
+
+/**
+ * `GET /networks/:slug/channels/:name/members`.
+ *
+ * #1680 — the REST twin of the `members_seeded` event. Both render through
+ * `Grappa.Session.Wire.member/1` on purpose (bucket D), so the per-row shape
+ * is one contract and this narrower reuses the GENERATED schema rather than
+ * a second hand-written mirror.
+ */
+export function narrowMembersIndexResponse(raw: unknown): SessionWireMembersIndexPayload {
+  return narrowRest(S_SessionWireMembersIndexPayload, raw, "members index");
 }
 
 /** `GET /networks/:slug/channels/:name/messages`, both the `before` and `after` pages. */

@@ -34,6 +34,7 @@ import {
   narrowCredentialResponse,
   narrowDirectoryPageResponse,
   narrowFeaturedChannelsResponse,
+  narrowMembersIndexResponse,
   narrowMessagePageResponse,
   narrowMessageResponse,
   narrowSessionLogListResponse,
@@ -2606,6 +2607,36 @@ export async function deleteInvite(
 // returns the inner array; the envelope is a stylistic mirror of
 // MembersJSON's `{"members": [...]}` shape.
 export type ArchiveEntry = ScrollbackWireArchiveWireEntry;
+
+// #1680 — `GET /networks/:slug/channels/:name/members`, the snapshot twin of
+// the `members_seeded` event. Both render through `Grappa.Session.Wire.member/1`
+// (bucket D), so this consumes the SAME generated shape rather than a second
+// mirror — and therefore costs no wire change and no protocol bump.
+//
+// `MembersController` was written for this call ("cicchetto refetches on
+// channel-select") but no client ever existed: cic has lived entirely off the
+// broadcast. The pause is what finally needs it, because a paused channel
+// misses the peer join/part/quit deltas and the members map is the one store
+// that goes stale.
+//
+// 🔴 Returns `null`, NOT `[]`, on HTTP 204. The server sends 204 for
+// `{:ok, :uninitialized}` — joined but pre-NAMES, or not joined at all — and
+// collapsing that to an empty array would let a refetch BLANK a good member
+// list at exactly the moment the session is still filling it (CP24 bucket E
+// drew that distinction on purpose; a caller must not undo it).
+export async function listMembers(
+  token: string,
+  networkSlug: string,
+  channel: string,
+): Promise<MemberEntry[] | null> {
+  const res = await fetch(
+    `/networks/${encodeURIComponent(networkSlug)}/channels/${encodeURIComponent(channel)}/members`,
+    { headers: buildHeaders(token) },
+  );
+  if (res.status === 204) return null;
+  if (!res.ok) throw await readError(res);
+  return narrowMembersIndexResponse(await res.json()).members;
+}
 
 export async function listArchive(token: string, networkSlug: string): Promise<ArchiveEntry[]> {
   const res = await fetch(`/networks/${encodeURIComponent(networkSlug)}/archive`, {
