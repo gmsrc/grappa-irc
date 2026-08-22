@@ -57562,9 +57562,23 @@ its private repo with `busy_timeout: 30_000` and says in a comment that the
 number is generous *"on purpose: the waiter must still be WAITING when the
 scan runs"*. Neither writer passes `:timeout`, so both inherit Ecto's
 default 15_000, which DBConnection arms as a checkout deadline over the
-WHOLE transaction — queue, statements, and the holder's park alike. The
-wait that file believed it had configured was `min(15_000, 30_000)`, and
-the number that actually governs was written down nowhere.
+WHOLE transaction — queue, statements, and the holder's park alike.
+
+🔴 **The bench declared 30 000 on purpose and got 15 000.** That sentence is
+the whole defect. The wait it believed it had configured was
+`min(15_000, 30_000)`, the smaller number came from a library default nobody
+wrote down, and no line in the file names it — so the red, when it finally
+came, pointed at an assertion instead of at the number that broke it.
+
+The route to this was itself instructive and is worth keeping. The first
+hypothesis was interference: a NEW test that also builds a real lock
+contention, running alongside the old one. It is false BY CONSTRUCTION —
+both modules are `async: false`, and ExUnit runs sync modules one at a time
+after the async ones are exhausted, so the two contentions cannot overlap.
+Checking the structural claim before believing the plausible one is what
+turned a suspicion about this branch into a defect that was already there.
+Proving it by mutating **main** rather than the branch is what established
+the second half: latent, not introduced.
 
 Measured on `29bea21d` (origin/main, none of this branch's code present) by
 injecting a 16s delay between the waiter's `BEGIN IMMEDIATE` and the
