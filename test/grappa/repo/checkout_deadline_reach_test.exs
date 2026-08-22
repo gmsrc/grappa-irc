@@ -176,7 +176,7 @@ defmodule Grappa.Repo.CheckoutDeadlineReachTest do
   # memory" reading in the moduledoc — a recursive CTE could plausibly
   # exhaust memory on its own; this cannot.
   defp observe_cancelled_execution(query_timeout) do
-    {repo, _path} = tmp_repo!("checkout_deadline_x", 0)
+    {repo, _} = tmp_repo!("checkout_deadline_x", 0)
     TmpRepo.query!("CREATE TABLE s(x integer)")
 
     TmpRepo.query!(

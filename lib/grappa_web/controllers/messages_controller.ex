@@ -279,7 +279,7 @@ defmodule GrappaWeb.MessagesController do
          :ok <- validate_wire_recipient_name(ctcp_target, Session.statusmsg(subject, network.id)),
          :ok <- take_send_token(subject, network.id),
          {:ok, result} <- Session.send_ctcp(subject, network.id, channel, ctcp_target, body) do
-      render_send_result(conn, result)
+      render_send_result(conn, result, network.slug)
     end
   end
 
@@ -302,7 +302,7 @@ defmodule GrappaWeb.MessagesController do
            validate_wire_recipient_name(notice_target, Session.statusmsg(subject, network.id)),
          :ok <- take_send_token(subject, network.id),
          {:ok, result} <- Session.send_notice(subject, network.id, channel, notice_target, body) do
-      render_send_result(conn, result)
+      render_send_result(conn, result, network.slug)
     end
   end
 
@@ -327,7 +327,7 @@ defmodule GrappaWeb.MessagesController do
          :ok <- validate_post_target_name(channel),
          :ok <- take_send_token(subject, network.id),
          {:ok, result} <- Session.send_privmsg(subject, network.id, channel, body) do
-      render_send_result(conn, result)
+      render_send_result(conn, result, network.slug)
     end
   end
 
@@ -423,13 +423,18 @@ defmodule GrappaWeb.MessagesController do
   # clause, and Phoenix raised on the unsent conn → 500. Split into
   # two arms here so the type contract is honored without a discriminator
   # leak into the `with` chain.
-  defp render_send_result(conn, %Scrollback.Message{} = message) do
+  #
+  # `network_slug` is passed rather than read off the row: since #1657b the
+  # persist boundary no longer preloads `:network` (it was a second pool
+  # checkout per row on the hot write path), and this controller already
+  # resolved the network from the URL.
+  defp render_send_result(conn, %Scrollback.Message{} = message, network_slug) do
     conn
     |> put_status(:created)
-    |> render(:show, message: message)
+    |> render(:show, message: message, network_slug: network_slug)
   end
 
-  defp render_send_result(conn, :no_persist) do
+  defp render_send_result(conn, :no_persist, _) do
     conn
     |> put_status(:accepted)
     |> json(%{ok: true})

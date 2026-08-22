@@ -157,7 +157,7 @@ defmodule GrappaWeb.GrappaChannel do
   dispatcher and the per-socket fastlane — a single WS frame per
   connected socket on the topic. The wire-shape contract lives at the
   broadcasting boundary (`Grappa.Session.Server` via
-  `Grappa.Scrollback.Wire.message_payload/1`). For the channel's own
+  `Grappa.Scrollback.Wire.message_payload/2`). For the channel's own
   topic the fastlane bypasses `handle_info/2` entirely; the ONE
   `handle_info(%Phoenix.Socket.Broadcast{}, _)` clause here serves
   #1088's foreign per-connection topic, which has no fastlane.

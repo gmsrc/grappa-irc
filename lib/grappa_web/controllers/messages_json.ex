@@ -20,9 +20,16 @@ defmodule GrappaWeb.MessagesJSON do
   @spec index(%{messages: [Message.t()]}) :: [Wire.t()]
   def index(%{messages: messages}), do: Enum.map(messages, &Wire.to_json/1)
 
-  @doc "Renders the `:show` action — a single serialized message map."
-  @spec show(%{message: Message.t()}) :: Wire.t()
-  def show(%{message: message}), do: Wire.to_json(message)
+  @doc """
+  Renders the `:show` action — a single serialized message map.
+
+  Takes the network slug explicitly (#1657b). `:show` renders a row that
+  was JUST persisted, and the persist boundary no longer preloads
+  `:network` — so this is `to_json/2`, while `index/1` above stays on
+  `to_json/1` because its rows come out of a query that preloaded.
+  """
+  @spec show(%{message: Message.t(), network_slug: String.t()}) :: Wire.t()
+  def show(%{message: message, network_slug: slug}), do: Wire.to_json(message, slug)
 
   @doc """
   Renders the `:count` action (#693) — the uncapped row count after an

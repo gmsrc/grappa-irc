@@ -58,7 +58,7 @@ defmodule Grappa.Session.Server do
 
   ## Wire shape (broadcast contract)
 
-  PRIVMSG broadcasts emit `Grappa.Scrollback.Wire.message_payload/1`
+  PRIVMSG broadcasts emit `Grappa.Scrollback.Wire.message_payload/2`
   via `Grappa.PubSub.broadcast_event/2` on the per-(subject, network,
   channel) topic built via `Grappa.PubSub.Topic.channel/3`.
   `state.subject_label` is the first segment (sub-task 2h, generalized

@@ -3196,21 +3196,25 @@ defmodule Grappa.Session.ServerTest do
 
       # Arm the fault on the SESSION pid, firing on the auto-open's
       # `BusyRetry.run` — NOT the persist's. The session-pid fault-CHECKS that
-      # precede the open are: persist insert (1) + persist preload (2). The
-      # `push: true` obligations (`Push.Triggers` + `WindowCounts`) each run in
-      # their OWN Task, so they add NO checks to this pid — the open's insert is
-      # the 3rd check, hence `fire_on: 3`. A wrong value fails LOUD, never
-      # silently passes: too low faults the persist (the message never lands →
-      # `assert_message_event` below times out); too high lets the open succeed
-      # (the terminal log is absent → the `log =~` assertion fails). So a change
-      # in how many `BusyRetry.run` calls precede the open BREAKS this test.
-      Repo.BusyRetry.arm_faults(pid, 10_000, fire_on: 3)
+      # precede the open are: persist insert (1). The `push: true` obligations
+      # (`Push.Triggers` + `WindowCounts`) each run in their OWN Task, so they
+      # add NO checks to this pid — the open's insert is the 2nd check, hence
+      # `fire_on: 2`. A wrong value fails LOUD, never silently passes: too low
+      # faults the persist (the message never lands → `assert_message_event`
+      # below times out); too high lets the open succeed (the terminal log is
+      # absent → the `log =~` assertion fails). So a change in how many
+      # `BusyRetry.run` calls precede the open BREAKS this test.
+      #
+      # It WAS `fire_on: 3`, and #1657b is exactly the change this guard was
+      # written to catch: removing the persist's `Repo.preload` round-trip
+      # deleted check (2), so the open moved up by one. The break was designed.
+      Repo.BusyRetry.arm_faults(pid, 10_000, fire_on: 2)
       on_exit(fn -> Repo.BusyRetry.disarm_faults(pid) end)
 
       log =
         capture_log(fn ->
           IRCServer.feed(server, ":alice!~a@host PRIVMSG vjt :hey there\r\n")
-          # persist rode out checks 1-2 + broadcast the message…
+          # persist rode out check 1 + broadcast the message…
           assert_message_event(sender: "alice", body: "hey there")
           # …then drain the handle_info that also ran the dropped open.
           _ = :sys.get_state(pid)
@@ -13264,6 +13268,12 @@ defmodule Grappa.Session.ServerTest do
   #
   # ⚠️ Reporting the loss is NOT preventing it. Every test there asserts that
   # a row was lost LOUDLY; none of them assert the row survived.
+  #
+  # #1657b adds the OTHER direction, and it lives in
+  # `Grappa.Session.PersistorTest` rather than here: a row that IS in the
+  # table must produce no census line. Together the two files bound the
+  # count from both sides — without the second, `scrollback row dropped`
+  # was neither a floor nor a ceiling.
 
   # Drive one persist door with every retry loop in the session pid saturated,
   # and hand back what it logged. `fire_on: 1` faults the persist's own first

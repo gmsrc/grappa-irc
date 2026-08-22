@@ -92,14 +92,16 @@ defmodule Grappa.Scrollback.WireTest do
     end
   end
 
-  describe "message_payload/1" do
+  describe "message_payload/2" do
     test "wraps a row in %{kind: \"message\", message: wire}",
          %{user: user, network: network} do
       {:ok, msg} = ScrollbackHelpers.insert(sample(user, network, 1))
-      preloaded = Repo.preload(msg, :network)
 
-      assert %{kind: :message, message: wire} = Wire.message_payload(preloaded)
-      assert wire == Wire.to_json(preloaded)
+      # #1657b — the broadcast door takes the slug; no preload. The equality
+      # against the read-path door on the SAME row is what keeps "one body,
+      # two entrances" a fact rather than a claim.
+      assert %{kind: :message, message: wire} = Wire.message_payload(msg, network.slug)
+      assert wire == Wire.to_json(Repo.preload(msg, :network))
     end
   end
 

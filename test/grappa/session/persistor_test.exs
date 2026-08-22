@@ -70,10 +70,8 @@ defmodule Grappa.Session.PersistorTest do
   end
 
   defp rows_in(network, channel) do
-    Repo.aggregate(
-      from(m in Message, where: m.network_id == ^network.id and m.channel == ^channel),
-      :count
-    )
+    query = from(m in Message, where: m.network_id == ^network.id and m.channel == ^channel)
+    Repo.aggregate(query, :count)
   end
 
   # Arm the retry engine against THIS process and hand back what the door

@@ -2,7 +2,7 @@ defmodule Grappa.MessageEventAssertions do
   @moduledoc """
   Test assertions for the canonical PubSub broadcast event payload
   `%{kind: :message, message: wire_shape}` produced by
-  `Grappa.Scrollback.Wire.message_payload/1` and broadcast via
+  `Grappa.Scrollback.Wire.message_payload/2` and broadcast via
   `Grappa.PubSub.broadcast_event/2`.
 
   Test processes that subscribe with `Phoenix.PubSub.subscribe(Grappa.PubSub,
