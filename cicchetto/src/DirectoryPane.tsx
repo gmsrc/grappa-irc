@@ -121,17 +121,22 @@ import { MircBody } from "./MircText";
 // down a reciprocal, so the first pixel past the seam buys `PULL_DAMPING` of
 // itself and the ten-thousandth buys nothing measurable.
 
-// 🔴 A FEEL NUMBER. PROVISIONAL, and NOT MEASURED ON A DEVICE — the same
-// standing rule `PULL_COMMIT_PX` states in its own comment: vjt calibrates on a
-// phone, and nothing here has been near one. No gate in this repo can say this
-// is right, only that it is bounded and monotone: jsdom drives no compositor
+// 🔴 A FEEL NUMBER. PROVISIONAL, and NOT MEASURED ON A DEVICE. It no longer
+// shares that standing with `PULL_COMMIT_PX`, which vjt measured on a phone in
+// #1671 — this one has still never been near one. No gate in this repo can say
+// it is right, only that it is bounded and monotone: jsdom drives no compositor
 // and Playwright's WebKit does not reproduce real iOS scroll physics (this
 // pane's e2e header says so at length). **iOS parity is claimed nowhere.**
 //
-// Derived rather than picked, so the pull does not grow a second vocabulary for
-// its own distances: the list travels at most twice as far as the finger must
-// go to spend a refresh. Doubling is the defensible default `PULL_COMMIT_PX`
-// itself takes from `SWIPE_MIN_PX`, not a measurement.
+// STILL DERIVED, deliberately, even though its base stopped being derived. What
+// #1671 approved on the device is the commit DISTANCE; what is approved here is
+// the RATIO — the list travels at most twice as far as the finger must go to
+// spend a refresh — so the ceiling follows the commit point and the elastic
+// keeps the shape vjt has just signed off. Freezing a literal here would pin
+// that shape against the next recalibration instead of tracking it. That is the
+// whole of the rule `PULL_COMMIT_PX` now states at its own declaration: derive
+// the ratio, write the measured distance. If the doubled 320px turns out to be
+// too much travel on the device, that is its own measurement and its own issue.
 export const PULL_MAX_OFFSET_PX = PULL_COMMIT_PX * 2;
 
 // 🔴 The second feel number, provisional on exactly the same terms.
@@ -175,8 +180,9 @@ const pulledTransform = (dy: number): string => `translateY(${pulledOffset(dy)}p
 // #1658 — a DIFFERENT axis from the travel above and it keeps its own
 // distance. The travel is the placement, the ramp is the affordance; tying the
 // ramp to the capped travel would top the spinner out at
-// slotHeight/PULL_COMMIT_PX (0.44 at the default font size) and it would never
-// reach full at the one distance where full is the point.
+// slotHeight/PULL_COMMIT_PX (0.22 at the default font size, halved from 0.44 by
+// #1671's doubling) and it would never reach full at the one distance where
+// full is the point.
 //
 // #1669 — which is why this reads the RAW `dy` and not `pulledOffset(dy)`, now
 // that the two differ. What the ramp announces is that the RELEASE will spend a

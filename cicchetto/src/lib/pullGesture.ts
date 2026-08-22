@@ -18,19 +18,36 @@
 // Like `bindDismissGesture` it reports PROGRESS and writes no paint of its own:
 // the pulled slot, its cap and its spinner belong to the pane, and a binder
 // that knew about them would be a binder that knew about the directory.
-import { type Point, SWIPE_MIN_PX, swipeDirection } from "./swipe";
+import { type Point, swipeDirection } from "./swipe";
 import { soleTouch, verticalClaim } from "./touchGesture";
 
 // How far down the finger must travel for the release to spend a refresh.
 //
-// Derived from `SWIPE_MIN_PX` rather than picked, so this does not become a
-// second vocabulary for the same physical gesture. It is deliberately STRICTER
-// than that floor: 40px answers "was this a gesture at all", while this answers
-// "did they mean to spend a server round-trip and a disabled button for the
-// length of a capture". Doubling is a defensible default, NOT a measurement —
-// the same standing `DISMISS_COMMIT_FRACTION` carries in the sibling binder.
-// vjt calibrates on-device; nothing here was verified on a phone.
-export const PULL_COMMIT_PX = SWIPE_MIN_PX * 2;
+// 🔴 MEASURED ON A DEVICE — vjt, 2026-08-22 (#1671), on a phone against the
+// staging build of `1.3.1-c6f46686`. This comment used to say the opposite in
+// as many words ("Doubling is a defensible default, NOT a measurement … vjt
+// calibrates on-device; nothing here was verified on a phone") and the value
+// was half of this, reached by doubling `SWIPE_MIN_PX`. The calibration it
+// asked for has now happened and it says 160.
+//
+// WRITTEN AS A LITERAL, which is the substantive half of the change. The
+// derivation `SWIPE_MIN_PX * 4` reaches the same number today and was the
+// recommendation on the issue; it is declined because it would assert a
+// causality that has stopped being true. 40px answers a DIFFERENT question
+// ("was this a gesture at all") for four binders, and recalibrating that floor
+// must not silently drag a distance somebody measured with a thumb. The lattice
+// bites the other way too: the next on-device call need not land on a multiple
+// of 40, and a constant spellable only in 40px steps invites rounding the
+// measurement to fit the multiplier.
+//
+// The one guarantee the derivation gave for free — that this stays STRICTER
+// than the swipe floor — is asserted rather than assumed: `BETWEEN_FLOOR_AND_
+// COMMIT` in `pullGesture.test.ts` sits between the two and reds the moment
+// they cross. The general rule, and why `PULL_MAX_OFFSET_PX` in
+// `DirectoryPane.tsx` STAYS derived from this constant in the same change:
+// derive when the approved thing is a RATIO, write the literal when the
+// measured thing is a DISTANCE.
+export const PULL_COMMIT_PX = 160;
 
 // Worn by the bound element for exactly as long as the finger is driving a
 // CLAIMED pull, so the stylesheet can drop its snap-back transition and let the

@@ -121,22 +121,30 @@ const MIRRORS: readonly Mirror[] = [
     origin: "REPLY_QUOTE_BODY_LIMIT (src/lib/replyQuote.ts)",
   },
 
-  // The two DERIVED ones, and the reason a value pin beats a name pin. Neither
-  // production side is a literal — `UNREAD_RETENTION_CAP = PAGE_LIMIT` and
-  // `PULL_COMMIT_PX = SWIPE_MIN_PX * 2` — so the number the e2e copy froze can
-  // be moved from a module the copy does not even name. Importing the constant
-  // pins the computed value, which is the one the product uses.
+  // The DERIVED one, and the reason a value pin beats a name pin. Its
+  // production side is not a literal — `UNREAD_RETENTION_CAP = PAGE_LIMIT` — so
+  // the number the e2e copy froze can be moved from a module the copy does not
+  // even name. Importing the constant pins the computed value, which is the one
+  // the product uses.
   {
     file: "e2e/tests/issue1229-unread-retention-bound.spec.ts",
     name: "UNREAD_BOUND",
     production: UNREAD_RETENTION_CAP,
     origin: "UNREAD_RETENTION_CAP = PAGE_LIMIT (src/lib/scrollback.ts)",
   },
+
+  // Was the SECOND derived one until #1671: `PULL_COMMIT_PX = SWIPE_MIN_PX * 2`
+  // became a plain 160 when vjt measured the distance on a phone, because a
+  // measurement is not a multiple of the swipe floor. The pin is unchanged and
+  // it is the reason that landed cleanly — it went red on this very row,
+  // naming the e2e line still holding 80. What it stopped covering went with
+  // the derivation and not with the pin: there is no third module left whose
+  // edit could move this value.
   {
     file: "e2e/tests/issue1445-directory-pull-refresh.spec.ts",
     name: "PULL_COMMIT_PX",
     production: PULL_COMMIT_PX,
-    origin: "PULL_COMMIT_PX = SWIPE_MIN_PX * 2 (src/lib/pullGesture.ts)",
+    origin: "PULL_COMMIT_PX (src/lib/pullGesture.ts)",
   },
 
   // The scroll-edge pair (#1646 slice 2). `SCROLL_BOTTOM_THRESHOLD_PX` is the

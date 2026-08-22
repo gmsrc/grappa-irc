@@ -160,8 +160,8 @@ import { expect, specNick, specUser, test } from "../fixtures/test";
 // proves it (#1646). Pinned by src/__tests__/e2eConstantMirrors.test.ts.
 const LIST_WINDOW_NAME = "$list";
 
-// PULL_COMMIT_PX from src/lib/pullGesture.ts (SWIPE_MIN_PX * 2). Hardcoded for
-// the same reason as the window name above.
+// PULL_COMMIT_PX from src/lib/pullGesture.ts. Hardcoded for the same reason as
+// the window name above.
 //
 // #1658 — and unlike the window name this copy stopped CHECKING ITSELF for a
 // while. It used to: test 2 dragged half of it against a paint capped at the
@@ -182,10 +182,13 @@ const LIST_WINDOW_NAME = "$list";
 //
 // What pins it is #1646's static witness, which needs no testnet:
 // src/__tests__/e2eConstantMirrors.test.ts imports the production constant and
-// compares it to this literal. It watches the number this file does NOT name —
-// the production side is DERIVED, so moving `SWIPE_MIN_PX` in src/lib/swipe.ts
-// moves the commit distance while leaving 80 sitting here.
-const PULL_COMMIT_PX = 80;
+// compares it to this literal. #1671 measured this distance on a phone and
+// doubled it, and that pin is exactly what caught this copy sitting at the old
+// 80 — a red naming this line, not a silent drift. What the pin no longer
+// watches is a THIRD module: production stopped being `SWIPE_MIN_PX * 2` in the
+// same change, deliberately, so moving the swipe floor no longer moves the
+// commit distance and there is nothing left here to be moved from behind.
+const PULL_COMMIT_PX = 160;
 
 // Open the directory pane and hand back its two moving parts.
 //
@@ -394,8 +397,9 @@ async function measureAtFullTravel(
       const y0 = 200;
       fire("touchstart", at(y0));
       fire("touchmove", at(y0 + 20));
-      // Far past every distance in play — the commit point (80) and the slot
-      // at its largest (50). Whatever bounds the pull, it is not the finger
+      // Far past every distance in play — the commit point (160 since #1671)
+      // and the slot at its largest (50). Whatever bounds the pull, it is not
+      // the finger
       // running out. Since #1669 the reading below is NOT the finger's own
       // distance any more: the travel past the commit point is damped towards
       // a ceiling, so what comes back is a damped offset and the test asserts

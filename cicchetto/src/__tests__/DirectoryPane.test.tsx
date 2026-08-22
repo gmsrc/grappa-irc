@@ -1011,8 +1011,9 @@ describe("DirectoryPane", () => {
     // #1658 — the ramp and the travel are INDEPENDENT axes, and the fix for
     // the travel is what puts the ramp at risk: computing opacity from the
     // capped travel would top the spinner out at slotHeight/PULL_COMMIT_PX —
-    // 0.44 at the default font size — so it would never reach full at the one
-    // distance where reaching full is the whole point. The ramp says where the
+    // 0.22 at the default font size, halved from 0.44 when #1671 doubled the
+    // commit distance — so it would never reach full at the one distance where
+    // reaching full is the whole point. The ramp says where the
     // release starts spending a capture; the travel says where the slot sits.
     //
     // Green before this issue and green after it, deliberately: its oracle is
