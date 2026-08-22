@@ -550,6 +550,102 @@ defmodule Grappa.Scrollback do
   end
 
   @doc """
+  #1679 — the newest `limit` rows for EVERY `(network_id, channel)` in
+  `targets`, in a CONSTANT number of queries. Returns
+  `%{{network_id, channel} => [Message.t()]}`, each list ASC by
+  `(server_time, id)` — the order `fetch/7` callers reverse into.
+
+  This is the bulk twin of `fetch/7`, and it exists for one reason: the boot
+  endpoint answers every channel of every network in one round trip, and a
+  round trip that issues one `fetch/7` per channel has moved the thundering
+  herd from the operator's proxy to SQLite. `GrappaWeb.BootCostTest` pins the
+  count as INVARIANT under both account-size axes.
+
+  Same `ROW_NUMBER() OVER (PARTITION BY … )`-filtered-in-the-outer-query
+  shape as `Grappa.ReadCursor.bulk_unread_content_tails/2`, which #396 already
+  proved against the live prod indexes: rank inside a subquery, keep the
+  top-`limit` ids per partition, then read the rows back. Ranking ids rather
+  than whole rows keeps the window pass narrow.
+
+  ## Query COUNT, and why it is one or two rather than one
+
+  `hidden` is the `(network_id, channel)` set whose presence noise this
+  subject suppresses (#458). The exclusion is a `kind NOT IN` predicate, so
+  channels that hide and channels that show cannot share one statement
+  without a per-pair `OR`, which would make the query STRING grow with the
+  account — defeating SQLite's prepared-statement cache for the exact
+  accounts this endpoint exists for. So the targets are partitioned and each
+  half gets one statement: **one query when `hidden` is empty (the common
+  case), two when it is not, never N**. Constant either way, which is what
+  the pin measures.
+
+  ## Over-fetch, bounded and deliberate
+
+  The predicate is `network_id IN (…) AND channel IN (…)` — two array params,
+  a query shape that does NOT vary with account size — rather than an OR over
+  the exact pairs. That admits rows for a `(network, channel)` combination
+  nobody asked for when the same channel name exists on two of the subject's
+  networks; `Map.take/2` drops them. The rows are the subject's own either
+  way (`Subject.subject_where/2` is applied first, as everywhere else), so
+  this is a small over-read, never a leak.
+
+  ## Scope: CHANNELS only
+
+  `targets` carry channel-shaped names (the autojoin ∪ session lists a boot
+  answers with), so the predicate is the plain `channel ==` arm that
+  `channel_or_dm_where/3` resolves those to. DM and self windows are NOT
+  served here — they need that function's OR-shape and its own-nick
+  narrowing, and they are not part of the channel tree a boot renders. A
+  nick-shaped name in `targets` would silently read only its outbound half;
+  callers pass channel lists.
+  """
+  @spec bulk_heads(
+          subject(),
+          [{integer(), String.t()}],
+          pos_integer(),
+          MapSet.t({integer(), String.t()})
+        ) :: %{{integer(), String.t()} => [Message.t()]}
+  def bulk_heads(subject, targets, limit, hidden)
+      when is_list(targets) and is_integer(limit) and limit > 0 do
+    {hiding, showing} = Enum.split_with(targets, &MapSet.member?(hidden, &1))
+
+    Map.merge(
+      heads_for(subject, showing, limit, false),
+      heads_for(subject, hiding, limit, true)
+    )
+  end
+
+  @spec heads_for(subject(), [{integer(), String.t()}], pos_integer(), boolean()) ::
+          %{{integer(), String.t()} => [Message.t()]}
+  defp heads_for(_subject, [], _limit, _hide_presence), do: %{}
+
+  defp heads_for(subject, targets, limit, hide_presence) do
+    capped = min(limit, @max_limit)
+    network_ids = targets |> Enum.map(&elem(&1, 0)) |> Enum.uniq()
+    channels = targets |> Enum.map(&elem(&1, 1)) |> Enum.uniq()
+
+    ranked =
+      Message
+      |> Subject.subject_where(subject)
+      |> where([m], m.network_id in ^network_ids and m.channel in ^channels)
+      |> maybe_exclude_presence(hide_presence)
+      |> select([m], %{id: m.id, rn: over(row_number(), :w)})
+      |> windows([m],
+        w: [partition_by: [m.network_id, m.channel], order_by: [desc: m.server_time, desc: m.id]]
+      )
+
+    top_ids = from(r in subquery(ranked), where: r.rn <= ^capped, select: r.id)
+
+    Message
+    |> where([m], m.id in subquery(top_ids))
+    |> order_by([m], asc: m.server_time, asc: m.id)
+    |> preload(:network)
+    |> Repo.all()
+    |> Enum.group_by(&{&1.network_id, &1.channel})
+    |> Map.take(targets)
+  end
+
+  @doc """
   Counts rows for `(subject, network_id, channel)` whose `id` is
   strictly greater than `after_id`. Returns an integer.
 
