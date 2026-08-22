@@ -63,6 +63,41 @@ export function nestedRuleBodies(selector: string): string[] {
   return out;
 }
 
+/**
+ * The body of every `@media (hover: hover)` block, brace-MATCHED rather than
+ * regex-captured: such a block contains whole rules, and the `[^{}]` classes
+ * the helpers above rely on cannot span a nested brace. Comments stripped,
+ * same as the rest of this module, so prose naming a selector can neither
+ * satisfy nor trip an assertion about it.
+ *
+ * Throws when the sheet carries no such gate at all, for the same reason
+ * `ruleBody` throws on an absent rule: a test asking "is this rule gated?"
+ * must not pass because the GATE vanished.
+ */
+export function hoverGatedBlocks(): string[] {
+  const stripped = themeCss.replace(/\/\*[\s\S]*?\*\//g, "");
+  const opener = /@media\s*\(\s*hover\s*:\s*hover\s*\)\s*\{/g;
+  const out: string[] = [];
+  let match = opener.exec(stripped);
+  while (match !== null) {
+    const start = match.index + match[0].length;
+    let depth = 1;
+    let i = start;
+    while (i < stripped.length && depth > 0) {
+      const ch = stripped[i];
+      if (ch === "{") depth += 1;
+      else if (ch === "}") depth -= 1;
+      i += 1;
+    }
+    if (depth !== 0) throw new Error("unbalanced @media (hover: hover) block in default.css");
+    out.push(stripped.slice(start, i - 1));
+    opener.lastIndex = i;
+    match = opener.exec(stripped);
+  }
+  if (out.length === 0) throw new Error("no @media (hover: hover) gate found in default.css");
+  return out;
+}
+
 export function ruleBody(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const re = new RegExp(`^${escaped}\\s*\\{([^}]*)\\}`, "m");

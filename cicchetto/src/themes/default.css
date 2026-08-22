@@ -11906,8 +11906,24 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   cursor: pointer;
 }
 
-.directory-row-join:hover {
-  background: var(--border);
+/* #1658 — gate the row fill on hover-capable input. A touch browser
+   SYNTHESIZES `:hover` on the element under the finger and LATCHES it, so a
+   finger put down to scroll this list — or to pull it for a refresh, which is
+   the other half of #1658 — painted the row it landed on and left it painted
+   after the lift. vjt reported it from a phone on 1.3.0.
+   The FOURTH instance of a cure this sheet already carries at
+   `.scroll-to-bottom-btn`, `.members-pane li .member-name` and
+   `.next-active-btn` — three, not the eight the issue claims (measured). Named
+   by selector rather than by line number so the citation cannot rot.
+   `(hover: hover)` tests the PRIMARY input, so touch-only and touch-primary
+   devices skip the rule cleanly while a hybrid (Surface, iPad+trackpad)
+   honours it.
+   A PRESSED affordance on touch would be `:active` and is a SEPARATE
+   decision — deliberately not smuggled in here (#1658 says so outright). */
+@media (hover: hover) {
+  .directory-row-join:hover {
+    background: var(--border);
+  }
 }
 
 /* Name + featured + joined labels. Mobile: a wrapping flex ROW so the
