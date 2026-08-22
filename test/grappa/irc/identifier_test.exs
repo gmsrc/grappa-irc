@@ -823,6 +823,41 @@ defmodule Grappa.IRC.IdentifierTest do
     end
   end
 
+  # #1674 — the server-origin half of the sender classification. Promoted
+  # out of `EventRouter.route_non_channel_notice_non_chanserv/3`, which has
+  # routed a dot-bearing sender to `$server` since the notice matrix landed;
+  # the mention fold needs the same verb and must not restate it.
+  describe "server_sender?/1" do
+    test "accepts server names (a dot-bearing prefix)" do
+      assert Identifier.server_sender?("nightwish.azzurra.chat")
+      assert Identifier.server_sender?("irc.libera.chat")
+      assert Identifier.server_sender?("localhost.localdomain")
+    end
+
+    test "rejects every nick, service nicks included" do
+      refute Identifier.server_sender?("vjt")
+      refute Identifier.server_sender?("NickServ")
+      refute Identifier.server_sender?("foo[bar]")
+      refute Identifier.server_sender?("a|b\\c")
+    end
+
+    test "rejects non-binary / empty input" do
+      refute Identifier.server_sender?(nil)
+      refute Identifier.server_sender?(:server)
+      refute Identifier.server_sender?("")
+      refute Identifier.server_sender?(123)
+    end
+
+    property "no valid nick is ever a server sender (the two classes are disjoint)" do
+      # This is the whole justification for the dot test: `@nick_regex`'s
+      # character class has no `.`, so a sender that carries one cannot be
+      # a nick and is therefore the server. Proven, not assumed.
+      check all(s <- StreamData.string(:ascii, min_length: 1, max_length: 20)) do
+        refute Identifier.valid_nick?(s) and Identifier.server_sender?(s)
+      end
+    end
+  end
+
   describe "safe_oper_token?/1 (#20 bundle)" do
     test "accepts non-empty single tokens with no whitespace or control bytes" do
       for s <- ~w(vjt admin-op s3cret hunter2 op_with_underscore) do

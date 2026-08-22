@@ -2894,7 +2894,10 @@ defmodule Grappa.Session.EventRouter do
           {String.t(), String.t()}
   defp route_non_channel_notice_non_chanserv(sender, body, state) do
     cond do
-      String.contains?(sender, ".") ->
+      # #1674 — was an inline `String.contains?(sender, ".")`. Promoted to
+      # `Identifier.server_sender?/1` so the mention fold observes the same
+      # "is this the server" rule this routing door does.
+      Identifier.server_sender?(sender) ->
         {"$server", body}
 
       Identifier.valid_nick?(sender) ->

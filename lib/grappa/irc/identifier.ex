@@ -742,6 +742,28 @@ defmodule Grappa.IRC.Identifier do
 
   def services_sender?(_), do: false
 
+  @doc """
+  True iff `s` is a SERVER name rather than a nick — the other half of the
+  sender classification `services_sender?/1` opens.
+
+  The test is a single `.`, and that is exact rather than heuristic:
+  `@nick_regex`'s character class has no dot in either position, so a
+  sender carrying one cannot be a nick and an IRC prefix is one or the
+  other. `IdentifierTest` pins the disjointness as a property.
+
+  `Grappa.Session.EventRouter` has routed a dot-bearing NOTICE sender to
+  the synthetic `"$server"` window since the notice matrix landed; #1674
+  promoted the inline test here so the mention fold
+  (`Grappa.Mentions.mentionable_sender?/1`) could reuse the verb instead
+  of restating it. Two copies of "is this the server" would be the defect
+  of tomorrow — the whole reason #1674 exists is a rule that lived in one
+  door and not the others.
+  """
+  @spec server_sender?(term()) :: boolean()
+  def server_sender?(s) when is_binary(s), do: String.contains?(s, ".")
+
+  def server_sender?(_), do: false
+
   # Channel-membership sigil precedence: op > halfop > voice. Mirrors
   # cic's `memberSigil` (@ > % > +) so server snapshot and client render
   # agree on which glyph a multi-moded member shows.
