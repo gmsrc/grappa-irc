@@ -76,6 +76,14 @@ defmodule GrappaWeb.RouterScopeTest do
   # scope refusal.
   @client_usable_routes [
     {"DELETE", "/auth/logout"},
+    # #1679 — the boot envelope. Client-usable by the same reasoning as
+    # `GET /me` and the `/networks` prefix it is assembled from: it is the
+    # read a client performs to know what it is connected to, and refusing
+    # it to a headless client would leave that client on the per-network
+    # fan-out the endpoint exists to remove. It carries no credential and
+    # no setting — networks, channel names, and message rows the same
+    # client can already fetch one at a time.
+    {"GET", "/boot"},
     {"GET", "/me"},
     {"GET", "/me/theme"},
     {"PUT", "/me/theme"},

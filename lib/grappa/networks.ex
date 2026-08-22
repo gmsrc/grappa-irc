@@ -824,6 +824,31 @@ defmodule Grappa.Networks do
   end
 
   @doc """
+  The persisted channel list a credential contributes to its network's tree —
+  and it is a DIFFERENT COLUMN per subject kind, which is the whole reason
+  this function exists rather than a field access at each call site.
+
+    * a USER declares `autojoin_channels`: an intention, edited by the
+      operator, honoured on every connect.
+    * a VISITOR carries `last_joined_channels`: a per-network SNAPSHOT the
+      live session writes so a returning visitor lands back where it was.
+      (#211 phase 4c moved it off the `visitors` scalar onto the
+      `(visitor_id, network_id)` credential — a multi-network visitor has one
+      per network, and two concurrent sessions would clobber a single one.)
+
+  #1679 — measured, not assumed: reading `autojoin_channels` for BOTH kinds
+  compiles, passes the user tests, and hands every visitor an EMPTY channel
+  tree. The column choice lives here so the boot endpoint and the
+  per-network endpoint cannot answer differently.
+  """
+  @spec autojoin_channels(:user | :visitor, Credential.t()) :: [String.t()]
+  def autojoin_channels(:user, %Credential{autojoin_channels: channels}),
+    do: channels || []
+
+  def autojoin_channels(:visitor, %Credential{last_joined_channels: channels}),
+    do: channels || []
+
+  @doc """
   The live session's channel list for `(subject, network_id)`, or `[]` when no
   session is up — a parked network has an autojoin list and no live joins, and
   that is a normal answer rather than an error.

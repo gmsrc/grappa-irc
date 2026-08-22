@@ -84,7 +84,7 @@ defmodule GrappaWeb.BootController do
       Map.new(rows, fn {network, _, cred, _} ->
         {network.slug,
          Networks.merge_channel_sources(
-           cred.autojoin_channels,
+           Networks.autojoin_channels(kind, cred),
            Networks.session_channels(subject, network.id)
          )}
       end)

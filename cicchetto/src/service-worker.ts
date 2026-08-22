@@ -95,6 +95,11 @@ const navigationHandler = createHandlerBoundToURL("index.html");
 const navigationRoute = new NavigationRoute(navigationHandler, {
   denylist: [
     /^\/auth/,
+    // #1679 — the one-round-trip boot envelope. A top-level REST path, so
+    // without this entry an explicit navigation to it serves the SPA shell
+    // instead of reaching the controller (REV-G H22). Pinned by
+    // `GrappaWeb.RouterSwDenylistTest`, which is what caught its absence.
+    /^\/boot/,
     /^\/me/,
     /^\/networks/,
     /^\/socket/,

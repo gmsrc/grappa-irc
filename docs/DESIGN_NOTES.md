@@ -58635,6 +58635,38 @@ its strongest form here: the moment a client stops fanning out and starts
 REQUIRING `/boot`, it can no longer talk to a server predating it, which is
 the new-client-to-old-server direction the number exists for.
 
+### What the guardrails caught, which prose would not have
+
+Three existing tests failed on the new route, and each was right.
+
+`RouterSwDenylistTest` — a new TOP-LEVEL path must be in cic's
+service-worker navigation denylist or an explicit navigation to it serves
+the SPA shell instead of reaching the controller (REV-G H22).
+`RouterScopeTest` — every route must be classified client-usable or answer
+the scope refusal; `/boot` is client-usable by the same reasoning as
+`GET /me`, and saying so is now a decision on the record rather than a
+default.
+
+The third was a defect, not a registration. A user's channel list is
+`credential.autojoin_channels`; a VISITOR's is
+`credential.last_joined_channels` (#211 phase 4c moved it off the `visitors`
+scalar). Reading the user column for both compiles, passes every user test,
+and hands each visitor an EMPTY channel tree. The column choice now lives in
+`Networks.autojoin_channels/2` — with `Visitors.list_autojoin_channels/2`
+delegating to it — so the two doors cannot pick differently.
+
+### The head is the TAIL, not the unread region
+
+`/boot`'s per-channel head is the newest page, which is what a pane renders
+on selection. It is deliberately NOT what `refreshScrollback` fetches today
+(`?after=<read cursor>`, i.e. the unread region): a subject a thousand rows
+behind gets the most recent page here, not the thousand. The unread
+machinery — counts, the divider, the far-behind affordance — is driven by
+`/me`'s `unread_counts` and `read_cursors`, which do not need the rows;
+anchoring at a cursor stays the per-channel endpoint's job, unchanged. A
+head shaped like the unread region would also be unbounded per channel,
+which is the one thing a single-response envelope cannot afford.
+
 ### Not measured, and named rather than assumed
 
 The RECONNECT path was read off the code, not executed. `subscribe.ts`'s

@@ -931,7 +931,10 @@ defmodule Grappa.Visitors do
   @spec list_autojoin_channels(Visitor.t(), pos_integer()) :: [String.t()]
   def list_autojoin_channels(%Visitor{id: id}, network_id) when is_integer(network_id) do
     case Credentials.get_visitor_credential(id, network_id) do
-      {:ok, %Credential{last_joined_channels: channels}} when is_list(channels) -> channels
+      # #1679 — the COLUMN choice lives in `Networks.autojoin_channels/2`,
+      # next to the user twin it differs from, so the boot endpoint and the
+      # per-network endpoint cannot pick differently.
+      {:ok, %Credential{} = cred} -> Networks.autojoin_channels(:visitor, cred)
       {:error, :not_found} -> []
     end
   end
