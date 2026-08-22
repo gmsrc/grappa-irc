@@ -1194,6 +1194,14 @@ defmodule Grappa.Deploy.PreflightTest do
     # the repo BEFORE wiring the classifier into the deploy path. The
     # list is PINNED, so a future classifier edit that silently flips a
     # real migration's class fails here instead of on m42.
+    #
+    # ⚠️ `~w()` has no comments — a `#` line inside the sigil becomes WORDS,
+    # and the failure then reads as a classifier disagreement rather than a
+    # syntax mistake. Annotate entries HERE, above the sigil, never inside it.
+    # (#1677's `20260822170037_add_tls_verify_to_network_servers` is a plain
+    # additive `alter table ... add` with a constant default — the same shape
+    # as the `add_label_*` / `add_provider_*` entries, and HOT because the
+    # classifier says so, not because it was assumed.)
     @migrations_glob "priv/repo/migrations/*.exs"
     @expected_hot ~w(
       20260425000000_init
@@ -1233,6 +1241,7 @@ defmodule Grappa.Deploy.PreflightTest do
       20260812220753_add_charset_to_uploads
       20260813074128_add_provider_to_push_subscriptions
       20260820174126_add_label_to_push_subscriptions
+      20260822170037_add_tls_verify_to_network_servers
     )
 
     test "every migration on disk classifies, and the HOT set is exactly the pinned one" do

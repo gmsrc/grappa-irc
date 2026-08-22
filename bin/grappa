@@ -370,6 +370,15 @@ add-server --network <slug> --server <host:port> [options]
         --server <host:port>   endpoint to add
     Optional:
         --tls / --no-tls       force the TLS posture (default: sniffed)
+        --no-tls-verify        do NOT validate this server's certificate
+                               chain (#1677). Default is to validate, and
+                               it is never sniffed from the port. Only for
+                               networks whose leaves can never present a
+                               valid chain (EFNet, IRCnet): cleartext is
+                               WORSE, since it leaks the whole stream,
+                               SASL included. If the network has a CA,
+                               install it in the system trust store
+                               instead. Every such session logs a warning.
         --priority <n>         fail-over order, lower first (default 0)
         --source <ip>          pin the outbound source address. Literal
                                IPv4/IPv6 only, no hostname, no CIDR.
