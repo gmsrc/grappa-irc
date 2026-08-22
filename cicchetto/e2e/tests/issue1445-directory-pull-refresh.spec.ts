@@ -20,8 +20,12 @@
 //      `translateY(-100%)` in the stylesheet; what moves it is its ancestor.
 //   2b. THE ROWS FOLLOW THE FINGER, AND THE SPINNER RIDES ABOVE THEM (#1658
 //      point 3, chromium). Two assertions, and the first is the defect vjt
-//      kept reporting: at a travel of 400px the first row's top edge sits 400px
+//      kept reporting: at a travel of 400px the first row's top edge sits well
 //      below the list's top edge — the CONTENT moved, not just the spinner.
+//      #1669 turned that reading from "by exactly 400px" into the pair of
+//      inequalities its own section below sets out (past the commit distance,
+//      short of the finger's 400), because the travel is damped now and an
+//      equality with the finger's distance IS the defect #1669 removes.
 //      Until point 3 only the slot moved, and because rows start at y=0 too,
 //      every position where the spinner was visible was a position where it
 //      covered the first row's top band; the strongest true statement
@@ -42,9 +46,10 @@
 //      clears the paint from `onCommit` — before that fix the spinner stayed
 //      exactly where the finger left it, at full opacity, for the life of the
 //      pane. Point 3 raised the stakes on it: the travel is on the TRACK now,
-//      so the same omission would strand the whole channel list 240px down the
-//      pane, not just a spinner. Both elements are asserted, and so is the
-//      slot's own transform staying empty — the pane must not write one.
+//      so the same omission would strand the whole channel list a hundred-odd
+//      pixels down the pane, not just a spinner. Both elements are asserted,
+//      and so is the slot's own transform staying empty — the pane must not
+//      write one.
 //   3. CSS CONTRACT (@webkit, iPhone 15): on the real target browser the row
 //      container refuses its own overscroll (so the iOS rubber-band does not
 //      fight the slot at the one scroll position the pull lives at) while
@@ -55,7 +60,8 @@
 //      — the hit-test target across nearly the whole list — still reading
 //      `auto`, which is the shape #913 measured as insufficient.
 //   3b. THE INVARIANT, RESOLVED BY THE ENGINE THE BUG CAME FROM (#1658 point
-//      3, @webkit): the track translate the pane writes at full travel is
+//      3, @webkit): a track translate of the SHAPE the pane writes — since
+//      #1669 a fractional px value, see that test's own note — is
 //      applied straight to the track and the engine's own geometry is read
 //      back — did the ROWS move by it, and did the slot's bottom still land on
 //      the first row's top?
@@ -106,12 +112,20 @@
 //     percentage offset such that the invariant holds", a question chromium
 //     cannot answer at all. It does not answer "does it resolve the same way on
 //     vjt's phone", and no assertion here claims it does.
-//   * The TRAVEL DISTANCE, now that #1658 point 3 removed the cap. Nothing here
-//     says 400px of finger should produce 400px of list, only that it DOES and
-//     that the spinner stays off the rows while it happens. Whether the pull
-//     should ease off past the commit point is a feel question that needs a
-//     phone, and the code takes the position that an unbounded follow is the
-//     honest floor to calibrate from rather than an unmeasured damping curve.
+//   * The TWO FEEL NUMBERS #1669 added — the damping factor and the ceiling.
+//     They are declared provisional in `DirectoryPane.tsx` and vjt calibrates
+//     them on a device; nothing in this file names either one, and nothing here
+//     says the resistance feels like an iOS scroller. What test 3 asserts is
+//     the visible PROPERTY: 400px of finger moves the rows by more than the
+//     commit distance and by strictly LESS than 400 — damped, still following.
+//     The curve's own guarantees (strictly increasing, gain never rising,
+//     bounded by the ceiling) are properties of a number and are pinned over a
+//     dense sweep in src/__tests__/DirectoryPane.test.tsx, where changing them
+//     costs no testnet.
+//     🔴 IOS PARITY, which the issue names as the acceptance bar, IS PROVEN
+//     NOWHERE AND IS NOT CLAIMED. Playwright's webkit does not reproduce real
+//     iOS scroll physics (the bullet above), so no reading in this file can
+//     speak to it. That call is vjt's, on the phone.
 //   * The GESTURE on WebKit, by anything here. `new Touch(...)` throws
 //     `Illegal constructor` there, so no test in this file drives the binder
 //     on that project. MEASURED while looking for a way round it, and recorded
@@ -149,17 +163,22 @@ const LIST_WINDOW_NAME = "$list";
 // PULL_COMMIT_PX from src/lib/pullGesture.ts (SWIPE_MIN_PX * 2). Hardcoded for
 // the same reason as the window name above.
 //
-// #1658 — and unlike the window name this copy no longer CHECKS ITSELF. It
-// did: test 2 dragged half of it against a paint capped at the real constant,
-// so lowering the real one made this spec read the cap instead of the drag and
-// go red. Both halves of that are gone. Point 3 removed the cap outright —
-// with the rows carried by the same transform as the spinner there is no
-// collision left to bound — so no drag in this file can read a clamp instead
-// of a follow, at any distance or font size. The only use left is a drag
-// MAGNITUDE (`PULL_COMMIT_PX * 3` in test 1), which reds only if the real
-// constant grows past 240 and says nothing at all if it shrinks. Leaving the
-// old claim here would have left a comment standing where a witness used to
-// be, which is the failure #1393 spent a day removing.
+// #1658 — and unlike the window name this copy stopped CHECKING ITSELF for a
+// while. It used to: test 2 dragged half of it against a paint capped at the
+// real constant, so lowering the real one made this spec read the cap instead
+// of the drag and go red. Point 3 removed that cap outright — with the rows
+// carried by the same transform as the spinner there was no collision left to
+// bound — and the only use left was a drag MAGNITUDE (`PULL_COMMIT_PX * 3` in
+// test 1), which reds only if the real constant grows past 240 and says
+// nothing at all if it shrinks.
+//
+// #1669 gives it a witness again, of a different kind. The commit distance is
+// now the SEAM of the travel curve: below it the finger goes through 1:1,
+// above it the offset is damped. Test 3 reads that the rows moved MORE than
+// this number and LESS than the finger's own 400, so a copy that drifted above
+// the real constant's damped offset reds — a genuine reading, not a magnitude.
+// It is still one-sided (drifting DOWN stays quiet), which is why the static
+// witness below remains the pin that matters.
 //
 // What pins it is #1646's static witness, which needs no testnet:
 // src/__tests__/e2eConstantMirrors.test.ts imports the production constant and
@@ -321,8 +340,8 @@ async function pullInlinePaint(
   });
 }
 
-// One pull driven far past any cap, at a chosen root font size, measured with
-// the finger still down — the only moment the paint exists.
+// One pull driven far past the commit point, at a chosen root font size,
+// measured with the finger still down — the only moment the paint exists.
 //
 // The font size is written as the CSS var on <html>, which is exactly what
 // `lib/fontSize.ts`'s `writeCssVar` does; set here rather than imported to
@@ -376,9 +395,11 @@ async function measureAtFullTravel(
       fire("touchstart", at(y0));
       fire("touchmove", at(y0 + 20));
       // Far past every distance in play — the commit point (80) and the slot
-      // at its largest (50). Whatever stops the pull, it is not the finger
-      // running out, and since point 3 removed the cap nothing else stops it
-      // either: the reading below is the finger's own distance.
+      // at its largest (50). Whatever bounds the pull, it is not the finger
+      // running out. Since #1669 the reading below is NOT the finger's own
+      // distance any more: the travel past the commit point is damped towards
+      // a ceiling, so what comes back is a damped offset and the test asserts
+      // it as one.
       fire("touchmove", at(y0 + opts.travel));
       const slotRect = slot.getBoundingClientRect();
       const rowRect = row.getBoundingClientRect();
@@ -478,7 +499,9 @@ test("#1445 — a downward pull on the directory asks for the refresh (chromium)
   //
   // Point 3 spread the paint over two elements, so this checks both — and the
   // stranded-track case is the worse of the two: not a hung spinner but the
-  // whole channel list sitting 240px down the pane. `slotTransform` is the
+  // whole channel list sitting a hundred-odd pixels down the pane (#1669's
+  // ceiling bounds how far, and does not make it any less stranded).
+  // `slotTransform` is the
   // third reading and it must be empty here for a different reason: the pane
   // never writes one at all, at any point in the gesture.
   expect(await pullInlinePaint(list)).toEqual({
@@ -496,8 +519,14 @@ test("#1445 — mid-pull the track moves by exactly the finger's travel (chromiu
 
   // 20px. It used to be half the commit distance, then a literal 20 chosen to
   // stay under the #1658 slot-height cap at every font size. Point 3 removed
-  // the cap, so no distance can read a clamp any more and the literal survives
-  // only because it keeps this test's arithmetic a small, obvious number.
+  // that cap, and the literal survived only because it kept this test's
+  // arithmetic a small, obvious number.
+  //
+  // 🔴 #1669 makes it load-bearing again, for a THIRD reason: 20 is below the
+  // commit point, which is where the travel is still 1:1. This test's title —
+  // "by EXACTLY the finger's travel" — is now true only in that stretch, and it
+  // is the browser-side witness that #1669 left the deciding stretch alone.
+  // Raise this past `PULL_COMMIT_PX` and the equality is simply false.
   //
   // The track rests at NO transform, so this reading is the whole of the
   // paint: `after - before` is the finger's travel or the paint is wrong. The
@@ -539,14 +568,23 @@ test("#1658 — the rows follow the finger and the slot rides above them, at eve
     expect(transform, `inline transform at --font-size: ${size}`).not.toBe("");
 
     // POINT 3 ITSELF, and the assertion this file did not have: the CONTENT
-    // moved. The first row is 400px below the list's top edge because the
-    // finger dragged it there. Before point 3 this read 0 at every size — the
-    // rows never moved at all, which is the defect vjt kept seeing, and it is
-    // also what proves the travel is UNCAPPED: any cap would read the cap.
-    expect(rowTop - listTop, `rows followed the finger at --font-size: ${size}`).toBeCloseTo(
-      400,
-      0,
+    // moved. Before point 3 this read 0 at every size — the rows never moved
+    // at all, which is the defect vjt kept seeing.
+    //
+    // #1669 turned the reading from an equality into the two inequalities that
+    // bracket it, because the equality was `toBeCloseTo(400, 0)`: the finger's
+    // own distance, going through whole, which is exactly the unbounded 1:1
+    // drag this issue removes. What survives is the pair that says the same
+    // thing without naming a feel number the pane no longer promises:
+    const moved = rowTop - listTop;
+    // Still FOLLOWING, well past the commit point — not the hard cap #1658
+    // deleted, and not a pane that stopped painting.
+    expect(moved, `rows followed the finger at --font-size: ${size}`).toBeGreaterThan(
+      PULL_COMMIT_PX,
     );
+    // And DAMPED: 400px of finger bought strictly less than 400px of list.
+    // This is #1669's visible outcome, read off real layout in a real engine.
+    expect(moved, `travel damped at --font-size: ${size}`).toBeLessThan(FULL_TRAVEL_PX);
 
     // THE STRONG INVARIANT. The slot's bottom edge lands ON the first row's
     // top edge — the spinner sits in the space the rows opened, touching them
@@ -582,8 +620,9 @@ test("@webkit #1658 — WebKit carries the rows AND keeps the slot off them (iPh
     );
     expect(control.gap, `plain-px control at --font-size: ${size}`).toBeCloseTo(20, 0);
 
-    // The declaration the pane actually writes at full travel, resolved by the
-    // engine the bug was reported from — and the two halves fail differently.
+    // A declaration of the shape the pane writes deep into the pull, resolved
+    // by the engine the bug was reported from — and the two halves fail
+    // differently.
     //
     // `gap` is the plain half: WebKit applied the ancestor translate, so the
     // rows moved. `overlap` is the half chromium cannot answer: the slot's own
@@ -599,8 +638,25 @@ test("@webkit #1658 — WebKit carries the rows AND keeps the slot off them (iPh
     // exactly as the CSS-contract test below names `pan-y`. Change the travel's
     // FORM in the pane and this string must move with it — the chromium arm
     // above is what keeps the pane honest about producing it.
-    const full = await resolveTrackTravel(list, size, "translateY(400px)");
-    expect(full.gap, `rows carried at --font-size: ${size} (${full.computed})`).toBeCloseTo(400, 0);
+    //
+    // #1669 changed that form in a way worth probing: the damped offset is
+    // FRACTIONAL (`pulledOffset` divides), where every declaration this file
+    // ever measured was a whole number. An engine that rounds or refuses a
+    // sub-pixel translate would put the spinner back over the first row by half
+    // a pixel and nothing else here would see it — so the probe is fractional
+    // now, and deliberately.
+    //
+    // The VALUE is not a mirror of the ceiling constant and must not become
+    // one: it is a representative translate from the pane's range, chosen so
+    // this stays a pure engine question (does WebKit compose an ancestor px
+    // translate with a descendant percentage) rather than a second, unpinnable
+    // copy of a feel number vjt is expected to retune. The composition is
+    // linear, so any value answers it.
+    const full = await resolveTrackTravel(list, size, "translateY(152.5px)");
+    expect(full.gap, `rows carried at --font-size: ${size} (${full.computed})`).toBeCloseTo(
+      152.5,
+      1,
+    );
     expect(full.overlap, `slot/row overlap at --font-size: ${size}`).toBeCloseTo(0, 0);
   }
 });
