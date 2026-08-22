@@ -349,6 +349,12 @@ defmodule Grappa.Session.Server do
           required(:host) => String.t(),
           required(:port) => :inet.port_number(),
           required(:tls) => boolean(),
+          # #1677 — per-server certificate-verification posture, from the same
+          # plan row as `:tls`. OPTIONAL because a live pre-#1677 plan map
+          # survives a hot reload without it; `client_opts/1` reads it with a
+          # `true` default, which is the STRICT direction, so the missing key
+          # can only over-verify.
+          optional(:tls_verify) => boolean(),
           # #543 INC-4 — mode 2 (`static_mapping_with_reservations`) may
           # resolve `{:hold, reason}` (no derivable source); `init/1`
           # intercepts it (parked-with-reason) and never reaches `do_init`.
@@ -4667,6 +4673,13 @@ defmodule Grappa.Session.Server do
       host: opts.host,
       port: opts.port,
       tls: opts.tls,
+      # #1677 — the per-server certificate-verification posture, from the same
+      # resolved plan row as `tls`. `Map.get` with a `true` default, unlike
+      # `opts.tls` above: a live pre-#1677 plan map (hot reload) has no such
+      # key, and the safe answer for a missing key is the STRICT one. The
+      # crash-loud argument that governs `:tls` runs the other way here —
+      # crashing would park a session that should simply keep verifying.
+      tls_verify: Map.get(opts, :tls_verify, true),
       source_address: opts.source_address,
       dispatch_to: self(),
       logger_metadata: Log.session_context(opts.subject_label, opts.network_slug),

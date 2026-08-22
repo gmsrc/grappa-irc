@@ -159,4 +159,72 @@ defmodule Grappa.Networks.ServersTest do
       assert Keyword.has_key?(cs.errors, :source_address)
     end
   end
+
+  # #1677 — the per-server verification opt-out. The half that breaks in
+  # silence is the DEFAULT: #89 must keep holding everywhere it holds today,
+  # so a caller that never names the field has to come back strict. Proven
+  # through the REAL persistence round-trip (the column's NOT NULL DEFAULT
+  # and the schema default are two separate places that could drift), not by
+  # reading a struct default back out of memory.
+  describe "tls_verify (#1677)" do
+    test "a server added WITHOUT the flag persists as verifying" do
+      {:ok, net} = Networks.find_or_create_network(%{slug: slug()})
+
+      {:ok, server} =
+        Servers.add_server(net, %{host: "irc.azzurra.chat", port: 6697, tls: true})
+
+      assert server.tls_verify == true
+
+      # Re-read: the struct default and the column default are different
+      # facts, and only the reload proves the row itself is strict.
+      {:ok, reloaded} = Servers.get_server(net, server.id)
+      assert reloaded.tls_verify == true
+    end
+
+    test "the opt-out persists when explicitly typed out" do
+      {:ok, net} = Networks.find_or_create_network(%{slug: slug()})
+
+      {:ok, server} =
+        Servers.add_server(net, %{
+          host: "efnet.deic.eu",
+          port: 6697,
+          tls: true,
+          tls_verify: false
+        })
+
+      assert server.tls_verify == false
+      assert {:ok, %{tls_verify: false}} = Servers.get_server(net, server.id)
+    end
+
+    test "update_server/2 can flip the posture both ways" do
+      {:ok, net} = Networks.find_or_create_network(%{slug: slug()})
+      {:ok, server} = Servers.add_server(net, %{host: "irc.ircnet.com", port: 6697, tls: true})
+
+      assert {:ok, loosened} = Servers.update_server(server, %{tls_verify: false})
+      assert loosened.tls_verify == false
+
+      # Back to strict — an operator whose network fixed its certificates
+      # must be able to return to #89 without deleting the row.
+      assert {:ok, restrict} = Servers.update_server(loosened, %{tls_verify: true})
+      assert restrict.tls_verify == true
+    end
+
+    test "an update that does not name the flag leaves it alone" do
+      {:ok, net} = Networks.find_or_create_network(%{slug: slug()})
+
+      {:ok, server} =
+        Servers.add_server(net, %{
+          host: "irc.swepipe.se",
+          port: 6697,
+          tls: true,
+          tls_verify: false
+        })
+
+      assert {:ok, updated} = Servers.update_server(server, %{priority: 3})
+      assert updated.priority == 3
+      # Editing an unrelated field must not silently re-verify (which would
+      # park the session) nor silently un-verify.
+      assert updated.tls_verify == false
+    end
+  end
 end

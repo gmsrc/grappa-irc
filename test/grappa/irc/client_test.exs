@@ -929,7 +929,7 @@ defmodule Grappa.IRC.ClientTest do
     # (Let's Encrypt → ISRG Root) with `irc.azzurra.chat` in every
     # round-robin member's SAN.
     test "TLS opts carry verify_peer against the system CA store" do
-      opts = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat")
+      opts = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat", :tls_verified)
 
       assert Keyword.fetch!(opts, :verify) == :verify_peer
       # System trust store loaded via OTP's :public_key.cacerts_get/0 — a
@@ -942,7 +942,7 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "TLS opts pin SNI + hostname check to the connect host" do
-      opts = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat")
+      opts = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat", :tls_verified)
 
       # SNI must be the host we dialed so the round-robin pool serves the
       # cert whose SAN covers irc.azzurra.chat.
@@ -958,12 +958,157 @@ defmodule Grappa.IRC.ClientTest do
     end
 
     test "TLS opts bound chain depth" do
-      opts = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat")
+      opts = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat", :tls_verified)
       # Pin the exact depth — azzurra's chain is leaf → LE intermediate →
       # ISRG root (depth 2); a regression that loosened this (e.g. the OTP
       # default 10, or 100) would pass an `is_integer/1` check but widen the
       # accepted chain length. `== 3` is the contract.
       assert Keyword.fetch!(opts, :depth) == 3
+    end
+  end
+
+  # #1677 — the per-server opt-out. Two halves, and the second one is the
+  # half that breaks in silence: that #89 still holds everywhere it held
+  # before. Every assertion below is on the SHAPE the socket would be
+  # opened with, through the same seam the #89 tests use.
+  describe "TLS posture (#1677 per-server verify opt-out)" do
+    test "tls_unverified drops to verify_none" do
+      opts = Client.__tls_connect_opts_for_test__(~c"efnet.deic.eu", :tls_unverified)
+
+      assert Keyword.fetch!(opts, :verify) == :verify_none
+      refute Keyword.get(opts, :verify) == :verify_peer
+    end
+
+    test "tls_unverified OMITS the three opts that are inert without verify_peer" do
+      opts = Client.__tls_connect_opts_for_test__(~c"efnet.deic.eu", :tls_unverified)
+
+      # Absent, not present-and-ignored. A dead `cacerts:`/`depth:` left in
+      # the list invites a later reader to believe some checking survives —
+      # and `cacerts_get/0` RAISES on a box with no CA bundle, so calling it
+      # on a path that never consults the store would invent a failure.
+      refute Keyword.has_key?(opts, :cacerts)
+      refute Keyword.has_key?(opts, :depth)
+      refute Keyword.has_key?(opts, :customize_hostname_check)
+    end
+
+    test "tls_unverified KEEPS SNI — it selects the cert, it does not check it" do
+      opts = Client.__tls_connect_opts_for_test__(~c"efnet.deic.eu", :tls_unverified)
+
+      # Dropping SNI would change WHICH certificate a round-robin member
+      # serves, not how hard we look at it. Different axis, stays.
+      assert Keyword.fetch!(opts, :server_name_indication) == ~c"efnet.deic.eu"
+    end
+
+    test "the two postures differ ONLY in verification — #89 is untouched where it held" do
+      strict = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat", :tls_verified)
+      loose = Client.__tls_connect_opts_for_test__(~c"irc.azzurra.chat", :tls_unverified)
+
+      assert Keyword.fetch!(strict, :verify) == :verify_peer
+      assert Keyword.fetch!(loose, :verify) == :verify_none
+
+      assert Keyword.fetch!(strict, :server_name_indication) ==
+               Keyword.fetch!(loose, :server_name_indication)
+    end
+
+    # The derivation table. This is where a missing `:tls_verify` key decides
+    # a security posture, so all four combinations are pinned — including the
+    # one that does not exist as a concept (`tls: false` with a verify flag),
+    # which must collapse to `:plain` rather than inventing a fourth state.
+    test "the posture derives from (tls, tls_verify), and an ABSENT flag is STRICT" do
+      base = %{
+        host: "irc.azzurra.chat",
+        port: 6697,
+        dispatch_to: self(),
+        logger_metadata: [],
+        nick: "n",
+        ident: "n",
+        realname: "n",
+        sasl_user: "n",
+        auth_method: :none
+      }
+
+      # The half that breaks in silence: a row/plan predating #1677 names no
+      # flag and MUST still verify.
+      assert Client.__transport_posture_for_test__(Map.put(base, :tls, true)) == :tls_verified
+
+      assert Client.__transport_posture_for_test__(Map.merge(base, %{tls: true, tls_verify: true})) ==
+               :tls_verified
+
+      assert Client.__transport_posture_for_test__(Map.merge(base, %{tls: true, tls_verify: false})) == :tls_unverified
+
+      # No TLS at all — the verify flag is meaningless and must not produce a
+      # fourth state.
+      assert Client.__transport_posture_for_test__(Map.put(base, :tls, false)) == :plain
+
+      assert Client.__transport_posture_for_test__(Map.merge(base, %{tls: false, tls_verify: false})) == :plain
+    end
+
+    # Paletto: an unverified link must be LOUD. The operational half of this
+    # slice is that you cannot end up unverified without it being legible —
+    # a quiet downgrade would be worse than the cleartext it replaces, since
+    # `tls: false` at least announces itself in the config.
+    test "an unverified session logs a WARNING naming the posture" do
+      Process.flag(:trap_exit, true)
+
+      log =
+        capture_log(fn ->
+          # Port 1 never accepts; `init/1` logs the posture BEFORE the
+          # connect continue, which is exactly the property being pinned.
+          {:ok, client} =
+            Client.start_link(%{
+              host: "127.0.0.1",
+              port: 1,
+              tls: true,
+              tls_verify: false,
+              dispatch_to: self(),
+              logger_metadata: [],
+              nick: "grappa-test",
+              ident: "grappa-test",
+              realname: "grappa-test",
+              sasl_user: "grappa-test",
+              auth_method: :none
+            })
+
+          assert_receive {:EXIT, ^client, _}, 15_000
+        end)
+
+      assert log =~ "TLS posture: verify_none"
+      assert log =~ "tls_verify=false"
+      assert log =~ "[warning]"
+      refute log =~ "TLS posture: verify_peer"
+    end
+
+    # The operationally load-bearing half: the warning clears the DEFAULT
+    # bar. Captured with no level override, i.e. at the `:warning` level
+    # `config/test.exs` sets — an operator running at the ordinary level
+    # still sees an unverified link. The STRICT line is an `info` and sits
+    # BELOW that bar, so it is pinned in the `async: false` sibling
+    # (`client_tls_posture_log_test.exs`) that may lower the global level;
+    # this file stays `async: true` and must (see that file's moduledoc).
+    test "the unverified warning clears the default log level, unaided" do
+      Process.flag(:trap_exit, true)
+
+      log =
+        capture_log(fn ->
+          {:ok, client} =
+            Client.start_link(%{
+              host: "127.0.0.1",
+              port: 1,
+              tls: true,
+              tls_verify: false,
+              dispatch_to: self(),
+              logger_metadata: [],
+              nick: "grappa-test",
+              ident: "grappa-test",
+              realname: "grappa-test",
+              sasl_user: "grappa-test",
+              auth_method: :none
+            })
+
+          assert_receive {:EXIT, ^client, _}, 15_000
+        end)
+
+      assert log =~ "TLS posture: verify_none"
     end
   end
 
@@ -2286,7 +2431,7 @@ defmodule Grappa.IRC.ClientTest do
                Client.__connect_with_rotation_for_test__(
                  ~c"irc.azzurra.chat",
                  6697,
-                 true,
+                 :tls_verified,
                  [],
                  :inet6,
                  resolver,
@@ -2326,7 +2471,7 @@ defmodule Grappa.IRC.ClientTest do
                Client.__connect_with_rotation_for_test__(
                  ~c"irc.azzurra.chat",
                  6667,
-                 false,
+                 :plain,
                  [],
                  :inet6,
                  resolver,
@@ -2354,7 +2499,7 @@ defmodule Grappa.IRC.ClientTest do
                Client.__connect_with_rotation_for_test__(
                  ~c"irc.azzurra.chat",
                  6697,
-                 true,
+                 :tls_verified,
                  [ifaddr: source],
                  :inet6,
                  resolver,
@@ -2390,7 +2535,7 @@ defmodule Grappa.IRC.ClientTest do
                Client.__connect_with_rotation_for_test__(
                  ~c"irc.azzurra.chat",
                  6697,
-                 true,
+                 :tls_verified,
                  [ifaddr: source],
                  :inet6,
                  resolver,
@@ -2429,7 +2574,7 @@ defmodule Grappa.IRC.ClientTest do
                Client.__connect_with_rotation_for_test__(
                  ~c"irc.azzurra.chat",
                  6697,
-                 true,
+                 :tls_verified,
                  [],
                  :inet6,
                  resolver,
@@ -2462,7 +2607,7 @@ defmodule Grappa.IRC.ClientTest do
                Client.__connect_with_rotation_for_test__(
                  ~c"irc.azzurra.chat",
                  6697,
-                 true,
+                 :tls_verified,
                  [],
                  :inet6,
                  resolver,

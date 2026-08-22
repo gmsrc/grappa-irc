@@ -2,8 +2,8 @@ defmodule Grappa.Networks.Server do
   @moduledoc """
   An IRC server endpoint attached to a `Grappa.Networks.Network`.
 
-  Tuple of `(host, port, tls)` is what `Grappa.IRC.Client` consumes at
-  connect time. `priority` (asc) is the ordering hint for fail-over —
+  Tuple of `(host, port, tls, tls_verify)` is what `Grappa.IRC.Client`
+  consumes at connect time. `priority` (asc) is the ordering hint for fail-over —
   the lowest-numbered enabled server is tried first; Phase 5 deferred
   fail-over policy will iterate the list. `enabled: false` lets an
   operator park a server without removing the row (audit + history).
@@ -33,6 +33,7 @@ defmodule Grappa.Networks.Server do
           host: String.t() | nil,
           port: :inet.port_number() | nil,
           tls: boolean() | nil,
+          tls_verify: boolean() | nil,
           priority: integer() | nil,
           enabled: boolean() | nil,
           source_address: String.t() | nil,
@@ -46,6 +47,12 @@ defmodule Grappa.Networks.Server do
     field :host, :string
     field :port, :integer
     field :tls, :boolean, default: true
+    # #1677 — per-server certificate-verification posture, meaningful only
+    # when `tls` is true. `true` is the #89 default and stays the default in
+    # BOTH places that can express one (here and the column), so a row nobody
+    # touched, and a caller who never names the field, both keep verify_peer.
+    # The opt-out has to be typed out.
+    field :tls_verify, :boolean, default: true
     field :priority, :integer, default: 0
     field :enabled, :boolean, default: true
     field :source_address, :string
@@ -65,7 +72,16 @@ defmodule Grappa.Networks.Server do
   @spec changeset(t(), map()) :: Ecto.Changeset.t()
   def changeset(server, attrs) do
     server
-    |> cast(attrs, [:network_id, :host, :port, :tls, :priority, :enabled, :source_address])
+    |> cast(attrs, [
+      :network_id,
+      :host,
+      :port,
+      :tls,
+      :tls_verify,
+      :priority,
+      :enabled,
+      :source_address
+    ])
     # Re-cast source_address with empty_values: [] so an explicit "" is
     # kept as a change (Ecto's default empty_values: [""] would silently
     # coerce it to nil and bypass the strict-literal check below). Scoped

@@ -52,7 +52,33 @@ defmodule Grappa.IRC.Client do
   round-robin pool member serves the cert whose SAN covers the dialed
   host; (3) `customize_hostname_check` with the RFC-6125 `:https`
   match_fun rejects a valid-CA cert issued for a different host. See
-  `tls_connect_opts/1` for the per-opt rationale.
+  `tls_connect_opts/2` for the per-opt rationale.
+
+  ### The per-server opt-out (#1677)
+
+  A server row may carry `tls_verify: false`, which drops THAT server to
+  `verify: :verify_none` and omits the three opts that are inert without
+  `verify_peer`. It defaults to `true` at the column and at the opts map,
+  so #89 is unchanged everywhere it currently holds.
+
+  It exists because the alternative was worse, not because verification is
+  optional. Some networks cannot present a chain that validates from any
+  reachable leaf — measured on prod: every EFNet leaf with an AAAA record
+  is self-signed or expired, and `irc.ircnet.com` serves the certificate of
+  `ircnet.tngnet.nl`. The workaround for those was `tls: false`, i.e.
+  CLEARTEXT IRC, which leaks the entire stream (SASL and NickServ traffic
+  included) to anything on path. An unverified TLS session still defeats
+  passive capture. This moves a case that was already at the floor one
+  step up; it does not lower anything that was above it.
+
+  What you lose is real and is not hedged here: an active on-path attacker
+  presenting any certificate is accepted. Prefer adding the network's CA to
+  the system store whenever such a CA exists — the opt-out is for the
+  networks where it does not.
+
+  `init/1` logs the posture it resolved, and the unverified one is a
+  `Logger.warning`. An unverified link must be legible in the log; a quiet
+  downgrade would be worse than the cleartext it replaces.
 
   If the upstream presents a cert that does NOT chain to a system-trusted
   CA (a private/self-signed IRC network), the connect fails at the TLS
@@ -131,10 +157,37 @@ defmodule Grappa.IRC.Client do
   @type send_result ::
           :ok | {:error, :invalid_line | :no_socket | :closed | :inet.posix()}
 
+  @typedoc """
+  What this session's transport actually IS, as one closed set (#1677).
+
+  Derived once from `(tls, tls_verify)` at the two doors that know them
+  (`init/1` for the log line, `handle_continue({:connect, _}, _)` for the
+  dial) and threaded through the rotation chain in place of the former
+  `tls :: boolean`. Deliberately a third atom rather than a second boolean
+  parameter: two booleans travelling side by side through five functions can
+  be swapped at a call site and still compile, and one of the four
+  combinations (`tls: false, tls_verify: false`) has no meaning at all.
+  Collapsing them here makes the impossible state unrepresentable below this
+  line and adds no argument to any function in the chain.
+
+  It is also the value the log line names, so what the operator reads is the
+  value the socket was opened with, not a second derivation of it.
+  """
+  @type transport_posture :: :plain | :tls_verified | :tls_unverified
+
   @type opts :: %{
           required(:host) => String.t() | charlist(),
           required(:port) => :inet.port_number(),
           required(:tls) => boolean(),
+          # #1677 — per-server certificate-verification posture. OPTIONAL
+          # with a `true` default, which is CLAUDE.md's "genuine config
+          # default where the default is the correct production behaviour"
+          # exception and not a silent-degradation path: omitting the key can
+          # only make a link MORE verified, never less, so a caller who
+          # forgets it inherits the #89 posture rather than escaping it. The
+          # DB column defaults to `true` too — two defaults agreeing on
+          # strict is defense in depth, not a duplicated rule.
+          optional(:tls_verify) => boolean(),
           required(:dispatch_to) => pid(),
           required(:logger_metadata) => session_metadata(),
           required(:nick) => String.t(),
@@ -1082,15 +1135,18 @@ defmodule Grappa.IRC.Client do
   def init(opts) do
     Logger.metadata(opts.logger_metadata)
 
-    # #89 — TLS posture observability. The connection now uses
-    # `verify: :verify_peer` against the system CA store (see
-    # `tls_connect_opts/1`). This info line lands BEFORE AuthFSM.new/1 —
-    # `init/1` may abort if the FSM rejects the opts (missing password
-    # etc.), and we want the posture visible regardless. Observability,
-    # not contingent on handshake validity.
-    if opts.tls do
-      Logger.info("TLS posture: verify_peer — certificate chain will be validated against the system CA store (#89)")
-    end
+    # #89 — TLS posture observability. This info line lands BEFORE
+    # AuthFSM.new/1 — `init/1` may abort if the FSM rejects the opts
+    # (missing password etc.), and we want the posture visible regardless.
+    # Observability, not contingent on handshake validity.
+    #
+    # #1677 — it now states WHICH posture this session got, and the
+    # unverified one is a `Logger.warning`, not an info. An unverified link
+    # is a deliberate, per-server operator decision; it must be impossible
+    # to end up in one without it being legible in the log. A cure that
+    # created a quiet downgrade would be worse than the cleartext it
+    # replaces, because cleartext at least announces itself as `tls: false`.
+    log_tls_posture(transport_posture(opts))
 
     case AuthFSM.new(opts) do
       {:ok, fsm} ->
@@ -1125,7 +1181,7 @@ defmodule Grappa.IRC.Client do
     # standing up a socket. See do_connect/5.
     deps = %{resolver: &:inet_res.lookup/3, connect_fun: &default_connect/5}
 
-    case do_connect(host, opts.port, opts.tls, Map.get(opts, :source_address), deps) do
+    case do_connect(host, opts.port, transport_posture(opts), Map.get(opts, :source_address), deps) do
       {:ok, socket} ->
         connected = %{state | socket: socket}
         # U-2 (UD7): announce the post-connect / post-TLS / pre-handshake
@@ -1306,12 +1362,18 @@ defmodule Grappa.IRC.Client do
               {:ok, :gen_tcp.socket() | :ssl.sslsocket()} | {:error, term()})
   @typep connect_deps :: %{resolver: resolver_fun(), connect_fun: connect_fun()}
 
-  @spec do_connect(charlist(), :inet.port_number(), boolean(), String.t() | nil, connect_deps()) ::
+  @spec do_connect(
+          charlist(),
+          :inet.port_number(),
+          transport_posture(),
+          String.t() | nil,
+          connect_deps()
+        ) ::
           {:ok, :gen_tcp.socket() | :ssl.sslsocket()} | {:error, term()}
-  defp do_connect(host, port, tls, source_address, deps) do
+  defp do_connect(host, port, posture, source_address, deps) do
     case source_bind(host, source_address) do
       {:ok, {bind_opts, fam}} ->
-        connect_with_rotation(host, port, tls, bind_opts, fam, deps)
+        connect_with_rotation(host, port, posture, bind_opts, fam, deps)
 
       {:error, {:source_family_mismatch, _, _, _} = reason} ->
         # Permanent misconfig (e.g. a v4 source pinned to a v6-only
@@ -1327,6 +1389,40 @@ defmodule Grappa.IRC.Client do
     end
   end
 
+  # #1677 — the ONE place `(tls, tls_verify)` collapses into the posture. Both
+  # readers (the init log line, the connect) call this rather than each
+  # deriving its own answer, so the log cannot describe a posture different
+  # from the one dialled. `tls_verify` defaults to `true` here: see the
+  # `optional(:tls_verify)` note on `t:opts/0` for why the default is the safe
+  # direction and not a silent degradation.
+  @spec transport_posture(opts()) :: transport_posture()
+  defp transport_posture(%{tls: false}), do: :plain
+
+  defp transport_posture(%{tls: true} = opts) do
+    if Map.get(opts, :tls_verify, true), do: :tls_verified, else: :tls_unverified
+  end
+
+  # #1677 — an unverified link is a WARNING, never an info. The whole
+  # operational half of the opt-out is that you cannot end up in one without
+  # seeing it: a quiet downgrade would be worse than the cleartext it
+  # replaces, since `tls: false` at least announces itself in the config.
+  # `:plain` logs nothing here, exactly as before — the cleartext case is
+  # already visible as `transport: :tcp` throughout.
+  @spec log_tls_posture(transport_posture()) :: :ok
+  defp log_tls_posture(:plain), do: :ok
+
+  defp log_tls_posture(:tls_verified) do
+    Logger.info("TLS posture: verify_peer — certificate chain will be validated against the system CA store (#89)")
+  end
+
+  defp log_tls_posture(:tls_unverified) do
+    Logger.warning(
+      "TLS posture: verify_none — certificate chain is NOT validated for this server " <>
+        "(per-server tls_verify=false, #1677). Encrypted against passive capture only; " <>
+        "an active on-path attacker is NOT detected."
+    )
+  end
+
   # #271 — grappa OWNS the leaf choice instead of delegating it to getaddrinfo.
   # Handing the HOSTNAME to :ssl.connect/:gen_tcp.connect lets the OS apply
   # RFC-6724 destination-address sorting, which is STABLE: the same leaf wins
@@ -1340,15 +1436,15 @@ defmodule Grappa.IRC.Client do
   @spec connect_with_rotation(
           charlist(),
           :inet.port_number(),
-          boolean(),
+          transport_posture(),
           keyword(),
           :inet | :inet6,
           connect_deps()
         ) :: {:ok, :gen_tcp.socket() | :ssl.sslsocket()} | {:error, term()}
-  defp connect_with_rotation(host, port, tls, bind_opts, fam, deps) do
+  defp connect_with_rotation(host, port, posture, bind_opts, fam, deps) do
     host
     |> resolve_targets(fam, deps.resolver)
-    |> connect_rotating(host, port, tls, bind_opts, fam, deps.connect_fun)
+    |> connect_rotating(host, port, posture, bind_opts, fam, deps.connect_fun)
   end
 
   # Resolve the round-robin candidate set for `fam` and shuffle it so each
@@ -1385,17 +1481,17 @@ defmodule Grappa.IRC.Client do
           [leaf_target(), ...],
           charlist(),
           :inet.port_number(),
-          boolean(),
+          transport_posture(),
           keyword(),
           :inet | :inet6,
           connect_fun()
         ) :: {:ok, :gen_tcp.socket() | :ssl.sslsocket()} | {:error, term()}
-  defp connect_rotating([target], host, port, tls, bind_opts, fam, connect_fun) do
-    transport_connect(target, host, port, tls, bind_opts, fam, connect_fun)
+  defp connect_rotating([target], host, port, posture, bind_opts, fam, connect_fun) do
+    transport_connect(target, host, port, posture, bind_opts, fam, connect_fun)
   end
 
-  defp connect_rotating([target | rest], host, port, tls, bind_opts, fam, connect_fun) do
-    case transport_connect(target, host, port, tls, bind_opts, fam, connect_fun) do
+  defp connect_rotating([target | rest], host, port, posture, bind_opts, fam, connect_fun) do
+    case transport_connect(target, host, port, posture, bind_opts, fam, connect_fun) do
       {:ok, _} = ok ->
         ok
 
@@ -1404,7 +1500,7 @@ defmodule Grappa.IRC.Client do
           error: inspect({target, reason})
         )
 
-        connect_rotating(rest, host, port, tls, bind_opts, fam, connect_fun)
+        connect_rotating(rest, host, port, posture, bind_opts, fam, connect_fun)
     end
   end
 
@@ -1416,21 +1512,22 @@ defmodule Grappa.IRC.Client do
           leaf_target(),
           charlist(),
           :inet.port_number(),
-          boolean(),
+          transport_posture(),
           keyword(),
           :inet | :inet6,
           connect_fun()
         ) :: {:ok, :gen_tcp.socket() | :ssl.sslsocket()} | {:error, term()}
-  defp transport_connect(target, _, port, false, bind_opts, fam, connect_fun) do
+  defp transport_connect(target, _, port, :plain, bind_opts, fam, connect_fun) do
     connect_fun.(:tcp, target, port, [:binary, fam, packet: :line, active: :once] ++ bind_opts, @connect_timeout_ms)
   end
 
-  defp transport_connect(target, host, port, true, bind_opts, fam, connect_fun) do
+  defp transport_connect(target, host, port, posture, bind_opts, fam, connect_fun)
+       when posture in [:tls_verified, :tls_unverified] do
     connect_fun.(
       :ssl,
       target,
       port,
-      [:binary, fam, packet: :line, active: :once] ++ tls_connect_opts(host) ++ bind_opts,
+      [:binary, fam, packet: :line, active: :once] ++ tls_connect_opts(host, posture) ++ bind_opts,
       @connect_timeout_ms
     )
   end
@@ -1489,10 +1586,34 @@ defmodule Grappa.IRC.Client do
   # against the live prod node before this flip (issue #89): azzurra's
   # round-robin members all chain to ISRG Root with `irc.azzurra.chat` in
   # SAN, so verify_peer is safe and does not risk locking the bouncer out.
+  # #1677 — `:tls_unverified` is the per-server opt-out, and the argument for
+  # its existence is NOT "verification is optional". It is that the workaround
+  # it replaces was `tls: false`, i.e. CLEARTEXT IRC, which is strictly worse:
+  # cleartext hands the whole stream — SASL and NickServ traffic included — to
+  # anything on path, while an unverified session still defeats passive
+  # capture. Measured on prod: every EFNet leaf with an AAAA record is
+  # self-signed or expired, and `irc.ircnet.com` serves the certificate of
+  # `ircnet.tngnet.nl` so the RFC-6125 check cannot pass. Those networks were
+  # already at the floor; this moves them one step UP, and it does not move
+  # anything else — Azzurra, Libera and OFTC keep validating because the
+  # default at both the column and the opts map is strict.
+  #
+  # With `:verify_none` the other three opts are OMITTED, not passed and
+  # ignored: `cacerts`/`depth`/`customize_hostname_check` are inert without
+  # `verify_peer` (see the bullet list above), and leaving dead opts in the
+  # list invites a later reader to believe some checking survives. SNI is
+  # kept — it is not a verification opt, it is how a round-robin member is
+  # told which vhost to serve, and dropping it would change WHICH cert we get
+  # rather than how hard we look at it.
+  #
+  # `cacerts_get/0` is likewise not called on the unverified path: it RAISES
+  # on a box with no CA bundle, and crashing a session that was never going
+  # to consult the trust store would be a failure invented by this function.
   @tls_verify_depth 3
 
-  @spec tls_connect_opts(charlist()) :: [:ssl.tls_client_option()]
-  defp tls_connect_opts(host) do
+  @spec tls_connect_opts(charlist(), :tls_verified | :tls_unverified) ::
+          [:ssl.tls_client_option()]
+  defp tls_connect_opts(host, :tls_verified) do
     [
       verify: :verify_peer,
       cacerts: :public_key.cacerts_get(),
@@ -1504,14 +1625,37 @@ defmodule Grappa.IRC.Client do
     ]
   end
 
+  defp tls_connect_opts(host, :tls_unverified) do
+    [
+      verify: :verify_none,
+      server_name_indication: host
+    ]
+  end
+
   @doc false
-  # Test-only seam for the #89 verify_peer opts. Production callers go
-  # through transport_connect/7. Mirrors __source_bind_for_test__/2 —
-  # greppable, absent from public docs. Lets the client_test assert the
-  # ssl-opts SHAPE without standing up a real TLS listener (the real
-  # handshake to azzurra was proven out-of-band, see issue #89).
-  @spec __tls_connect_opts_for_test__(charlist()) :: [:ssl.tls_client_option()]
-  def __tls_connect_opts_for_test__(host), do: tls_connect_opts(host)
+  # Test-only seam for the TLS opts. Production callers go through
+  # transport_connect/7. Mirrors __source_bind_for_test__/2 — greppable,
+  # absent from public docs. Lets the client_test assert the ssl-opts SHAPE
+  # without standing up a real TLS listener (the real handshake to azzurra
+  # was proven out-of-band, see issue #89).
+  #
+  # #1677 — takes the posture so BOTH shapes are observable through the one
+  # seam. A seam that could only see the strict shape would have left the
+  # opt-out's "and the inert opts are absent" half untested, which is the
+  # half a future edit is most likely to break.
+  @spec __tls_connect_opts_for_test__(charlist(), :tls_verified | :tls_unverified) ::
+          [:ssl.tls_client_option()]
+  def __tls_connect_opts_for_test__(host, posture), do: tls_connect_opts(host, posture)
+
+  @doc false
+  # #1677 test seam for the `(tls, tls_verify) -> posture` derivation. Same
+  # family as the seams above. It exists because the derivation is the one
+  # step where a missing `:tls_verify` key decides a SECURITY posture, and
+  # the production readers of it (`init/1`, `handle_continue/2`) can only be
+  # observed by standing up a socket — which would test the connect, not the
+  # table. The table is what has to be pinned in all four combinations.
+  @spec __transport_posture_for_test__(opts()) :: transport_posture()
+  def __transport_posture_for_test__(opts), do: transport_posture(opts)
 
   # Fixed source present → bind that literal as `ifaddr` over its own
   # family, after confirming the upstream is reachable in that family.
@@ -1574,14 +1718,14 @@ defmodule Grappa.IRC.Client do
   @spec __connect_with_rotation_for_test__(
           charlist(),
           :inet.port_number(),
-          boolean(),
+          transport_posture(),
           keyword(),
           :inet | :inet6,
           resolver_fun(),
           connect_fun()
         ) :: {:ok, :gen_tcp.socket() | :ssl.sslsocket()} | {:error, term()}
-  def __connect_with_rotation_for_test__(host, port, tls, bind_opts, fam, resolver, connect_fun) do
-    connect_with_rotation(host, port, tls, bind_opts, fam, %{
+  def __connect_with_rotation_for_test__(host, port, posture, bind_opts, fam, resolver, connect_fun) do
+    connect_with_rotation(host, port, posture, bind_opts, fam, %{
       resolver: resolver,
       connect_fun: connect_fun
     })

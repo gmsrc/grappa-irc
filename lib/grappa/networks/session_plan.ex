@@ -326,6 +326,11 @@ defmodule Grappa.Networks.SessionPlan do
       host: server.host,
       port: server.port,
       tls: server.tls,
+      # #1677 — per-server certificate-verification posture. Threaded from the
+      # SAME row as `tls` so the two cannot come from different servers after
+      # a fail-over pick. Re-resolved on every `Session.Server.init/1`, so an
+      # operator flipping the column takes effect on the next (re)connect.
+      tls_verify: server.tls_verify,
       # #228 / #266 / #543 — resolve the source-bind through
       # `effective_source/3`. #266: an admin-configured per-network
       # `server.source_address` WINS (absolute bind, BOTH modes). Else the
