@@ -1283,7 +1283,19 @@ defmodule Grappa.Networks.Credentials do
   for display.
   """
   @spec list_credentials_for_user(User.t()) :: [Credential.t()]
-  def list_credentials_for_user(%User{id: user_id}) do
+  def list_credentials_for_user(%User{id: user_id}), do: list_credentials_for_user_id(user_id)
+
+  @doc """
+  The id-keyed twin of `list_credentials_for_user/1`, and the symmetric
+  sibling of `list_visitor_credentials/1` (which has always been id-keyed).
+
+  #1679 — a caller holding a `Session.subject()` tuple has the id and not the
+  struct, and fetching a `%User{}` back out of the DB purely to destructure
+  its `id` would be a query bought for nothing on a path whose whole point is
+  a constant query count.
+  """
+  @spec list_credentials_for_user_id(Ecto.UUID.t()) :: [Credential.t()]
+  def list_credentials_for_user_id(user_id) when is_binary(user_id) do
     query =
       from(c in Credential,
         where: c.user_id == ^user_id,

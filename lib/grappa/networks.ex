@@ -732,6 +732,110 @@ defmodule Grappa.Networks do
     Wire.home_data(pairs, available_slugs)
   end
 
+  @typedoc """
+  One `GET /networks` row before rendering: the network, the LIVE-or-fallback
+  nick, the credential of record, and the live upstream facts (`nil` when no
+  session is up).
+  """
+  @type network_row ::
+          {Network.t(), String.t(), Credential.t(), Session.connection_info() | nil}
+
+  @doc """
+  Every network row the subject can see, tagged with the subject kind the
+  wire discriminator is built from.
+
+  #1679 — extracted from `GrappaWeb.NetworksController.index/2` so the boot
+  endpoint answers with the SAME rows rather than a second assembly that
+  drifts. The two branches were already byte-identical apart from the tag;
+  keeping one copy is what makes "`/boot`'s networks are `GET /networks`'s
+  networks" a fact a test can assert rather than a claim.
+
+  Constant in the number of networks: the credential read preloads
+  `:network`, and both live lookups (`resolve_network_nick/2`,
+  `Session.connection_info/2`) are `Registry`/GenServer reads, not queries.
+  `GrappaWeb.BootCostTest` measures that.
+  """
+  @spec subject_network_rows(Session.subject()) ::
+          {:user, [network_row()]} | {:visitor, [network_row()]}
+  def subject_network_rows({:user, user_id} = subject) when is_binary(user_id) do
+    {:user, rows_for(subject, Credentials.list_credentials_for_user_id(user_id))}
+  end
+
+  def subject_network_rows({:visitor, visitor_id} = subject) when is_binary(visitor_id) do
+    {:visitor, rows_for(subject, Credentials.list_visitor_credentials(visitor_id))}
+  end
+
+  @spec rows_for(Session.subject(), [Credential.t()]) :: [network_row()]
+  defp rows_for(subject, credentials) do
+    Enum.map(credentials, fn cred ->
+      {cred.network, resolve_network_nick(subject, cred), cred, live_connection_info(subject, cred.network_id)}
+    end)
+  end
+
+  # #474 B — the LIVE upstream facts for a row, or `nil` when there is no live
+  # connected session (parked / failed / no pid): the honest "no connection"
+  # the server-window rail renders as an absent card. Same live-vs-DB split as
+  # `resolve_network_nick/2` — these come from the running Session.Server,
+  # never the credential row of record.
+  @spec live_connection_info(Session.subject(), integer()) :: Session.connection_info() | nil
+  defp live_connection_info(subject, network_id) do
+    case Session.connection_info(subject, network_id) do
+      {:ok, info} -> info
+      {:error, _} -> nil
+    end
+  end
+
+  @typedoc "One channel-tree entry: the name, whether we are IN it, and why we know about it."
+  @type channel_entry :: %{name: String.t(), joined: boolean(), source: :autojoin | :joined}
+
+  @doc """
+  The channel tree for one network: the persisted autojoin list unioned with
+  what the LIVE session says it is actually in.
+
+  Q3 pinned: a channel in BOTH is sourced `:autojoin`. Sorted by
+  `{name, source}` for wire-shape stability — name is the primary key and
+  unique under the `MapSet.difference/2` dedup, but tie-breaking on `:source`
+  makes the ordering contract TOTAL, so a future widening that admitted
+  duplicates would still give clients deterministic order instead of
+  source-dependent churn (M-web-4).
+
+  #1679 — lifted out of `GrappaWeb.ChannelsController` so the boot endpoint
+  builds the SAME tree rather than a second copy. The per-network endpoint
+  and the boot endpoint answering different channel lists is precisely the
+  silent half of this change, so there is one function and both doors call
+  it.
+  """
+  @spec merge_channel_sources([String.t()], [String.t()]) :: [channel_entry()]
+  def merge_channel_sources(autojoin, session) when is_list(autojoin) and is_list(session) do
+    autojoin_set = MapSet.new(autojoin)
+    session_set = MapSet.new(session)
+
+    autojoin_entries =
+      Enum.map(autojoin_set, fn name ->
+        %{name: name, joined: MapSet.member?(session_set, name), source: :autojoin}
+      end)
+
+    session_only_entries =
+      session_set
+      |> MapSet.difference(autojoin_set)
+      |> Enum.map(fn name -> %{name: name, joined: true, source: :joined} end)
+
+    Enum.sort_by(autojoin_entries ++ session_only_entries, &{&1.name, &1.source})
+  end
+
+  @doc """
+  The live session's channel list for `(subject, network_id)`, or `[]` when no
+  session is up — a parked network has an autojoin list and no live joins, and
+  that is a normal answer rather than an error.
+  """
+  @spec session_channels(Session.subject(), integer()) :: [String.t()]
+  def session_channels(subject, network_id) when is_integer(network_id) do
+    case Session.list_channels(subject, network_id) do
+      {:ok, list} -> list
+      {:error, :no_session} -> []
+    end
+  end
+
   @doc """
   Resolves the live IRC nick for a `(subject, credential)` pair. Asks
   the running `Session.Server` for its current nick — which may

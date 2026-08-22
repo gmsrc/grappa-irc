@@ -43,7 +43,7 @@ defmodule GrappaWeb.ChannelsController do
 
   alias Grappa.Accounts.User
   alias Grappa.Networks.{Credentials, Network}
-  alias Grappa.{Session, Visitors}
+  alias Grappa.{Networks, Session, Visitors}
   alias GrappaWeb.{BodyLimit, Subject}
 
   @doc """
@@ -61,13 +61,8 @@ defmodule GrappaWeb.ChannelsController do
     subject = conn.assigns.current_subject
 
     with {:ok, autojoin} <- subject_autojoin(subject, network) do
-      session_channels =
-        case Session.list_channels(Subject.to_session(subject), network.id) do
-          {:ok, list} -> list
-          {:error, :no_session} -> []
-        end
-
-      entries = merge_channel_sources(autojoin, session_channels)
+      session_channels = Networks.session_channels(Subject.to_session(subject), network.id)
+      entries = Networks.merge_channel_sources(autojoin, session_channels)
       render(conn, :index, channels: entries)
     end
   end
@@ -86,33 +81,6 @@ defmodule GrappaWeb.ChannelsController do
     # (`conn.assigns.network`). No credential on this network → empty list
     # (the visitor hasn't attached / joined anything there yet).
     {:ok, Visitors.list_autojoin_channels(visitor, network.id)}
-  end
-
-  # Q3 pinned: when a channel is in both autojoin and session, source
-  # is :autojoin. Sorted alphabetically by `{name, source}` for
-  # wire-shape stability — name is the primary key and (under current
-  # MapSet.difference dedup) is unique, but tie-breaking on `:source`
-  # makes the ordering contract total. If a future refactor ever
-  # widened `merge_channel_sources/2` to accept duplicates, clients
-  # would still see deterministic order across requests instead of
-  # source-dependent churn (M-web-4).
-  @spec merge_channel_sources([String.t()], [String.t()]) ::
-          [%{name: String.t(), joined: boolean(), source: :autojoin | :joined}]
-  defp merge_channel_sources(autojoin, session) do
-    autojoin_set = MapSet.new(autojoin)
-    session_set = MapSet.new(session)
-
-    autojoin_entries =
-      Enum.map(autojoin_set, fn name ->
-        %{name: name, joined: MapSet.member?(session_set, name), source: :autojoin}
-      end)
-
-    session_only_entries =
-      session_set
-      |> MapSet.difference(autojoin_set)
-      |> Enum.map(fn name -> %{name: name, joined: true, source: :joined} end)
-
-    Enum.sort_by(autojoin_entries ++ session_only_entries, &{&1.name, &1.source})
   end
 
   @doc """
