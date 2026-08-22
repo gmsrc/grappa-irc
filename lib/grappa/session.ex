@@ -231,6 +231,17 @@ defmodule Grappa.Session do
           required(:host) => String.t(),
           required(:port) => :inet.port_number(),
           required(:tls) => boolean(),
+          # #1677 — per-server certificate-verification posture, threaded off
+          # the SAME `%Server{}` row as `:tls`. REQUIRED here, and that is not
+          # the same call as the `optional(:tls_verify)` on
+          # `Grappa.Session.Server.init_opts/0`: `base_plan/6` is the single
+          # build site for BOTH the user and visitor plans and always sets it,
+          # so `required` states what a plan actually IS — while the SERVER
+          # tolerates its absence so an opts map in flight across a hot reload
+          # cannot park a session. The asymmetry is one-way safe: a required
+          # map satisfies the optional one, and the server's fallback is the
+          # STRICT posture.
+          required(:tls_verify) => boolean(),
           required(:source_address) => String.t() | nil,
           # #543 INC-6 — the derived `::cb` source alias the session acquires/
           # releases for its upstream lifetime (equals `source_address` when
