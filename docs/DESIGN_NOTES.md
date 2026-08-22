@@ -58288,3 +58288,95 @@ argument against one: the defect class is prose, three independent searches here
 each returned a different subset, and the one that wrapped across a line break
 is invisible to the whole technique. A gate that greens on the sentence it cannot
 see is a floor that lies — the same failure the ruling itself was about.
+<!-- entry #1674 -->
+
+---
+
+## 2026-08-22 — #1674: a robot spelling your nick is not a mention
+
+A user reported, with a screen recording, a red `@1` on the server tab that
+"never goes away" — gone while the server window is open, back on the next tab
+switch. Measured read-only on prod (azzurra, `network_id = 1`): row `id
+2957172`, `channel = "$server"`, `kind = :notice`, `sender = "NickServ"`, body
+`Password accepted for <nick>. You are now identified.` The login confirmation
+spells the operator's own nick, and every layer below it then did exactly what
+it was specified to do. The "it comes back" half was the documented focus-zero
+overlay (`cicchetto/src/lib/mentions.ts`) and was never the bug; the badge
+cleared for real only when the read cursor advanced.
+
+### The layers were right; the input was wrong
+
+`Mentions.mentioned?/3` is a predicate on the BODY. `:notice` is in
+`Message.content_kinds/0`, so the row counted as unread content, and nothing
+anywhere asked WHO sent it. So a NickServ confirmation — and equally an ircd
+notice, which routinely names the connecting nick — lit the highest-severity
+badge grappa has, on a window most operators never open, and kept it lit.
+
+### The discriminator is the SENDER, not the kind and not the channel
+
+Two cures were available and only one is right.
+
+Excluding `:notice` wholesale is wrong: a human `/notice vjt ...` IS
+conversation, and the mention it raises is the one the feature exists for.
+That half breaks silently — nothing would have told us.
+
+Excluding the `$server` channel is wrong because the defect is not confined to
+it, which the issue flagged as unmeasured. Measured here, as a failing test
+before the fix: `EventRouter.open_query_or_server/2` (#400, generalised by
+#546) re-keys a services NOTICE onto the SERVICE'S OWN query window whenever
+the operator has one open, and `snapshot/7` on channel `"nickserv"` returned
+`mentions: 1` for the identical row. A channel-shaped cure would have fixed the
+reported window and left the one an operator who `/msg`s NickServ actually
+looks at.
+
+So the rule is on the sender, and it composes the two verbs that already
+answer the same question for message ROUTING:
+`Grappa.Mentions.mentionable_sender?/1` = not `Identifier.services_sender?/1`
+and not `Identifier.server_sender?/1`.
+
+`server_sender?/1` is new only as a name — the single-dot test has been
+routing dot-bearing NOTICE senders to `$server` since the notice matrix
+landed, inline in `EventRouter`. It was promoted rather than restated, and it
+is exact rather than heuristic: `@nick_regex`'s character class has no dot, so
+a sender carrying one cannot be a nick, and an IRC prefix is one or the other.
+`IdentifierTest` pins that disjointness as a property.
+
+The predicate is total and biased toward `true`: it only ever SUBTRACTS, so an
+input it cannot classify stays mentionable and the other conjuncts decide it.
+A fallback clause that silently excluded would be the same defect again.
+
+### One rule, folded at every door
+
+The issue asked for one SSOT so `count_mentions/6` and `count_tail_mentions/3`
+could not diverge. They were already two byte-identical closures, which is
+precisely the shape that made this defect cost four sites instead of one — so
+the fold itself collapsed into `WindowCounts.mention_row?/3` (own-sent, then
+mentionable sender, then body match) and both counting doors now call it.
+
+Two more doors fold the same notion and were closed with it, deliberately
+beyond the issue's text: `aggregate_mentions/6` (the C8 mentions-while-away
+bundle would otherwise still LIST the row whose badge no longer counts) and
+`Push.Triggers.mention_match?/4` (the OS push). The push arm is closed by code
+reading, not by a measured prod arrival: the kind gate already drops every
+`:notice`, so only a services PRIVMSG could reach it, and bahamut's services
+deliver by NOTICE. It is a hole in the door, not an observed leak.
+
+The push mirror `cicchetto/src/lib/pushTriggers.ts` moved in lockstep, with
+four new rows in the shared `shouldNotifyTruthTable.json` that both ports read
+— including one asserting that `channel_messages_all` STILL delivers a service
+row, because only the mention disjunct is gated. Asking for every channel
+message is an explicit request; a mention is an inference.
+
+### What was measured and declined
+
+cic's per-row `.scrollback-mention` was named as needing to move in lockstep.
+It does not: `ScrollbackLine`'s `isMention()` is already gated on
+`kind === "privmsg"`, so it has never highlighted ANY notice, service or human.
+The client is stricter than the server here, in both directions — it also
+misses a peer `/me` and a peer `/notice` that name you — and reconciling that
+axis is a separate question from this one. Untouched, and stated rather than
+quietly assumed.
+
+`aggregate_mentions/6` also does not exclude OWN-sent rows, unlike both badge
+doors: your own line quoting your own nick appears in the away bundle. Real,
+a different axis, left alone.
