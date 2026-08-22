@@ -373,9 +373,16 @@ describe("cic declares the client protocol version to the socket (#1379)", () =>
 });
 
 // #1379 — the user-topic join reply carries the server's `protocol_version`
-// and cic dropped it on the floor. It is a diagnostic, not a gate: a
-// difference is legal under the additive-only rule, so the only correct
-// response is to make it visible to whoever is reading a console.
+// and cic dropped it on the floor. What this suite covers is the HANDOVER:
+// joinUser reads the number and hands it to `serverProtocol.ts`, which owns
+// the floor and the comparison (`serverProtocol.test.ts`).
+//
+// This comment used to call the number "a diagnostic, not a gate", because
+// "a difference is legal under the additive-only rule". #1393d withdrew that
+// on 2026-08-21: a server BEHIND cic's floor now raises a banner, not a
+// console line. Only the server-AHEAD direction is still nothing to gate on.
+// The `console.warn` covers both because a bundle/BEAM skew on a
+// service-worker-cached PWA is invisible from every other signal.
 describe("joinUser consumes the join reply's protocol_version (#1379)", () => {
   async function joinAndReply(reply: unknown): Promise<MockInstance> {
     localStorage.setItem("grappa-token", "tok-proto-reply");

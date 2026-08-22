@@ -850,8 +850,11 @@ export function pushRaw(networkId: number, line: string): Promise<void> {
 // #606 — the WHOIS request origin. `"user"` = an operator-issued /whois
 // (renders the single-slot scrollback card); `"rail"` = the query-rail
 // auto-fetch (feeds the per-nick rail cache, never the scrollback card).
-// Add-only wire field, so the server treats an absent/unknown value as
-// "user" and no protocol_version bumps.
+// Add-only wire field: the server treats an absent/unknown value as
+// "user". It landed under protocol v1 with no protocol_version bump —
+// that was the rule of the day, and #1393d withdrew it on 2026-08-21.
+// The server now bumps on EVERY wire-shape change, additive included
+// (docs/CLIENT_PROTOCOL.md §2a), so widening this union is not free.
 export type WhoisOrigin = "user" | "rail";
 
 // /whois [<server>] <nick> → WHOIS — pushes on the user-level channel.
