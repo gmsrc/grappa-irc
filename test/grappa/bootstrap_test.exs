@@ -104,6 +104,41 @@ defmodule Grappa.BootstrapTest do
       assert is_pid(Session.whereis({:user, vjt.id}, net_b.id))
     end
 
+    test "#1675 — resumes a :failing credential, still skips :parked and :failed" do
+      vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
+      {_, port_a} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {_, port_b} = IRCServer.start_server(IRCServer.passthrough_handler())
+
+      net_failing = bind_db(vjt, "failing-#{System.unique_integer([:positive])}", port_a)
+      net_failed = bind_db(vjt, "failed-#{System.unique_integer([:positive])}", port_b)
+
+      on_exit(fn -> stop_session(vjt.id, net_failing.id) end)
+      on_exit(fn -> stop_session(vjt.id, net_failed.id) end)
+
+      # `:failing` = "wanted up, link not registered, backoff running". A
+      # reboot landing inside that backoff window MUST bring the row back,
+      # or a misconfigured-then-fixed network stays down until a human
+      # PATCHes it — the reason `:failing` and `:failed` are two values
+      # and not one `:failed` plus a reason grep.
+      vjt
+      |> Credentials.get_credential!(net_failing)
+      |> Ecto.Changeset.change(
+        connection_state: :failing,
+        connection_state_reason: "connection refused"
+      )
+      |> Repo.update!()
+
+      vjt
+      |> Credentials.get_credential!(net_failed)
+      |> Ecto.Changeset.change(connection_state: :failed, connection_state_reason: "k-line")
+      |> Repo.update!()
+
+      assert {:ok, %Result{}} = Bootstrap.run()
+
+      assert is_pid(Session.whereis({:user, vjt.id}, net_failing.id))
+      assert Session.whereis({:user, vjt.id}, net_failed.id) == nil
+    end
+
     test "logs structured summary line with 5-bucket honest counts" do
       vjt = user_fixture(name: "vjt-#{System.unique_integer([:positive])}")
       {_, port} = IRCServer.start_server(IRCServer.passthrough_handler())
