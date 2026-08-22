@@ -5,7 +5,7 @@ defmodule Grappa.ScrollbackTelemetryTest do
   Two signals, both proving the mechanisms the issue traced:
 
     * `[:grappa, :scrollback, :persist, :start | :stop]` — a `:telemetry.span`
-      around `persist_event/1`'s insert+preload, tagged by `channel` so the
+      around `persist_event/1`'s insert, tagged by `channel` so the
       per-channel insert latency (mechanism 3, index write-amplification) is
       correlatable against a channel's inbound msg/s. This is ALSO the "pure
       insert" half of the split-span pair (the other half is the send-path
@@ -13,7 +13,7 @@ defmodule Grappa.ScrollbackTelemetryTest do
       the mailbox head-of-line blocking (mechanism 1).
 
     * `[:grappa, :scrollback, :persist, :contention]` — emitted from
-      `with_pool_retry/3` on each transient busy/locked/queue_timeout fault,
+      `with_pool_retry/1` on each transient busy/locked/queue_timeout fault,
       surfacing SQLite single-writer contention (mechanism 2) as telemetry
       rather than only a log grep.
 
@@ -112,7 +112,7 @@ defmodule Grappa.ScrollbackTelemetryTest do
     end
   end
 
-  describe "with_pool_retry/3 contention — [:grappa, :scrollback, :persist, :contention]" do
+  describe "with_pool_retry/1 contention — [:grappa, :scrollback, :persist, :contention]" do
     defp raise_busy, do: raise(%Exqlite.Error{message: "database is locked", statement: nil})
 
     defp raise_queue_timeout do

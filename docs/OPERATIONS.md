@@ -4920,7 +4920,7 @@ mechanism is provable before any fix (Deliverable 2, deferred). Four signals,
 mapped to the three mechanisms the issue traced:
 
 - **`[:grappa, :scrollback, :persist, :start | :stop]`** — a `:telemetry.span`
-  around every `messages` insert+preload, **tagged by `channel`** (also
+  around every `messages` insert, **tagged by `channel`** (also
   `kind`, `network_id`, `subject`, and `outcome`). `:stop` `duration` is the
   **pure insert** time (mechanism 3: index write-amplification grows it as the
   table grows). Correlate a channel's `:stop` durations against its inbound
@@ -4932,8 +4932,11 @@ mapped to the three mechanisms the issue traced:
   duration` = head-of-line blocking (mechanism 1)** — the user's own send
   queued behind a busy channel's synchronous inbound inserts.
 - **`[:grappa, :scrollback, :persist, :contention]`** — fires per transient
-  SQLite write-contention fault in `with_pool_retry/3` (mechanism 2:
-  single-writer contention). Metadata `fault: :queue_timeout | :busy_locked`,
+  SQLite write-contention fault in `with_pool_retry/1` (mechanism 2:
+  single-writer contention). Metadata
+  `fault: :queue_timeout | :busy_locked | :interrupted` (`:interrupted` since
+  #1657 — the pool's checkout deadline cancelled a statement it had already
+  served, i.e. the connection was taken BACK rather than never granted),
   `dropped: false` (ridden out) / `true` (budget exhausted, row lost — the
   telemetry twin of the `scrollback persist unavailable: SQLite pool
   saturated` `Logger.warning`).

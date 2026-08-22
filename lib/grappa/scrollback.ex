@@ -65,7 +65,7 @@ defmodule Grappa.Scrollback do
   @max_limit 500
 
   # #336 / #340 — SQLite is single-writer; a write burst saturates the
-  # connection pool (`Repo.insert`/`Repo.preload` RAISE
+  # connection pool (`Repo.insert` RAISES
   # `DBConnection.ConnectionError`, reason: :queue_timeout) OR, when a slow
   # writer holds the lock past `busy_timeout`, raises `%Exqlite.Error{}`
   # with a "busy"/"locked" message. Both are TRANSIENT contention, not a
@@ -91,8 +91,17 @@ defmodule Grappa.Scrollback do
 
   # Closed error set for the write path. A validation failure returns the
   # changeset (caller inspects `.errors`); a pool-saturation drop returns
-  # the bare atom (nothing to inspect — the row never reached the DB, or
-  # the insert landed but the wire-shape preload could not).
+  # the bare atom, and since #1657b that atom means EXACTLY ONE thing:
+  # the row never reached the DB.
+  #
+  # 🔴 It has to keep meaning exactly that. It used to cover a second case
+  # as well — insert landed, wire-shape preload did not — and one atom over
+  # two outcomes is what let `Persistor` log `scrollback row dropped` for a
+  # row sitting durably in the table (#1429 census, over-counting). Any
+  # retried op added AFTER the insert in `persist_row/1` re-opens the
+  # ambiguity, because both arms collapse onto this one value and no caller
+  # downstream can tell them apart. Add one and you must widen the type
+  # first, not the function.
   @type persist_error :: Ecto.Changeset.t() | :persist_unavailable
 
   # Content-bearing kinds: the ones that carry a notification meaning.
@@ -169,7 +178,7 @@ defmodule Grappa.Scrollback do
   def persist_event(%{kind: kind} = attrs) when is_atom(kind) do
     changeset = Message.changeset(%Message{}, attrs)
 
-    # #357 D1 — the insert+preload is wrapped in the `[:grappa, :scrollback,
+    # #357 D1 — the insert is wrapped in the `[:grappa, :scrollback,
     # :persist, …]` span (channel-tagged) so per-channel write latency
     # (mechanism 3) is measurable, and it is the "pure insert" half of the
     # split-span pair vs the send-path total (mechanism 1). The span returns
@@ -208,9 +217,10 @@ defmodule Grappa.Scrollback do
   # `Grappa.Session.PersistorTest`, whose two tests fail in opposite directions.
   #
   # What remains is a single op whose failure means exactly one thing: the row
-  # did not land. The `with` still carries a plain `{:error, %Changeset{}}`
-  # validation failure straight through (that op returns, never raises, so it
-  # is not retried). Kept as a named function rather than inlined to hold
+  # did not land. `with_pool_retry/1` still carries a plain
+  # `{:error, %Changeset{}}` validation failure straight through (a changeset
+  # error is RETURNED, never raised, so it is not retried). Kept as a named
+  # function rather than inlined to hold
   # `persist_event/1`'s nesting ≤ 2 (Credo).
   @spec persist_row(Ecto.Changeset.t()) :: {:ok, Message.t()} | {:error, persist_error()}
   defp persist_row(changeset) do
@@ -272,9 +282,16 @@ defmodule Grappa.Scrollback do
   rescue is the ONE place the scrollback posture diverges from a stateless
   web write, which instead lets the engine's raise surface as a 500.
 
-  Public because `persist_event/1` runs BOTH its insert and its preload
-  through it, and the retry/degrade contract is unit-tested here directly
-  (the sandbox pool cannot reproduce a real `queue_timeout`).
+  Public for two reasons, and `persist_event/1` is no longer either of them:
+  since #1657b it makes exactly ONE wrapped call, from inside this module.
+  (1) The retry/degrade contract is unit-tested here directly — the sandbox
+  pool cannot reproduce a real `queue_timeout`, so the tests hand this
+  function a raising op. (2) It is the named reference posture two siblings
+  are documented AGAINST: `Grappa.Repo.BusyRetry`'s moduledoc cites it as
+  the deliberate divergence (the engine re-raises a non-transient fault
+  where this one rescues it), and `Grappa.Notify.degrade_on_db_fault/1`
+  says it mirrors this test posture. Un-publishing it is a surface change,
+  not a comment fix, and it would take both citations with it.
   """
   @spec with_pool_retry((-> {:ok, result} | {:error, Ecto.Changeset.t()})) ::
           {:ok, result} | {:error, persist_error()}

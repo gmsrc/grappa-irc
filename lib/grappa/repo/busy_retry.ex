@@ -332,11 +332,14 @@ defmodule Grappa.Repo.BusyRetry do
     # `maybe_inject_fault/0` at the top of a `BusyRetry.run/1` attempt — NOT a
     # raw `Repo` call and NOT an operation. `fire_on: 1` fires on the VERY NEXT
     # check (channel / reaper immediate case); a higher value is how #594 pins
-    # the query-window auto-open terminal — persist + its preload each make one
-    # wrapped call BEFORE the open, so a single per-pid counter cannot otherwise
+    # the query-window auto-open terminal — the persist makes its own wrapped
+    # call BEFORE the open, so a single per-pid counter cannot otherwise
     # distinguish "fault the open" from "fault the persist". The exact `fire_on`
     # is DETERMINED EMPIRICALLY per flow (see the #594 session test); a change in
-    # how many `BusyRetry.run` calls precede the open is MEANT to break it.
+    # how many `BusyRetry.run` calls precede the open is MEANT to break it — and
+    # it has: #1657b deleted the persist's `Repo.preload` round-trip, so one
+    # check disappeared and that pin moved from `fire_on: 3` to `fire_on: 2`.
+    # The break was the contract working, not a regression.
     #
     # Callers MUST `on_exit` a `disarm_faults/1` — a fault left armed on a pid
     # that outlives the test is a failure-at-a-distance (the worst kind to

@@ -17,7 +17,7 @@ defmodule Grappa.Scrollback.Telemetry do
       metadata: start-metadata + `%{outcome: :ok | :validation_error | :unavailable}`
 
       The STOP half of the `:telemetry.span` wrapping
-      `Grappa.Scrollback.persist_event/1`'s insert+preload. `duration` is the
+      `Grappa.Scrollback.persist_event/1`'s insert. `duration` is the
       pure DB-write time — mechanism 3 (index write-amplification grows it as
       the table grows) — and is `channel`-tagged so it correlates against a
       channel's inbound msg/s (proving the RATE, not member-count,
@@ -38,7 +38,7 @@ defmodule Grappa.Scrollback.Telemetry do
       measurements: `%{attempt: pos_integer()}`
       metadata: `%{fault: :queue_timeout | :busy_locked | :interrupted, dropped: boolean()}`
 
-      Emitted from `Grappa.Scrollback.with_pool_retry/3` on each transient
+      Emitted from `Grappa.Scrollback.with_pool_retry/1` on each transient
       SQLite write-contention fault — mechanism 2 (single-writer contention):
       `:queue_timeout` (the pool could not serve a checkout), `:busy_locked`
       (a slow writer held the single write-lock past `busy_timeout`), or
@@ -66,7 +66,7 @@ defmodule Grappa.Scrollback.Telemetry do
         }
 
   @doc """
-  Wrap `fun` (the insert+preload) in the `[:grappa, :scrollback, :persist, …]`
+  Wrap `fun` (the insert) in the `[:grappa, :scrollback, :persist, …]`
   span. `fun` returns `{result, %{outcome: persist_outcome()}}`; the raw
   `result` is returned unchanged so `persist_event/1`'s contract is untouched.
 
@@ -88,7 +88,7 @@ defmodule Grappa.Scrollback.Telemetry do
 
   @doc """
   Emit `[:grappa, :scrollback, :persist, :contention]` for ONE transient
-  write-contention fault caught in `with_pool_retry/3`. `attempt` is the
+  write-contention fault caught in `with_pool_retry/1`. `attempt` is the
   1-based retry attempt; `dropped` is `true` only on the budget-exhausted
   final attempt (the row is lost), `false` while the loop is still riding it
   out. Fires ONLY on the contention path — already the slow path — so it adds
