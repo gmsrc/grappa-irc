@@ -367,6 +367,23 @@ defmodule GrappaWeb.Router do
 
     get "/me", MeController, :show
 
+    # #1679 — the one-round-trip boot envelope: networks + every network's
+    # channel tree + each channel's head page. Replaces the `1 + N` fan-out
+    # (`GET /networks` then one `GET /networks/:slug/channels` per network)
+    # plus the per-channel `/messages` burst that followed it, which scaled
+    # with the size of the account and tripped the operator's proxy
+    # `limit_req` zone (31 × 503 on prod, none of them grappa's).
+    #
+    # TOP-LEVEL, alongside `/me`, not nested under `/networks`: it is not a
+    # network-scoped resource — it answers ACROSS every network the subject
+    # holds, so `Plugs.ResolveNetwork` (which resolves ONE `:network_id` and
+    # asserts ownership of it) is the wrong pipeline by construction. Subject
+    # scoping is `:authn` plus the subject-keyed reads inside.
+    #
+    # A GET, so `:request_budget` does not meter it (#630 self-gates to write
+    # methods) — the same reason grappa never saw the burst this replaces.
+    get "/boot", BootController, :index
+
     # Per-user settings — push notifications cluster B3 (2026-05-14).
     # Visitor-parity V4 (2026-05-15) lifted the user-only gate; both
     # registered users + visitors hit these endpoints. Persists into
