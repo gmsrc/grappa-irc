@@ -58058,3 +58058,123 @@ nowhere, and cannot be from here.** jsdom drives no compositor and Playwright's
 webkit does not reproduce real iOS scroll physics; every gate in this repo can
 say the travel is bounded and monotone and none of them can say it feels like a
 native scroller. That reading is vjt's, on the phone.
+<!-- entry #1671 -->
+
+---
+
+## 2026-08-22 — #1671: the pull distance stops being a default and becomes a measurement
+
+The entry directly above this one ends on a sentence that was still an IOU:
+*"That reading is vjt's, on the phone."* This is that reading arriving. vjt
+pulled the channel directory on a real device against the staging build of
+`1.3.1-c6f46686` and called it: the travel needed to trigger the refresh
+doubles, 80px → 160px. `PULL_COMMIT_PX` had asked for exactly this since #1445
+wrote it — *"Doubling is a defensible default, NOT a measurement […] vjt
+calibrates on-device; nothing here was verified on a phone."* The number is now
+a datum, and the sentence calling it a default is the part that became false.
+
+### The rule the change is really about: derive a ratio, write a distance
+
+Two spellings reach 160 and the issue recommended the first: `SWIPE_MIN_PX * 4`,
+keeping the derivation, versus a plain literal. It is not an orthography
+question and the literal was taken.
+
+`SWIPE_MIN_PX = 40` answers a DIFFERENT question — *was this a gesture at all* —
+for four binders. Spelling a measured distance as a multiple of it asserts a
+causality that has stopped being true, and the harm is directional: whoever
+recalibrates the swipe floor on a device next would silently drag a distance
+somebody else measured with a thumb, and nothing in the resulting red would say
+so. The lattice bites the other way too. The next on-device call need not land
+on a multiple of 40; a constant spellable only in 40px steps invites rounding
+the measurement to fit the multiplier, or an `* 4.5` that is a lie with a
+decimal point in it.
+
+So the pair now states one rule at both declarations. **Derive when the approved
+thing is a RATIO; write the literal when the measured thing is a DISTANCE.**
+That is why `PULL_MAX_OFFSET_PX = PULL_COMMIT_PX * 2` STAYS derived in the same
+commit and follows to 320px on its own: what vjt approved there is the elastic's
+shape relative to the commit point, and freezing a literal would pin that shape
+against the next recalibration instead of tracking it. Whether 320px is now too
+much travel is its own measurement and its own issue.
+
+### What the derivation was doing, and where each job went
+
+Two jobs, and they separated cleanly.
+
+The ordering guarantee — the commit distance staying STRICTER than the swipe
+floor — was structural and is now asserted: `BETWEEN_FLOOR_AND_COMMIT` in
+`pullGesture.test.ts` is `(SWIPE_MIN_PX + PULL_COMMIT_PX) / 2` and reds the
+moment the two cross. It already existed, written for a #1445 mutant; nothing
+was added for this.
+
+The second job is knowingly given up. #1646's mirror pin listed
+`PULL_COMMIT_PX` as one of TWO DERIVED arms, the interesting case where *"the
+copy freezes a number that can be moved from a module the copy does not even
+name"*. There is one such arm now (`UNREAD_RETENTION_CAP = PAGE_LIMIT`). That
+loss is the point rather than a regression: the pin faithfully tracked a
+coupling this change exists to cut, so the reach it loses is reach it should no
+longer have. Three prose sites arguing for that reach are corrected rather than
+left to rot.
+
+The pin itself is untouched, and it is what made this land cleanly. Changing
+production alone turned it red on its own row — `expected 80 to be 160`, naming
+`issue1445-directory-pull-refresh.spec.ts:188`. A frozen copy left behind is a
+red that names its line, which is exactly what #1646 was built to buy.
+
+### The derived figure, recomputed rather than copied
+
+`0.44` is not a constant anywhere; it is `slotHeight / PULL_COMMIT_PX` quoted in
+prose in three places as the opacity the spinner would top out at under the
+naive fix #1658 refused. The slot is `2.5rem` against a default
+`--font-size: 14px` = 35px, so it halves with the commit distance: 35/160 =
+**0.22**, where it was 35/80 = 0.44. Both live comment sites now carry 0.22 and
+say what halved them.
+
+A nude grep for `80` and `0.44` across `cicchetto/src`, `cicchetto/e2e` and
+`docs` is what closed the census, and it earned its keep: it found a site no
+issue listed — `measureAtFullTravel`'s comment calling the commit point 80 while
+its own drag is 400.
+
+### 🔴 The historical entries above are NOT rewritten, and that is deliberate
+
+Both the issue and the briefing asked for the several places in this file that
+say *"80px, `SWIPE_MIN_PX * 2`"* and *"0.44 at the default size"* to be updated.
+That was declined, and the refusal is the durable part.
+
+This file is the chronological decision log. An entry dated when `PULL_COMMIT_PX`
+was 80 and derived is a TRUE statement about that date, and editing the number
+inside it would make the log lie about its own history — destroying the very
+evidence that a recalibration happened, which is the thing a decision log exists
+to hold. Several of those passages are load-bearing arguments that would go
+incoherent under a find-and-replace: #1658's entry reasons *"the alternative
+worth having is damping past the commit point; that needs a constant measured on
+a device, and `PULL_COMMIT_PX`'s own comment already records that nothing about
+this gesture was verified on a phone"*, and #1669's ends by naming this
+calibration as the thing it could not establish. Those sentences are worth MORE
+now that the measurement exists, not less.
+
+The general rule, which is not specific to this constant: **a stale number in a
+DATED entry is history and stays; a stale number in a MODULE comment is a claim
+about the present and must move.** Code comments are read as the current rule by
+whoever opens the file — that is why every one of them changed here — and a
+chronological entry is read as a record of a moment. Fixing a documentation
+citation means fixing the CLASS, and for this file the class fix is a new entry,
+which is this one.
+
+### Not established
+
+**iOS parity, still, and this change does not touch that.** The distance is now
+a device measurement but the FEEL around it is not: jsdom drives no compositor
+and Playwright's WebKit does not reproduce real iOS scroll physics. What is
+claimed is that the trigger travel is the one vjt asked for.
+
+**The doubled ceiling has not been on a phone.** `PULL_MAX_OFFSET_PX` follows to
+320px by derivation and is still a provisional feel number; preserving the ratio
+preserves the shape vjt approved, which is an argument and not a measurement.
+
+**Nothing here was run in a browser.** The vitest suite is green (299 files,
+5831 tests) and so is the cic `check` gate, but the e2e lane needs the shared
+stack and was not run for this change. The e2e arithmetic was checked on paper
+instead: at 400px of finger the damped offset is now 256px, so
+`PULL_COMMIT_PX < moved < FULL_TRAVEL_PX` still brackets it — 160 < 256 < 400,
+where it was 80 < 144 < 400.
