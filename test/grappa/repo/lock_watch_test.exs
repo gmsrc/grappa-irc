@@ -184,6 +184,9 @@ defmodule Grappa.Repo.LockWatchTest do
     # busy_timeout is generous on purpose: the waiter must still be WAITING
     # when the scan runs. A short timeout would turn it into an error path
     # and measure `BusyRetry` instead of this module.
+    #
+    # It is NOT the only wait on that writer, and on its own it does not
+    # govern — see `observed_write/3`.
     {:ok, repo} =
       TmpRepo.start_link(database: path, pool_size: 2, busy_timeout: 30_000, journal_mode: :wal)
 
@@ -211,10 +214,34 @@ defmodule Grappa.Repo.LockWatchTest do
   # Split out of `start_writer/2` so no body nests deeper than two levels.
   # `observe/1` is production's own wrapper — the point is that the test
   # drives the real edge sequence rather than a hand-written copy of it.
+  #
+  # 🔴 `timeout: :infinity` is load-bearing, and it is what makes
+  # `start_tmp_repo/0`'s `busy_timeout: 30_000` mean what that comment says
+  # it means. Without it both writers inherit Ecto's DEFAULT `:timeout` of
+  # 15_000 (`ecto_sql/lib/ecto/adapters/sql.ex`), which DBConnection arms as
+  # a checkout deadline covering the WHOLE transaction — queue, statements
+  # and the holder's park alike. So the real wait was `min(15_000, 30_000)`,
+  # the smaller number was never written down anywhere, and once a loaded
+  # runner pushed the window past 15s the pool disconnected BOTH
+  # connections: the parked holder mid-park, and the waiter mid-`BEGIN
+  # IMMEDIATE`. exqlite's busy handler answers a cancellation with plain
+  # SQLITE_BUSY, so the waiter died `%Exqlite.Error{message: "database is
+  # locked"}` instead of exiting `:normal` — a red naming this file's
+  # waiter assertion, on a machine slow enough, with nothing in the source
+  # to point at. #1657b measured that ordering (deadline caps busy_timeout,
+  # and the cap is invisible by error CLASS); this is the same finding
+  # landing on the harness that assumed otherwise.
+  #
+  # Measured, on `29bea21d` with a 16s delay injected before the release:
+  # without this option the waiter dies `database is locked` and the
+  # waiter-DOWN assertion fails; with it, 4 tests / 0 failures, assertions
+  # untouched. `busy_timeout` is now the only wait bounding the waiter,
+  # which is what this file was always documented to be testing.
   defp observed_write(id, after_insert, test_pid) do
     LockWatch.observe(fn acquired ->
       TmpRepo.transaction(fn -> insert_then(id, after_insert, test_pid, acquired) end,
-        mode: :immediate
+        mode: :immediate,
+        timeout: :infinity
       )
     end)
   end

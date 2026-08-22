@@ -57550,8 +57550,62 @@ genuine SQLITE_NOMEM would then be retried and degraded to a 503 instead
 of surfacing loudly — so it is a policy call that goes up with its
 numbers, the same treatment `pool_size` got.
 
+### Coda: CI found the same cap had already broken a test nobody linked to it
+
+`Grappa.Repo.LockWatchTest` went red on this branch's first CI run, on an
+assertion the branch does not touch, in a file the branch does not touch.
+Its blocked writer died `%Exqlite.Error{message: "database is locked",
+statement: "BEGIN IMMEDIATE TRANSACTION"}` instead of exiting `:normal`.
+
+It is the finding above arriving from the other direction. That file starts
+its private repo with `busy_timeout: 30_000` and says in a comment that the
+number is generous *"on purpose: the waiter must still be WAITING when the
+scan runs"*. Neither writer passes `:timeout`, so both inherit Ecto's
+default 15_000, which DBConnection arms as a checkout deadline over the
+WHOLE transaction — queue, statements, and the holder's park alike. The
+wait that file believed it had configured was `min(15_000, 30_000)`, and
+the number that actually governs was written down nowhere.
+
+Measured on `29bea21d` (origin/main, none of this branch's code present) by
+injecting a 16s delay between the waiter's `BEGIN IMMEDIATE` and the
+holder's release — a slow runner, made deterministic:
+
+| bench | outcome |
+|---|---|
+| main + delay | the pool disconnects BOTH connections at 15 000ms; the waiter dies `database is locked`; the waiter-DOWN assertion fails and the holder-DOWN one passes |
+| main + delay + `timeout: :infinity` | 4 tests, 0 failures, assertions byte-identical |
+
+The holder passing while the waiter fails is the same asymmetry CI showed,
+and it is not luck: a commit on a disconnected connection RETURNS
+`{:error, :rollback}` through Ecto, while a cancelled `BEGIN IMMEDIATE`
+RAISES — because exqlite's busy handler answers the cancellation with a
+plain SQLITE_BUSY, the mechanism measured above. The deadline kills both
+writers; only one of them says so.
+
+The cure is `timeout: :infinity` on both writers. It weakens no assertion:
+it deletes an unstated fourth wait and leaves `busy_timeout` as the only
+bound, which is what the file already claimed to be doing. The bound stays
+finite — 30 000ms, under ExUnit's own per-test timeout.
+
+Scope of the class, checked rather than assumed: of the four private-repo
+benches, only this one holds the write lock inside a POOLED Ecto
+transaction and parks it for an unbounded time.
+`Grappa.Repo.BusyRetryFidelityTest` and `Grappa.Repo.BusyRetryBudgetReachTest`
+hold theirs on a RAW `Exqlite.Sqlite3` connection with a `busy_timeout` of 0
+and 3 000, and `Grappa.Repo.CheckoutDeadlineReachTest` states `:timeout`
+explicitly because that number is its independent variable. **Rule for the
+next one: a bench whose `busy_timeout` exceeds 15 000, or that parks a
+pooled transaction for an unbounded time, must state `:timeout` — otherwise
+the smaller, invisible deadline is what it is really measuring.**
+
 ### What is NOT claimed
 
+- **It is NOT established that this branch made that red more likely.**
+  Both files are `async: false`, so ExUnit never runs them concurrently,
+  and the pair reran green four times locally (7 tests each). What IS
+  established is that the defect belongs to `origin/main` and reproduces
+  with none of this branch's code present. WHY the CI runner spent more
+  than 15s inside that window was not measured.
 - **No production substrate was measured.** Both new benches run on
   private temp repos. The prevention axis is untouched: a contended
   insert still drops its row. What this branch removed is a loss
