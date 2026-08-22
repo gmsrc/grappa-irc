@@ -212,6 +212,33 @@ async function openDirectory(
   return { list, refresh };
 }
 
+// A row to measure against, MADE rather than waited for.
+//
+// 🔴 MEASURED, not reasoned from the source: with only this spec in the run the
+// directory renders "0 channels", "never", and an EMPTY `<ul>` — the Playwright
+// failure snapshot says exactly that. No capture has ever happened on the
+// network, and `openDirectory` names that state in its own comment ("the pane's
+// own mount GET is what produces that page, EMPTY SNAPSHOT OR NOT"). So no
+// timeout and no polling can help: waiting longer for a row that nothing is
+// producing waits forever.
+//
+// What made this pass in CI at all is shard ORDER — the directory snapshot is
+// SERVER-side and per-network, so any earlier spec that captured one leaves it
+// populated for everything after. That is the flake, and the cure is to stop
+// depending on a neighbour: force the capture here, through the same door
+// `channel-directory.spec.ts` uses.
+//
+// The 15s is that spec's number and it is a ROUND-TRIP BUDGET, not a guess at a
+// slow machine: LIST → the session's 322 capture → 323 → progress ping → cic's
+// re-GET. Settling the button back to "Refresh" afterwards restores the quiet
+// pre-state `openDirectory` establishes, so a "Refreshing…" seen later is the
+// pull's doing and not this capture still in flight.
+async function seedOneRow(page: Page, refresh: Locator): Promise<void> {
+  await refresh.click();
+  await expect(page.locator(".directory-row-join").first()).toBeVisible({ timeout: 15_000 });
+  await expect(refresh).toHaveText("Refresh", { timeout: 15_000 });
+}
+
 // One downward drag on the row list, plus the browser's own reading of where
 // the slot sat before and during it. Body inlined in the page rather than
 // passed as a stringified function: `new Function` in page context is eval,
@@ -328,7 +355,7 @@ async function measureAtFullTravel(
       if (slot === null) throw new Error("no pull slot inside the directory list");
       const track = el.querySelector<HTMLElement>(".directory-pull-track");
       if (track === null) throw new Error("no pull track inside the directory list");
-      const row = el.querySelector<HTMLElement>(".directory-row");
+      const row = el.querySelector<HTMLElement>(".directory-row-join");
       if (row === null) throw new Error("no directory row to measure the gap against");
       const at = (y: number): Touch =>
         new Touch({ identifier: 1, target: el, clientX: 200, clientY: y });
@@ -409,7 +436,7 @@ async function resolveTrackTravel(
       if (slot === null) throw new Error("no pull slot inside the directory list");
       const track = el.querySelector<HTMLElement>(".directory-pull-track");
       if (track === null) throw new Error("no pull track inside the directory list");
-      const row = el.querySelector<HTMLElement>(".directory-row");
+      const row = el.querySelector<HTMLElement>(".directory-row-join");
       if (row === null) throw new Error("no directory row to measure the gap against");
       el.classList.add("pull-gesture-active");
       track.style.transform = opts.declaration;
@@ -486,7 +513,10 @@ test("#1658 — the rows follow the finger and the slot rides above them, at eve
   page,
 }) => {
   test.slow();
-  const { list } = await openDirectory(page, "sidebar");
+  const { list, refresh } = await openDirectory(page, "sidebar");
+  // A row must EXIST to measure the gap against it, and nothing else in this
+  // run produces one — see `seedOneRow`.
+  await seedOneRow(page, refresh);
 
   // S, M (the default) and XXL — three DIFFERENT slot heights, and that is the
   // point: the invariant is an identity only if it survives all three. A
@@ -535,7 +565,8 @@ test("@webkit #1658 — WebKit carries the rows AND keeps the slot off them (iPh
   test.slow();
   // The mobile door, for the reason `openDirectory` states: the $list window
   // has no BottomBar tab, so `selectChannel` cannot reach it on this layout.
-  const { list } = await openDirectory(page, "list-command");
+  const { list, refresh } = await openDirectory(page, "list-command");
+  await seedOneRow(page, refresh);
 
   for (const [size, expectedSlotHeight] of FONT_SIZES) {
     // The ARITHMETIC CONTROL, and it runs first because everything below is
@@ -578,7 +609,13 @@ test("@webkit #1445 — the directory list refuses its own overscroll and declar
   page,
 }) => {
   test.slow();
-  const { list } = await openDirectory(page, "list-command");
+  const { list, refresh } = await openDirectory(page, "list-command");
+  // NOT this test's defect, but the same latent one: it hit-tests a row and
+  // has only ever found one because some earlier spec in the shard left a
+  // server-side snapshot behind. Seeded here too — leaving one call site
+  // order-dependent while curing its two neighbours would put two patterns in
+  // one file.
+  await seedOneRow(page, refresh);
 
   const contract = await list.evaluate((el) => {
     const row = el.querySelector<HTMLElement>(".directory-row-join");
