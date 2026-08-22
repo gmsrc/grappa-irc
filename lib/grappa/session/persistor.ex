@@ -6,7 +6,7 @@ defmodule Grappa.Session.Persistor do
   Three sites in the Server hand-rolled the same delivery shape — the
   inbound `:persist` effect, the outbound `persist_and_send_fragments`
   loop, and the `:join_failed` effect — each persisting a `Scrollback`
-  row and broadcasting `Scrollback.Wire.message_payload/1` on the row's
+  row and broadcasting `Scrollback.Wire.message_payload/2` on the row's
   per-channel topic. But only the inbound arm carried the #267
   `WindowCounts.PushSource.push` obligation. The 2026-04-27 A20 deferral
   predicted this drift; the 2026-07-20 architecture review (#369 A3)
@@ -59,6 +59,22 @@ defmodule Grappa.Session.Persistor do
 
   A validation failure is NOT a drop and does not log here: the row never
   had a right to exist, the caller's changeset arm owns that message.
+
+  ## The line may only fire when the row is actually gone (#1657b)
+
+  #1657 fixed the direction where the census UNDER-counted. It left the
+  other one: `Scrollback.persist_row/1` ran a second retry-wrapped op
+  after the insert had already committed, and its failure returned the
+  same `:persist_unavailable`, so this line fired for a row durably in
+  the table. A count that is neither a floor nor a ceiling is worse than
+  one known to be a floor — nothing on the line says which arm made it.
+
+  The cure is structural rather than a smarter predicate here: the second
+  op is gone, so `:persist_unavailable` now has exactly one meaning at
+  this door. **A future op added to the persist path AFTER the insert
+  re-opens this defect** — if one is ever needed, its failure must not
+  reach `log_row_dropped/2`. Pinned in both directions by
+  `Grappa.Session.PersistorTest`.
   """
 
   alias Grappa.IRC.Identifier
@@ -102,10 +118,14 @@ defmodule Grappa.Session.Persistor do
   def persist_and_broadcast(attrs, ctx, opts) do
     case Scrollback.persist_event(attrs) do
       {:ok, message} ->
+        # Both the topic and the payload take `ctx.network_slug` — the same
+        # value, from the same place, on two adjacent lines. It used to reach
+        # the payload the long way round, off a `:network` assoc that
+        # `persist_event/1` fetched with a second query (#1657b).
         :ok =
           Grappa.PubSub.broadcast_event(
             Topic.channel(ctx.subject_label, ctx.network_slug, attrs.channel),
-            Wire.message_payload(message)
+            Wire.message_payload(message, ctx.network_slug)
           )
 
         if Keyword.get(opts, :push, false), do: dispatch_push(message, ctx)

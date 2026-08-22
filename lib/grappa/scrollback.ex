@@ -131,9 +131,12 @@ defmodule Grappa.Scrollback do
   is responsible for `:server_time` (epoch ms) and `:meta` (`%{}` for
   kinds without event-specific payload).
 
-  The returned row has `:network` preloaded so callers can hand it
-  straight to `Grappa.Scrollback.Wire.message_payload/1` (which
-  pattern-matches on `%Network{slug: _}` and crashes on unloaded assoc).
+  🔴 The returned row does **NOT** have `:network` preloaded (#1657b,
+  reversing the original contract). Pass the slug you already have to
+  `Grappa.Scrollback.Wire.message_payload/2` instead — every caller of
+  this function knows its own network, and preloading here cost a
+  second pool checkout per row on the hot write path plus a failure arm
+  that reported a durable row as dropped. See `persist_row/1`.
   Single source for the wire-shape contract — every door (REST,
   PubSub, future Phase 6 listener) goes through here.
 
@@ -183,20 +186,35 @@ defmodule Grappa.Scrollback do
     end)
   end
 
-  # Insert and preload each run through `with_pool_retry/1` so a pool
-  # saturation raise on EITHER step degrades to `{:error, :persist_unavailable}`
-  # instead of escaping. The `with` also carries a plain `{:error, %Changeset{}}`
-  # validation failure straight through (that op returns, never raises, so it's
-  # not retried). On a preload-only failure the row IS durably written but has
-  # no `:network` assoc for the wire payload — degrading is correct: the row
-  # surfaces on the next `fetch/5`, the live broadcast is what's lost. Extracted
-  # from the span closure to keep `persist_event/1`'s nesting ≤ 2 (Credo).
+  # ONE retry-wrapped DB op, and the count is the point (#1657b).
+  #
+  # This used to be two: the insert, then `Repo.preload(message, :network)` so
+  # the row came back wire-shape-ready. The preload was a second SELECT, with
+  # its own pool checkout and its own DBConnection deadline, issued on the
+  # hot write path to fetch ONE value — the network slug — that the only
+  # production caller already holds (`Persistor`'s `ctx.network_slug`, which
+  # it uses on the adjacent line to build the broadcast topic). Deriving what
+  # you already have, at the cost of a round-trip, on the path that loses rows
+  # under saturation.
+  #
+  # 🔴 It also made the #1429 census LIE, and that is why it went rather than
+  # being merely optimised. A preload-only failure returned the same
+  # `:persist_unavailable` as a row that never landed, so `Persistor` logged
+  # `scrollback row dropped` for a row sitting durably in the table. The old
+  # comment here knew it — "the row IS durably written [...] the live broadcast
+  # is what's lost" — and returned the drop atom anyway. #1657 made the count
+  # stop being a floor; this arm made it not a ceiling either, which is worse,
+  # because nothing on the line said which arm produced it. Pinned by
+  # `Grappa.Session.PersistorTest`, whose two tests fail in opposite directions.
+  #
+  # What remains is a single op whose failure means exactly one thing: the row
+  # did not land. The `with` still carries a plain `{:error, %Changeset{}}`
+  # validation failure straight through (that op returns, never raises, so it
+  # is not retried). Kept as a named function rather than inlined to hold
+  # `persist_event/1`'s nesting ≤ 2 (Credo).
   @spec persist_row(Ecto.Changeset.t()) :: {:ok, Message.t()} | {:error, persist_error()}
   defp persist_row(changeset) do
-    with {:ok, message} <- with_pool_retry(fn -> Repo.insert(changeset) end),
-         {:ok, preloaded} <- with_pool_retry(fn -> {:ok, Repo.preload(message, :network)} end) do
-      {:ok, preloaded}
-    end
+    with_pool_retry(fn -> Repo.insert(changeset) end)
   end
 
   # #357 D1 — span metadata. `channel`/`network_id` via `Map.get` (nil on a

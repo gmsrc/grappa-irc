@@ -249,8 +249,9 @@ defmodule GrappaWeb.GrappaChannelTest do
           body: "ciao raga"
         })
 
-      preloaded = Repo.preload(message, :network)
-      payload = Wire.message_payload(preloaded)
+      # #1657b — the broadcast door takes the slug it is publishing under; no
+      # preload, mirroring what `Session.Persistor` does in production.
+      payload = Wire.message_payload(message, network.slug)
 
       Grappa.PubSub.broadcast_event(topic, payload)
 

@@ -10,16 +10,39 @@ defmodule Grappa.Scrollback.Wire do
   Phase 6 IRCv3 `CHATHISTORY` listener will be the fourth — different
   serializer (IRC bytes, not JSON) but same domain event. Centralising
   the shape here separates "data" (`Scrollback.Message` schema) from
-  "verb" (this module's `to_json/1` and `message_payload/1`).
+  "verb" (this module's `to_json/1,2` and `message_payload/2`).
+
+  ## Where the slug comes from, and why there are two doors (#1657b)
+
+  The wire's `:network` is a **slug**, and a caller reaches it one of
+  two ways. `to_json/2` TAKES it; `to_json/1` DERIVES it from a
+  preloaded `:network` assoc. One body, two entrances — not two
+  shapes.
+
+  Which door a caller uses is decided by what it already holds, and
+  that is not a style choice:
+
+    * A **read** path (`MessagesJSON`) receives rows out of a query
+      that preloaded `:network` as part of the same fetch, and its
+      render function is handed nothing but the rows. It has no slug
+      of its own, so it uses `to_json/1`.
+    * A **broadcast** path always knows the slug already — it is in
+      the topic it is about to publish on. `Persistor` computes
+      `Topic.channel(…, ctx.network_slug, …)` on the line above the
+      payload. So `message_payload/2` takes it, and there is no
+      1-arity: making the write path re-derive a value sitting in the
+      adjacent expression cost `Scrollback.persist_event/1` a whole
+      extra DB round-trip per row, and cost the #1429 census its
+      honesty when that round-trip failed (see `Scrollback.persist_row/1`).
+
+  `to_json/1` pattern-matches and crashes loudly if the assoc is
+  unloaded — invariant violation worth crashing on, per CLAUDE.md
+  "let it crash." That is the read-path contract, unchanged.
 
   ## Phase 2 sub-task 2e — wire-shape changes
 
     * The wire emits the network **slug** (string) under key
-      `:network`, NOT the integer `network_id` FK. Callers must
-      preload `:network` on the message before calling `to_json/1`;
-      the function pattern-matches and crashes loudly if the assoc
-      is unloaded — invariant violation worth crashing on, per
-      CLAUDE.md "let it crash."
+      `:network`, NOT the integer `network_id` FK.
     * The wire does NOT carry `user_id` (decision G3). The user
       identity is a topic discriminator (in the PubSub topic string
       and the channel join URL), not a payload field — the client
@@ -100,7 +123,18 @@ defmodule Grappa.Scrollback.Wire do
   literal union rather than a bare `string`.
   """
   @spec to_json(Message.t()) :: t()
-  def to_json(%Message{network: %Network{slug: slug}, kind: kind} = m) when kind != nil do
+  def to_json(%Message{network: %Network{slug: slug}} = m), do: to_json(m, slug)
+
+  @doc """
+  As `to_json/1`, with the network slug supplied by the caller instead
+  of read off a preloaded `:network` assoc.
+
+  This is the body both doors share; `to_json/1` is the read-path
+  entrance that derives `slug` and delegates here. See the moduledoc
+  for which caller owes which.
+  """
+  @spec to_json(Message.t(), String.t()) :: t()
+  def to_json(%Message{kind: kind} = m, slug) when kind != nil and is_binary(slug) do
     %{
       id: m.id,
       network: slug,
@@ -120,18 +154,22 @@ defmodule Grappa.Scrollback.Wire do
 
   Use this with `Grappa.PubSub.broadcast_event/2`:
 
-      Grappa.PubSub.broadcast_event(topic, Wire.message_payload(message))
+      Grappa.PubSub.broadcast_event(topic, Wire.message_payload(message, slug))
 
-  The caller is responsible for preloading `:network` before calling.
+  The caller supplies the network slug. There is deliberately **no
+  1-arity form** (#1657b): every broadcast door already holds the slug
+  — it is in the topic it is publishing on — so a variant that read it
+  back off a preloaded assoc would only re-create the extra DB
+  round-trip this removed. See the moduledoc.
 
   Renamed from `message_event/1` (which returned the legacy `{:event,
   payload}` tuple shape used with raw `Phoenix.PubSub.broadcast/3`)
   when BUG 6 forced a switch to the framework-native fastlane path.
   See `Grappa.PubSub.broadcast_event/2` for the new broadcast surface.
   """
-  @spec message_payload(Message.t()) :: event()
-  def message_payload(%Message{} = m) do
-    %{kind: :message, message: to_json(m)}
+  @spec message_payload(Message.t(), String.t()) :: event()
+  def message_payload(%Message{} = m, network_slug) when is_binary(network_slug) do
+    %{kind: :message, message: to_json(m, network_slug)}
   end
 
   @doc """

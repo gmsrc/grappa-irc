@@ -254,17 +254,23 @@ defmodule Grappa.ScrollbackTest do
     end
   end
 
-  describe "persist_event/1 — :network preloading (was persist_privmsg/5)" do
-    test "returns the row with :network preloaded so Wire.to_json/1 doesn't need to",
-         %{user: user, network: net} do
-      # Wire.to_json/1 pattern-matches on `%Network{slug: slug}` and
-      # crashes on unloaded assoc. Both callers (Session.Server's
-      # persist_and_broadcast → Wire.message_payload, and the REST POST
-      # controller → Scrollback.Wire.to_json) used to re-issue a
-      # `Repo.preload(message, :network)` after the boundary returned.
-      # Pushing the preload into the Scrollback boundary collapses the
-      # two parallel preload sites into one — the contract is now "the
-      # row I hand back is wire-shape-ready".
+  # #1657b REVERSES the contract this describe used to pin. It read
+  # "returns the row with :network preloaded so Wire.to_json/1 doesn't need
+  # to", and that preload was a SECOND pool checkout per persisted row,
+  # issued on the hot write path to fetch the network slug — a value the one
+  # production caller (`Session.Persistor`) already holds as
+  # `ctx.network_slug` and uses on the adjacent line to build the broadcast
+  # topic.
+  #
+  # It was not merely wasteful. Its failure returned the same
+  # `:persist_unavailable` as a row that never landed, so the #1429 census
+  # logged `scrollback row dropped` for a row durably in the table. The
+  # honesty half is pinned in `Grappa.Session.PersistorTest`; what is pinned
+  # HERE is the mechanical fact that makes it true — the boundary issues no
+  # query after the insert, so there is nothing left that can fail behind a
+  # committed row.
+  describe "persist_event/1 — one DB op, no wire-shape preload (#1657b)" do
+    test "hands back the row WITHOUT :network preloaded", %{user: user, network: net} do
       attrs = %{
         user_id: user.id,
         network_id: net.id,
@@ -278,9 +284,34 @@ defmodule Grappa.ScrollbackTest do
 
       assert {:ok, %Message{} = m} = Scrollback.persist_event(attrs)
 
-      assert %Network{id: id, slug: slug} = m.network
-      assert id == net.id
-      assert slug == net.slug
+      # The FK is what the row carries; the slug is the caller's to supply.
+      assert m.network_id == net.id
+      assert %Ecto.Association.NotLoaded{} = m.network
+    end
+
+    test "the wire payload is built from the caller's slug, not from the row",
+         %{user: user, network: net} do
+      # The two doors must agree byte-for-byte on the same row, or "one body,
+      # two entrances" is a claim rather than a fact — and the write path
+      # would be emitting a shape nothing else validates.
+      attrs = %{
+        user_id: user.id,
+        network_id: net.id,
+        channel: "#sniffo",
+        server_time: System.system_time(:millisecond),
+        kind: :privmsg,
+        sender: "vjt",
+        body: "ciao",
+        meta: %{}
+      }
+
+      assert {:ok, %Message{} = m} = Scrollback.persist_event(attrs)
+
+      from_caller = Wire.to_json(m, net.slug)
+      from_assoc = m |> Repo.preload(:network) |> Wire.to_json()
+
+      assert from_caller == from_assoc
+      assert from_caller.network == net.slug
     end
   end
 
@@ -399,7 +430,7 @@ defmodule Grappa.ScrollbackTest do
   end
 
   describe "persist_event/1" do
-    test "persists :privmsg with body+meta and preloads :network", %{user: user, network: net} do
+    test "persists :privmsg with body+meta", %{user: user, network: net} do
       attrs = %{
         user_id: user.id,
         network_id: net.id,
@@ -411,8 +442,9 @@ defmodule Grappa.ScrollbackTest do
         meta: %{}
       }
 
-      assert {:ok, %Message{kind: :privmsg, body: "ciao", network: %Network{slug: _}} = m} =
-               Scrollback.persist_event(attrs)
+      # #1657b — the row comes back with the network FK and no preloaded
+      # assoc; the wire slug is the caller's to supply.
+      assert {:ok, %Message{kind: :privmsg, body: "ciao"} = m} = Scrollback.persist_event(attrs)
 
       assert m.user_id == user.id
       assert m.network_id == net.id
@@ -430,7 +462,7 @@ defmodule Grappa.ScrollbackTest do
         meta: %{}
       }
 
-      assert {:ok, %Message{kind: :join, body: nil, network: %Network{slug: _}}} =
+      assert {:ok, %Message{kind: :join, body: nil}} =
                Scrollback.persist_event(attrs)
     end
 
