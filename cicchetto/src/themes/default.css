@@ -1209,9 +1209,14 @@ html.overlay-open #root > div {
   .directory-pull-spinner {
     animation: none;
   }
-  /* #1445 — same call as the swipe-to-reply snap-back below: the slot still
+  /* #1445 — same call as the swipe-to-reply snap-back below: the pull still
      follows the finger (that is the gesture's own feedback, not decoration);
-     only the eased return is dropped, so it jumps home. */
+     only the eased return is dropped, so it jumps home.
+     #1658 point 3 — the track joined the slot here because the TRAVEL moved
+     onto it. Leaving it out would have kept a 150ms eased return on the whole
+     channel list for a user who asked for no motion — the one animation in
+     this pair that is actually large. */
+  .directory-pull-track,
   .directory-pull-slot {
     transition: none;
   }
@@ -11804,12 +11809,32 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   touch-action: pan-y;
 }
 
-/* #1445 — the pull-to-refresh slot. Parked one slot-height ABOVE the list's
-   top edge, where the scroller's own overflow clips it, and slid into view by
-   the gesture's inline transform (DirectoryPane's `pulledTransform`, which
-   re-states this parked offset because an inline transform replaces the
-   declaration wholesale). `pointer-events: none` so a slot mid-slide never
-   swallows a tap meant for the first row. */
+/* #1658 point 3 — the pull TRACK: everything the finger drags, moved as one
+   body. The slot and the rows are both inside it, so the single transform
+   DirectoryPane writes here places both and the spinner rides in the space the
+   rows open rather than sliding over them.
+   `position: relative` makes it the containing block for the absolutely
+   positioned slot below. That puts the slot's origin at the top of the
+   content, which is where `.directory-list` (also `relative`, and a scroller,
+   so its absolute children are placed against the SCROLLED content origin) put
+   it before — nothing moves at rest.
+   The eased snap-back lives here now, on the transform, because the transform
+   moved here; the slot below keeps only its own opacity ease. */
+.directory-pull-track {
+  position: relative;
+  transition: transform 150ms ease-out;
+}
+
+/* #1445 — the pull-to-refresh slot. Parked one slot-height ABOVE the track's
+   top edge, where the scroller's own overflow clips it, and carried into view
+   by the TRACK's transform — not by one of its own.
+   🔴 #1658 point 3 — this `translateY(-100%)` is no longer re-stated by any
+   inline paint, and that is deliberate: an inline transform replaces the
+   declaration wholesale (the #1438 trap), so keeping the parked offset in the
+   stylesheet and moving the ancestor instead removes the trap rather than
+   guarding against it. Nothing writes `transform` on this element.
+   `pointer-events: none` so a slot mid-slide never swallows a tap meant for
+   the first row. */
 .directory-pull-slot {
   position: absolute;
   top: 0;
@@ -11821,17 +11846,17 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   height: 2.5rem;
   opacity: 0;
   transform: translateY(-100%);
-  transition:
-    transform 150ms ease-out,
-    opacity 150ms ease-out;
+  transition: opacity 150ms ease-out;
   pointer-events: none;
 }
 
 /* While a finger is driving a CLAIMED pull the binder wears
-   `pull-gesture-active` on the scroller, and the slot must track the finger
-   rather than ease behind it. Reachable as a plain descendant selector only
-   because the slot lives INSIDE the bound element — the reason it is an
-   absolute child rather than a sibling above the list. */
+   `pull-gesture-active` on the scroller, and BOTH painted axes must track the
+   finger rather than ease behind it — the track's travel and the slot's ramp.
+   Reachable as plain descendant selectors only because both live INSIDE the
+   bound element, which is why the slot is an absolute child rather than a
+   sibling above the list. */
+.directory-list.pull-gesture-active .directory-pull-track,
 .directory-list.pull-gesture-active .directory-pull-slot {
   transition: none;
 }

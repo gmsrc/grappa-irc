@@ -11,34 +11,40 @@
 //      latch (F1). A gesture wired to a second refresh path would leave the
 //      button reading "Refresh" and turn this red.
 //   2. DISPLACEMENT (chromium): mid-drag, the browser's own computed matrix
-//      says the slot has moved by exactly the finger's travel and by nothing
-//      else. Two things ride on that "and nothing else": the slot rests at
-//      `translateY(-100%)`, which an inline transform REPLACES, so a paint
-//      that forgot to re-state it would read +slotHeight instead of 0 for the
-//      parked term; and the reading is taken mid-gesture, which is only a
-//      stable number because `pull-gesture-active` drops the slot's snap-back
-//      transition — without it getComputedStyle returns wherever the ease
-//      happened to be.
-//   2b. THE FLUSH LINE (#1658, chromium): at a travel far past any cap the
-//      slot's top edge lands exactly ON the list's top edge — it stops flush
-//      instead of sinking into the rows, which is what it did on 1.3.0 (the
-//      cap was `PULL_COMMIT_PX`, larger than the slot at every font size, so
-//      the spinner parked 30-50px inside the list). Asserted at THREE root
-//      font sizes because the slot is `2.5rem` against a size the user picks,
-//      and the reading is 0 at all three only if the cap is the slot's own
-//      height: a hardcoded 35 would read +5 at S and -15 at XXL. The slot
-//      height is asserted alongside it, so a `--font-size` write that silently
-//      failed cannot make three identical measurements look like three sizes.
-//      What this does NOT say is that the slot never covers a row: it is
-//      `position: absolute; top: 0` over rows that start at y=0, so every
-//      visible position overlaps the first row's top band. Only moving the
-//      rows fixes that (#1658 point 3, not started) — the flush line is the
-//      strongest TRUE statement available here.
+//      says the TRACK has moved by exactly the finger's travel and by nothing
+//      else. The reading is taken mid-gesture, which is only a stable number
+//      because `pull-gesture-active` drops the snap-back transition — without
+//      it getComputedStyle returns wherever the ease happened to be.
+//      #1658 point 3 moved this reading off the slot and onto the track. The
+//      slot no longer carries a transform of its own beyond the parked
+//      `translateY(-100%)` in the stylesheet; what moves it is its ancestor.
+//   2b. THE ROWS FOLLOW THE FINGER, AND THE SPINNER RIDES ABOVE THEM (#1658
+//      point 3, chromium). Two assertions, and the first is the defect vjt
+//      kept reporting: at a travel of 400px the first row's top edge sits 400px
+//      below the list's top edge — the CONTENT moved, not just the spinner.
+//      Until point 3 only the slot moved, and because rows start at y=0 too,
+//      every position where the spinner was visible was a position where it
+//      covered the first row's top band; the strongest true statement
+//      available then was the weaker "the slot never travels PAST the top
+//      edge", and this file used to assert exactly that.
+//      The second is the STRONG invariant that replaces it: the slot's bottom
+//      edge lands ON the first row's top edge, never below it. It holds because
+//      the two are one rigid body under one transform — an identity, not a
+//      bound — so what this measures is that the ENGINE agrees with that
+//      geometry once real layout exists, which jsdom cannot say.
+//      Asserted at THREE root font sizes, with the slot height read alongside:
+//      the slot is `2.5rem` against a size the user picks, and without the
+//      height control three identical readings from a `--font-size` write that
+//      silently failed would look like proof.
 //   2c. NO PAINT AFTER THE COMMIT (#1658, chromium): the committing release
-//      leaves no inline transform and no inline opacity on the slot. The
-//      binder does not call `onRelease` on that path, so the pane clears the
-//      paint from `onCommit` — before the fix the spinner stayed exactly where
-//      the finger left it, at full opacity, for the life of the pane.
+//      leaves no inline transform on the track and no inline opacity on the
+//      slot. The binder does not call `onRelease` on that path, so the pane
+//      clears the paint from `onCommit` — before that fix the spinner stayed
+//      exactly where the finger left it, at full opacity, for the life of the
+//      pane. Point 3 raised the stakes on it: the travel is on the TRACK now,
+//      so the same omission would strand the whole channel list 240px down the
+//      pane, not just a spinner. Both elements are asserted, and so is the
+//      slot's own transform staying empty — the pane must not write one.
 //   3. CSS CONTRACT (@webkit, iPhone 15): on the real target browser the row
 //      container refuses its own overscroll (so the iOS rubber-band does not
 //      fight the slot at the one scroll position the pull lives at) while
@@ -48,17 +54,26 @@
 //      altogether, and the scroller's own `pan-y` alone would leave the ROW
 //      — the hit-test target across nearly the whole list — still reading
 //      `auto`, which is the shape #913 measured as insufficient.
-//   3b. THE CAP, RESOLVED BY THE ENGINE THE BUG CAME FROM (#1658, @webkit):
-//      the declaration the pane writes at full travel is applied straight to
-//      the slot and the engine's own geometry is read back. vjt reported this
-//      from iOS Safari, and the cap is `translateY(min(<px>, 100%))` — a CSS
-//      math function over MIXED UNITS inside a transform. Chromium resolving
-//      it says nothing about WebKit, and a WebKit that did not resolve it
-//      would leave the slot parked out of sight: not "the cap is a few px
-//      off" but the pull no longer following the finger, on the only engine
-//      the reporter has, with 2b and every other gate here GREEN. That is the
-//      empty-green class — a gate that passes because it does not look where
-//      the defect lives — and this is the assertion that closes it.
+//   3b. THE INVARIANT, RESOLVED BY THE ENGINE THE BUG CAME FROM (#1658 point
+//      3, @webkit): the track translate the pane writes at full travel is
+//      applied straight to the track and the engine's own geometry is read
+//      back — did the ROWS move by it, and did the slot's bottom still land on
+//      the first row's top?
+//      The question is not the same one chromium answers, and that is why the
+//      arm exists. The invariant is an identity only if the engine composes an
+//      ancestor's px translate with the slot's OWN `translateY(-100%)` — a
+//      PERCENTAGE that resolves against the slot's own height, not the
+//      track's. Chromium composing it correctly says nothing about WebKit, and
+//      a WebKit that resolved that percentage against the wrong box would put
+//      the spinner back on top of the first row: the exact defect, on the only
+//      engine the reporter has, with every chromium gate here GREEN. That is
+//      the empty-green class — a gate that passes because it does not look
+//      where the defect lives.
+//      It used to ask a different question — whether WebKit resolved
+//      `translateY(min(<px>, 100%))`, the mixed-unit cap. Point 3 deleted that
+//      declaration from production, so the test was re-aimed rather than
+//      dropped: the engine half is still worth a witness, only the geometry it
+//      witnesses changed.
 //      NO GESTURE, deliberately and not for convenience: `new Touch(...)` is
 //      an `Illegal constructor` on Playwright's WebKit (measured; issue230's
 //      header records the same limit for its own drag), so the production
@@ -66,8 +81,8 @@
 //      the ENGINE half; the PANE half — that the pane writes this declaration
 //      from a real finger — is 2b's, on chromium. Each is honest about which
 //      half it owns, and neither pretends to the other.
-//      It carries a plain-px ARITHMETIC CONTROL ahead of the capped reading,
-//      because the first draft of it had none and measured the slot's 150ms
+//      It carries a plain-px ARITHMETIC CONTROL ahead of the real reading,
+//      because the first draft of it had none and measured the 150ms
 //      snap-back transition instead of the resolved transform: every
 //      declaration read as "parked" on BOTH engines and it looked like a
 //      total WebKit failure. The control fails loudly in that state.
@@ -87,9 +102,16 @@
 //   * That Playwright's WebKit IS iOS Safari. Test 3b measures the same engine
 //     family under a phone viewport, which is the closest thing reachable from
 //     CI and strictly more than a chromium-only reading — it answers "does
-//     WebKit resolve a mixed-unit `min()` inside a transform", a question
-//     chromium cannot answer at all. It does not answer "does it resolve the
-//     same way on vjt's phone", and no assertion here claims it does.
+//     WebKit compose an ancestor's px translate with a descendant's own
+//     percentage offset such that the invariant holds", a question chromium
+//     cannot answer at all. It does not answer "does it resolve the same way on
+//     vjt's phone", and no assertion here claims it does.
+//   * The TRAVEL DISTANCE, now that #1658 point 3 removed the cap. Nothing here
+//     says 400px of finger should produce 400px of list, only that it DOES and
+//     that the spinner stays off the rows while it happens. Whether the pull
+//     should ease off past the commit point is a feel question that needs a
+//     phone, and the code takes the position that an unbounded follow is the
+//     honest floor to calibrate from rather than an unmeasured damping curve.
 //   * The GESTURE on WebKit, by anything here. `new Touch(...)` throws
 //     `Illegal constructor` there, so no test in this file drives the binder
 //     on that project. MEASURED while looking for a way round it, and recorded
@@ -130,13 +152,14 @@ const LIST_WINDOW_NAME = "$list";
 // #1658 — and unlike the window name this copy no longer CHECKS ITSELF. It
 // did: test 2 dragged half of it against a paint capped at the real constant,
 // so lowering the real one made this spec read the cap instead of the drag and
-// go red. Both halves of that are gone — the travel caps at the slot's own
-// height now, and test 2 drags a literal 20 to stay under it at every font
-// size. The only use left is a drag MAGNITUDE (`PULL_COMMIT_PX * 3` in test
-// 1), which reds only if the real constant grows past 240 and says nothing at
-// all if it shrinks. Leaving the old claim here would have left a comment
-// standing where a witness used to be, which is the failure #1393 spent a day
-// removing.
+// go red. Both halves of that are gone. Point 3 removed the cap outright —
+// with the rows carried by the same transform as the spinner there is no
+// collision left to bound — so no drag in this file can read a clamp instead
+// of a follow, at any distance or font size. The only use left is a drag
+// MAGNITUDE (`PULL_COMMIT_PX * 3` in test 1), which reds only if the real
+// constant grows past 240 and says nothing at all if it shrinks. Leaving the
+// old claim here would have left a comment standing where a witness used to
+// be, which is the failure #1393 spent a day removing.
 //
 // What pins it is #1646's static witness, which needs no testnet:
 // src/__tests__/e2eConstantMirrors.test.ts imports the production constant and
@@ -205,12 +228,16 @@ async function pullList(
 ): Promise<{ before: number; after: number }> {
   return list.evaluate(
     (el, opts) => {
-      const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
-      if (slot === null) throw new Error("no pull slot inside the directory list");
+      // #1658 point 3 — the TRACK, not the slot. The travel is painted on the
+      // element that carries both the spinner and the rows; the slot's own
+      // computed transform is the constant parked `translateY(-100%)` and
+      // would read the same at every distance.
+      const track = el.querySelector<HTMLElement>(".directory-pull-track");
+      if (track === null) throw new Error("no pull track inside the directory list");
       // The vertical component of the computed matrix — what the browser
       // actually resolved, not the inline string we wrote.
       const verticalOffset = (): number =>
-        new DOMMatrixReadOnly(getComputedStyle(slot).transform).f;
+        new DOMMatrixReadOnly(getComputedStyle(track).transform).f;
       const at = (y: number): Touch =>
         new Touch({ identifier: 1, target: el, clientX: 200, clientY: y });
       const fire = (type: string, touch: Touch): void => {
@@ -243,15 +270,27 @@ async function pullList(
   );
 }
 
-// The slot's inline style, which is the whole of the paint: the rule in
-// default.css sets the parked transform and `opacity: 0`, and the gesture
-// writes over both. Empty strings mean the pane handed the slot back to the
-// stylesheet.
-async function slotInlinePaint(list: Locator): Promise<{ transform: string; opacity: string }> {
+// The whole of the paint, which since #1658 point 3 spans TWO elements on two
+// axes: the TRACK carries the travel, the SLOT carries the opacity ramp.
+// Empty strings mean the pane handed both back to the stylesheet.
+//
+// `slotTransform` is read as well and must ALWAYS be empty, at rest and
+// mid-pull alike: the parked `translateY(-100%)` lives in default.css and the
+// pane writes no transform on that element at any point. A non-empty reading
+// is the #1438 trap coming back — an inline transform replacing the rule.
+async function pullInlinePaint(
+  list: Locator,
+): Promise<{ trackTransform: string; slotOpacity: string; slotTransform: string }> {
   return list.evaluate((el) => {
+    const track = el.querySelector<HTMLElement>(".directory-pull-track");
+    if (track === null) throw new Error("no pull track inside the directory list");
     const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
     if (slot === null) throw new Error("no pull slot inside the directory list");
-    return { transform: slot.style.transform, opacity: slot.style.opacity };
+    return {
+      trackTransform: track.style.transform,
+      slotOpacity: slot.style.opacity,
+      slotTransform: slot.style.transform,
+    };
   });
 }
 
@@ -265,52 +304,70 @@ async function slotInlinePaint(list: Locator): Promise<{ transform: string; opac
 // cancel puts the slot back without committing, so measuring three sizes in
 // one test does not spend three upstream LIST captures.
 //
-// `transform` comes back as the INLINE string, not a computed one, and it is
-// the discriminator #1658's webkit arm needs: setting an unparseable value on
-// a CSSStyleDeclaration is a silent no-op, so an engine that refuses
-// `min(<px>, 100%)` inside `translateY` leaves this empty while the geometry
-// merely reads "parked". Empty means the declaration was refused; non-empty
-// with a non-zero offset means it was accepted and resolved elsewhere.
+// `transform` comes back as the INLINE string, not a computed one: setting an
+// unparseable value on a CSSStyleDeclaration is a silent no-op, so an engine
+// that refused the declaration leaves this empty while the geometry merely
+// reads "parked". Empty means refused; non-empty with a moved row means
+// accepted and resolved.
+const FULL_TRAVEL_PX = 400;
+
 async function measureAtFullTravel(
   list: Locator,
   rootFontSize: string,
-): Promise<{ slotTop: number; listTop: number; slotHeight: number; transform: string }> {
-  return list.evaluate((el, size) => {
-    document.documentElement.style.setProperty("--font-size", size);
-    const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
-    if (slot === null) throw new Error("no pull slot inside the directory list");
-    const at = (y: number): Touch =>
-      new Touch({ identifier: 1, target: el, clientX: 200, clientY: y });
-    const fire = (type: string, touch: Touch): void => {
-      const points = type === "touchend" || type === "touchcancel" ? [] : [touch];
-      el.dispatchEvent(
-        new TouchEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          touches: points,
-          targetTouches: points,
-          changedTouches: [touch],
-        }),
-      );
-    };
-    el.scrollTop = 0;
-    const y0 = 200;
-    fire("touchstart", at(y0));
-    fire("touchmove", at(y0 + 20));
-    // Far past every cap in play — the old one (80), the slot at its largest
-    // (50). Whatever stops the slot, it is not the finger running out.
-    fire("touchmove", at(y0 + 400));
-    const slotRect = slot.getBoundingClientRect();
-    const listRect = el.getBoundingClientRect();
-    const transform = slot.style.transform;
-    fire("touchcancel", at(y0 + 400));
-    return {
-      slotTop: slotRect.top,
-      listTop: listRect.top,
-      slotHeight: slotRect.height,
-      transform,
-    };
-  }, rootFontSize);
+): Promise<{
+  slotBottom: number;
+  rowTop: number;
+  listTop: number;
+  slotHeight: number;
+  transform: string;
+}> {
+  return list.evaluate(
+    (el, opts) => {
+      document.documentElement.style.setProperty("--font-size", opts.size);
+      const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
+      if (slot === null) throw new Error("no pull slot inside the directory list");
+      const track = el.querySelector<HTMLElement>(".directory-pull-track");
+      if (track === null) throw new Error("no pull track inside the directory list");
+      const row = el.querySelector<HTMLElement>(".directory-row");
+      if (row === null) throw new Error("no directory row to measure the gap against");
+      const at = (y: number): Touch =>
+        new Touch({ identifier: 1, target: el, clientX: 200, clientY: y });
+      const fire = (type: string, touch: Touch): void => {
+        const points = type === "touchend" || type === "touchcancel" ? [] : [touch];
+        el.dispatchEvent(
+          new TouchEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            touches: points,
+            targetTouches: points,
+            changedTouches: [touch],
+          }),
+        );
+      };
+      el.scrollTop = 0;
+      const y0 = 200;
+      fire("touchstart", at(y0));
+      fire("touchmove", at(y0 + 20));
+      // Far past every distance in play — the commit point (80) and the slot
+      // at its largest (50). Whatever stops the pull, it is not the finger
+      // running out, and since point 3 removed the cap nothing else stops it
+      // either: the reading below is the finger's own distance.
+      fire("touchmove", at(y0 + opts.travel));
+      const slotRect = slot.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const listRect = el.getBoundingClientRect();
+      const transform = track.style.transform;
+      fire("touchcancel", at(y0 + opts.travel));
+      return {
+        slotBottom: slotRect.bottom,
+        rowTop: rowRect.top,
+        listTop: listRect.top,
+        slotHeight: slotRect.height,
+        transform,
+      };
+    },
+    { size: rootFontSize, travel: FULL_TRAVEL_PX },
+  );
 }
 
 // The three root font sizes that bracket cic's range, and the slot height each
@@ -321,38 +378,48 @@ const FONT_SIZES = [
   ["20px", 50],
 ] as const;
 
-// One paint applied DIRECTLY to the slot, with no gesture in front of it, and
+// One paint applied DIRECTLY to the track, with no gesture in front of it, and
 // the geometry the engine resolves it to. This is how the @webkit arm reaches
-// the cap at all: `new Touch(...)` is an `Illegal constructor` on Playwright's
-// WebKit (measured, and issue230's header records the same for its own drag),
-// so the production gesture cannot be synthesized there and the question
-// "does THIS ENGINE resolve THIS DECLARATION" has to be asked directly.
+// the invariant at all: `new Touch(...)` is an `Illegal constructor` on
+// Playwright's WebKit (measured, and issue230's header records the same for
+// its own drag), so the production gesture cannot be synthesized there and the
+// question "does THIS ENGINE resolve THIS GEOMETRY" has to be asked directly.
 //
-// 🔴 `pull-gesture-active` is not decoration. The slot carries
+// It returns both halves of the invariant because they fail differently: `gap`
+// is how far the ROWS moved (the engine applied the ancestor translate at all)
+// and `overlap` is slot-bottom minus row-top (the engine composed that
+// translate with the slot's own PERCENTAGE offset against the right box).
+//
+// 🔴 `pull-gesture-active` is not decoration. The track carries
 // `transition: transform 150ms ease-out`, which production drops through that
 // exact class for the length of a claimed pull. Without it every reading here
-// is the ease at t=0 — MEASURED: all eight candidate declarations, on BOTH
-// engines, read as the parked position and the table looked like a total
-// engine failure. Killing the transition the way production kills it is what
-// turned that into a table with two distinct answers in it.
-async function resolveTransform(
+// is the ease at t=0 — MEASURED on the cap this test used to check: all eight
+// candidate declarations, on BOTH engines, read as the parked position and the
+// table looked like a total engine failure. Killing the transition the way
+// production kills it is what turned that into a table with distinct answers.
+async function resolveTrackTravel(
   list: Locator,
   rootFontSize: string,
   declaration: string,
-): Promise<{ offset: number; slotHeight: number; computed: string }> {
+): Promise<{ gap: number; overlap: number; slotHeight: number; computed: string }> {
   return list.evaluate(
     (el, opts) => {
       document.documentElement.style.setProperty("--font-size", opts.rootFontSize);
       const slot = el.querySelector<HTMLElement>(".directory-pull-slot");
       if (slot === null) throw new Error("no pull slot inside the directory list");
+      const track = el.querySelector<HTMLElement>(".directory-pull-track");
+      if (track === null) throw new Error("no pull track inside the directory list");
+      const row = el.querySelector<HTMLElement>(".directory-row");
+      if (row === null) throw new Error("no directory row to measure the gap against");
       el.classList.add("pull-gesture-active");
-      slot.style.transform = opts.declaration;
-      const computed = getComputedStyle(slot).transform;
+      track.style.transform = opts.declaration;
+      const computed = getComputedStyle(track).transform;
       const slotRect = slot.getBoundingClientRect();
-      const offset = slotRect.top - el.getBoundingClientRect().top;
-      slot.style.removeProperty("transform");
+      const rowRect = row.getBoundingClientRect();
+      const gap = rowRect.top - el.getBoundingClientRect().top;
+      track.style.removeProperty("transform");
       el.classList.remove("pull-gesture-active");
-      return { offset, slotHeight: slotRect.height, computed };
+      return { gap, overlap: slotRect.bottom - rowRect.top, slotHeight: slotRect.height, computed };
     },
     { rootFontSize, declaration },
   );
@@ -378,65 +445,91 @@ test("#1445 — a downward pull on the directory asks for the refresh (chromium)
   // #1658 — and the committing release cleaned up after itself. The binder
   // reports a commit through `onCommit` and returns WITHOUT calling
   // `onRelease`, so a pane that hangs its cleanup off `onRelease` alone leaves
-  // the slot painted where the finger left it, at full opacity, forever. The
-  // two assertions above are the pre-state that makes this one evidence: the
-  // gesture really did take the committing path.
-  expect(await slotInlinePaint(list)).toEqual({ transform: "", opacity: "" });
+  // the paint where the finger left it, forever. The two assertions above are
+  // the pre-state that makes this one evidence: the gesture really did take
+  // the committing path.
+  //
+  // Point 3 spread the paint over two elements, so this checks both — and the
+  // stranded-track case is the worse of the two: not a hung spinner but the
+  // whole channel list sitting 240px down the pane. `slotTransform` is the
+  // third reading and it must be empty here for a different reason: the pane
+  // never writes one at all, at any point in the gesture.
+  expect(await pullInlinePaint(list)).toEqual({
+    trackTransform: "",
+    slotOpacity: "",
+    slotTransform: "",
+  });
 });
 
-test("#1445 — mid-pull the slot moves by the finger's travel, parked offset intact (chromium)", async ({
+test("#1445 — mid-pull the track moves by exactly the finger's travel (chromium)", async ({
   page,
 }) => {
   test.slow();
   const { list } = await openDirectory(page, "sidebar");
 
-  // 20px, and it used to be half the commit distance. #1658 capped the travel
-  // at the slot's OWN height — `2.5rem`, so 30px at the smallest root font
-  // size cic offers — and 40px is over that cap at three of the five sizes,
-  // which would make this read the clamp instead of the follow. 20px is under
-  // it at all five. The cap has its own test below.
+  // 20px. It used to be half the commit distance, then a literal 20 chosen to
+  // stay under the #1658 slot-height cap at every font size. Point 3 removed
+  // the cap, so no distance can read a clamp any more and the literal survives
+  // only because it keeps this test's arithmetic a small, obvious number.
   //
-  // Under the cap a correct paint moves the slot by exactly what the finger
-  // did. The rest position contributes -slotHeight to this same component, so
-  // a paint that dropped it would read +slotHeight + travel instead. The two
-  // failure modes are far apart and the browser does the arithmetic.
+  // The track rests at NO transform, so this reading is the whole of the
+  // paint: `after - before` is the finger's travel or the paint is wrong. The
+  // parked offset that used to complicate it belongs to the slot and stays in
+  // the stylesheet, on an element this no longer reads.
   const travel = 20;
   const { before, after } = await pullList(list, travel, false);
 
   expect(after - before).toBeCloseTo(travel, 0);
 });
 
-test("#1658 — at full travel the slot stops flush with the list's top edge, at every font size (chromium)", async ({
+test("#1658 — the rows follow the finger and the slot rides above them, at every font size (chromium)", async ({
   page,
 }) => {
   test.slow();
   const { list } = await openDirectory(page, "sidebar");
 
   // S, M (the default) and XXL — three DIFFERENT slot heights, and that is the
-  // point: the cap is only the slot's own height if the flush reading survives
-  // all three. A hardcoded 35 reads +5 at S and -15 at XXL; the old
-  // `PULL_COMMIT_PX` cap reads +50, +45 and +30.
+  // point: the invariant is an identity only if it survives all three. A
+  // spinner placed by any arithmetic on the slot's height instead of by being
+  // carried in the same box would read three different overlaps here.
   for (const [size, expectedSlotHeight] of FONT_SIZES) {
-    const { slotTop, listTop, slotHeight, transform } = await measureAtFullTravel(list, size);
+    const { slotBottom, rowTop, listTop, slotHeight, transform } = await measureAtFullTravel(
+      list,
+      size,
+    );
 
     // Known-answer control, and without it this whole test is theatre: if the
     // `--font-size` write did not take, all three iterations would measure the
     // same slot and three identical readings would look like proof.
     expect(slotHeight, `slot height at --font-size: ${size}`).toBeCloseTo(expectedSlotHeight, 0);
-    // Read this one FIRST when the pair goes red: an EMPTY inline transform is
+    // Read this one FIRST when the rest goes red: an EMPTY inline transform is
     // the engine refusing the declaration outright (the CSSOM setter drops an
     // unparseable value silently), which is a different defect and a different
     // fix from an engine that accepted it and resolved it somewhere else.
     expect(transform, `inline transform at --font-size: ${size}`).not.toBe("");
-    // The flush line. NOT "the slot clears the first row" — it cannot, it is
-    // absolutely positioned over rows that start at the same y — but it never
-    // travels PAST the edge, which is the whole of what #1658 point 2 can buy
-    // before the rows themselves move (point 3, not started).
-    expect(slotTop - listTop, `flush offset at --font-size: ${size}`).toBeCloseTo(0, 0);
+
+    // POINT 3 ITSELF, and the assertion this file did not have: the CONTENT
+    // moved. The first row is 400px below the list's top edge because the
+    // finger dragged it there. Before point 3 this read 0 at every size — the
+    // rows never moved at all, which is the defect vjt kept seeing, and it is
+    // also what proves the travel is UNCAPPED: any cap would read the cap.
+    expect(rowTop - listTop, `rows followed the finger at --font-size: ${size}`).toBeCloseTo(
+      400,
+      0,
+    );
+
+    // THE STRONG INVARIANT. The slot's bottom edge lands ON the first row's
+    // top edge — the spinner sits in the space the rows opened, touching them
+    // and never over them. A positive number here is the spinner back on top
+    // of the row, which is exactly the 1.3.0 defect.
+    expect(slotBottom - rowTop, `slot/row overlap at --font-size: ${size}`).toBeCloseTo(0, 0);
+    expect(slotBottom, `slot bottom must not pass the first row at ${size}`).toBeLessThanOrEqual(
+      rowTop + 0.5,
+    );
   }
 });
 
-test("@webkit #1658 — WebKit resolves the travel cap against the slot's own height (iPhone 15)", async ({
+test("@webkit #1658 — WebKit carries the rows AND keeps the slot off them (iPhone 15)", async ({
   page,
 }) => {
   test.slow();
@@ -446,44 +539,38 @@ test("@webkit #1658 — WebKit resolves the travel cap against the slot's own he
 
   for (const [size, expectedSlotHeight] of FONT_SIZES) {
     // The ARITHMETIC CONTROL, and it runs first because everything below is
-    // worthless without it. A plain px translate under the cap must move the
-    // slot by exactly that much from its parked -100%. If this reads the
-    // parked position instead, the harness is measuring a transition or a
-    // stale layout and the capped reading beneath it means nothing — which is
-    // the exact hole the first draft of this test fell into.
-    const control = await resolveTransform(list, size, "translateY(-100%) translateY(20px)");
+    // worthless without it. A small plain-px translate on the track must move
+    // the first row by exactly that much. If this reads 0 instead, the harness
+    // is measuring a transition or a stale layout and the reading beneath it
+    // means nothing — which is the exact hole the first draft of this test
+    // fell into, back when it measured a cap.
+    const control = await resolveTrackTravel(list, size, "translateY(20px)");
     expect(control.slotHeight, `slot height at --font-size: ${size}`).toBeCloseTo(
       expectedSlotHeight,
       0,
     );
-    expect(control.offset, `plain-px control at --font-size: ${size}`).toBeCloseTo(
-      20 - expectedSlotHeight,
-      0,
-    );
+    expect(control.gap, `plain-px control at --font-size: ${size}`).toBeCloseTo(20, 0);
 
     // The declaration the pane actually writes at full travel, resolved by the
-    // engine the bug was reported from. `min(<px>, 100%)` is a CSS math
-    // function over MIXED UNITS inside a transform: chromium resolving it says
-    // nothing about WebKit, and if WebKit did not resolve it the slot would
-    // stay parked out of sight — not "the cap is off by a few px" but the pull
-    // no longer following the finger at all, on the only engine vjt has, with
-    // every other gate in this repo green. That is the empty-green class, and
-    // this line is what closes it.
+    // engine the bug was reported from — and the two halves fail differently.
+    //
+    // `gap` is the plain half: WebKit applied the ancestor translate, so the
+    // rows moved. `overlap` is the half chromium cannot answer: the slot's own
+    // parked offset is a PERCENTAGE (`translateY(-100%)`) that resolves against
+    // the SLOT's box, not the track's, and the invariant is an identity only if
+    // the engine composes those two correctly. An engine that resolved the
+    // percentage against the wrong box puts the spinner straight back on top of
+    // the first row — the 1.3.0 defect, on the only engine vjt has, with every
+    // chromium gate in this repo green. That is the empty-green class.
     //
     // Coupled BY HAND to `pulledTransform` in src/DirectoryPane.tsx: this is an
     // ENGINE contract, so it names the declaration rather than importing it,
-    // exactly as the CSS-contract test below names `pan-y`. Change the cap's
+    // exactly as the CSS-contract test below names `pan-y`. Change the travel's
     // FORM in the pane and this string must move with it — the chromium arm
     // above is what keeps the pane honest about producing it.
-    const capped = await resolveTransform(
-      list,
-      size,
-      "translateY(-100%) translateY(min(400px, 100%))",
-    );
-    expect(capped.offset, `capped travel at --font-size: ${size} (${capped.computed})`).toBeCloseTo(
-      0,
-      0,
-    );
+    const full = await resolveTrackTravel(list, size, "translateY(400px)");
+    expect(full.gap, `rows carried at --font-size: ${size} (${full.computed})`).toBeCloseTo(400, 0);
+    expect(full.overlap, `slot/row overlap at --font-size: ${size}`).toBeCloseTo(0, 0);
   }
 });
 

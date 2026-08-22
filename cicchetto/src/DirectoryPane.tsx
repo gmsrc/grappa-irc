@@ -64,41 +64,40 @@ import { MircBody } from "./MircText";
 // the viewport stays steady while rows update from a progress ping or an
 // append; a REPLACE that shrinks the list snaps back to the top.
 
-// #1445 — the pull slot rests at `translateY(-100%)`, parked one slot-height
-// above the list's top edge and clipped there by the scroller's overflow. An
-// inline transform REPLACES that declaration wholesale, so the pulled paint
-// has to re-state the parked offset or the slot drops into the rows by its own
-// height instead of sliding in from above. Same trap #1438 hit with the media
-// viewer's centering transform, on a different element.
+// #1658 point 3 — the pull moves the TRACK, and the track carries everything:
+// the parked slot AND the rows. That is the whole design, and it is worth
+// stating as geometry because the geometry is what makes the strong invariant
+// free.
 //
-// Two `translateY` functions rather than one `calc`: they compose to the same
-// matrix, and the resolved form a test can read is `-slotHeight + dy` either
-// way — but this one is legible in an assertion and needs no CSS arithmetic.
+// Inside the track the slot occupies `[-slotHeight, 0]` (its own
+// `translateY(-100%)`, which lives in the stylesheet) and the rows start at 0.
+// Translate the track by `dy` and the slot's bottom edge lands on `dy` — which
+// is exactly where the first row's top edge lands. So:
 //
-// #1658 — the travel caps at `100%`, the slot's OWN height, and the cap lives
-// in the CSS rather than in JS because there is no number to put in JS. The
-// slot is `2.5rem` and cic's root font-size is a USER PREFERENCE
-// (`lib/fontSize.ts` writes `--font-size` on <html>: S=12px … XXL=20px), so
-// the slot is anywhere from 30px to 50px and can change while this pane is
-// open. A px constant would be right for one of the five sizes; a percentage
-// in `translateY` resolves against the element's own height, so the cap and
-// the parked offset are the same unit, the same fact, and read live.
+//   slot bottom ≡ first row top, at EVERY dy
 //
-// It used to cap at `PULL_COMMIT_PX` (80), which is more than the slot at
-// every size: at full travel the slot sat 30-50px BELOW the list's top edge —
-// a whole spinner parked inside the rows, which is the overlap vjt reported
-// on 1.3.0. The old comment claimed the cap existed to stop exactly that.
+// Not a bound that holds at the distances a test happens to sample: an
+// identity, because the two are one rigid body under one transform. The
+// spinner rides in the space the rows open and cannot be made to overlap them
+// by any later edit to either one — there is no second number to keep in step.
 //
-// 🔴 What this buys is the WEAKER of the two invariants available, on purpose:
-// the slot never travels PAST the list's top edge. It does not buy "the slot
-// never overlaps a row", and that one is not on offer here — the slot is
-// `position: absolute; top: 0` inside a scroller whose rows also start at
-// y=0, so every position where the spinner is visible at all is a position
-// where it covers the top band of the first row. Making the rows move out of
-// its way is a different change (#1658 point 3, not started), and until it
-// lands the honest statement is the flush line. Asserting the strong one here
-// would be asserting something false.
-const pulledTransform = (dy: number): string => `translateY(-100%) translateY(min(${dy}px, 100%))`;
+// What this REPLACED, and why none of it is a loss:
+//
+//   * The paint used to go on the slot as `translateY(-100%) translateY(...)`,
+//     re-stating the parked offset because an inline transform replaces the
+//     rule wholesale (the #1438 trap). The pane writes no transform to the slot
+//     at all now, so the parked offset stays in the stylesheet where nothing
+//     can replace it and the trap is gone rather than guarded.
+//   * The travel used to cap at `min(dy, 100%)`, the slot's own height. That
+//     cap existed for ONE reason — keeping the spinner off rows that stood
+//     still — and with the rows moving there is no collision left to bound.
+//     🔴 Removed rather than retuned, deliberately: any cap makes the list stop
+//     following the finger past it, which is the defect this issue is about, in
+//     smaller print. Where the travel should ease off past the commit distance
+//     is a FEEL question and needs a constant measured on a phone; the honest
+//     floor to calibrate from is the finger's own distance, and damping is
+//     additive afterwards. vjt's call, as `PULL_COMMIT_PX`'s own comment says.
+const pulledTransform = (dy: number): string => `translateY(${dy}px)`;
 
 // The spinner is legible before the commit point, not after it: the ramp
 // reaches full exactly where the release starts spending a capture, so the
@@ -260,6 +259,7 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   // <Show when={page()}> and only rendered once a page is in the store).
   let containerRef: HTMLDivElement | undefined;
   let pullSlotRef: HTMLDivElement | undefined;
+  let pullTrackRef: HTMLDivElement | undefined;
   let savedScrollTop = 0;
   // The slug currently shown — kept in sync by the effect so onCleanup can
   // reset the right slug without reading props during disposal.
@@ -376,15 +376,25 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
   // RENDERS from the pulled distance, and a signal here would run the reactive
   // graph once per touchmove to move one element. Same call MediaViewerModal
   // makes for the dismiss drag it mirrors.
+  // #1658 point 3 — TWO elements, one per axis, and the split is the point.
+  // The TRACK carries the placement (slot + rows together, so they cannot
+  // disagree); the SLOT carries the ramp, which is a different axis with a
+  // different distance and must not be recomputed from the travel.
   const paintPull = (dy: number): void => {
+    const track = pullTrackRef;
     const slot = pullSlotRef;
-    if (slot === undefined) return;
-    slot.style.transform = pulledTransform(dy);
+    if (track === undefined || slot === undefined) return;
+    track.style.transform = pulledTransform(dy);
     slot.style.opacity = String(pulledOpacity(dy));
   };
 
+  // Both, always. The travel and the ramp are painted on different elements
+  // now, so a cleanup that clears one and forgets the other does not leave a
+  // hung spinner — it leaves the whole channel list parked down the pane for
+  // as long as it lives, which is a louder version of the bug `onCommit` was
+  // taught to clear.
   const unpaintPull = (): void => {
-    pullSlotRef?.style.removeProperty("transform");
+    pullTrackRef?.style.removeProperty("transform");
     pullSlotRef?.style.removeProperty("opacity");
   };
 
@@ -538,33 +548,52 @@ const DirectoryPane: Component<{ networkSlug: string }> = (props) => {
                 if (containerRef) savedScrollTop = containerRef.scrollTop;
               }}
             >
-              {/* #1445 — the pulled affordance. Absolutely positioned INSIDE
-                  the scroller: an absolute child is placed against the
-                  scrolled content origin, and the pull exists only at
-                  scrollTop 0, so the two origins coincide by construction —
-                  which buys the plain descendant selector the stylesheet needs
-                  to drop the snap-back transition while a finger is driving.
-                  aria-hidden: the outcome it announces is the Refresh button
-                  going to "Refreshing…", which is already in the a11y tree. */}
-              <div class="directory-pull-slot" aria-hidden="true" ref={pullSlotRef}>
-                <span class="directory-pull-spinner" />
-              </div>
-              <ul class="directory-list-inner">
-                <For each={p().entries}>
-                  {(entry) => <DirectoryRow entry={entry} networkSlug={props.networkSlug} />}
-                </For>
-              </ul>
-              {/* #677 — load-more sentinel: present only while the server
-                  reports another page (next_cursor). IntersectionObserver on
-                  it drives loadMore; it unmounts when the list is exhausted. */}
-              <Show when={p().next_cursor !== null}>
-                <div class="directory-sentinel" aria-hidden="true" ref={attachSentinel} />
-              </Show>
-              <Show when={isLoadingMore(props.networkSlug)}>
-                <div class="directory-loading-more muted" role="status">
-                  Loading more…
+              {/* #1658 point 3 — the pull TRACK: everything the finger drags,
+                  in one box, moved by one transform. It wraps the slot AND the
+                  rows on purpose — that is what makes "the spinner never
+                  covers a row" a property of the markup instead of an
+                  arithmetic relation between two paints that a later edit
+                  could break. It is the containing block for the absolutely
+                  positioned slot below (`position: relative` in the
+                  stylesheet), which puts the slot's origin at the top of the
+                  content — the same place `.directory-list` put it before, so
+                  nothing moves at rest.
+                  A wrapper level is safe here, checked rather than assumed: no
+                  rule in default.css selects a DIRECT child of
+                  `.directory-list`, `attachSentinel` reaches its observer root
+                  through `closest()`, and a transform does not touch layout,
+                  so scrollHeight and the pane's scroll-preservation effect are
+                  untouched. */}
+              <div class="directory-pull-track" ref={pullTrackRef}>
+                {/* #1445 — the pulled affordance. Absolutely positioned, and
+                    it keeps its parked `translateY(-100%)` in the STYLESHEET:
+                    the pane no longer writes a transform here, so the #1438
+                    trap (an inline transform replacing the rule wholesale) has
+                    nothing left to catch. Only the opacity ramp is painted
+                    inline. aria-hidden: the outcome it announces is the
+                    Refresh button going to "Refreshing…", which is already in
+                    the a11y tree. */}
+                <div class="directory-pull-slot" aria-hidden="true" ref={pullSlotRef}>
+                  <span class="directory-pull-spinner" />
                 </div>
-              </Show>
+                <ul class="directory-list-inner">
+                  <For each={p().entries}>
+                    {(entry) => <DirectoryRow entry={entry} networkSlug={props.networkSlug} />}
+                  </For>
+                </ul>
+                {/* #677 — load-more sentinel: present only while the server
+                    reports another page (next_cursor). IntersectionObserver on
+                    it drives loadMore; it unmounts when the list is
+                    exhausted. */}
+                <Show when={p().next_cursor !== null}>
+                  <div class="directory-sentinel" aria-hidden="true" ref={attachSentinel} />
+                </Show>
+                <Show when={isLoadingMore(props.networkSlug)}>
+                  <div class="directory-loading-more muted" role="status">
+                    Loading more…
+                  </div>
+                </Show>
+              </div>
             </div>
           </>
         )}

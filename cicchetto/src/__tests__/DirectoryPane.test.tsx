@@ -862,6 +862,15 @@ describe("DirectoryPane", () => {
       return el;
     };
 
+    // #1658 point 3 — the one element the pull moves. The slot and the rows
+    // live INSIDE it, so the single transform written here carries both and
+    // they cannot drift apart.
+    const trackIn = (container: HTMLElement): HTMLElement => {
+      const el = container.querySelector<HTMLElement>(".directory-pull-track");
+      if (el === null) throw new Error("no pull track rendered");
+      return el;
+    };
+
     // Finger down and dragged to `dy`, still on the glass — the mid-pull paint
     // exists only before the release wipes it. TWO moves because the binder
     // claims LATE: it decides on a touchmove, never on the touchstart.
@@ -904,58 +913,62 @@ describe("DirectoryPane", () => {
       expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
     });
 
-    // #1658 — 20px, not half the commit distance as this drag used to be. The
-    // travel now caps at the slot's OWN height, and the slot is `2.5rem`
-    // against a root font-size the user picks (`lib/fontSize.ts`: S=12px …
-    // XXL=20px ⇒ 30px … 50px). 40px is over that cap at three of the five
-    // sizes; 20px is under it at all five, so this reads the follow and not
-    // the clamp. The clamp has its own test below.
-    it("the slot follows the finger while it is down", () => {
+    // #1658 point 3 — the whole of the defect vjt kept seeing: only the
+    // spinner moved. What the finger drags now is the TRACK, and the rows are
+    // inside it, so "the list follows the finger" is the same statement as
+    // "the paint happened".
+    it("the list's CONTENT follows the finger, not just the slot", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
 
       pullTo(listIn(container), 20);
 
-      expect(slotIn(container).style.transform).toContain("translateY(min(20px, 100%))");
+      const track = trackIn(container);
+      expect(track.style.transform).toBe("translateY(20px)");
+      // The rows are INSIDE the element that moved. Without this the assertion
+      // above is satisfied by a track that translates an empty box beside a
+      // list standing still — which is the defect, wearing the fix's name.
+      expect(track.querySelector(".directory-list-inner")).not.toBeNull();
+      // And so is the slot: ONE transform carries both, which is why the
+      // spinner cannot land on top of a row. The geometry that follows from it
+      // is asserted in the browser (e2e), where there is layout to measure.
+      expect(track.querySelector(".directory-pull-slot")).not.toBeNull();
     });
 
-    it("keeps the slot's parked offset in the pulled transform (an inline transform replaces the rule)", () => {
+    // #1658 point 3 — the inverse of the test this replaces. The pane used to
+    // write `translateY(-100%) translateY(min(dy, 100%))` onto the SLOT: the
+    // parked offset had to be re-stated because an inline transform replaces
+    // the rule wholesale (the #1438 lesson), and the `min(…, 100%)` capped the
+    // travel at the slot's own height to keep the spinner off the rows.
+    //
+    // Both are gone, and neither is a loss. The slot is carried by its
+    // ancestor now, so the parked `translateY(-100%)` stays in the stylesheet
+    // where nothing can replace it, and the cap has nothing left to prevent.
+    it("writes no inline transform to the slot — the parked offset stays in the stylesheet", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
 
       pullTo(listIn(container), Math.round(PULL_COMMIT_PX / 2));
 
-      // The slot rests at translateY(-100%), clipped above the list's top
-      // edge. An inline transform REPLACES that declaration wholesale, so a
-      // paint that forgot it would drop the slot into the rows by its own
-      // height instead of sliding it in from above — the #1438 lesson, on a
-      // different element.
-      expect(slotIn(container).style.transform).toContain("translateY(-100%)");
+      expect(slotIn(container).style.transform).toBe("");
     });
 
-    // #1658 — the cap used to be `PULL_COMMIT_PX`, which is TWICE the slot at
-    // the default font size: the paint drove the slot a whole extra
-    // slot-height past the list's top edge and parked the spinner inside the
-    // rows. What this pins is not a smaller number but the ABSENCE of a
-    // number: the finger's distance goes through unclamped and the clamp is
-    // `100%` — the slot's own height, resolved by the engine against whatever
-    // the root font-size currently is. Reinstating any JS clamp turns the
-    // received string into a bare `translateY(<n>px)` and this red.
+    // #1658 point 3 — the cap is GONE, and this pins its absence rather than a
+    // new number. It existed only to stop the spinner sinking into rows that
+    // stood still; with the rows carried by the same transform there is no
+    // collision left to bound, so the travel follows the finger the whole way
+    // and where it stops is a question of feel, not of geometry.
     //
-    // jsdom resolves no layout, so this is the CONTRACT and not the geometry.
-    // That the slot actually stops flush with the list's top edge — at three
-    // font sizes, which is what proves the cap is slot-relative and not a 35
-    // in disguise — is asserted in the browser, in
-    // e2e/tests/issue1445-directory-pull-refresh.spec.ts.
-    it("the paint is capped by the slot's OWN height, not by the commit distance", () => {
+    // Reinstating any clamp — in JS or as a `min()` in the declaration — turns
+    // this string into something other than the raw distance and reds it.
+    it("the travel is UNCAPPED — the finger's distance goes through whole", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
 
       const far = PULL_COMMIT_PX * 4;
       pullTo(listIn(container), far);
 
-      const painted = slotIn(container).style.transform;
-      expect(painted).toBe(`translateY(-100%) translateY(min(${far}px, 100%))`);
+      expect(trackIn(container).style.transform).toBe(`translateY(${far}px)`);
     });
 
     // #1658 — the ramp and the travel are INDEPENDENT axes, and the fix for
@@ -989,11 +1002,11 @@ describe("DirectoryPane", () => {
 
       const list = listIn(container);
       pullTo(list, Math.round(PULL_COMMIT_PX / 2));
-      expect(slotIn(container).style.transform).not.toBe("");
+      expect(trackIn(container).style.transform).not.toBe("");
 
       fireTouch(list, "touchend", { clientX: X, clientY: Y0 + Math.round(PULL_COMMIT_PX / 2) });
 
-      expect(slotIn(container).style.transform).toBe("");
+      expect(trackIn(container).style.transform).toBe("");
     });
 
     // #1658 — the release that COMMITS is a terminal too, and the pane hangs
@@ -1006,6 +1019,12 @@ describe("DirectoryPane", () => {
     // A separate test from "the release wipes the paint" above rather than a
     // widening of it: that one lifts SHORT of the commit distance, which is
     // precisely why it stayed green through the whole defect.
+    //
+    // #1658 point 3 — and the guarantee now spans TWO elements. The travel
+    // moved to the track while the ramp stayed on the slot, so a cleanup that
+    // clears one and forgets the other leaves the list itself parked 240px
+    // down the pane for the rest of its life: a worse version of the hung
+    // spinner this test was written for. Both are asserted, separately.
     it("a release that COMMITS wipes the paint too", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
@@ -1015,7 +1034,7 @@ describe("DirectoryPane", () => {
       // Pre-state, not decoration: without it a binder that never armed would
       // satisfy both assertions below by having painted nothing at all.
       expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
-      expect(slotIn(container).style.transform).toBe("");
+      expect(trackIn(container).style.transform).toBe("");
       expect(slotIn(container).style.opacity).toBe("");
     });
 
