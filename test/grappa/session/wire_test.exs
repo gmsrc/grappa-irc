@@ -591,9 +591,11 @@ defmodule Grappa.Session.WireTest do
       # window_pending (cic subscribes per-channel after seeing the state).
       #
       # #902 — `inviter` is the nick cic's replacement surface (a banner
-      # reading "<nick> is inviting you to #chan") renders. Additive field:
-      # no protocol bump, and asserting the WHOLE map means a silent drop of
-      # it fails here.
+      # reading "<nick> is inviting you to #chan") renders. It shipped as an
+      # additive field with no protocol bump; #1393d (2026-08-21) withdrew
+      # that exemption, so a field added here now moves
+      # `Grappa.Protocol.version/0` too. Asserting the WHOLE map means a
+      # silent drop of it fails here.
       assert Wire.window_invited("azzurra", "#grappa", "vjt") == %{
                kind: :window_invited,
                network: "azzurra",

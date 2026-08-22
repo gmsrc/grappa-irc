@@ -397,8 +397,14 @@ defmodule Grappa.Session.Wire do
   rule), only the typed source + the raw reply lines.
 
   Additive per the #447 wire contract: a client that does not know
-  `:admin` ignores the frame rather than breaking, so no
-  `protocol_version` bump is needed.
+  `:admin` ignores the frame rather than breaking. That half of #447
+  stands — but it no longer licenses a still version number. Since
+  vjt's ruling (2026-08-21, #1393d) `Grappa.Protocol.version/0` bumps
+  on EVERY wire-shape change, additive included, and this union is in
+  the pinned shape (`SESSION_WIRE_SERVER_REPLY_SOURCE` in the generated
+  `wireTypes.ts`), so a FIFTH source costs a bump and
+  `mix grappa.wire_pin --check` is what says so. `:admin` itself
+  predates the ruling and shipped under v1 without one.
 
   The union is DERIVED from `@server_reply_sources` rather than spelled
   twice. #992 shipped `:admin` into the union but not into the copy of
@@ -558,8 +564,11 @@ defmodule Grappa.Session.Wire do
           target: String.t(),
           # #606 — request origin. `"user"` = operator-issued /whois (the
           # single-slot scrollback card); `"rail"` = query-rail auto-fetch.
-          # Add-only (no protocol_version bump); an old client ignores it and
-          # cic treats an absent value as "user".
+          # Add-only: an old client ignores it and cic treats an absent
+          # value as "user". Add-only is NOT a bump exemption — it shipped
+          # under v1, before the 2026-08-21 ruling (#1393d) made every
+          # wire-shape change bump `Grappa.Protocol.version/0`. Widening
+          # this union today costs one.
           source: :user | :rail,
           user: String.t() | nil,
           host: String.t() | nil,
@@ -1345,9 +1354,12 @@ defmodule Grappa.Session.Wire do
   the user-topic is joined from boot so delivery is guaranteed. Same
   `window_`-namespaced naming convention.
 
-  #902 — carries `inviter`, the nick that sent the INVITE. ADDITIVE field,
-  so no `Grappa.Protocol` version bump (the wire contract is additive-only
-  and a client ignores what it does not know). The greyed tab this event
+  #902 — carries `inviter`, the nick that sent the INVITE. ADDITIVE: a
+  client that does not know it ignores it, and that much of the wire
+  contract is unchanged. It shipped WITHOUT a `Grappa.Protocol` version
+  bump, and `inviter` is one of the five un-bumped additions the ruling
+  cites by name — since 2026-08-21 (#1393d) a field added here bumps
+  `version/0`, additive or not. The greyed tab this event
   used to open is gone; cic now renders a dismissable banner reading
   "<nick> is inviting you to #chan", which needs the nick at event time —
   the persisted INVITE row it used to be read from lives in a channel
@@ -1383,9 +1395,13 @@ defmodule Grappa.Session.Wire do
   window, so absence there is unobservable — this event IS the observation.
   Nothing is sent upstream; IRC has no DECLINE.
 
-  ADDITIVE (a new event kind), so no `Grappa.Protocol` bump: an older client
-  ignores it and simply keeps behaving as it did pre-#976 (the banner returns
-  on ITS next reload; the server-side state is gone either way).
+  ADDITIVE (a new event kind): an older client ignores it and simply keeps
+  behaving as it did pre-#976 (the banner returns on ITS next reload; the
+  server-side state is gone either way). It shipped with no
+  `Grappa.Protocol` bump, under the rule of the day; since 2026-08-21
+  (#1393d) a new event kind bumps `version/0` like any other shape change —
+  the kind is in the pinned shape, so `mix grappa.wire_pin --check` enforces
+  it rather than leaving it to the author to remember.
   """
   @spec window_invite_declined(String.t(), String.t()) :: window_invite_declined_payload()
   def window_invite_declined(network_slug, channel)
