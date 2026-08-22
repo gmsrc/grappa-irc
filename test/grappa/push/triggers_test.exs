@@ -254,6 +254,20 @@ defmodule Grappa.Push.TriggersTest do
       m = msg(channel: "#sniffo", body: "vjtbot is paged")
       refute notify?(m, "vjt", prefs(channel_mentions: true), [])
     end
+
+    # #1674 — the mention disjunct folds the same row-level rule the badge
+    # does, so a robot spelling your nick cannot buzz the phone either. The
+    # kind gate already drops every `:notice`; a services PRIVMSG (MemoServ
+    # delivery) is the arrival this closes.
+    test "a services PRIVMSG spelling own nick does NOT notify (#1674)" do
+      m = msg(channel: "$server", sender: "MemoServ", body: "vjt, you have 1 new memo.")
+      refute notify?(m, "vjt", prefs(channel_mentions: true), [])
+    end
+
+    test "a peer PRIVMSG spelling own nick still notifies (#1674)" do
+      m = msg(channel: "#sniffo", sender: "bob", body: "vjt: are you there?")
+      assert notify?(m, "vjt", prefs(channel_mentions: true), [])
+    end
   end
 
   describe "should_notify?/5 — the subject's OWN rows never notify (#532 C)" do

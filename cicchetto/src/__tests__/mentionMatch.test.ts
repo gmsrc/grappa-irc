@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesWatchlist } from "../lib/mentionMatch";
+import { isMentionableSender, matchesWatchlist } from "../lib/mentionMatch";
 
 // #370 — `matchesWatchlist` is the SINGLE client-side match predicate for
 // the in-message visual highlight (ScrollbackPane `.scrollback-mention` /
@@ -57,5 +57,29 @@ describe("matchesWatchlist — own nick ∪ custom highlight patterns (#370)", (
 
   it("is false when both the nick is null and there are no patterns", () => {
     expect(matchesWatchlist("anything at all", null, [])).toBe(false);
+  });
+});
+
+// #1674 — the SENDER half of the mention rule. Mirror of
+// `Grappa.Mentions.mentionable_sender?/1`. Keyed on the sender because
+// neither of the alternatives survives: excluding `:notice` silences a
+// human `/notice`, and excluding `$server` misses the service's own query
+// window, which over-counted identically (measured server-side).
+describe("isMentionableSender — a robot cannot mention you (#1674)", () => {
+  it("excludes services and the server", () => {
+    expect(isMentionableSender("NickServ")).toBe(false);
+    expect(isMentionableSender("chanserv")).toBe(false);
+    expect(isMentionableSender("nightwish.azzurra.chat")).toBe(false);
+  });
+
+  it("keeps every other sender", () => {
+    expect(isMentionableSender("bob")).toBe(true);
+    // Closed allowlist: real ops nicks merely ending in "serv" stay
+    // mentionable (bucket H/S4 regression guard).
+    expect(isMentionableSender("Conserv")).toBe(true);
+  });
+
+  it("only ever subtracts — an unclassifiable sender stays mentionable", () => {
+    expect(isMentionableSender("")).toBe(true);
   });
 });

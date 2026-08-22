@@ -733,5 +733,85 @@
     },
     "patterns": [],
     "expected": true
+  },
+  {
+    "name": "mention (#1674): a services PRIVMSG spelling own nick does NOT notify",
+    "message": {
+      "kind": "privmsg",
+      "channel": "$server",
+      "sender": "MemoServ",
+      "body": "vjt, you have 1 new memo."
+    },
+    "network_slug": "azzurra",
+    "own_nick": "vjt",
+    "prefs": {
+      "channel_messages_all": false,
+      "channel_messages_only": [],
+      "channel_mentions": true,
+      "private_messages_all": false,
+      "private_messages_only": []
+    },
+    "patterns": [],
+    "expected": false
+  },
+  {
+    "name": "mention (#1674): a server-originated PRIVMSG spelling own nick does NOT notify",
+    "message": {
+      "kind": "privmsg",
+      "channel": "$server",
+      "sender": "nightwish.azzurra.chat",
+      "body": "*** Notice -- Client connecting: vjt"
+    },
+    "network_slug": "azzurra",
+    "own_nick": "vjt",
+    "prefs": {
+      "channel_messages_all": false,
+      "channel_messages_only": [],
+      "channel_mentions": true,
+      "private_messages_all": false,
+      "private_messages_only": []
+    },
+    "patterns": [],
+    "expected": false
+  },
+  {
+    "name": "mention (#1674): the exclusion is by SENDER — a peer mention still notifies",
+    "message": {
+      "kind": "privmsg",
+      "channel": "#sniffo",
+      "sender": "Conserv",
+      "body": "vjt: are you there?"
+    },
+    "network_slug": "azzurra",
+    "own_nick": "vjt",
+    "prefs": {
+      "channel_messages_all": false,
+      "channel_messages_only": [],
+      "channel_mentions": true,
+      "private_messages_all": false,
+      "private_messages_only": []
+    },
+    "patterns": [],
+    "expected": true
+  },
+  {
+    "name": "mention (#1674): channel_messages_all still delivers a services row — only the mention disjunct is gated",
+    "message": {
+      "kind": "privmsg",
+      "channel": "$server",
+      "sender": "MemoServ",
+      "body": "vjt, you have 1 new memo."
+    },
+    "network_slug": "azzurra",
+    "own_nick": "vjt",
+    "prefs": {
+      "channel_messages_all": true,
+      "channel_messages_only": [],
+      "channel_mentions": true,
+      "private_messages_all": false,
+      "private_messages_only": []
+    },
+    "patterns": [],
+    "expected": true
   }
 ]

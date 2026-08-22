@@ -57,14 +57,46 @@ defmodule Grappa.Mentions do
   Mirror of `cicchetto/src/lib/mentionMatch.ts`'s `mentionsUser/2`. A
   regex tweak (e.g. broader Unicode word-boundary support) MUST land
   in both ports together.
+
+  ## `mentionable_sender?/1` — the SENDER half (#1674)
+
+  The body predicate above answers "does this text name me". It cannot
+  answer "did a PERSON name me", and that is the axis #1674 was filed on:
+  a NickServ login confirmation (`Password accepted for <nick>. You are
+  now identified.`) and the ircd's own connect notices both spell the
+  operator's nick as a matter of routine, and both lit the highest-severity
+  badge grappa has on a window almost nobody opens.
+
+  `mentionable_sender?/1` is the second conjunct — a pure sender
+  classification composed from the two `Grappa.IRC.Identifier` verbs that
+  already decide the SAME question for message routing
+  (`services_sender?/1`, `server_sender?/1`). Being told something by a
+  robot is not being mentioned by somebody.
+
+  Deliberately keyed on the SENDER, not the kind and not the channel:
+
+    * NOT the kind — a human `/notice vjt ...` IS conversation and still
+      counts. Excluding `:notice` wholesale would silence it.
+    * NOT the channel — the over-count is not confined to `$server`.
+      `EventRouter.open_query_or_server/2` re-keys a services NOTICE onto
+      the service's own query window when one is open (#400/#546), and
+      that window over-counted identically (measured under #1674).
+
+  Every server-side "is this row a mention" fold composes THIS with
+  `matches?/2`: `Grappa.WindowCounts.mention_row?/3` (the badge, both the
+  per-window and the bulk cold-load door), `aggregate_mentions/6` (the C8
+  mentions-while-away bundle) and `Grappa.Push.Triggers.mention_match?/4`
+  (the OS push). A new mention fold MUST go through it or the badge and
+  the notification start disagreeing again.
   """
 
   use Boundary,
     top_level?: true,
-    deps: [Grappa.Repo, Grappa.Scrollback]
+    deps: [Grappa.IRC, Grappa.Repo, Grappa.Scrollback]
 
   import Ecto.Query
 
+  alias Grappa.IRC.Identifier
   alias Grappa.Repo
   alias Grappa.Scrollback.Message
 
@@ -85,7 +117,10 @@ defmodule Grappa.Mentions do
   Messages are returned in `server_time ASC` order (chronological).
 
   Non-content-bearing kinds (`:join`, `:part`, `:quit`, etc.) are
-  excluded — they never carry a body to match against.
+  excluded — they never carry a body to match against. Service- and
+  server-originated rows are excluded too (`mentionable_sender?/1`,
+  #1674): a NickServ confirmation naming you is not a mention, and the
+  away bundle must agree with the badge that counted it.
 
   The DB query step uses the `messages_user_id_network_id_channel_server_time_index`
   composite index. The in-memory regex step filters the (typically small)
@@ -120,7 +155,7 @@ defmodule Grappa.Mentions do
     # Compile all pattern regexes once before the loop — avoids
     # re-compilation per row × per pattern.
     compiled = build_matchers([own_nick | watchlist_patterns])
-    Enum.filter(rows, &body_matches?(&1.body, compiled))
+    Enum.filter(rows, &(mentionable_sender?(&1.sender) and body_matches?(&1.body, compiled)))
   end
 
   # ---------------------------------------------------------------------------
@@ -146,6 +181,26 @@ defmodule Grappa.Mentions do
   def mentioned?(body, own_nick, patterns)
       when (is_binary(body) or is_nil(body)) and is_binary(own_nick) and is_list(patterns) do
     matches?(body, matchers(own_nick, patterns))
+  end
+
+  @doc """
+  Returns `true` when a row from `sender` is CAPABLE of mentioning the
+  subject — i.e. `sender` is neither a well-known IRC service nor the
+  server itself (#1674).
+
+  The sender half of the mention rule; pair it with `matches?/2` (or
+  `mentioned?/3`) at every fold. See the moduledoc for WHY this is keyed on
+  the sender rather than on `:notice` or on the `$server` channel.
+
+  Total on `term()` and biased toward `true`: this predicate only ever
+  SUBTRACTS from the mention set, so an input it cannot classify (a `nil`
+  sender, a non-binary) stays mentionable and is decided by the other
+  conjuncts. A second silent exclusion rule hiding in a fallback clause is
+  exactly the shape of the defect this closes.
+  """
+  @spec mentionable_sender?(sender :: term()) :: boolean()
+  def mentionable_sender?(sender) do
+    not (Identifier.services_sender?(sender) or Identifier.server_sender?(sender))
   end
 
   @typedoc """

@@ -222,6 +222,103 @@ defmodule Grappa.MentionsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # #1674 — service / server senders cannot mention you
+  # ---------------------------------------------------------------------------
+
+  describe "mentionable_sender?/1 — the sender-side SSOT" do
+    test "a service or the server can never mention you" do
+      refute Mentions.mentionable_sender?("NickServ")
+      refute Mentions.mentionable_sender?("chanserv")
+      refute Mentions.mentionable_sender?("nightwish.azzurra.chat")
+    end
+
+    test "every other sender can" do
+      assert Mentions.mentionable_sender?("bob")
+      # Closed allowlist: real ops nicks that merely end in "serv" stay
+      # mentionable (bucket H/S4 regression guard).
+      assert Mentions.mentionable_sender?("Conserv")
+      # A channel-shaped sender is not a real arrival shape, but the
+      # classifier must not silently swallow one either.
+      assert Mentions.mentionable_sender?("#chanserv")
+    end
+
+    test "a non-binary sender is mentionable — this predicate only ever SUBTRACTS" do
+      # The row-level fold's other conjuncts (own-sender fold, body match)
+      # decide those rows; a `nil` here must not become a second, silent
+      # exclusion rule.
+      assert Mentions.mentionable_sender?(nil)
+    end
+  end
+
+  describe "aggregate_mentions/6 — service / server senders (#1674)" do
+    test "a services NOTICE spelling own nick is not aggregated", %{user: u, network: net} do
+      insert!(
+        msg(u, net,
+          channel: "$server",
+          kind: :notice,
+          sender: "NickServ",
+          body: "Password accepted for vjt. You are now identified.",
+          server_time: @away_start + 10
+        )
+      )
+
+      assert Mentions.aggregate_mentions(u.id, net.id, @away_start, @away_end, [], "vjt") == []
+    end
+
+    test "an ircd NOTICE spelling own nick is not aggregated", %{user: u, network: net} do
+      insert!(
+        msg(u, net,
+          channel: "$server",
+          kind: :notice,
+          sender: "nightwish.azzurra.chat",
+          body: "*** Notice -- Client connecting: vjt",
+          server_time: @away_start + 10
+        )
+      )
+
+      assert Mentions.aggregate_mentions(u.id, net.id, @away_start, @away_end, [], "vjt") == []
+    end
+
+    test "a peer's NOTICE spelling own nick IS still aggregated", %{user: u, network: net} do
+      m =
+        insert!(
+          msg(u, net,
+            kind: :notice,
+            sender: "bob",
+            body: "vjt heads up",
+            server_time: @away_start + 10
+          )
+        )
+
+      result = Mentions.aggregate_mentions(u.id, net.id, @away_start, @away_end, [], "vjt")
+      assert Enum.map(result, & &1.id) == [m.id]
+    end
+
+    test "a highlight pattern in a service notice is excluded too", %{user: u, network: net} do
+      # The exclusion is by SENDER, so it covers the /hilight half of the
+      # watchlist and not just the own nick.
+      insert!(
+        msg(u, net,
+          channel: "$server",
+          kind: :notice,
+          sender: "ChanServ",
+          body: "grappa is not registered",
+          server_time: @away_start + 10
+        )
+      )
+
+      assert Mentions.aggregate_mentions(
+               u.id,
+               net.id,
+               @away_start,
+               @away_end,
+               ["grappa"],
+               "nobody"
+             ) == []
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Property test: in-memory regex gate matches Elixir Regex directly
   # ---------------------------------------------------------------------------
 

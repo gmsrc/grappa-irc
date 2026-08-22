@@ -454,8 +454,15 @@ defmodule Grappa.Push.Triggers do
 
   defp channel_in_whitelist?(_, _), do: false
 
-  defp mention_match?(%Message{body: body}, prefs, own_nick, patterns) do
+  defp mention_match?(%Message{body: body, sender: sender}, prefs, own_nick, patterns) do
+    # #1674 — the sender half of the mention rule, the same conjunct the
+    # badge folds (`WindowCounts.mention_row?/3`). The kind gate already
+    # drops every `:notice`, so this closes the arrival it does NOT cover:
+    # a services PRIVMSG (MemoServ delivery) naming the operator, routed to
+    # `$server` and landing in the channel branch below the DM shape test.
+    # Badge and OS notification must never disagree about what a mention is.
     Map.get(prefs, :channel_mentions, false) and
+      Mentions.mentionable_sender?(sender) and
       Mentions.mentioned?(body, own_nick, patterns)
   end
 end

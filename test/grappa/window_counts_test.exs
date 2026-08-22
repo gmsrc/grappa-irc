@@ -334,6 +334,112 @@ defmodule Grappa.WindowCountsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # #1674 — service / server senders cannot mention you
+  # ---------------------------------------------------------------------------
+
+  test "a services NOTICE spelling own nick is NOT a mention (#1674)" do
+    c = ctx()
+    anchor = insert(c, "$server", st: 1, body: "anchor")
+
+    # The prod row (issue #1674): a NickServ login confirmation naming the
+    # operator lit the highest-severity badge on a window nobody opens.
+    insert(c, "$server",
+      st: 2,
+      kind: :notice,
+      sender: "NickServ",
+      body: "Password accepted for vjt. You are now identified."
+    )
+
+    result = snap(c, "$server", anchor.id, "vjt")
+    # The row stays UNREAD CONTENT — only its mention grade changes, so the
+    # window still asks to be read, just not in red.
+    assert result.messages == 1
+    assert result.mentions == 0
+    assert result.severity == :message
+  end
+
+  test "an ircd NOTICE spelling own nick is NOT a mention (#1674)" do
+    c = ctx()
+    anchor = insert(c, "$server", st: 1, body: "anchor")
+
+    # Not specific to services: the ircd's own notices routinely name the
+    # connecting nick. `sender` is the server name (Message.sender_nick/1
+    # returns the `{:server, name}` prefix verbatim).
+    insert(c, "$server",
+      st: 2,
+      kind: :notice,
+      sender: "nightwish.azzurra.chat",
+      body: "*** Notice -- Client connecting: vjt"
+    )
+
+    result = snap(c, "$server", anchor.id, "vjt")
+    assert result.messages == 1
+    assert result.mentions == 0
+    assert result.severity == :message
+  end
+
+  test "a service NOTICE in the service's OWN query window is not a mention either (#1674)" do
+    c = ctx()
+    anchor = insert(c, "nickserv", st: 1, body: "anchor")
+
+    # The over-count is NOT confined to `$server`: EventRouter's
+    # `open_query_or_server/2` re-keys a services NOTICE onto the service's
+    # query window when the operator has one open (#400/#546), so a
+    # `/msg nickserv identify` reply lands here instead.
+    insert(c, "nickserv",
+      st: 2,
+      kind: :notice,
+      sender: "NickServ",
+      body: "Password accepted for vjt. You are now identified."
+    )
+
+    result = snap(c, "nickserv", anchor.id, "vjt")
+    assert result.messages == 1
+    assert result.mentions == 0
+    assert result.severity == :message
+  end
+
+  test "a services PRIVMSG spelling own nick is NOT a mention (#1674)" do
+    c = ctx()
+    anchor = insert(c, "$server", st: 1, body: "anchor")
+
+    # Sender is the discriminator, not kind: services that PRIVMSG instead of
+    # NOTICE (MemoServ delivery) reach the same fold.
+    insert(c, "$server",
+      st: 2,
+      kind: :privmsg,
+      sender: "MemoServ",
+      body: "vjt, you have 1 new memo."
+    )
+
+    result = snap(c, "$server", anchor.id, "vjt")
+    assert result.mentions == 0
+  end
+
+  test "a PEER's NOTICE spelling own nick STILL counts as a mention (#1674)" do
+    c = ctx()
+    anchor = insert(c, "#chan", st: 1, body: "anchor")
+    # The half that breaks in silence: a human `/notice` IS conversation.
+    # Only service/server senders are excluded — never the kind.
+    insert(c, "#chan", st: 2, kind: :notice, sender: "bob", body: "vjt heads up")
+
+    result = snap(c, "#chan", anchor.id, "vjt")
+    assert result.mentions == 1
+    assert result.severity == :mention
+  end
+
+  test "a nick that merely ENDS in serv still mentions you (closed allowlist, #1674)" do
+    c = ctx()
+    anchor = insert(c, "#chan", st: 1, body: "anchor")
+    # `Conserv` / `Dataserv` / `Reserv` are real ops nicks — the allowlist is
+    # closed on purpose (bucket H/S4). A substring rule would silence them.
+    insert(c, "#chan", st: 2, kind: :privmsg, sender: "Conserv", body: "vjt ping")
+
+    result = snap(c, "#chan", anchor.id, "vjt")
+    assert result.mentions == 1
+  end
+
+  # ---------------------------------------------------------------------------
   # severity ladder
   # ---------------------------------------------------------------------------
 
@@ -440,6 +546,45 @@ defmodule Grappa.WindowCountsTest do
                WindowCounts.snapshot(subject, net.id, "#chan", a.id, own, ["grappa"], false)
 
       assert bulk[net.slug]["#chan"].mentions == 1
+    end
+
+    test "the service/server sender exclusion holds on the bulk path too (#1674)" do
+      user = AuthFixtures.user_fixture()
+      subject = {:user, user.id}
+      net = AuthFixtures.network_fixture()
+      own = "vjt"
+
+      # The bulk path folds `count_tail_mentions/3`, a SECOND fold from the
+      # per-window `count_mentions/6`. Both must see the same rule — this is
+      # the test that fails if the two ever diverge.
+      a = ins(subject, net.id, "$server", st: 1, body: "anchor")
+
+      ins(subject, net.id, "$server",
+        st: 2,
+        kind: :notice,
+        sender: "NickServ",
+        body: "Password accepted for vjt. You are now identified."
+      )
+
+      ins(subject, net.id, "$server",
+        st: 3,
+        kind: :notice,
+        sender: "nightwish.azzurra.chat",
+        body: "*** Notice -- Client connecting: vjt"
+      )
+
+      ins(subject, net.id, "$server", st: 4, kind: :notice, sender: "bob", body: "vjt heads up")
+      cursor(subject, net.id, "$server", a.id)
+
+      bulk = WindowCounts.bulk_snapshot(subject, %{net.slug => {net.id, own}}, [], %{})
+
+      # Only bob's line is a mention; both robots are excluded.
+      assert bulk[net.slug]["$server"].mentions == 1
+      assert bulk[net.slug]["$server"].messages == 3
+
+      # And the two doors agree row for row.
+      assert bulk[net.slug]["$server"] ==
+               WindowCounts.snapshot(subject, net.id, "$server", a.id, own, [], false)
     end
 
     # #576 self-window carve-out: the own-nick window is the ONE window where

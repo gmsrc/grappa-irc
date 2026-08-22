@@ -42,3 +42,13 @@ export function isServicesSender(s: string): boolean {
   if (first === "#" || first === "&" || first === "+" || first === "!") return false;
   return SERVICES.has(s.toLowerCase());
 }
+
+// #1674 — the SERVER half of the sender classification. Mirrors
+// `Grappa.IRC.Identifier.server_sender?/1`.
+//
+// The single `.` is exact rather than heuristic: the server's `@nick_regex`
+// character class has no dot in either position, so a sender carrying one
+// cannot be a nick, and an IRC prefix is one or the other.
+export function isServerSender(s: string): boolean {
+  return s.includes(".");
+}

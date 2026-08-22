@@ -25,7 +25,7 @@
 import { type MessageKind, NOTIFY_KINDS } from "./api";
 import { type ChannelKey, canonicalChannel } from "./channelKey";
 import { conversationMuteKey, isConversationMuted } from "./conversationMute";
-import { matchesWatchlist } from "./mentionMatch";
+import { isMentionableSender, matchesWatchlist } from "./mentionMatch";
 import { asciiFold, nickEquals } from "./nickEquals";
 import type { NotificationPrefs } from "./userSettings";
 
@@ -56,7 +56,9 @@ export type ShouldNotifyMessage = {
  *      asciiFold(sender) in private_messages_only (mirrors the
  *      server's `canonical_target(sender) in ...`).
  *   5. channel: channel_messages_all OR canonicalChannel(channel) in
- *      channel_messages_only OR (channel_mentions AND mention).
+ *      channel_messages_only OR (channel_mentions AND mentionable sender
+ *      AND mention). #1674 — a service or the server naming you is not a
+ *      mention, on the MENTION disjunct only.
  */
 export function shouldNotify(
   message: ShouldNotifyMessage,
@@ -158,6 +160,12 @@ function channelMatch(
     // brackets.
     prefs.channel_messages_all ||
     prefs.channel_messages_only.includes(canonicalChannel(message.channel)) ||
-    (prefs.channel_mentions && matchesWatchlist(message.body, ownNick, patterns))
+    // #1674 — the sender half of the mention rule, mirroring the server's
+    // `mention_match?/4`. Only the MENTION disjunct carries it: asking for
+    // ALL channel messages, or whitelisting a window, is an explicit request
+    // that a service reply still honours. A mention is not.
+    (prefs.channel_mentions &&
+      isMentionableSender(message.sender) &&
+      matchesWatchlist(message.body, ownNick, patterns))
   );
 }

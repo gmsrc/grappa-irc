@@ -5,7 +5,7 @@
 // focus-shift for `/msg <Xserv>` without round-tripping.
 
 import { describe, expect, it } from "vitest";
-import { isServicesSender } from "../lib/servicesSender";
+import { isServerSender, isServicesSender } from "../lib/servicesSender";
 
 describe("isServicesSender", () => {
   it("accepts the eleven well-known services nicks (case-insensitive)", () => {
@@ -46,5 +46,25 @@ describe("isServicesSender", () => {
 
   it("rejects empty string", () => {
     expect(isServicesSender("")).toBe(false);
+  });
+});
+
+// #1674 — the SERVER half. Mirror of `Identifier.server_sender?/1`.
+describe("isServerSender — the other half of the sender classification (#1674)", () => {
+  it("accepts server names (a dot-bearing prefix)", () => {
+    expect(isServerSender("nightwish.azzurra.chat")).toBe(true);
+    expect(isServerSender("irc.libera.chat")).toBe(true);
+  });
+
+  it("rejects every nick, service nicks included", () => {
+    expect(isServerSender("vjt")).toBe(false);
+    expect(isServerSender("NickServ")).toBe(false);
+    // RFC 2812 nick specials carry no dot, so none of them trip the test.
+    expect(isServerSender("foo[bar]")).toBe(false);
+    expect(isServerSender("a|b\\c")).toBe(false);
+  });
+
+  it("rejects empty string", () => {
+    expect(isServerSender("")).toBe(false);
   });
 });
