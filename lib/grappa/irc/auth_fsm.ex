@@ -123,6 +123,35 @@ defmodule Grappa.IRC.AuthFSM do
           optional(:password) => String.t() | nil
         }
 
+  @typedoc """
+  One key of `t:opts/0`.
+
+  Spelled out rather than `atom()` so dialyzer ties `@opt_keys` to it: the
+  list and this union have to agree exactly or `opt_keys/0`'s contract stops
+  matching its success typing, which is the only automatic check binding the
+  DATA copy of the key set to a declared one.
+  """
+  @type opt_key :: :auth_method | :ident | :nick | :password | :realname | :sasl_user
+
+  # `t:opts/0` as DATA, so a caller holding a WIDER map can hand `new/1`
+  # exactly this FSM's domain instead of its own. Kept adjacent to the type
+  # because the two must name the same keys: a field added to one and not the
+  # other silently stops being forwarded.
+  @opt_keys [:nick, :ident, :realname, :sasl_user, :auth_method, :password]
+
+  @doc """
+  The keys `t:opts/0` declares, for callers whose own opts map is a
+  superset of this one.
+
+  `Grappa.IRC.Client` holds transport, dispatch and liveness keys the FSM
+  has no business seeing; it narrows with `Map.take/2` through this list so
+  the closed `t:opts/0` describes what actually crosses the boundary rather
+  than what we wished crossed it. Exported rather than restated at the call
+  site so the list cannot drift from the type it mirrors.
+  """
+  @spec opt_keys() :: [opt_key(), ...]
+  def opt_keys, do: @opt_keys
+
   @type stop_reason ::
           {:sasl_failed, 904 | 905}
           | :sasl_unavailable

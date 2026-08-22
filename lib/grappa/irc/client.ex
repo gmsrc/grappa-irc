@@ -1148,7 +1148,21 @@ defmodule Grappa.IRC.Client do
     # replaces, because cleartext at least announces itself as `tls: false`.
     log_tls_posture(transport_posture(opts))
 
-    case AuthFSM.new(opts) do
+    # Hand the FSM ITS opts, not ours. `AuthFSM.opts/0` is a closed map of six
+    # registration fields; `t:opts/0` here is a superset carrying the socket
+    # dispatch pid, host/port, logger metadata and the liveness seams, none of
+    # which the FSM has any business seeing. Passing the whole map worked and
+    # was invisible for as long as nothing pinned this variable's type —
+    # `map_get` (what `opts.field` compiles to) constrains only "is a map", so
+    # dialyzer never compared the two shapes. #1677 added
+    # `transport_posture(opts)`, whose `@spec` names `t:opts/0`, and THAT
+    # refinement made the mismatch visible as a `call` + `no_return` pair.
+    # Measured: the warning survives narrowing that spec to the two keys it
+    # reads, because the surviving REQUIRED `:tls` is already a key the FSM's
+    # closed map forbids. So the type was right and the call was wrong — the
+    # cure narrows the value instead of widening `AuthFSM.opts/0`, whose
+    # closure is the self-defending boundary its moduledoc claims.
+    case AuthFSM.new(Map.take(opts, AuthFSM.opt_keys())) do
       {:ok, fsm} ->
         state = %__MODULE__{
           socket: nil,

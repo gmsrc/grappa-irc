@@ -985,4 +985,71 @@ defmodule Grappa.IRC.AuthFSMTest do
       assert %{next | sasl_fields: :none} == pending
     end
   end
+
+  describe "opt_keys/0 — the narrowing seam" do
+    # `Grappa.IRC.Client` holds a SUPERSET of `t:opts/0` (transport, dispatch
+    # pid, logger metadata, liveness seams) and narrows it through this list
+    # before calling `new/1`, so the closed `t:opts/0` describes what actually
+    # crosses the boundary. Dialyzer already binds `@opt_keys` to `t:opt_key/0`
+    # — an entry not in that union is a `contract_supertype` red. It says
+    # nothing about the OTHER direction, which is the one that loses data: a
+    # field added to `t:opts/0` and forgotten in the list would simply stop
+    # being forwarded, and `new/1` would read the default of a key the caller
+    # did supply. This test is that direction.
+    test "names exactly the keys t:opts/0 declares" do
+      {:ok, types} = Code.Typespec.fetch_types(AuthFSM)
+
+      {:type, {:opts, {:type, _, :map, pairs}, []}} =
+        Enum.find(types, &match?({:type, {:opts, _, []}}, &1))
+
+      declared =
+        Enum.map(pairs, fn {:type, _, assoc, [{:atom, _, key}, _]}
+                           when assoc in [:map_field_exact, :map_field_assoc] ->
+          key
+        end)
+
+      assert Enum.sort(declared) == Enum.sort(AuthFSM.opt_keys())
+    end
+
+    # The behavioural half: narrowing must be a no-op for the FSM. Built from a
+    # map shaped like the one `Client.init/1` actually holds, so a key the FSM
+    # silently depends on would show up here as a difference rather than as a
+    # session that registers wrong in production.
+    test "narrowing a Client-shaped superset builds the same FSM" do
+      wide =
+        Map.merge(base_opts(%{auth_method: :sasl, password: "swordfish"}), %{
+          host: "irc.azzurra.chat",
+          port: 6697,
+          tls: true,
+          tls_verify: false,
+          dispatch_to: self(),
+          logger_metadata: [user: "vjt", network: "azzurra"],
+          source_address: nil,
+          liveness_idle_ms: 10,
+          liveness_timeout_ms: 10
+        })
+
+      {:ok, from_wide} = AuthFSM.new(wide)
+      {:ok, from_narrow} = AuthFSM.new(Map.take(wide, AuthFSM.opt_keys()))
+
+      # `nick_suffixes` is drawn randomly per FSM (#676 ladder), so it is the
+      # one field two independent `new/1` calls are entitled to disagree on.
+      assert %{from_narrow | nick_suffixes: []} == %{from_wide | nick_suffixes: []}
+    end
+
+    # `validate_password_present/1` distinguishes an ABSENT `:password` key from
+    # a present one, so a narrowing that invented the key would turn a rejected
+    # credential into one that registers with `nil` and fails mid-SASL instead.
+    test "narrowing preserves the absent-password rejection" do
+      wide =
+        Map.merge(base_opts(%{auth_method: :sasl}), %{
+          host: "irc.azzurra.chat",
+          port: 6697,
+          tls: true,
+          dispatch_to: self()
+        })
+
+      assert {:error, {:missing_password, :sasl}} = AuthFSM.new(Map.take(wide, AuthFSM.opt_keys()))
+    end
+  end
 end
