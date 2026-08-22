@@ -1,6 +1,6 @@
 import type { Channel } from "phoenix";
 import { createEffect, on, untrack } from "solid-js";
-import { assertNever, type ChannelEvent, ownNickForNetwork } from "./api";
+import { assertNever, type ChannelEvent, listMembers, ownNickForNetwork } from "./api";
 import { socketUserName, token } from "./auth";
 import { incrementBadge, setBadge } from "./badge";
 import { playBeep } from "./beep";
@@ -26,6 +26,8 @@ import { notificationPrefs } from "./notificationPrefs";
 import { isOperatorActionEcho } from "./operatorActionEcho";
 import { isOwnPresenceEvent } from "./ownPresenceEvent";
 import { resolveCtcpReply, resolvePing } from "./pingCorrelation";
+import { PRESENCE_COOLDOWN_MS } from "./presenceCooldown";
+import { createPresencePause } from "./presencePause";
 import { shouldNotify } from "./pushTriggers";
 import { setEnsureQueryTopicJoined } from "./queryTopicJoin";
 import { canonicalQueryNick, queryWindowsByNetwork } from "./queryWindows";
@@ -143,6 +145,51 @@ moduleRoot(() => {
   // event, doubling presence/unread/mention bumps. N rotations = N+1
   // handlers per channel.
   const joined = new Map<ChannelKey, Channel>();
+  // #1680 — the presence pause. A 7-network account takes ~30 events/s and
+  // 82% of it is peer join/part/quit for channels nobody is reading; that is
+  // what starves the main thread. A channel the user has left alone for
+  // `PRESENCE_COOLDOWN_MS` stops applying those, and regaining focus refetches
+  // the one store the pause let go stale — the members map.
+  //
+  // The subscription itself is NEVER dropped: the per-channel topic also
+  // carries the messages (`Grappa.Session.Persistor` broadcasts them there),
+  // so leaving it would make the window blind rather than quiet. See
+  // `presencePause.ts` for the full argument and the carve-outs.
+  const presencePause = createPresencePause((key) => {
+    const t = untrack(token);
+    if (!t) return;
+    // `decodeChannelKey` is nullable by contract; a key that cannot be
+    // decoded cannot be refetched, and inventing a slug would fetch the
+    // wrong channel. Leave the members map alone.
+    const decoded = decodeChannelKey(key);
+    if (decoded === null) return;
+    const { slug, name } = decoded;
+    // A refetch that throws must not take the handler down with it — the
+    // members map simply stays as it was until the next seed. `null` is the
+    // server's 204 (`:uninitialized`): joined but pre-NAMES, or not joined.
+    // Seeding `[]` there would blank a good list, which is exactly the
+    // distinction CP24 bucket E drew.
+    void listMembers(t, slug, name)
+      .then((members) => {
+        if (members !== null) seedMembers(key, members);
+      })
+      .catch((err: unknown) => {
+        console.warn("[subscribe] members refetch failed on resume", key, err);
+      });
+  }, PRESENCE_COOLDOWN_MS);
+
+  // Selection IS focus, for the pause's purposes — deliberately NOT gated on
+  // `isDocumentVisible()`. A backgrounded tab that comes back must not pay a
+  // refetch for every channel it holds; the cooldown already covers genuine
+  // abandonment, and tab-switching is the flick case the window exists to
+  // absorb. (Issue open question 1, answered this way and recorded as an
+  // assumption rather than a measurement.)
+  createEffect(() => {
+    const sel = selectedChannel();
+    presencePause.focus(
+      sel && sel.kind === "channel" ? channelKey(sel.networkSlug, sel.channelName) : null,
+    );
+  });
   // #254 — coalesce concurrent join callers (the reactive query-windows loop +
   // a compose `/msg` via `ensureQueryTopicJoined`) onto ONE join-ACK promise
   // per query topic, so subscribe-before-send awaits the SAME ack the loop
@@ -582,7 +629,16 @@ moduleRoot(() => {
             if (!windowIsPresent(key)) dropChannelTopicState(key);
           }
 
-          routeMessage(slug, key, name, message, ownNick);
+          // #1680 — the pause bites HERE and nowhere else. `routeMessage` is
+          // what applies the members delta (`applyPresenceEvent`) and the
+          // scrollback append, so guarding this ONE call drops the noise
+          // while every arm around it keeps running: the own-PART teardown
+          // above, the #372/#373 nick migration below, and every non-presence
+          // kind. `shouldDrop` is false for our own nick and for
+          // nick_change/mode by construction.
+          if (!presencePause.shouldDrop(key, message.kind, nickEquals(message.sender, ownNick))) {
+            routeMessage(slug, key, name, message, ownNick);
+          }
 
           // #373: a PEER's NICK migrates that peer's query-window cic-owned
           // caches — the live scrollback under (slug, oldNick) → (slug,

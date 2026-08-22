@@ -4391,3 +4391,211 @@ describe("subscribe — the DM listener releases its own-nick topic on a rename 
     expect(landed).toEqual([channelKey("freenode", "alice")]);
   });
 });
+
+// #1680 — the pause. A 7-network account takes ~30 events/s and 82% of it is
+// join/part/quit for channels nobody is looking at; those are what starve the
+// main thread. These tests pin BOTH halves of the cure: the noise stops for a
+// channel the user left alone, and it keeps flowing for the one they are
+// actually reading.
+//
+// Note what is asserted: `applyPresenceEvent` (the members delta, reached
+// through `routeMessage`). The per-channel Phoenix topic is NOT left — it
+// also carries the messages themselves (`Grappa.Session.Persistor` broadcasts
+// them there), so leaving it would make the window blind rather than quiet.
+describe("subscribe — presence pause on unfocused channels (#1680)", () => {
+  // Solid queues effects on the microtask queue, not on timers, so draining
+  // microtasks flushes the selection effect even with fake timers installed.
+  const flushEffects = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  const focus = (store: Awaited<ReturnType<typeof loadStores>>, channelName: string) =>
+    store.setSelectedChannel({ networkSlug: "freenode", channelName, kind: "channel" });
+
+  it("stops a peer JOIN from touching a channel left alone past the cooldown", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+    const members = await import("../lib/members");
+    const { PRESENCE_COOLDOWN_MS } = await import("../lib/presenceCooldown");
+
+    vi.useFakeTimers();
+    focus(store, "#grappa");
+    await flushEffects();
+    focus(store, "#cicchetto");
+    await flushEffects();
+    vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
+    vi.useRealTimers();
+
+    vi.mocked(members.applyPresenceEvent).mockClear();
+    fireMessageEvent("#grappa", { id: 4001, kind: "join", sender: "carol" });
+
+    expect(members.applyPresenceEvent).not.toHaveBeenCalled();
+  });
+
+  // The half that breaks in silence. A pause that also quiets the channel the
+  // user is reading is not a pause, it is a bug — and no counter would catch
+  // it, because "fewer events" is exactly what success looks like.
+  it("keeps presence live on the channel the user is actually reading", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+    const members = await import("../lib/members");
+    const { PRESENCE_COOLDOWN_MS } = await import("../lib/presenceCooldown");
+
+    vi.useFakeTimers();
+    focus(store, "#grappa");
+    await flushEffects();
+    vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS * 5);
+    vi.useRealTimers();
+
+    vi.mocked(members.applyPresenceEvent).mockClear();
+    fireMessageEvent("#grappa", { id: 4002, kind: "join", sender: "carol" });
+
+    expect(members.applyPresenceEvent).toHaveBeenCalledTimes(1);
+  });
+
+  // The flick. Two minutes is chosen precisely so this never releases.
+  it("never pauses a channel the user came back to inside the window", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+    const members = await import("../lib/members");
+    const { PRESENCE_COOLDOWN_MS } = await import("../lib/presenceCooldown");
+
+    vi.useFakeTimers();
+    focus(store, "#grappa");
+    await flushEffects();
+    focus(store, "#cicchetto");
+    await flushEffects();
+    vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS / 2);
+    focus(store, "#grappa");
+    await flushEffects();
+    vi.useRealTimers();
+
+    vi.mocked(members.applyPresenceEvent).mockClear();
+    fireMessageEvent("#grappa", { id: 4003, kind: "join", sender: "carol" });
+
+    expect(members.applyPresenceEvent).toHaveBeenCalledTimes(1);
+  });
+
+  // The carve-outs. These kinds ride the same "presence" label but have
+  // consumers that are load-bearing even for a channel nobody is watching:
+  // a peer NICK drives the #372/#373 cache migration, and an own PART tears
+  // the window down. Dropping them with the rest would strand cic's caches
+  // at a dead nick and leak a subscription — silently, in both cases.
+  it("still processes a peer NICK on a paused channel (the #373 migration)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+    const members = await import("../lib/members");
+    const { PRESENCE_COOLDOWN_MS } = await import("../lib/presenceCooldown");
+
+    vi.useFakeTimers();
+    focus(store, "#grappa");
+    await flushEffects();
+    focus(store, "#cicchetto");
+    await flushEffects();
+    vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
+    vi.useRealTimers();
+
+    vi.mocked(members.applyPresenceEvent).mockClear();
+    fireMessageEvent("#grappa", {
+      id: 4004,
+      kind: "nick_change",
+      sender: "carol",
+      meta: { new_nick: "carol_" },
+    });
+
+    expect(members.applyPresenceEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("still processes our OWN part on a paused channel (window teardown)", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+    const members = await import("../lib/members");
+    const { PRESENCE_COOLDOWN_MS } = await import("../lib/presenceCooldown");
+
+    vi.useFakeTimers();
+    focus(store, "#grappa");
+    await flushEffects();
+    focus(store, "#cicchetto");
+    await flushEffects();
+    vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
+    vi.useRealTimers();
+
+    vi.mocked(members.applyPresenceEvent).mockClear();
+    fireMessageEvent("#grappa", { id: 4005, kind: "part", sender: "alice" });
+
+    expect(members.applyPresenceEvent).toHaveBeenCalledTimes(1);
+  });
+
+  // A paused channel must go QUIET, never BLIND. This is the assertion that
+  // encodes vjt's ruling ("messages must not be lost") as a test rather than
+  // as a comment — and the one that fails the moment someone "simplifies"
+  // the pause into a `phx.leave()`.
+  it("still delivers MESSAGES on a paused channel — quiet, not blind", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    localStorage.setItem(
+      "grappa-subject",
+      JSON.stringify({ kind: "user", id: "u1", name: "alice" }),
+    );
+    await seedStubs();
+    const store = await loadStores();
+    await vi.waitFor(() => {
+      expect(mockChannel.on).toHaveBeenCalled();
+    });
+    const { PRESENCE_COOLDOWN_MS } = await import("../lib/presenceCooldown");
+
+    vi.useFakeTimers();
+    focus(store, "#grappa");
+    await flushEffects();
+    focus(store, "#cicchetto");
+    await flushEffects();
+    vi.advanceTimersByTime(PRESENCE_COOLDOWN_MS);
+    vi.useRealTimers();
+
+    fireMessageEvent("#grappa", { id: 4006, kind: "privmsg", sender: "carol", body: "oi" });
+
+    const rows = store.scrollbackByChannel()[channelKey("freenode", "#grappa")] ?? [];
+    expect(rows.some((r: { id: number }) => r.id === 4006)).toBe(true);
+    expect(mockChannel.leave).not.toHaveBeenCalled();
+  });
+});
