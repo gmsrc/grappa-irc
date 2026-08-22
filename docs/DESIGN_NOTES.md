@@ -57641,3 +57641,116 @@ the smaller, invisible deadline is what it is really measuring.**
 - **The 1.3.0 herd's attribution stays closed as non-establishable**
   (#1657): the 42 stack-carrying deadline lines were overwritten by
   `run_erl` rotation. Nothing here reopens it.
+<!-- entry #1658b -->
+
+---
+
+## 2026-08-22 — #1658b: the rows follow the finger, and what that lets the code delete
+
+Point 3 of #1658, the half vjt kept seeing on a phone after the other two
+landed: pulling the channel directory moved only the spinner. The slot is
+`position: absolute; top: 0` inside the scroller and the rows start at `y=0`
+too, so **every position where the spinner was visible was a position where it
+covered the first row's top band**. The code said so itself — the comment on
+`pulledTransform` declined to assert the strong invariant on the grounds that
+it was false, and asserted the flush line instead ("the slot never travels
+PAST the top edge"). That was the honest ceiling while the rows stood still.
+
+**The design: one rigid track, one transform.** Everything the finger drags —
+the parked slot AND the rows — now lives in a single `.directory-pull-track`,
+and the pull writes one `translateY(dy)` onto it. Inside the track the slot
+occupies `[-slotHeight, 0]` and the rows start at `0`, so translating by `dy`
+puts the slot's bottom edge and the first row's top edge both at `dy`:
+
+    slot bottom ≡ first row top, at EVERY dy
+
+**That is an identity, not a bound**, and the distinction is the whole reason
+this shape was chosen over the obvious one (translate the rows, keep capping
+the slot). Two separately-painted elements would satisfy the invariant by
+arithmetic that a later edit to either one could get wrong; one rigid body
+under one transform has no second number to keep in step. The invariant stops
+being something the tests check and becomes something the markup cannot
+violate.
+
+🔴 **The travel cap is REMOVED, and that was the decision the issue asked to
+have named.** `min(dy, 100%)` (#1658 point 2, `c7cb048e`) existed for exactly
+one reason: keeping the spinner off rows that stood still. With the rows
+carried there is no collision left to bound, so the question stops being
+geometry and becomes feel. It was removed rather than retuned because **any
+cap makes the list stop following the finger past it** — the reported defect
+in smaller print, arriving at the moment the gesture is most committed. The
+alternative worth having is damping past the commit point; that needs a
+constant measured on a device, and `PULL_COMMIT_PX`'s own comment already
+records that nothing about this gesture was verified on a phone. An unbounded
+linear follow is the honest floor to calibrate FROM, and damping is additive
+afterwards. The other coherent look — the slot settling at the top edge while
+the gap keeps growing beneath it — is deliberately not taken: it satisfies the
+invariant too, but by hand-maintained arithmetic across two transforms.
+
+**Two things fall out for free.** The pane writes no transform to the slot at
+all, so the parked `translateY(-100%)` stays in the stylesheet and the #1438
+trap (an inline transform replacing the declaration wholesale) is *gone*
+rather than guarded against. And the opacity ramp keeps its own axis
+untouched — painted on the slot, computed from the commit distance, never
+recomputed from the travel, which is what makes it reach full at the one
+distance where full is the point.
+
+**The `a2dacafa` guarantee now spans two elements, which raises its stakes.**
+A commit-path cleanup that clears one and forgets the other no longer leaves a
+hung spinner but the whole channel list parked a few hundred pixels down the
+pane. Both are cleared and both are asserted, separately.
+
+**A mutant found a hole in the oracle and it is worth recording as a
+pattern.** Mutating the paint to write the travel onto the slot instead of the
+track — which is precisely the pre-point-3 defect, not an invented mutation —
+left "a release that COMMITS wipes the paint too" GREEN: under that mutant the
+track is trivially unpainted and the ramp is still cleared, so both of its
+assertions passed while a stale transform sat on the slot. **A cleanup test
+that only reads the elements the CURRENT code paints cannot see paint that
+went to the wrong element.** The third assertion (the slot's transform is
+empty, at rest and after a commit alike) is what distinguishes "nothing was
+painted here" from "the paint landed elsewhere".
+
+**The webkit arm was re-aimed, not dropped.** It used to ask whether WebKit
+resolved `translateY(min(<px>, 100%))`, a mixed-unit CSS math function inside
+a transform; point 3 deleted that declaration from production. The engine
+question that survives is sharper: the invariant is an identity only if the
+engine composes the track's px translate with the slot's own PERCENTAGE
+offset, which resolves against the slot's box and not the track's. An engine
+getting that wrong puts the spinner straight back on the first row with every
+chromium gate green — the empty-green class. The division of labour stands:
+chromium owns the PANE half (the declaration comes from a real finger), webkit
+owns the ENGINE half (`new Touch(...)` is an `Illegal constructor` there, so
+no gesture is synthesizable on that project).
+
+**Second defect, same pane: a scroll must not light up the row under the
+finger.** `.directory-row-join:hover { background: var(--border) }` was
+ungated, and a touch browser SYNTHESIZES `:hover` on the element under the
+finger and LATCHES it — so putting a finger down to scroll, or to drive the
+pull above, painted the row it landed on and left it painted after the lift.
+Gated behind `@media (hover: hover)`, which tests the PRIMARY input.
+**Measured correction to the issue text: this stylesheet applies that cure
+THREE times, not eight** (`.scroll-to-bottom-btn`,
+`.members-pane li .member-name`, `.next-active-btn`, brace-matched over the
+three gate blocks); the new one is the fourth. `:active` was NOT smuggled in —
+a pressed affordance on touch is a separate decision.
+
+**The hover guard is source-level and that is not a shortcut.** The behaviour
+needs a browser reporting `(hover: none)`, and Playwright cannot emulate one:
+`page.emulateMedia()` accepts `colorScheme`, `contrast`, `forcedColors`,
+`media` and `reducedMotion` — there is no `hover` key (verified against the
+installed `playwright-core` types), so no project in this repo can put the
+query into its false branch on purpose, and jsdom applies no stylesheet at
+all. What is deterministic is what the cascade is ASKED to do. The test
+COUNTS: every declaration of the selector must sit inside a hover gate, so a
+second ungated copy added later reds it where an existence check would pass,
+and a control ahead of it pins that the fill still exists — "gate it" and
+"delete it" are different changes.
+
+**Not established here, and left open on purpose.** The FEEL, and with it the
+whole iOS question: whether the follow is smooth, whether an uncapped travel
+is the right sensation, and above all whether iOS elects our gesture rather
+than its own overscroll — the binder claims LATE, on a touchmove, and a real
+device may have committed to a pan before that claim lands. Playwright's
+WebKit is not vjt's phone. The assertions here are DOM facts; the calibration
+is a device call, as it was for #213 and #1438.
