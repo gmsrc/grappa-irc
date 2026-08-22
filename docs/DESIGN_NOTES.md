@@ -58501,3 +58501,39 @@ controller, so today an operator removes and re-adds the server
 (`grappa.remove_server` + `grappa.add_server --no-tls-verify`). Fine for the
 handful of rows this exists for; if it stops being fine, the answer is the
 deferred decision above and not a second write path.
+
+### The typing lesson this slice paid for, twice
+
+Adding one key to a plan cost 53 dialyzer errors, and adding one spec'd
+helper surfaced a type mismatch that had been in the tree since the FSM was
+extracted. Both are worth keeping because neither is about TLS.
+
+**A closed map type reports its own violation N times, in files you never
+opened.** `Session.start_opts/0` enumerates the plan as a closed map;
+`base_plan/6` gained `tls_verify:` and the type did not. The 53 errors landed
+on `bootstrap.ex`, `operator.ex`, `session_plan.ex` and `test_support/*` —
+`resolve/2`'s spec stops being satisfiable, and every consumer of it inherits
+a `missing_range`. The typespec's own comment predicted exactly this cascade
+and did not prevent it. The operational reading: a large dialyzer delta in
+files a branch never touched is ONE closed map until proven otherwise, so
+count first and fix the map, rather than triaging the list.
+
+**`opts.field` pins nothing; a local call with a `@spec` pins everything.**
+`Client.init/1` has always passed its whole opts map to `AuthFSM.new/1`,
+whose `t:opts/0` is a closed six-key map that forbids `:host`, `:port` and
+`:dispatch_to`. Dialyzer never said so, because `opts.field` compiles to
+`:erlang.map_get/2`, which constrains its argument to "is a map" and nothing
+more. This slice added `transport_posture(opts)` with `@spec
+transport_posture(opts())`, and a local call carrying a contract refines the
+CALLER's variable to that contract's domain — at which point the two closed
+maps have no common inhabitant and the call is a `no_return`.
+
+Two consequences. First, the age of a type mismatch is not the age of its
+warning: writing a spec for a new helper is enough to expose an old one, and
+that report is a true finding rather than collateral of the new code.
+Second, narrowing the new spec to only the keys it reads does NOT silence it
+— measured — because a REQUIRED `:tls` is already a key the callee's closed
+map forbids. The cure belongs at the call site: `Map.take/2` through a key
+list the callee exports, so the closed type describes what actually crosses
+the boundary. Widening the callee to a catch-all would have made the type
+agree with the leak, and the leak is the thing the closure existed to stop.
