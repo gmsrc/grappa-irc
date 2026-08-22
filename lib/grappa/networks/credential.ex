@@ -80,21 +80,46 @@ defmodule Grappa.Networks.Credential do
   # T32 (channel-client-polish S1.1): terminal/user-visible connection
   # state for a credential.
   #
-  # `:connected` — Bootstrap (or `Networks.connect/1`) spawned a
-  #   `Session.Server`; the binding is live, OR the session is in
-  #   continuous reconnect / backoff. Runtime sub-states
-  #   (`:connecting`, `:reconnecting`, `:backing_off`) stay in
-  #   Session.Server GenServer state — NOT mirrored here.
+  # 🔴 #1675 — `:connected` means REGISTERED UPSTREAM, not "a session
+  # process exists". Until #1675 it meant the latter, and the two are not
+  # the same thing: three networks bound to misconfigured endpoints on
+  # 2026-08-22 kept a live `Session.Server` hammering an upstream that
+  # refused every connect, and the row said `connected` for as long as
+  # they did. Read this column as "is IRC up", never as liveness — the
+  # live-pid truth is `Grappa.Session.whereis/2` and stays a SEPARATE
+  # source (the CLAUDE.md two-truths rule).
+  #
+  # `:connected` — 001 RPL_WELCOME arrived: the link is registered.
+  #   Also the state a row starts in at INSERT and the one
+  #   `Networks.connect/1` writes on an operator reconnect, both of
+  #   which are statements of INTENT that the first 001 (or the first
+  #   connect failure) then confirms or corrects.
+  # `:failing`   — the session process is alive and the reconnect
+  #   backoff is running, but the upstream link is NOT registered:
+  #   a refused/timed-out connect, a TLS handshake that cannot pass,
+  #   an egress-family mismatch. Non-terminal — the ladder keeps
+  #   retrying and 001 takes the row back to `:connected`.
   # `:parked`    — user-driven `/disconnect` or `/quit`. Bouncer
   #   stays parked across reboots until `/connect <network>`.
   # `:failed`    — server-set on permanent error (k-line 465 +
   #   permanent SASL 904/906 — see plan S1.4 lenient triggers).
+  #   TERMINAL: the session is stopped and Bootstrap skips the row.
+  #
+  # `:failing` vs `:failed` is exactly the boot question. A reboot
+  # landing inside a backoff window must bring a `:failing` row BACK
+  # (else a misconfigured-then-fixed network stays down until a human
+  # PATCHes it), while a `:failed` row must stay down until the operator
+  # acts. One value plus a reason grep could not express both.
+  #
+  # The finer runtime sub-states (`:connecting`, `:backing_off`) stay in
+  # `Session.Server` GenServer state and reach cic as the #100
+  # `connection_progress` overlay — NOT mirrored here.
   #
   # State-transition policy lives in `Grappa.Networks.connect/1`,
-  # `disconnect/2`, and `mark_failed/2` — the schema accepts any
-  # value in the closed set; the context module enforces which
-  # transitions are valid.
-  @connection_states [:connected, :parked, :failed]
+  # `disconnect/2`, `mark_failed/2`, `mark_failing/2` and
+  # `mark_registered/1` — the schema accepts any value in the closed
+  # set; the context module enforces which transitions are valid.
+  @connection_states [:connected, :failing, :parked, :failed]
 
   # H15 (REV-D 2026-05-22): hard ceiling on the per-credential
   # `last_joined_channels` snapshot. Schema-level cap so every
@@ -141,7 +166,7 @@ defmodule Grappa.Networks.Credential do
   def connection_states, do: @connection_states
 
   @type auth_method :: AuthFSM.auth_method()
-  @type connection_state :: :connected | :parked | :failed
+  @type connection_state :: :connected | :failing | :parked | :failed
 
   @type t :: %__MODULE__{
           id: integer() | nil,

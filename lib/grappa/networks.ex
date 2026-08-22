@@ -902,7 +902,17 @@ defmodule Grappa.Networks do
 
   @doc """
   Transitions a credential to `:connected`. Idempotent if already
-  `:connected` (no DB write, no broadcast).
+  `:connected` OR `:failing` (no DB write, no broadcast).
+
+  #1675 — `:failing` is idempotent here rather than a transition,
+  because `connect/1` states the operator's INTENT ("I want this
+  network up") and a `:failing` row is already wanted-up: the session
+  exists and its backoff ladder is retrying. Writing `:connected` would
+  re-assert the exact claim this issue is about — that a row says
+  registered while the link is not — and the honest correction arrives
+  on its own at 001 via `mark_registered/1`. The caller's spawn step
+  still runs first and is what repairs a `:failing` row whose session
+  died, so the door is not a no-op end to end.
 
   Does NOT spawn the `Session.Server` — see the moduledoc T32 boundary
   note. The caller (`NetworkController` for `/connect`, `Bootstrap` at
@@ -918,7 +928,7 @@ defmodule Grappa.Networks do
   the broadcast fans out on the subject's own user-rooted topic.
   """
   @spec connect(Credential.t()) :: {:ok, Credential.t()}
-  def connect(%Credential{connection_state: :connected} = cred) do
+  def connect(%Credential{connection_state: state} = cred) when state in [:connected, :failing] do
     {:ok, preload_subject_and_network(cred)}
   end
 
@@ -943,10 +953,17 @@ defmodule Grappa.Networks do
 
   @doc """
   Transitions a credential to `:parked` (user-initiated `/disconnect`
-  or `/quit`). `:connected → :parked`; rejects from `:parked | :failed`
-  with `{:error, :not_connected}` (idempotency-by-rejection, not
-  silent no-op — the caller is asking to disconnect a row that's
-  already not connected, surface that).
+  or `/quit`). `:connected | :failing → :parked`; rejects from
+  `:parked | :failed` with `{:error, :not_connected}`
+  (idempotency-by-rejection, not silent no-op — the caller is asking to
+  disconnect a row that's already not connected, surface that).
+
+  #1675 — `:failing` parks like `:connected` does, and that is not a
+  nicety: a network hammering a dead upstream is precisely the one an
+  operator reaches for the disconnect button on (it is what vjt did by
+  hand on 2026-08-22). Both states own a live session and a running
+  backoff ladder, so both need the QUIT + `stop_session` this verb does;
+  only `:parked` and `:failed` have nothing left to stop.
 
   Issues an explicit `QUIT :<reason>` upstream first (best-effort —
   no live session is fine) so the upstream sees a clean disconnect
@@ -956,8 +973,8 @@ defmodule Grappa.Networks do
   """
   @spec disconnect(Credential.t(), String.t()) ::
           {:ok, Credential.t()} | {:error, :not_connected}
-  def disconnect(%Credential{connection_state: :connected} = cred, reason)
-      when is_binary(reason) do
+  def disconnect(%Credential{connection_state: from} = cred, reason)
+      when from in [:connected, :failing] and is_binary(reason) do
     cred = preload_subject_and_network(cred)
     subject = subject_of(cred)
 
@@ -968,7 +985,7 @@ defmodule Grappa.Networks do
     # GH #417 — a DELIBERATE park clears the persisted explicit away (see
     # clear_away_on_manual_park/1 for the manual-vs-automatic rationale).
     :ok = clear_away_on_manual_park(cred)
-    broadcast_state_change(updated, :connected, :parked, reason)
+    broadcast_state_change(updated, from, :parked, reason)
     {:ok, updated}
   end
 
@@ -989,27 +1006,32 @@ defmodule Grappa.Networks do
   doesn't restart on `:normal`-shape stops; the supervisor terminating
   the child achieves the same).
 
-  `:connected → :failed`. Idempotent if already `:failed` (no DB
-  write, no broadcast). Rejects from `:parked` with
+  `:connected | :failing → :failed`. Idempotent if already `:failed`
+  (no DB write, no broadcast). Rejects from `:parked` with
   `{:error, :user_parked}` — `:parked` is explicit user intent
   ("don't reconnect this row"), and a server-set terminal failure
   shouldn't quietly overwrite that. The caller (Session.Server's
   `handle_terminal_failure`) is expected to log + drop the
   transition rather than retry.
+
+  #1675 — `:failing → :failed` is the escalation edge: a link that was
+  merely down (backoff running) can then earn a k-line or a permanent
+  SASL rejection, and terminal must win over non-terminal. The reverse
+  edge does not exist; see `mark_failing/2`.
   """
   @spec mark_failed(Credential.t(), String.t()) ::
           {:ok, Credential.t()} | {:error, :user_parked}
   def mark_failed(%Credential{connection_state: :failed} = cred, _), do: {:ok, cred}
 
-  def mark_failed(%Credential{connection_state: :connected} = cred, reason)
-      when is_binary(reason) do
+  def mark_failed(%Credential{connection_state: from} = cred, reason)
+      when from in [:connected, :failing] and is_binary(reason) do
     cred = preload_subject_and_network(cred)
     subject = subject_of(cred)
 
     :ok = Session.stop_session(subject, cred.network_id, reason)
 
     updated = transition!(cred, :failed, reason)
-    broadcast_state_change(updated, :connected, :failed, reason)
+    broadcast_state_change(updated, from, :failed, reason)
     {:ok, updated}
   end
 
@@ -1070,6 +1092,159 @@ defmodule Grappa.Networks do
         :ok
     end
   end
+
+  @doc """
+  Server-internal, NON-TERMINAL: marks a credential `:failing` — "the
+  session process is alive and the reconnect backoff is running, but the
+  upstream link is not registered" (#1675).
+
+  `:connected | :failing → :failing`, carrying `reason` (the ACTUAL
+  cause: `tls: …`, `connect refused`, a source-family mismatch — see
+  `Grappa.IRC.Client.describe_connect_failure/1`). Does **NOT** stop the
+  session, which is the whole point and the reason this is a second verb
+  rather than a widened `mark_failed/2`: the ladder underneath has to
+  keep retrying, and the 001 that ends the outage arrives on the process
+  `mark_failed/2` would have killed.
+
+  Idempotent on `:failing`: no DB write, no broadcast, and the FIRST
+  cause is kept. Re-entering backoff happens once per attempt on an
+  exponential ladder, and a row + broadcast per attempt is churn the
+  operator learns nothing from; the first cause is also the one closest
+  to the misconfiguration (EFNet rotated a bad certificate into four
+  timeouts — the certificate is the diagnosis). The per-attempt detail
+  is not lost: it lands in the `$server` window and the session log.
+
+  Rejects `:parked` with `{:error, :user_parked}` (a deliberate park
+  outranks a server observation — same posture as `mark_failed/2`) and
+  `:failed` with `{:error, :terminal}` (terminal never decays into
+  non-terminal; a `:failed` row has no session to be failing).
+  """
+  @spec mark_failing(Credential.t(), String.t()) ::
+          {:ok, Credential.t()} | {:error, :user_parked | :terminal}
+  def mark_failing(%Credential{connection_state: :failing} = cred, _), do: {:ok, cred}
+
+  def mark_failing(%Credential{connection_state: :connected} = cred, reason)
+      when is_binary(reason) do
+    cred = preload_subject_and_network(cred)
+    updated = transition!(cred, :failing, reason)
+    broadcast_state_change(updated, :connected, :failing, reason)
+    {:ok, updated}
+  end
+
+  def mark_failing(%Credential{connection_state: :parked}, _), do: {:error, :user_parked}
+  def mark_failing(%Credential{connection_state: :failed}, _), do: {:error, :terminal}
+
+  # REV-B / H6: see `connect/1`. Raises on a future enum addition rather
+  # than silently `FunctionClauseError`-ing — the four clauses above are
+  # exhaustive on TODAY's set, and #1675 is itself the proof that this
+  # set grows.
+  def mark_failing(%Credential{connection_state: other}, _),
+    do: raise(ArgumentError, "Networks.mark_failing: unhandled connection_state #{inspect(other)}")
+
+  @doc """
+  Server-internal: the return edge of `mark_failing/2` — 001 RPL_WELCOME
+  proved the link is registered, so the row goes back to `:connected`
+  with the failure cause CLEARED (#1675).
+
+  `:failing → :connected`. Idempotent on `:connected` (no DB write, no
+  broadcast) — 001 fires on every reconnect, including the overwhelming
+  majority that were never failing, so the no-op arm is the hot path and
+  must not churn the row.
+
+  Rejects `:parked | :failed` with `{:error, :not_failing}`: both mean a
+  teardown already won the race (`disconnect/2` and `mark_failed/2` both
+  stop the session BEFORE writing), and resurrecting the row from a late
+  001 would undo an operator's decision.
+  """
+  @spec mark_registered(Credential.t()) :: {:ok, Credential.t()} | {:error, :not_failing}
+  def mark_registered(%Credential{connection_state: :connected} = cred), do: {:ok, cred}
+
+  def mark_registered(%Credential{connection_state: :failing} = cred) do
+    cred = preload_subject_and_network(cred)
+    updated = transition!(cred, :connected, nil)
+    broadcast_state_change(updated, :failing, :connected, nil)
+    {:ok, updated}
+  end
+
+  def mark_registered(%Credential{connection_state: state}) when state in [:parked, :failed],
+    do: {:error, :not_failing}
+
+  # REV-B / H6 fallthrough — see `mark_failing/2`.
+  def mark_registered(%Credential{connection_state: other}),
+    do: raise(ArgumentError, "Networks.mark_registered: unhandled connection_state #{inspect(other)}")
+
+  @doc """
+  The door `Grappa.Session.Server` reaches through its injected
+  `link_state_reporter` closure (#1675): reports what the UPSTREAM LINK
+  is doing to the credential row for `(subject, network_id)`.
+
+  `{:failing, reason}` → `mark_failing/2`; `:registered` →
+  `mark_registered/1`. Always returns `:ok` — the caller is a session on
+  its connect path and has nothing to do with a refusal but log it, so
+  every non-write outcome is logged HERE (never silently swallowed) and
+  the session carries on.
+
+  Subject-polymorphic, unlike its terminal sibling `mark_failed_by_ids/3`.
+  The write set of `connection_state` has no subject branch, so the drift
+  this issue is about is not user-specific: a visitor credential goes
+  through the same `Networks.connect/1` and lands in the same lie. The
+  visitor row carries a real `connection_state` since #211 ruling D.
+  """
+  @spec report_link_state(Session.subject(), integer(), {:failing, String.t()} | :registered) ::
+          :ok
+  def report_link_state(subject, network_id, link_state) when is_integer(network_id) do
+    case fetch_credential_for_subject(subject, network_id) do
+      {:ok, cred} ->
+        log_link_state_outcome(apply_link_state(cred, link_state), subject, network_id, link_state)
+
+      {:error, :not_found} ->
+        # Unbound between spawn and the connect failure (an admin unbind,
+        # a reaped visitor). The session is about to die with it; nothing
+        # to write, but say so rather than drop it.
+        Logger.info(
+          "report_link_state: no credential — unbound or reaped " <>
+            "(subject=#{inspect(subject)} network_id=#{network_id})"
+        )
+
+        :ok
+    end
+  end
+
+  @spec apply_link_state(Credential.t(), {:failing, String.t()} | :registered) ::
+          {:ok, Credential.t()} | {:error, atom()}
+  defp apply_link_state(cred, {:failing, reason}) when is_binary(reason),
+    do: mark_failing(cred, reason)
+
+  defp apply_link_state(cred, :registered), do: mark_registered(cred)
+
+  @spec log_link_state_outcome(
+          {:ok, Credential.t()} | {:error, atom()},
+          Session.subject(),
+          integer(),
+          {:failing, String.t()} | :registered
+        ) :: :ok
+  defp log_link_state_outcome({:ok, _}, _, _, _), do: :ok
+
+  defp log_link_state_outcome({:error, why}, subject, network_id, link_state) do
+    # Not a warning: every one of these is a legitimate race with a
+    # teardown that already won (park / terminal failure), and the row is
+    # correct as it stands. Logged because a silent drop here is how a
+    # future genuinely-wrong transition would hide.
+    Logger.info(
+      "report_link_state: #{inspect(link_state)} declined (#{why}) " <>
+        "(subject=#{inspect(subject)} network_id=#{network_id})"
+    )
+
+    :ok
+  end
+
+  @spec fetch_credential_for_subject(Session.subject(), integer()) ::
+          {:ok, Credential.t()} | {:error, :not_found}
+  defp fetch_credential_for_subject({:user, user_id}, network_id),
+    do: Credentials.get_credential_by_ids(user_id, network_id)
+
+  defp fetch_credential_for_subject({:visitor, visitor_id}, network_id),
+    do: Credentials.get_visitor_credential(visitor_id, network_id)
 
   # REV-J M13: routes through `Credential.connection_state_changeset/2`
   # so the same `safe_line_token` guard that protects `realname`,

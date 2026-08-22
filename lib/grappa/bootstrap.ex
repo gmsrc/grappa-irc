@@ -421,10 +421,14 @@ defmodule Grappa.Bootstrap do
     # A visitor who /disconnected network A parked its credential; on a
     # bouncer reboot Bootstrap must NOT respawn it (vjt: "visitor per
     # network disconnect persists after reboot, yes, of course cazzo").
-    # Mirrors the user path (`list_credentials_for_all_users/0` filters to
-    # `:connected`, i.e. skips BOTH :parked and :failed); the visitor path
+    # Mirrors the user path (`list_credentials_for_all_users/0` selects the
+    # WANTED-UP set and so skips BOTH :parked and :failed); the visitor path
     # enumerates ALL credentials (TTL identity lifecycle is orthogonal to
     # per-network session state), so the skip is per-credential here.
+    # #1675 — `:failing` is deliberately NOT in this guard: it means
+    # "wanted up, link not registered", so it falls through to the spawn
+    # clause below exactly as the user path resumes it. Skipping it would
+    # strand a visitor network that was mid-backoff at reboot.
     # `:failed` is included for symmetry with the user path — visitor
     # credentials don't reach it today (the visitor terminal-failure axis
     # is Reaper/TTL on the identity row), but a future `:failed`-for-

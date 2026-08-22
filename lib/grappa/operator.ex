@@ -573,12 +573,16 @@ defmodule Grappa.Operator do
           {:ok, :transitioned | :noop} | {:error, :not_found}
   defp disconnect_user_session({:user, user_id} = subject, network_id, actor_user_id) do
     case Credentials.get_credential_by_ids(user_id, network_id) do
-      {:ok, %{connection_state: :connected} = cred} ->
-        # Networks.disconnect/2 guarantees {:ok, _} on :connected input
-        # (lib/grappa/networks.ex:369-386 only short-circuits on parked/
-        # failed); the bare match crashes loudly if a future refactor
-        # changes the shape — preferable to a defensive case that hides
-        # the contract (CLAUDE.md "Dialyzer warnings are design signals").
+      {:ok, %{connection_state: state} = cred} when state in [:connected, :failing] ->
+        # Networks.disconnect/2 guarantees {:ok, _} on :connected AND
+        # :failing input (it only short-circuits on parked/failed); the
+        # bare match crashes loudly if a future refactor changes the
+        # shape — preferable to a defensive case that hides the contract
+        # (CLAUDE.md "Dialyzer warnings are design signals").
+        #
+        # #1675 — `:failing` belongs on this arm, not the noop one below:
+        # the row owns a live session hammering a dead upstream, which is
+        # exactly the session an admin reaches for this verb to stop.
         {:ok, _} = Networks.disconnect(cred, @disconnect_reason)
 
         Logger.info(

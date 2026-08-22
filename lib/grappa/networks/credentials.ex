@@ -1330,8 +1330,9 @@ defmodule Grappa.Networks.Credentials do
   end
 
   @doc """
-  Returns every credential whose `connection_state == :connected`,
-  with `:network` preloaded.
+  Returns every credential the bouncer is meant to bring up at boot —
+  `connection_state in [:connected, :failing]` — with `:network`
+  preloaded.
 
   Used by `Grappa.Bootstrap` to spawn one `Grappa.Session.Server` per
   bound (user, network) at boot. Sub-task 2j swapped the boot path
@@ -1339,14 +1340,24 @@ defmodule Grappa.Networks.Credentials do
   operators using `mix grappa.bind_network` can take effect on the
   next deploy without editing a file.
 
-  T32 (channel-client-polish S1.2): filters on `:connected`. `:parked`
-  and `:failed` rows are intentionally skipped — `:parked` is user
-  intent ("don't reconnect this on reboot"), `:failed` is a server-set
-  terminal flag for hard upstream failures (k-line / permanent SASL).
-  Operator brings them back via `Networks.connect/1` (PATCH endpoint
-  or future mix task), which flips to `:connected` and the next
-  Bootstrap cycle picks them up — though typically the PATCH
-  controller spawns the session inline.
+  T32 (channel-client-polish S1.2) + #1675: the filter is the
+  WANTED-UP set, not the `:connected` value. `:parked` and `:failed`
+  rows are intentionally skipped — `:parked` is user intent ("don't
+  reconnect this on reboot"), `:failed` is a server-set terminal flag
+  for hard upstream failures (k-line / permanent SASL). Operator brings
+  them back via `Networks.connect/1` (PATCH endpoint or future mix
+  task), which flips to `:connected` and the next Bootstrap cycle picks
+  them up — though typically the PATCH controller spawns the session
+  inline.
+
+  🔴 `:failing` IS resumed, and that is the half the pre-#1675 wording
+  could not express. That state means "wanted up, link not registered,
+  backoff running": a reboot landing inside a backoff window would
+  otherwise drop the network permanently, since nothing but a human
+  PATCH could ever move the row again. The `:parked`/`:failed` reasoning
+  above is right for those two and WRONG for this one — which is exactly
+  why #1675 added a fourth value instead of reusing `:failed` with a
+  reason grep.
 
   Ordered by `(inserted_at, user_id, network_id)` so the per-credential
   log lines from Bootstrap are deterministic across reboots — handy
@@ -1369,7 +1380,7 @@ defmodule Grappa.Networks.Credentials do
     # explicit-worthy.
     query =
       from(c in Credential,
-        where: c.connection_state == :connected and not is_nil(c.user_id),
+        where: c.connection_state in [:connected, :failing] and not is_nil(c.user_id),
         order_by: [asc: c.inserted_at, asc: c.user_id, asc: c.network_id],
         preload: [network: :servers]
       )
