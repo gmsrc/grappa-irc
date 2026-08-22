@@ -1,6 +1,6 @@
 // GENERATED FILE — DO NOT EDIT
 // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-// Source: lib/grappa/**/*wire.ex + GrappaWeb.AuthJSON + GrappaWeb.ErrorTokens + GrappaWeb.MeJSON
+// Source: lib/grappa/**/*wire.ex + GrappaWeb.AuthJSON + GrappaWeb.BootJSON + GrappaWeb.ErrorTokens + GrappaWeb.MeJSON
 
 // === External types (referenced by Wire modules) ===
 
@@ -1591,6 +1591,18 @@ export type AuthJSONVisitorSubjectWire = {
 };
 
 export type AuthJSONSubjectWire = AuthJSONUserSubjectWire | AuthJSONVisitorSubjectWire;
+
+// === GrappaWeb.BootJSON ===
+
+export type BootJSONChannelTree = Record<string, NetworksWireChannelJson[]>;
+
+export type BootJSONHeads = Record<string, Record<string, ScrollbackWireT[]>>;
+
+export type BootJSONBootJson = {
+  networks: NetworksWireNetworkWithNickJson | NetworksWireVisitorNetworkWithNickJson[];
+  channels: BootJSONChannelTree;
+  heads: BootJSONHeads;
+};
 
 // === GrappaWeb.ErrorTokens ===
 

@@ -1,6 +1,6 @@
 // GENERATED FILE — DO NOT EDIT
 // Run `scripts/mix.sh grappa.gen_wire_types` to regenerate.
-// Source: lib/grappa/**/*wire.ex + GrappaWeb.AuthJSON + GrappaWeb.ErrorTokens + GrappaWeb.MeJSON
+// Source: lib/grappa/**/*wire.ex + GrappaWeb.AuthJSON + GrappaWeb.BootJSON + GrappaWeb.ErrorTokens + GrappaWeb.MeJSON
 //
 // #429 — the RUNTIME twin of `wireTypes.ts`: the same typespecs, emitted
 // as schema literals `wireValidate.ts` interprets. `wireTypes.ts` is
@@ -1541,6 +1541,23 @@ export const S_AuthJSONVisitorSubjectWire = {
 // GrappaWeb.AuthJSON.subject_wire/0
 export const S_AuthJSONSubjectWire = {
   u: [S_AuthJSONUserSubjectWire, S_AuthJSONVisitorSubjectWire],
+} as const;
+
+// GrappaWeb.BootJSON.channel_tree/0
+export const S_BootJSONChannelTree = { r: { a: S_NetworksWireChannelJson } } as const;
+
+// GrappaWeb.BootJSON.heads/0
+export const S_BootJSONHeads = { r: { r: { a: S_ScrollbackWireT } } } as const;
+
+// GrappaWeb.BootJSON.boot_json/0
+export const S_BootJSONBootJson = {
+  o: {
+    networks: {
+      a: { u: [S_NetworksWireNetworkWithNickJson, S_NetworksWireVisitorNetworkWithNickJson] },
+    },
+    channels: S_BootJSONChannelTree,
+    heads: S_BootJSONHeads,
+  },
 } as const;
 
 // GrappaWeb.ErrorTokens.shared_error_token/0

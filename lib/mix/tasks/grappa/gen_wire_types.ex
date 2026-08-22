@@ -100,8 +100,23 @@ defmodule Mix.Tasks.Grappa.GenWireTypes do
   # delivering zero coverage while looking widened. `error_tokens.ex` only
   # ever worked because it sits directly under `grappa_web/` and camelizes
   # exactly. A module list has no path→name guess to get wrong.
+  # #1679 — `GrappaWeb.BootJSON` joins the list for the same reason `MeJSON`
+  # is on it: it is a top-level ENVELOPE assembled in the web layer, not a
+  # domain `*.Wire` module, so the glob cannot reach it. Its leaf shapes
+  # (network rows, channel entries, message rows) already come from
+  # `Grappa.Networks.Wire` / `Grappa.Scrollback.Wire`; what is new — and what
+  # a client would otherwise hand-write — is how they nest.
+  #
+  # Measured before adding it: with `/boot` routed, rendered and tested,
+  # `mix grappa.wire_pin --check` answered `wire shape and protocol 3 agree`
+  # at rc=0. A whole new client-facing endpoint was invisible to the
+  # tripwire, because the set it digests is a glob over `lib/grappa/**` plus
+  # a hand-kept list. So a new web-layer envelope MUST be added here in the
+  # same commit that introduces it, or the pin green means only "nothing I
+  # was looking at moved".
   @extra_modules [
     GrappaWeb.AuthJSON,
+    GrappaWeb.BootJSON,
     GrappaWeb.ErrorTokens,
     GrappaWeb.MeJSON
   ]
