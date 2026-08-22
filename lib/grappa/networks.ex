@@ -1118,6 +1118,37 @@ defmodule Grappa.Networks do
   outranks a server observation — same posture as `mark_failed/2`) and
   `:failed` with `{:error, :terminal}` (terminal never decays into
   non-terminal; a `:failed` row has no session to be failing).
+
+  ## 🔴 KNOWN HOLE — the `:parked` rejection also eats the FIRST failure
+
+  **Not intentional. Measured on the integration stack 2026-08-22, not
+  reasoned about:** every operator-initiated connect SPAWNS BEFORE it
+  writes `:connected` (`Operator.connect_credential/1` and the post-U-0
+  `NetworksController` order both do `resolve → spawn → connect/1`, and
+  that ordering is #642's cure — a refused SPAWN must not report
+  success). So there is a window, between the spawn and that write, in
+  which the row still reads `:parked`. An upstream that refuses
+  instantly closes it inside that window:
+
+      21:49:35.464  credential_bound
+      21:49:35.466  report_link_state: {:failing, "connection refused"}
+                    declined (user_parked)          <- 2 ms after the bind
+      21:49:35.470  INSERT INTO messages            <- the $server row DOES land
+
+  The `user_parked` diagnosis is then **wrong**: nobody parked the row,
+  the writer had not committed yet. The two surfaces disagree for the
+  rest of the window — the `$server` scrollback says the connect was
+  refused while the network row says `connected` with a null reason —
+  and the row only self-corrects on the NEXT attempt, i.e. after
+  `@connect_failure_sleep_ms` (30 s, `config/config.exs`) plus one
+  backoff rung (~5 s): **~35 s of exactly the lie #1675 exists to
+  remove**, bounded but real, and reachable in production by the
+  commonest misconfiguration there is (a wrong port).
+
+  It is NOT fixed here because the fix is an ordering change to the U-0
+  sequence #642 established, which is a separate decision with a
+  separate blast radius. It is written down because the next reader
+  would otherwise have to re-derive it from a log line that lies.
   """
   @spec mark_failing(Credential.t(), String.t()) ::
           {:ok, Credential.t()} | {:error, :user_parked | :terminal}

@@ -58955,3 +58955,79 @@ disturb the seeded sessions the rest of the suite depends on.
 Restarting the container mid-suite is heavy and flaky. It is covered by
 `bootstrap_test.exs` ("#1675 — resumes a :failing credential"), which runs
 the real `Bootstrap.run/0` against a real socket.
+
+### The `:parked` rejection also eats the FIRST failure — measured, and left open
+
+Writing the e2e surfaced a hole in the cure itself, and it is recorded here
+rather than fixed because the fix is somebody's decision, not a detail.
+
+Every operator-initiated connect SPAWNS BEFORE it writes `:connected`.
+`Operator.connect_credential/1` is `resolve → spawn → Networks.connect/1`, and
+the post-U-0 `NetworksController` order is the same — deliberately, because
+that IS #642's cure: a refused spawn must not report success. So between the
+spawn and that write the row still reads `:parked`, and `mark_failing/2`
+rejects `:parked` by design.
+
+An upstream that refuses instantly closes inside that window. From the
+integration stack on 2026-08-22, a network bound to a closed loopback port:
+
+```
+21:49:35.464  credential_bound
+21:49:35.466  report_link_state: {:failing, "connection refused"}
+              declined (user_parked)              <- 2 ms after the bind
+21:49:35.470  INSERT INTO "messages"              <- the $server row DOES land
+```
+
+and `GET /networks` twenty seconds later still answered
+`connection_state: "connected"`, `connection_state_reason: null`,
+`connection: null`.
+
+Three things are wrong at once, and they are worth separating. The
+`user_parked` **diagnosis is false** — nobody parked the row, the writer had
+not committed — so the log lies about why, which is the exact failure the
+log-honesty rule names. The **two surfaces disagree**: the `$server`
+scrollback says the connect was refused while the network row says connected.
+And the row **self-corrects only on the next attempt**, i.e. after
+`@connect_failure_sleep_ms` (30 s) plus one backoff rung (~5 s) — about
+**35 seconds of exactly the lie this issue exists to remove**, bounded but
+real, and reachable in production by the commonest misconfiguration there is.
+
+It did not show on the 2026-08-22 incident because all three real causes were
+SLOW (a TLS handshake, four connect timeouts, a refusal computed before the
+SYN), so the microsecond write always won. `:econnrefused` is the case that
+loses, and it is the case an operator hits by typing the wrong port.
+
+Not fixed in this slice: the cure is an ordering change to the U-0 sequence
+#642 established, and re-ordering it naively reinstates #642. Recorded so the
+next reader does not have to re-derive it from a log line that lies.
+
+### Why the e2e budgets are what they are, and why the throttle was NOT shrunk
+
+The first e2e run was red for this reason and not for a defect in the cure:
+the spec polled 20 s for `:failing`, and with the first failure eaten the row
+cannot reach it before attempt 2 at ~35 s.
+
+The house rule is to cure a red by making the SETUP deterministic rather than
+by raising a timeout, so that was tried first and it does not exist here.
+`irc_client_connect_failure_sleep_ms` is `Application.compile_env` and
+`config/dev.exs` is the established door for shortening an integration-env
+constant (#671 does exactly that for the auto-away debounce). It was still
+declined, on two measurements. It changes the retry cadence of every session
+in a 760-test suite, including the failure paths of the known per-IP autokill
+flake, to save thirty seconds in one spec. **And it would not buy determinism
+anyway:** the spec would still be waiting on attempt 2, because what removes
+the first failure is the `:parked` window above, not the throttle — the
+throttle sets how LONG the wait is, never whether there is one.
+
+Nor can the spec sidestep it by starting from a genuinely `:connected` row:
+every door that respawns a session (`connect_credential/1`, `PATCH
+/networks/:slug`) goes through the same `:parked → :connected` write, and the
+two that do not respawn (`stop_session/2` behind the admin terminate, and
+`disconnect/2`) leave nothing running to retry. There is no operator verb that
+provokes a connect failure on a row that is already `:connected`.
+
+So the budgets are bounded waits on a MEASURED ladder, and they say so at the
+assertion: 30 s throttle + one rung (~5 s) for `:failing`, and for the
+`[dead, dead, live]` ring 2×30 s + a 5 s rung + a 10 s rung + registration
+before `:connected` returns. The polls are condition-based, not sleeps; the
+numbers are the ladder's, not a safety margin.
