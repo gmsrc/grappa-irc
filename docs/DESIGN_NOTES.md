@@ -58703,3 +58703,104 @@ already supplied every secret. The release-image smoke test supplies only
 command with the password on stdin (never argv) and requires an admin account
 creation. That real image boundary is the regression: a same-process entrypoint
 test cannot model Docker discarding environment mutations for future execs.
+<!-- entry #1680 -->
+
+---
+
+## 2026-08-23 — #1680: pausing presence without going blind, and the two kinds that could not be paused
+
+A 7-network account was dropping clicks. Measured on prod: **26,588 rows in
+15 minutes = 29.5 events/s sustained, of which 21,917 are presence — 82%**.
+The server was demonstrably not the bottleneck (zero 503, zero 4xx, 1655 of
+1718 requests under 100ms, none over 2s); latency produces waiting, not a UI
+that drops clicks. So the client's main thread was being fed ~30 events/s of
+join/part/quit for channels nobody was looking at.
+
+The cure is to stop applying presence for channels the user has stopped
+visiting, and to refetch the member list on return. Three things about it are
+worth keeping.
+
+### The obvious implementation loses messages, and the topic says so
+
+"Pause the channel" reads as "leave the per-channel Phoenix topic", and the
+issue's own first shape said exactly that: client-side only, no server
+change, no protocol move. Taken literally it ships a message-loss bug.
+
+That topic is not a presence feed. It is the window's entire inbound, and
+five broadcasters ride it:
+
+```
+lib/grappa/session/persistor.ex:107      the MESSAGES
+lib/grappa/session/broadcaster.ex:110    topic_changed, channel_created, modes
+lib/grappa/window_counts/pusher.ex:113   unread / mention counters
+lib/grappa/read_cursor.ex:583            read-cursor fan-out
+```
+
+`Persistor.persist_and_broadcast/3` literally hands `Wire.message_payload/1`
+to `Topic.channel/3`, and `Broadcaster.to_channel/3`'s own moduledoc calls the
+topic "the carrier for post-join-handshake events (**messages**, topic, modes,
+members)". Leaving it makes a paused channel **blind, not quiet** — and the
+reported use case is hopping between *active* channels, which is precisely
+the signal that would vanish. Ruling (vjt, 2026-08-22): messages must not be
+lost.
+
+So the subscription stays and the noise is dropped where it arrives, at the
+one `routeMessage` call in `subscribe.ts`. **General rule: before muting a
+transport, enumerate what else rides it.** A per-channel topic that carries
+one obvious thing usually carries four unobvious ones, and the call sites are
+the only honest enumeration — prose about it rots.
+
+### Two of the five "presence" kinds are not noise
+
+`SUPPRESSED_PRESENCE_KINDS` has five members and it is tempting to drop all
+five. Two have consumers that are load-bearing for a channel nobody is
+watching: `nick_change` drives the #372/#373 client-side identity migration
+(`renameScrollbackKey` / `renameReadCursorChannel` / `renameRailWhois` /
+`followQueryNick`), and `mode` feeds channel-mode state. And regardless of
+kind, our OWN presence is never noise — an own PART tears the window down
+(#200), so swallowing it leaks a subscription and strands a dead window.
+
+What remains is a PEER joining, parting or quitting: the 82%, whose only
+consumer is the members map, which is exactly what the on-focus refetch
+rebuilds. `PAUSABLE_PRESENCE_KINDS` is therefore its own literal rather than
+a derivation of the pinned set — the two answer different questions ("is this
+presence?" vs "is this presence we can afford to miss?"), and a sixth kind
+landing in the server twin must be considered here on purpose instead of
+inherited silently. A test asserts the subset relation so they cannot drift.
+
+### The cooldown exists so the cure is not the disease
+
+Releasing on every blur would turn tab-switching into a refetch storm —
+#1679's failure mode in a new costume — and would discard a member list about
+to be needed again. So a blur ARMS a two-minute window and returning disarms
+it: a channel the user flicks through and comes back to never leaves.
+
+**The two minutes are CHOSEN, not measured** (vjt, 2026-08-22). No on-device
+timing exists for how long a user dwells away before returning. The honest
+consequence is that the pause only bites once someone actually stops visiting
+a channel: a tour of ten channels inside the window holds ten subscriptions —
+far below the 43 seeded channels all live today, but the relief is "the
+channels you left alone", not "one at a time". **The event rate is worth
+re-measuring with the cooldown live rather than assuming the win.**
+
+### What this cost, and what it did not
+
+Client-side only and genuinely so: zero Elixir files, `priv/wire/shape.pin`
+untouched, `@protocol_version` unmoved. The members refetch consumes the
+GENERATED `S_SessionWireMembersIndexPayload` because `MembersJSON` and the
+`members_seeded` event already render through `Session.Wire.member/1` — one
+contract, so no wire change. It returns `null` and not `[]` on HTTP 204,
+because 204 is `{:ok, :uninitialized}` and collapsing it would let a refetch
+blank a good member list.
+
+Noted in passing: `MembersController`'s moduledoc has claimed "cicchetto
+refetches on channel-select" since P4-1, and no client function existed —
+cic lived entirely off the broadcast. The claim is true now.
+
+### Left open, deliberately
+
+Issue open question 1 is answered as an ASSUMPTION, not a measurement: focus
+is the selected channel and is NOT gated on `isDocumentVisible()`, because
+gating on tab visibility makes every alt-tab cost a refetch round. Questions 2
+and 3 (what else goes stale while paused; resume ordering against a JOIN
+landing mid-refetch) are narrowed by the carve-outs above rather than closed.
