@@ -57845,3 +57845,103 @@ of 2026-08-21 reversed exactly that, and `Grappa.Protocol`'s moduledoc
 plus CLAUDE.md now say the opposite. These are module comments, not a
 chronological log, so a reader takes them as the current rule. Left for
 its own slice.
+<!-- entry #1655 -->
+
+---
+
+## 2026-08-22 — #1655: two instruments for one rule set, and neither alone is the answer
+
+`biome migrate --write` on the pinned 2.5.8 rewrites two lines of
+`cicchetto/biome.json` — `$schema` 2.5.6 → 2.5.8, and the pre-rename
+`linter.rules.recommended: true` → `preset: "recommended"`. That part is
+mechanical. The part worth recording is the question the issue left open: did
+the pre-rename key still select the *full* recommended set, or had it been
+silently narrowed? A shrunken rule set is the only way this stops being
+housekeeping, and "the linter still emits from seven rules" does not answer it.
+
+**The answer is zero difference, and it took two instruments to say so.**
+
+### The two instruments, and the exact shape of their disagreement
+
+`biome check --profile-rules` prints a timing row per rule, so the table IS the
+set of rules that **executed** over the corpus. `biome rage --linter` prints
+`Enabled rules:`, the set biome **resolves** from the configuration whether or
+not any node ever matches it. Both were run against the same tree under the old
+key and the new one; both report the two configurations **byte-identical**
+(197 executed rule ids, 216 resolved rule ids, nude `diff` empty and `cmp`
+clean in each case).
+
+Neither is complete on its own, and the way they fail is worth knowing:
+
+- **Executed ⊄ resolved.** Six rules executed that `rage` never lists: four
+  always-on syntax-level `correctness` rules, `source/organizeImports` (an
+  assist action, correctly absent from a *linter* rule list), and
+  `suspicious/noFocusedTests` — a `test`-DOMAIN rule that `biome explain` shows
+  is auto-enabled when vitest is detected. `rage`'s static resolution does not
+  show domain auto-enablement.
+- **Resolved ⊄ executed.** Twenty-five recommended rules are resolved but never
+  execute here, because the constructs they match are absent from the tree —
+  GraphQL, Vue, CSS at-rules, `const enum`, `with`, `debugger`. Enumerated
+  independently by running `biome explain` over every rule in the 2.5.8
+  configuration schema that never appeared in a profile table: the two methods
+  agree on all 25, by name, with nothing left over.
+
+The books close exactly — 197 − 6 + 25 = 216 — and the union is **222 distinct
+rules with a zero delta across all of them**. Quote a rule-set comparison
+without saying which of the two things it measured and it is worth less than it
+looks: `--profile-rules` alone cannot see a rule that would only fire on code
+nobody has written yet, and `rage` alone cannot see a rule a detected
+dependency switched on.
+
+### The pre-rename key was live, not ignored
+
+Two mechanisms produce a full rule set: the key is honoured, or the key is
+ignored and the default happens to be `recommended`. They are not the same
+posture and the difference matters to anyone writing `recommended: false`
+elsewhere. Measured: `recommended: false` collapses the resolved set to the
+single explicitly-configured rule, **identical to `preset: "none"`**. The key
+was live. The migration changes a spelling, not a behaviour.
+
+### Do not "simplify" by deleting the key
+
+Reproducible 3 runs to 2: with the key present (either spelling) 197 rules
+execute; with the key omitted entirely, 196 — `suspicious/noFocusedTests`
+disappears, even though `rage` resolves the same 216 in both cases. So the
+schema's "`true` by default" is true of the resolved set and NOT of what runs.
+Dropping the key as redundant would silently retire a test-domain rule. The
+mechanism behind the divergence is not established here and is written as open.
+
+### Two facts about biome's output that mislead on first read
+
+- **The stale `$schema` is inert until something else breaks.** No
+  schema-version diagnostic appears on a clean parse. It surfaces only
+  alongside a real deserialization error — planting an unknown key produced
+  both the unknown-key error *and* a "schema version does not match" hint
+  pointing at `biome migrate`. Useful as a control (it proves biome is reading
+  the file you are editing); useless as a reminder, since it stays silent
+  exactly while everything else is fine.
+- **Truncation hides the LIST, not the COUNT.** At the default
+  `--max-diagnostics=20` the run prints 20 diagnostics and `Diagnostics not
+  shown: 43`, while the summary still reads `Found 59 warnings. Found 4 infos.`
+  — the totals are truthful, the enumeration is not. `cicchetto/scripts/check.ts`
+  already passes `--max-diagnostics=none`, so the gate never had the problem;
+  an ad-hoc scoped run does.
+
+### The controls caught the instrument twice, and both times it was mine
+
+Both parsers written for this measurement were wrong, and both were caught by a
+control at a known answer rather than by reading output: the profile-table
+extractor swallowed the table's own `rule` header, inflating every count by one;
+the `rage` extractor called `gsub` on `$0`, which made the following
+terminator rule match the line it had just rewritten and stop after the first
+entry — reporting 1 enabled rule where there were 216. A control that asserts
+"`preset: none` must shrink the set and `preset: all` must grow it" fails loudly
+on both bugs; eyeballing a plausible-looking list does not. Gate the payload on
+the controls so a broken instrument prints no numbers at all.
+
+### Not established
+
+Why an explicitly-present `recommended` key enables a domain rule that an
+absent one does not. The delta is measured and reproducible; the mechanism is
+inferred from `biome explain` (a `test`-domain rule gated on a detected
+vitest dependency) and was not proven.
