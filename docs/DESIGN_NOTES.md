@@ -57395,3 +57395,35 @@ The jail rc.d is the only shipped service definition that spawns
 `run_erl`; systemd and both images run `bin/grappa start` in the
 foreground. A test holds that set, so a future substrate that adopts
 `daemon` cannot inherit the 500 KB ring in silence.
+
+### The mutation bench broke, and how it announced itself
+
+The oracles above were proven by mutation, and one round of that battery
+was invalid. The loop saved each production file before mutating it with
+`cp "$f" /tmp/w1-$(basename "$f").orig` — and this repo has **five files
+named `deploy.sh`** (`infra/linux/`, `infra/docker/`, `infra/freebsd/`,
+`scripts/`, plus the mirrored copies). Two of them collapsed onto one
+backup, so the restore wrote the docker driver into
+`infra/linux/deploy.sh`, and the next mutant ran against a file that was
+not the file under test.
+
+**It announced itself in the shape of the result: a mutation aimed at one
+hook lit up 22 reds across the whole linux suite instead of the 1 it was
+built to kill.** That reads like a discovery — "my change breaks
+everything" — and it is the opposite: nothing was measured at all.
+
+**A targeted mutant that lights up reds everywhere is not a powerful
+mutant, it is the wrong bench.** A mutant is a scalpel; its result is
+only evidence when the blast radius matches the aim. One red where you
+predicted one red is a measurement. Twenty-two reds where you predicted
+one is a bench report, and the only correct next move is to throw the
+round away and rebuild the bench — which is what happened here: the round
+was rerun after restoring from git, and it then killed exactly its one
+intended case.
+
+Restore from `git checkout -- <file>` rather than from a copy. The
+production files are committed before the battery starts, so git is the
+authoritative backup and it cannot collide with itself; and
+`git status --porcelain` after each restore names any file the mutant
+never touched, which is the cheap check that would have caught this on
+the first round instead of the second.
