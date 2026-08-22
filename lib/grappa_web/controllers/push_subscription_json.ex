@@ -28,9 +28,20 @@ defmodule GrappaWeb.PushSubscriptionJSON do
     * `:device` (PATCH 200) — one `subscription_summary()`, the same
       shape an `:index` row carries.
 
-  `label` is a NEW additive field on an existing shape, so per the
-  additive-only wire contract (#447) it costs no `protocol_version`
-  bump: a client that does not know it simply ignores it.
+  `label` is a NEW additive field on an existing shape: a client that
+  does not know it simply ignores it. It shipped with no
+  `protocol_version` bump, one day before vjt's ruling (2026-08-21,
+  #1393d) made every wire-shape change bump `Grappa.Protocol.version/0`,
+  additive included — so read the absence as a date, not as a standing
+  exemption.
+
+  What the ruling does NOT settle is reach, and this view sits on the
+  unsettled side: `priv/wire/shape.pin` spans the GENERATED artefacts
+  only (`wireTypes.ts` + `wireSchema.ts`, built from the `*.Wire`
+  typespecs), and a REST JSON view is not among them, so the gate is
+  silent here in either direction. A new field on this shape gets the
+  ruling applied by hand, or the scope question asked — not a silent
+  pass because nothing went red.
 
   ## Why no endpoint/keys in any list shape
 
