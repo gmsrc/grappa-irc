@@ -57945,3 +57945,116 @@ Why an explicitly-present `recommended` key enables a domain rule that an
 absent one does not. The delta is measured and reproducible; the mechanism is
 inferred from `biome explain` (a `test`-domain rule gated on a detected
 vitest dependency) and was not proven.
+<!-- entry #1669 -->
+
+---
+
+## 2026-08-22 — #1669: elastic resistance on the directory pull, and why the numbers are not the contract
+
+#1658 point 3 deleted the pull's travel cap and said so in the code: *"any cap
+makes the list stop following the finger past it … where the travel should ease
+off past the commit distance is a FEEL question and needs a constant measured on
+a phone … vjt's call."* #1669 is vjt making that call. The travel past
+`PULL_COMMIT_PX` is now damped towards a ceiling it approaches and never
+reaches.
+
+### The curve, and where it does NOT go
+
+`pulledOffset` in `DirectoryPane.tsx`, the ordinary rubber-band shape: identity
+below the commit point, and above it the remaining slack spent down a
+reciprocal. NOT in `pullGesture.ts` — that binder is deliberately paint-free and
+reports raw travel, and it is the fourth binder over one core, so a paint
+concern parked there becomes four panes' concern. NOT in `PULL_COMMIT_PX`
+either: the commit threshold is a separate decision vjt has explicitly reserved,
+and the binder still gates the commit on the finger's OWN distance
+(`swipeDirection(…, PULL_COMMIT_PX)`), which damping does not touch.
+
+Which forces one non-obvious consequence: **the opacity ramp keeps reading the
+RAW `dy`, not the damped offset.** The ramp announces that the release will
+spend a capture, and the release is decided on finger distance. Ramp the damped
+offset and the spinner reaches full at a distance that does not commit — the
+affordance lying about the one threshold it exists to announce.
+
+### The PROPERTIES are the contract; the two numbers are not
+
+`PULL_MAX_OFFSET_PX` and `PULL_DAMPING` are declared provisional feel constants,
+on the same standing rule `PULL_COMMIT_PX` carries in its own comment. So the
+suite pins the SHAPE and never the values:
+
+1. **Identity below the commit point.** The stretch a user crosses to decide
+   whether to spend a refresh must not lie about distance.
+2. **Strictly increasing at every distance.** An asymptote, not a clamp — this
+   is the property that keeps #1658's deletion intact.
+3. **Gain never rises, and falls past the seam.** Resistance, not a wall.
+4. **Bounded by the ceiling**, which it approaches and never reaches.
+
+They are each other's controls, and that is the point: strictly-increasing alone
+permits the undamped 1:1 travel; non-increasing-gain alone permits a hard clamp;
+bounded alone permits a clamp too. Only an asymptote satisfies all of them.
+
+### Measured by mutation, both mutants, against the shipped oracle
+
+Run through a harness that patches the body, runs, restores, and verifies the
+restored file's digest matches the original — with a known-answer control
+(`the pristine body must appear exactly once`) gating the run, because a patcher
+that silently found nothing reports green.
+
+| mutant | reds |
+| --- | --- |
+| `return dy` (the pre-#1669 linear travel) | 3 — bounded, gain-falls, and the pane-wiring test |
+| `Math.min(dy, PULL_MAX_OFFSET_PX)` (a hard clamp) | 4 — the same three **plus strictly-increasing** |
+
+The second row is why property 2 exists as its own assertion: the clamp is
+bounded and its gain never rises, so it passes everything the issue literally
+asks for while reinstating the defect #1658 removed. Only "still moving at every
+distance" sees it. The linear mutant is the one the brief demanded; it passes
+strictly-increasing and identity-below-the-seam, and dies on the ceiling.
+
+### A wrong assertion, and the honest replacement
+
+The first draft of the ceiling's user-facing test claimed "past four ceilings, a
+further 100px of finger buys under a pixel". **False, measured: it buys 1.35px**,
+and getting under 1px needs roughly 8000px of finger — not a distance a thumb
+reaches. The honest statement of "dragging further adds nothing visible" is not
+about the next pixel but about what is LEFT: `PULL_MAX_OFFSET_PX -
+pulledOffset(dy)` is everything an arbitrarily long drag could still add, and
+past four ceilings it is under a tenth of the ceiling. Stated as a fraction of
+the ceiling, so it survives a recalibration of either constant.
+
+### The e2e assertion that had to go
+
+`issue1445-directory-pull-refresh.spec.ts` asserted `rowTop - listTop` was
+`toBeCloseTo(400, 0)` at three font sizes — the finger's own distance going
+through whole, which #1658 wrote there precisely to pin the ABSENCE of a feel
+constant it declined to invent. That assertion is now the defect, stated. It
+became the two inequalities that bracket it (past the commit distance, short of
+the finger's 400): damped, still following, read off real layout in a real
+engine. The strong invariant it was really guarding — slot bottom ≡ first row
+top — is an identity at every offset and is untouched.
+
+Two smaller consequences in the same file. The `@webkit` engine probe hard-codes
+the declaration it applies, and the damped offset is **fractional** where every
+value that file ever measured was a whole number, so the probe is fractional
+now: an engine that rounded or refused a sub-pixel translate would put the
+spinner back over the first row by half a pixel and nothing else would see it.
+Its value is deliberately NOT a mirror of the ceiling — the composition question
+is linear, so any value answers it, and pinning one would plant an unpinnable
+copy of a number vjt is expected to retune. And the 20px literal in the
+displacement test is load-bearing again for a third reason: 20 is below the
+commit point, which is the only stretch where "moves by EXACTLY the finger's
+travel" is still true.
+
+### Not established, and it is the piece that closes the issue
+
+**The calibration.** Both numbers are guesses with a rationale, not
+measurements: the ceiling is `PULL_COMMIT_PX * 2` (derived so the pull does not
+grow a second vocabulary for its own distances, the same defensible doubling
+`PULL_COMMIT_PX` itself takes from `SWIPE_MIN_PX`), and the damping is 1,
+the value that leaves no step at the seam and is therefore the honest floor
+#1658 asked to calibrate FROM.
+
+**iOS parity — which the issue names as its acceptance bar — is claimed
+nowhere, and cannot be from here.** jsdom drives no compositor and Playwright's
+webkit does not reproduce real iOS scroll physics; every gate in this repo can
+say the travel is bounded and monotone and none of them can say it feels like a
+native scroller. That reading is vjt's, on the phone.
