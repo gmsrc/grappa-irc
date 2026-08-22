@@ -58178,3 +58178,113 @@ stack and was not run for this change. The e2e arithmetic was checked on paper
 instead: at 400px of finger the damped offset is now 256px, so
 `PULL_COMMIT_PX < moved < FULL_TRAVEL_PX` still brackets it — 160 < 256 < 400,
 where it was 80 < 144 < 400.
+<!-- entry #1668 -->
+
+---
+
+## 2026-08-22 — #1668: the comments that still licensed a still version number
+
+vjt's ruling of 2026-08-21 (#1393d) reversed the #447 additive-only rule:
+`Grappa.Protocol.version/0` now bumps on EVERY wire-shape change, additive
+included. `CLAUDE.md`, the `Grappa.Protocol` moduledoc, `docs/CLIENT_PROTOCOL.md`
+and `mix grappa.wire_pin --check` were all moved. Comments in the code were not.
+This entry records the sweep that found them, and three things the sweep taught
+that are worth more than the edit.
+
+### The discriminator, which is what separated 10 defects from ~170 mentions
+
+The tree carries 179 lines matching `additive|add-only` and 484 matching `bump`
+across `lib/`, `cicchetto/src/`, `test/`, `cicchetto/e2e/`, `frontends/` and the
+living docs. Almost none of them are wrong, because **the ruling repealed one
+half of #447 and left the other standing**. Additive-as-emission — the server may
+add a kind or a field, a client MUST ignore what it does not know — is unchanged
+and still true wherever it is written. What fell is the LICENCE that used to be
+drawn from it: *"additive, therefore no `protocol_version` bump"*.
+
+So the test for a defect is not "does it say additive". It is **"does it conclude
+that no bump is needed"**. Ten sites concluded that; every other mention was
+describing tolerance and stays.
+
+### The issue's count was a floor, and the floor was under-stated by 4
+
+#1668 listed six sites and said so explicitly. The sweep found ten. The four the
+issue did not have: `Session.Wire`'s `window_invite_declined` docstring (a new
+event KIND, same "so no `Grappa.Protocol` bump" shape as its `window_invited`
+neighbour twelve lines up), `PushSubscriptionJSON`'s `label` moduledoc,
+`wire_test.exs`'s `window_invited/3` assertion comment, and
+`__tests__/socket.test.ts`, which asserted *"a difference is legal under the
+additive-only rule"* — the withdrawn justification, in a test whose own
+production file (`lib/socket.ts`) had already been rewritten to say the opposite.
+That last one is the interesting shape: **the fix for #1393d moved a module and
+left its test's rationale behind, so the pair now contradicted each other.**
+
+### Why one grep is never the set — twice over, and the second is new
+
+The issue proved this once: its own sweep pattern missed two sites it already
+knew about, because they spell it *"no `protocol_version` bump is needed"*.
+
+It happened again here, one level deeper, and it is the reusable part. The
+positive known-answer control in this sweep's harness was the exact sentence the
+issue quotes from `wire.ex:400`. **It failed.** Not because the site was gone —
+because the sentence WRAPS: line 400 ends `…so no`, line 401 begins
+`` `protocol_version` bump is needed. `` `git grep` is line-oriented, so no
+phrase grep can see it, and the issue's own quotation hides the wrap behind an
+ellipsis. A comment is reflowed to 80 columns by whoever last edited it, which
+means **any phrase long enough to be specific is long enough to have been
+wrapped.** The cure is to build the battery out of single TOKENS (`bump`,
+`additive`, `#447`, `protocol_version`) and pay for it by reading more hits by
+hand — tokens survive reflow, phrases do not.
+
+Third instance, same lesson from a different cause: a first count run under `zsh`
+reported **0 for all five patterns**, because `zsh` does not word-split, so
+`-- $PATHS` reached `git grep` as one pathspec that matches nothing. Zero with
+`rc=0`. A grep that cannot match reports exactly what a clean tree reports, and
+that is true whether the pattern is wrong, the corpus is wrong, or the shell ate
+the argument list. **A sweep without a known-answer control is not evidence.**
+
+### One site had a different cure: the citation was wrong before the ruling too
+
+`Session.Server`'s catch-all clause (#1338 M-S2) and its test both credited "the
+#447 additive-only contract" for letting a publisher add an event type with no
+version bump. But the topics in question — `Topic.ws_presence/1`,
+`Topic.user_settings/1` — resolve to `grappa:ws_presence:…` and
+`grappa:user_settings:…`, INTERNAL PubSub, not the `grappa:user:…` topic cic
+joins. The client-facing wire contract never governed that axis, so the citation
+was a mis-citation before 2026-08-21 and remains one after. Pasting the bump
+obligation there would have been a second wrong answer. The comment now says no
+version numbers that axis at all, which is why the catch-all has to carry it.
+
+### What was deliberately NOT changed
+
+- `CLAUDE.md` and `Grappa.Protocol`'s moduledoc QUOTE the old wording inside the
+  passage that overturns it, as do `docs/CLIENT_PROTOCOL.md` §2 and
+  `UserSocket`'s ceiling comment. Rewriting a quotation deletes the reversal's
+  own reasoning.
+- `Grappa.Push`'s `push_content_encoding` docstring and `FallbackController`'s
+  `{:rate_limited, retry_after}` clause both conclude "no bump", but neither
+  reasons from additivity: the first says an encoding switch is not a shape
+  change, the second says the response body is byte-identical. Both conclusions
+  survive the ruling intact, because the new rule keys on wire-shape change and
+  neither is one.
+- `docs/DESIGN_NOTES.md` is a chronological log. A July entry is not wrong for
+  having been superseded in August; the cure for a log is a new entry, which is
+  this one.
+- `bundle-refresh-banner.spec.ts` is about semver on a rebuild — a different axis.
+
+### Open, not decided: how far "wire-shape change" reaches
+
+`priv/wire/shape.pin` spans the GENERATED artefacts only (`wireTypes.ts` +
+`wireSchema.ts`, from the `*.Wire` typespecs). `PushSubscriptionJSON` is a Phoenix
+JSON view and is not among them, so the gate is silent on a new field there in
+either direction — while `CLAUDE.md` describes `protocol_version` as versioning
+"the client-facing wire contract", which a REST response arguably is. `label`
+itself is moot (it shipped 2026-08-20, one day before the ruling), so nothing is
+retroactively owed. The comment now names the gap rather than resolving it.
+
+### No gate was added, on purpose
+
+The obvious follow-up is a grep gate for the stale phrasing. This sweep is the
+argument against one: the defect class is prose, three independent searches here
+each returned a different subset, and the one that wrapped across a line break
+is invisible to the whole technique. A gate that greens on the sentence it cannot
+see is a floor that lies — the same failure the ruling itself was about.
