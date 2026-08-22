@@ -157,7 +157,7 @@ const REFRESHING_PAGE: DirectoryPage = {
   status: "refreshing",
 };
 
-import DirectoryPane, { timeAgo } from "../DirectoryPane";
+import DirectoryPane, { PULL_MAX_OFFSET_PX, pulledOffset, timeAgo } from "../DirectoryPane";
 
 describe("DirectoryPane", () => {
   beforeEach(() => {
@@ -871,6 +871,23 @@ describe("DirectoryPane", () => {
       return el;
     };
 
+    // #1669 — the painted travel as a NUMBER, because the damped one is not a
+    // literal any more and an equality against a string would be an equality
+    // against a re-implementation of the curve.
+    //
+    // It THROWS on a shape it cannot read rather than returning NaN: every
+    // caller compares with an inequality, and `NaN < x` is false, so a silent
+    // parse failure would read as a passing bound. An empty transform (the pane
+    // painted nothing) fails here too, which is the point.
+    const trackOffset = (container: HTMLElement): number => {
+      const written = trackIn(container).style.transform;
+      const m = /^translateY\((-?\d+(?:\.\d+)?)px\)$/.exec(written);
+      if (m?.[1] === undefined) {
+        throw new Error(`unreadable track transform: ${JSON.stringify(written)}`);
+      }
+      return Number(m[1]);
+    };
+
     // Finger down and dragged to `dy`, still on the glass — the mid-pull paint
     // exists only before the release wipes it. TWO moves because the binder
     // claims LATE: it decides on a touchmove, never on the touchstart.
@@ -953,22 +970,42 @@ describe("DirectoryPane", () => {
       expect(slotIn(container).style.transform).toBe("");
     });
 
-    // #1658 point 3 — the cap is GONE, and this pins its absence rather than a
-    // new number. It existed only to stop the spinner sinking into rows that
-    // stood still; with the rows carried by the same transform there is no
-    // collision left to bound, so the travel follows the finger the whole way
-    // and where it stops is a question of feel, not of geometry.
+    // #1669 — the pane's WIRING half of the elastic travel: that the damped
+    // number is the one that reaches the DOM. The curve's own guarantees are
+    // properties of a number and are pinned as such, over a sweep, in
+    // "pulledOffset" at the bottom of this file.
     //
-    // Reinstating any clamp — in JS or as a `min()` in the declaration — turns
-    // this string into something other than the raw distance and reds it.
-    it("the travel is UNCAPPED — the finger's distance goes through whole", () => {
+    // This REPLACES #1658 point 3's "the travel is UNCAPPED", which asserted
+    // `translateY(${PULL_COMMIT_PX * 4}px)` — the finger's raw distance, going
+    // through whole. That test pinned the deliberate ABSENCE of the feel
+    // constant #1658 declined to invent; #1669 is vjt making that call, so the
+    // assertion it pinned is now the defect. What survives of it is the part
+    // that was never about the cap: the list must still be MOVING at four times
+    // the commit distance, and it is, which is why the third assertion below is
+    // a strict inequality against the ceiling and not an equality with it.
+    it("the travel past the commit point is damped, and bounded by the ceiling", () => {
       directoryPageMock.mockReturnValue(FRESH_PAGE);
       const { container } = render(() => <DirectoryPane networkSlug={SLUG} />);
 
+      // Pre-state, and the half that must NOT have changed: below the commit
+      // point the finger still goes through 1:1. Without it every assertion
+      // below is satisfied by a pane that damped the whole gesture to nothing.
+      pullTo(listIn(container), 20);
+      expect(trackOffset(container)).toBe(20);
+
       const far = PULL_COMMIT_PX * 4;
       pullTo(listIn(container), far);
+      const offset = trackOffset(container);
 
-      expect(trackIn(container).style.transform).toBe(`translateY(${far}px)`);
+      // Damped: the visible outcome #1669 asks for. 320px of finger moved the
+      // list by less than 320px.
+      expect(offset).toBeLessThan(far);
+      // Still moving, and past the commit distance — this is what separates
+      // resistance from the hard cap #1658 deleted.
+      expect(offset).toBeGreaterThan(PULL_COMMIT_PX);
+      // Under the ceiling, strictly: it is an asymptote, so no finite finger
+      // ever lands on it.
+      expect(offset).toBeLessThan(PULL_MAX_OFFSET_PX);
     });
 
     // #1658 — the ramp and the travel are INDEPENDENT axes, and the fix for
@@ -1083,6 +1120,103 @@ describe("DirectoryPane", () => {
 
       expect(triggerRefreshMock).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+// #1669 — the elastic pull curve, asserted as PROPERTIES and never as the two
+// numbers that shape it. Both are declared provisional feel constants that vjt
+// calibrates on a device; a suite that pinned them would go red on the
+// calibration it exists to permit, and would say nothing about the shape.
+//
+// What jsdom (and Playwright, and this whole repo) cannot say: whether any of
+// this feels like an iOS scroller. No assertion below is about parity, and
+// nothing here has been near a phone.
+//
+// The three properties are each other's controls, which is why they are one
+// sweep and not three unrelated numbers:
+//
+//   * STRICTLY INCREASING alone permits the undamped 1:1 travel (the defect).
+//   * NON-INCREASING GAIN alone permits a hard clamp (gain drops to 0 and
+//     stays there) — the #1658 defect wearing #1669's name.
+//   * BOUNDED alone permits a clamp too.
+//
+// Together only an asymptote satisfies all three, and each of the two mutants
+// above was run and reds — see the DESIGN_NOTES entry for which assertion
+// catches which.
+describe("pulledOffset (#1669 — the elastic pull curve)", () => {
+  // 0…2000px of finger at 1px resolution: past four ceilings, and fine enough
+  // that a gain reversal anywhere in the interesting region lands between two
+  // samples. Whole pixels because that is the resolution a touchmove reports.
+  const SWEEP = Array.from({ length: 2001 }, (_, i) => i);
+  const offsets = SWEEP.map(pulledOffset);
+  // IEEE noise on these magnitudes is ~1e-13. Anything this tolerance hides is
+  // below a millionth of a pixel and cannot be a gain reversal anyone designed.
+  const EPS = 1e-9;
+
+  it("is the identity below the commit point — the deciding stretch is not damped", () => {
+    for (let dy = 0; dy <= PULL_COMMIT_PX; dy++) {
+      expect(pulledOffset(dy), `pulledOffset(${dy})`).toBe(dy);
+    }
+    // The seam is INSIDE the identity, not past it: the commit point itself is
+    // the last undamped pixel, so the ramp and the travel agree exactly at the
+    // one distance the release changes meaning.
+    expect(pulledOffset(PULL_COMMIT_PX)).toBe(PULL_COMMIT_PX);
+  });
+
+  it("never stops following the finger — strictly increasing at every distance", () => {
+    for (let i = 1; i < offsets.length; i++) {
+      expect(
+        offsets[i] as number,
+        `pulledOffset(${SWEEP[i]}) must exceed pulledOffset(${SWEEP[i - 1]})`,
+      ).toBeGreaterThan(offsets[i - 1] as number);
+    }
+  });
+
+  it("resists: every pixel of finger buys no more than the pixel before it", () => {
+    const gain = offsets.slice(1).map((v, i) => v - (offsets[i] as number));
+    for (let i = 1; i < gain.length; i++) {
+      expect(
+        gain[i] as number,
+        `gain over px ${SWEEP[i]}→${SWEEP[i + 1]} must not exceed the one before it`,
+      ).toBeLessThanOrEqual((gain[i - 1] as number) + EPS);
+    }
+    // Not merely NON-increasing: past the seam it actually falls, or "damping"
+    // would be satisfied by the undamped travel, whose gain is a flat 1.
+    const past = SWEEP.findIndex((dy) => dy > PULL_COMMIT_PX);
+    expect(gain[past + 10] as number).toBeLessThan((gain[past] as number) - EPS);
+  });
+
+  it("is bounded by the ceiling, which it approaches and never reaches", () => {
+    for (const [i, v] of offsets.entries()) {
+      expect(v, `pulledOffset(${SWEEP[i]})`).toBeLessThan(PULL_MAX_OFFSET_PX);
+    }
+    // An absurd finger, to read the asymptote rather than a distant sample:
+    // within a hundredth of a pixel of the ceiling and still under it.
+    expect(pulledOffset(1e7)).toBeLessThan(PULL_MAX_OFFSET_PX);
+    expect(pulledOffset(1e7)).toBeGreaterThan(PULL_MAX_OFFSET_PX - 0.01);
+  });
+
+  it("is SPENT well before the arm runs out — the travel still on offer collapses", () => {
+    // The user-facing half of "a ceiling", and the honest way to state it: not
+    // "one more pixel buys nothing" (at any reachable distance it still buys a
+    // pixel or so — MEASURED: 1.35px per 100px of finger at four ceilings out,
+    // which is why the first draft of this assertion was wrong), but "there is
+    // almost nothing LEFT to buy". `PULL_MAX_OFFSET_PX - pulledOffset(dy)` is
+    // everything an arbitrarily long drag could still add, from here to
+    // infinity, and past four ceilings of finger it is under a tenth of the
+    // ceiling.
+    //
+    // Stated as a FRACTION of the ceiling rather than in pixels so it survives
+    // a recalibration of either constant, which is the whole posture of this
+    // block.
+    const far = PULL_MAX_OFFSET_PX * 4;
+    expect(PULL_MAX_OFFSET_PX - pulledOffset(far)).toBeLessThan(PULL_MAX_OFFSET_PX / 10);
+    // Control against vacuity: at the commit point there is still most of the
+    // ceiling to play for. Without it a function that returns the ceiling flat
+    // passes the assertion above.
+    expect(PULL_MAX_OFFSET_PX - pulledOffset(PULL_COMMIT_PX)).toBeGreaterThan(
+      PULL_MAX_OFFSET_PX / 10,
+    );
   });
 });
 

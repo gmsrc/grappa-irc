@@ -91,13 +91,82 @@ import { MircBody } from "./MircText";
 //   * The travel used to cap at `min(dy, 100%)`, the slot's own height. That
 //     cap existed for ONE reason — keeping the spinner off rows that stood
 //     still — and with the rows moving there is no collision left to bound.
-//     🔴 Removed rather than retuned, deliberately: any cap makes the list stop
-//     following the finger past it, which is the defect this issue is about, in
-//     smaller print. Where the travel should ease off past the commit distance
-//     is a FEEL question and needs a constant measured on a phone; the honest
-//     floor to calibrate from is the finger's own distance, and damping is
-//     additive afterwards. vjt's call, as `PULL_COMMIT_PX`'s own comment says.
-const pulledTransform = (dy: number): string => `translateY(${dy}px)`;
+//     🔴 Removed rather than retuned, deliberately: any HARD cap makes the list
+//     stop dead under a still-moving finger, which is the defect this issue is
+//     about, in smaller print. What #1669 adds below is not that cap coming
+//     back — an asymptote never stops following, it only ever buys less.
+
+// #1669 — the travel PAST the commit point, and vjt's call on the feel question
+// #1658 left open above ("where the travel should ease off past the commit
+// distance is a FEEL question … damping is additive afterwards"). This is the
+// additive half; the floor it is added to is unchanged.
+//
+// Three properties, and they are what the tests pin — NOT the two numbers,
+// which are provisional. A property survives a recalibration; a number does not.
+//
+//   1. Below the commit point the finger goes through 1:1. That stretch is the
+//      one a user crosses to decide whether to spend a refresh, so it is the
+//      one place the affordance must not lie about distance — and #1658's
+//      geometry (slot bottom ≡ first row top) is an identity at EVERY offset,
+//      so damping it would buy nothing.
+//   2. Past it the gain only ever falls: each further pixel of finger buys
+//      strictly less than the pixel before it. Resistance, not a wall.
+//   3. The offset approaches `PULL_MAX_OFFSET_PX` and never reaches it, while
+//      STILL increasing at every distance. An asymptote, not a clamp — and that
+//      distinction is the whole of why the old cap was deleted rather than
+//      retuned, so it is asserted directly.
+//
+// The curve is the ordinary rubber-band shape (UIScrollView's, and every
+// pull-to-refresh built after it): the slack above the commit point is spent
+// down a reciprocal, so the first pixel past the seam buys `PULL_DAMPING` of
+// itself and the ten-thousandth buys nothing measurable.
+
+// 🔴 A FEEL NUMBER. PROVISIONAL, and NOT MEASURED ON A DEVICE — the same
+// standing rule `PULL_COMMIT_PX` states in its own comment: vjt calibrates on a
+// phone, and nothing here has been near one. No gate in this repo can say this
+// is right, only that it is bounded and monotone: jsdom drives no compositor
+// and Playwright's WebKit does not reproduce real iOS scroll physics (this
+// pane's e2e header says so at length). **iOS parity is claimed nowhere.**
+//
+// Derived rather than picked, so the pull does not grow a second vocabulary for
+// its own distances: the list travels at most twice as far as the finger must
+// go to spend a refresh. Doubling is the defensible default `PULL_COMMIT_PX`
+// itself takes from `SWIPE_MIN_PX`, not a measurement.
+export const PULL_MAX_OFFSET_PX = PULL_COMMIT_PX * 2;
+
+// 🔴 The second feel number, provisional on exactly the same terms.
+//
+// Read it as the gain AT THE SEAM: the share of the finger's next pixel the
+// track still travels the instant it crosses the commit point. Every pixel
+// after that one buys less whatever this is set to — the falling gain is the
+// curve's doing, not this constant's.
+//
+// 1 is the value that leaves NO STEP at the seam: the damped stretch departs at
+// exactly the rate the 1:1 stretch arrives, so resistance builds instead of
+// switching on. It is the honest floor #1658 asked to calibrate FROM. Lower it
+// for a firmer wall right at the threshold. Above 1 the pull would ACCELERATE
+// past the commit point, which is the one direction the property tests refuse.
+const PULL_DAMPING = 1;
+
+/**
+ * The track's offset for a finger that has travelled `dy` downward.
+ *
+ * @spec pulledOffset(number) :: number — the identity below `PULL_COMMIT_PX`;
+ * strictly increasing everywhere; gain non-increasing everywhere; bounded above
+ * by `PULL_MAX_OFFSET_PX`, which it approaches and never reaches.
+ *
+ * Exported for its property tests the way `timeAgo` below is: the three
+ * guarantees are statements about a NUMBER, and asserting them through a
+ * transform string would be asserting them through a parser as well.
+ */
+export function pulledOffset(dy: number): number {
+  if (dy <= PULL_COMMIT_PX) return dy;
+  const slack = PULL_MAX_OFFSET_PX - PULL_COMMIT_PX;
+  const past = dy - PULL_COMMIT_PX;
+  return PULL_COMMIT_PX + slack * (1 - 1 / ((past * PULL_DAMPING) / slack + 1));
+}
+
+const pulledTransform = (dy: number): string => `translateY(${pulledOffset(dy)}px)`;
 
 // The spinner is legible before the commit point, not after it: the ramp
 // reaches full exactly where the release starts spending a capture, so the
@@ -108,6 +177,14 @@ const pulledTransform = (dy: number): string => `translateY(${dy}px)`;
 // ramp to the capped travel would top the spinner out at
 // slotHeight/PULL_COMMIT_PX (0.44 at the default font size) and it would never
 // reach full at the one distance where full is the point.
+//
+// #1669 — which is why this reads the RAW `dy` and not `pulledOffset(dy)`, now
+// that the two differ. What the ramp announces is that the RELEASE will spend a
+// capture, and the binder decides that on the finger's own travel
+// (`swipeDirection(…, PULL_COMMIT_PX)` in pullGesture.ts), which damping does
+// not touch. Ramp the damped offset instead and the spinner reaches full at a
+// distance that does not commit — the affordance lying about the threshold it
+// exists to announce.
 const pulledOpacity = (dy: number): number => Math.min(dy, PULL_COMMIT_PX) / PULL_COMMIT_PX;
 
 // Quiet window after the last keystroke before the filter GET fires. Long
