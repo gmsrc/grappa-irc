@@ -691,6 +691,7 @@ export const S_NetworksServersAdminWireT = {
     host: "s",
     port: "i",
     tls: "b",
+    tls_verify: "b",
     priority: "i",
     enabled: "b",
     source_address: { u: ["s", "z"] },

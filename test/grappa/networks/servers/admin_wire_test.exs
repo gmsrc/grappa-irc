@@ -81,5 +81,32 @@ defmodule Grappa.Networks.Servers.AdminWireTest do
       json = AdminWire.server_to_admin_json(server)
       refute Map.has_key?(json, :network)
     end
+
+    # #1677 — the posture is projected so an operator can SEE which servers
+    # run unverified. Read-only: it is deliberately NOT in the controller's
+    # write whitelist, because whether the API should be able to SET it is
+    # the question the issue explicitly left open.
+    test "tls_verify is projected, and a schema default row projects true" do
+      now = DateTime.utc_now()
+
+      # `%Server{}` with no tls_verify given — the SCHEMA default is what a
+      # pre-#1677 row and a caller who never named the field both get.
+      strict = %Server{
+        id: 1,
+        network_id: 1,
+        host: "irc.azzurra.chat",
+        port: 6697,
+        tls: true,
+        priority: 0,
+        enabled: true,
+        inserted_at: now,
+        updated_at: now
+      }
+
+      assert AdminWire.server_to_admin_json(strict).tls_verify == true
+
+      loose = %Server{strict | id: 2, host: "efnet.deic.eu", tls_verify: false}
+      assert AdminWire.server_to_admin_json(loose).tls_verify == false
+    end
   end
 end

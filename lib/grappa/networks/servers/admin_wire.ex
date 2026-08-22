@@ -20,6 +20,7 @@ defmodule Grappa.Networks.Servers.AdminWire do
           host: String.t(),
           port: :inet.port_number(),
           tls: boolean(),
+          tls_verify: boolean(),
           priority: integer(),
           enabled: boolean(),
           source_address: String.t() | nil,
@@ -43,6 +44,14 @@ defmodule Grappa.Networks.Servers.AdminWire do
       host: server.host,
       port: server.port,
       tls: server.tls,
+      # #1677 — the per-server certificate-verification posture. Projected
+      # READ-ONLY on purpose: it is not in the controller's write whitelist,
+      # so the admin surface can SHOW which servers run unverified without
+      # this slice deciding the "should the API be able to set it" question
+      # the issue explicitly left open. Surfacing it is the other half of
+      # making an unverified link legible (the first half is the client's
+      # `Logger.warning` at connect).
+      tls_verify: server.tls_verify,
       priority: server.priority,
       enabled: server.enabled,
       # #266 — the admin-configured per-network outbound source bind

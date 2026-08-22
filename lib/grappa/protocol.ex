@@ -53,7 +53,7 @@ defmodule Grappa.Protocol do
   `min_version/0` is a DIFFERENT axis and does NOT follow: it moves only
   when old clients can no longer be SERVED. An additive field strands
   nobody, so a bump under the new rule leaves the floor where it is —
-  which is why `version/0` is 2 here and `min_version/0` is still 1.
+  which is why `version/0` is 3 here and `min_version/0` is still 1.
 
   The rule is written for client authors in `docs/CLIENT_PROTOCOL.md` and
   restated as an invariant in `CLAUDE.md`.
@@ -69,25 +69,31 @@ defmodule Grappa.Protocol do
 
   use Boundary, top_level?: true, deps: [], exports: []
 
-  # Protocol v2 (#1393d) — v1 was the initial published contract (#447).
-  # Bump this on EVERY wire-shape change, additive included, per the
-  # moduledoc: the number is only worth comparing against if it is total.
+  # Protocol v3 (#1677) — v1 was the initial published contract (#447), v2
+  # the ruling that made the bump unconditional (#1393d). v3 adds
+  # `tls_verify` to `Grappa.Networks.Servers.AdminWire.t`.
+  #
+  # An admin-only field no cic surface reads still bumps, and that is the
+  # rule working rather than a cost to route around: the digest spans the
+  # whole generated schema precisely so nobody has to adjudicate which
+  # additions "count" (see `Mix.Tasks.Grappa.WirePin`'s "Cost, accepted
+  # knowingly").
   #
   # @min_protocol_version is NOT the same axis and stays at 1: it rises only
   # when old clients can no longer be SERVED, and every client that spoke v1
-  # is still served — v1 clients tolerate what v2 clients require.
-  @protocol_version 2
+  # is still served — v1 clients tolerate what v3 clients require.
+  @protocol_version 3
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
-  # `:: 2` (not `pos_integer()`) so the spec matches the success typing of
+  # `:: 3` (not `pos_integer()`) so the spec matches the success typing of
   # the literal constant under Dialyzer `:underspecs` — the codebase idiom
   # for a constant-returning function (`Grappa.Notify.max_entries/0 :: 64`,
   # `Grappa.IRC.Identifier.max_nick_length/0 :: 30`). A bump edits the spec
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 2
+  @spec version() :: 3
   def version, do: @protocol_version
 
   @doc """

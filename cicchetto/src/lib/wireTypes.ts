@@ -721,6 +721,7 @@ export type NetworksServersAdminWireT = {
   host: string;
   port: number;
   tls: boolean;
+  tls_verify: boolean;
   priority: number;
   enabled: boolean;
   source_address: string | null;

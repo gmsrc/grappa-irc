@@ -82,6 +82,56 @@ defmodule GrappaWeb.Admin.ServersControllerTest do
       assert body["tls"] == true
       assert body["network_id"] == net.id
       assert is_integer(body["id"])
+      # #1677 — the posture is READ-exposed so the console can show which
+      # servers run unverified, and a row nobody flagged reads strict.
+      assert body["tls_verify"] == true
+    end
+
+    # #1677 — the issue explicitly leaves undecided whether the admin API
+    # should be able to SET the posture ("Not measured"). The controller's
+    # whitelist is where that decision would be made, so this slice does not
+    # touch it and pins the current answer instead: writing the field is a
+    # 400, and the ONLY door is out-of-band (`mix grappa.add_server
+    # --no-tls-verify`).
+    #
+    # This test IS the guard. Adding `tls_verify` to the whitelist turns it
+    # red, which forces the decision to be deliberate rather than arriving
+    # as a side effect of someone extending the list.
+    test "400: the write surface does NOT accept tls_verify (decision deferred, #1677)", %{
+      conn: conn
+    } do
+      net = fresh_network()
+      session = admin_session()
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> post(
+          "/admin/networks/#{net.id}/servers",
+          Jason.encode!(%{host: "efnet.deic.eu", port: 6697, tls: true, tls_verify: false})
+        )
+
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+    end
+
+    test "400: PUT does not accept tls_verify either (#1677)", %{conn: conn} do
+      net = fresh_network()
+      session = admin_session()
+      {:ok, server} = Servers.add_server(net, %{host: "irc.example.test", port: 6697, tls: true})
+
+      conn =
+        conn
+        |> put_bearer(session.id)
+        |> put_req_header("content-type", "application/json")
+        |> put(
+          "/admin/networks/#{net.id}/servers/#{server.id}",
+          Jason.encode!(%{tls_verify: false})
+        )
+
+      assert json_response(conn, 400) == %{"error" => "bad_request"}
+      # And the row is untouched — a rejected write must not half-apply.
+      assert {:ok, %{tls_verify: true}} = Servers.get_server(net, server.id)
     end
 
     test "404 for unknown network id", %{conn: conn} do
