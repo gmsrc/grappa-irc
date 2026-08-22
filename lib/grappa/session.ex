@@ -254,6 +254,9 @@ defmodule Grappa.Session do
           optional(:visitor_password_rotator) => Deps.visitor_password_rotator(),
           optional(:visitor_nick_persister) => Deps.visitor_nick_persister(),
           optional(:credential_failer) => Deps.credential_failer(),
+          # #1675 — non-terminal link-state reporter; BOTH subject tags
+          # inject it (the `connection_state` write set is subject-blind).
+          optional(:link_state_reporter) => Deps.link_state_reporter(),
           optional(:credential_committer) => Deps.credential_committer(),
           optional(:registration_committer) => Deps.registration_committer(),
           optional(:last_joined_persister) => Deps.last_joined_persister(),

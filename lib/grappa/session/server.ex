@@ -370,6 +370,9 @@ defmodule Grappa.Session.Server do
           optional(:visitor_password_rotator) => Deps.visitor_password_rotator(),
           optional(:visitor_nick_persister) => Deps.visitor_nick_persister(),
           optional(:credential_failer) => Deps.credential_failer(),
+          # #1675 — non-terminal link-state reporter; BOTH subject tags
+          # inject it (the `connection_state` write set is subject-blind).
+          optional(:link_state_reporter) => Deps.link_state_reporter(),
           optional(:credential_committer) => Deps.credential_committer(),
           optional(:registration_committer) => Deps.registration_committer(),
           optional(:last_joined_persister) => Deps.last_joined_persister(),
@@ -2841,7 +2844,21 @@ defmodule Grappa.Session.Server do
   # untouched by this.
   def handle_info({:irc_connect_failed, reason}, state) do
     maybe_notify_session_phase(state, {:connect_failed, reason})
-    {:noreply, state}
+
+    # #1675 — the same fact, for the two surfaces that outlive this
+    # process. The notify above reaches ONE waiting login and only while
+    # it waits; nothing carried the diagnosis to the operator, so a
+    # network that could never register kept reading `connected`.
+    #
+    # This arm is the trigger and not `terminate/2` on purpose: every
+    # abnormal teardown lands there, including the mid-session netsplit
+    # that reconnects on the first retry, and marking THAT `:failing`
+    # would churn the row on every blip. A failed connect ATTEMPT is the
+    # honest evidence that the link is not coming up right now.
+    described = Client.describe_connect_failure(reason)
+    :ok = report_link_state(state, {:failing, described})
+
+    {:noreply, persist_link_failure(state, described)}
   end
 
   # #550 — the Client captured the upstream peer at connect. Cache it
@@ -3079,6 +3096,16 @@ defmodule Grappa.Session.Server do
     # timer above (which paces the Backoff-ladder RESET, 60s) — the badge
     # flips the instant we're connected, not after the stability window.
     broadcast_connection_progress(state, :connected)
+
+    # #1675 — the DURABLE half of the same fact, and the return edge of
+    # the `:failing` transition below. The badge above is an ephemeral
+    # overlay a page load cannot see; this walks the credential row back
+    # to `:connected` with the failure cause cleared, so a client that
+    # arrives after the recovery reads a row that is true. A no-op on a
+    # row that is already `:connected`, which is the overwhelming
+    # majority of 001s — the idempotency lives in
+    # `Networks.mark_registered/1`, not here.
+    report_link_state(state, :registered)
 
     # #229: query the operator's OWN umode set at registration. ircds don't
     # report umodes unsolicited (only mode CHANGES echo back), so without
@@ -6545,6 +6572,71 @@ defmodule Grappa.Session.Server do
     _ = Broadcaster.to_user(state, SessionWire.connection_progress(state.network_slug, progress))
 
     :ok
+  end
+
+  # #1675 — report the UPSTREAM LINK's registration state to the
+  # credential row through the plan's injected closure. The durable twin
+  # of `broadcast_connection_progress/2` above: that one is an ephemeral
+  # overlay with no snapshot (a page load during a failing loop sees
+  # nothing until the next backoff tick), this one is the row every REST
+  # read and every cold client load goes through.
+  #
+  # Called INLINE, unlike `credential_failer`'s supervised Task: neither
+  # verb behind it stops the session, so there is no `stop_session`
+  # deadlock to dodge, and the write is one row on a path that runs at
+  # most once per connect attempt.
+  #
+  # The nested `Map.get` is hot-reload safety on TWO axes, both real: a
+  # process spawned before #1390 has no `:deps` key at all, and one
+  # spawned before #1675 has a `%Deps{}` struct built without this
+  # field. Either would be a KeyError on the connect path — i.e. a live
+  # session dropped by a deploy. Absent ⇒ no report, which is exactly
+  # the pre-#1675 behaviour.
+  @spec report_link_state(t(), {:failing, String.t()} | :registered) :: :ok
+  defp report_link_state(state, link_state) do
+    case Map.get(Map.get(state, :deps, %Deps{}), :link_state_reporter) do
+      reporter when is_function(reporter, 1) ->
+        _ = reporter.(link_state)
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  # #1675 — the same failure, in the window the operator is looking at.
+  # vjt's three networks failed silently as far as the UI was concerned:
+  # the TLS hostname mismatch existed only in the server log, and the
+  # `$server` window (created by the spawn, like every other window) sat
+  # there looking normal.
+  #
+  # One row per FAILED ATTEMPT, deliberately unlike the row transition
+  # above, which is idempotent. This is a log, and the honest granularity
+  # for a log is per attempt — "still refusing, 6 tries later" is the
+  # fact an operator needs and a single first-cause line cannot carry.
+  # Bounded by the backoff ladder itself (5s doubling to a 5min cap), not
+  # by a dedup we would have to keep honest.
+  #
+  # `:server_event` (event-tier, not content) and the anonymous sender
+  # sentinel: nobody said this, and it did not come off the wire —
+  # `Message.anonymous_sender/0` is the closed-set value the storage
+  # layer already accepts for exactly that.
+  @spec persist_link_failure(t(), String.t()) :: t()
+  defp persist_link_failure(state, described) do
+    attrs =
+      Session.put_subject_id(
+        %{
+          network_id: state.network_id,
+          channel: "$server",
+          server_time: System.system_time(:millisecond),
+          sender: Message.anonymous_sender(),
+          body: "upstream connect failed: " <> described,
+          meta: %{link_failure: %{reason: described}}
+        },
+        state.subject
+      )
+
+    apply_effects([{:persist, :server_event, attrs}], state)
   end
 
   # Channel directory (#84) C3 — per-numeric handling of an in-flight LIST

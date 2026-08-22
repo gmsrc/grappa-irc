@@ -48,9 +48,7 @@ defmodule Grappa.IRC.ConnectFailureDescriptionTest do
 
     test "a source-family mismatch says which side is which" do
       described =
-        Client.describe_connect_failure(
-          {:source_family_mismatch, "2a01:4f8::1", "irc.undernet.org", :inet6}
-        )
+        Client.describe_connect_failure({:source_family_mismatch, "2a01:4f8::1", "irc.undernet.org", :inet6})
 
       assert described =~ "2a01:4f8::1"
       assert described =~ "irc.undernet.org"

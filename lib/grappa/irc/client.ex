@@ -324,7 +324,100 @@ defmodule Grappa.IRC.Client do
                          30_000
                        )
 
+  # #1675 — ceiling on a rendered connect-failure reason, in GRAPHEMES.
+  # An OTP TLS alert description is a full sentence with a nested error
+  # term inside it and no bound of its own; the real one from prod runs
+  # ~230 characters, so the cap has to sit above that or it truncates the
+  # diagnosis in the one case it exists for. Graphemes and not bytes
+  # because the value lands in a UTF-8 column and a byte slice can end
+  # mid-codepoint.
+  @connect_failure_max_length 500
+
   ## API
+
+  @doc """
+  Renders a connect-failure reason as one line an operator can act on.
+
+  #1675 — this string is the whole diagnosis at two surfaces:
+  `network_credentials.connection_state_reason` (which cicchetto already
+  renders) and the `$server` window row. It therefore carries the ACTUAL
+  cause — which host, which certificate, which address family — never a
+  category like "connection failed". The unmapped arm is `inspect/1` for
+  the same reason: an unrecognised shape must stay diagnosable.
+
+  Lives here because this module PRODUCES every shape it maps: the POSIX
+  atoms come back from `:gen_tcp.connect/4`, the alert tuple from
+  `:ssl.connect/4`, and `{:source_family_mismatch, …}` from this file's
+  own `source_bind/2`. A new failure shape and its wording land in one
+  file.
+
+  Contract the callers depend on: the result is a single line — no CR,
+  LF or NUL, which `Credential.connection_state_changeset/2` rejects
+  outright (an OTP alert description spans lines, so this is a real
+  crash, not a hypothetical) — and is bounded to
+  #{@connect_failure_max_length} graphemes.
+  """
+  @spec describe_connect_failure(term()) :: String.t()
+  def describe_connect_failure(reason) do
+    reason |> connect_failure_text() |> one_line() |> truncate()
+  end
+
+  # The POSIX set worth spelling out: what an operator actually hits.
+  # Anything else falls through to `inspect/1` rather than being flattened
+  # into a friendly lie.
+  defp connect_failure_text(:econnrefused), do: "connection refused"
+  defp connect_failure_text(:timeout), do: "connect timeout"
+  defp connect_failure_text(:etimedout), do: "connect timeout"
+  defp connect_failure_text(:ehostunreach), do: "host unreachable"
+  defp connect_failure_text(:enetunreach), do: "network unreachable"
+  defp connect_failure_text(:econnreset), do: "connection reset by peer"
+  defp connect_failure_text(:nxdomain), do: "host not found (DNS)"
+  defp connect_failure_text(:closed), do: "upstream closed the connection"
+
+  # `:ssl.connect/4`'s alert tuple. The description is a charlist holding
+  # the nested reason — on the 2026-08-22 ircnet failure it is where BOTH
+  # hostnames of the RFC-6125 mismatch live, so it is kept rather than
+  # summarised away; the alert atom alone would say `handshake_failure`
+  # and name neither host.
+  defp connect_failure_text({:tls_alert, {alert, description}}),
+    do: "tls: #{alert} (#{to_string(description)})"
+
+  defp connect_failure_text({:tls_alert, alert}), do: "tls: #{inspect(alert)}"
+
+  # Ours (`source_bind/2`): the egress source is pinned to one family and
+  # the upstream publishes no address in it. `fam` is the SOURCE's family;
+  # the HOST is the side that lacks the record, and saying which is which
+  # is the difference between a fixable line and a puzzle.
+  defp connect_failure_text({:source_family_mismatch, source, host, fam}) do
+    "source address family mismatch: source #{source} is #{family_word(fam)}, " <>
+      "#{host} has no #{family_record(fam)} record"
+  end
+
+  defp connect_failure_text(other), do: inspect(other)
+
+  defp family_word(:inet6), do: "IPv6"
+  defp family_word(:inet), do: "IPv4"
+
+  defp family_record(:inet6), do: "AAAA"
+  defp family_record(:inet), do: "A"
+
+  # CR/LF/NUL are rejected by the changeset that stores this, and an OTP
+  # alert description really does contain newlines. Collapse rather than
+  # strip so two joined sentences do not run into one word.
+  defp one_line(text) do
+    text
+    |> String.replace(["\r\n", "\r", "\n", "\x00"], " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  defp truncate(text) do
+    if String.length(text) > @connect_failure_max_length do
+      String.slice(text, 0, @connect_failure_max_length - 1) <> "…"
+    else
+      text
+    end
+  end
 
   @doc """
   Spawns and links the Client. `opts` MUST carry `:nick` and

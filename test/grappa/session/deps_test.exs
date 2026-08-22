@@ -62,12 +62,18 @@ defmodule Grappa.Session.DepsTest do
       assert injected_arities(plan) == Deps.required_injections({:visitor, visitor.id})
     end
 
-    test "the two due sets are disjoint on all but the two shared persisters" do
+    test "the two due sets are disjoint on all but the three shared closures" do
       user_keys = {:user, "u"} |> Deps.required_injections() |> Map.keys() |> MapSet.new()
       visitor_keys = {:visitor, "v"} |> Deps.required_injections() |> Map.keys() |> MapSet.new()
 
+      # #1675 added the third: `link_state_reporter` is shared because the
+      # `connection_state` write set it feeds has no subject branch. The
+      # terminal `credential_failer` is shared as a KEY while the two
+      # producers inject genuinely different closures behind it (visitor
+      # terminal failure expires the identity row, not the credential
+      # state) — this assertion is about the due SET, not the behaviour.
       assert MapSet.intersection(user_keys, visitor_keys) ==
-               MapSet.new([:credential_failer, :last_joined_persister])
+               MapSet.new([:credential_failer, :last_joined_persister, :link_state_reporter])
     end
 
     test "injectable_keys/0 is exactly the union of the two due sets" do

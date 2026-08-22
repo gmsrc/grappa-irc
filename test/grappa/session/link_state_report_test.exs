@@ -69,13 +69,34 @@ defmodule Grappa.Session.LinkStateReportTest do
       port = IRCServer.pick_unused_port()
       {user, network, _} = user_with_credential(port, %{})
 
-      :ok = Phoenix.PubSub.subscribe(Grappa.PubSub, Topic.user(user.name))
+      # Subscribe to the `$server` window itself, NOT to the row-state
+      # event on the user topic: the persist happens AFTER the state
+      # report, so waiting on the state broadcast and then reading the DB
+      # is a race that only shows under load (it did, in the full suite).
+      # The row broadcast is emitted by `Persistor` AFTER the insert
+      # returns, so receiving it is proof the row landed.
+      :ok =
+        Phoenix.PubSub.subscribe(
+          Grappa.PubSub,
+          Topic.channel(user.name, network.slug, "$server")
+        )
+
       pid = start_session_for(user, network)
 
       assert_receive %Phoenix.Socket.Broadcast{
-                       payload: %{kind: :connection_state_changed, to: :failing}
+                       event: "event",
+                       payload: %{
+                         kind: :message,
+                         message: %{kind: :server_event, body: broadcast_body, meta: meta}
+                       }
                      },
                      5_000
+
+      assert broadcast_body =~ "refused"
+      # Structured beside the prose: an old client renders the body, a
+      # future one can style the cause without re-parsing English.
+      assert %{link_failure: %{reason: reason}} = meta
+      assert reason =~ "refused"
 
       rows =
         Scrollback.fetch({:user, user.id}, network.id, "$server", nil, 50, "grappa-test", false)

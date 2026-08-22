@@ -2,7 +2,7 @@ defmodule Grappa.Session.Deps do
   @moduledoc """
   The callbacks a session is BUILT with, in one struct.
 
-  These ten are dependencies, not state. Nothing in a session's lifetime
+  These eleven are dependencies, not state. Nothing in a session's lifetime
   writes them: `init/1` reads them out of the resolved plan and every later
   read is a call. Carried as opaque function references rather than module
   aliases because the producing contexts (Networks, Visitors, QueryWindows)
@@ -32,12 +32,14 @@ defmodule Grappa.Session.Deps do
 
   * `Grappa.Networks.SessionPlan` (registered users) —
     `away_persister`, `credential_committer`, `credential_failer`,
-    `last_joined_persister`, `registration_committer`;
+    `last_joined_persister`, `link_state_reporter`,
+    `registration_committer`;
   * `Grappa.Visitors.SessionPlan` (visitors) — `credential_failer`,
-    `last_joined_persister`, `recover_source`, `visitor_committer`,
-    `visitor_nick_persister`, `visitor_password_rotator`.
+    `last_joined_persister`, `link_state_reporter`, `recover_source`,
+    `visitor_committer`, `visitor_nick_persister`,
+    `visitor_password_rotator`.
 
-  Two shared, three user-only, four visitor-only. So `nil` is not a
+  Three shared, three user-only, four visitor-only. So `nil` is not a
   default at all: it is a function of the SUBJECT TAG, which
   `Grappa.Subject` already carries. `from_opts/2` validates the set due
   for that tag and raises `Grappa.Session.DepsInjectionError` naming the
@@ -134,6 +136,29 @@ defmodule Grappa.Session.Deps do
   @type credential_failer :: (String.t() -> :ok)
 
   @typedoc """
+  #1675 — the NON-terminal sibling of `credential_failer`, injected by
+  BOTH `SessionPlan`s. Reports what the upstream LINK is doing to the
+  credential row: `{:failing, reason}` when a connect attempt could not
+  reach or negotiate with the upstream, `:registered` at 001 RPL_WELCOME.
+
+  Two events, one closure, because they are one axis — "is IRC up" — and
+  a session that can report one must be able to report the other. Both
+  forward to `Grappa.Networks.report_link_state/3`, which owns the
+  idempotency (a re-entered backoff must not churn the row) and logs
+  every declined transition.
+
+  Unlike `credential_failer` this does NOT stop the session and is
+  therefore called INLINE from the connect path, not from a Task: there
+  is no `stop_session` to deadlock against. Same opaque-function-
+  reference indirection and the same Boundary-cycle reason.
+
+  Shared by both subject tags. The write set of `connection_state` has
+  no subject branch, so a user-only reporter would leave the visitor
+  half of the column claiming a registration that never happened.
+  """
+  @type link_state_reporter :: ({:failing, String.t()} | :registered -> :ok)
+
+  @typedoc """
   #131 — opaque callback injected by `Networks.SessionPlan.resolve/1`
   into every USER-session plan. Invoked from the outbound NickServ-secret
   capture choke point when a well-formed in-session `SET PASSWD` leaves
@@ -228,7 +253,7 @@ defmodule Grappa.Session.Deps do
   @type away_persister :: (String.t() | nil, DateTime.t() | nil -> :ok | {:error, term()})
 
   @typedoc """
-  The ten injected callbacks. Nine field defaults are `nil`, and a `nil`
+  The eleven injected callbacks. Ten field defaults are `nil`, and a `nil`
   on a LIVE session still means "this session cannot do that thing" (a
   user session has no `recover_source`; a visitor session has no
   `away_persister`) — but which nils are legitimate is decided at the
@@ -248,6 +273,7 @@ defmodule Grappa.Session.Deps do
           visitor_password_rotator: visitor_password_rotator() | nil,
           visitor_nick_persister: visitor_nick_persister() | nil,
           credential_failer: credential_failer() | nil,
+          link_state_reporter: link_state_reporter() | nil,
           credential_committer: credential_committer() | nil,
           registration_committer: registration_committer() | nil,
           last_joined_persister: last_joined_persister() | nil,
@@ -260,6 +286,7 @@ defmodule Grappa.Session.Deps do
             visitor_password_rotator: nil,
             visitor_nick_persister: nil,
             credential_failer: nil,
+            link_state_reporter: nil,
             credential_committer: nil,
             registration_committer: nil,
             last_joined_persister: nil,
@@ -277,12 +304,14 @@ defmodule Grappa.Session.Deps do
     credential_committer: 1,
     credential_failer: 1,
     last_joined_persister: 2,
+    link_state_reporter: 1,
     registration_committer: 1
   }
 
   @visitor_injections %{
     credential_failer: 1,
     last_joined_persister: 2,
+    link_state_reporter: 1,
     recover_source: 0,
     visitor_committer: 3,
     visitor_nick_persister: 2,
@@ -294,11 +323,11 @@ defmodule Grappa.Session.Deps do
   @injectable_keys Enum.sort(Enum.uniq(Map.keys(@user_injections) ++ Map.keys(@visitor_injections)))
 
   @typedoc """
-  The closed set of injectable closure keys — NINE, not ten.
+  The closed set of injectable closure keys — TEN, not eleven.
 
-  Nine and not ten because the review's ten is the UNION OF WHAT THE TWO
-  PRODUCERS INJECT, and one member of that union is `refresh_plan`, which
-  this struct does not carry. Measured, not assumed:
+  Ten and not eleven because the union of WHAT THE TWO PRODUCERS INJECT
+  includes `refresh_plan`, which this struct does not carry. Measured,
+  not assumed:
 
   * it is absent from `defstruct` above and always has been;
   * `Server.init/1` reads it with its own `Map.get(opts, :refresh_plan)`
@@ -310,16 +339,17 @@ defmodule Grappa.Session.Deps do
 
   Excluded by that structure, therefore, not by oversight and not because
   its absence is safe: both producers inject it, so it belongs to the same
-  silent-absence class as these nine, and it stays UNGUARDED. That is the
-  documented limitation of this door. `query_window_open?` is the tenth
-  STRUCT field and is likewise not here, for the opposite reason — no
-  producer injects it and it has a real production default.
+  silent-absence class as these ten, and it stays UNGUARDED. That is the
+  documented limitation of this door. `query_window_open?` is the
+  eleventh STRUCT field and is likewise not here, for the opposite
+  reason — no producer injects it and it has a real production default.
   """
   @type injectable ::
           :away_persister
           | :credential_committer
           | :credential_failer
           | :last_joined_persister
+          | :link_state_reporter
           | :recover_source
           | :registration_committer
           | :visitor_committer
@@ -369,6 +399,7 @@ defmodule Grappa.Session.Deps do
       visitor_password_rotator: Map.get(opts, :visitor_password_rotator),
       visitor_nick_persister: Map.get(opts, :visitor_nick_persister),
       credential_failer: Map.get(opts, :credential_failer),
+      link_state_reporter: Map.get(opts, :link_state_reporter),
       credential_committer: Map.get(opts, :credential_committer),
       registration_committer: Map.get(opts, :registration_committer),
       last_joined_persister: Map.get(opts, :last_joined_persister),

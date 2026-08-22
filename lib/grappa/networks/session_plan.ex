@@ -133,6 +133,18 @@ defmodule Grappa.Networks.SessionPlan do
       credential_failer: fn reason ->
         Networks.mark_failed_by_ids(user.id, cred.network_id, reason)
       end,
+      # #1675 — the NON-terminal sibling of `credential_failer`. The
+      # upstream link failing to come up is not a reason to stop the
+      # session (the ladder must keep retrying), but it IS a reason to
+      # stop the row claiming `connected`: pre-#1675 nothing walked the
+      # row back, so three misconfigured networks read as connected in
+      # cicchetto while every attempt was refused. Same Boundary-cycle
+      # indirection as the failer above; the closure captures the subject
+      # so `Networks` can reach the credential through the polymorphic
+      # door rather than the user-only `*_by_ids` one.
+      link_state_reporter: fn link_state ->
+        Networks.report_link_state({:user, user.id}, cred.network_id, link_state)
+      end,
       # #131 — optimistic SET PASSWD commit. User-side mirror of
       # `Visitors.SessionPlan`'s `visitor_committer`. Session.Server can't
       # statically alias `Grappa.Networks.Credentials` (Networks already

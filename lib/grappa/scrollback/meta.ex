@@ -106,6 +106,18 @@ defmodule Grappa.Scrollback.Meta do
       :nick_change                  →  %{new_nick: String.t()}
       :mode                         →  %{modes: String.t(), args: [String.t()]}
       :kick                         →  %{target: String.t()}     (body carries reason)
+      :server_event (link failure)  →  %{link_failure: %{reason: String.t()}}
+                                                                 (#1675: an upstream connect attempt that
+                                                                  never reached registration — refused,
+                                                                  timed out, TLS unable to verify, egress
+                                                                  family mismatch. Written by
+                                                                  Session.Server on `$server`, sender is
+                                                                  the anonymous sentinel: nobody said it
+                                                                  and it did not come off the wire. The
+                                                                  body carries the same reason spelled
+                                                                  for a human, so an old client renders
+                                                                  it with no change; the structured copy
+                                                                  is what a future client would style.)
       :notice  | :privmsg           →  %{ctcp_verb: String.t(), ctcp_args: String.t()}
                                                                  (#591: a CTCP frame classified by
                                                                   Grappa.IRC.CTCP.verb_args/1 — a peer's
@@ -205,10 +217,11 @@ defmodule Grappa.Scrollback.Meta do
             | :notice_target
             | :statusmsg
             | :nick_fallback
+            | :link_failure
           ) => term()
         }
 
-  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix sender_kind ctcp_verb ctcp_args ctcp_target notice_target statusmsg nick_fallback]a
+  @known_keys ~w[target new_nick modes args numeric severity who who_target names names_target raw_verb raw_sender raw_params sender_user sender_host sender_prefix sender_kind ctcp_verb ctcp_args ctcp_target notice_target statusmsg nick_fallback link_failure]a
 
   @doc """
   The atom-key allowlist. Exposed so the test suite can assert that
@@ -240,7 +253,8 @@ defmodule Grappa.Scrollback.Meta do
           | :ctcp_target
           | :notice_target
           | :statusmsg
-          | :nick_fallback,
+          | :nick_fallback
+          | :link_failure,
           ...
         ]
   def known_keys, do: @known_keys

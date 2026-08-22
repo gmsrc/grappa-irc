@@ -222,6 +222,20 @@ defmodule Grappa.Visitors.SessionPlan do
       # the full struct so a delete-between-spawn-and-failure race
       # surfaces as `{:error, :not_found}` (handled inside
       # `mark_failed/2`) instead of stale-row write.
+      # #1675 — visitor half of the link reporter. IDENTICAL closure to the
+      # user side (`Networks.SessionPlan`), because the drift it fixes is
+      # subject-blind: a visitor credential goes through the same
+      # `Networks.connect/1` and carries a real `connection_state` since
+      # #211 ruling D, so a user-only reporter would leave half the column
+      # claiming a registration that never happened.
+      #
+      # Note this does NOT mirror `credential_failer` below, which is
+      # deliberately DIFFERENT per subject (the visitor terminal axis is
+      # the TTL/identity row, not the credential state). Non-terminal
+      # link state has no such split: the row is the row.
+      link_state_reporter: fn link_state ->
+        Networks.report_link_state({:visitor, visitor.id}, network.id, link_state)
+      end,
       credential_failer: fn reason ->
         case Visitors.mark_failed(visitor.id, reason) do
           :ok -> :ok
