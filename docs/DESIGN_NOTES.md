@@ -57754,3 +57754,94 @@ than its own overscroll — the binder claims LATE, on a touchmove, and a real
 device may have committed to a pan before that claim lands. Playwright's
 WebKit is not vjt's phone. The assertions here are DOM facts; the calibration
 is a device call, as it was for #213 and #1438.
+<!-- entry #1654 -->
+
+---
+
+## 2026-08-22 — #1654: a pin for cic's server floor, and the measured price of the gate it is not
+
+#1393d gave cic a floor for the SERVER it talks to
+(`MIN_SERVER_PROTOCOL_VERSION = 2`, `cicchetto/src/lib/serverProtocol.ts`)
+and shipped, knowingly, with nothing enforcing it. The obligation it
+carries is that narrowing any client guard to REQUIRE a field introduced
+by protocol version N obliges raising the floor to N in the same change.
+The module says so in prose beside the constant, and #1393d's own note
+concedes a sentence is not a gate.
+
+### What shipped here, and what it deliberately is not
+
+Two assertions in `test/grappa/protocol_test.exs`, next to #1379's
+`CLIENT_PROTOCOL_VERSION >= Protocol.min_version()` and reading cic's
+source the same way (`cicchetto/src` is mounted into the Elixir test
+container): the constant exists, and
+`MIN_SERVER_PROTOCOL_VERSION <= Protocol.version()`.
+
+That catches a floor raised ABOVE every server that can exist — a bundle
+that banners "server outdated" on a fully current deploy. It does **not**
+catch the defect the issue is about, which is forgetting to RAISE the
+floor: tighten a narrower onto a v5 field, leave the floor at 2, and
+`2 <= 5` still holds. The test is labelled as a half-measure in its own
+describe name so no later reader mistakes a green for coverage. The wire
+pin cannot host the real check either — `mix grappa.wire_pin`'s digest
+spans the SERVER's two generated artefacts, so a `wireNarrow.ts` edit
+moves nothing it covers.
+
+The oracle was proven by mutation, not by inspection: floor to 3 fails
+`left: 3 / right: 2`; renaming the constant fails BOTH tests with the
+named message rather than passing vacuously (Elixir's term order puts
+every atom above every integer, so a `nil` return would satisfy a `>=`
+comparison — the reason #1379's reader flunks, and the reason this one
+shares it rather than copying it).
+
+### The price of the real gate, measured
+
+A field to version-that-introduced-it ledger is the only thing that
+catches the forgotten raise. Counted by IMPORTING the generated runtime
+schema rather than grepping it (`cicchetto/src/lib/wireSchema.ts` is a
+deterministic projection of the `@type` declarations, so one slot there
+is one field a human would have to stamp):
+
+- **768 field slots** across **185** schema consts, **253** distinct
+  field names — every one of them unstamped today.
+- **169** `@type` declarations in the codegen's source set, spread over
+  **29** `lib/grappa/**/*wire.ex` modules plus three web modules
+  (`GrappaWeb.AuthJSON`, `GrappaWeb.MeJSON`, `GrappaWeb.ErrorTokens`) the
+  generated header names.
+- **0** per-field version stamps anywhere in `lib/` — a naked
+  case-insensitive grep for `@since|@wire_version|@introduced|@added_in|
+  @proto_version|@first_seen_in`, with planted positives proving the
+  pattern can match. The word `version` DOES occur 29 times in that
+  source set, so the zero is an absence of stamps, not of the search.
+
+Two findings widen the "where", and both were forced by a control that
+fired rather than by inspection. The census first claimed 185 consts
+against 169 `@type`s, which is impossible if the mapping is one-to-one:
+
+- **The stamp surface is not the wire modules.** The 16 extra consts are
+  types declared in DOMAIN modules and pulled in by reference from a wire
+  typespec — `Grappa.Admission.flow/0`, `Grappa.IRC.Identifier.casemapping/0`,
+  `Grappa.Networks.Credential.connection_state/0`,
+  `Grappa.Scrollback.Message.kind/0` and twelve more. A ledger stamped
+  only in `*wire.ex` would silently miss whatever they later grow.
+  (Cross-checked by generating the expected const name for all 169 from
+  the codegen's own rule — `S_` + `Module.split |> tl |> join` + camelize
+  — and diffing: 169 matched, 0 orphans, 16 external.)
+- **One type cannot be stamped at all.** `Grappa.Scrollback.Meta.t/0`
+  emits `{ r: "x" }` — a bare `map()`, `Record<string, unknown>`, the
+  escape hatch the codegen's own moduledoc warns defeats its purpose. Its
+  fields are declared nowhere, so no ledger can date them.
+
+**The choice is not made here.** Whether to build the ledger, adopt a
+review-time convention, or accept the half-measure is vjt's, and the
+numbers above are the input to it, not an argument for one arm.
+
+### Found in passing, not fixed
+
+Three comments in `lib/grappa/session/wire.ex` (around the
+`whois_bundle_payload` `source` field, the `window_invited` `inviter`
+field, and the `server_reply` source union) still state the pre-ruling
+rule — "additive, so no `protocol_version` bump is needed". vjt's ruling
+of 2026-08-21 reversed exactly that, and `Grappa.Protocol`'s moduledoc
+plus CLAUDE.md now say the opposite. These are module comments, not a
+chronological log, so a reader takes them as the current rule. Left for
+its own slice.
