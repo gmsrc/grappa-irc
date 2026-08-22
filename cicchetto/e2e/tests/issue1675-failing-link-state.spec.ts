@@ -103,11 +103,17 @@ const DEAD_PORT_B = 2;
 const LIVE_HOST = "bahamut-test2";
 const LIVE_PORT = 6667;
 
+// Deliberately NARROW — the wire carries more, and these tests read exactly
+// this. `connection` is the LIVE projection: null when there is no session or
+// no peer. `registered` is on that wire and is NOT declared here on purpose:
+// it is the #388 NickServ IDENTIFIED verdict, not an IRC-registration
+// witness, and leaving it out of the type keeps the next reader from
+// reaching for it the way this spec once did.
 type NetworkRow = {
   slug: string;
   connection_state: string;
   connection_state_reason: string | null;
-  connection: { registered: boolean } | null;
+  connection: { port: number } | null;
 };
 
 function userIdFromSubject(subjectJson: string): string {
@@ -261,8 +267,13 @@ test("#1675 — a network whose upstream refuses every connect reads `failing`, 
     expect(reason).not.toBe("");
     expect(reason).toMatch(/connection refused/i);
 
-    // Pre-state for the sibling test's recovery oracle: nothing registered.
-    expect(failing.connection?.registered ?? false).toBe(false);
+    // The pre-state that IS the issue: a row that names a state, with no
+    // live link behind it. `connection` is the live projection and it is
+    // null here — either the session is between rungs of the backoff
+    // ladder, or it is up with no peer; both answer `no_peer`/`no_session`.
+    // (NOT asserted via `connection.registered`: that field is the #388
+    // NickServ IDENTIFIED verdict, not an IRC-registration witness.)
+    expect(failing.connection).toBeNull();
 
     // …and now the half an API assertion cannot discharge. Log in and read
     // the row the way the operator does.
@@ -313,19 +324,39 @@ test("#1675 — a failing row returns to `connected` with the reason cleared onc
     );
     expect(failing.connection_state_reason ?? "").toMatch(/connection refused/i);
 
-    // `registered === true` is the load-bearing conjunct. `:connected`
-    // alone would be a vacuous oracle — `Networks.connect/1` writes it on
-    // spawn success — whereas the live `connection` projection only reports
-    // registered once 001 RPL_WELCOME landed, which is the event
-    // `mark_registered/1` hangs off.
+    // 🔴 THE ORACLE, and why it is not vacuous — this cost a full-suite run
+    // to get right, so the reasoning is written down rather than trusted.
+    //
+    // `connection_state === "connected"` on its OWN would be vacuous:
+    // `Networks.connect/1` writes exactly that on spawn success. But the
+    // poll above has ALREADY observed `failing`, and from `:failing` the
+    // only writer that reaches `connected` with a NULL reason is
+    // `Networks.mark_registered/1` — `connect/1` from `:failing` is a
+    // measured NO-OP (`when state in [:connected, :failing]` returns the
+    // credential untouched: no transition, no broadcast), and this test
+    // issues neither a park nor a connect PATCH. `mark_registered/1`'s only
+    // caller is the 001 RPL_WELCOME arm of `Session.Server`. So the
+    // SEQUENCE failing → connected+null IS the proof of registration; no
+    // single-state assertion could be.
+    //
+    // What is NOT the witness, measured the hard way: the live projection's
+    // `connection.registered`. Despite the name it is
+    // `IdentityState.identified?/1` — the #388 NickServ IDENTIFIED verdict,
+    // not "registered with the ircd". This credential is `auth_method:
+    // none` with no services account, so that field is `false` forever and
+    // asserting it hung this test for 180s against a link that had
+    // registered perfectly.
     const recovered = await waitForNetworkRow(
       admin.token,
       slug,
-      (r) => r.connection_state === "connected" && r.connection?.registered === true,
+      (r) => r.connection_state === "connected" && r.connection_state_reason === null,
       180_000,
-      "connected + registered",
+      "connected with the reason cleared",
     );
-    expect(recovered.connection_state_reason).toBeNull();
+
+    // …and it is the LIVE leaf it came back on, not merely a row that says
+    // connected: the ring rotated off the two dead endpoints onto this one.
+    expect(recovered.connection?.port).toBe(LIVE_PORT);
 
     // The failure also had to reach the `$server` window — the issue's last
     // line, and the durable half: a row survives the recovery that cleared

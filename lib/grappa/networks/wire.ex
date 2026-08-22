@@ -65,6 +65,17 @@ defmodule Grappa.Networks.Wire do
   no-ops without a DB write), so it outlives the link by however many
   restarts happened since. `nil` on a session whose state predates the
   field (#216 hot-reload contract): "unknown", never a fabricated instant.
+
+  ⚠️ `registered` does NOT mean "registered with the ircd" (001
+  RPL_WELCOME). It is `Grappa.Session.IdentityState.identified?/1` — the
+  #388 normalized NickServ IDENTIFIED verdict, which is what cic's
+  registration + recover launchers gate on. An `auth_method: :none`
+  credential is `false` here for its whole life while being perfectly
+  registered upstream. The name is kept (it is published wire, and the
+  contract is additive-only) but it is NOT an IRC-registration witness:
+  for that, read `connection_state` — since #1675 it means REGISTERED
+  UPSTREAM. Measured the hard way; the #1675 e2e asserted this field as a
+  001 witness and hung 180 s against a link that had registered fine.
   """
   @type connection_info :: %{
           server: String.t(),
