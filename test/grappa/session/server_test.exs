@@ -13195,8 +13195,10 @@ defmodule Grappa.Session.ServerTest do
   describe "unmodelled mailbox message (#1338 M-S2)" do
     test "an unrecognised message is logged and the session keeps serving" do
       # The server subscribes to `Topic.ws_presence/1` and
-      # `Topic.user_settings/1` — the settings bridge is a surface the
-      # #447 additive-only contract lets grow WITHOUT a version bump. Before
+      # `Topic.user_settings/1` — INTERNAL PubSub topics, not the
+      # client-facing wire, so no version governs their growth at all (this
+      # used to credit the #447 additive-only contract, which never reached
+      # this axis and whose no-bump half #1393d withdrew anyway). Before
       # #1338 a second tuple published by `Grappa.UserSettings` reached 40
       # clauses and no catch-all: FunctionClauseError, supervisor restart,
       # and the user's IRC connection dropped by an unrelated context.

@@ -3598,8 +3598,14 @@ defmodule Grappa.Session.Server do
 
   # #1338 M-S2 — unknown-is-never-fatal, verbatim from `IRC.Client`. This
   # process subscribes to `Topic.ws_presence/1` and `Topic.user_settings/1`,
-  # and the #447 additive-only contract lets a publisher add an event type at
-  # any time with no version bump and no compile error. Without this clause
+  # and a publisher can add an event type on either at any time with no
+  # compile error. This used to cite the #447 additive-only contract as the
+  # licence, which was a mis-citation in both directions: those are INTERNAL
+  # PubSub topics (`grappa:ws_presence:…`, `grappa:user_settings:…`), not the
+  # client-facing wire cic joins (`grappa:user:…`), so neither #447 nor the
+  # #1393d bump obligation that replaced its no-bump half on 2026-08-21
+  # reaches them. No version numbers this axis at all — which is precisely
+  # why the catch-all has to carry it. Without this clause
   # the first such addition takes down EVERY session of that subject with a
   # FunctionClauseError — dropping a live IRC connection over a change made
   # in an unrelated context. Loud, logged, and narrower than it looks: the
