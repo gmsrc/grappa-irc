@@ -115,6 +115,39 @@ defmodule Mix.Tasks.Grappa.AddServerTest do
     assert server.source_address == "203.0.113.9"
   end
 
+  # #1677 — the out-of-band door for the verification opt-out. Deliberately
+  # NOT port-sniffed like `--tls` is: no port number means "this leaf's
+  # certificate will not validate", so there is nothing honest to infer.
+  test "--no-tls-verify drops THIS server to unverified", %{network: network} do
+    capture_io(fn ->
+      AddServer.run([
+        "--network",
+        "azzurra",
+        "--server",
+        "efnet.deic.eu:6697",
+        "--no-tls-verify"
+      ])
+    end)
+
+    [server] = Servers.list_servers(network)
+    assert server.tls == true
+    assert server.tls_verify == false
+  end
+
+  test "the opt-out is NOT port-sniffed — an unflagged :6697 still verifies", %{
+    network: network
+  } do
+    capture_io(fn ->
+      AddServer.run(["--network", "azzurra", "--server", "irc.azzurra.chat:6697"])
+    end)
+
+    [server] = Servers.list_servers(network)
+    assert server.tls == true
+    # The half that breaks in silence: every existing operator invocation
+    # must keep producing a #89 row.
+    assert server.tls_verify == true
+  end
+
   # System.halt/1 (called by Output.halt_changeset on invalid changeset)
   # cannot be exercised in-process — it kills the BEAM unconditionally.
   # The source_address strict-literal validation is covered by

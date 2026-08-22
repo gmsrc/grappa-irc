@@ -1,5 +1,5 @@
 defmodule Mix.Tasks.Grappa.AddServer do
-  @shortdoc "Adds a server endpoint to a network: --network --server host:port [--tls|--no-tls] [--priority] [--source <ip>]"
+  @shortdoc "Adds a server endpoint to a network: --network --server host:port [--tls|--no-tls] [--no-tls-verify] [--priority] [--source <ip>]"
 
   @moduledoc """
   Appends an additional server to an existing network's fail-over
@@ -42,6 +42,28 @@ defmodule Mix.Tasks.Grappa.AddServer do
   spawn (root cause of the 9-day visitor-mint cold-start mystery).
   Port-sniff matches operator expectation: 6697 means TLS everywhere
   in the IRC world, anything else is plain unless flagged.
+
+  ## `--no-tls-verify` — the per-server opt-out (#1677)
+
+  Drops THIS server to `verify: :verify_none`. Defaults to verifying, is
+  never port-sniffed (no port number means "this leaf's certificate will
+  not validate"), and applies only when the server is TLS at all.
+
+  Use it for a network whose leaves can never present a validating chain —
+  measured: every EFNet leaf with an AAAA record is self-signed or expired,
+  and `irc.ircnet.com` serves the certificate of `ircnet.tngnet.nl`. For
+  those the alternative is `--no-tls`, i.e. CLEARTEXT, which leaks the whole
+  stream (SASL and NickServ traffic included) to anything on path; an
+  unverified TLS session at least defeats passive capture.
+
+  It is NOT the answer for a private network with its own CA — add that CA
+  to the host's system trust store instead. Every session on a server
+  carrying this flag logs a `Logger.warning` naming the posture at connect.
+
+      scripts/mix.sh grappa.add_server \\
+        --network efnet \\
+        --server efnet.deic.eu:6697 \\
+        --no-tls-verify
   """
   use Boundary,
     top_level?: true,
@@ -58,7 +80,14 @@ defmodule Mix.Tasks.Grappa.AddServer do
   alias Grappa.Networks.Servers
   alias Mix.Tasks.Grappa.{Boot, OptionParsing, Output}
 
-  @switches [network: :string, server: :string, tls: :boolean, priority: :integer, source: :string]
+  @switches [
+    network: :string,
+    server: :string,
+    tls: :boolean,
+    tls_verify: :boolean,
+    priority: :integer,
+    source: :string
+  ]
 
   @required [:network, :server]
 
@@ -80,6 +109,11 @@ defmodule Mix.Tasks.Grappa.AddServer do
       host: host,
       port: port,
       tls: Keyword.get(opts, :tls, port == @tls_port),
+      # #1677 — NOT port-sniffed, unlike `--tls` above. There is no port that
+      # means "this leaf's certificate will not validate", so there is nothing
+      # honest to infer: the strict #89 posture is the default and the opt-out
+      # must be typed.
+      tls_verify: Keyword.get(opts, :tls_verify, true),
       priority: Keyword.get(opts, :priority, 0),
       source_address: Keyword.get(opts, :source)
     }
