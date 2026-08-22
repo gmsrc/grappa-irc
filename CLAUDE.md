@@ -925,13 +925,38 @@ is due. Don't just look at todo.md.
   CA trust store** (`:public_key.cacerts_get/0`), with `depth: 3`, SNI,
   and RFC-6125 hostname checking (`customize_hostname_check` +
   `pkix_verify_hostname_match_fun(:https)`). Single source of truth:
-  `Grappa.IRC.Client.tls_connect_opts/1`. grappa ships no cacertfile and
+  `Grappa.IRC.Client.tls_connect_opts/2`. grappa ships no cacertfile and
   pins no cert — the anchor set IS the host OS CA bundle (FreeBSD
   `/etc/ssl/cert.pem` via `ca_root_nss`, Linux `ca-certificates`, macOS
   keychain); operators keep it current the OS way. A private/self-signed
   upstream must have its CA added to the system store, NOT verify_peer
   weakened. Operator strategy: `Client` moduledoc "TLS posture" +
   `docs/OPERATIONS.md`.
+  **The ONE exception is per-server and defaults off: `network_servers.tls_verify`
+  (#1677).** When false, THAT server drops to `verify: :verify_none` and the
+  three opts that are inert without `verify_peer` (`cacerts` / `depth` /
+  `customize_hostname_check`) are OMITTED rather than passed and ignored;
+  SNI stays, because it selects which certificate is served rather than
+  checking it. The column is `NOT NULL DEFAULT 1` and the `Client` opts key
+  defaults to `true`, so #89 is unweakened everywhere it holds today —
+  Azzurra, Libera and OFTC keep validating, and a row or plan that never
+  names the field keeps verifying. **It is NOT a global switch and must not
+  become one**: the failure is per-network, and a single knob would silently
+  disarm the networks that verify fine. **The argument is not "verification
+  is optional" — it is that the workaround it replaces was `tls: false`,
+  i.e. CLEARTEXT IRC, which is strictly worse:** cleartext leaks the whole
+  stream (SASL and NickServ traffic included) to anything on path, while
+  unverified TLS still defeats passive capture. Measured on prod: every
+  EFNet leaf with an AAAA record is self-signed or expired, and
+  `irc.ircnet.com` serves the certificate of `ircnet.tngnet.nl`, so the
+  RFC-6125 check cannot pass from any reachable leaf. Every unverified
+  session emits a `Logger.warning` naming the posture at connect (the
+  strict one is an `info`, deliberately below the default bar) — **an
+  unverified link must never be silent**, or the cure has bought a hole
+  nobody can see. Settable OUT-OF-BAND only (`mix grappa.add_server
+  --no-tls-verify`); the admin REST write whitelist deliberately does not
+  carry it, and the admin payload projects it READ-ONLY so an operator can
+  see which servers run unverified.
 - **Sobelow is a CI gate** — Medium-or-above findings fail the build.
   Every Phoenix app gets it.
 - **`mix deps.audit` is the hard CI gate.** CVE-flagged deps fail the

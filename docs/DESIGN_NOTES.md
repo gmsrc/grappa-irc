@@ -58380,3 +58380,124 @@ quietly assumed.
 `aggregate_mentions/6` also does not exclude OWN-sent rows, unlike both badge
 doors: your own line quoting your own nick appears in the away bundle. Real,
 a different axis, left alone.
+<!-- entry #1677 -->
+
+---
+
+## 2026-08-22 — #1677: a per-server TLS verify opt-out, because cleartext was worse
+
+#89 made `verify: :verify_peer` unconditional and that is still right. But
+some networks cannot present a validating chain from ANY reachable leaf, and
+the only knob adjacent to verification was `tls: boolean` — all-or-nothing
+between validated TLS and no TLS. Measured on prod while wiring EFNet /
+IRCnet: 15 EFNet leaves probed, every one with an AAAA record is self-signed
+(`irc.swepipe.se`, `irc.underworld.no`, `irc.choopa.net`) or expired
+(`efnet.deic.eu`), and the rest time out on 6697; `irc.ircnet.com` serves the
+certificate of `ircnet.tngnet.nl`, so the RFC-6125 check fails by
+construction on any round-robin entry point.
+
+So those networks were stored with `tls: false` and spoke CLEARTEXT IRC.
+
+### The argument, and it is not "verification is optional"
+
+Cleartext hands the whole stream to anything on path — SASL and NickServ
+traffic included. Unverified TLS still defeats passive capture. The case
+being moved was already at the FLOOR; this raises it one step and lowers
+nothing, because the default is strict in both places that can express one
+(`network_servers.tls_verify NOT NULL DEFAULT 1`, and the `Client` opts key).
+Azzurra, Libera and OFTC keep validating, and a row or plan that never names
+the field keeps verifying. What is lost is stated rather than hedged: an
+active on-path attacker presenting any certificate is accepted, so the answer
+whenever a CA exists is still to install it in the system trust store.
+
+Deliberately NOT a global switch — the failure is per-network, and one knob
+would silently disarm the networks that verify fine.
+
+### Three states, not two booleans
+
+`(tls, tls_verify)` collapses ONCE into `Client.transport_posture/1` →
+`:plain | :tls_verified | :tls_unverified`, which then replaces the former
+`tls :: boolean` through the whole rotation chain (`do_connect` →
+`connect_with_rotation` → `connect_rotating` → `transport_connect`). No
+function in that chain gained a parameter.
+
+Two booleans travelling side by side through five functions can be swapped at
+a call site and still compile, and one of their four combinations
+(`tls: false, tls_verify: false`) has no meaning at all. The atom makes that
+state unrepresentable below the derivation, and — the reason it is worth a
+type rather than a tuple — it is the same value the log line names, so what
+the operator reads cannot be a second, independently-derived answer.
+
+### With `verify_none` the inert opts are OMITTED, not passed
+
+`cacerts` / `depth` / `customize_hostname_check` do nothing without
+`verify_peer`; leaving them in the list would invite a later reader to
+believe some checking survives. `cacerts_get/0` is also not CALLED on that
+path — it raises on a box with no CA bundle, and crashing a session that was
+never going to consult the store would be a failure invented by this
+function. SNI stays: it selects WHICH certificate is served, it does not
+check it, and dropping it would change the cert we get rather than how hard
+we look at it.
+
+### The log asymmetry is the operational half
+
+Unverified is a `Logger.warning`, above the default bar; verified is an
+`info`, below it. The unusual posture is the one that must reach an operator
+who is not looking for it, while the ordinary one must not spam a line per
+session per reconnect (the review record already carries that complaint about
+this exact call site, B5-LOW-6). A quiet downgrade would be worse than the
+cleartext it replaces, because `tls: false` at least announces itself in the
+config. The `info` arm needs the global Logger level lowered to observe, so
+it lives in its own `async: false` file — the repo's existing answer to that
+problem (`client_outbound_cost_test.exs` exists for the same reason, and says
+so).
+
+### The migration is a plain ADD COLUMN — the proposed recreate would have DROPPED DATA
+
+The issue proposed following the SQLite `CHECK`-recreate pattern from
+`20260504020002_*`. Measured, that is wrong twice over.
+
+Wrong in principle: the dance exists because SQLite rejects `ALTER TABLE ADD
+CONSTRAINT`. `ADD COLUMN` is supported natively, `NOT NULL` with a constant
+default is exactly the accepted shape, and a boolean has no closed-set enum
+to mirror back as a CHECK — so the dance buys nothing. The precedent in this
+very table agrees: `source_address` went in with a three-line `alter table`
+(#266, `20260603174206`).
+
+Wrong in fact: that migration recreated `network_servers` ONLY to refresh its
+FK ref text — its own moduledoc says "We add no CHECK to it" — so its
+`CREATE TABLE` is frozen at the 2026-05-04 column set, a month before
+`source_address` existed. Its `INSERT INTO ... SELECT` names nine columns and
+`source_address` is not among them. Copying that shape today would silently
+discard every per-network outbound bind. It is precisely the frozen-snippet
+hazard the `messages` section of that same file warns about.
+
+### An admin-only field still bumps `protocol_version` (2 → 3)
+
+`tls_verify` lands in `Networks.Servers.AdminWire.t`, which the codegen
+covers, so `wireTypes.ts` and `wireSchema.ts` both move and the pin digest
+with them. No cic surface reads the field. It bumps anyway: the digest spans
+the whole generated schema exactly so nobody has to adjudicate which
+additions "count", and `WirePin`'s moduledoc names that as the accepted
+recurring price rather than a defect. `min_version/0` does not follow — no
+client is stranded.
+
+### What this slice deliberately did NOT decide
+
+Whether the admin API should be able to SET the posture. The issue flags it
+as not measured, and the controller's param whitelist is exactly where that
+decision would be made — so the whitelist is untouched and a `tls_verify` key
+in the body is a 400. The payload projects the field READ-ONLY, which is the
+other half of making an unverified link legible without deciding the write
+question.
+
+That 400 is pinned by a test, and the test IS the guard: adding the field to
+the whitelist turns it red, so the decision has to be taken deliberately
+rather than arriving as a side effect of someone extending a list.
+
+Consequence, named rather than left to be discovered: there is no out-of-band
+door to flip an EXISTING row. `update_server/2` is only reachable from that
+controller, so today an operator removes and re-adds the server
+(`grappa.remove_server` + `grappa.add_server --no-tls-verify`). Fine for the
+handful of rows this exists for; if it stops being fine, the answer is the
+deferred decision above and not a second write path.

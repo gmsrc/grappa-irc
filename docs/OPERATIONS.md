@@ -220,7 +220,7 @@ var). Model:
 TLS server entries (`--tls`, typically port 6697) connect with
 `verify: :verify_peer` — the upstream cert chain is validated against
 this host's **system CA trust store**, with SNI + RFC-6125 hostname
-matching (`Grappa.IRC.Client.tls_connect_opts/1`). grappa ships no
+matching (`Grappa.IRC.Client.tls_connect_opts/2`). grappa ships no
 cacertfile and pins no cert; the anchor set IS the OS CA bundle.
 
 Operational facts that bite:
@@ -235,8 +235,42 @@ Operational facts that bite:
 - **A private / self-signed upstream will NOT connect.** The handshake
   fails at cert validation and the session enters the connect-fail
   throttle. The fix is to add that network's CA to the **system** trust
-  store (the standard OS mechanism) — grappa is never weakened to a
-  per-network `verify_none`.
+  store (the standard OS mechanism). That remains the answer whenever a
+  CA exists — `--no-tls-verify` below is for the networks where none does.
+
+#### `--no-tls-verify` — the per-server opt-out (#1677)
+
+Some networks cannot present a validating chain from ANY reachable leaf,
+and for those the only prior option was `--no-tls`, i.e. cleartext.
+Measured on prod: every EFNet leaf with an AAAA record is self-signed
+(`irc.swepipe.se`, `irc.underworld.no`, `irc.choopa.net`) or expired
+(`efnet.deic.eu`), the rest time out on 6697; and `irc.ircnet.com`
+serves the certificate of `ircnet.tngnet.nl`, so RFC-6125 cannot pass.
+
+```sh
+scripts/mix.sh grappa.add_server \
+  --network efnet --server efnet.deic.eu:6697 --no-tls-verify
+```
+
+- **Cleartext is WORSE, and that is the whole argument.** `--no-tls`
+  hands the entire stream — SASL and NickServ traffic included — to
+  anything on path. Unverified TLS still defeats passive capture. This
+  moves a case that was already at the floor one step up.
+- **What you lose is real**: an active on-path attacker presenting any
+  certificate is accepted. Use it only where no CA exists to install.
+- **Per-server, never global.** The column is
+  `network_servers.tls_verify`, `NOT NULL DEFAULT 1`. Azzurra, Libera and
+  OFTC keep validating; a row that predates the flag keeps verifying.
+- **Every such session logs a warning at connect** naming the posture
+  (`TLS posture: verify_none — ... tls_verify=false`). It clears the
+  default log level on purpose. `grep 'TLS posture: verify_none'` over
+  `scripts/monitor.sh` output is the audit.
+- **Out-of-band only.** The admin REST surface does NOT accept the field
+  on write (a `tls_verify` key in the body is a 400); it only SHOWS it in
+  the server payload. To flip an EXISTING row today, remove and re-add it
+  (`grappa.remove_server` then `grappa.add_server --no-tls-verify`) —
+  whether the admin API should gain a write control is deliberately
+  undecided (issue #1677 "Not measured").
 - **Hostname mismatch is fatal too.** The cert's SAN (or CN) must cover
   the host in the `network_servers` row. For a round-robin upstream
   (e.g. `irc.azzurra.chat`), EVERY pool member's cert must carry the
@@ -4052,7 +4086,7 @@ Two more notes on these installers:
   via `sudo -u grappa`, so without it they all fail with "sudo: command
   not found".
 - **`ca-certificates` is the ENTIRE Linux upstream-TLS trust story** —
-  `Grappa.IRC.Client.tls_connect_opts/1` reads the OS store via
+  `Grappa.IRC.Client.tls_connect_opts/2` reads the OS store via
   `:public_key.cacerts_get/0`, and there is no FreeBSD-style extra step
   (see § "Upstream TLS trust store (`--tls`, #89)" and CLAUDE.md's
   security section for the per-OS anchor sets). It is load-bearing, not
