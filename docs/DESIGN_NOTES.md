@@ -57427,3 +57427,149 @@ authoritative backup and it cannot collide with itself; and
 `git status --porcelain` after each restore names any file the mutant
 never touched, which is the cheap check that would have caught this on
 the first round instead of the second.
+<!-- entry #1657b -->
+
+---
+
+## 2026-08-22 — #1657b: the instrument that over-reported, and which wait actually ends a contended write
+
+#1657 landed the night before and this is a review of it, not of a diff.
+Two of the three findings below are corrections to that landed work, and
+one of them is a defect it introduced the coverage for.
+
+### The census over-reported, and that is worse than the floor it fixed
+
+#1657's whole argument was that `scrollback row dropped` had been a
+count taken from two of five doors, so "ten rows lost" was a FLOOR by
+construction. It moved the line to the one door every persist passes
+through. It did not check the opposite direction.
+
+`Scrollback.persist_row/1` ran TWO retry-wrapped ops: the insert, then
+`Repo.preload(message, :network)`. A failure of the SECOND returned the
+same `:persist_unavailable` as a row that never landed, so `Persistor`
+logged the drop for a row sitting durably in the table. The code knew —
+the comment read *"the row IS durably written [...] the live broadcast
+is what's lost"* — and returned the drop atom anyway.
+
+**So the corrected reading of #1657's own note is that the count was
+neither a floor nor a ceiling.** A floor is still a usable number; a
+figure that can err in EITHER direction, with nothing on the line saying
+which arm produced it, is not. An instrument that lies in our favour
+("we lost more than we did") is exactly as dangerous as one that lies
+against us, and this is the same class #1657 spent its night removing.
+
+### Cured at the root: the write path had a round-trip it did not need
+
+The preload existed to fetch ONE value for the wire payload — the
+network slug. The only production caller already holds it:
+`Session.Persistor` uses `ctx.network_slug` on the adjacent line to
+build the broadcast topic. So the hot write path was spending a second
+pool checkout, with its own DBConnection deadline, on the path that
+loses rows under saturation, to re-derive a value in the caller's hand.
+
+`Wire.to_json/2` and `message_payload/2` now take the slug;
+`to_json/1` remains as the READ-path entrance, deriving it from the
+assoc a fetch already preloaded, and delegating to the same body. Which
+door a caller uses follows from what it holds: a render function handed
+nothing but rows has no slug, a broadcast always does. There is
+deliberately no `message_payload/1`.
+
+Two consequences beyond the honesty fix: one pool checkout per persisted
+row instead of two, and `:persist_unavailable` at that door now has
+exactly one meaning. Pinned in both directions by
+`Grappa.Session.PersistorTest` — a durable row must produce no census
+line, a lost row must produce one — because the lazy way to green the
+first is to delete the line. Oracle proven by mutation: restoring the
+preload turns the first test red and nothing else.
+
+Declined as too wide for this branch: the four READ-path
+`preload(:network)` sites (`scrollback.ex` 435/513/868/876). Same
+"derive what you already have" shape, different callers, and they are
+separate queries rather than a second op behind a committed row.
+
+### Which wait ends a contended write — the prediction was refuted
+
+The analysis that opened this branch predicted that DBConnection's
+checkout deadline (15_000ms, Ecto's default, overridden nowhere) always
+cuts a lock wait before `busy_timeout` (30_000ms) can expire, and that
+the caller therefore sees `:interrupted`. Half right, and the wrong half
+is the useful one.
+
+`Grappa.Repo.CheckoutDeadlineReachTest` varies ONE thing — which of the
+two numbers is smaller — against a real held write lock, ratio preserved
+and magnitudes scaled (300 : 600), classified by production's own
+`BusyRetry.classify/1`. The pool DOES cut the wait: it logs the checkout
+timeout and disconnects the holder. But the class is `:busy_locked` in
+BOTH orderings, 12/12 samples each. exqlite installs a custom busy
+handler that polls `conn->cancelled` and **returns 0** on cancellation
+(`c_src/sqlite3_nif.c`), and a busy handler returning 0 makes SQLite
+give up with SQLITE_BUSY rather than SQLITE_INTERRUPT.
+
+**A write cancelled while WAITING for the lock is indistinguishable, by
+fault kind, from one that exhausted `busy_timeout`. Only the clock
+separates them.** `observed_state(:busy_locked)` — "SQLite write lock
+held by another writer" — stays honest under both, so no census phrase
+moved and `scripts/log-gap-scan.awk` is untouched.
+
+This re-prices #1421's option table. Its lock row reads *"up to
+`busy_timeout` = 30_000ms"*; the real latency is
+`min(busy_timeout, checkout deadline)`, i.e. 15_000 in production, so
+the ratio against the 1_500 budget is 10 and not 20. #1421's CONCLUSION
+is unchanged — the loop still collapses to one attempt — but three of
+its four priced options are argued against a number that never governs a
+lock-contended write. Reported up rather than edited there: #1421 is not
+this branch's to cure.
+
+It also names the discriminator. `:interrupted` is not the lock-wait
+verdict at all — it is what a cancellation yields when the statement is
+EXECUTING rather than queued behind the lock. That is exactly why
+#1657's `Bootstrap` casualty was an interrupt on a READ
+(`Visitors.list_active/0`): a read never enters the busy handler.
+
+### 🔴 A gap found by that measurement, named and not fixed
+
+The executing-statement case is BIMODAL. Over 63 samples across two
+statement shapes, a cancelled statement raised
+`%Exqlite.Error{message: "interrupted"}` ~57% of the time and
+`%Exqlite.Error{message: "out of memory"}` ~43% — and `classify/1` calls
+the latter `:permanent`, so `BusyRetry` RE-RAISES it. That is precisely
+the failure mode #1657 exists to remove (a 500 instead of a 503, a crash
+where nothing wraps it, a "non-transient DB error" in the log), still
+live for roughly half of its own cases, and wearing a message that tells
+the operator they ran out of memory.
+
+Not a harness artifact: the control is a streaming cross join whose
+memory is O(1) by construction, and it splits the same way a recursive
+CTE did.
+
+Not fixed here, and not asserted in the test either. The split is
+roughly even so pinning it would be flaky, and asserting that
+`:permanent` is an acceptable outcome would be asserting a bug. Widening
+the transient set to cover `"out of memory"` carries a real cost — a
+genuine SQLITE_NOMEM would then be retried and degraded to a 503 instead
+of surfacing loudly — so it is a policy call that goes up with its
+numbers, the same treatment `pool_size` got.
+
+### What is NOT claimed
+
+- **No production substrate was measured.** Both new benches run on
+  private temp repos. The prevention axis is untouched: a contended
+  insert still drops its row. What this branch removed is a loss
+  CHANNEL (a durable row whose broadcast died) and a hot-path round-trip.
+- **The C-level cause of the `"out of memory"` reading is not
+  established.** The likely mechanism is `sqlite3_errmsg` read against a
+  handle the concurrent disconnect is already tearing down, but that was
+  not confirmed in the C source, and the reading has never been seen
+  outside that test file.
+- **The #1420 contradiction is NOT resolved.** That census measured gaps
+  of exactly 30.1s (`lock_watch.ex:19-21`) — `busy_timeout` expiring in
+  full, which needs a deadline that did not fire. The mechanism
+  established here says that cannot happen while a 15_000 deadline is in
+  play, so the two readings still disagree. The disagreement is sharper,
+  not closed: it now points at WHICH POOL was in that window, since the
+  SQL Sandbox runs `DBConnection.Ownership` rather than
+  `ConnectionPool`, and #1421 records that both its windows are CI and
+  neither is m42. Left open, written as open.
+- **The 1.3.0 herd's attribution stays closed as non-establishable**
+  (#1657): the 42 stack-carrying deadline lines were overwritten by
+  `run_erl` rotation. Nothing here reopens it.
