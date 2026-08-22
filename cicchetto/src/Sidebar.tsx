@@ -88,6 +88,12 @@ import WindowBadges from "./WindowBadges";
 //   per-window `:parked` events from `Session.Server.terminate/2`; cic
 //   derives the cascade from the network-level state.
 
+// #1675 — `failing` is deliberately NOT in this set. Greyed means "no
+// live session; the way back is a reconnect action", and a failing
+// network HAS one, retrying on its own — greying it would disable the
+// compose box on every network that blinks. The state is still visible:
+// HomePane routes anything that is not `connected` to the disconnected
+// row, which renders the word AND `connection_state_reason`.
 const NETWORK_GREYED_STATES = new Set(["parked", "failed"]);
 
 // #96 — a row's state, spoken. Every non-live sidebar row is rendered muted +

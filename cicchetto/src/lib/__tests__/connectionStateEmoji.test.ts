@@ -5,8 +5,8 @@ import { connectionStateEmoji } from "../connectionStateEmoji";
 // ADMIN-LAYOUT-FIX (2026-07-12) — pure table test for the DB-canonical
 // `connection_state` → glyph map rendered in AdminVisitorsTab. Mirrors
 // the timeFormat.ts (#217) closed-set→value pattern: the closed set is
-// `Grappa.Networks.Credential.connection_state()` = :connected | :parked
-// | :failed (credential.ex:86), encoded over JSON as the string
+// `Grappa.Networks.Credential.connection_state()` = :connected |
+// :failing | :parked | :failed, encoded over JSON as the string
 // discriminator, plus a defensive `null`/unrecognised → ⚪ fallback (the
 // wire field is non-nullable per api.ts, so the null arm is belt-and-
 // braces, not a live signal). Every real state + the fallback maps to a
@@ -20,6 +20,10 @@ import { connectionStateEmoji } from "../connectionStateEmoji";
 // to the ⚪ fallback.
 const STATES: ReadonlyArray<[ConnectionState, string]> = [
   ["connected", "connected"],
+  // #1675 — the fourth value. `failing` and `failed` are different
+  // facts (retrying vs terminal) and the "DISTINCT glyph" case below is
+  // what keeps them from rendering as the same picture.
+  ["failing", "failing"],
   ["parked", "parked"],
   ["failed", "failed"],
 ];

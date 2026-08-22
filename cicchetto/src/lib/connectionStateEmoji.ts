@@ -8,13 +8,16 @@ import type { ConnectionState } from "./api";
 // ## The closed set is the server's, not ours
 //
 // The states are `Grappa.Networks.Credential.connection_state()` =
-// `:connected | :parked | :failed` (credential.ex:86), encoded over JSON
-// as the string discriminator and typed in api.ts as `ConnectionState`.
-// There is NO `:disconnected` / `:connecting` / `:reconnecting` at the DB
-// level — those transient runtime sub-states live in Session.Server
-// GenServer state and never reach this wire field (credential.ex:72-79).
-// So the map keys are EXACTLY the three real values; anything else
-// degrades to the neutral ⚪ fallback — visibly, never a throw. Note
+// `:connected | :failing | :parked | :failed`, encoded over JSON as the
+// string discriminator and typed in api.ts as `ConnectionState` (a
+// re-export of the GENERATED union, so the server's set is the only
+// source and this map is exhaustive by tsc rather than by vigilance).
+// There is still NO `:disconnected` / `:connecting` at the DB level —
+// those transient runtime sub-states live in Session.Server GenServer
+// state and reach cic as the #100 `connection_progress` overlay, never
+// as this wire field. So the map keys are EXACTLY the four real values;
+// anything else degrades to the neutral ⚪ fallback — visibly, never a
+// throw. Note
 // `AdminVisitorNetwork.connection_state` is NON-nullable (api.ts), so the
 // `null` arm below is defensive only; the U-0 honesty signal is carried by
 // `net.live_state` (nullable), a SEPARATE field the LiveBadge renders.
@@ -39,11 +42,17 @@ export type ConnectionStateGlyph = {
   label: string;
 };
 
-// 🟢 connected — live binding (or continuous reconnect/backoff).
+// 🟢 connected — registered upstream (001 RPL_WELCOME seen).
+// ⚠️  failing   — #1675: the session is alive and retrying, but the link
+//                is NOT registered (refused / timed out / TLS unusable).
+//                Distinct from 🔴: this one is coming back on its own if
+//                the upstream lets it, and the row carries the cause in
+//                `connection_state_reason`.
 // ⏸️  parked    — user-driven /disconnect or /quit; paused, not an error.
 // 🔴 failed     — server-set permanent error (k-line 465 / SASL 904/906).
 const GLYPHS: Record<ConnectionState, ConnectionStateGlyph> = {
   connected: { glyph: "🟢", label: "connected" },
+  failing: { glyph: "⚠️", label: "failing" },
   parked: { glyph: "⏸️", label: "parked" },
   failed: { glyph: "🔴", label: "failed" },
 };

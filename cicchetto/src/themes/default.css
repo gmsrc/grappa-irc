@@ -12151,7 +12151,16 @@ button.home-pane-network-title:hover .home-pane-network-slug {
   color: #d04040;
 }
 
+/* #1675 — `failing` is an outage in progress: amber, not the terminal
+   red of `failed` and not the muted grey of a deliberate park. The row
+   below it carries `connection_state_reason`, which is the actual
+   diagnosis and the half the operator had no way to see. */
+.home-pane-network-row-failing .home-pane-network-state {
+  color: #d08a20;
+}
+
 .home-pane-network-row-parked .home-pane-network-title-static,
+.home-pane-network-row-failing .home-pane-network-title-static,
 .home-pane-network-row-failed .home-pane-network-title-static {
   opacity: 0.85;
 }

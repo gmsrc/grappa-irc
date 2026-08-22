@@ -437,6 +437,11 @@ const DisconnectedRow: Component<{ row: HomeRow }> = (props) => {
       classList={{
         "home-pane-network-row-parked": props.row.connection_state === "parked",
         "home-pane-network-row-failed": props.row.connection_state === "failed",
+        // #1675 — a `failing` network lands on this row by the same rule
+        // as the other two (anything that is not `connected`), so the
+        // state word and the reason render with no change; the modifier
+        // exists so it does not wear the styling of a state it is not.
+        "home-pane-network-row-failing": props.row.connection_state === "failing",
       }}
     >
       {/* #529 — same heading/separator shape as ConnectedRow: a horizontal

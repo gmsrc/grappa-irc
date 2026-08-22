@@ -110,6 +110,12 @@ export type Props = {
 // it is not on screen while composing normally.
 const COUNTDOWN_FROM = 10;
 
+// #1675 — `failing` is deliberately NOT in this set. Greyed means "no
+// live session; the way back is a reconnect action", and a failing
+// network HAS one, retrying on its own — greying it would disable the
+// compose box on every network that blinks. The state is still visible:
+// HomePane routes anything that is not `connected` to the disconnected
+// row, which renders the word AND `connection_state_reason`.
 const NETWORK_GREYED_STATES = new Set(["parked", "failed"]);
 
 // #356 — how long a green success/notice stays up before self-clearing.

@@ -24,6 +24,13 @@ import type { Tone } from "./AdminBadge";
 // danger.
 const BY_LABEL: Record<string, Tone> = {
   connected: "ok",
+  // #1675 — `failing` is danger and not warn, on the same
+  // meaning-not-severity reading: it is a genuine outage the operator
+  // may have to fix (a wrong endpoint, an unverifiable certificate),
+  // whereas `parked` is somebody choosing to pause. That the bouncer
+  // keeps retrying does not make it less broken, and pairing it with
+  // the deliberate pause would say it is.
+  failing: "danger",
   parked: "warn",
   failed: "danger",
   unknown: "neutral",
