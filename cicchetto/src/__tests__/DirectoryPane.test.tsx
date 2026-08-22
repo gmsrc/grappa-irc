@@ -1036,6 +1036,14 @@ describe("DirectoryPane", () => {
       expect(triggerRefreshMock).toHaveBeenCalledWith(SLUG);
       expect(trackIn(container).style.transform).toBe("");
       expect(slotIn(container).style.opacity).toBe("");
+      // The third reading, and a MUTANT found the hole it fills: paint the
+      // travel onto the slot instead of the track — the pre-point-3 defect,
+      // exactly — and the two assertions above stay GREEN, because the track
+      // is trivially unpainted and the ramp is still cleared. This one is the
+      // one that sees it. The pane must write no transform to this element at
+      // any point, so "" here is the same statement at rest and after a
+      // commit.
+      expect(slotIn(container).style.transform).toBe("");
     });
 
     it("a drag that starts scrolled away from the top is left to native scroll", () => {
