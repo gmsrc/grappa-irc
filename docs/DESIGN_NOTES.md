@@ -58804,3 +58804,154 @@ is the selected channel and is NOT gated on `isDocumentVisible()`, because
 gating on tab visibility makes every alt-tab cost a refetch round. Questions 2
 and 3 (what else goes stale while paused; resume ordering against a JOIN
 landing mid-refetch) are narrowed by the carve-outs above rather than closed.
+<!-- entry #1675 -->
+
+---
+
+## 2026-08-22 — #1675: a fourth connection_state, because `connected` was reporting the spawn
+
+Three networks added on prod on 2026-08-22 (ircnet / efnet / undernet) read
+`connected` in cicchetto while none of them ever completed registration. The
+endpoints were misconfigured, which is a separate matter; the defect is that
+`network_credentials.connection_state` records that a session process was
+STARTED, not that IRC came up. `Networks.connect/1` writes `:connected` on
+spawn success — the U-0 ordering that correctly refuses to claim success when
+the SPAWN is rejected (#642) — and nothing ever walked the row back when the
+upstream TCP/TLS/registration then failed. The reconnect backoff keeps a
+session process alive, so the row stayed `:connected` indefinitely and the
+operator had no way to tell it from a healthy link.
+
+**`:failing` is a fourth value and not a reuse of `:failed`, and the
+constraint was measured rather than assumed.** `Networks.mark_failed/2`
+calls `Session.stop_session/2` BEFORE `transition!/3`, and the child is
+`:transient`, so nothing comes back on its own: a `:failed → :connected`
+edge on `RPL_WELCOME` can never fire, because there is no process left to
+receive the 001. `mark_failed/2` is the terminal verb (k-line, permanent
+SASL rejection) and stays exactly as it is. `:failing` means the opposite —
+the session process is alive and the backoff ladder is running — and that
+difference is load-bearing at boot (below), which is why it is a value and
+not a reason string on `:failed`.
+
+**One value, not a taxonomy.** `:tls_error` / `:rejected` / `:timeout` as
+enum members would have to grow on every new cause. The human-readable half
+already had a home: `connection_state_reason` is a column cic already
+renders (`HomePane.tsx`, `ServerInfoCard.tsx`) behind a `Show when=…`, and
+it read empty **by construction** — `Networks.connect/1` does
+`transition!(cred, :connected, nil)`, so the reason was nulled at connect and
+never rewritten. The missing piece was the writer, not the place to put it.
+The reason therefore carries the ACTUAL cause and not a category label:
+`Grappa.IRC.Client.describe_connect_failure/1` spells the POSIX set an
+operator actually hits and keeps the OTP alert description verbatim, because
+on the ircnet failure that description is where BOTH hostnames of the
+RFC-6125 mismatch live — the alert atom alone would say `handshake_failure`
+and name neither host.
+
+**The trigger is `{:irc_connect_failed, _}`, deliberately not
+`terminate/2`.** Every abnormal teardown lands in `terminate/2`, including
+the mid-session netsplit that reconnects on the first retry; marking THAT
+`:failing` would churn the row on every blip. A failed connect ATTEMPT is
+the honest evidence that the link is not coming up right now.
+
+**Idempotent on `:failing`, and the FIRST cause is kept.** Re-entering
+backoff happens once per attempt on an exponential ladder; a row write plus a
+broadcast per attempt is churn the operator learns nothing from. The first
+cause is also the one closest to the misconfiguration — EFNet rotated one bad
+certificate into four subsequent timeouts, and the certificate is the
+diagnosis. The per-attempt detail is not lost: it lands in the `$server`
+window and the session log. **Those two granularities differ on purpose.**
+The state write is idempotent; the `$server` row is one per ATTEMPT, because
+it is a LOG and a log that collapses repetitions hides the ladder.
+
+**Boot resumes `:failing` and still skips `:failed`.**
+`Credentials.list_credentials_for_all_users/0` selected
+`connection_state == :connected`; the doc above it explains that `:parked` is
+user intent and `:failed` is server-set and deliberately not retried. That
+reasoning holds for `:failed` and is wrong for `:failing` — a reboot landing
+inside a backoff window would otherwise drop the network permanently. This is
+the reason the two are separate values rather than one `:failed` plus a
+reason grep.
+
+**`:connected` has changed meaning: it is now "registered upstream", not
+"a session process is alive".** CLAUDE.md's "DB state and live state" bullet
+named the closed set `[:connected, :parked, :failed]` and that line is now
+false in both halves; it is updated in the same change. Every reader that
+treats `:connected` as liveness is reading a different fact than the one the
+column now records.
+
+**Subject-polymorphic, because the drift is not user-specific.**
+`report_link_state/3` takes a `Session.subject()` — the write set of
+`connection_state` has no subject branch, a visitor credential goes through
+the same `Networks.connect/1`, and the visitor row has carried a real
+`connection_state` since the #211 ruling D. **Named and NOT cured here:** the
+visitor attach path (`Visitors.attach_credential/2`) writes `:connected`
+BEFORE the spawn, which is the #642 class over again on the other subject.
+It is a separate defect with a separate fix and gets its own issue rather
+than riding in on this one.
+
+**Named gap, deliberately left open: there is no registration watchdog.** A
+socket that CONNECTS and then never registers — blocked rDNS, an ident
+timeout, a services hang — emits no `irc_connect_failed`, so the row stays
+`:connected` and this change does nothing for it. A watchdog is a timer, a
+policy for what "too long" means, and a new failure mode of its own; whoever
+wants it opens the issue and argues the policy. Writing it down here so the
+next reader does not mistake silence for coverage.
+
+**The wire bump was decided by the pin digest, not by hand.** A new enum
+value is a wire-shape change, and per the 2026-08-21 ruling the bump is
+unconditional for additive changes too. `mix grappa.wire_pin --update`
+refuses a new digest at a still number, so `@protocol_version` went 3 → 4.
+The 3 was #1677's and has never been deployed (staging and prod serve 2);
+that is a fact about the release train, not about this shape.
+`@min_protocol_version` stays 1 — an additive value strands no client.
+
+**The migration aligns a predicate; it does not restore an index the boot
+query needs, and the difference was measured.** `EXPLAIN QUERY PLAN` on a
+test DB (once, without `ANALYZE`) shows the planner choosing
+`network_credentials_user_id_network_id_index` both before and after the
+change — never the `connection_state` one. So the honest claim is the
+narrow one: the partial index's predicate is brought back into agreement
+with the query that names the column. It is written that way in the
+migration's own moduledoc and must not be promoted to something stronger.
+
+### e2e: two tests, because the two halves want opposite topologies
+
+vjt's ruling made e2e coverage mandatory, and the reason it gave is the one
+that shaped the spec: every part of this failed on prod *between* the
+layers, so an API-only assertion does not discharge the requirement.
+
+The driver is a `network_servers` row on a closed loopback port —
+ECONNREFUSED with no DNS, no route and no wait, where the three real prod
+causes each need either a second ircd or a 30-second wall-clock wait.
+
+`issue1675-failing-link-state.spec.ts` splits because a stable `:failing`
+row and a row that leaves `:failing` on its own cannot be the same fixture.
+Test 1 gives the network ONE dead leaf, so every rung of the ladder refuses
+and the state holds for as long as the assertions take: the row reads
+`failing`, the reason names the cause, and then cicchetto is driven and
+asserted to render the same string — the half that was invisible to the
+operator. Test 2 gives it a ring of [dead, dead, live]: `SessionPlan`'s
+`refresh_plan` closure re-resolves the endpoint at `Backoff.failure_count`
+on every `:transient` respawn and `Servers.pick_server!/2` indexes the
+enabled ring by that ordinal, so the session walks itself onto the live leaf
+at attempt 2 and registers. That is the genuine `mark_failing →
+mark_registered` pair on one credential. The **two** dead rungs are not
+padding: at base 5 s they buy a ~15 s window in which `:failing` is
+observable, where a single dead leaf would leave ~5 s.
+
+**The recovery oracle is `connection.registered === true`, and the
+conjunct is the whole point.** Asserting `connection_state === "connected"`
+alone would be vacuous — `Networks.connect/1` writes exactly that on spawn
+success — so a park→connect cycle would have "proved" recovery against a
+still-dead upstream. The live `connection` projection reports `registered`
+only after 001, which is the event `mark_registered/1` hangs off. This is
+also why recovery is driven by the ring rather than by parking and
+reconnecting.
+
+The subject is `admin-vjt`, the one seeded user with no network bind, so the
+ephemeral network is the only row in its HomePane and neither test can
+disturb the seeded sessions the rest of the suite depends on.
+
+**The reboot arm is NOT in e2e, and that is a choice, not an omission.**
+Restarting the container mid-suite is heavy and flaky. It is covered by
+`bootstrap_test.exs` ("#1675 — resumes a :failing credential"), which runs
+the real `Bootstrap.run/0` against a real socket.

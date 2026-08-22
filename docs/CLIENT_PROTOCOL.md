@@ -138,8 +138,10 @@ number told nobody anything.
 **`min_protocol_version` is a different axis and does NOT follow.** It
 rises only when old clients can no longer be *served*. An additive field
 strands nobody, so the ordinary bump leaves the floor exactly where it
-is: at the time of writing `protocol_version` is `2` and
-`min_protocol_version` is still `1`.
+is: `protocol_version` has moved several times under this rule while
+`min_protocol_version` has never left `1`. (The current pair is not
+written here on purpose — see the note under `GET /api/config`; the
+moving number is stale the moment it is typed, and it has been, twice.)
 
 ### 2b. What this means for you, as a client author
 

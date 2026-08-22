@@ -520,9 +520,35 @@ not the surrounding code.**
   a row STILL reading `:connected` whose process is already in
   `terminate/2`, because `Networks.disconnect/2` and `mark_failed/2`
   both stop the session BEFORE writing the transition. The closed set
-  is `[:connected, :parked, :failed]` — there is no `:disconnected`
-  state (the `:disconnected` in `session_log_events` is a lifecycle
-  EVENT, a different axis).
+  is `[:connected, :parked, :failing, :failed]` (#1675) — there is no
+  `:disconnected` state (the `:disconnected` in `session_log_events` is
+  a lifecycle EVENT, a different axis).
+  **🔴 `:connected` means REGISTERED UPSTREAM, not "a session process is
+  alive" (#1675).** Until then it meant the latter, and that is exactly
+  the lie: `Networks.connect/1` writes `:connected` on SPAWN success (the
+  U-0 ordering, correct as far as it goes — see #642), and three prod
+  networks that never completed registration read `connected` for hours
+  because nothing walked the row back. `:failing` is that missing state —
+  "the session process is alive and the reconnect backoff is running, but
+  the upstream link is not registered" — written by the NON-terminal
+  `Networks.mark_failing/2` with the actual cause in
+  `connection_state_reason` (`IRC.Client.describe_connect_failure/1`, never
+  a category label), reversed by `mark_registered/1` on 001 RPL_WELCOME,
+  and reached from `Session.Server` only through the injected
+  `link_state_reporter` closure → `Networks.report_link_state/3` (the ONE
+  subject-polymorphic door; the drift has no subject branch, so visitors
+  are in scope by construction). `:failed` stays TERMINAL and unchanged:
+  `mark_failed/2` stops the session BEFORE the transition, so a
+  `:failed → :connected` edge on 001 can never fire — which is WHY this is
+  a fourth value and not a reason string on `:failed`. Boot resumes
+  `:failing` and still skips `:failed`
+  (`Credentials.list_credentials_for_all_users/0`), else a reboot inside a
+  backoff window drops the network permanently. **Known gap, not a bug to
+  rediscover:** a socket that CONNECTS but never registers (blocked rDNS,
+  ident hang) emits no `irc_connect_failed`, so it still reads
+  `:connected` — there is no registration watchdog, deliberately. A new
+  reader of `connection_state` MUST decide which fact it wants and say so;
+  a liveness check is `Grappa.Session.whereis/2`, not this column.
   `AdminSessionsTab` surfaces BOTH columns and shows an explicit
   `null` when the live pid is gone — diagnostic value beats false
   uniformity. When adding a new admin listing, return both
