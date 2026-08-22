@@ -15,9 +15,8 @@ defmodule GrappaWeb.BootJSON do
   `GrappaWeb.BootCostTest` compares `/boot`'s per-network channel list
   against the live `GET /networks/:slug/channels` response.
   """
-  alias Grappa.Networks
+  alias Grappa.{Networks, Scrollback}
   alias Grappa.Networks.Wire, as: NetworksWire
-  alias Grappa.Scrollback
   alias Grappa.Scrollback.Wire, as: ScrollbackWire
   alias GrappaWeb.NetworksJSON
 

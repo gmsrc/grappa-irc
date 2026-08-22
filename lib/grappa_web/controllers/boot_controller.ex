@@ -59,9 +59,8 @@ defmodule GrappaWeb.BootController do
   """
   use GrappaWeb, :controller
 
-  alias Grappa.Networks
+  alias Grappa.{Networks, Scrollback}
   alias Grappa.PresenceFilter.Resolver
-  alias Grappa.Scrollback
   alias GrappaWeb.Subject
 
   # One page, matching `MessagesController`'s `@default_limit`. The head is
@@ -82,7 +81,7 @@ defmodule GrappaWeb.BootController do
     {kind, rows} = Networks.subject_network_rows(subject)
 
     channels =
-      Map.new(rows, fn {network, _nick, cred, _conn} ->
+      Map.new(rows, fn {network, _, cred, _} ->
         {network.slug,
          Networks.merge_channel_sources(
            cred.autojoin_channels,
@@ -108,7 +107,7 @@ defmodule GrappaWeb.BootController do
           [Networks.network_row()],
           %{String.t() => [Networks.channel_entry()]}
         ) :: %{String.t() => %{String.t() => [Scrollback.Message.t()]}}
-  defp heads(_subject, [], _channels), do: %{}
+  defp heads(_, [], _), do: %{}
 
   defp heads(subject, rows, channels) do
     id_by_slug = Map.new(rows, fn {network, _, _, _} -> {network.slug, network.id} end)

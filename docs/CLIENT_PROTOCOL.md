@@ -443,6 +443,53 @@ Per §2 all of the above is additive: a client that does not recognise the
 `rate_limited` token or the `web_session_severed` frame still degrades
 safely (the 429 status / the socket close remain unambiguous).
 
+### 6a. Cold boot — do NOT fan out; ask `GET /boot` (#1679)
+
+🔴 **The budget above does not protect you here, and the thing that stops
+you is not grappa.** The budget meters write methods only, so a boot — pure
+`GET` — passes it untouched. What a deployment actually puts in front of
+grappa is a reverse proxy with a `limit_req` zone, and that answers **`503`,
+not `429`**, with no `retry_after_ms` and no `Retry-After` to back off on.
+
+This is not hypothetical. A client that fetched the channel list per network
+and then a backlog page per channel presented **81+ requests at once** on a
+seven-network account, and a proxy at `burst=50` rejected 31 of them; the
+user saw a blank window. The same shape had already, on an earlier occasion,
+tripped a `fail2ban` jail and got the client's IP **firewall-banned**. A
+boot whose request count scales with the size of the account will find a
+limiter somewhere, and every operator's is configured differently — so the
+client has to be well-behaved at defaults rather than assume a tuned proxy.
+
+**One request answers the whole picture:**
+
+```
+GET /boot
+→ 200 application/json
+{
+  "networks": [ … ],                          // identical to GET /networks
+  "channels": { "<slug>": [ … ] },            // identical to GET /networks/<slug>/channels
+  "heads":    { "<slug>": { "<chan>": [ … ] } } // newest page per channel
+}
+```
+
+The three values are the SAME shapes the per-request endpoints return — one
+decoder, not two. `channels` carries one key per network you hold; `heads`
+carries one key per channel that HAS history (a channel with none is absent,
+like a missing `read_cursors` key, rather than mapped to `[]`).
+
+Pair it with `GET /me` — which already answers `read_cursors`,
+`unread_counts` and `badge_count` in bulk — and a cold boot is **two
+requests, flat in the size of the account**, however many networks and
+channels it holds.
+
+The per-channel endpoints are unchanged and stay for everything that is not
+boot: paging further back (`?before=`), resuming a gap (`?after=`), and
+measuring one (`/messages/count`). `/boot` replaces the fan-out, not them.
+
+> Note the reconnect path too. A WebSocket resume that re-fetches a backlog
+> page for every channel it re-joins presents the same burst as a cold boot,
+> from the same account size — the limiter cannot tell the two apart.
+
 ---
 
 ## 7. Per-client tokens (#1196)

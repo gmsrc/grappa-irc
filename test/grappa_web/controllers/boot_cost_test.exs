@@ -168,9 +168,9 @@ defmodule GrappaWeb.BootCostTest do
   # the account it was built for, before its cost is believed.
   defp measure_boot(n, c) do
     %{conn: conn, slugs: slugs} = boot_account(n, c)
-    {conn, sources} = measure(fn -> get(conn, "/boot") end)
+    {resp, sources} = measure(fn -> get(conn, "/boot") end)
 
-    body = json_response(conn, 200)
+    body = json_response(resp, 200)
     assert length(body["networks"]) == n
     assert map_size(body["channels"]) == n
     for slug <- slugs, do: assert(length(body["channels"][slug]) == c)

@@ -42,8 +42,8 @@ defmodule GrappaWeb.ChannelsController do
   import GrappaWeb.Validation, only: [validate_channel_name: 1, validate_channel_list: 1]
 
   alias Grappa.Accounts.User
-  alias Grappa.Networks.{Credentials, Network}
   alias Grappa.{Networks, Session, Visitors}
+  alias Grappa.Networks.{Credentials, Network}
   alias GrappaWeb.{BodyLimit, Subject}
 
   @doc """

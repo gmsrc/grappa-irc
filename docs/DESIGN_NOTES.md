@@ -58537,3 +58537,110 @@ map forbids. The cure belongs at the call site: `Map.take/2` through a key
 list the callee exports, so the closed type describes what actually crosses
 the boundary. Widening the callee to a catch-all would have made the type
 agree with the leak, and the leak is the thing the closure existed to stop.
+<!-- entry #1679 -->
+
+---
+
+## 2026-08-22 — #1679: a boot that scales with the account, and the tripwire that could not see the cure
+
+cic's cold boot fanned out `GET /me`, `GET /networks`, one
+`GET /networks/:slug/channels` per network, then a `/messages` page per
+channel. The burst therefore scaled with the SIZE OF THE ACCOUNT rather than
+with anything the operator did. On prod it tripped the reverse proxy's
+`limit_req` zone — 31 x `503`, with **zero** `Sent 503` in the application
+log, so nginx rejected them and grappa never saw them. grappa's own inbound
+budget cannot see them either: #630's `RequestBudget` meters write methods
+only, and a boot is pure GET. The operator's proxy is the sole backstop, and
+every operator's is configured differently.
+
+vjt's ruling: a new `/boot` endpoint, and client-side throttling explicitly
+REJECTED — an in-flight cap only staggers the same work and makes boot feel
+slower. It is the request COUNT that has to stop scaling.
+
+### The arithmetic that fixed the scope
+
+The Decision's letter ("one request replaces `1 + N + ...`") and its success
+criterion ("back in the single digits of requests") are not the same
+instruction, and the second is the binding one. Prod: `burst=50` plus 31
+rejections means **at least 81 requests** were presented in the window — a
+floor, since the queue drains as it fills. The account holds seven networks,
+so `me + networks + 7 x channels` is **nine**. The other ~72 are per-channel.
+
+An endpoint that collapsed only `1 + N` would have removed nine of eighty-one
+and the incident would have repeated unchanged. So the per-channel heads are
+in scope, and it is that subtraction — not a preference — that says so.
+
+### Measured, because "must not become an N+1" needs a number
+
+`GrappaWeb.BootCostTest` counts `[:grappa, :repo, :query]` in the test
+process with a `self()` filter (the shape `RefreshPlanCostTest` established:
+handlers run in the emitting process, Ecto emits synchronously, so the filter
+is exact and the mailbox is complete when the request returns).
+
+    today   11 + 5N queries over 2 + N requests   (16/3 at N=1, 46/9 at N=7)
+    /boot    6 queries over 1 request, invariant on BOTH axes
+
+Pinned as an ordered source list — `sessions`, `users`,
+`network_credentials`, `networks`, `user_settings`, `messages` — so a
+regression names WHICH read appeared. `GET /networks` was already constant in
+N before this change; only the per-network channel call scaled.
+
+`GET /me` is deliberately NOT folded in: already an aggregate envelope,
+already constant in account size, and it has non-boot consumers. Boot is
+`/me` + `/boot` — two requests, flat.
+
+### `ROW_NUMBER` per channel, and the two things that keep the query STRING constant
+
+`Scrollback.bulk_heads/4` reuses the shape #396 already proved on the live
+prod indexes: rank ids in a subquery partitioned by `(network_id, channel)`,
+keep the top `limit` per partition, read the rows back.
+
+Two calls, both about SQLite's prepared-statement cache still helping the
+accounts this exists for. The predicate is `network_id IN (...) AND channel
+IN (...)` — two array params — rather than an OR over exact pairs, which
+would grow the query string with the account; the over-read that admits
+(a channel name present on two of the subject's networks) is dropped by
+`Map.take/2`, and `subject_where/2` is applied first so it is never a leak.
+And the #458 presence exclusion is a `kind NOT IN` predicate that hiding and
+showing channels cannot share without a per-pair OR, so targets are
+partitioned: one statement when nothing is hidden, two when something is,
+never N.
+
+### The finding worth more than the endpoint: the wire tripwire was blind
+
+With `/boot` routed, rendered and tested, `mix grappa.wire_pin --check`
+answered `wire shape and protocol 3 agree` at **rc=0**. A whole new
+client-facing endpoint, invisible — because the digested set is a glob over
+`lib/grappa/**/*wire.ex` plus a hand-kept `@extra_modules` list, and a
+controller's `*_json.ex` is in neither.
+
+Adding `GrappaWeb.BootJSON` to that list was necessary and NOT sufficient,
+and the intermediate state is the trap to record: while its only typespec was
+an inline `@spec` on `index/1`, the codegen emitted nothing but a changed
+`Source:` header comment — and that comment moved the digest. A RED gate and
+a version bump earned by a comment rather than by a shape. The generator
+reads `@type` declarations via `Code.Typespec.fetch_types/1` and never looks
+at a `@spec`.
+
+**Rule: a new web-layer envelope must be added to `@extra_modules` AND must
+name its type, in the commit that introduces it.** Either half alone gives a
+number that is wrong in a different direction — silence, or a bump bought
+with a comment. (The false digest was pinned once mid-work; the pin was reset
+to the base and re-taken so the branch carries ONE bump, 3 to 4, against the
+real shape.)
+
+The bump itself is the task's verdict, not a judgement call. Purely additive
+— no existing endpoint changed shape — but the rule since #1393d applies in
+its strongest form here: the moment a client stops fanning out and starts
+REQUIRING `/boot`, it can no longer talk to a server predating it, which is
+the new-client-to-old-server direction the number exists for.
+
+### Not measured, and named rather than assumed
+
+The RECONNECT path was read off the code, not executed. `subscribe.ts`'s
+socket-open effect calls `refetchNetworks()`, `refetchChannels()` and then
+loops `refreshScrollback` over EVERY key in `joined` — and phoenix.js's
+auto-rejoin fires the join-ok refresh for the same keys, which #1593's queue
+deliberately does not drop. So the shape is the same and the count is larger
+than a cold boot's. That is a static reading of an unambiguous loop, not a
+measurement, and it is recorded as such.

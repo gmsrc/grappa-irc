@@ -617,7 +617,7 @@ defmodule Grappa.Scrollback do
 
   @spec heads_for(subject(), [{integer(), String.t()}], pos_integer(), boolean()) ::
           %{{integer(), String.t()} => [Message.t()]}
-  defp heads_for(_subject, [], _limit, _hide_presence), do: %{}
+  defp heads_for(_, [], _, _), do: %{}
 
   defp heads_for(subject, targets, limit, hide_presence) do
     capped = min(limit, @max_limit)
