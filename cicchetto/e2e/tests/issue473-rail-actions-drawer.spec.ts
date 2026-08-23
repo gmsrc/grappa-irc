@@ -95,7 +95,13 @@ const RAIL_BUTTONS: ReadonlyArray<{ testid: string; label: string }> = [
   { testid: "rail-action-mute", label: "mute" },
   // #986 — the lifecycle pair, moved out of the settings drawer. `detach` is
   // canDetach()-gated: vjt is a persistent user, so it renders.
-  { testid: "detach-btn", label: "detach" },
+  //
+  // #1705 — its LABEL now reads "switch account". Only the words moved: the
+  // verb, the class and this testid are still `detach`, which is why the pair
+  // below looks mismatched and must stay that way. The label is named on the
+  // INTENT axis ("I want to be someone else here") because two reporters in one
+  // evening scanned this menu for a word the bouncer axis does not contain.
+  { testid: "detach-btn", label: "switch account" },
   { testid: "quit-irc-btn", label: "quit" },
 ];
 

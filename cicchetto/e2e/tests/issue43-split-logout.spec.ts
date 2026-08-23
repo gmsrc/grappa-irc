@@ -45,7 +45,12 @@ test("issue #43 — registered user sees detach + quit in the rail, not a bare '
   const detach = page.getByTestId("detach-btn");
   const quit = page.getByTestId("quit-irc-btn");
   await expect(detach).toBeVisible();
-  await expect(detach).toHaveText(/detach/i);
+  // #1705 — the entry READS "switch account" while the verb, the class and the
+  // testid stay `detach`. What #43 asserts is unchanged: two distinct verbs,
+  // neither of them a bare "log out". The expected word follows the rename
+  // rather than loosening to /detach|switch/ — a label that drifts again must
+  // still redden this line.
+  await expect(detach).toHaveText(/switch account/i);
   await expect(quit).toBeVisible();
   await expect(quit).toHaveText(/quit/i);
   // Positive twin for the negative assertion so a testid typo can't
