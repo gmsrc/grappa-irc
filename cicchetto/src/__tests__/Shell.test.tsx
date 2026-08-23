@@ -1311,7 +1311,7 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
     });
   });
 
-  it("#473/#986/#950 drawer order: home · rooms · mentions · themes · archive · settings · admin · denoise · mute · quit", async () => {
+  it("#473/#986/#950/#682 drawer order: home · rooms · mentions · radio · themes · archive · settings · admin · denoise · mute · quit", async () => {
     mobileState.value = true;
     userHolder.current = {
       kind: "user",
@@ -1348,6 +1348,7 @@ describe("#361 / #473 — rooms (list) launcher in the RailActions drawer", () =
       "mobile-panel-home",
       "mobile-panel-list",
       "rail-action-mentions",
+      "rail-action-radio",
       "mobile-panel-themes",
       "mobile-panel-archive",
       "action-cluster-cog",

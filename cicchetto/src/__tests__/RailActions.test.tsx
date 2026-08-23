@@ -696,6 +696,9 @@ describe("RailActions — detach + quit (#986)", () => {
       "mobile-panel-home",
       "mobile-panel-list",
       "rail-action-mentions",
+      // #682 — the radio picker launcher sits with the navigation set, before
+      // themes: it opens a rail surface, like the entries around it.
+      "rail-action-radio",
       "mobile-panel-themes",
       "mobile-panel-archive",
       "action-cluster-cog",

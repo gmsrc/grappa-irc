@@ -2300,6 +2300,179 @@ html.resize-dragging * {
   color: inherit;
 }
 
+/* #682 — the rail's radio surface, mounted directly above `.rail-actions` in
+   BOTH Shell rail branches. Static position on purpose: the picker below is
+   absolute against `.shell-members` (already `position: relative` for the
+   resize handle), so it overlays the WHOLE rail rather than a slice of it.
+   `flex-shrink: 0` keeps the station chrome from being squeezed by a long
+   nick list — the space it takes comes off the scrolling `.members-pane`
+   above, never off the floored actions drawer below. Idle it has no children
+   at all and so no height: #500's vertical budget is untouched until the
+   operator tunes something. */
+.rail-radio {
+  flex-shrink: 0;
+}
+
+/* The station chrome: one compact row answering "what is playing". Present
+   only while something is — the docked `.audio-mini-player` carries the same
+   name for the phone, where this rail is slid off-screen. */
+.rail-radio-now {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+
+.rail-radio-now-logo {
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  object-fit: cover;
+}
+
+/* `min-width: 0` is what lets the title ellipsise instead of forcing the row
+   wider than the rail and pushing the stop button out of reach. */
+.rail-radio-now-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+.rail-radio-now-title,
+.rail-radio-station-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  color: var(--fg);
+}
+
+.rail-radio-now-genres,
+.rail-radio-station-genres {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+
+.rail-radio-stop {
+  flex: none;
+  min-width: 2rem;
+  min-height: 2rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+/* The picker OVERLAYS the whole rail. Deliberately not the
+   `.rail-actions-menu` popover shape: anchoring at `bottom: 100%` of a
+   bottom-pinned launcher is what made #588 (cap by the space ABOVE, not the
+   viewport) and #913 (that space is measured from the PHYSICAL top under
+   `viewport-fit=cover`) necessary. An `inset: 0` overlay's height IS the
+   rail, so CSS bounds it with no JS measurement to get wrong, and
+   `.shell-members`'s own `min-height: 0` (#500) already bounds that to the
+   grid track. z-index one step above the actions menu so the two cannot
+   argue if both are ever up.
+   `overscroll-behavior: contain` stops the scroll chaining into the nick list
+   behind it, as its sibling menu does. */
+.rail-radio-picker {
+  position: absolute;
+  inset: 0;
+  z-index: 302;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
+  background: var(--bg-alt);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* #913's descendant carve-out, for the same reason it exists on
+   `.rail-actions-menu`: `touch-action` does NOT inherit, the station rows ARE
+   the hit-test target across nearly the whole panel, and iOS elects the
+   gesture consumer from the target's OWN value — so a scroller-level `pan-y`
+   alone leaves the pan refused while the list overflows correctly. */
+.rail-radio-picker * {
+  touch-action: pan-y;
+}
+
+.rail-radio-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+/* Matches the `.members-pane h3` / `.rail-query-heading` slot — the
+   established heading shape for rail content. */
+.rail-radio-heading {
+  margin: 0;
+  font-size: var(--font-size);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.rail-radio-picker-close {
+  flex: none;
+  min-width: 2rem;
+  min-height: 2rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+/* A station row. The tap floor is the app-wide absolute one, so it does not
+   shrink with the user's font size. */
+.rail-radio-station {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: var(--chrome-tap-min);
+  padding: 0.25rem 0.375rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  text-align: start;
+}
+
+.rail-radio-station-logo {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  object-fit: cover;
+}
+
+.rail-radio-station-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.1rem;
+}
+
+/* The tuned row, marked the same way the presence toggle marks its active
+   state — accent on both text and border, so it reads without relying on
+   colour alone being noticed (the `aria-pressed` on the button is the
+   non-visual half). */
+.rail-radio-station.tuned {
+  border-color: var(--accent);
+}
+
+.rail-radio-station.tuned .rail-radio-station-title {
+  color: var(--accent);
+}
+
 /* #222/#473 — the denoise (presence-filter) toggle keeps its accent when the
    channel is filtered (rows suppressed), matching the former
    `.action-cluster-presence-toggle` treatment. `flex: none` on the row is not

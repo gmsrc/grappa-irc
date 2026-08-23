@@ -29,6 +29,7 @@ import {
 } from "./lib/notificationPrefs";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { channelPresenceVisible } from "./lib/presenceFilter";
+import { openRadioPicker } from "./lib/radio";
 import { selectedChannel, setSelectedChannel } from "./lib/selection";
 import {
   ADMIN_WINDOW_NAME,
@@ -38,8 +39,8 @@ import {
   LIST_WINDOW_NAME,
 } from "./lib/windowKinds";
 
-// #473 → #500 — RailActions: EVERY rail affordance (home · rooms · themes ·
-// archive · settings · admin · denoise) lives here, mounted unchanged by BOTH
+// #473 → #500 — RailActions: EVERY rail affordance (home · rooms · radio ·
+// themes · archive · settings · admin · denoise) lives here, mounted by BOTH
 // branches of Shell's `isMobile()` split — one component, one place, same
 // buttons on desktop and mobile.
 //
@@ -98,12 +99,14 @@ import {
 // operator flips in place (watching the accent flip, re-toggling), not a
 // navigation away.
 //
-// Buttons, in order: home · rooms · mentions · themes · archive · settings ·
-// admin · refresh · denoise · detach · quit. Each carries its NAME as visible
+// Buttons, in order: home · rooms · mentions · radio · themes · archive ·
+// settings · admin · refresh · denoise · detach · quit. Each carries its NAME as visible
 // text next to the glyph (#473: bare emoji had to be guessed / long-pressed).
 //
 // Gating is CAPABILITY-only — no form-factor gates (#473):
-//   * home / themes / settings / archive / quit — always.
+//   * home / radio / themes / settings / archive / quit — always. The radio
+//     picker's station table is baked in (#682), so there is nothing to gate
+//     it on; it opens RailRadio, which overlays this same rail.
 //   * rooms — needs a network context (`archiveSlugForSelection()`).
 //   * mentions — needs a bundle to re-open for that network context.
 //   * admin — `isAdmin()`.
@@ -431,6 +434,28 @@ const RailActions: Component<Props> = (props) => {
               </button>
             )}
           </Show>
+
+          {/* #682 — radio launcher. Opens the station picker, which overlays
+              this same rail (RailRadio, mounted just above this drawer). It
+              closes the menu like every other launcher: the picker takes over
+              the rail, so leaving this menu live underneath it would stack two
+              overlays on one column. ALWAYS shown — the station table is baked
+              in, so there is no capability to gate on. */}
+          <button
+            type="button"
+            class="shell-chrome-btn rail-action rail-action-radio"
+            aria-label="open radio"
+            data-testid="rail-action-radio"
+            onClick={() => {
+              openRadioPicker();
+              close();
+            }}
+          >
+            <span class="rail-action-icon" aria-hidden="true">
+              {"\u{1F4FB}"}
+            </span>
+            <span class="rail-action-label">radio</span>
+          </button>
 
           {/* #75/#332 — themes launcher: opens the settings drawer on the themes
               sub-page (openThemesPanel deep-links via settingsNav). Always. */}

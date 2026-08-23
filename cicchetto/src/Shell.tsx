@@ -59,6 +59,7 @@ import NextActiveButton from "./NextActiveButton";
 import PrivacyModal from "./PrivacyModal";
 import RailActions from "./RailActions";
 import RailContext from "./RailContext";
+import RailRadio from "./RailRadio";
 import RecoverModal from "./RecoverModal";
 import RegistrationWizardModal from "./RegistrationWizardModal";
 import ResizeHandle from "./ResizeHandle";
@@ -784,6 +785,13 @@ const Shell: Component = () => {
                 now a first-class always-on RailActions button opening the single
                 grouped ArchiveModal (mounted above) — the desktop Sidebar
                 `<details>` and the mobile footer chip it replaced are removed. */}
+            {/* #682 — the radio surface, mounted UNCONDITIONALLY like the drawer
+              below it and deliberately NOT as a `RailContext` arm: that
+              component grafts by the active window's KIND and would drop the
+              panel the moment the operator switched to a query. Idle it renders
+              nothing at all, so #500's vertical budget is untouched until a
+              station is tuned; its picker overlays the whole rail. */}
+            <RailRadio />
             <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
           </aside>
 
@@ -1113,6 +1121,13 @@ const Shell: Component = () => {
               Same component + same handler set the desktop rail mounts (the
               drawer-closing arm of the mobilePanel helpers is meaningful here on
               mobile and a harmless no-op on the permanent desktop rail). */}
+          {/* #682 — the radio surface, mounted UNCONDITIONALLY like the drawer
+              below it and deliberately NOT as a `RailContext` arm: that
+              component grafts by the active window's KIND and would drop the
+              panel the moment the operator switched to a query. Idle it renders
+              nothing at all, so #500's vertical budget is untouched until a
+              station is tuned; its picker overlays the whole rail. */}
+          <RailRadio />
           <RailActions setters={{ membersOpen, setMembersOpen, setSettingsOpen }} />
         </aside>
 

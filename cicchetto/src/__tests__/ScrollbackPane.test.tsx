@@ -4279,8 +4279,10 @@ describe("ScrollbackPane", () => {
       const ev = new MouseEvent("click", { bubbles: true, cancelable: true });
       link.dispatchEvent(ev);
       // Audio routes to the non-modal docked player; the image/video
-      // viewer modal stays closed.
-      expect(activeAudio()).toEqual({ href });
+      // viewer modal stays closed. `label: null` (#682) is the honest answer
+      // for a pasted link: cic sees a slug-only href and has no title to
+      // caption it with — only a picked radio station carries a name.
+      expect(activeAudio()).toEqual({ href, label: null });
       expect(mediaViewerState()).toBeNull();
     });
 
