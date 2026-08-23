@@ -30,6 +30,8 @@ defmodule Grappa.Repo.LockWatchTest do
   """
   use Grappa.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Grappa.Repo.LockWatch
 
   defmodule TmpRepo do
@@ -38,6 +40,7 @@ defmodule Grappa.Repo.LockWatchTest do
   end
 
   @detected [:grappa, :repo, :lock_stall, :detected]
+  @unattributed [:grappa, :repo, :lock_stall, :unattributed]
 
   setup do
     LockWatch.put_test_enabled(true)
@@ -46,12 +49,17 @@ defmodule Grappa.Repo.LockWatchTest do
     handler = "lock-watch-test-#{System.unique_integer([:positive])}"
     test_pid = self()
 
+    # Both doors on ONE handler, tagged by event: a test that asserts the
+    # attributed line fired must also be able to REFUTE the unattributed one
+    # (and vice versa). Two separate handlers would let a mutant that emits
+    # both pass every assertion in the file.
     :ok =
-      :telemetry.attach(
+      :telemetry.attach_many(
         handler,
-        @detected,
-        fn _, measurements, metadata, _ ->
-          send(test_pid, {:stall, measurements, metadata})
+        [@detected, @unattributed],
+        fn
+          @detected, measurements, metadata, _ -> send(test_pid, {:stall, measurements, metadata})
+          @unattributed, measurements, metadata, _ -> send(test_pid, {:unattributed, measurements, metadata})
         end,
         nil
       )
@@ -96,6 +104,12 @@ defmodule Grappa.Repo.LockWatchTest do
       # CONTENT of the stack tells the two apart. This frame is the reason
       # the holder is stuck, which is the datum #1420 says is missing.
       assert Enum.any?(stall.holder.stacktrace, &(&1 =~ "park_until_released"))
+
+      # #1687 — the two arms are mutually exclusive by construction. A mutant
+      # that emits the unattributed line unconditionally (rather than only
+      # when nothing was named) would double-report every real stall, and the
+      # operator would learn to ignore both.
+      refute_receive {:unattributed, _, _}, 100
 
       send(holder, :release)
       assert_receive {:DOWN, ^holder_ref, :process, ^holder, :normal}, 5_000
@@ -146,6 +160,147 @@ defmodule Grappa.Repo.LockWatchTest do
 
       send(holder, :release)
       assert_receive {:DOWN, ^holder_ref, :process, ^holder, :normal}, 5_000
+
+      Supervisor.stop(repo)
+    end
+  end
+
+  describe "a queue with no attributable holder (#1687)" do
+    test "reports the queue instead of staying silent, and says the holder was never attributed" do
+      repo = start_tmp_repo()
+
+      {blind, blind_ref} = start_unobserved_writer(1)
+      assert_receive {:holding, ^blind}, 5_000
+
+      {waiter, waiter_ref} = start_writer(2, :straight_through)
+
+      await_roles(nil, [waiter])
+
+      # The LOG is the door that failed in prod: LockWatch was armed through a
+      # three-minute episode and put NOT ONE line in `erlang.log.5`, so the
+      # #1429 census and the operator both read a healthy system. Pinning the
+      # telemetry alone would leave exactly the door that was dark, dark.
+      log = capture_log(fn -> LockWatch.scan(0) end)
+
+      assert log =~ "db lock stall UNATTRIBUTED"
+      assert log =~ "no holder registered"
+
+      assert_receive {:unattributed, measurements, report}, 1_000
+
+      # M6 — a mutant reporting the holder-less queue with a fabricated holder
+      # (the shape the issue's own wording invites) dies here: there is no
+      # holder to name, and the record says so rather than guessing.
+      assert report.holders_registered == 0
+
+      # M7 — a mutant sampling `self()` (the scanning process) instead of the
+      # queued writers still produces a well-formed record; only the pid tells
+      # them apart. The waiters ARE the payload here — they are the only thing
+      # the instrument can honestly show.
+      assert [sample] = report.waiters
+      assert sample.pid == inspect(waiter)
+      assert is_integer(sample.elapsed_ms)
+
+      assert measurements.waiter_count == 1
+      assert is_integer(measurements.longest_wait_ms)
+
+      # M8 — the queue is NOT a named stall. A mutant that routes this through
+      # the attributed door would put a `holder` key on a record that has none.
+      refute_receive {:stall, _, _}, 100
+
+      send(blind, :release)
+      assert_receive {:DOWN, ^blind_ref, :process, ^blind, :normal}, 5_000
+      assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, :normal}, 10_000
+
+      Supervisor.stop(repo)
+    end
+
+    test "a queue that has not crossed the threshold is not reported either" do
+      repo = start_tmp_repo()
+
+      {blind, blind_ref} = start_unobserved_writer(1)
+      assert_receive {:holding, ^blind}, 5_000
+
+      {waiter, waiter_ref} = start_writer(2, :straight_through)
+
+      await_roles(nil, [waiter])
+
+      # M9 — the mirror of M5 on the new arm. A mutant that drops the
+      # threshold comparison for waiters turns every transient queue behind
+      # every autocommit write into a warning, which on the hot path is a log
+      # flood, not a signal.
+      LockWatch.scan(10_000)
+
+      refute_receive {:unattributed, _, _}, 300
+
+      send(blind, :release)
+      assert_receive {:DOWN, ^blind_ref, :process, ^blind, :normal}, 5_000
+      assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, :normal}, 10_000
+
+      Supervisor.stop(repo)
+    end
+
+    test "one line per queued cohort, not one per watchdog tick" do
+      repo = start_tmp_repo()
+
+      {blind, blind_ref} = start_unobserved_writer(1)
+      assert_receive {:holding, ^blind}, 5_000
+
+      {waiter, waiter_ref} = start_writer(2, :straight_through)
+
+      await_roles(nil, [waiter])
+
+      LockWatch.scan(0)
+      assert_receive {:unattributed, _, _}, 1_000
+
+      # M10 — the prod episode ran ~170s at `tick_ms: 1_000`. A mutant that
+      # forgets to arm the row's `reported?` flag prints ~170 identical
+      # warnings for one episode, which is the same as printing none.
+      LockWatch.scan(0)
+      refute_receive {:unattributed, _, _}, 300
+
+      send(blind, :release)
+      assert_receive {:DOWN, ^blind_ref, :process, ^blind, :normal}, 5_000
+      assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, :normal}, 10_000
+
+      Supervisor.stop(repo)
+    end
+
+    test "a waiter already reported as unattributed is still reportable once it becomes the holder" do
+      repo = start_tmp_repo()
+
+      {blind, blind_ref} = start_unobserved_writer(1)
+      assert_receive {:holding, ^blind}, 5_000
+
+      {writer, writer_ref} = start_writer(2, :park)
+      await_roles(nil, [writer])
+
+      LockWatch.scan(0)
+      assert_receive {:unattributed, _, _}, 1_000
+
+      # The unregistered writer lets go; the pid that was just reported as a
+      # WAITER now takes RESERVED itself.
+      send(blind, :release)
+      assert_receive {:DOWN, ^blind_ref, :process, ^blind, :normal}, 5_000
+      assert_receive {:holding, ^writer}, 10_000
+
+      {queued, queued_ref} = start_writer(3, :straight_through)
+      await_roles(writer, [queued])
+
+      LockWatch.scan(0)
+
+      # 🔴 M11, and it is the whole reason this test exists. `acquired/0`
+      # promotes the row's role and restarts its clock but leaves the
+      # `reported?` flag exactly where it was, so a pid reported once as a
+      # waiter would be permanently unreportable as a HOLDER — the cure for
+      # the unattributed blindness having quietly blinded the attributed path
+      # that already worked. The flag has to clear on promotion, because the
+      # promotion starts a new episode with a new clock.
+      assert_receive {:stall, _, stall}, 1_000
+      assert stall.holder.pid == inspect(writer)
+
+      send(writer, :release)
+      assert_receive {:DOWN, ^writer_ref, :process, ^writer, :normal}, 5_000
+      assert_receive {:DOWN, ^queued_ref, :process, ^queued, :normal}, 10_000
 
       Supervisor.stop(repo)
     end
@@ -246,6 +401,45 @@ defmodule Grappa.Repo.LockWatchTest do
     end)
   end
 
+  # #1687 — a writer that takes RESERVED WITHOUT going through
+  # `LockWatch.observe/1`: it holds the file lock and owns no row in the watch
+  # table. That is the production blindness in person.
+  #
+  # Honest limit, and it is why this is not literally `TmpRepo.insert/2`: the
+  # production writer is a bare autocommit statement
+  # (`Scrollback.persist_row/1` -> `Repo.insert/2`,
+  # `lib/grappa/scrollback.ex:227`), and an autocommit statement cannot be
+  # held open from outside — it commits the moment it returns, so it cannot be
+  # parked while a second writer queues behind it. An un-observed
+  # `mode: :immediate` transaction CAN be parked, and the state `detect/2`
+  # actually reads is byte-identical between the two: RESERVED held, zero rows
+  # in the watch table. This harness reproduces the OBSERVABLE state, not the
+  # statement shape.
+  defp start_unobserved_writer(id) do
+    test_pid = self()
+
+    {pid, ref} = spawn_monitor(fn -> unobserved_write(id, test_pid) end)
+
+    on_exit(fn -> Process.exit(pid, :kill) end)
+
+    {pid, ref}
+  end
+
+  # `timeout: :infinity` for the same reason `observed_write/3` carries it —
+  # see the 🔴 note there. Without it the park is capped at Ecto's default
+  # 15_000 checkout deadline rather than by this test's own release message.
+  defp unobserved_write(id, test_pid) do
+    TmpRepo.transaction(
+      fn ->
+        TmpRepo.query!("INSERT INTO t VALUES (?)", [id])
+        send(test_pid, {:holding, self()})
+        park_until_released()
+      end,
+      mode: :immediate,
+      timeout: :infinity
+    )
+  end
+
   defp insert_then(id, after_insert, test_pid, acquired) do
     acquired.()
     TmpRepo.query!("INSERT INTO t VALUES (?)", [id])
@@ -261,16 +455,22 @@ defmodule Grappa.Repo.LockWatchTest do
     end
   end
 
+  # `holder` is `nil` for the #1687 topology — a queue whose holder owns no
+  # row, so the barrier is "holders is EMPTY and these pids are queued".
   defp await_roles(holder, waiters) do
     await_until(
       fn ->
         %{holders: held, waiters: queued} = LockWatch.inspect_lock()
 
-        pids(held) == [inspect(holder)] and Enum.sort(pids(queued)) == Enum.sort(Enum.map(waiters, &inspect/1))
+        pids(held) == expected_holders(holder) and
+          Enum.sort(pids(queued)) == Enum.sort(Enum.map(waiters, &inspect/1))
       end,
       300
     )
   end
+
+  defp expected_holders(nil), do: []
+  defp expected_holders(holder), do: [inspect(holder)]
 
   defp pids(samples), do: Enum.map(samples, & &1.pid)
 

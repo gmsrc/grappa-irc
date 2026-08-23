@@ -60,6 +60,66 @@ defmodule Grappa.Repo.LockWatchReportTest do
     assert log =~ "status=:waiting"
   end
 
+  test "the UNATTRIBUTED warning refuses to name a holder, and says which kind of silence it is" do
+    waiter = start_role(:waiter)
+
+    await_queue_only(waiter)
+
+    log = capture_log(fn -> LockWatch.scan(0) end)
+
+    # #1687 — in prod this was the empty string for ~170 seconds.
+    assert log =~ "db lock stall UNATTRIBUTED: 1 writer(s) queued past the threshold"
+    assert log =~ "no holder registered"
+
+    # 🔴 The load-bearing negative. The issue's own wording ("holder
+    # unattributed") invites a line that still asserts a HOLD by an
+    # unregistered writer. Prod says that inference is unsafe: the victims'
+    # 62 s decomposes into ~31 s of pool checkout plus ~31 s of
+    # `busy_timeout`, so pool queueing is a live cause and this frame
+    # measured neither. A mutant that reinstates the claim dies here.
+    refute log =~ "held"
+    assert log =~ "NOT attributable at the BEGIN IMMEDIATE seam"
+
+    # What it CAN vouch for: which waiter, and where it is parked — the one
+    # field that separates "blocked on the lock" from "queued for a
+    # connection" without guessing between them.
+    assert log =~ "longest waiter #{inspect(waiter)}"
+    assert log =~ "status=:waiting"
+  end
+
+  test "a holder registered but still under the threshold is reported as such, not as no holder" do
+    # Order is the point: the waiter must be measurably OLDER than the
+    # holder, so one threshold can sit between them. Both are registered.
+    #
+    # The waiter has to be AGED before the holder starts, and starting them
+    # back to back is not enough — measured: `acquired/0` restarts the
+    # holder's clock at promotion, which lands microseconds after its own
+    # `waiting/0`, so two roles started together read the SAME elapsed and no
+    # threshold can separate them.
+    waiter = start_role(:waiter)
+    await_age(waiter, 150)
+    holder = start_role(:holder)
+
+    # A polled CONDITION on the instrument's own reading, never a sleep. The
+    # 100ms margin is what makes the threshold choice below safe: the arm
+    # under test only mis-selects if this process is descheduled for 50ms
+    # between the reading and the scan on the next line.
+    {holder_ms, waiter_ms} = await_gap(holder, waiter, 100)
+
+    log = capture_log(fn -> LockWatch.scan(holder_ms + 50) end)
+
+    assert waiter_ms > holder_ms + 100
+
+    # M — a mutant that reports `holders_registered` as a plain boolean, or
+    # that hardcodes the "no holder" clause because it is the case the issue
+    # described, cannot tell an operator whether the seam is working. These
+    # two sub-cases call for opposite next moves: widen coverage, versus
+    # nothing at all because the queue is simply older than the holder.
+    assert log =~ "db lock stall UNATTRIBUTED"
+    assert log =~ "1 holder(s) registered, none past the threshold"
+    refute log =~ "no holder registered"
+  end
+
   ## ----- helpers --------------------------------------------------------
 
   # Both roles go through `LockWatch.observe/1`, production's own wrapper:
@@ -92,6 +152,70 @@ defmodule Grappa.Repo.LockWatchReportTest do
   defp park do
     receive do
       :never -> :ok
+    end
+  end
+
+  # #1687 — the queue-with-no-holder barrier. Same discipline as
+  # `await_roles/2`: the `send` proves the process reached `observe/1`, not
+  # that its ETS row is visible yet.
+  defp await_queue_only(waiter), do: await_queue_only(waiter, 300)
+
+  defp await_queue_only(waiter, 0) do
+    flunk("queue never settled: #{inspect(LockWatch.inspect_lock())} (#{inspect(waiter)})")
+  end
+
+  defp await_queue_only(waiter, attempts) do
+    %{holders: holders, waiters: waiters} = LockWatch.inspect_lock()
+
+    if holders == [] and Enum.map(waiters, & &1.pid) == [inspect(waiter)] do
+      :ok
+    else
+      Process.sleep(10)
+      await_queue_only(waiter, attempts - 1)
+    end
+  end
+
+  # Polls until `waiter`'s own row has aged past `ms`. Read off the
+  # instrument rather than slept, so a loaded runner waits longer instead of
+  # asserting against a clock it never checked.
+  defp await_age(waiter, ms), do: await_age(waiter, ms, 300)
+
+  defp await_age(waiter, ms, 0) do
+    flunk("waiter never aged to #{ms}ms: #{inspect(LockWatch.inspect_lock())} (#{inspect(waiter)})")
+  end
+
+  defp await_age(waiter, ms, attempts) do
+    case LockWatch.inspect_lock() do
+      %{waiters: [%{pid: pid, elapsed_ms: elapsed}]} when elapsed >= ms ->
+        ^pid = inspect(waiter)
+        :ok
+
+      _ ->
+        Process.sleep(10)
+        await_age(waiter, ms, attempts - 1)
+    end
+  end
+
+  # Polls until the waiter is at least `margin` ms older than the holder, and
+  # returns both readings so the caller can place a threshold between them.
+  defp await_gap(holder, waiter, margin), do: await_gap(holder, waiter, margin, 300)
+
+  defp await_gap(holder, waiter, margin, 0) do
+    flunk("gap never opened: #{inspect(LockWatch.inspect_lock())} (#{inspect({holder, waiter, margin})})")
+  end
+
+  defp await_gap(holder, waiter, margin, attempts) do
+    %{holders: holders, waiters: waiters} = LockWatch.inspect_lock()
+
+    with [%{pid: h_pid, elapsed_ms: h_ms}] <- holders,
+         [%{pid: w_pid, elapsed_ms: w_ms}] <- waiters,
+         true <- h_pid == inspect(holder) and w_pid == inspect(waiter),
+         true <- w_ms > h_ms + margin do
+      {h_ms, w_ms}
+    else
+      _ ->
+        Process.sleep(10)
+        await_gap(holder, waiter, margin, attempts - 1)
     end
   end
 

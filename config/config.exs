@@ -409,6 +409,12 @@ config :logger, :console,
     # and the log line IS the door that reaches CI container logs.
     :held_ms,
     :waiters,
+    # #1687 — the unattributed arm's own measurement. Deliberately NOT
+    # `:held_ms`: nothing in that report observed a hold, and reusing the key
+    # would smuggle the claim back into the structured half after the prose
+    # was written to leave it out. An operator aggregating `held_ms` must not
+    # find waits mixed into it.
+    :longest_wait_ms,
     :pid,
     :unexpected,
     # Bootstrap summary: how many credentials we enumerated and how

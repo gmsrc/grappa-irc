@@ -57,15 +57,58 @@ defmodule Grappa.Repo.LockWatch do
 
   ## What it reports, and when
 
-  A watchdog tick scans the table and reports only when a holder has held
-  for at least `stall_threshold_ms` **AND at least one waiter is queued
-  behind it**. A slow-but-uncontended transaction is not a stall, and
-  reporting one would bury the signal it exists to find.
+  A watchdog tick scans the table and reports a NAMED stall only when a
+  holder has held for at least `stall_threshold_ms` **AND at least one
+  waiter is queued behind it**. A slow-but-uncontended transaction is not a
+  stall, and reporting one would bury the signal it exists to find.
 
-  One report per episode (the row's `reported?` flag arms on the first and
-  disarms on release) — otherwise a 30 s stall prints 30 times. Release
-  emits a second, `:resolved` event carrying the TOTAL hold, so an episode
-  has both an opening and a closing bracket.
+  ### The unattributed arm (#1687)
+
+  A queue past the threshold that named nobody is reported too, as its own
+  line. This arm exists because the first one is blind by construction:
+  `observe/1` has a single producer, so ONLY a writer that went through
+  `Grappa.Repo.immediate_transaction/1` can ever be tagged `:holding`. Every
+  autocommit single-statement write — `Grappa.Scrollback.persist_row/1`
+  (`lib/grappa/scrollback.ex:227`) and its ~120 peers — takes the same file
+  lock and owns no row here at all.
+
+  This code used to answer that case with silence, on the reasoning that
+  *"waiters with no holder are the pool's business, not the write lock's."*
+  🔴 **Measured in prod on 2026-08-22 (grappa 1.3.1, `erlang.log.5`), that
+  reasoning was half right and the conclusion was wrong.** Half right: the
+  pool IS a real component — victims' `elapsed` decomposes as ~31 s of
+  DBConnection checkout plus ~31 s of `busy_timeout`, which is the whole of
+  the "62 s" that opened #1687. Wrong: through a ~170 s episode, with this
+  observer ARMED at `stall_threshold_ms: 2_000` and 23 `busy_locked`
+  terminals in the log, it emitted **zero** lines. A long unattributed stall
+  was indistinguishable from a healthy system, so the one thing the operator
+  learned from the instrument was nothing.
+
+  🔴 **The line states what was OBSERVED and stops there.** It does NOT say
+  the write lock is held by an unregistered writer — that is an inference,
+  and the same prod episode shows pool queueing is an equally live cause.
+  What it can vouch for is exactly: N registered writers have been queued
+  past the threshold, and this many holders are registered (usually none).
+  The two candidate causes are separated by the WAITERS' OWN STACKS, which
+  it samples and carries — a waiter parked in `Exqlite.Sqlite3NIF` is
+  blocked on the lock, one inside `DBConnection.Holder` is queued for a
+  connection. Asserting a cause the frame never measured is the exact defect
+  `terminal_message/3` in `Grappa.Repo.BusyRetry` was twice rewritten to
+  stop committing (#1420, #1421); this arm does not re-commit it here.
+
+  ### One report per episode, on either arm
+
+  The row's `reported?` flag arms on the first report and disarms on release
+  — otherwise a 30 s stall prints 30 times. Release emits a second,
+  `:resolved` event carrying the TOTAL hold, so a NAMED episode has both an
+  opening and a closing bracket.
+
+  Both arms share that one flag, and the unattributed arm arms it on WAITER
+  rows rather than a holder's. So `acquired/0` CLEARS it on promotion: a pid
+  reported once while queued would otherwise carry an armed flag into its own
+  hold and never be reportable as the holder it went on to become. An
+  unattributed episode gets no closing bracket — there was no hold to total,
+  and inventing one is the claim this arm exists to avoid.
 
   ## Deriving the holder's identity instead of storing it
 
@@ -149,6 +192,19 @@ defmodule Grappa.Repo.LockWatch do
           holder: sample(),
           waiters: [sample()],
           waiter_count: non_neg_integer()
+        }
+
+  @typedoc """
+  A queue nobody can be blamed for (#1687): writers past the threshold with
+  no holder this instrument can name. `holders_registered` is the honesty
+  field — `0` says the seam saw no holder at all (the autocommit case),
+  a positive value says one is registered but has not crossed the
+  threshold. There is deliberately no `holder` key: a record cannot carry a
+  field for a thing that was never observed.
+  """
+  @type unattributed :: %{
+          waiters: [sample()],
+          holders_registered: non_neg_integer()
         }
 
   defstruct [:stall_threshold_ms, :tick_ms, :enabled]
@@ -235,10 +291,18 @@ defmodule Grappa.Repo.LockWatch do
   # precisely the semantic change this instrument is forbidden to make.
   # `enabled?/0` proves the table exists and `:ets.update_element/3` answers
   # `false` (never raises) for an absent key.
+  #
+  # 🔴 The `reported?` reset is load-bearing since #1687 gave the flag a
+  # second writer. The unattributed arm arms it on WAITER rows, and this
+  # update rewrites the role and restarts the clock in place — so without
+  # `{4, false}` a pid reported once while queued would carry an armed flag
+  # into its own hold and `unreported?/1` would suppress it forever. Clearing
+  # it here is not defensive: the promotion IS a new episode, with a new
+  # clock, and a new episode has not been reported.
   @spec acquired() :: :ok
   defp acquired do
     if depth() == 1 and enabled?() do
-      :ets.update_element(@table, self(), [{2, :holding}, {3, now_ms()}])
+      :ets.update_element(@table, self(), [{2, :holding}, {3, now_ms()}, {4, false}])
     end
 
     :ok
@@ -344,21 +408,60 @@ defmodule Grappa.Repo.LockWatch do
 
   ## ----- Detection -----------------------------------------------------
 
-  # A stall is a holder past the threshold WITH a queue behind it. Neither
-  # half alone qualifies: a lone slow transaction blocks nobody, and waiters
-  # with no holder are the pool's business, not the write lock's.
+  # A NAMED stall is a holder past the threshold WITH a queue behind it.
+  # Neither half alone qualifies: a lone slow transaction blocks nobody.
+  #
+  # The `else` is the #1687 arm, and it is a fallback rather than a second
+  # independent test on purpose — the two are mutually exclusive, so a real
+  # stall is reported once, by its own name, and never also as an anonymous
+  # queue. It fires in both shapes the first arm walks away from: no holder
+  # registered at all (the autocommit case that produced the prod episode),
+  # and a holder registered but still under the threshold while the queue
+  # behind it is already past it. Both are the same defect — writers
+  # demonstrably stuck, instrument silent — so they get the same cure and one
+  # metadata field tells them apart.
   @spec detect(integer(), non_neg_integer()) :: :ok
   defp detect(now, threshold_ms) do
     {holders, waiters} = partition(rows(), now)
 
-    stalled = Enum.filter(holders, fn {pid, elapsed} -> elapsed >= threshold_ms and unreported?(pid) end)
-
-    if stalled != [] and waiters != [] do
-      waiter_samples = Enum.map(waiters, fn {pid, elapsed} -> sample(pid, elapsed) end)
-      Enum.each(stalled, &report(&1, waiter_samples))
+    # 🔴 The fork is ATTRIBUTABLE, not "did we print something". Splitting on
+    # the reportable set instead would make an already-announced episode fall
+    # through to the second arm on the very next tick and print "none past
+    # the threshold" about a holder that is past it — the instrument lying in
+    # the act of being more talkative. Nameable-at-all and
+    # not-yet-named-this-episode are two different questions, and only the
+    # first one chooses the arm.
+    if attributable(holders, threshold_ms) == [] do
+      report_unattributed(unreported_past(waiters, threshold_ms), length(holders))
+    else
+      report_stalls(unreported_past(holders, threshold_ms), waiters)
     end
 
     :ok
+  end
+
+  # Holders past the threshold, whether or not this episode already named
+  # them. This is the "can anyone be blamed at all?" question.
+  @spec attributable([{pid(), non_neg_integer()}], non_neg_integer()) :: [{pid(), non_neg_integer()}]
+  defp attributable(holders, threshold_ms) do
+    Enum.filter(holders, fn {_, elapsed} -> elapsed >= threshold_ms end)
+  end
+
+  # Rows past the threshold that this episode has not reported yet — the
+  # "what is left to say?" question. Shared by both arms so they cannot
+  # drift on either half of the predicate.
+  @spec unreported_past([{pid(), non_neg_integer()}], non_neg_integer()) :: [{pid(), non_neg_integer()}]
+  defp unreported_past(rows, threshold_ms) do
+    Enum.filter(rows, fn {pid, elapsed} -> elapsed >= threshold_ms and unreported?(pid) end)
+  end
+
+  @spec report_stalls([{pid(), non_neg_integer()}], [{pid(), non_neg_integer()}]) :: :ok
+  defp report_stalls([], _), do: :ok
+  defp report_stalls(_, []), do: :ok
+
+  defp report_stalls(stalled, waiters) do
+    waiter_samples = Enum.map(waiters, fn {pid, elapsed} -> sample(pid, elapsed) end)
+    Enum.each(stalled, &report(&1, waiter_samples))
   end
 
   @spec report({pid(), non_neg_integer()}, [sample()]) :: :ok
@@ -390,6 +493,54 @@ defmodule Grappa.Repo.LockWatch do
       stall
     )
   end
+
+  # #1687 — the queue nobody can be blamed for. Same two doors as `report/2`,
+  # and deliberately the same SHAPE of line, so an operator scanning the log
+  # reads them as one instrument with two verdicts rather than two tools.
+  #
+  # It carries the LONGEST waiter's stack for the same reason `report/2`
+  # carries the holder's: it is the one frame that says which of the two
+  # topologies this is. The measurement is named `longest_wait_ms` and not
+  # `held_ms` — nothing here observed a hold, and reusing the hold field
+  # would smuggle the claim back in through the schema after the prose had
+  # been careful to leave it out.
+  @spec report_unattributed([{pid(), non_neg_integer()}], non_neg_integer()) :: :ok
+  defp report_unattributed([], _), do: :ok
+
+  defp report_unattributed(queued, holders_registered) do
+    # Arm BEFORE emitting, exactly as `report/2` does: a 170-second prod
+    # episode at `tick_ms: 1_000` would otherwise print the same warning ~170
+    # times, which an operator reads the same way as never printing it.
+    Enum.each(queued, fn {pid, _} -> :ets.update_element(@table, pid, [{4, true}]) end)
+
+    samples = Enum.map(queued, fn {pid, elapsed} -> sample(pid, elapsed) end)
+    longest = Enum.max_by(samples, & &1.elapsed_ms)
+    report = %{waiters: samples, holders_registered: holders_registered}
+
+    Logger.warning(
+      "db lock stall UNATTRIBUTED: #{length(samples)} writer(s) queued past the threshold, " <>
+        "longest #{longest.elapsed_ms}ms — #{holder_clause(holders_registered)}, so the holder is " <>
+        "NOT attributable at the BEGIN IMMEDIATE seam; longest waiter #{longest.pid} " <>
+        "status=#{inspect(longest.status)} at #{longest.current_function}, " <>
+        "stack: #{Enum.join(longest.stacktrace, " <- ")}",
+      waiters: length(samples),
+      longest_wait_ms: longest.elapsed_ms
+    )
+
+    :telemetry.execute(
+      [:grappa, :repo, :lock_stall, :unattributed],
+      %{waiter_count: length(samples), longest_wait_ms: longest.elapsed_ms},
+      report
+    )
+  end
+
+  # The two sub-cases, named apart because they call for different next
+  # moves: `0` means the writer holding the lock never passed the seam (widen
+  # coverage, or accept the blindness knowingly), while a positive count
+  # means the seam DID see a holder and the queue is simply older than it.
+  @spec holder_clause(non_neg_integer()) :: String.t()
+  defp holder_clause(0), do: "no holder registered"
+  defp holder_clause(n), do: "#{n} holder(s) registered, none past the threshold"
 
   ## ----- Sampling -------------------------------------------------------
 

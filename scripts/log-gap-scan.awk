@@ -112,6 +112,12 @@ function count_signatures(line) {
         if (line ~ /write lock held by another writer/) CNT["lockheld"]++
         if (line ~ /db lock stall: holder /) CNT["lockstall"]++
         if (line ~ /db lock stall RESOLVED/) CNT["lockstall_resolved"]++
+        # #1687 — the third LockWatch edge. Its own counter, not folded into
+        # `lockstall`: that one means "a holder was NAMED", and the whole
+        # point of this one is that nobody could be. Folding them would let
+        # an episode the instrument could not attribute be read off the
+        # artefact as one it did.
+        if (line ~ /db lock stall UNATTRIBUTED/) CNT["lockstall_unattributed"]++
     }
 }
 
@@ -125,7 +131,7 @@ function summary_line(svc, nlines, mg, mat) {
     return sprintf(SUMFMT, svc, nlines, mg, mat, THRESH, ngap, \
         CNT["db30"], CNT["idle30"], CNT["dropped"], CNT["saturated"], \
         CNT["interrupted"], CNT["lockheld"], CNT["lockstall"], \
-        CNT["lockstall_resolved"])
+        CNT["lockstall_resolved"], CNT["lockstall_unattributed"])
 }
 
 function bail(msg) {
@@ -196,7 +202,8 @@ BEGIN {
 
     SUMFMT = "%s\tSUMMARY\tlines=%d\tmaxgap=%.1f\tmaxgap_at=%s\tgaps_ge_%d=%d" \
         "\tdb30=%d\tidle30=%d\tdropped=%d\tsaturated=%d\tinterrupted=%d" \
-        "\tlockheld=%d\tlockstall=%d\tlockstall_resolved=%d\n"
+        "\tlockheld=%d\tlockstall=%d\tlockstall_resolved=%d" \
+        "\tlockstall_unattributed=%d\n"
 
     # Samples copied from the emitting call site. Keep them verbatim: a
     # sample edited to fit the pattern turns the control into a mirror.
@@ -206,6 +213,11 @@ BEGIN {
     #   interrupted        — Repo.BusyRetry, interrupted arm (#1657).
     #   lockheld           — Repo.BusyRetry, busy_locked arm (#1420).
     #   lockstall{,_resolved} — Grappa.Repo.LockWatch's two episode edges.
+    #   lockstall_unattributed — LockWatch's third edge (#1687): a queue past
+    #                      the threshold that named nobody. It counted ZERO
+    #                      through the whole 2026-08-22 prod episode because
+    #                      the line did not exist; a census blind to it reads
+    #                      exactly like a clean run.
     sig("db30", "QUERY OK source=\"messages\" db=30064.1ms queue=0.1ms")
     sig("idle30", "client #PID<0.700.0> checked out, idle=30062.4ms")
     sig("dropped", "scrollback row dropped for #bofh: :persist_unavailable")
@@ -223,6 +235,11 @@ BEGIN {
         " waiter(s) queued — holder status=:runnable at :gen_server.loop/7, stack: …")
     sig("lockstall_resolved", \
         "db lock stall RESOLVED: holder #PID<0.512.0> released RESERVED after 30456ms")
+    sig("lockstall_unattributed", \
+        "db lock stall UNATTRIBUTED: 3 writer(s) queued past the threshold, longest" \
+        " 31303ms — no holder registered, so the holder is NOT attributable at the" \
+        " BEGIN IMMEDIATE seam; longest waiter #PID<0.512.0> status=:waiting at" \
+        " :gen_server.loop/7, stack: …")
 
     # Deliberately ordinary: a real line from the same stream that names
     # none of the signatures. It DOES carry the word "lock" so the
