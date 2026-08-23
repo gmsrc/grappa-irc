@@ -60011,3 +60011,121 @@ the logo probe, and out of scope here rather than silently folded in.
 cic bundle only. No server module, no `VERSION` bump, no migration: the change
 is the station table, one new `cicchetto/scripts/` probe and a `package.json`
 script that CI never calls.
+<!-- entry #1094 -->
+
+---
+
+## 2026-08-24 — #1094: the prepend preserve moves onto a commit seam, and the fetch gets a floating spinner
+
+Paging older history in `ScrollbackPane` has always had to compensate for the
+prepend: rows land ABOVE the viewport, so `scrollTop` has to move by the height
+they added or the reader's row slides down the pane. The compensation
+(`applyPrependPreserve`, #608 W6) was correct arithmetic wired to the wrong two
+instants:
+
+```ts
+const oldScrollHeight = listRef.scrollHeight;
+const oldScrollTop = listRef.scrollTop;
+void loadMoreScrollback(slug, name).then(() =>
+  applyPrependPreserve(oldScrollHeight, oldScrollTop),
+);
+```
+
+Both terms are live DOM geometry, read BEFORE a network round trip and spent
+AFTER it. #1094 filed the second half of that (the restore lands at least a
+frame after the store write) from a frame-sampled harness on the anchored
+initial load. vjt's field report of 2026-08-23 supplied the first half from the
+ORDINARY scroll-to-top gesture — *"salire e ripescare messaggi vecchi smuove
+tutto l'elenco"* — which the issue itself had listed under *What is NOT
+measured*.
+
+### What was measured here, and what was not
+
+The staleness is the operator-visible half and it is arithmetic, not timing.
+`maybeLoadOlder` arms at `scrollTop <= 200`; the flick that armed it carries on
+to 0 while the request is out; the restore then aims at `delta + 150` (say)
+instead of `delta + 0` and drags the pane down by the difference. A live row
+appending at the tail during the same window inflates `newScrollHeight -
+oldScrollHeight` by its own height, so the prepend is credited with growth it
+did not cause. Both are now pinned in jsdom, red-first, in
+`ScrollbackPane.test.tsx`.
+
+**Not established, and deliberately not asserted anywhere: that the ORIGINAL
+one-frame gap reproduces on the `loadMore` path.** Reading the code, it should
+not: `loadMore`'s store write is the last thing before the async function
+returns, Solid flushes render effects and user effects synchronously inside
+`setScrollbackByChannel`, and a `.then()` on the resulting promise is a
+microtask of that same task — microtasks drain before paint. The issue's
+measurement was taken on the anchored initial load, which has a different await
+shape. That question is left open; the fix does not depend on the answer,
+because binding the compensation to the mutation makes the timing correct by
+construction however many awaits the verb grows later.
+
+### The seam
+
+`loadMore(slug, name, aroundCommit)` — a `PrependCommitSeam`, called with no
+arguments immediately BEFORE the one store write that prepends the page, and
+the function it returns called immediately AFTER it. The store stays DOM-free:
+it says WHEN, the pane reads WHAT. `lib/scrollback.ts` was the only place that
+could offer those two instants, and the pane is the only place that can read
+geometry — that split is the whole reason this is a callback and not a return
+value.
+
+Required, not optional: `ScrollbackPane` is the sole caller, and an optional
+parameter here would be a silent degradation path (CLAUDE.md).
+
+One consequence worth naming: `loadMore`'s `try/catch` was narrowed to cover
+the REQUEST only, via a `fetchOlderPage` helper returning `null` for a failure
+(distinct from `[]`, which is the server saying "no older rows" and is what
+latches `loadMoreExhausted`). Leaving the seam inside the old wide catch would
+have had a boundary silently absorb an exception thrown by a DOM scroll write.
+
+### The spinner: FLOATING, and why
+
+`ScrollbackPane` had no loading state at all on this path. The open question
+the issue left was whether the affordance sits ABOVE the first row, occupying
+the space the prepend will fill, or floats over the pane. **Floating**, on
+three grounds, the third being decisive:
+
+1. An in-flow slot adds a term to the exact quantity `applyPrependPreserve`
+   compensates. Correctness would then depend on the slot's unmount landing in
+   the same flush as the prepend.
+2. It has TWO edges, not one. It grows the list when the fetch STARTS, and
+   nothing compensates that — so the cure for a jump at t=RTT would open a new
+   one at t=0.
+3. The pane already made this call once and paid for the in-flow version
+   first: the #133 WHOIS/WHOWAS/LUSERS cards were flex siblings before
+   `.scrollback` and *"shrank the scroll list on mount, shifting the reader's
+   anchor"*. `DirectoryPane`'s pull affordance states the same rule from the
+   other side — *"a transform does not touch layout, so scrollHeight and the
+   pane's scroll-preservation effect are untouched"*.
+
+The one thing an in-flow slot buys — reserving the space the page will fill —
+it does not actually buy: the ring is 18px and a page is ~1000px.
+
+The in-flight state it renders from is `isLoadingOlder(slug, name)`, which is
+the burst guard itself, promoted from a plain `Set` to a signal. Not a second
+boolean beside it: a mirrored flag is the one that hangs on whichever terminal
+its author forgot, which is the `directory-pull-spinner` failure mode
+(`onCommit` clearing the paint on the one path that works) restated.
+
+The ring reuses `.directory-pull-spinner`'s declaration block by joining its
+selector rather than becoming the fourth hand-copy that block's own comment
+warns about. It is a selector and not a hoisted `.spinner-ring` because the
+other two rings genuinely differ (2.5rem/3px accent; 16px currentColor), and
+migrating them is a change to Login and ComposeBox.
+
+### Coverage, stated honestly
+
+The units pin the MECHANISM and cannot pin the OUTCOME: jsdom has no layout
+engine, so every px in them is a `defineProperty`. `issue1094-prepend-preserve-commit.spec.ts`
+is the outcome guard — anchor a row, page older history in underneath it while
+the operator keeps flicking, assert it did not move — with the loading
+affordance doubling as the calibration arm that proves the injected fetch delay
+took effect. It is an END-STATE oracle, not frame sampling, deliberately.
+**That spec has not been executed: no browser is runnable on this host, and the
+e2e lane is exclusive.** CI is its first run.
+
+#1151 (11px of drift for an 18px insertion, same applier) is adjacent and was
+left alone. The e2e tolerance is set wide enough to survive that residue and
+narrow enough that the ~150px this issue is about cannot hide inside it.
