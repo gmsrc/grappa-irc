@@ -59646,3 +59646,51 @@ the instrument accusing the victim, which is worse than silence and is the
 precise confusion it exists to resolve. Tagging it `:waiting` reports nothing
 new. A third role is needed, and it must be priced in ETS writes on the hot
 path before it is proposed.
+
+### The test harness had two clocks, in the wrong order
+
+CI run `32663241142` turned the new cohort test red — `6817 tests, 1 failure` —
+with `assert_receive {:unattributed, _, _}` timing out at 1000ms and an
+`%Exqlite.Error{message: "database is locked", statement: "BEGIN IMMEDIATE
+TRANSACTION"}` sitting in the mailbox instead: the writer that was supposed to
+be QUEUED had died. Local `check.sh` was green, so it is load-dependent.
+
+Measured, in the harness's own topology, before changing anything:
+
+* The give-up is the configured `busy_timeout` and it tracks: `500` → 586ms,
+  `2_000` → 4.2s, `30_000` → 35.1s. The option reaches the connection.
+* That budget is wall-clock and load-INSENSITIVE: 33.9s idle versus 32.8s with
+  32 spinning processes on the same BEAM. exqlite's custom busy handler
+  (`c_src/sqlite3_nif.c:332`) models elapsed from an invocation count, so the
+  worry that a loaded scheduler would burn it faster was checked, and refuted.
+* Sampling a writer parked inside the dirty NIF is cheap, not blocking:
+  `LockWatch.inspect_lock/0` costs 0–3ms against a waiter whose
+  `current_function` is `Exqlite.Sqlite3NIF.execute/2`.
+* A killed waiter dies AT ONCE (0ms) and its watch-table row goes with it —
+  exqlite's busy handler polls `enif_is_process_alive` on the caller — so the
+  suspected "ghost row poisons the next test's barrier" cascade is refuted too.
+* Every test in the file costs 15–378ms.
+
+So the waiter has one hard budget that starts at its `BEGIN IMMEDIATE` and has
+to cover everything the test does before the holder is released, and that
+budget was SMALLER than ExUnit's per-test deadline. A test ExUnit still allowed
+to run could therefore outlive its own waiter, and reported the consequence
+rather than the cause. The cure is the ORDER, not a bigger number: the budget
+is now derived from the module's own deadline (`@waiter_budget_ms =
+@test_timeout_ms * 2`), so a stalled runner fails as an ExUnit timeout naming
+the test and the line. It is the same move as `observed_write/3`'s
+`timeout: :infinity` one layer out — that removed the checkout deadline so
+`busy_timeout` was the only bound left; this bounds `busy_timeout` in turn.
+
+Proven by displacement, not by re-running the flake: with a 35s stall injected
+between the barrier and the scan, the OLD shape reproduces the CI failure
+exactly — same assertion, same mailbox value, same two stack frames — and the
+NEW shape passes with the same injection (8 tests, 0 failures, 37.3s). The
+injection is a measurement and is not committed.
+
+**Not measured, and not guessed at:** what consumed ~30s of that waiter's
+budget on the runner. The exception is stamped `20:07:53.782`, one second
+before the assertion gave up, inside a 35.4s window in which ~103 tests
+flushed; the three accelerators above were each tested and refuted, and no
+fourth is elected here. The ordering fix does not depend on knowing which one
+it was — it removes the class.

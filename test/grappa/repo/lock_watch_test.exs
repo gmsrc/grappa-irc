@@ -42,6 +42,34 @@ defmodule Grappa.Repo.LockWatchTest do
   @detected [:grappa, :repo, :lock_stall, :detected]
   @unattributed [:grappa, :repo, :lock_stall, :unattributed]
 
+  # 🔴 TWO CLOCKS BOUND EVERY TEST HERE, AND THEY HAVE TO BE ORDERED.
+  #
+  # The queued writer stays queued only while SQLite's busy handler keeps
+  # waiting for it: `busy_timeout` is a hard wall-clock budget that starts at
+  # that writer's `BEGIN IMMEDIATE` and has to cover everything the test does
+  # before it releases the holder. ExUnit's own per-test deadline is the other
+  # clock. While the budget was the SMALLER of the two, a runner slow enough to
+  # push a test past it killed the WAITER first, and the test then reported the
+  # consequence — a telemetry message that never arrived, with an unrelated
+  # `%Exqlite.Error{message: "database is locked"}` sitting in the mailbox —
+  # rather than "this test is too slow" (#1687, CI run 32663241142).
+  #
+  # Measured on 29bea21d, in this file's own topology: the budget is
+  # wall-clock and load-INSENSITIVE (`30_000` configured → 32.9s idle and
+  # 32.8s with 32 spinning processes; `500` → 586ms, `2_000` → 4.2s, so it
+  # tracks the setting), while every test in this file costs 15–378ms. So the
+  # cure is not a bigger guess at the budget: it is the ORDER. Derive the
+  # budget FROM the test deadline and no test ExUnit still allows to run can
+  # outlive its own waiter — a stalled runner then fails as an ExUnit timeout,
+  # which names the test and the line instead of the symptom.
+  #
+  # This is the same move as `observed_write/3`'s `timeout: :infinity`, one
+  # layer out: that one removed the checkout deadline so `busy_timeout` was
+  # the only bound left, and this one bounds `busy_timeout` in turn.
+  @test_timeout_ms 60_000
+  @moduletag timeout: @test_timeout_ms
+  @waiter_budget_ms @test_timeout_ms * 2
+
   setup do
     LockWatch.put_test_enabled(true)
     on_exit(fn -> LockWatch.put_test_enabled(false) end)
@@ -336,14 +364,21 @@ defmodule Grappa.Repo.LockWatchTest do
     path = Path.join(System.tmp_dir!(), "lock_watch_#{System.unique_integer([:positive])}.db")
     on_exit(fn -> Enum.each(["", "-wal", "-shm"], &File.rm(path <> &1)) end)
 
-    # busy_timeout is generous on purpose: the waiter must still be WAITING
-    # when the scan runs. A short timeout would turn it into an error path
-    # and measure `BusyRetry` instead of this module.
+    # busy_timeout is the waiter's whole life: it must still be WAITING when
+    # the scan runs, and a short timeout would turn it into an error path and
+    # measure `BusyRetry` instead of this module. The value is DERIVED from the
+    # test deadline rather than chosen — see `@waiter_budget_ms` for why the
+    # two clocks have to be ordered and what a mis-order looks like.
     #
     # It is NOT the only wait on that writer, and on its own it does not
     # govern — see `observed_write/3`.
     {:ok, repo} =
-      TmpRepo.start_link(database: path, pool_size: 2, busy_timeout: 30_000, journal_mode: :wal)
+      TmpRepo.start_link(
+        database: path,
+        pool_size: 2,
+        busy_timeout: @waiter_budget_ms,
+        journal_mode: :wal
+      )
 
     TmpRepo.query!("CREATE TABLE t(id integer)")
 
