@@ -59694,3 +59694,139 @@ before the assertion gave up, inside a 35.4s window in which ~103 tests
 flushed; the three accelerators above were each tested and refuted, and no
 fourth is elected here. The ordering fix does not depend on knowing which one
 it was — it removes the class.
+<!-- entry #1692 -->
+
+---
+
+## 2026-08-23 — #1692: a runtime write to a compile-time key, and the build that could not be recompiled out of it
+
+`bin/grappa`'s boot verbs and `scripts/mix.sh --env=prod` were dead on a
+compose prod stack, all of them, before their task ran:
+
+```
+** (Mix) the application :grappa has a different value set for path [:code_reloader]
+   inside key GrappaWeb.Endpoint during runtime compared to compile time.
+  * Compile time value was set to: true
+  * Runtime value was not set
+```
+
+`gen-vapid` failed identically to `bind-network`, which is the tell: the
+gate is `Config.Provider.validate_compile_env/1`, and it fires before any
+task code. The `--rpc-eval` verbs were unaffected — they never enter Mix.
+
+### The precondition, and why it could only ever be a matter of time
+
+`config/runtime.exs`'s prod block set `code_reloader: true` on the
+Endpoint. Phoenix reads that key with `Application.compile_env/3` in its
+`use` macro (`endpoint.ex:426`, alongside `debug_errors` and `force_ssl`),
+so the value observed at compile time is recorded into
+`_build/<env>/lib/grappa/ebin/grappa.app` and compared, at every later Mix
+invocation, against what the config files say. `runtime.exs` is not one of
+those files: in the Mix lane it is evaluated by `app.config`, AFTER
+compilation. A compile_env key written from there cannot agree with its
+own record except by accident.
+
+The release lane already knew. `mix.exs` carried
+`validate_compile_env: false` with a comment naming this exact key as the
+reason, so the jail booted by silencing the detector rather than by
+satisfying it. The Mix lane had no such silencer, which is why it is the
+one that broke — and the mix.exs comment's closing claim, that "the Docker
+path doesn't hit this because it boots via `mix phx.server`", was the
+half-truth: true of the boot, false of every other `mix` invocation
+against the build that boot produced.
+
+### What actually bakes the wrong value in
+
+A clean prod compile records `error` (unset) for the key: measured on an
+untouched `_build/prod` and again on a wiped one. The `{ok,true}` in the
+reported build therefore came from a compile that observed the RUNTIME
+value — i.e. one that ran in a VM where runtime.exs had already been
+applied.
+
+`mix compile` cannot be that compile: it depends on `loadpaths`, which
+re-runs `loadconfig` and resets the app env to config-file values. Measured
+— a `put_env` followed by `Mix.Task.rerun("compile", ["--force"])` records
+`error`, not `{ok,true}`. What CAN be that compile is
+`Phoenix.CodeReloader`: its default `reloadable_compilers` include `:app`
+(`endpoint/supervisor.ex:247`) and it invokes those compiler tasks directly
+via `run_compilers/4` (`code_reloader/server.ex:330`), bypassing
+`loadconfig` entirely. Replicating exactly that shape —
+`Mix.Task.run("compile.elixir", ["--force"])` then
+`Mix.Task.run("compile.app", [])` with the value put into the app env
+first — records `{ok,true}`, and the very next `scripts/mix.sh` run
+reproduces the reported error byte for byte.
+
+And `code_reloader: true` is precisely what puts such a reloader inside the
+prod VM at all (`endpoint/supervisor.ex:91`). The flag's one live effect in
+production was the ability to poison its own build.
+
+### It does not heal
+
+Measured, and it is the part worth remembering: on a poisoned build **`mix
+compile` dies on the same gate**, rc=1. The state is therefore sticky — an
+operator cannot recompile out of it. The exits are `mix deps.clean grappa
+--build`, a wiped `_build/<env>`, or `--no-validate-compile-env`. Note that
+a change to a `config/*.exs` file DOES heal it, because Elixir treats those
+as compile inputs and recompiles before the gate can bite; a value that
+entered through runtime.exs has no such file behind it, so nothing
+invalidates it. That asymmetry is the whole bug in one sentence.
+
+### The cure, and why removal rather than silence
+
+Both halves of the mismatch were removed, not papered.
+`config/runtime.exs` no longer writes `code_reloader` (nor its
+`reloadable_apps` companion), and `mix.exs` no longer disables the release
+boot check. Passing `--no-validate-compile-env` on the toolchain lane —
+the issue's own preferred axis — was rejected: it disables a correct
+detector for every future key in order to keep a flag that does nothing.
+
+Nothing does. No `Phoenix.CodeReloader` plug exists in the endpoint, and
+`/admin/reload` has gone through `Grappa.HotReload`'s md5 beam walk since
+CP28, exactly because the Phoenix reloader no-ops without mix. The 2026-07-31
+"#503 unit C" entry left the flag in place as "harmless in a release"; that
+reading was right about the release image and wrong about the Mix lane, and
+this entry is the correction.
+
+Re-arming the release check is safe by enumeration, not by hope: five
+loaded applications declare any `compile_env` (grappa, bunt, mime, plug,
+remote_ip), runtime.exs writes to three (`:grappa`, `:ex_nudge`,
+`:logger`), only `:grappa` is in both, and inside it no written path meets
+a read path. In a release the config provider is the ONLY thing that can
+move a value between compile and boot, so that intersection IS the whole
+exposure. Verified on the artefact: a fresh `mix release --overwrite` ships
+`sys.config` with `validate_compile_env => [...]` (armed) and the entry it
+will check reading `error`.
+
+### The pin
+
+`test/grappa/config/compile_env_runtime_overlap_test.exs` asserts the
+intersection stays empty. Both sides are DERIVED — reads from the `.app`
+files the build just produced, writes from the parsed AST of runtime.exs —
+because a hand-kept list of either drifts from the thing it describes.
+Matching is prefix-symmetric: `Config.config/3` deep-merges a keyword
+value, so a write to `[:admission, :captcha_secret]` must not flag a read
+of `[:admission, :network_circuit_threshold]`, while a write of a
+non-keyword value replaces a whole key and a read may itself name a whole
+key (`[Grappa.ChannelDirectory]`) that any subkey write disturbs.
+
+### Deploy class and what stayed unproven
+
+COLD, twice over: `config/*.exs` matches `Grappa.Deploy.Preflight`'s
+`config?/1` and `mix.exs` matches `mix_deps?/1`.
+
+Not established: WHICH agent recompiled on the reporting operator's box.
+The mechanism and its stickiness are reproduced; the trigger is not, and
+today's tree contains no caller that would fire `Phoenix.CodeReloader.reload/1`.
+The fix does not depend on the answer — it removes the precondition every
+candidate needs — but the question is left open rather than closed by
+assertion.
+
+Two adjacent staleness findings were left alone deliberately, being
+neither caused nor touched by this change: `mix.exs`'s `listeners:
+[Phoenix.CodeReloader]` comment claims the listener is what lets "the next
+/admin/reload pick up the new beams", which has not been true since reload
+moved to `Grappa.HotReload` (the listener only accumulates modules for a
+`Server.reload!` that never comes); and `docs/OPERATIONS.md`'s hot-deploy
+section still attributes module reload to `:code.modified_modules/0` +
+`:code.load_file/1`, both of which `Grappa.HotReload`'s moduledoc names as
+tried-and-rejected with live repros.

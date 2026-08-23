@@ -2772,9 +2772,15 @@ cicchetto SPA, and nothing to compile with — no Elixir, no mix, no
 source, no code reloader, no inotify. It boots `bin/grappa start`, and a
 hot update swaps beams into `lib/grappa-<vsn>/ebin` and fires
 `Grappa.HotReload` (unit E), never the dev reloader. Do not expect the
-compose hot-edit loop from it. `code_reloader: true` survives in the prod
-Endpoint config and is harmless in a release — the reasoning is in
-DESIGN_NOTES 2026-07-31, "#503 unit C".
+compose hot-edit loop from it. `code_reloader: true` NO LONGER survives in
+the prod Endpoint config: #1692 measured that it was not harmless after
+all — Phoenix reads that key with `Application.compile_env/3`, and setting
+it from `config/runtime.exs` is what killed every `bin/grappa` boot verb
+and every `scripts/mix.sh --env=prod` on a compose prod stack. It is now
+set in `config/dev.exs` only. The 2026-07-31 "#503 unit C" reasoning stands
+for the release image itself (no mix, so no reloader either way); what it
+got wrong was the Mix lane, and DESIGN_NOTES 2026-08-23 "#1692" carries the
+correction.
 
 **Base image: `elixir:1.19-otp-28-alpine` (Docker Hub official).** The
 earlier multi-stage debian build used
