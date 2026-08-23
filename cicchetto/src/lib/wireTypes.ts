@@ -39,7 +39,12 @@ export type LiveIntrospectionSessionEntryDegradedField =
 
 export type NetworksCredentialAuthMethod = IRCAuthFSMAuthMethod;
 
-export const NETWORKS_CREDENTIAL_CONNECTION_STATE = ["connected", "parked", "failed"] as const;
+export const NETWORKS_CREDENTIAL_CONNECTION_STATE = [
+  "connected",
+  "failing",
+  "parked",
+  "failed",
+] as const;
 export type NetworksCredentialConnectionState =
   (typeof NETWORKS_CREDENTIAL_CONNECTION_STATE)[number];
 
@@ -85,6 +90,7 @@ export const SCROLLBACK_META_TKEY = [
   "notice_target",
   "statusmsg",
   "nick_fallback",
+  "link_failure",
 ] as const;
 export type ScrollbackMetaTKey = (typeof SCROLLBACK_META_TKEY)[number];
 

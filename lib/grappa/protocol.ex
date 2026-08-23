@@ -71,11 +71,27 @@ defmodule Grappa.Protocol do
 
   use Boundary, top_level?: true, deps: [], exports: []
 
-  # Protocol v4 (#1679) — v1 was the initial published contract (#447), v2
+  # Protocol v5 (#1675) — v1 was the initial published contract (#447), v2
   # the ruling that made the bump unconditional (#1393d), v3 added
-  # `tls_verify` to `Grappa.Networks.Servers.AdminWire.t` (#1677). v4 adds
+  # `tls_verify` to `Grappa.Networks.Servers.AdminWire.t` (#1677), v4 added
   # the `GET /boot` envelope (`GrappaWeb.BootJSON.index/1`): networks, every
-  # network's channel tree, and each channel's head page in one round trip.
+  # network's channel tree, and each channel's head page in one round trip
+  # (#1679). v5 adds the `failing` value to
+  # `NETWORKS_CREDENTIAL_CONNECTION_STATE` and the `link_failure` key to the
+  # scrollback meta allowlist.
+  #
+  # A fourth value in a literal union is the additive case the #1393d
+  # ruling is about, and it is the direction that bites: a client that
+  # starts REQUIRING `failing` (to grey a hammering network, say) cannot
+  # be served by a server that never emits it, and nothing on the server
+  # side would express that break without this number moving. Which
+  # version it lands in is not a judgement call either — `mix
+  # grappa.wire_pin --update` refuses to rewrite the digest while the
+  # number stands still, so a moved shape either bumps or stays red.
+  #
+  # v5 and not v4 because this branch was written against v3 and #1679
+  # landed v4 first: the rebase put TWO wire changes in one digest, and the
+  # pin recomputed against the union rather than against either half.
   #
   # Purely ADDITIVE — no existing endpoint changed shape, and a v3 client
   # that never calls `/boot` is served exactly as before. It bumps anyway,
@@ -93,8 +109,8 @@ defmodule Grappa.Protocol do
   #
   # @min_protocol_version is NOT the same axis and stays at 1: it rises only
   # when old clients can no longer be SERVED, and every client that spoke v1
-  # is still served — v1 clients tolerate what v4 clients require.
-  @protocol_version 4
+  # is still served — v1 clients tolerate what v5 clients require.
+  @protocol_version 5
   @min_protocol_version 1
 
   @doc "The protocol version the server currently speaks."
@@ -105,7 +121,7 @@ defmodule Grappa.Protocol do
   # alongside `@protocol_version`; the spec doubles as the bump tripwire,
   # and now that the bump is routine the tripwire is what keeps it from
   # being done half-way.
-  @spec version() :: 4
+  @spec version() :: 5
   def version, do: @protocol_version
 
   @doc """
