@@ -59398,3 +59398,102 @@ sites, `userAgent.test.ts` pins the classification matrix directly, and
 `push.test.ts` pins the grouping the format feeds; a browser-driven spec
 would exercise Playwright's own UA rather than the branch under test, and
 would assert rendering plumbing that #964's specs already cover.
+<!-- entry #1688 -->
+
+---
+
+## 2026-08-23 — #1688: where the reply quote goes, and the standing ruling that shaped the trigger
+
+peluche reported that right-click → Reply on a compose box already holding
+typed text appended the quote AFTER it. `replyToMessage` was unconditionally
+`draftBeforeReplyQuote(draft) + quote`, and that helper only ever sheds a
+TRAILING marker, so a draft carrying the operator's own words came back
+untouched with the quote behind them.
+
+It is a defect and not a preference because the tail says so. `REPLY_QUOTE_TAIL`
+is documented as carrying a trailing space "so the answer is typed straight
+after the caret" — an invariant about the END of the line, i.e. the shape
+`quote << answer`. Type-then-reply inverts it and leaves a `<<` reading as if it
+separated a quote from an answer sitting in front of it.
+
+### The trigger the issue proposed would have broken #1357
+
+The issue phrased the cure as "if the draft is non-empty and does NOT end with
+`REPLY_QUOTE_TAIL`, put the quote first". That sweeps in a draft the standing
+#1357 ruling already governs. Its acceptance criterion 3 reads: *a draft with
+operator text already typed after the tail is not silently mangled — the
+appended quote must not land before that text*, and it is pinned by a green test
+("does not touch a tail the operator has already typed past"). A draft like
+`<a> primo << ciao` does not end with the tail either, so the proposed trigger
+would have prepended there and reversed a ruling nobody meant to reopen.
+
+So the question the code asks is not "does this draft end with our tail" but
+**"does this draft already carry a quote of OURS"**, and that is deliberately
+two tests joined by `||`:
+
+- it ENDS with our tail — the #1357 accumulate case, whose marker is shed;
+- it STARTS with our quote shape — the case where an answer has been typed past
+  the tail, which must keep appending.
+
+Everything else is the operator's text and the quote goes in front of it.
+
+### The head test reuses `quotableBody`'s regex rather than searching for `<<`
+
+`startsWithReplyQuote/1` is a new export over the existing `PREVIOUS_QUOTE`
+regex — the anchored `^(?:<nick>|\* nick) [\s\S]*<<(?: |$)` that #1123 wrote for
+the de-nesting cut. The trap is identical on both sides and it is the trap that
+regex exists for: a bare `<<` search calls `shift << 2` and `cat <<EOF` quotes.
+On the body side that ate a real message; on the draft side it would decide
+whether to reorder somebody's sentence, and it would leave #1688 unfixed for
+exactly the drafts that happen to contain the marker. One nick charset, one
+anchor, one answer.
+
+### The caret cost the issue anticipated is zero, and that was measured
+
+The issue noted that a prepend "costs a caret decision: after a prepend the
+caret should land at the end of the typed answer, not at the end of the quote".
+It costs nothing: `updateCompose` calls `placeCaretAtEndInView(ta)`
+unconditionally, so the caret is already at the very end of the draft, which
+after a prepend IS the end of the typed answer. Asserted in the suite rather
+than left as a reading, because it is the half of the invariant a string
+comparison cannot see.
+
+### A mutant survived, and it proved the `endsWith` half is not redundant
+
+Seven mutants were run against the cure. Six died on the first pass; deleting
+the `endsWith` disjunct left the suite GREEN, because every draft that
+legitimately ends with our tail today also starts with our quote, so the head
+test alone covered them.
+
+The input that separates them is real, not contrived: `bozza <a> primo << ` —
+type first, then reply — is precisely what the PRE-#1688 code produced, and
+compose drafts are persisted, so one can be on screen when this ships. It ends
+with our tail and does not start with our quote. Without the disjunct the next
+reply would prepend and produce a two-marker line. The disjunct stays and the
+case is now pinned by its own test.
+
+Left alone, and noted rather than fixed: a draft that is pure operator text
+ending in ` << ` (`ciao << `) still has that marker shed, because it satisfies
+the `endsWith` test. That is today's behaviour, it predates this issue, and
+changing it is a ruling about which markers are ours to remove — a different
+question from where the quote goes.
+
+### The #1067 expectation that moved, and why its intent did not
+
+`replyToMessage`'s "does not clobber an existing draft" test asserted
+`bozza <vjt> ciao mondo << `, which is the reported defect. Its stated intent —
+"never destroy work in progress: a half-typed line survives the gesture" — is
+untouched by the cure: the line survives whole, only its position relative to
+the quote changed. The test now asserts that both halves are present and leaves
+the ordering to the arms filed under this issue.
+
+### No e2e spec, deliberately
+
+The change is a pure string function plus the one call site that feeds it.
+`replyQuote.test.ts` drives `replyToMessage` through a real mounted textarea in
+jsdom and asserts both the draft and `selectionStart`/`activeElement`, so the
+caret half is covered at the same door. The DOM dance underneath —
+focus, the iOS `preventScroll` short-circuit, `placeCaretAtEndInView` — is
+byte-identical to the one `issue1105-reply-quote-caret-visible.spec.ts` already
+drives in a real browser; this change does not touch it, and a new spec would
+re-assert somebody else's plumbing.
