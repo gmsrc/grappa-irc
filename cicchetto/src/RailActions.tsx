@@ -716,12 +716,22 @@ const RailActions: Component<Props> = (props) => {
               the SAME `isPersistentIdentity` question `quit()` routes on, so
               the affordance and the teardown cannot drift. The confirm modal
               is what makes this a rail entry rather than the drawer's
-              unconfirmed button: it says what stays up before the tap. */}
+              unconfirmed button: it says what stays up before the tap.
+
+              #1705 — the entry READS "switch account", not "detach". The verb
+              is still `detach` everywhere in code (and the class/testid keep
+              that name): what changed is the axis the LABEL is named on. The
+              two lifecycle entries were both named after what happens to the
+              bouncer, which is the right axis for the consequence and the
+              wrong one for the intent "I want to be someone else here" — so a
+              user looking to change account scanned the menu for a word that
+              was deliberately absent and concluded it could not be done. The
+              modal behind it still explains the bouncer half before the tap. */}
           <Show when={canDetach()}>
             <button
               type="button"
               class="shell-chrome-btn rail-action rail-action-detach"
-              aria-label="detach from cicchetto"
+              aria-label="switch account"
               data-testid="detach-btn"
               onClick={() => {
                 confirmDetach(toLogin);
@@ -731,7 +741,7 @@ const RailActions: Component<Props> = (props) => {
               <span class="rail-action-icon" aria-hidden="true">
                 {"\u{1F6AA}"}
               </span>
-              <span class="rail-action-label">detach</span>
+              <span class="rail-action-label">switch account</span>
             </button>
           </Show>
 

@@ -602,7 +602,9 @@ describe("RailActions — detach + quit (#986)", () => {
 
   it("carries a name next to the glyph, like every other rail row", () => {
     mountWithSubject(USER);
-    expect(screen.getByTestId("detach-btn")).toHaveTextContent("detach");
+    // #1705 — the detach entry is LABELLED "switch account": the verb kept its
+    // code name, the words moved from the bouncer axis to the intent one.
+    expect(screen.getByTestId("detach-btn")).toHaveTextContent("switch account");
     expect(screen.getByTestId("quit-irc-btn")).toHaveTextContent("quit");
   });
 

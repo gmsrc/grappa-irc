@@ -138,12 +138,21 @@ function quitBody(): string {
  * landing (the rail passes `navigate("/login")`): `logout()` nulls the token
  * and RequireAuth would redirect anyway, but the explicit navigation makes
  * the landing deterministic rather than effect-ordered.
+ *
+ * #1705 — the modal READS "Switch account". The verb stays `detach` in code;
+ * only the words the operator sees moved from the bouncer axis to the intent
+ * axis. `logout` was not available for this: #126 retired it precisely
+ * because it does not say whether the bouncer stays up, and for an ephemeral
+ * visitor the thing that used to be called logout is what `quit` is now.
+ * "Switch account" names the intent and claims nothing about the connection,
+ * so it cannot re-open that ambiguity — and the body below still spells the
+ * bouncer half out before the tap.
  */
 export function confirmDetach(onDone: () => void): void {
   requestConfirm({
-    title: "Detach",
+    title: "Switch account",
     body: DETACH_BODY,
-    confirmLabel: "Detach",
+    confirmLabel: "Switch account",
     onConfirm: () => void detach().then(onDone),
     alternative: null,
   });
