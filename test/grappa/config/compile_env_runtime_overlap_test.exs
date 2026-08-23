@@ -52,7 +52,7 @@ defmodule Grappa.Config.CompileEnvRuntimeOverlapTest do
     writes = runtime_writes()
 
     overlap =
-      for {app, read_path, _observed} <- compile_env_reads(),
+      for {app, read_path, _} <- compile_env_reads(),
           write_path <- Map.get(writes, app, []),
           collides?(read_path, write_path),
           do: "  * #{inspect(app)} #{inspect(read_path)} (written as #{inspect(write_path)})"
@@ -79,7 +79,7 @@ defmodule Grappa.Config.CompileEnvRuntimeOverlapTest do
   # Every {app, key_path, observed} triple the current build recorded, across
   # all loaded applications — the app that OWNS the key owns the record.
   defp compile_env_reads do
-    for {app, _description, _vsn} <- Application.loaded_applications(),
+    for {app, _, _} <- Application.loaded_applications(),
         entry <- app_compile_env(app),
         do: entry
   end
@@ -102,7 +102,7 @@ defmodule Grappa.Config.CompileEnvRuntimeOverlapTest do
     |> File.read!()
     |> Code.string_to_quoted!()
     |> Macro.prewalk([], fn
-      {:config, _meta, args} = node, acc when is_list(args) -> {node, writes(args) ++ acc}
+      {:config, _, args} = node, acc when is_list(args) -> {node, writes(args) ++ acc}
       node, acc -> {node, acc}
     end)
     |> elem(1)
@@ -125,21 +125,21 @@ defmodule Grappa.Config.CompileEnvRuntimeOverlapTest do
     end
   end
 
-  defp writes(_args), do: []
+  defp writes(_), do: []
 
   defp config_key(key) when is_atom(key), do: {:ok, key}
-  defp config_key({:__aliases__, _meta, parts}), do: {:ok, Module.concat(parts)}
-  defp config_key(_key), do: :error
+  defp config_key({:__aliases__, _, parts}), do: {:ok, Module.concat(parts)}
+  defp config_key(_), do: :error
 
   defp keyword_keys(list) when is_list(list) and list != [] do
-    if Enum.all?(list, &match?({key, _value} when is_atom(key), &1)) do
+    if Enum.all?(list, &match?({key, _} when is_atom(key), &1)) do
       {:ok, Enum.map(list, &elem(&1, 0))}
     else
       :error
     end
   end
 
-  defp keyword_keys(_value), do: :error
+  defp keyword_keys(_), do: :error
 
   defp collides?(read_path, write_path) do
     List.starts_with?(read_path, write_path) or List.starts_with?(write_path, read_path)
