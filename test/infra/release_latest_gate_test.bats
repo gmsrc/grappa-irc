@@ -147,6 +147,11 @@ at_stable_push() {
     run --separate-stderr "$GATE_SH" v1.3.0
     [ "$status" -eq 0 ]
     [ "$output" = "yes" ]
+
+    # The candidates it ranked PAST, named on the way. Without this the case
+    # cannot tell "the scan skipped rc2" from "the scan never looked" — and
+    # what the skip line reports is the evidence for the verdict above it.
+    grep -qF 'ranking skips v1.3.0-rc2' <<<"$stderr"
 }
 
 @test "#1686 an ordinary release with no candidates around it takes :latest" {
@@ -233,11 +238,23 @@ at_stable_push() {
     # over every future release. It is skipped, out loud, and the scan carries
     # on to the highest tag that IS a release — the conservative direction,
     # since a tag the classifier refuses never had images published under it.
-    cd "$(tagged_repo stray v1.0.0 v1.1.0 nightly-2026-08-01 v1.2 v1.3.0)"
+    #
+    # THE STRAY MUST OUTRANK THE TAG UNDER TEST or this case proves nothing:
+    # the scan stops at the first release it finds, so a stray BELOW the winner
+    # is never reached and the assertion holds with the skip arm replaced by a
+    # hard failure. Measured — that mutant SURVIVED against `v1.2` (which sorts
+    # under v1.3.0) and is killed by `v9.9`, which sorts over it.
+    #
+    # `nightly-2026-08-01` rides along to pin the other half: the scan globs
+    # `v*`, so a tag outside that shape never enters the ranking at all and it
+    # is only the `v`-spelled stray that can reach the classifier.
+    cd "$(tagged_repo stray v1.0.0 v1.1.0 v1.3.0 v9.9 nightly-2026-08-01)"
 
     run --separate-stderr "$GATE_SH" v1.3.0
     [ "$status" -eq 0 ]
     [ "$output" = "yes" ]
+    grep -qF 'ranking skips v9.9' <<<"$stderr"
+    refute grep -qF 'nightly-2026-08-01' <<<"$stderr"
 }
 
 @test "#1686 a repository with no release tags at all answers 'no', not 'yes'" {
