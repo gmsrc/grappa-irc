@@ -181,6 +181,7 @@ const MIRRORS: readonly Mirror[] = [
   ),
   ...[
     "e2e/tests/cp14-b2-scroll-up-loadmore.spec.ts",
+    "e2e/tests/issue1094-prepend-preserve-commit.spec.ts",
     "e2e/tests/issue253-kbd-resize-scroll-preserve.spec.ts",
   ].map(
     (file): Mirror => ({
