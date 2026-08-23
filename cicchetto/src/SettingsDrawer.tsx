@@ -56,7 +56,7 @@ import {
   saveUploadTtlSeconds,
   uploadTtlSecondsValue,
 } from "./lib/uploadOrchestrator";
-import { deviceClassIcon, parseUserAgent } from "./lib/userAgent";
+import { deviceClassIcon, deviceDisplayName, parseUserAgent } from "./lib/userAgent";
 import {
   DEFAULT_NOTIFICATION_PREFS,
   getNotificationPrefs,
@@ -1948,7 +1948,7 @@ const SettingsDrawer: Component<Props> = (props) => {
                                         twice on an unnamed row says nothing. */}
                                     <Show when={row.named}>
                                       <span class="device-activity" data-testid="device-parsed">
-                                        {parsed.browser} on {parsed.os}
+                                        {deviceDisplayName(parsed)}
                                       </span>
                                     </Show>
                                     <Show when={activity !== null}>

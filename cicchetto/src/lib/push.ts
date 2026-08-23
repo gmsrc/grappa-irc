@@ -35,7 +35,7 @@
 import { ApiError, readError } from "./api";
 import { formatDurationSince } from "./duration";
 import { isIos, isStandalonePwa } from "./platform";
-import { parseUserAgent } from "./userAgent";
+import { deviceDisplayName, parseUserAgent } from "./userAgent";
 
 const SUBSCRIBED_VAPID_KEY_STORAGE_KEY = "cic.vapidPublicKey";
 
@@ -184,10 +184,11 @@ export type DeviceRow = {
   named: boolean;
 };
 
-const parsedDeviceName = (device: PushDeviceSummary): string => {
-  const parsed = parseUserAgent(device.user_agent);
-  return `${parsed.browser} on ${parsed.os}`;
-};
+// #1682 — the format itself lives in `deviceDisplayName`, which is also
+// what SettingsDrawer renders. This string is the GROUPING KEY below, so
+// it has to stay byte-identical to what the user actually reads.
+const parsedDeviceName = (device: PushDeviceSummary): string =>
+  deviceDisplayName(parseUserAgent(device.user_agent));
 
 // Oldest first, id as the tiebreak so the ordering is TOTAL — two rows
 // created in the same microsecond (or with an unparseable instant) must

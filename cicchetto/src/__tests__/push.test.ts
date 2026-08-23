@@ -735,8 +735,14 @@ describe("deviceRows — #964: the name the device row prints", () => {
       dev({ id: "a", user_agent: null, created_at: "2026-08-01T09:00:00Z" }),
       dev({ id: "b", user_agent: "", created_at: "2026-08-02T09:00:00Z" }),
     ]);
-    expect(nameOf(rows, "a")).toBe("Unknown browser on Unknown OS #1");
-    expect(nameOf(rows, "b")).toBe("Unknown browser on Unknown OS #2");
+    // #1682 — these used to read "Unknown browser on Unknown OS #n". The
+    // suffix is dropped whenever the OS is unknown, and that rule takes no
+    // exception for a UA that is absent rather than merely unrecognised: a
+    // second branch for the empty case would be the same duplication this
+    // change removes. The grouping itself is unaffected — both rows still
+    // collapse into one group and are still numbered within it.
+    expect(nameOf(rows, "a")).toBe("Unknown browser #1");
+    expect(nameOf(rows, "b")).toBe("Unknown browser #2");
   });
 
   it("returns an empty list for an empty device list", () => {
