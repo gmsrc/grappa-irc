@@ -59830,3 +59830,109 @@ moved to `Grappa.HotReload` (the listener only accumulates modules for a
 section still attributes module reload to `:code.modified_modules/0` +
 `:code.load_file/1`, both of which `Grappa.HotReload`'s moduledoc names as
 tried-and-rejected with live repros.
+<!-- entry #1695 -->
+
+---
+
+## 2026-08-23 — #1695: one CSP host for the SomaFM catalogue, and why the bare-domain pin is the wrong tripwire
+
+`connect-src` blocked the `fetch` of SomaFM's `channels.json`, which is why
+#682 shipped a curated station table rather than the live catalogue — the
+reasoning is written out at the top of `radioStations.ts`. vjt approved
+widening the policy. The issue arrived titled `*.somafm.com` and carrying a
+measurement that says something narrower; the measurement won.
+
+### What was measured
+
+The live catalogue, re-measured rather than taken from the issue: 46
+channels, 425 absolute URLs, classified by host and by the directive that
+governs each kind.
+
+| kind | `api.somafm.com` | `somafm.com` | directive |
+|---|---|---|---|
+| `.pls` playlists | 184 | 0 | `connect-src` — fetched and parsed |
+| logos | 138 | 0 | `img-src https:` — already passes |
+| prerolls (`.m4a`) | 0 | 103 | `media-src https:` — already passes |
+
+184 of 184 connect-src-governed URLs are on `api.somafm.com`. No other somafm
+subdomain appears in the catalogue at all. `channels.json` and
+`songs/<id>.json` answer byte-identically from either host (52,852 and 2,576
+bytes, both), so a client can address the API host and stay in one origin.
+
+### Why one host and not the wildcard
+
+`https://*.somafm.com` would hand `fetch` to every present and future somafm
+subdomain — ice, ice2..6, hls — with nothing measured asking for it. It would
+also not cover the bare `somafm.com`, because a CSP host-source spelled `*.`
+requires at least one label. So the wildcard is strictly wider where it costs
+and no wider where it might have helped. Widening a CSP past the measurement
+is a security regression; the shipped token is `https://api.somafm.com`.
+
+The consequence lands on a future client author and is recorded in the plug's
+moduledoc, where they will read it: the short spelling works under `curl` and
+dies at the policy.
+
+### The header alone does not make the catalogue load
+
+Nothing in `cicchetto/src` fetches somafm today — the station table is baked
+in. This change removes the server-side blocker #682 named; the live-catalogue
+swap is the follow-up the issue itself puts out of scope. The issue's own
+verification step "load the player and confirm `channels.json` fetches" is
+therefore not executable at this commit, and saying so is cheaper than a
+reader later concluding the change did not work.
+
+### Why the bare-domain pin is not the tripwire it looks like
+
+The reflex when narrowing a CSP is to pin the host you refused — here, the
+bare `somafm.com`. That pin is worth having: identical bytes from both hosts
+make the short spelling the likely client mistake, and the refusal should red
+in CI rather than in a browser console.
+
+But it does **not** catch the regression it appears to catch, and this was
+measured rather than reasoned. The policy was mutated to
+`https://*.somafm.com` and the spec re-run against a real chromium through
+the e2e stack. Result: `https://somafm.com/channels.json` was **still
+blocked** — `violatedDirective: connect-src`, collected by the suite's own
+guard — while `ice.somafm.com` sailed through. That is the `*.` label rule
+observed in a browser instead of cited from CSP3: the wildcard refuses the
+bare domain too, so a bare-domain assertion stays green straight through the
+widening it was added to detect.
+
+The stimulus that separates the shipped policy from the wildcard is a somafm
+subdomain that is **not** the API. `issue1695-somafm-connect-src-perimeter.spec.ts`
+provokes both and asserts the blocked set is exactly
+`{somafm.com, ice.somafm.com}`; the wildcard mutant reduces it to
+`{somafm.com}` and reds.
+
+General rule, and the reason this is written down: **a pin against widening
+must be stimulated by something the WIDER policy would admit.** A stimulus
+both policies refuse measures nothing about the boundary between them — it
+reads like a perimeter test and is one only by coincidence of naming.
+
+The bench also killed the opposite mutant: with the token removed entirely,
+the allowed fetch never reaches the interceptor (`hits` empty) and the spec
+reds on the admission half. Both directions are covered.
+
+### Test shape
+
+`security_headers_test.exs` already held a byte-for-byte golden pin. It is a
+good drift catcher and a poor contract: updating it is the same edit as making
+the change, so on its own it lets a widening land with no statement of what
+was measured. Three tests were added beside it that parse the emitted policy
+into directive → sources and assert what it ADMITS — the host present, the
+host not spelled as a wildcard, and no other directive carrying a somafm
+source. They survive a reformat of the literal and fail on the two mistakes
+that matter.
+
+The e2e is the other half, and a genuinely different question: the plug test
+proves the string, only a browser proves the string is honoured. Interception
+(`page.route`) fulfils the allowed fetch, so the assertion is about the policy
+and a somafm outage cannot turn the gate red — the same rule #682 set for the
+station table. Hosts are routed one literal at a time on purpose: routing them
+through a `*.somafm.com` glob would make the harness agree with a widened
+policy by construction.
+
+### Deploy class
+
+HOT. The policy is a module attribute in `lib/grappa_web/plugs/security_headers.ex`,
+not `config/*.exs` — a recompiled `.beam`, no `VERSION` bump, no migration.
