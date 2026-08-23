@@ -4,6 +4,7 @@ import { refreshInCardHead, refreshSlot } from "./admin/refreshSlot";
 import { archiveSlugForSelection } from "./lib/archiveContext";
 import { type ChannelKey, channelKey } from "./lib/channelKey";
 import { conversationMuteKey, isConversationMuted } from "./lib/conversationMute";
+import { createDismissOnOutsidePointer } from "./lib/dismissOnOutsidePointer";
 import { syncedSetChannelPresencePref } from "./lib/displayPrefs";
 import { canDetach, confirmDetach, confirmQuit } from "./lib/lifecycle";
 import { membersByChannel } from "./lib/members";
@@ -257,16 +258,12 @@ const RailActions: Component<Props> = (props) => {
   // so clicks on the launcher/menu never self-close here — the launcher toggles,
   // the action buttons call close() themselves. Registered only while open; the
   // opening click already fired before the effect runs, so it can't self-close.
+  // #682 — the listener itself moved to `lib/dismissOnOutsidePointer`, where
+  // the second rail popover (the radio picker) shares it. The reasoning above
+  // — non-blocking listener, NOT a scrim — travelled with it and now lives on
+  // the verb; nothing about the behaviour here changed.
   let rootRef: HTMLDivElement | undefined;
-  createEffect(() => {
-    if (!open()) return;
-    const onPointerDown = (e: PointerEvent): void => {
-      const target = e.target as Node | null;
-      if (rootRef && target && !rootRef.contains(target)) close();
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    onCleanup(() => document.removeEventListener("pointerdown", onPointerDown, true));
-  });
+  createDismissOnOutsidePointer(open, () => rootRef, close);
 
   // #588 — the menu opens UPWARD from the launcher (`bottom: 100%`), so its
   // usable height is ONLY the space above `rootRef` (the `.rail-actions`
