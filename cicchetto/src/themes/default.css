@@ -3567,6 +3567,33 @@ html.resize-dragging * {
   text-decoration: none;
 }
 
+/* #682 — the source's name, when it has one (uploads have none and this
+   renders nothing). It takes the free space so a long station title
+   ellipsises rather than pushing the transport controls off the bar: on a
+   phone this row is the whole player, and a control shoved past the right
+   edge is a control the operator cannot reach. In live mode it is also the
+   only element competing for that space — the seek slider is gone. */
+.audio-mini-player-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+/* #682 — the "this has no end" badge that stands in for the seek slider.
+   Deliberately a LABEL and not a disabled slider: a greyed-out position bar
+   still draws a scale, and there is no scale — the operator would read a
+   position out of a control that cannot have one. */
+.audio-mini-player-live {
+  flex: none;
+  color: var(--accent, var(--fg));
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.85em;
+}
+
 .audio-mini-player-seek {
   flex: 1;
   min-width: 0;

@@ -14,6 +14,14 @@ import { activeAudio, closeAudio } from "./lib/audioPlayer";
 // This keeps the `audioEl` ref assigned before the activeAudio effect
 // runs — wrapping the element itself in <Show> would race ref-assignment
 // against the effect on the open transition.
+//
+// #682 — LIVE mode. This bar was written for a FILE, and an internet-radio
+// station is not one: an Icecast stream has no end, so a position slider and
+// a "cur / dur" read are both meaningless against it. Live mode is DERIVED
+// from the element's own `duration` (see `live` below) rather than flagged by
+// the caller — so it is correct for ANY endless source, not just the radio
+// stations that motivated it, and it cannot drift from the element's truth.
+// It is the general rule, not the incident.
 
 const formatTime = (seconds: number): string => {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -49,6 +57,18 @@ const AudioMiniPlayer: Component = () => {
       void audioEl.play().catch(() => {});
     }),
   );
+
+  // Endless source? `duration` starts at 0 — a FINITE number, so a source
+  // whose metadata has not arrived yet keeps today's file chrome and does not
+  // flash a "live" badge at every upload. Only `onLoadedMetadata` writes it
+  // again, and at that point the element is stating what it knows:
+  //   * a file    → a finite length  → scrubbable
+  //   * a stream  → Infinity         → not scrubbable
+  //   * unknown   → NaN              → not scrubbable either, and the reason
+  //                                    is the same one, so the predicate is
+  //                                    "not a finite number" rather than
+  //                                    "=== Infinity".
+  const live = (): boolean => !Number.isFinite(duration());
 
   const togglePlay = (): void => {
     if (audioEl === undefined) return;
@@ -88,33 +108,66 @@ const AudioMiniPlayer: Component = () => {
           >
             {playing() ? "⏸" : "▶"}
           </button>
-          <input
-            type="range"
-            class="audio-mini-player-seek"
-            data-testid="audio-mini-player-seek"
-            min="0"
-            max={duration() || 0}
-            step="any"
-            value={current()}
-            onInput={onSeek}
-            aria-label="seek"
-          />
-          <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
-            {formatTime(current())} / {formatTime(duration())}
-          </span>
-          {/* Same-origin download: the `download` attribute forces a save
-              (overriding the server's `inline` Content-Disposition) and
-              inherits the server-sent filename — cic has no filename on
-              the wire (slug only), so no `download` value is set. */}
-          <a
-            class="audio-mini-player-download"
-            data-testid="audio-mini-player-download"
-            href={activeAudio()?.href}
-            download=""
-            aria-label="download"
+          {/* #682 — the source's name, when it has one. An upload passes
+              null and this renders nothing; a radio station passes its title,
+              which on mobile is the ONLY place naming it (the rail that holds
+              the station chrome is a drawer slid off-screen while playing). */}
+          <Show when={activeAudio()?.label}>
+            {(label) => (
+              <span class="audio-mini-player-label" data-testid="audio-mini-player-label">
+                {label()}
+              </span>
+            )}
+          </Show>
+          <Show
+            when={!live()}
+            fallback={
+              <>
+                <span class="audio-mini-player-live" data-testid="audio-mini-player-live">
+                  live
+                </span>
+                {/* Elapsed since tune-in, NOT a position: there is no total
+                    to divide it by, so it is shown alone rather than as one
+                    half of a "cur / dur" pair with a hollow denominator. */}
+                <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
+                  {formatTime(current())}
+                </span>
+              </>
+            }
           >
-            ⬇
-          </a>
+            <input
+              type="range"
+              class="audio-mini-player-seek"
+              data-testid="audio-mini-player-seek"
+              min="0"
+              max={duration() || 0}
+              step="any"
+              value={current()}
+              onInput={onSeek}
+              aria-label="seek"
+            />
+            <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
+              {formatTime(current())} / {formatTime(duration())}
+            </span>
+            {/* Same-origin download: the `download` attribute forces a save
+                (overriding the server's `inline` Content-Disposition) and
+                inherits the server-sent filename — cic has no filename on
+                the wire (slug only), so no `download` value is set.
+                #682 — gated OFF for a live source, for two independent
+                reasons either of which is sufficient: the resource has no
+                end, so the save never completes; and `download` is ignored
+                outright on a cross-origin href, so the anchor would navigate
+                the operator out of the app instead of saving anything. */}
+            <a
+              class="audio-mini-player-download"
+              data-testid="audio-mini-player-download"
+              href={activeAudio()?.href}
+              download=""
+              aria-label="download"
+            >
+              ⬇
+            </a>
+          </Show>
           <button
             type="button"
             class="audio-mini-player-close"

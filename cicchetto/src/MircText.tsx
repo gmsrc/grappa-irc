@@ -239,7 +239,10 @@ const renderRun = (
                           // readable while it plays; image/video keep the
                           // full-screen viewer.
                           if (media.kind === "audio") {
-                            playAudio(media.href);
+                            // No label (#682): a pasted media link carries no
+                            // title on the wire — cic sees a slug-only href —
+                            // so there is nothing honest to caption it with.
+                            playAudio(media.href, null);
                           } else {
                             openMediaViewer(media.href, media.kind);
                           }

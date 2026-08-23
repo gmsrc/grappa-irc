@@ -20,7 +20,12 @@
 import { createSignal } from "solid-js";
 import { identityScopedStore } from "./identityScopedStore";
 
-export type AudioPlayerState = { href: string };
+export type AudioPlayerState = {
+  href: string;
+  /** Human name for the source, or null when it has none (an upload is
+      identified by its link, not by a title). See `playAudio`. */
+  label: string | null;
+};
 
 const exports_ = identityScopedStore((onIdentityChange) => {
   const [activeAudio, setActiveAudio] = createSignal<AudioPlayerState | null>(null);
@@ -31,8 +36,20 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     activeAudio,
     // Start (or swap to) the audio at `href`. One instance: a second
     // click replaces the source rather than stacking a new player.
-    playAudio(href: string): void {
-      setActiveAudio({ href });
+    //
+    // #682 — `label` rides WITH the href rather than sitting in a sibling
+    // signal, because the two must swap ATOMICALLY: a separate signal lets a
+    // station's name outlive the source it named for one render, captioning
+    // the next upload with the station that preceded it. It is REQUIRED, not
+    // defaulted (CLAUDE.md: no silent-degradation defaults) — a caller with
+    // nothing to say passes `null` and says so.
+    //
+    // Why a label exists at all: on mobile the right rail is a drawer slid
+    // off-screen (`transform: translateX(100%)`), so while a radio station
+    // plays, this docked bar is the only surface naming it. Without the label
+    // the phone cannot answer "what am I listening to".
+    playAudio(href: string, label: string | null): void {
+      setActiveAudio({ href, label });
     },
     closeAudio(): void {
       setActiveAudio(null);
