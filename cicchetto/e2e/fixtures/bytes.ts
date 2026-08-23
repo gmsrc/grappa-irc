@@ -14,3 +14,26 @@
 export const TINY_PNG_HEX =
   "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489" +
   "0000000b49444154789c6360000200000500017a5eab3f0000000049454e44ae426082";
+
+// #682 — a minimal, VALID MPEG-1 Layer III frame sequence, built rather than
+// pasted: 417 bytes per frame at 128 kbps / 44.1 kHz, so a hex constant for
+// even a few frames would be kilobytes of noise in a source file.
+//
+// Header bytes, for the next reader who has to check them against a spec
+// sheet rather than trust a magic number:
+//   FF FB — syncword + MPEG-1 + Layer III + no CRC
+//   90    — 128 kbps, 44100 Hz, no padding
+//   40    — joint stereo, no emphasis
+// Frame size = floor(144 * 128000 / 44100) = 417.
+//
+// The payload is silence (zeroes). Specs use this to satisfy an <audio>
+// element from a `page.route` handler, so that a radio station's stream is
+// served LOCALLY and the suite never reaches a third-party host.
+const MP3_FRAME_HEADER = [0xff, 0xfb, 0x90, 0x40];
+const MP3_FRAME_BYTES = 417;
+
+export function silentMp3(frames: number): Buffer {
+  const frame = Buffer.alloc(MP3_FRAME_BYTES);
+  for (const [i, byte] of MP3_FRAME_HEADER.entries()) frame[i] = byte;
+  return Buffer.concat(Array.from({ length: frames }, () => frame));
+}
