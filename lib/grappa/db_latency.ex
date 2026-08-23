@@ -48,7 +48,8 @@ defmodule Grappa.DbLatency do
         - **mechanism 3 (pure insert / index write-amplification):** the
           `persist` row `mean_ms` on its own, watched as the table grows.
 
-    * **`[:grappa, :repo, :lock_stall, :detected | :resolved]`** (#1420) —
+    * **`[:grappa, :repo, :lock_stall, :detected | :resolved |
+      :unattributed]`** (#1420, #1687) —
       the write-lock HOLDER, which neither family above can see. Both of
       them are completion-driven, so a process sitting idle inside
       `BEGIN IMMEDIATE` emits nothing while it sits and only its victims
@@ -56,6 +57,12 @@ defmodule Grappa.DbLatency do
       reads at the seam instead and hands over the holder's sampled stack
       plus the queue behind it; here they are kept as a bounded ring, so
       the existing CLI and admin doors surface them with no new noun.
+      `:unattributed` is the same ring for the episodes that seam CANNOT
+      name — an autocommit writer holds the same file lock and never
+      registers — and it carries the queue's stacks with explicit nils
+      where the holder would be. Filing it elsewhere would mean an operator
+      asking what the write lock did has to already know that a third,
+      differently-shaped answer exists somewhere else.
 
   ## Reading a window
 
@@ -95,7 +102,8 @@ defmodule Grappa.DbLatency do
     [:grappa, :session, :send_privmsg, :stop],
     [:grappa, :scrollback, :persist, :contention],
     [:grappa, :repo, :lock_stall, :detected],
-    [:grappa, :repo, :lock_stall, :resolved]
+    [:grappa, :repo, :lock_stall, :resolved],
+    [:grappa, :repo, :lock_stall, :unattributed]
   ]
 
   # #1420 — the lock-stall ring is bounded: these rows carry sampled
@@ -139,11 +147,20 @@ defmodule Grappa.DbLatency do
   sampled stack and the queue behind it; `:resolved` brackets the same
   episode with the TOTAL hold and no samples (by then there is nothing left
   to sample). Newest first.
+
+  `:unattributed` (#1687) is the third phase and the reason two fields are
+  nilable: a queue past the threshold that LockWatch could name nobody for.
+  Its `holder_pid` and `held_ms` are `nil` — the explicit-null honesty
+  signal, not a gap to paper over. A `held_ms: 0` would assert a hold of
+  zero was measured, and nothing in that episode measured a hold at all; its
+  own figure is the longest WAIT, which rides the telemetry measurements and
+  is derivable from `waiters` rather than duplicated here. It gets no
+  `:resolved` bracket, because there is no hold to total.
   """
   @type lock_stall_row :: %{
-          phase: :detected | :resolved,
-          holder_pid: String.t(),
-          held_ms: non_neg_integer(),
+          phase: :detected | :resolved | :unattributed,
+          holder_pid: String.t() | nil,
+          held_ms: non_neg_integer() | nil,
           waiter_count: non_neg_integer(),
           holder: map() | nil,
           waiters: [map()]
@@ -278,6 +295,22 @@ defmodule Grappa.DbLatency do
       held_ms: measurements.held_ms,
       waiter_count: measurements.waiter_count,
       holder: metadata.holder,
+      waiters: metadata.waiters
+    })
+  end
+
+  # #1687 — the episode that named nobody. It reaches the SAME ring and the
+  # same two doors as the other two: an operator asking "what did the write
+  # lock do" must not have to know that a third, differently-shaped answer
+  # exists somewhere else. What it does NOT do is synthesise a holder to fit
+  # the row shape — the nils are the finding.
+  defp fold([:grappa, :repo, :lock_stall, :unattributed], measurements, metadata, state) do
+    push_stall(state, %{
+      phase: :unattributed,
+      holder_pid: nil,
+      held_ms: nil,
+      waiter_count: measurements.waiter_count,
+      holder: nil,
       waiters: metadata.waiters
     })
   end

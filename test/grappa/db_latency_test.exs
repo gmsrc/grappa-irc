@@ -24,7 +24,8 @@ defmodule Grappa.DbLatencyTest do
     [:grappa, :session, :send_privmsg, :stop],
     [:grappa, :scrollback, :persist, :contention],
     [:grappa, :repo, :lock_stall, :detected],
-    [:grappa, :repo, :lock_stall, :resolved]
+    [:grappa, :repo, :lock_stall, :resolved],
+    [:grappa, :repo, :lock_stall, :unattributed]
   ]
 
   # Native-unit duration for a whole number of milliseconds, via the
@@ -218,6 +219,41 @@ defmodule Grappa.DbLatencyTest do
       assert detected.waiter_count == 2
       assert detected.holder.stacktrace == ["Foo.bar/1"]
       assert length(detected.waiters) == 2
+    end
+
+    test "[:grappa, :repo, :lock_stall, :unattributed] folds with an explicit nil where the holder would be" do
+      :telemetry.execute(
+        [:grappa, :repo, :lock_stall, :unattributed],
+        %{waiter_count: 3, longest_wait_ms: 31_303},
+        %{
+          holders_registered: 0,
+          waiters: [
+            %{pid: "#PID<0.222.0>", elapsed_ms: 31_303, stacktrace: ["Exqlite.Sqlite3NIF.step/2"]},
+            %{pid: "#PID<0.333.0>", elapsed_ms: 2_100},
+            %{pid: "#PID<0.444.0>", elapsed_ms: 2_050}
+          ]
+        }
+      )
+
+      assert [row] = DbLatency.snapshot().lock_stalls
+
+      assert row.phase == :unattributed
+      assert row.waiter_count == 3
+
+      # 🔴 The two nils are the POINT, not an omission. CLAUDE.md's admin rule
+      # — an explicit null is the honesty signal, never papered over with a
+      # computed field — lands exactly here: a `held_ms: 0` would assert a
+      # measured hold of zero, and a synthesised `holder_pid` would name
+      # somebody. A mutant that defaults either one dies on these two lines.
+      assert row.holder_pid == nil
+      assert row.held_ms == nil
+      assert row.holder == nil
+
+      # The waiters ARE the payload: they are the only thing this episode can
+      # honestly show, and the stack is what separates "blocked on the lock"
+      # from "queued for a connection".
+      assert length(row.waiters) == 3
+      assert hd(row.waiters).stacktrace == ["Exqlite.Sqlite3NIF.step/2"]
     end
 
     test "the lock-stall ring is bounded, keeping the newest episodes" do

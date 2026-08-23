@@ -1032,8 +1032,8 @@ defmodule Grappa.Operator do
 
     Enum.each(snapshot.lock_stalls, fn stall ->
       IO.puts(
-        "#{stall.phase}\tholder=#{stall.holder_pid}\theld_ms=#{stall.held_ms}" <>
-          "\twaiters=#{stall.waiter_count}"
+        "#{stall.phase}\tholder=#{lock_stall_field(stall.holder_pid)}" <>
+          "\theld_ms=#{lock_stall_field(stall.held_ms)}\twaiters=#{stall.waiter_count}"
       )
 
       Enum.each(lock_stall_detail_lines(stall), &IO.puts/1)
@@ -1042,15 +1042,35 @@ defmodule Grappa.Operator do
     :ok
   end
 
-  # A `:resolved` row carries no samples (the episode is over and there is
-  # nothing left to inspect), so it renders as its header line alone.
-  @spec lock_stall_detail_lines(DbLatency.lock_stall_row()) :: [String.t()]
-  defp lock_stall_detail_lines(%{holder: nil}), do: []
+  # #1687 — an `:unattributed` row has no holder and no hold, and the column
+  # has to SAY so. Interpolating the nil would print `holder=`, which reads
+  # as a formatting slip rather than as the finding it is.
+  @spec lock_stall_field(String.t() | non_neg_integer() | nil) :: String.t()
+  defp lock_stall_field(nil), do: "unattributed"
+  defp lock_stall_field(value), do: to_string(value)
 
+  # The two blocks are separate because the phases carry different halves.
+  # A `:resolved` row has neither (the episode is over, nothing left to
+  # inspect) and still renders as its header line alone — `waiters` is `[]`
+  # there, so that behaviour is preserved by the data, not by a clause.
+  #
+  # 🔴 The clause this replaces was `%{holder: nil} -> []`, which would have
+  # thrown away an `:unattributed` row's ENTIRE payload: those waiters and
+  # their stacks are the only thing such an episode can honestly show, and
+  # they are what separates "blocked on the lock" from "queued for a
+  # connection".
+  @spec lock_stall_detail_lines(DbLatency.lock_stall_row()) :: [String.t()]
   defp lock_stall_detail_lines(%{holder: holder, waiters: waiters}) do
-    ["  holder at #{holder.current_function} (#{holder.status}, mailbox #{holder.message_queue_len})"] ++
-      Enum.map(holder.stacktrace, &"    #{&1}") ++
+    holder_lines(holder) ++
       Enum.map(waiters, &"  waiter #{&1.pid} waiting #{&1.elapsed_ms}ms at #{&1.current_function}")
+  end
+
+  @spec holder_lines(map() | nil) :: [String.t()]
+  defp holder_lines(nil), do: []
+
+  defp holder_lines(holder) do
+    ["  holder at #{holder.current_function} (#{holder.status}, mailbox #{holder.message_queue_len})"] ++
+      Enum.map(holder.stacktrace, &"    #{&1}")
   end
 
   @doc """
