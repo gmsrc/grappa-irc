@@ -59497,3 +59497,152 @@ focus, the iOS `preventScroll` short-circuit, `placeCaretAtEndInView` — is
 byte-identical to the one `issue1105-reply-quote-caret-visible.spec.ts` already
 drives in a real browser; this change does not touch it, and a new spec would
 re-assert somebody else's plumbing.
+<!-- entry #1687 -->
+
+---
+
+## 2026-08-23 — #1687: the instrument was silent, and the number that alarmed us measured something else
+
+`Grappa.Repo.LockWatch` was ARMED in production through the 2026-08-22
+16:36–16:38 episode — `enabled: true`, `stall_threshold_ms: 2_000`,
+`tick_ms: 1_000` — and put **zero** lines in `erlang.log.5` while 23
+`busy_locked` terminals piled up over ~170 s. #1420 built it precisely to
+answer *who holds the write lock*, and on the first live stall after it
+shipped it answered nothing.
+
+### The gap was by construction, not by accident
+
+`observe/1` has exactly one producer, `Repo.immediate_transaction/1`, so only
+a writer that passed that seam is ever tagged `:holding` — 20 call sites in
+`lib/`, against 123 bare `Repo.{insert,update,delete,*_all}` sites. The writer
+that dominates the hot path under an IRC flood is one of the 123:
+`Scrollback.persist_row/1` is `with_pool_retry(fn -> Repo.insert(changeset) end)`
+(`lib/grappa/scrollback.ex:227`), and `Grappa.Repo` overrides no write
+callback, so nothing wraps it. `detect/2` then declined to report, on a
+comment that said so out loud: *"waiters with no holder are the pool's
+business, not the write lock's."* So the one class of writer the instrument
+cannot see was also the one case its reporting rule turned into silence.
+
+### 🔴 The 62-second hold does not exist
+
+The issue opened on `SQLite write lock held by another writer for 62494ms`
+and read it as one writer holding for 62 s. **It is not a hold, and the
+arithmetic in the log says so.** `BusyRetry.run/1` stamps `started` BEFORE the
+first `op.()` (`busy_retry.ex:127`) and reports `now - started` (`:138`), so
+with `attempts=1` the figure is one whole `Repo.insert/2` — pool checkout AND
+statement, indistinguishable — while the prose composed around it
+(`terminal_message/3`) asserts a *hold*. Subject inferred from the fault
+class, number measured from something else.
+
+Subtracting `elapsed` from the emission stamps decomposes it:
+
+| emitted | elapsed | implied start |
+|---|---|---|
+| 16:36:32.556 | 31303 ms | 16:36:01.253 |
+| 16:37:03.422 | 62494 ms | 16:36:00.928 |
+| 16:37:03.484 | 31282 ms | 16:36:32.202 |
+
+The 62.5 s and 31.3 s victims **start together** at 16:36:01 ±350 ms. Blocked
+on the same busy handler from the same instant they would raise together at
+~30 s (`busy_timeout: 30_000`); they do not. And the cohort that raises at
+16:37:03 having waited 31.3 s **starts at 16:36:32.2** — the instant the first
+cohort died and released its connections. So `62494ms` = ~31.2 s queued for a
+pool connection + ~31.3 s on `busy_timeout`, inside one un-preemptable call.
+**The longest write-lock wait anywhere in the episode is ~31.3 s, i.e. one
+`busy_timeout`.**
+
+Corroborated independently: the same quantum appears in `pool saturated`
+(33371, 33426, 33371, 33361, 32979 …), a class that never touches the write
+lock, alongside a genuinely short ~2.17 s cluster in the same millisecond —
+so the quantum is `busy_timeout` propagating through a pool whose connections
+are all held by writers parked in their own busy waits. The WS upgrade series
+(1146 → 31576 → **63399** → 31863 → 31921 → 31816 → 31741 ms) is the same
+quantum and the same doubling, on a real user — evidence for #1618, filed
+there.
+
+**The rule, and it outlives this incident: a quantum that recurs across fault
+classes is a TIMEOUT signature, not a duration of work.** Read a repeated
+number as a clock somebody set, and go find whose.
+
+### What the new line says, and the sentence it refuses to say
+
+The issue proposed *"N waiters queued ≥Xms, holder unattributed"*. That still
+asserts a HOLD by an unregistered writer — and the decomposition above shows
+pool queueing is an equally live cause that this frame never measured. So the
+unattributed arm states only what it observed: how many registered writers are
+queued, the longest wait, and how many holders are registered. The two
+candidate topologies are separated by the WAITERS' OWN STACKS, which it
+samples and carries — the discipline `LockWatch`'s moduledoc already claimed
+(*"its sampled stack says which"*) and did not yet practise on this path.
+
+The measurement is `longest_wait_ms`, never `held_ms`. Reusing the hold field
+would have smuggled the claim back in through the schema after the prose was
+written to keep it out — which is exactly the defect `terminal_message/3` was
+rewritten twice to stop committing (#1420 split the phrase, #1421 fixed the
+number). In `Grappa.DbLatency` the row's `holder_pid` and `held_ms` are `nil`:
+the explicit-null honesty signal, because `held_ms: 0` asserts a measured hold
+of zero and nothing here measured a hold at all.
+
+The half-right half of the old comment survives in the code: the pool IS
+implicated. What died is the conclusion that being implicated justifies
+silence.
+
+### Two defects the design surfaced before it shipped
+
+**The flag.** `acquired/0` promoted a row with `[{2, :holding}, {3, now_ms()}]`
+— role and clock, not `reported?`. Giving that flag a second writer (the new
+arm arms it on WAITER rows) meant a pid reported once while queued would carry
+an armed flag into its own hold and be **permanently unreportable as a
+holder**. The cure for the unattributed blindness would have blinded the path
+that already worked. `acquired/0` now clears it: the promotion IS a new
+episode, with a new clock.
+
+**The fork.** Splitting on "did we print something" rather than on
+ATTRIBUTABLE (holders past the threshold, reported or not) drops an
+already-announced episode into the second arm on the very next tick, printing
+*"none past the threshold"* about a holder that is past it. Nameable-at-all
+and not-yet-named are two different questions and only the first chooses the
+arm.
+
+**And one in code that predates this.** `Operator.lock_stall_detail_lines/1`
+matched `%{holder: nil} -> []`, correct for `:resolved` and catastrophic for
+an unattributed row: it would discard the waiters and their stacks, the only
+payload such an episode has. Split into two blocks, so `:resolved` renders as
+a header line by the DATA (`waiters == []`) rather than by a clause guessing
+from the wrong field.
+
+`scripts/log-gap-scan.awk` gains `lockstall_unattributed` in the same commit
+as the prose, per the rule on its own call site. It is NOT folded into
+`lockstall`, which means *a holder was NAMED*: folding them would let the
+artefact report an attribution the instrument explicitly declined to make.
+Through the whole prod episode both existing counters read zero, and zero is
+what a clean run looks like.
+
+### #1420 stays closed
+
+Its closing criterion reads *"Re-open, or file fresh, when LockWatch names a
+holder in a live stall."* Disjunctive, and its trigger — LockWatch **naming**
+a holder — never fired. An instrument that stayed mute is a defect in the
+instrument, a different axis from #1420's (which delivered the mechanism and
+the observer), and the "file fresh" branch is already exercised by #1687. The
+speculative reading that this was #1420's mirror case and should reopen it was
+tested against the text and dropped.
+
+### What is still NOT measured
+
+**Who held the lock is not named, and this work does not name it.** The log
+carries zero LockWatch lines — that is the defect, not a gap in the extract.
+`persist_row/1` remains the obvious structural suspect and obvious is not
+measured. Whether a single holder persisted for ~3 minutes is not
+distinguishable from no single holder at all on this evidence: every
+observable quantum is a victim's timeout, never a release.
+
+The **coverage** half — registering autocommit writers as holders — is
+deliberately not attempted here. It is not a wrapping exercise: an autocommit
+statement has no `waiting → acquired` fracture (it blocks inside the NIF with
+no callback between "queued" and "granted"), so tagging it `:holding` for its
+whole duration would label a victim parked on `busy_timeout` as the HOLDER —
+the instrument accusing the victim, which is worse than silence and is the
+precise confusion it exists to resolve. Tagging it `:waiting` reports nothing
+new. A third role is needed, and it must be priced in ETS writes on the hot
+path before it is proposed.
