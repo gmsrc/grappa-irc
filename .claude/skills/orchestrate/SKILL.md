@@ -975,6 +975,19 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   loses nothing. Verify with `pgrep -fl 'wait-for-ev''ent.sh'` (the unsplit pattern kills its own shell).
 - 🔴 **`API Error: Stream idle timeout` looks exactly like IDLE.** Cure = a SHORT `riprendi.` — do not clear.
 - 🔴 **QUEUED INPUT ≠ SWALLOWED ≠ DELIVERED.** Proof of delivery is a `-S` capture showing `❯ <text>` as a TURN.
+  🔴🔴 **BUT ON A VERY SHORT PANE THAT PROOF DOES NOT EXIST, AND ITS ABSENCE READS AS "SWALLOWED"
+  (orch, 2026-08-23, w1 at 71x**6**).** Claude Code renders the input box ABOVE the status block, so on a
+  six-row pane the visible rows are separator + 4 status lines and **there is no `❯` line on screen at
+  all** — every `capture-pane -p` looks like an empty prompt, and the scrollback is shredded by redraws.
+  I read that as three swallowed orders and re-sent twice; the extra Enters submitted the same order
+  **three times**. Measured afterwards: the sends HAD landed.
+  🥇 **On a pane too short to show `❯`, delivery is proved by the COST and CTX moving** (`💰 $x.xx` /
+  `🧠 NN%` in the status block, which IS visible), never by the prompt. Sample twice ~20 s apart before
+  concluding anything.
+  🥇 **And the readable channel is the INVERSE file handoff**: order the worker to write its state to
+  `<host>:/tmp/<w>-status.txt` and read it over ssh. It costs one round trip and is immune to geometry.
+  ⚠️ **Do NOT fix this by resizing the window** — see the `window-size` entry below: the window is almost
+  certainly being watched, and geometry is the user's environment. **Report it and work around it.**
 - 🥇🥇 **GHOST TEXT vs TYPED TEXT — THERE IS A MEASURED DISCRIMINATOR, STOP GUESSING (2026-08-17).** The
   memory note says `capture-pane` cannot tell Claude Code's autocomplete suggestion from actually-typed
   keystrokes, and that ambiguity cost 90 minutes of stalling. It is only true of `-p` **without `-e`**, which
@@ -987,6 +1000,20 @@ said "ask vjt for the STACK lane", which is flatly wrong: lanes are MINE).
   ℹ️ A picker about LANES or a BRANCH BASE is addressed to **ME**; escalate only DESIGN/product pickers.
 - 🔴 **A worker's redirect log / rc file can belong to a DEAD run** — `ls -lat` and match the mtime, never `cat`.
   Same for a staged `/tmp/orchestrate-next-<w>.txt`: **`stat` it before dispatching**, a stale body looks identical.
+  🔴🔴 **AND DO NOT WAIT ON *EXISTENCE* AT A PATH A PRIOR RUN ALREADY CREATED — WAIT ON *FRESHNESS* (orch,
+  2026-08-23).** I armed `until ssh <host> 'test -f /tmp/orchestrate-next-w1.txt'` to wait for a worker to
+  stage its clear body. The path had existed since the previous night, so the loop **exited on the first
+  iteration**, I read a 16-hour-old mtime, declared the file STALE, and **ordered the worker to rewrite a
+  file it had in fact written nine seconds after my read**. It refused — correctly, with the mtime, the byte
+  count and four freshness tokens (`5cc3349c`, `check4`, `390bd56e`, `protocol 5`) — because *"rewriting it
+  identical would change only the mtime, not the content."*
+  🥇 **The form that holds: capture the OLD mtime first and loop until it CHANGES** (`stat -f%m` on BSD /
+  `stat -c%Y` on GNU), or have the worker write to a path you deleted beforehand. **A `test -f` on a path
+  that outlives the run measures nothing.** Eighth instance of the false-and-plausible zero: a check that
+  answers instantly because it is asking the wrong question.
+  🥇 *And the meta-lesson, which is the one that repeats: **when a worker contradicts your verdict about
+  ITS artefact, its evidence is first-hand and yours is second-hand.** Read the refusal before re-issuing
+  the order.*
 - 🔴 **The harness's own "background command completed (exit code 0)" is the COMPOUND's last command**, i.e. the
   trailing `echo`, NOT the gate's rc. **Only a redirected rc FILE counts.**
 - 🔴 **NEVER column-split `gh pr checks`** — TAB-separated and the check name itself contains spaces
@@ -1208,3 +1235,30 @@ nessuna riscrittura possibile. Misurala lo stesso se costa due comandi, ma dichi
   ⚠️ E il danno NON e' il contesto: e' che **l'auto-clear e' anche il salvagente del flush dell'handoff**
   (prompta il flush PRIMA di clearare). Morto lui, se l'orchestratore non flusha a mano, un clear
   manuale o un crash perde tutto.
+- 🔴🔴 **EDITARE UN FILE MENTRE LA e2e GIRA ROMPE TEST A CASO — `code_reloader: true` in dev
+  (`config/dev.exs:27`), misurato da w1 il 2026-08-23.** Due spec estranee alla fetta (`issue364`
+  rotation, `issue367` whois-oper) sono cadute a **+20s e +33s** da un edit a
+  `lib/grappa/networks/wire.ex` fatto **mentre la suite era in volo**. Si presentano come "rossi non
+  miei" e portano dritti a cercare un flake che non esiste.
+  🥇 **Regola: mentre `integration.sh` gira, l'albero NON SI TOCCA.** Se un edit e' urgente, si uccide
+  il run e si rilancia pulito — che e' esattamente quello che w1 ha fatto, dopo essersene accorta.
+  ⚠️ **E l'orchestratore non puo' distinguerli dall'esterno**: nel log sono `✘` come tutti gli altri.
+  **L'unico che sa se ha toccato l'albero e' chi lo ha toccato** — chiedilo, non dedurlo.
+- 🥇🥇 **UN ROSSO PUO' ESSERE L'ORACOLO, NON IL BUDGET E NON LA CURA** (w1, #1675). Il test del ritorno
+  a `:connected` falliva mentre **l'arco di ritorno era SCATTATO** — misurato dal contesto d'errore:
+  riga `connected`, reason `null`, `connection_state_changed_at` == `connected_at` sulla leaf viva.
+  Il test pretendeva `connection.registered === true`, che e' `IdentityState.identified?/1`, cioe' **il
+  verdetto NickServ di #388: FALSO PER SEMPRE su `auth_method: none`**.
+  🥇 *Prima di allargare un budget o accusare la cura, chiedi cosa il test sta davvero asserendo: un
+  predicato preso per "e' su" puo' essere un verdetto di tutt'altro dominio.*
+- 🔴🔴 **IL TITOLO DEL PANE ORCHESTRATORE SI RISCRIVE DA SOLO, E QUELLO DECAPITA L'AUTO-CLEAR
+  (misurato 2026-08-23).** Claude Code rinomina il pane col TOPIC della conversazione: `%80` era diventato
+  *"Issue #1679 concurrency bound decision"*. `auto-clear-watch.sh` risolve il pane **per TITOLO**, non
+  lo trovava piu', e aveva agganciato **`%5`** — un pane che non c'entrava niente. Risultato: `status`
+  diceva **`running`** con un pid vivo, il log **cresceva**, e l'orchestratore non veniva clearato mai.
+  🥇 **`running` NON basta: il probe corretto e' `status` PIU' il pane su cui sta FIRING nel log, letto
+  contro `$TMUX_PANE`.** Un watchdog vivo puntato altrove e' peggio di uno morto, perche' mente.
+  🔧 **Cura: `tmux select-pane -t "$TMUX_PANE" -T grappa-orch` e riavviare il watch.** Rifallo a ogni
+  resume — il titolo torna a cambiare da solo.
+  ⚠️ **Costo reale la prima volta: entrambe le worker ferme ~13 ORE** mentre l'orchestratore era all'87%
+  e i suoi tick `STALL state=idle` scorrevano senza che nessuno agisse.
