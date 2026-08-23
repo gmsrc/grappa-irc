@@ -59281,3 +59281,120 @@ tag list the gate feeds that action, via the workflow text. The end-to-end fact
 is unreachable without cutting a release. `.github/workflows/**` is also
 outside `integration.yml`'s `paths:`, so this change's PR runs fewer checks
 than a source change does.
+<!-- entry #1682 -->
+
+---
+
+## 2026-08-23 — #1682: the UA parser knew browsers, not clients
+
+`cicchetto/src/lib/userAgent.ts` classified the push-device list's
+`user_agent` through a fixed allowlist of browser tokens (`Edg` / `OPR` /
+`CriOS` / `FxiOS` / `Firefox` / `Chrome` / `Safari`+`Version`). Anything
+else fell through to `"Unknown browser"`. A self-hoster running a native
+third-party client (`Resentin/1.2`) therefore read **"Unknown browser on
+Unknown OS"** for their own device, and so would the native Android shell
+of #1193.
+
+cic-only: the server neither filters nor classifies. It stores the header
+verbatim (`push_subscription_controller.ex`) and ships the raw string back
+(`push_subscription_json.ex`), and that stays true here.
+
+### The fix is a branch, not an entry
+
+Growing the allowlist once per client is the defect rather than a gap in
+it, so the cure is a final **product-token** branch: RFC 9110 §10.1.5 says
+`User-Agent = product *( RWS ( product / comment ) )`, so the first product
+names the client. It runs **LAST**, after every brand branch, because Edge
+and Opera UAs embed `Chrome`/`Safari` substrings and any other order breaks
+them — the pre-existing ordering constraint is unchanged, only extended.
+
+It is guarded on the UA not being **Mozilla-shaped**, and that guard is
+load-bearing rather than decorative. Every browser UA on earth opens
+`Mozilla/5.0`, so without it an unrecognised Chromium fork would be named
+**"Mozilla"** — a confident wrong answer, which is strictly worse than
+"Unknown browser". A parser that guesses is worse than one that abstains.
+
+### Sanitisation by construction, and the one cap
+
+The product name is attacker-controlled text from a request header that
+ends up rendered in the drawer, so it is sanitised — but by the shape of
+the capture, not by scrubbing afterwards. The capture class is an
+allowlist, `[A-Za-z0-9._+-]`, a deliberate subset of RFC 9110's `tchar`
+with every character that means something in an HTML or attribute context
+removed. A control byte, a quote, an angle bracket, an ampersand or a
+space therefore **cannot** reach the name: the token fails to match and the
+UA falls back. Rejecting at the boundary beats emitting a scrubbed
+half-name, and it is one rule instead of a filter list that must be kept
+in step with its own threat model.
+
+Length is the single axis a character class cannot bound, so it takes the
+single cap: **32 characters, ellipsis included**. The number is argued, not
+picked: it is ~2.3x the longest product token that actually ships in the
+wild (`SamsungBrowser` / `HeadlessChrome`, 14), so no real client is ever
+truncated, while the row stays inside the drawer width that motivated this
+module's existence in the first place (UX-4 bucket L). The class is
+ASCII-only, so `.length` counts characters and `slice` cannot split a
+surrogate pair. The ellipsis is not decoration — without it a truncated
+name reads as a genuine product name.
+
+### Why the OS-suffix drop forced a formatter, and a measurement
+
+A native client usually carries no platform token, so it would have
+rendered as "Resentin on Unknown OS": a sentence whose second half is
+noise. The suffix is dropped whenever the OS is unknown.
+
+That decision looked like a display tweak and was not. `${browser} on
+${os}` was composed **by hand in two places** — `push.ts` and, inline in
+JSX, `SettingsDrawer.tsx` — and in `push.ts` that string is not display at
+all: it is the **grouping key** the `#1`/`#2` ordinals for unlabelled twins
+are derived from (#964, whose own moduledoc states "the grouping key is the
+OUTPUT of `parseUserAgent`"). Dropping the suffix at one site would not
+have risked divergence between the two, it would have guaranteed it, and
+it would have severed the key from the string the user actually reads.
+
+So the format moved into **`deviceDisplayName`**, its one owner, and both
+sites call it. The alternative considered and rejected was making the type
+carry the absence (`os: null` in `ParsedUserAgent`): it changes the
+semantics for every reader and collapses "OS unknown" into "OS absent"
+exactly while the device-class icon still wants them distinct. The
+already-duplicated literal is the evidence that a second consumer always
+arrives; a format with one owner is what to have in place before the third.
+
+### One rule, no exception for the empty UA
+
+"OS unknown ⇒ no suffix" takes no special case for a UA that is absent
+rather than merely unrecognised: an empty or null UA now prints **"Unknown
+browser"**, not "Unknown browser on Unknown OS". A branch for the empty
+case would be a second rule, free to drift from the first the moment either
+is touched — the same defect being cured here, in miniature. This
+**supersedes** the first "Limitations" bullet of the #964 entry, which
+records the old two-word-noise spelling; the grouping behaviour it
+describes is unchanged, only the string is.
+
+The device-class icon is untouched. An unplaceable client still shows ❔,
+so nothing is concealed: the unknown-ness moved to the axis that expresses
+it in one glyph instead of three words.
+
+`HypotheticalBot/9000` had been the test suite's never-classified case. It
+is a well-formed product token and now parses as "HypotheticalBot" — that
+reclassification IS the fix, so the test was rewritten around a UA carrying
+no product token at its head at all.
+
+### Measured, and what was deliberately left alone
+
+Measured on `f1d9ff2f`. The issue recorded "whether any other surface
+renders this string" as NOT MEASURED; a three-way sweep (parser symbols,
+module imports, raw `user_agent`) settles it at **two** consumers,
+`SettingsDrawer.tsx` and `push.ts` — the second of which the issue did not
+name, and is the one that made this more than a display change.
+
+`SettingsDrawer.tsx` also puts the **raw** UA in a `title=` attribute. That
+is pre-existing, is an attribute rather than markup, and is left untouched
+here rather than folded into this slice; it is recorded so the next reader
+does not have to rediscover that the raw string still reaches the DOM.
+
+No e2e spec was added. The change is a pure function plus its two call
+sites, `userAgent.test.ts` pins the classification matrix directly, and
+`push.test.ts` pins the grouping the format feeds; a browser-driven spec
+would exercise Playwright's own UA rather than the branch under test, and
+would assert rendering plumbing that #964's specs already cover.
