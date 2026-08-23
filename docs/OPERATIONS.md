@@ -4547,6 +4547,67 @@ or a repair dispatch against an existing release) does not touch the
 marker, and neither does the body-reconciliation `gh release edit` below
 it. rc1 and rc2 are already correct because they were fixed by hand.
 
+### `latest_tag_gate.sh` — who gets the mutable ghcr `:latest` (#1686)
+
+**`:latest` was ranked over every tag, so a release candidate took it.** The
+`docker` job picked the image that gets the mutable tag with
+`git tag -l 'v*' --sort=-v:refname | head -1`, and `versionsort.suffix` is
+not configured here, so git's version sort places a `-rcN` suffix ABOVE the
+bare version. Quoted from the runs' own logs:
+
+    2026-08-20T23:38:15Z  v1.3.0-rc2 is the highest tag — tagging :latest
+    2026-08-21T19:18:58Z  v1.3.0 is NOT the highest (v1.3.0-rc2) — NOT tagging :latest
+    2026-08-22T08:40:28Z  v1.3.1 is the highest tag — tagging :latest
+
+**Two faces, and the second bounds the exposure.** A candidate took the tag;
+the stable release that followed was then DENIED it by that candidate, so
+`:latest` skipped `v1.3.0` entirely and served rc2 until `v1.3.1` — roughly
+33 hours. `:latest` is what an operator following the published docker path
+pulls (`compose.release.yaml`, `infra/docker/deploy.sh update`).
+
+`infra/packaging/latest_tag_gate.sh` answers the eligibility question. The
+verdict is a bare token on **stdout**; the reason goes to **stderr**, where
+the runner logs it:
+
+    latest_tag_gate.sh v1.3.1      -> yes   (the highest release tag)
+    latest_tag_gate.sh v1.3.0-rc2  -> no    (a pre-release, whatever it outranks)
+    latest_tag_gate.sh v0.7.5      -> no    (a backport, below v0.8.0)
+    latest_tag_gate.sh v1.3        -> refused, exit 2
+
+**It reuses `prerelease_flag.sh` rather than comparing versions again.** A
+hand-rolled filter is wrong on the row that decided that script's
+implementation: `v1.4.0+foo-bar` carries a hyphen inside its BUILD metadata
+and is a release. One rule, one owner.
+
+**`versionsort.suffix` was rejected, by measurement.** On a scratch
+repository holding the tag set as it stood at the rc2 push (no `v1.3.0` yet),
+`git -c versionsort.suffix=- tag -l 'v*' --sort=-v:refname` still answers
+`v1.3.0-rc2`: the suffix orders a candidate against its own release and
+nothing else, so it repairs the second face and leaves the measured first one
+untouched. Restricting the ranking to releases repairs both, and then the
+suffix has nothing left to order.
+
+**ONE gate, BOTH images.** The verdict feeds the existing `emit_tags`, so
+`grappa` and the `grappa-shottino` bridge share it — they are cut from the
+same tag and have shared one gate since #1168.
+
+**A verdict that cannot be derived stops the job** (`::error::`, exit 1). A
+tag found in the REPOSITORY that the classifier refuses is the opposite case:
+it is skipped out loud and the scan carries on, so a stray tag cannot become
+a permanent veto over every future release.
+
+**Operator-visible consequence: a candidate tag now publishes `:v<version>`
+only.** `docker pull ghcr.io/<owner>/grappa` keeps resolving to the newest
+stable release across a candidate cycle; to run a candidate, name its tag.
+
+**A repair dispatch takes both scripts from the dispatched ref.** The docker
+job checks out `ref: REPAIR_TAG`, so on a #573 (b) image repair the tree is
+the OLD TAG's, and every tag before `v1.3.0` predates `prerelease_flag.sh`.
+They ride in the repair scaffolding checkout for that reason; measured not to
+change the artifact, since `Dockerfile.release` COPYs only `version.sh` and
+`gen-secrets.sh` out of `infra/packaging`. Gate:
+`test/infra/release_latest_gate_test.bats`.
+
 ### The packaged operator CLI and the migrate path (#419)
 
 **`/usr/bin/grappa` is the only door to the release on a packaged host.**

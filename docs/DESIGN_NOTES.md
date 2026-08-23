@@ -59163,3 +59163,121 @@ block autoplay without a gesture, and a rail click is one.
 
 Widening `connect-src` for the live catalogue is left as a NON-blocking note
 for vjt rather than taken here.
+<!-- entry #1686 -->
+
+---
+
+## 2026-08-23 — #1686: ghcr `:latest` ranked over every tag, so a candidate took it and a release was refused it
+
+`release.yml` chose which image gets the mutable ghcr `:latest` with
+
+    highest="$(git tag -l 'v*' --sort=-v:refname | head -1)"
+
+and `versionsort.suffix` is not configured in this repository, so git's
+version sort places a `-rcN` suffix **above** the bare version.
+
+### The report named one face; the runs' logs carry two
+
+Not derived — quoted:
+
+    2026-08-20T23:38:15Z  v1.3.0-rc2 is the highest tag — tagging :latest
+    2026-08-21T19:18:58Z  v1.3.0 is NOT the highest (v1.3.0-rc2) — NOT tagging :latest
+    2026-08-22T08:40:28Z  v1.3.1 is the highest tag — tagging :latest
+
+Face one is the reported one: a **candidate took `:latest`**. Face two is the
+mirror the issue does not name: the **stable release that followed was then
+denied it by its own candidate**, so `:latest` skipped `v1.3.0` entirely and
+served rc2 until `v1.3.1` — roughly **33 hours**, not the ~20 the issue bounds
+it at by assuming the next stable run closed the window. It could not: that
+run is the second line above.
+
+**The rule this leaves: an issue that under-states its own damage sends the
+next person to cure half a defect.** The bound was reasoned from "the next
+stable release shipped" rather than read from the log that stable release
+wrote, and the mechanism denies exactly that inference. When a report bounds
+an exposure, check the closing edge against the artefact that supposedly
+closed it.
+
+### `versionsort.suffix` was rejected, by measurement
+
+The issue proposes belt-and-braces: restrict the ranking **and** set
+`versionsort.suffix`. On a scratch repository holding the tag set as it stood
+at the rc2 push (`v1.0.0 v1.1.0 v1.2.0 v1.3.0-rc1 v1.3.0-rc2`, with no
+`v1.3.0` yet):
+
+    git tag -l 'v*' --sort=-v:refname                   -> v1.3.0-rc2
+    git -c versionsort.suffix=- tag -l ... --sort=...    -> v1.3.0-rc2
+
+Identical. The suffix orders a candidate against **its own release** and
+nothing else, so it repairs face two and leaves the measured face one exactly
+where it was. Restricting the ranking to releases repairs both — and once
+pre-releases are out of the candidate set, the suffix has nothing left to
+order, so configuring it as well is a second mechanism doing the first one's
+job. That is the drift #1591 / #1594 / #1636 all were. **One mechanism, one
+owner.**
+
+### The classifier is not written twice
+
+"Does semver call this a pre-release" already has an owner in this tree:
+`infra/packaging/prerelease_flag.sh` (#1636), measured against `Version.parse/1`
+on the pinned toolchain, refusing with exit 2 what it cannot classify. The new
+`infra/packaging/latest_tag_gate.sh` reuses it rather than comparing versions a
+second time. A hand-rolled filter would be wrong on the very row that decided
+that script's implementation: `v1.4.0+foo-bar` carries a hyphen inside its
+**build** metadata and is a release.
+
+The verdict feeds the existing `emit_tags`, so it reaches the bridge image
+too — `grappa` and `grappa-shottino` are cut from the same tag and have shared
+one gate since #1168. Curing only the bouncer would have been half a cure, and
+the half nobody looks at.
+
+A pre-release gets its **own arm** rather than falling through the ranking.
+Falling through prints `v1.3.0-rc2 is NOT the highest (v1.2.0)`, which is
+false — rc2 *is* higher. A fast path states what it observed.
+
+A tag the classifier refuses is treated differently depending on which one it
+is. The tag **under test** is refused outright (exit 2): the permissive answer
+there is the one that publishes. A tag found in the **repository** is skipped,
+out loud, and the scan carries on — a stray `nightly-…` must not become a
+permanent veto over every future release, and skipping is conservative because
+a tag nobody could classify never had images published under it.
+
+### The cure would have broken the repair path, which works today
+
+The `docker` job checks out `ref: REPAIR_TAG`, so on a #573 (b) image repair
+the tree is the **old tag's**. `git tag --contains d622616d` answers
+`v1.3.0 v1.3.1`: every earlier tag predates `prerelease_flag.sh`, and a naive
+call would have exited 127 on a path that works. The two scripts therefore join
+the repair scaffolding checkout, which is the verb the job **already has** for
+"this comes from the dispatched ref" — the same principle #504 stated as
+"dispatching from main runs the FIXED workflow against the tag", extended to
+the helpers that workflow now reasons with. Measured not to touch the artefact:
+`Dockerfile.release` COPYs exactly two files out of `infra/packaging`
+(`version.sh`, `gen-secrets.sh`) and neither is one of these, so the image
+stays byte-for-byte the tag's. The bats case pins that count at 2 — the moment
+a third joins, it is what notices.
+
+### The bench, and the green that meant nothing
+
+Eight mutants against `test/infra/release_latest_gate_test.bats`; seven died on
+the first pass and **one survived**. Replacing the skip arm with a hard failure
+left the suite green at 15/15, because the case fabricated its unreadable tag
+as `v1.2` — which sorts *under* the tag being asked about, and the scan stops
+at the first release it finds. The classifier was never handed anything it
+could refuse. Fixed by making the stray **outrank** the tag under test (`v9.9`)
+and asserting the skip line on stderr, so "the scan skipped it" is told apart
+from "the scan never looked". Second pass: 8 mutants, 8 killed.
+
+**The general shape: a test that exercises an early-exit scan must place its
+subject on the side of the exit that is actually reached.** A fixture below the
+break point is decoration.
+
+### What the suite does not cover, stated so a green is not read wider
+
+It drives shell logic against fabricated git repositories. It does not run
+GitHub Actions, does not exercise `docker/build-push-action`, and never
+contacts a registry — "which tags the runner pushed" is asserted only as the
+tag list the gate feeds that action, via the workflow text. The end-to-end fact
+is unreachable without cutting a release. `.github/workflows/**` is also
+outside `integration.yml`'s `paths:`, so this change's PR runs fewer checks
+than a source change does.
