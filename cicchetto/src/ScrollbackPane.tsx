@@ -3087,18 +3087,23 @@ const ScrollbackPane: Component<Props> = (props) => {
     if (winner) dispatchScrollWrite(winner);
   };
 
-  // #608 (deep-review §6.4) — the prepend-preserve applier entrypoint. UNLIKE
-  // the commit-frame intents, loadMore preserve is POST-AWAIT: an older page is
-  // fetched, PREPENDED, and the reader's on-screen row must stay put across that
-  // mutation. It is a DISTINCT entrypoint (not `resolveIntent` at the commit
-  // frame) because the restore needs the geometry captured BEFORE the await and
-  // runs on the commit AFTER the prepend lands — the commit-frame length-effect
-  // already ran for that same rows() change and, per the followMode gate, left a
-  // scrolled-up reader in place. `prepend-preserve` is the LOWEST precedence in
-  // the array: it never fights a higher authority because it fires only on the
-  // operator's own scroll-to-top / #230 underfill-rescue, when nothing higher is
-  // arming. The single owner of the W6 write; logs via the shared dev-log.
-  // `oldScrollHeight` / `oldScrollTop` are the geometry captured pre-await.
+  // #608 (deep-review §6.4) — the prepend-preserve applier entrypoint. An older
+  // page is fetched, PREPENDED, and the reader's on-screen row must stay put
+  // across that mutation. It is a DISTINCT entrypoint (not `resolveIntent` at
+  // the commit frame) because the restore needs a BEFORE and an AFTER reading
+  // of the same geometry, which a single commit-frame pass cannot give it — the
+  // length-effect already ran for that same rows() change and, per the
+  // followMode gate, left a scrolled-up reader in place. `prepend-preserve` is
+  // the LOWEST precedence in the array: it never fights a higher authority
+  // because it fires only on the operator's own scroll-to-top / #230
+  // underfill-rescue, when nothing higher is arming. The single owner of the W6
+  // write; logs via the shared dev-log.
+  //
+  // #1094 — `oldScrollHeight` / `oldScrollTop` are read at the store's commit
+  // seam, one statement before the prepend lands; this runs one statement
+  // after it, in the same task. They used to be a pre-await snapshot spent in
+  // the verb's `.then()`, which is what this issue removed — see
+  // `maybeLoadOlder`. The arithmetic is unchanged; only its two instants are.
   const applyPrependPreserve = (oldScrollHeight: number, oldScrollTop: number): void => {
     if (!listRef) return;
     const intent: ScrollIntent = { kind: "prepend-preserve", key: key(), lifetime: "one-shot" };
@@ -3389,10 +3394,17 @@ const ScrollbackPane: Component<Props> = (props) => {
   // jump to the new top (scrollTop=0 stays pinned) — where they were already
   // looking — or stay numerically pinned to scrollTop=N relative to the OLD
   // scrollHeight, which is now a different position relative to the new
-  // content. We capture (scrollHeight, scrollTop) BEFORE the await, then the
-  // #608 applier's post-await `applyPrependPreserve` restores the reader's row
-  // via the height delta (see its doc). DOM mutation lives here in the
+  // content. The #608 applier's `applyPrependPreserve` restores the reader's
+  // row via the height delta (see its doc). DOM mutation lives here in the
   // component; lib/scrollback.ts stays DOM-free.
+  //
+  // #1094 — the geometry is read at the verb's COMMIT SEAM, not before the
+  // call. It used to be captured here and spent in the returned promise's
+  // `.then()`, which made both terms of the delta a round trip old: the
+  // operator goes on scrolling past the 200px that armed the fetch, and live
+  // rows go on appending at the tail, so the restore aimed at where the reader
+  // WAS and dragged the pane out from under them by the difference (vjt, from
+  // the field, on the ordinary scroll-to-top gesture). See `PrependCommitSeam`.
   const maybeLoadOlder = (): void => {
     if (!listRef) return;
     if (listRef.scrollTop > LOAD_MORE_THRESHOLD_PX) return;
@@ -3400,11 +3412,15 @@ const ScrollbackPane: Component<Props> = (props) => {
     // yanking this (it re-asserts ONLY when a marker exists; a no-marker latch
     // falls through to the followMode tail-follow, which preserves here because the
     // operator scrolled UP).
-    const oldScrollHeight = listRef.scrollHeight;
-    const oldScrollTop = listRef.scrollTop;
-    void loadMoreScrollback(props.networkSlug, props.channelName).then(() =>
-      applyPrependPreserve(oldScrollHeight, oldScrollTop),
-    );
+    void loadMoreScrollback(props.networkSlug, props.channelName, () => {
+      // Re-read the ref rather than closing over the one the guard above
+      // proved: this runs a round trip later and the pane can have unmounted.
+      const list = listRef;
+      if (!list) return undefined;
+      const oldScrollHeight = list.scrollHeight;
+      const oldScrollTop = list.scrollTop;
+      return () => applyPrependPreserve(oldScrollHeight, oldScrollTop);
+    });
   };
 
   const onWheel = (e: WheelEvent): void => {

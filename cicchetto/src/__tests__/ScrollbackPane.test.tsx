@@ -1833,16 +1833,118 @@ describe("ScrollbackPane", () => {
       Object.defineProperty(list, "scrollTop", { value: 40, writable: true, configurable: true });
       Object.defineProperty(list, "scrollHeight", { value: 1000, configurable: true });
 
-      // loadMore resolves AND simulates the prepend (scrollHeight 1000 → 1500).
-      vi.mocked(loadMore).mockImplementationOnce(() => {
+      // loadMore drives the #1094 commit seam AND simulates the prepend
+      // (scrollHeight 1000 → 1500). The arithmetic pinned here is unchanged by
+      // #1094 — only its transport moved: the geometry used to be read by the
+      // pane before the call and spent in a `.then()`, and is now read at the
+      // seam's open edge and spent at its close edge. Nothing moves during
+      // this fetch, so the two readings coincide and the expected px is the
+      // same 540 it always was. (What #1094 changes is the case where they do
+      // NOT coincide — see the describe below.)
+      vi.mocked(loadMore).mockImplementationOnce((_slug, _name, aroundCommit) => {
+        const committed = aroundCommit();
         Object.defineProperty(list, "scrollHeight", { value: 1500, configurable: true });
+        committed?.();
         return Promise.resolve();
       });
 
       list.dispatchEvent(new Event("scroll"));
 
-      // Post-await restore: 1500 - 1000 + 40 = 540 (the reader's row held).
+      // Restore: 1500 - 1000 + 40 = 540 (the reader's row held).
       await waitFor(() => expect(list.scrollTop).toBe(540));
+    });
+  });
+
+  // #1094 — the preserve is bound to the COMMIT, not to the verb.
+  //
+  // The pane used to read (scrollHeight, scrollTop) BEFORE calling `loadMore`
+  // and spend them in the returned promise's `.then()`. Both numbers are live
+  // DOM geometry and the fetch is a network round trip, so everything that
+  // happens in between moves them under the snapshot: the operator carries on
+  // scrolling upward past the threshold that armed the fetch, and live rows
+  // keep appending at the tail. The restore then aims at where the reader WAS
+  // when the gesture crossed 200px, not where they are — and the pane visibly
+  // shifts under them, which is the field report on the operator's own
+  // scroll-to-top path ("salire e ripescare messaggi vecchi smuove tutto
+  // l'elenco", 2026-08-23).
+  //
+  // The two cases below are the two axes of that: WHICH geometry is spent, and
+  // WHEN it is spent. Both fail on the pre-#1094 shape.
+  describe("#1094 — the prepend preserve reads the geometry at the commit", () => {
+    let origScrollIntoView: typeof Element.prototype.scrollIntoView;
+    beforeEach(() => {
+      // Same isolation as the #608 block above: stub scrollIntoView so the
+      // mount tail-follow never touches scrollTop and the only write under
+      // test is the preserve.
+      origScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+    afterEach(() => {
+      Element.prototype.scrollIntoView = origScrollIntoView;
+    });
+
+    it("ignores the pre-fetch snapshot when the pane moved during the fetch", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      // The gesture that arms the fetch: scrollTop 40 (<= 200), height 1000.
+      Object.defineProperty(list, "clientHeight", { value: 300, configurable: true });
+      Object.defineProperty(list, "scrollTop", { value: 40, writable: true, configurable: true });
+      Object.defineProperty(list, "scrollHeight", { value: 1000, configurable: true });
+
+      vi.mocked(loadMore).mockImplementationOnce((_slug, _name, aroundCommit) => {
+        // …and this is the fetch. The operator keeps flicking upward and lands
+        // on the very top (40 → 0), and one live row arrives at the tail
+        // (1000 → 1120). Neither is visible to a snapshot taken before the
+        // call, and BOTH are terms in the restore.
+        list.scrollTop = 0;
+        Object.defineProperty(list, "scrollHeight", { value: 1120, configurable: true });
+
+        const committed = aroundCommit();
+        Object.defineProperty(list, "scrollHeight", { value: 1620, configurable: true });
+        committed?.();
+        return Promise.resolve();
+      });
+
+      list.dispatchEvent(new Event("scroll"));
+
+      // Only the 500px the PREPEND added is compensated, onto where the reader
+      // actually is: 1620 - 1120 + 0 = 500. The pre-fetch snapshot would have
+      // answered 1620 - 1000 + 40 = 660 — 160px of pane yanked out from under
+      // them, of which 120 is a live append the prepend never caused.
+      await waitFor(() => expect(list.scrollTop).toBe(500));
+    });
+
+    it("has already compensated by the time the verb resolves", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      const list = screen.getByTestId("scrollback") as HTMLDivElement;
+
+      Object.defineProperty(list, "clientHeight", { value: 300, configurable: true });
+      Object.defineProperty(list, "scrollTop", { value: 40, writable: true, configurable: true });
+      Object.defineProperty(list, "scrollHeight", { value: 1000, configurable: true });
+
+      // The verb commits the prepend, then keeps going — the store's own
+      // `loadMore` has bookkeeping after its merge, and a future one may grow
+      // more. A restore chained to the RESOLUTION inherits however many awaits
+      // that turns out to be; a restore chained to the commit inherits none.
+      // Here the resolution is deferred by a whole macrotask, which is a frame
+      // the browser is free to paint with the content shifted and scrollTop
+      // untouched.
+      vi.mocked(loadMore).mockImplementationOnce((_slug, _name, aroundCommit) => {
+        const committed = aroundCommit();
+        Object.defineProperty(list, "scrollHeight", { value: 1500, configurable: true });
+        committed?.();
+        return new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+
+      list.dispatchEvent(new Event("scroll"));
+
+      // NOT awaited: the assertion is that the write already happened, in the
+      // same task as the mutation. `await waitFor` here would pass on the old
+      // shape too — it is exactly the frame this issue is about.
+      expect(list.scrollTop).toBe(540);
     });
   });
 
@@ -5030,7 +5132,9 @@ describe("ScrollbackPane", () => {
       // scrolls); only the wheel path can rescue the operator.
       list.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true }));
 
-      await waitFor(() => expect(loadMore).toHaveBeenCalledWith("freenode", "#grappa"));
+      await waitFor(() =>
+        expect(loadMore).toHaveBeenCalledWith("freenode", "#grappa", expect.any(Function)),
+      );
     });
 
     it("wheel-DOWN on a non-overflowing pane does NOT call loadMore", async () => {
@@ -5475,7 +5579,9 @@ describe("ScrollbackPane", () => {
       fireTouch(list, "touchstart", 100);
       fireTouch(list, "touchmove", 260);
 
-      await waitFor(() => expect(loadMore).toHaveBeenCalledWith("freenode", "#grappa"));
+      await waitFor(() =>
+        expect(loadMore).toHaveBeenCalledWith("freenode", "#grappa", expect.any(Function)),
+      );
     });
 
     it("finger drag UP on an underfilled pane does NOT call loadMore", async () => {

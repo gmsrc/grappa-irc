@@ -65,6 +65,10 @@ vi.mock("../lib/readCursor", () => ({
 const SLUG = "freenode";
 const CHAN = "#grappa";
 const KEY = channelKey(SLUG, CHAN);
+// #1094 — `loadMore` brackets its prepend with a caller-supplied commit seam.
+// Nothing here is about scroll position, so these pass the contract's own
+// "neither edge" answer. Pinned in `scrollback.test.ts`.
+const noSeam = (): undefined => undefined;
 
 // Row whose `id` is a counting getter. Every read the store performs — the
 // dedupe scan, the tail comparison, the ring-cap protection scan, a sort — is
@@ -309,9 +313,9 @@ describe("#1288 — the batched ingest keeps every per-row invariant", () => {
 
     // Latch loadMore as exhausted, then prove a page-driven eviction clears it.
     vi.mocked(api.listMessages).mockResolvedValueOnce([]);
-    await scrollback.loadMore(SLUG, CHAN);
+    await scrollback.loadMore(SLUG, CHAN, noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
-    await scrollback.loadMore(SLUG, CHAN);
+    await scrollback.loadMore(SLUG, CHAN, noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
 
     const page = Array.from({ length: 200 }, (_, i) => plainRow(cap + 1 + i));
@@ -322,7 +326,7 @@ describe("#1288 — the batched ingest keeps every per-row invariant", () => {
     expect(scrollback.scrollbackByChannel()[KEY]?.some((m) => m.id === 1)).toBe(false);
 
     vi.mocked(api.listMessages).mockResolvedValueOnce([]);
-    await scrollback.loadMore(SLUG, CHAN);
+    await scrollback.loadMore(SLUG, CHAN, noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(2);
   });
 

@@ -309,16 +309,61 @@ const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): CappedRi
 // same predicate to drop a stale RESPONSE; this module uses it one step
 // earlier, to refuse a stale REQUEST.
 
+/**
+ * #1094 — the synchronous seam `loadMore` wraps around its prepend.
+ *
+ * Called with no arguments IMMEDIATELY BEFORE the store write that prepends
+ * the older page, and the function it returns (when it returns one) called
+ * IMMEDIATELY AFTER that write, with nothing awaited in between.
+ *
+ * Why a seam and not a return value the caller acts on. What the pane has to
+ * preserve across a prepend is GEOMETRY — the container's `scrollHeight` and
+ * `scrollTop` — and geometry is only true at an instant. Read before the verb
+ * is called it is stale by a whole network round trip: the operator carries on
+ * scrolling past the threshold that armed the fetch, and live rows keep
+ * appending at the tail, so BOTH terms of the height-delta correction move
+ * under the snapshot and the pane restores the reader to where they were
+ * rather than where they are. Read after the verb RESOLVES it is correct but
+ * late by however many awaits the verb happens to have left, which is not a
+ * number the caller can know and not one that stays fixed as the verb grows.
+ * Bracketing the mutation is the only reading that is neither.
+ *
+ * `lib/scrollback.ts` stays DOM-free: the store says WHEN, the pane reads
+ * WHAT. Returning nothing is legitimate — a caller that only wants the "about
+ * to prepend" edge (or neither) says so by returning `undefined`.
+ */
+export type PrependCommitSeam = () => (() => void) | undefined;
+
 const exports = identityScopedStore((onIdentityChange) => {
   const loadedChannels = new Set<ChannelKey>();
   // CP14 B2: per-key in-flight Set guards against scroll-burst fan-out
   // (the user flicks the scrollbar; the browser fires `scroll` 5+ times
   // in a frame and the onScroll handler would otherwise dispatch 5+
   // identical REST requests). While a key is in `loadMoreInFlight`, a
-  // second `loadMore` call for the same key is a no-op. Released in
-  // `finally` so a transient REST error doesn't permanently lock out
+  // second `loadMore` call for the same key is a no-op. Released on every
+  // terminal so a transient REST error doesn't permanently lock out
   // future retries — only the exhausted-latch is forward-only.
-  const loadMoreInFlight = new Set<ChannelKey>();
+  //
+  // #1094 — and it is a SIGNAL rather than a plain Set, unlike its four
+  // siblings below, because the pane RENDERS from it: the older-page fetch
+  // now has a loading affordance, and "is a page on the wire for this key"
+  // is precisely this state. A second boolean mirroring it would be a
+  // parallel structure with its own housekeeping to drift (CLAUDE.md: derive,
+  // don't duplicate) — and it would drift on exactly the paths that matter,
+  // the ones where the fetch ends badly. Reading it from `loadMore` creates
+  // no reactive dependency: the verb runs outside any tracking scope.
+  const [loadMoreInFlight, setLoadMoreInFlight] = createSignal<ReadonlySet<ChannelKey>>(new Set());
+  const holdLoadMoreInFlight = (key: ChannelKey): void => {
+    setLoadMoreInFlight((prev) => new Set(prev).add(key));
+  };
+  const releaseLoadMoreInFlight = (key: ChannelKey): void => {
+    setLoadMoreInFlight((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  };
   // CP14 B2: end-of-history latch. When `loadMore` returns 0 fresh
   // rows, the channel is exhausted — the server has no rows older than
   // our current oldest. Subsequent calls are no-ops. Latch is forward-
@@ -463,7 +508,7 @@ const exports = identityScopedStore((onIdentityChange) => {
   // merge paths; `jumpToUnread` REPLACES the key's rows, so a second concurrent
   // jump would discard whatever landed between the two writes.)
   onIdentityChange(() => loadedChannels.clear());
-  onIdentityChange(() => loadMoreInFlight.clear());
+  onIdentityChange(() => setLoadMoreInFlight(new Set()));
   onIdentityChange(() => loadMoreExhausted.clear());
   onIdentityChange(() => loadNewerInFlight.clear());
   onIdentityChange(() => loadNewerExhausted.clear());
@@ -1005,7 +1050,33 @@ const exports = identityScopedStore((onIdentityChange) => {
     }
   };
 
-  const loadMore = async (slug: string, name: string): Promise<void> => {
+  // #1094 — the fetch half of `loadMore`, split out so the `catch` that
+  // deliberately swallows a transient REST failure covers the REQUEST and
+  // nothing else. What follows it is a DOM-visible scroll write supplied by
+  // the pane, and a boundary that absorbs an exception from that would hide
+  // the next bug to fall into it (CLAUDE.md: no silent-swallow at boundaries).
+  //
+  // `null` is the failure; it is NOT `[]`, which is the server answering "no
+  // older rows" and is what latches `loadMoreExhausted`. Collapsing the two
+  // would latch the channel permanently on one flaky request.
+  const fetchOlderPage = async (
+    t: string,
+    slug: string,
+    name: string,
+    before: number,
+  ): Promise<ScrollbackMessage[] | null> => {
+    try {
+      return await listMessages(t, slug, name, before);
+    } catch {
+      return null;
+    }
+  };
+
+  const loadMore = async (
+    slug: string,
+    name: string,
+    aroundCommit: PrependCommitSeam,
+  ): Promise<void> => {
     const t = token();
     if (!t) return;
     const key = channelKey(slug, name);
@@ -1017,33 +1088,45 @@ const exports = identityScopedStore((onIdentityChange) => {
     //      onto a single REST request; the second call returns void
     //      while the first is still pending.
     if (loadMoreExhausted.has(key)) return;
-    if (loadMoreInFlight.has(key)) return;
+    if (loadMoreInFlight().has(key)) return;
     const current = scrollbackByChannel()[key];
     if (!current || current.length === 0) return;
     const oldest = current[0];
     if (!oldest) return;
-    loadMoreInFlight.add(key);
+    // Held SYNCHRONOUSLY, before the first await: the pane's loading
+    // affordance reads this, and one set a microtask later is one the
+    // operator's own next scroll event beats to the draw.
+    holdLoadMoreInFlight(key);
+    // CP29 R-2: cursor flipped from `oldest.server_time` to
+    // `oldest.id`. The server-side `?before=` parameter now expects
+    // a `messages.id` value, eliminating same-ms ties that straddled
+    // page boundaries pre-flip.
+    const page = await fetchOlderPage(t, slug, name, oldest.id);
+    // Past a rotation the identity reset already emptied the in-flight set, so
+    // releasing here would unlock a fetch belonging to whoever replaced us.
+    if (identityMoved(t)) return;
     try {
-      // CP29 R-2: cursor flipped from `oldest.server_time` to
-      // `oldest.id`. The server-side `?before=` parameter now expects
-      // a `messages.id` value, eliminating same-ms ties that straddled
-      // page boundaries pre-flip.
-      const page = await listMessages(t, slug, name, oldest.id);
-      if (identityMoved(t)) return;
+      // A transient failure does NOT latch as exhausted: the operator can
+      // retry by scrolling again, and the in-flight guard releases below.
+      if (page === null) return;
       // CP14 B2: empty page from the server means there's no older
       // history to load. Latch the channel so subsequent scroll-to-
-      // top events don't re-fetch.
+      // top events don't re-fetch. No prepend, so the seam stays shut —
+      // there is no mutation for the pane to compensate for.
       if (page.length === 0) {
         loadMoreExhausted.add(key);
-      } else {
-        mergeIntoScrollback(key, page);
+        return;
       }
-    } catch {
-      // Transient error — do NOT latch as exhausted. The user can
-      // retry by scrolling again; the in-flight guard releases via
-      // the finally clause below.
+      // #1094 — the commit seam, wrapped tight around the ONE store write
+      // that prepends the page. Solid flushes a signal write's render effects
+      // and user effects before the setter returns, so `settled` runs with the
+      // new rows already in the DOM, in this same task, with no frame between
+      // it and the mutation. See `PrependCommitSeam`.
+      const settled = aroundCommit();
+      mergeIntoScrollback(key, page);
+      settled?.();
     } finally {
-      if (!identityMoved(t)) loadMoreInFlight.delete(key);
+      releaseLoadMoreInFlight(key);
     }
   };
 
@@ -1425,7 +1508,7 @@ const exports = identityScopedStore((onIdentityChange) => {
     if (!hasSignal && !hasGate) return;
     loadedChannels.delete(key);
     loadMoreExhausted.delete(key);
-    loadMoreInFlight.delete(key);
+    releaseLoadMoreInFlight(key);
     loadNewerExhausted.delete(key);
     loadNewerInFlight.delete(key);
     // #693 — the rows the far-behind record points back to were just deleted
@@ -1454,11 +1537,20 @@ const exports = identityScopedStore((onIdentityChange) => {
   const wasLoaded = (slug: string, name: string): boolean =>
     loadedChannels.has(channelKey(slug, name));
 
+  // #1094 — "an older page is on the wire for this window". The pane renders
+  // its loading affordance from this and nothing else, so the flag and the
+  // guard that makes the fetch idempotent are the SAME state: an affordance
+  // derived from a second boolean would be the one that hangs when a fetch
+  // ends on a path whoever added it forgot about.
+  const isLoadingOlder = (slug: string, name: string): boolean =>
+    loadMoreInFlight().has(channelKey(slug, name));
+
   return {
     scrollbackByChannel,
     appendToScrollback,
     dismissFarBehind,
     farBehindByChannel,
+    isLoadingOlder,
     jumpToUnread,
     loadInitialScrollback,
     loadMore,
@@ -1478,6 +1570,7 @@ export const scrollbackByChannel = exports.scrollbackByChannel;
 export const appendToScrollback = exports.appendToScrollback;
 export const dismissFarBehind = exports.dismissFarBehind;
 export const farBehindByChannel = exports.farBehindByChannel;
+export const isLoadingOlder = exports.isLoadingOlder;
 export const jumpToUnread = exports.jumpToUnread;
 export const loadInitialScrollback = exports.loadInitialScrollback;
 export const loadMore = exports.loadMore;

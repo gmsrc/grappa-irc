@@ -57,6 +57,12 @@ vi.mock("../lib/readCursor", () => ({
     mockSetReadCursor(bearer, slug, chan, id),
 }));
 
+// #1094 — `loadMore` brackets its prepend with a commit seam supplied by the
+// caller (the pane restores the reader's scroll position across it). Cases
+// that are not about the seam pass this: returning `undefined` is the
+// contract's own way of saying "I want neither edge", not a stub.
+const noSeam = (): undefined => undefined;
+
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
@@ -221,7 +227,7 @@ describe("scrollback verbs", () => {
         meta: {},
       },
     ]);
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     const key = channelKey("freenode", "#grappa");
     // CP29 R-2: cursor flipped from oldest.server_time (500) to oldest.id (5).
     expect(api.listMessages).toHaveBeenLastCalledWith("tok", "freenode", "#grappa", 5);
@@ -797,8 +803,8 @@ describe("loadMore — B2 concurrency guard + end-of-history latch", () => {
     const scrollback = await import("../lib/scrollback");
     seedOne(scrollback);
     // Fire two loadMore calls back-to-back without awaiting the first.
-    const p1 = scrollback.loadMore("freenode", "#grappa");
-    const p2 = scrollback.loadMore("freenode", "#grappa");
+    const p1 = scrollback.loadMore("freenode", "#grappa", noSeam);
+    const p2 = scrollback.loadMore("freenode", "#grappa", noSeam);
     // The second call should resolve immediately (no-op) without
     // adding a second REST request.
     expect(api.listMessages).toHaveBeenCalledTimes(1);
@@ -828,13 +834,13 @@ describe("loadMore — B2 concurrency guard + end-of-history latch", () => {
     const scrollback = await import("../lib/scrollback");
     seedOne(scrollback);
     // First loadMore: REST returns [] → exhausted latch fires.
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
     // Second loadMore: latch makes this a no-op (no REST).
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
     // Third loadMore: still latched.
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
   });
 
@@ -855,7 +861,7 @@ describe("loadMore — B2 concurrency guard + end-of-history latch", () => {
     ]);
     const scrollback = await import("../lib/scrollback");
     seedOne(scrollback);
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
     // Fresh page came back non-empty → not exhausted. Second call,
     // serial (in-flight cleared), fires a second REST request.
@@ -871,7 +877,7 @@ describe("loadMore — B2 concurrency guard + end-of-history latch", () => {
         meta: {},
       },
     ]);
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(2);
   });
 
@@ -881,13 +887,147 @@ describe("loadMore — B2 concurrency guard + end-of-history latch", () => {
     vi.mocked(api.listMessages).mockRejectedValueOnce(new Error("boom"));
     const scrollback = await import("../lib/scrollback");
     seedOne(scrollback);
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
     // Failed call must NOT latch as exhausted — error is transient.
     // User scrolls again; REST retries.
     vi.mocked(api.listMessages).mockResolvedValueOnce([]);
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(2);
+  });
+
+  // #1094 — the prepend commit seam.
+  //
+  // `loadMore` used to be a verb with no seam at all: the pane read its
+  // geometry BEFORE calling it and restored the reader's position from the
+  // returned promise's `.then()`. Everything that happens in between — the
+  // operator carrying on scrolling for the length of the fetch, live rows
+  // appending at the tail — moves the very numbers that restore is computed
+  // from, and it never learned about any of it.
+  //
+  // These pin both edges observably, by reading the store's OWN row count
+  // from inside the callbacks: that is the only evidence saying WHEN they ran
+  // relative to the mutation, and it says it without asserting a call
+  // sequence. The pane's half is in `ScrollbackPane.test.tsx`.
+  describe("#1094 — the commit seam brackets the prepend", () => {
+    const older = (id: number): ScrollbackMessage => ({
+      id,
+      network: "freenode",
+      channel: "#grappa",
+      server_time: id * 10,
+      kind: "privmsg",
+      sender: "bob",
+      body: `older ${id}`,
+      meta: {},
+    });
+
+    it("opens before the prepend lands and closes after it, in one task", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValueOnce([older(50), older(40)]);
+      const scrollback = await import("../lib/scrollback");
+      seedOne(scrollback);
+      const key = channelKey("freenode", "#grappa");
+      const count = (): number => (scrollback.scrollbackByChannel()[key] ?? []).length;
+
+      const atOpen: number[] = [];
+      const atClose: number[] = [];
+      // No await between the two edges — the verb invokes the finaliser
+      // itself, in place, rather than scheduling it.
+      let closed = false;
+
+      await scrollback.loadMore("freenode", "#grappa", () => {
+        atOpen.push(count());
+        return () => {
+          atClose.push(count());
+          closed = true;
+        };
+      });
+
+      // Opened with only the seeded row in the pane, closed with the two
+      // older rows already merged.
+      expect(atOpen).toEqual([1]);
+      expect(atClose).toEqual([3]);
+      expect(closed).toBe(true);
+    });
+
+    it("stays shut when the server has no older rows", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockResolvedValueOnce([]);
+      const scrollback = await import("../lib/scrollback");
+      seedOne(scrollback);
+
+      const opened = vi.fn((): undefined => undefined);
+      await scrollback.loadMore("freenode", "#grappa", opened);
+
+      // An empty page prepends nothing, so there is no mutation to
+      // compensate for. Firing the seam anyway would have the pane spend a
+      // scroll write on a geometry that never moved.
+      expect(opened).not.toHaveBeenCalled();
+    });
+
+    it("stays shut when the request fails", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockRejectedValueOnce(new Error("boom"));
+      const scrollback = await import("../lib/scrollback");
+      seedOne(scrollback);
+
+      const opened = vi.fn((): undefined => undefined);
+      await scrollback.loadMore("freenode", "#grappa", opened);
+
+      expect(opened).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1094 — the in-flight state the pane's loading affordance renders from.
+  // Deliberately the SAME state as the burst guard above rather than a second
+  // boolean beside it: an affordance derived from a mirror is the one that
+  // hangs on whichever terminal its author forgot.
+  describe("#1094 — isLoadingOlder tracks the older-page fetch", () => {
+    it("is true for exactly the fetch's lifetime, and only for its own key", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      let release: ((v: ScrollbackMessage[]) => void) | null = null;
+      vi.mocked(api.listMessages).mockImplementation(
+        () =>
+          new Promise<ScrollbackMessage[]>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const scrollback = await import("../lib/scrollback");
+      seedOne(scrollback);
+
+      expect(scrollback.isLoadingOlder("freenode", "#grappa")).toBe(false);
+      const inFlight = scrollback.loadMore("freenode", "#grappa", noSeam);
+      // Held SYNCHRONOUSLY, before the first await: a flag set one microtask
+      // later is one the operator's own next scroll event beats to the draw.
+      expect(scrollback.isLoadingOlder("freenode", "#grappa")).toBe(true);
+      // Per key, not per pane — a fetch in one window must not spin another.
+      expect(scrollback.isLoadingOlder("freenode", "#other")).toBe(false);
+
+      if (!release) throw new Error("release never bound");
+      (release as (v: ScrollbackMessage[]) => void)([]);
+      await inFlight;
+
+      expect(scrollback.isLoadingOlder("freenode", "#grappa")).toBe(false);
+    });
+
+    it("comes back down when the request fails", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const api = await import("../lib/api");
+      vi.mocked(api.listMessages).mockRejectedValueOnce(new Error("boom"));
+      const scrollback = await import("../lib/scrollback");
+      seedOne(scrollback);
+
+      await scrollback.loadMore("freenode", "#grappa", noSeam);
+
+      // The DirectoryPane lesson, restated (`onCommit` clearing the paint on
+      // the one path that actually works): an affordance must come down on
+      // every terminal, not just the happy one.
+      expect(scrollback.isLoadingOlder("freenode", "#grappa")).toBe(false);
+    });
   });
 });
 
@@ -1477,11 +1617,11 @@ describe("purgeScrollback (UX-7-B 2026-05-22)", () => {
 
     // Latch the channel as exhausted via an empty loadMore.
     vi.mocked(api.listMessages).mockResolvedValueOnce([]);
-    await scrollback.loadMore("bahamut", "#bofh");
+    await scrollback.loadMore("bahamut", "#bofh", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(2);
 
     // Subsequent loadMore: exhausted latch short-circuits, no REST.
-    await scrollback.loadMore("bahamut", "#bofh");
+    await scrollback.loadMore("bahamut", "#bofh", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(2);
 
     // After purge + reseed: loadMore can fire again.
@@ -1500,7 +1640,7 @@ describe("purgeScrollback (UX-7-B 2026-05-22)", () => {
     ]);
     await scrollback.loadInitialScrollback("bahamut", "#bofh");
     vi.mocked(api.listMessages).mockResolvedValueOnce([]);
-    await scrollback.loadMore("bahamut", "#bofh");
+    await scrollback.loadMore("bahamut", "#bofh", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(4);
   });
 
@@ -1659,17 +1799,17 @@ describe("appendToScrollback — S20 per-channel ring cap", () => {
     scrollback.appendToScrollback(key, mkRow(1));
     // Latch loadMore as exhausted (server has no older history yet).
     vi.mocked(api.listMessages).mockResolvedValueOnce([]);
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
     // Latched: a second loadMore is a no-op.
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(1);
     // Grow past the cap so eviction fires → the seed (id 1) is dropped, so
     // there IS older history again → the exhausted latch must clear.
     for (let i = 2; i <= cap + 5; i++) scrollback.appendToScrollback(key, mkRow(i));
     expect(scrollback.scrollbackByChannel()[key]?.some((m) => m.id === 1)).toBe(false);
     vi.mocked(api.listMessages).mockResolvedValueOnce([]);
-    await scrollback.loadMore("freenode", "#grappa");
+    await scrollback.loadMore("freenode", "#grappa", noSeam);
     expect(api.listMessages).toHaveBeenCalledTimes(2);
   });
 });
