@@ -59031,3 +59031,135 @@ assertion: 30 s throttle + one rung (~5 s) for `:failing`, and for the
 `[dead, dead, live]` ring 2×30 s + a 5 s rung + a 10 s rung + registration
 before `:connected` returns. The polls are condition-based, not sleeps; the
 numbers are the ladder's, not a safety margin.
+<!-- entry #682 -->
+
+---
+
+## 2026-08-23 — #682: internet radio, and the CORS answer that turned out not to be the question
+
+Wollino asked for an internet-radio player in cicchetto and vjt decided the
+shape in channel: station picker reachable from the RailActions drawer,
+station chrome in the right rail, and the transport staying where it already
+is. Most of the machinery existed — `audioPlayer.ts` (#115) is a one-instance
+store and `AudioMiniPlayer` is a docked, persistent transport, so a station is
+just another href. What this entry records is the three places the obvious
+design was wrong.
+
+### The CORS measurement was necessary and not sufficient
+
+The issue named cross-origin access to `somafm.com/channels.json` as an open
+question, so it was measured first: the catalogue answers
+`Access-Control-Allow-Origin: *`, 46 channels, and so do the `.pls` playlists
+it points at. On that reading a live catalogue was the better design — richer,
+self-updating, and carrying `lastPlaying` as a free partial answer to the
+now-playing question.
+
+That reading was wrong, because the blocking party is not SomaFM. It is our
+own CSP. `GrappaWeb.Plugs.SecurityHeaders` admits `connect-src 'self'` plus
+three named third parties, and a `fetch` to somafm.com is not among them —
+nor is the `.pls` fetch that would resolve a stream URL. Widening it is a
+server change and a security-surface decision, so the first cut ships the
+list as data instead.
+
+Two directives needed no change at all, and they are the reason this works
+without touching the server: `media-src 'self' blob: https:` already admits
+the `<audio>` stream, widened by #607 for this very mini-player, and
+`img-src 'self' data: https:` already admits the station logos (#1240),
+because an `<img>` is governed by `img-src` and not by `connect-src`.
+
+**The general rule, which is what makes this worth recording:** for a
+third-party subresource, CORS answers whether THEY will serve us and the CSP
+answers whether WE will fetch it, and the second question is the one a client
+change can fail on its own. Measuring only the first produces a design that
+looks funded and is not.
+
+### The fragility objection to a baked-in list was refuted by measurement
+
+The argument against hardcoding stream URLs was concrete: a channel's `.pls`
+lists three rotating hosts (`ice2`, `ice5`, `ice6`), so a table pins a pool
+member and rots. Measured, that is false. The UNNUMBERED `ice.somafm.com`
+also answers, serving `audio/mpeg` with the channel's `icy-name` — it is the
+stable front door and the numbered hosts are the pool behind it. All fourteen
+curated entries were fetched through it and returned real MPEG audio, and the
+versionless logo URLs were checked the same way (the catalogue spells them
+with a `?v=` cache-buster that would rot).
+
+The lesson is pinned where it will actually be broken: adding a station by
+pasting a URL out of a `.pls` is the natural way to do it, and a test now
+fails any somafm host that is not the unnumbered one. Scoped to somafm hosts
+deliberately — the table is allowed to hold another provider.
+
+### A source with no end is a transport bug, not a radio feature
+
+`AudioMiniPlayer` was written for a file: a position slider and a `cur / dur`
+read, both meaningless against an endless stream. Live mode is DERIVED from
+the element's own `duration` rather than flagged by the caller, so it is
+right for any endless source and cannot drift from the element's truth. The
+predicate is "not a finite number", not "=== Infinity", because NaN means the
+element cannot state a length and seeking is exactly as meaningless. The
+initial value is `0` — finite — so a source whose metadata has not arrived
+keeps the file chrome instead of flashing a badge at every upload.
+
+In live mode the slider is replaced by a LABEL, not by a disabled slider: a
+greyed-out position bar still draws a scale and there is no scale. The
+download anchor is gated off for two independent reasons, either sufficient —
+the resource has no end, and `download` is ignored outright on a cross-origin
+href, so the anchor would navigate the operator out of the app.
+
+### Where the pieces live, and why the split is forced
+
+`playAudio` grew a REQUIRED label parameter carrying the source's name, riding
+with the href so the two swap atomically (a sibling signal lets a station's
+name outlive the source it named for one render, captioning the next upload).
+It exists because on mobile `.shell-members` is `position: fixed` with
+`transform: translateX(100%)`: a transport living in the rail is UNREACHABLE
+on a phone while it plays. So the rail gets picking and identity, the docked
+bar keeps the controls, and the label is the phone's only answer to "what am
+I listening to".
+
+`RailRadio` is NOT an arm of `RailContext` — that grafts by the active
+window's KIND and would drop the panel on switching to a query. It mounts
+unconditionally inside `.shell-members` from both branches of Shell's
+`isMobile()` split, like `RailActions`.
+
+The tuned station is DERIVED from `activeAudio()`, not stored. One `<audio>`
+means a clicked audio link swaps the source out from under the station; a
+stored flag would keep claiming the station is playing, and the derivation
+also inherits the close button and the identity-rotation reset for free.
+
+### The picker overlays the rail instead of copying the popover that bled
+
+`.rail-actions-menu` anchors at `bottom: 100%` of a bottom-pinned launcher,
+and that geometry is precisely what made #588 (cap by the space ABOVE, not
+the viewport) and #913 (that space is measured from the PHYSICAL top under
+`viewport-fit=cover`) necessary. The picker instead sits `position: absolute;
+inset: 0` against `.shell-members`, which is already relative for the resize
+handle and already carries #500's `min-height: 0`: its height IS the rail, so
+CSS bounds it with no JS measurement to get wrong. #913's descendant
+`touch-action` carve-out IS kept — that one is about which element iOS elects
+as the gesture consumer, and applies unchanged.
+
+#500's vertical budget holds by construction: idle the component renders
+nothing and has no height; the station chrome appears only once the operator
+tunes something and takes its row off the scrolling `.members-pane`, never
+off the floored actions drawer.
+
+Picking does not close the picker, following the rule `RailActions` already
+states for `denoise`: a launcher that NAVIGATES away is single-shot, a control
+the operator flips in place is not. The launcher itself DOES close the actions
+menu, for the opposite reason — the picker takes over the same column.
+
+### Left open, deliberately
+
+Now-playing metadata is out: ICY titles are not exposed to `<audio>`, and
+`lastPlaying` died with the catalogue fetch. A user-editable list is out: that
+is user state and wants `displayPrefs` treatment (server-backed + synced,
+#449) rather than a localStorage list that dies per device. `mediaLink.ts`
+still classifies audio by file EXTENSION and so does not recognise an
+extensionless Icecast endpoint — irrelevant to the rail picker, and it only
+starts to matter if stations may arrive as pasted links. Nothing is persisted
+across reload, which is also why no resume affordance was needed: browsers
+block autoplay without a gesture, and a rail click is one.
+
+Widening `connect-src` for the live catalogue is left as a NON-blocking note
+for vjt rather than taken here.
