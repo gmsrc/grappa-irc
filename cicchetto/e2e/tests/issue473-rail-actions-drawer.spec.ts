@@ -29,8 +29,11 @@
 // quit are always shown; rooms needs a network context (channel/server window);
 // mentions needs a live bundle for that network; denoise is channel-gated;
 // detach is canDetach()-gated; admin is isAdmin()-gated. vjt is a persistent
-// NON-admin, so on a channel window it sees the EIGHT labelled buttons in
-// RAIL_BUTTONS, with admin ABSENT — the isAdmin() gate's negative arm. The
+// NON-admin, so on a channel window it sees exactly the labelled buttons listed
+// in RAIL_BUTTONS, with admin ABSENT — the isAdmin() gate's negative arm. The
+// count is deliberately NOT restated here: this sentence said "EIGHT" while the
+// array had carried nine since #950, so the number is left where it is derived
+// (`RAIL_BUTTONS.length`) and nowhere else. The
 // admin-present arm is exercised by issue291 / issue299 / ux-6-c, which promote
 // vjt via setAdminFlag; this spec stays on the plain non-admin baseline to keep
 // the shared stack untouched.
@@ -73,6 +76,11 @@ const CHANNEL = AUTOJOIN_CHANNELS[0]; // #spec-wN — the seeded autojoin channe
 const RAIL_BUTTONS: ReadonlyArray<{ testid: string; label: string }> = [
   { testid: "mobile-panel-home", label: "home" },
   { testid: "mobile-panel-list", label: "rooms" },
+  // #682 — the radio picker launcher, added to the CONTRACT rather than
+  // loosening the count it broke: the rail genuinely hosts one more labelled
+  // row now. Ungated — the station table is baked into the bundle, so there is
+  // no capability to gate on and it renders for every subject on both engines.
+  { testid: "rail-action-radio", label: "radio" },
   { testid: "mobile-panel-themes", label: "themes" },
   { testid: "mobile-panel-archive", label: "archive" },
   { testid: "action-cluster-cog", label: "settings" },
