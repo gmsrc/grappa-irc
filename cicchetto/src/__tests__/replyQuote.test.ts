@@ -365,13 +365,91 @@ describe("replyToMessage", () => {
     expect(getDraft(KEY)).toBe("<vjt> ciao mondo << ");
   });
 
-  // Never destroy work in progress: the quote lands AFTER what is already
-  // there, so a half-typed line survives the gesture.
+  // Never destroy work in progress — #1067's rule, and it still holds: the
+  // half-typed line survives the gesture whole. #1688 changed only WHERE the
+  // quote goes relative to it. The old expectation here was
+  // `bozza <vjt> ciao mondo << `, which is the defect peluche reported.
   it("does not clobber an existing draft", () => {
     mountCompose();
     setDraft(KEY, "bozza ");
     replyToMessage(msg({}), NET, CHAN);
-    expect(getDraft(KEY)).toBe("bozza <vjt> ciao mondo << ");
+    // Both halves, so a cure that dropped either one cannot pass here while the
+    // ordering arms below carry the shape.
+    expect(getDraft(KEY)).toContain("bozza ");
+    expect(getDraft(KEY)).toContain("<vjt> ciao mondo << ");
+  });
+
+  // #1688 — the tail is documented (`replyQuote.ts`) as ending the line "so the
+  // answer is typed straight after the caret": quote first, answer last. A
+  // draft holding the operator's own words used to come back with the quote
+  // BEHIND them, which inverts that and leaves a `<<` reading as if it
+  // separated a quote from an answer sitting in front of it.
+  it("puts the quote in FRONT of a draft the operator typed — #1688", () => {
+    mountCompose();
+    setDraft(KEY, "la mia risposta");
+    replyToMessage(msg({}), NET, CHAN);
+    expect(getDraft(KEY)).toBe("<vjt> ciao mondo << la mia risposta");
+  });
+
+  // The documented invariant is about the END of the line, so it is asserted as
+  // one: whatever the draft held, the tail is followed by the operator's words
+  // and by nothing of ours.
+  it("leaves the operator's words after the tail, not before it — #1688", () => {
+    mountCompose();
+    setDraft(KEY, "la mia risposta");
+    replyToMessage(msg({}), NET, CHAN);
+    const draft = getDraft(KEY);
+    expect(draft.indexOf(REPLY_QUOTE_TAIL)).toBeLessThan(draft.indexOf("la mia risposta"));
+  });
+
+  // The caret decision #1688 worried about costs nothing: `updateCompose` places
+  // it at the very end unconditionally, which after a prepend IS the end of the
+  // typed answer. Asserted rather than assumed — it is the half of the
+  // invariant a string comparison cannot see.
+  it("leaves the caret at the end of the typed answer after a prepend — #1688", async () => {
+    const ta = mountCompose();
+    setDraft(KEY, "la mia risposta");
+    replyToMessage(msg({}), NET, CHAN);
+    ta.value = getDraft(KEY);
+    await Promise.resolve();
+    expect(ta.selectionStart).toBe("<vjt> ciao mondo << la mia risposta".length);
+    expect(document.activeElement).toBe(ta);
+  });
+
+  // A draft is OURS to reorder only when it actually carries one of our quotes.
+  // `<<` is ordinary text — the same trap `quotableBody`'s de-nesting regex was
+  // written to avoid (`shift << 2`, `cat <<EOF`) — so a discriminator that
+  // merely searched for the marker would treat a human's shift expression as a
+  // quote and append behind it, leaving #1688 unfixed for exactly those drafts.
+  it("treats a draft containing a bare << as the operator's own text — #1688", () => {
+    mountCompose();
+    setDraft(KEY, "shift << 2 gives four");
+    replyToMessage(msg({}), NET, CHAN);
+    expect(getDraft(KEY)).toBe("<vjt> ciao mondo << shift << 2 gives four");
+  });
+
+  // A draft that ENDS with our tail without STARTING with our quote is the
+  // shape the pre-#1688 code produced (type first, then reply) — and it can
+  // still be sitting in a persisted draft when this change ships. It is ours to
+  // extend, not to reorder: #1357's marker shed applies and the quote goes at
+  // the end. Found by the mutant bench, which kept a green suite when the
+  // `endsWith` half of the test was deleted.
+  it("still sheds the marker on a legacy draft that only ENDS with our tail", () => {
+    mountCompose();
+    setDraft(KEY, "bozza <a> primo << ");
+    replyToMessage(msg({ sender: "b", body: "secondo" }), NET, CHAN);
+    expect(getDraft(KEY)).toBe("bozza <a> primo <b> secondo << ");
+  });
+
+  // Reply, type, reply. The second quote must NOT jump in front of the answer
+  // written after the first — that is #1357's acceptance criterion 3, reached
+  // here through the #1688 prepend rather than through a hand-set draft.
+  it("appends once the draft already carries our quote — #1357 still holds", () => {
+    mountCompose();
+    replyToMessage(msg({ sender: "a", body: "primo" }), NET, CHAN);
+    setDraft(KEY, `${getDraft(KEY)}ciao`);
+    replyToMessage(msg({ id: 2, sender: "b", body: "secondo" }), NET, CHAN);
+    expect(getDraft(KEY)).toBe("<a> primo << ciao<b> secondo << ");
   });
 
   it("writes nothing for an unquotable row", () => {

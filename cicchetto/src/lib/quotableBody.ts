@@ -40,6 +40,18 @@ function withoutPreviousQuote(body: string): string {
   return body.replace(PREVIOUS_QUOTE, "").trim();
 }
 
+// #1688 — the same question asked of a COMPOSE DRAFT rather than of a wire
+// body: does this string already open with a quote WE emitted?
+//
+// Shares `PREVIOUS_QUOTE` rather than re-deriving it, because the trap is
+// identical on both sides and it is the trap this regex exists for: a bare
+// `<<` search calls `shift << 2` a quote, and on the draft side that
+// mis-classification is what decides whether the operator's own sentence gets
+// reordered. One nick charset, one anchor, one answer.
+export function startsWithReplyQuote(text: string): boolean {
+  return PREVIOUS_QUOTE.test(text);
+}
+
 // Only CONTENT kinds quote (`isContentKind` — privmsg/notice/action, the same
 // classifier the unread/badge math uses). A presence row is not somebody
 // speaking: a PART carries a reason in `body`, so a bare body check would

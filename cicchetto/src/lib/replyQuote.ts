@@ -1,6 +1,6 @@
 import type { ScrollbackMessage } from "./api";
 import { updateCompose } from "./composeAppend";
-import { attributionHead, quotableBody } from "./quotableBody";
+import { attributionHead, quotableBody, startsWithReplyQuote } from "./quotableBody";
 
 // #1067 — the reply verb, shared by the left→right swipe on a message row and
 // the long-press menu's Reply item. Both doors, one code path.
@@ -71,11 +71,47 @@ const REPLY_QUOTE_MARKER = REPLY_QUOTE_TAIL.trimStart();
 //
 // THIS is the function to change if replace-semantics ever wins (vjt: "start
 // with 2, we change it later if needed") — last-swipe-wins means returning the
-// draft with its whole quote removed instead of just the marker. The door below
-// hands it the draft and appends to whatever comes back, so nothing else moves.
+// draft with its whole quote removed instead of just the marker.
+// `draftWithReplyQuote` below hands it the draft and appends to whatever comes
+// back, so nothing else moves.
 export function draftBeforeReplyQuote(draft: string): string {
   if (!draft.endsWith(REPLY_QUOTE_TAIL)) return draft;
   return draft.slice(0, draft.length - REPLY_QUOTE_MARKER.length);
+}
+
+// #1688 — WHERE the quote goes. The tail is documented above as ending the line
+// "so the answer is typed straight after the caret": the shape is
+// `quote << answer`, an invariant about the END of the line and not merely
+// about concatenation. A draft holding the operator's own words used to come
+// back with the quote BEHIND them, inverting it — peluche reported the result
+// on #grappa, and the `<<` then reads as if it separated a quote from an answer
+// sitting in front of it.
+//
+// So: a draft that already carries a quote of OURS is extended (the #1357
+// path); anything else is the operator's text and the quote goes in FRONT of
+// it, restoring the documented order.
+//
+// "Carries a quote of ours" is deliberately two tests, not one.
+//   - ENDS with our tail — the #1357 accumulate case, whose marker is shed.
+//   - STARTS with our quote shape (`startsWithReplyQuote`) — the case where the
+//     operator has already typed an answer past the tail. #1357's acceptance
+//     criterion 3 rules on exactly that draft: the new quote "must not land
+//     before that text". A trigger phrased as "does not end with the tail"
+//     — which is how the shapes were first written down — would prepend there
+//     and break a standing ruling, so the head test is what keeps the two
+//     issues compatible.
+// Neither test is a bare `<<` search: `shift << 2` is somebody's sentence, and
+// treating it as ours is how #1688 would stay unfixed for the drafts that
+// happen to contain the marker.
+//
+// The caret needs no decision here, measured rather than assumed:
+// `updateCompose` places it at the very end unconditionally, which after a
+// prepend IS the end of the typed answer.
+export function draftWithReplyQuote(draft: string, quote: string): string {
+  if (draft.endsWith(REPLY_QUOTE_TAIL) || startsWithReplyQuote(draft)) {
+    return draftBeforeReplyQuote(draft) + quote;
+  }
+  return quote + draft;
 }
 
 // Drop the quote into the window's compose box with the caret at the end. A
@@ -88,5 +124,5 @@ export function replyToMessage(
 ): void {
   const quote = replyQuote(msg);
   if (quote === null) return;
-  updateCompose(networkSlug, channelName, (draft) => draftBeforeReplyQuote(draft) + quote);
+  updateCompose(networkSlug, channelName, (draft) => draftWithReplyQuote(draft, quote));
 }
