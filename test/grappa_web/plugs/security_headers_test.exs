@@ -33,6 +33,65 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
     |> send_resp(status, "body")
   end
 
+  # Parse the EMITTED policy into %{directive => MapSet.t(source)}. The golden
+  # pin above catches byte drift; the #1695 tests below need to ask what a
+  # directive ADMITS, and re-typing the expected string to answer that would
+  # make them mirrors of the implementation instead of assertions about it.
+  defp directives do
+    SecurityHeaders.csp()
+    |> String.split(";", trim: true)
+    |> Map.new(fn directive ->
+      [name | sources] = directive |> String.trim() |> String.split(" ", trim: true)
+      {name, MapSet.new(sources)}
+    end)
+  end
+
+  describe "#1695 — the SomaFM catalogue host on connect-src" do
+    # Measured against the live catalogue (46 channels, 425 absolute URLs,
+    # 2026-08-23): the 184 `.pls` playlist URLs — the only kind a client
+    # FETCHES, and so the only kind `connect-src` governs — are 184/184 on
+    # `api.somafm.com`. The 138 logos ride `img-src https:` and the 103
+    # prerolls ride `media-src https:`, both already wide enough, and the
+    # prerolls are the only thing on the bare `somafm.com` at all.
+    test "connect-src admits the catalogue host" do
+      assert MapSet.member?(directives()["connect-src"], "https://api.somafm.com"),
+             "connect-src must admit https://api.somafm.com — it is the host every " <>
+               "connect-src-governed SomaFM URL lives on."
+    end
+
+    # `https://*.somafm.com` (the issue TITLE's spelling) is wider than the
+    # measurement: it admits every present and future somafm subdomain —
+    # ice/ice2..6, hls — for `fetch`, and not one of them appears in the
+    # catalogue's connect-src set. It also does NOT match the bare
+    # `somafm.com` (a CSP host-source with `*.` requires at least one label),
+    # so it buys nothing for the prerolls either. Widening past the measured
+    # host is a security regression, not a convenience.
+    test "connect-src stays at the measured host, not a somafm wildcard" do
+      somafm =
+        directives()["connect-src"]
+        |> Enum.filter(&String.contains?(&1, "somafm.com"))
+        |> Enum.sort()
+
+      assert somafm == ["https://api.somafm.com"],
+             "connect-src must carry exactly the measured host and no wildcard; got " <>
+               inspect(somafm)
+    end
+
+    # #1695 is a one-token change. Its own verification step says so: the
+    # logos and prerolls already pass on directives that must not move.
+    test "no directive other than connect-src gained a somafm source" do
+      leaked =
+        for {name, sources} <- directives(),
+            name != "connect-src",
+            source <- sources,
+            String.contains?(source, "somafm"),
+            do: {name, source}
+
+      assert leaked == [],
+             "only connect-src needed widening; somafm leaked into " <> inspect(leaked)
+    end
+  end
+
   test "csp/0 matches the golden pin (SSOT, incl. the #607 media-src + #1240 img-src https: widenings)" do
     assert SecurityHeaders.csp() == @golden_csp
   end
