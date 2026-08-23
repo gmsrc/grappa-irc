@@ -60853,3 +60853,171 @@ must log under contention are enumerable — they live around the Repo
 design-discipline (1) "don't duplicate state that already exists" and (5) "if
 the mechanism is heavier than the problem, the mechanism IS the problem", not a
 performance argument.
+<!-- entry #1685 -->
+
+---
+
+## 2026-08-23 — #1685: the verb wrote the row in a VM that could not hold a session
+
+`grappa add-network` on a RUNNING published-image deployment reported
+success, left `connection_state: :connected`, and started nothing. cic
+then rendered a network that claimed to be connected — so there was
+nothing to press — while every live-session operation answered
+`not_connected`.
+
+Two independent faults, and the interesting one is not the state value.
+
+**The row said `connected` because nobody decided that.** It is the
+schema default (`credential.ex`), and `Networks.add_network/3` →
+`Credentials.bind_credential/3` passes no `connection_state`. The other
+two bind doors — `session_controller.ex` (#642) and
+`admin/credentials_controller.ex` (#1163) — already write `:parked`
+explicitly and let the spawn promote the row. This door was the last one
+inheriting the default.
+
+**Nothing spawned because of the TRANSPORT.** `infra/release/grappa.sh`
+rewrites the account verbs into the boot script's `eval`, and an `eval`
+starts a transient node of its own: it loads the app, writes, and exits.
+A `SpawnOrchestrator.spawn/4` call added inside the verb would have
+started a session in a VM about to die. So "just write `:parked` and
+spawn" was never the fix.
+
+### Why not simply route the verb through `rpc`
+
+MEASURED, and it is the constraint that decided the design.
+`System.argv/0` evaluated under `--rpc-eval` is the **remote** node's
+argv and is always `[]` — with no extra args, with them, and with `--`
+before them. The wrapper's whole safety property is that the operator's
+words travel as argv and are never interpolated into source. That channel
+does not exist under `rpc`, so carrying the words to the live node would
+mean interpolating them — `--password` included — into Elixir evaluated
+on the production BEAM. Base64-in-a-literal was proposed to make that
+safe by alphabet; vjt rejected it, and the structural objection is the
+better one: it still passes TEXT somebody has to interpret.
+
+### The shape that shipped: stay on `eval`, cross as TERMS
+
+Parsing, flag validation and the write stay in the transient node, where
+a mistyped flag can still `System.halt/1` harmlessly. Only the spawn
+crosses, as an `:erpc.call/5` — a function call whose arguments are
+Erlang terms. There is no expression to escape and no `Code.eval_string`
+on the live node: the injection surface is not narrowed, it is absent by
+construction. `Grappa.Release.LiveNode` owns the hop; the far side lands
+on `Grappa.Operator.connect_credential/1`, the same canonical
+admission → backoff-reset → spawn verb #1163's console bind and Bootstrap
+reach, so bind-time and boot-time cannot drift.
+
+**`abort/1` is untouched, and the price everyone expected is not owed.**
+The worry was that code running in the live node can no longer
+`System.halt/1`, and that `stderr` is swallowed under `rpc`. Under this
+shape the CLI never runs in the live node. Measured through the real door
+today: `rc=1` and the message on the operator's stderr, both intact.
+
+### What crosses, and why it is two integers and an atom
+
+`(user_id, network_id)` out, `{:ok, :started}` back. Neither direction
+carries a `%Credential{}`, and the reason is not tidiness: **Cloak hands
+back the CLEARTEXT on load**, so a struct in either direction would put
+the operator's NickServ/SASL password on the distribution socket, which
+is unencrypted by default. `adopt_here/2` loads the row on the far side.
+A test asserts the returned term does not contain the secret.
+
+It deliberately does not answer with the row's `connection_state` either.
+`Networks.connect/1` writes `:connected` as INTENT, and since #1675 that
+value means *registered upstream* — reporting it at the instant of return
+would be a lie the next `001` either confirms or corrects.
+
+### The measurement that gated the build
+
+vjt made "can an `eval` node raise distribution on all four substrates,
+Docker included?" a measurement rather than a discussion. Result: **2–3 ms
+to raise distribution, 1–3 ms to connect**, on the Docker release image in
+three hostname shapes (container id, an FQDN hostname under `sname`, and
+`RELEASE_DISTRIBUTION=name`) and on a real `.deb` installed into Debian 13
+through `/usr/bin/grappa`. The overhead was accepted in advance and is not
+worth optimising.
+
+Three facts from that bench are load-bearing in the code:
+
+- The boot script gives `eval` `--cookie "$RELEASE_COOKIE"` and no
+  `-sname`, and exports `RELEASE_NODE` / `RELEASE_DISTRIBUTION`. So
+  `Node.get_cookie/0` already returns the release cookie the moment
+  `net_kernel` starts — **nothing calls `Node.set_cookie/2`**.
+- 🔴 **The target host comes from our OWN node name, never from
+  `:inet.gethostname/0`.** Under `RELEASE_DISTRIBUTION=name` the two
+  disagree (`box2.example.com` vs `box2`) and the gethostname spelling is
+  not merely wrong, it is rejected: `** Hostname box2 is illegal **`.
+- **There are TWO no-live-node shapes, not one**, and a cure handling
+  only the second crashes on first run. With no epmd (a fresh container, a
+  host that never booted the service) `:net_kernel.start/2` itself fails
+  with `:nodistribution` in ~8 ms — a release `eval` does not spawn epmd,
+  so nothing is left behind. With epmd up and the node down (any
+  long-lived host after a stop) it succeeds and `Node.connect/1` returns
+  `false` in ~1 ms.
+
+Also measured: a **wrong cookie is indistinguishable from a stopped node**
+at the caller (`false` in 1–2 ms either way), so the operator-facing text
+names both possibilities rather than guessing one.
+
+The end-to-end proof was run on the published-image substrate: after
+`add-network`, `whereis` was `nil` with the row reading `:connected` (the
+defect); one `:erpc` later `whereis` was a pid and the row had moved to
+`:failing` with `connection_state_reason: "connection refused"` on its own
+— #1675's semantics working, against a deliberately dead endpoint.
+
+### The state, and the query that was NOT widened
+
+vjt's ruling: bind `:parked`, and **leave
+`Credentials.list_credentials_for_all_users/0` alone** —
+`connection_state in [:connected, :failing]`. A "consequence" that had
+circulated (widen boot adoption to `:parked` so a seeded box comes up on
+restart) was withdrawn, and the withdrawal is measured-correct:
+`networks.ex` writes `:parked` for a user-initiated `/disconnect` and
+documents it as *explicit user intent*, so widening would resurrect at
+reboot every network a user had deliberately disconnected.
+
+The price is that a seed-then-restart no longer brings the network up on
+its own. That is accepted, and therefore the CLI **says so** — the parked
+line names the reason and states that a restart will not dial it. A fast
+path must describe what it observed, and this one observes that nothing is
+listening.
+
+### The seam, and why it has no `boot/0`
+
+`adopt/2` must be substitutable in tests: its own `:net_kernel.start/2`
+would make the TEST VM distributed and leak into every other file. It uses
+the `:persistent_term` DI idiom the codebase already has
+(`Grappa.Push.BadgeSource`, `Grappa.Admission.Config`) with one deliberate
+difference — **no `boot/0`, and the DEFAULT is production**. The caller is
+a release `eval` node, which never runs `Grappa.Application.start/2`, so a
+boot-populated key would be permanently absent on the one path that
+matters.
+
+### Deliberately not done
+
+- **`mix grappa.bind_network` still binds the schema default.** It is the
+  same class of defect, but the cure does not transfer: a source install's
+  live node is `mix phx.server`, which sets no `RELEASE_NODE`, so there is
+  no live hop to promote the row and `:parked` there would be a plain
+  regression for dev seeding. Flagged, not silently widened.
+- **`remove-network` has the mirror defect**: it deletes the row in the
+  transient node while the live node keeps running the session. Same
+  family, different verb, out of this slice's scope.
+- **The packaged `/usr/bin/grappa` boots its eval VM in latin1** — the
+  `runuser` payload sets no `LANG` while the systemd unit beside it pins
+  `C.UTF-8` for exactly that reason (#425), and `add-network --nick` /
+  `--autojoin` carry user-supplied bytes. Observed on the bench; a separate
+  defect.
+
+### Not measured
+
+The **FreeBSD bastille jail**. The ssh key for m42 is unreadable from the
+agent's process (`Operation not permitted`, macOS layer, unchanged with
+the agent sandbox off), so it is a gap in evidence and not a negative
+result. A self-contained read-only probe was handed over on the issue.
+
+It does not block correctness: the offline branch is mandatory anyway —
+first run is the case the CLI exists for — so a substrate that cannot
+raise distribution simply always takes it, and the credential lands
+`:parked` exactly as ruled. What the jail can lose is the convenience,
+never the honesty.

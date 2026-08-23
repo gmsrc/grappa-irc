@@ -48,6 +48,10 @@ defmodule Grappa.Release do
       Grappa.Deploy.MigrationAudit,
       Grappa.Networks,
       Grappa.Networks.Network,
+      # #1685 — `LiveNode.adopt_here/2` runs in the LIVE node and reaches
+      # the canonical #1163 spawn verb there, so `add-network` cannot drift
+      # from the console bind or from Bootstrap.
+      Grappa.Operator,
       Grappa.Repo,
       Grappa.Themes,
       Grappa.Vault

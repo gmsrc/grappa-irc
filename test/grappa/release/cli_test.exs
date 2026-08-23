@@ -25,9 +25,28 @@ defmodule Grappa.Release.CLITest do
 
   import ExUnit.CaptureIO
 
-  alias Grappa.{Accounts, Networks}
-  alias Grappa.Networks.{Credentials, SessionPlan}
-  alias Grappa.Release.CLI
+  alias Grappa.{Accounts, Networks, Session}
+  alias Grappa.Networks.{Credential, Credentials, SessionPlan}
+  alias Grappa.Release.{CLI, LiveNode}
+
+  # #1685 — the live-node outcome, substituted through the seam
+  # `Grappa.Release.LiveNode` owns. A module and not a real second node on
+  # purpose: `adopt/2`'s own `:net_kernel.start/2` would make THIS VM
+  # distributed and leak into every other test file. The real transport was
+  # measured on three substrates (issue #1685) and its live half is driven
+  # for real in `Grappa.Release.LiveNodeTest`.
+  #
+  # The answer comes from the process dictionary because `CLI.run/1` is
+  # synchronous in the calling process — so ONE stub covers every outcome,
+  # and the exhaustive test below can walk the whole error union without a
+  # module per value.
+  defmodule ScriptedLiveNode do
+    @moduledoc false
+    @behaviour LiveNode
+
+    @impl LiveNode
+    def adopt(_, _), do: Process.get(:live_node_answer)
+  end
 
   @dispatcher "infra/release/grappa.sh"
   @external_resource @dispatcher
@@ -51,6 +70,28 @@ defmodule Grappa.Release.CLITest do
   end
 
   defp unique_name, do: "vjt-#{System.unique_integer([:positive])}"
+
+  # The #1685 verb, with the flags held constant so each test varies one
+  # thing: what the live node answered.
+  defp add_network(name) do
+    CLI.run([
+      "add-network",
+      name,
+      "azzurra",
+      "--server",
+      "irc.azzurra.chat:6697",
+      "--nick",
+      "vjt-grappa",
+      "--auth",
+      "none"
+    ])
+  end
+
+  # Arms the seam with one live-node answer for the calling process.
+  defp answering(outcome) do
+    Process.put(:live_node_answer, outcome)
+    LiveNode.put_test_impl(ScriptedLiveNode)
+  end
 
   # Runs the door the way the shipped dispatcher runs it: argv in the
   # process's own argv, the expression evaluated verbatim.
@@ -274,6 +315,118 @@ defmodule Grappa.Release.CLITest do
          %{name: name} do
       assert {:error, message} = CLI.run(["remove-network", name, "no-such-net"])
       assert message =~ "no-such-net"
+    end
+  end
+
+  # #1685 — the verb wrote `connection_state: :connected` (the schema
+  # default, not a decision) and never spawned, because `eval` runs in a
+  # transient VM of its own. cic then rendered a network that claimed to be
+  # connected while every live-session operation answered `not_connected`.
+  #
+  # The cure has two halves and both are asserted here: the row lands
+  # `:parked` like the other two bind doors, and the operator is told, in
+  # words, which of the two things actually happened.
+  describe "add-network — never claims a session it did not start (#1685)" do
+    setup do
+      name = unique_name()
+      {:ok, _} = CLI.run(["create-user", name, "--password", @password])
+      on_exit(&LiveNode.reset_test_impl/0)
+      %{name: name, user: Accounts.get_user_by_name(name)}
+    end
+
+    test "binds :parked, never the schema default :connected", %{name: name, user: user} do
+      assert {:ok, _} = add_network(name)
+
+      network = Networks.get_network_by_slug!("azzurra")
+
+      assert %Credential{connection_state: :parked} = Credentials.get_credential!(user, network)
+      refute Session.whereis({:user, user.id}, network.id)
+    end
+
+    test "with no live node, says it is parked AND that a restart will not dial it",
+         %{name: name} do
+      # The honest half of vjt's ruling: a `:parked` row is NOT in the boot
+      # adoption query (`connection_state in [:connected, :failing]`), so an
+      # operator who seeds a box and restarts it would otherwise wait
+      # forever for a network that never comes up.
+      assert {:ok, message} = add_network(name)
+
+      assert message =~ "PARKED"
+      assert message =~ "Connect"
+      assert message =~ "restart"
+    end
+
+    test "with a live node that starts the session, says THAT instead", %{name: name} do
+      answering({:ok, :started})
+
+      assert {:ok, message} = add_network(name)
+
+      assert message =~ "started a session on the live node"
+      refute message =~ "PARKED"
+    end
+
+    test "a live node that refuses the spawn is reported, not swallowed", %{name: name} do
+      answering({:error, {:refused, :resolve_failed}})
+
+      assert {:ok, message} = add_network(name)
+
+      assert message =~ "PARKED"
+      assert message =~ "resolve_failed"
+    end
+
+    test "the binding survives a refused spawn — the row is the operator's input",
+         %{name: name, user: user} do
+      answering({:error, {:refused, :resolve_failed}})
+
+      assert {:ok, _} = add_network(name)
+
+      network = Networks.get_network_by_slug!("azzurra")
+      assert %Credential{connection_state: :parked} = Credentials.get_credential!(user, network)
+    end
+
+    # The class this closes, found by Dialyzer and not by hand: `adopt/2`
+    # can answer `:not_found` (the far side loaded no row), which was NOT in
+    # the union the message formatter had a clause for — so the operator's
+    # shell would have taken a FunctionClauseError instead of a sentence,
+    # AFTER the credential was written. Every value of
+    # `t:Grappa.Release.LiveNode.error/0` is walked here; a value added to
+    # that type without a matching phrase fails this test.
+    test "every live-node outcome produces a sentence, never a crash", %{name: name} do
+      outcomes = [
+        :no_release_node,
+        :distribution_disabled,
+        :no_distribution,
+        :unreachable,
+        :not_found,
+        {:refused, :resolve_failed},
+        {:refused, :ip_cap_exceeded},
+        {:refused, :visitor_cap_exceeded},
+        {:refused, :user_cap_exceeded},
+        {:refused, {:network_circuit_open, 30}},
+        {:refused, {:start_failed, :badarg}},
+        {:call_failed, {:error, {:erpc, :timeout}}}
+      ]
+
+      for outcome <- outcomes do
+        answering({:error, outcome})
+        slug = "net-#{System.unique_integer([:positive])}"
+
+        assert {:ok, message} =
+                 CLI.run([
+                   "add-network",
+                   name,
+                   slug,
+                   "--server",
+                   "irc.azzurra.chat:6697",
+                   "--nick",
+                   "vjt-grappa",
+                   "--auth",
+                   "none"
+                 ]),
+               "add-network raised or failed on live-node outcome #{inspect(outcome)}"
+
+        assert message =~ "PARKED", "no parked sentence for #{inspect(outcome)}"
+      end
     end
   end
 

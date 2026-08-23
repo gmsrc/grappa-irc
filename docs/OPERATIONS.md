@@ -151,6 +151,51 @@ composition that creates the network + server when needed and REFUSES to
 write access to a network with no enabled server, because a credential
 alone is not a connectable account.
 
+#### What `add-network` says, and why it says two different things (#1685)
+
+The verb runs in a transient `eval` node, so a session it started would
+die with the command. Against a RUNNING deployment it therefore crosses
+to the live node over Erlang distribution and asks it to start the
+session (`Grappa.Release.LiveNode`); against a box that is not running
+yet — the first-run case this door exists for — there is nothing to
+cross to. Both outcomes are printed, because they are not the same
+thing:
+
+```
+vjt can now use azzurra (server irc.azzurra.chat:6697)
+  started a session on the live node — nothing else to do
+```
+
+```
+vjt can now use azzurra (server irc.azzurra.chat:6697)
+  the binding is PARKED: nothing is listening on epmd, so no bouncer is running here.
+  A restart will NOT dial it — vjt connects it with Connect after logging in.
+```
+
+🔴 **The restart caveat is literal.** The row is written `:parked` (like
+the other two bind doors — #642, #1163 — and never the schema default
+`:connected`, which claimed a session no `eval` node could have
+started). `:parked` means explicit user intent and is deliberately NOT in
+the boot adoption query (`connection_state in [:connected, :failing]`),
+so `systemctl start grappa` will not dial it: the user presses Connect at
+first login. Widening that query was considered and rejected — it would
+resurrect every network a user had deliberately `/disconnect`ed.
+
+**Exit status is 0 in both cases**, and in the third one too (the live
+node answered and refused the spawn — capacity, no enabled server). The
+binding is the operator's input and is kept either way, so
+`create-user && add-network && systemctl start grappa` does not break on
+the case that has no live node by definition. Read the second line, not
+the exit code.
+
+Requirements for the live hop, all already satisfied by every substrate's
+own setup: `RELEASE_COOKIE` and `RELEASE_NODE` in the verb's environment
+(the Docker image's entrypoint re-exports them from `/data/grappa.env`
+for `docker exec` — #1683; the jail, systemd and `.deb` doors source
+their env file) and `RELEASE_DISTRIBUTION` not set to `none`. A cookie
+mismatch is indistinguishable from a stopped node at the CLI end and
+prints as "did not answer".
+
 ### Per-server outbound source address (`--source`)
 
 `bind-network` and `add-server` accept `--source <ip>` to pin the
