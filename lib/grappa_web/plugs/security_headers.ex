@@ -37,7 +37,8 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
 
     * `default-src 'self'` — same-origin baseline.
     * `connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com
-      https://litterbox.catbox.moe` — REST + WS to grappa (same-origin: `'self'`
+      https://litterbox.catbox.moe https://api.somafm.com` — REST + WS to grappa
+      (same-origin: `'self'`
       covers `ws://$host` / `wss://$host` per CSP3, so this is deployment-host
       agnostic — no edit when `PHX_HOST` changes); Cloudflare Turnstile +
       hCaptcha verification XHRs; `litterbox.catbox.moe` receives cic's
@@ -45,6 +46,24 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
       its OWN — since #1240 a click on that link renders the image in the media
       viewer, but the widened `img-src https:` below already covers it. IRC
       stays text only (CLAUDE.md): the modal is on-click, never on arrival.
+      `api.somafm.com` (#1695) is the SomaFM catalogue: `channels.json` and the
+      `.pls` playlists it points at are `fetch`ed and parsed, so they fall here
+      and not on the `media-src`/`img-src` widenings that already carry the
+      streams and the logos. **It is ONE host and not `https://*.somafm.com`,
+      deliberately.** Measured over the live catalogue on 2026-08-23 — 46
+      channels, 425 absolute URLs — every URL this directive governs is on
+      `api.somafm.com` (184/184 `.pls`), the 138 logos are `img-src https:` and
+      the 103 prerolls are `media-src https:`; the bare `somafm.com` carries
+      the prerolls and nothing else. The wildcard would hand `fetch` to every
+      present and future somafm subdomain (ice, ice2..6, hls) with nothing
+      measured asking for it, and it would not even cover the bare domain — a
+      host-source spelled `*.` requires at least one label. CONSEQUENCE FOR A
+      CLIENT AUTHOR: the catalogue answers byte-identically from either host
+      (52,852 bytes for `channels.json` from both), so a `fetch` aimed at
+      `https://somafm.com/...` works under `curl` and dies here. Aim it at
+      `api.somafm.com`; `issue1695-somafm-connect-src-perimeter.spec.ts` pins
+      both that refusal and the non-api subdomain that separates this policy
+      from the wildcard.
     * `script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM='
       https://challenges.cloudflare.com https://*.hcaptcha.com` — Vite modules +
       the Turnstile / hCaptcha widget loaders. Each loader injects a small
@@ -105,7 +124,7 @@ defmodule GrappaWeb.Plugs.SecurityHeaders do
 
   import Plug.Conn
 
-  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  @csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe https://api.somafm.com; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   # HTTP header names are lower-cased (HTTP/2 + Plug convention); the VALUES
   # are byte-identical to the retired nginx snippet.

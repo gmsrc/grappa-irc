@@ -21,10 +21,10 @@ defmodule GrappaWeb.Plugs.SecurityHeadersTest do
   alias GrappaWeb.Plugs.SecurityHeaders
 
   # The plug's Content-Security-Policy SSOT (was byte-identical to the
-  # deleted nginx snippet; #607 widened media-src to https:, #1240 img-src).
-  # If the app must change the policy, change it in ONE place (the plug) and
-  # update this pin deliberately.
-  @golden_csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  # deleted nginx snippet; #607 widened media-src to https:, #1240 img-src,
+  # #1695 added ONE connect-src host). If the app must change the policy,
+  # change it in ONE place (the plug) and update this pin deliberately.
+  @golden_csp "default-src 'self'; connect-src 'self' https://challenges.cloudflare.com https://*.hcaptcha.com https://litterbox.catbox.moe https://api.somafm.com; script-src 'self' 'sha256-ZswfTY7H35rbv8WC7NXBoiC7WNu86vSzCDChNWwZZDM=' https://challenges.cloudflare.com https://*.hcaptcha.com; style-src 'self' 'unsafe-inline' https://*.hcaptcha.com; img-src 'self' data: https:; font-src 'self'; manifest-src 'self'; media-src 'self' blob: https:; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com https://*.hcaptcha.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 
   defp sent(status) do
     :get
