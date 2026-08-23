@@ -106,6 +106,9 @@ const [farBehind, setFarBehind] = createSignal<
 const [measuredUnread, setMeasuredUnread] = createSignal<
   Record<string, { at: number; count: number }>
 >({});
+// #1094 — "an older page is on the wire for this key", the state the loading
+// affordance renders from. Keyed the same way the store keys it.
+const [loadingOlder, setLoadingOlder] = createSignal<Record<string, boolean>>({});
 // Resolves TRUE by default (the swap happened) — the pane chains off the
 // result to stand the marker latch back down on a failed jump.
 const jumpToUnreadSpy = vi.fn((_slug: string, _name: string) => Promise.resolve(true));
@@ -120,6 +123,11 @@ vi.mock("../lib/scrollback", () => ({
   // `loadMore` (production imports it as `loadMore as
   // loadMoreScrollback`).
   loadMore: vi.fn(() => Promise.resolve()),
+  // #1094 — the in-flight read the older-page affordance renders from.
+  // Signal-backed for the same reason `farBehindByChannel` is: a spec drives
+  // the flag AFTER mount and the pane must re-render, which a plain-fn stub
+  // cannot express.
+  isLoadingOlder: (slug: string, name: string) => loadingOlder()[`${slug} ${name}`] ?? false,
   // #161: onScroll also calls `loadNewer` when the pane nears the BOTTOM
   // (forward-paging, production imports it as `loadNewer as
   // loadNewerScrollback`). Same no-op resolved-promise stub so synthetic
@@ -379,6 +387,7 @@ beforeEach(() => {
   setHighlightPatternsForTest([]);
   setDocVisible(true);
   setOwnSend(null);
+  setLoadingOlder({});
   mockMembersByChannel.mockReturnValue({});
   // Reset the C5.0 auto-focus shown-set between tests (test seam, see ScrollbackPane.tsx).
   resetAutoFocusedJoinsForTest();
@@ -1945,6 +1954,52 @@ describe("ScrollbackPane", () => {
       // same task as the mutation. `await waitFor` here would pass on the old
       // shape too — it is exactly the frame this issue is about.
       expect(list.scrollTop).toBe(540);
+    });
+  });
+
+  // #1094 second half — the loading affordance. `ScrollbackPane` had no
+  // loading state at all on this path; the reader stared at a frozen pane for
+  // the length of the fetch with nothing to say a fetch was happening.
+  describe("#1094 — the older-page fetch has a loading affordance", () => {
+    it("shows it while the older page is in flight and drops it when the rows land", async () => {
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+
+      expect(screen.queryByTestId("scrollback-loading-older")).toBeNull();
+
+      setLoadingOlder({ "freenode #grappa": true });
+      await waitFor(() => expect(screen.queryByTestId("scrollback-loading-older")).not.toBeNull());
+
+      setLoadingOlder({ "freenode #grappa": false });
+      await waitFor(() => expect(screen.queryByTestId("scrollback-loading-older")).toBeNull());
+    });
+
+    it("shows it only for the window doing the fetching", async () => {
+      setScrollback({ "freenode #grappa": fixture, "freenode #other": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+
+      setLoadingOlder({ "freenode #other": true });
+      await waitFor(() => expect(screen.queryByTestId("scrollback-loading-older")).toBeNull());
+    });
+
+    it("keeps the affordance OUT of the scroll container", async () => {
+      // The decision this pins (see DESIGN_NOTES 2026-08-24): the spinner
+      // floats over the pane instead of occupying a slot above the first row.
+      // An in-flow slot is a second height change on the exact quantity
+      // `applyPrependPreserve` compensates — one at mount (uncompensated by
+      // anything, so the cure would open a new jump at t=0) and one at unmount
+      // that has to land in the same flush as the prepend or leave a residue.
+      // Containment is what makes that structurally impossible: an element
+      // outside `.scrollback` cannot be in its `scrollHeight`. The pane made
+      // the same call for the #133 WHOIS/WHOWAS/LUSERS cards, for the same
+      // reason and after paying for the in-flow version once.
+      setScrollback({ "freenode #grappa": fixture });
+      render(() => <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />);
+      setLoadingOlder({ "freenode #grappa": true });
+
+      const affordance = await waitFor(() => screen.getByTestId("scrollback-loading-older"));
+      const list = screen.getByTestId("scrollback");
+      expect(list.contains(affordance)).toBe(false);
     });
   });
 

@@ -1206,7 +1206,8 @@ html.overlay-open #root > div {
   .login-matrix::after,
   .login-spinner,
   .compose-send-spinner,
-  .directory-pull-spinner {
+  .directory-pull-spinner,
+  .scrollback-loading-older-spinner {
     animation: none;
   }
   /* #1445 — same call as the swipe-to-reply snap-back below: the pull still
@@ -3514,6 +3515,35 @@ html.resize-dragging * {
    cannot be translucent without both layers becoming unreadable. Both
    buttons carry the 44px tap-target floor in absolute px — the root
    font-size is 14px, so a rem-based target comes out short on mobile. */
+
+/* #1094 — the older-page fetch affordance. Container-anchored like the #133
+   overlay and the #693 far-behind bar rather than in-flow at the top of
+   `.scrollback`, and here the reason is not just "don't resize the list": this
+   affordance accompanies the ONE mutation whose height delta the pane
+   measures and compensates (`applyPrependPreserve`). In flow it would add a
+   term to that delta at mount and subtract it again at the commit, and the
+   subtraction only cancels if it lands in the same flush as the prepend. Out
+   of `.scrollback` it is not in its `scrollHeight` at all, so there is no term
+   and nothing to keep in step. Full rationale in ScrollbackPane.tsx.
+
+   z-index 5 puts it one above the far-behind bar (4), which pins to the same
+   top-0 strip and is opaque: when a far-behind pane pages older, the spinner
+   still has to be visible. Below the #280 float stack (40) and the #133 cards
+   (42), both of which are deliberate operator affordances and outrank a
+   transient. `pointer-events: none` — nothing here is clickable, and the rows
+   it floats over stay scrollable and tappable. */
+.scrollback-loading-older {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  pointer-events: none;
+}
 
 .scrollback-far-behind {
   position: absolute;
@@ -12064,8 +12094,16 @@ button.home-pane-network-title:hover .home-pane-network-slug {
 /* Reuses the `.login-spinner` ring recipe and the shared `login-spin`
    keyframes, exactly as `.compose-send-spinner` does — a third hand-copied
    ring is how that recipe would start to drift. In `--accent` like the
-   original: this one sits on the pane background, not on a coloured button. */
-.directory-pull-spinner {
+   original: this one sits on the pane background, not on a coloured button.
+
+   #1094 — the scrollback's older-page ring wants this recipe EXACTLY (same
+   18px, same accent, same pane background), so it joins the selector instead
+   of becoming the fourth copy the comment above warns about. It is only a
+   selector away rather than a hoisted `.spinner-ring` because the other two
+   rings genuinely differ (2.5rem/3px; 16px/currentColor), and migrating them
+   is a change to Login and ComposeBox, which is not this issue. */
+.directory-pull-spinner,
+.scrollback-loading-older-spinner {
   box-sizing: border-box;
   display: inline-block;
   width: 18px;

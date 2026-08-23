@@ -194,6 +194,10 @@ vi.mock("../lib/scrollback", () => ({
   // contiguous pane, which is what every Shell render test wants; the
   // far-behind rendering itself is pinned in ScrollbackPane.test.tsx.
   farBehindByChannel: () => ({}),
+  // #1094 — ScrollbackPane renders its older-page loading affordance from
+  // this. Static false: no Shell test drives a scroll-to-top fetch, and the
+  // affordance itself is pinned in ScrollbackPane.test.tsx.
+  isLoadingOlder: () => false,
   jumpToUnread: vi.fn(() => Promise.resolve(true)),
   dismissFarBehind: vi.fn(),
 }));

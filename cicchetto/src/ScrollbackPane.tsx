@@ -51,6 +51,7 @@ import { isSettled, nextFollowMode, resolveIntent, type ScrollIntent } from "./l
 import {
   dismissFarBehind,
   farBehindByChannel,
+  isLoadingOlder,
   jumpToUnread,
   lastOwnSend,
   loadMore as loadMoreScrollback,
@@ -3843,6 +3844,39 @@ const ScrollbackPane: Component<Props> = (props) => {
             </button>
           </div>
         )}
+      </Show>
+      {/* #1094 — the older-page fetch affordance. Before this the pane had no
+          loading state at all on this path: the operator scrolled to the top,
+          a request went out, and for the whole round trip the pane was
+          indistinguishable from one that had reached the beginning of history.
+          Nothing else in the pane announces it, so this carries `role=status`
+          (unlike `.directory-pull-spinner`, which is aria-hidden because the
+          Refresh button it accompanies already says "Refreshing…").
+
+          FLOATING, not a slot above the first row, and that is the whole
+          design decision (DESIGN_NOTES 2026-08-24). An in-flow slot is a
+          second height change on the exact quantity `applyPrependPreserve`
+          compensates, and it has TWO edges, not one: it grows the list the
+          moment the fetch starts — which nothing compensates, so the cure for
+          a jump at t=RTT would open a new one at t=0 — and it shrinks it again
+          at the commit, where it only cancels out if it lands in the very same
+          flush as the prepend. Floating has neither edge by construction: it
+          is not inside `.scrollback`, so it is not in its `scrollHeight`. This
+          pane already made the same call once, for the same reason, and paid
+          for the in-flow version first — see the `.scrollback-overlay` comment
+          above ("rendered as flex siblings BEFORE `.scrollback` they shrank
+          the scroll list on mount, shifting the reader's anchor"). The one
+          thing an in-flow slot buys — reserving the space the page will fill —
+          it does not actually buy: a ring is ~18px and a page is ~1000. */}
+      <Show when={isLoadingOlder(props.networkSlug, props.channelName)}>
+        <div
+          class="scrollback-loading-older"
+          data-testid="scrollback-loading-older"
+          role="status"
+          aria-label="Loading older messages"
+        >
+          <span class="scrollback-loading-older-spinner" />
+        </div>
       </Show>
       <div
         ref={listRef}
