@@ -104,6 +104,24 @@ Read /srv/grappa/.orchestrate/orchestrator-resume.md
 (DURABLE path — survives host reboot, unlike `/tmp`. The per-pane daemon state files
 stay in `/tmp` — they're regenerable per-run; only the handoff brain must be durable.)
 
+🔴🔴 **AND IN THE SAME BREATH AS READING THE HANDOFF: INVOKE THE `grappa-live` SKILL AND POST THE
+ROUND'S STATE TO `#grappa-live` (vjt ORDER, #grappa 2026-08-23 20:48).**
+```
+Skill(skill: "grappa-live")   # then post: issue number first, ≤40 words
+```
+**Why it is pinned HERE and not left to memory — measured, not argued:** the skill file on disk was
+intact the whole time, but **nothing re-invokes it after a `/clear` or a compact, so the CHATTY rule
+evaporates with the context**. Result: the orchestrator went **silent from 17:02 to 20:48** while
+merging #1694, #1682 and #1686 and pruning refs, and **vjt had to notice and say so** — the same
+shape as every other "you cannot notice silence" trap in this file, except the observer here is a
+human waiting on a channel.
+🥇 **Diagnose the mute with the transport probe BEFORE explaining it**: run the `grappa-post.py` line
+and read the exit code **from a redirected file, never through a pipe**. **Non-zero ⇒ transport is
+broken. Zero ⇒ it is the CHATTY rule you are skipping, and the honest report says so.** Measured
+2026-08-23: `EXIT=0`, empty output — the mute was the orchestrator's, not the transport's.
+🔁 **Then keep posting at EVERY state change** — dispatch, merge, close, red CI, halt, lane grant —
+not only at the end of a batch. **And propagate this to the workers if their ritual is separate.**
+
 The handoff is the orchestrator's persistent brain across `/clear`. It holds ONLY
 THIS-RUN STATE: the active issue pack, what's shipped/queued, any pending decision or
 open halt, and an `## IMMEDIATE NEXT STEP` line — plus per-RUN config the user set
@@ -812,6 +830,17 @@ block as the dispatch send-keys; `strip status:*` rides the SAME turn as process
 - 🥇 **After a rebase-then-direct-merge, judge "did it land?" by COMMIT CONTENT** (`git log origin/main --grep '#NNN'`),
   **never by `merge-base --is-ancestor` on the PR head** — a rebase gives the landed commits NEW shas, so the PR head is
   legitimately not an ancestor.
+- 🔴🔴 **DELETING THE HEAD REF IN THE SAME BREATH AS THE FF LEAVES THE PR `CLOSED`, NOT `MERGED`
+  (orch, 2026-08-23, PR #1699).** The `MERGED` state propagates **asynchronously** after a
+  `gh api -X PATCH git/refs/heads/main`: #1693 read `state=OPEN mergedAt=null` right after the PATCH and
+  `MERGED` twenty seconds later. Delete the branch ref inside that window and GitHub resolves the PR as
+  **CLOSED with `mergedAt=null`** — the commits are on main verbatim, but the PR reads like abandoned work
+  and invites someone to ship it twice.
+  🥇 **Order that works: PATCH the ref → poll until `mergedAt` is non-null → THEN `gh api -X DELETE` the
+  branch ref.** Never the two in one Bash block. If you already did it, prove the landing
+  (`git merge-base --is-ancestor <head> origin/main`) and **comment on the PR naming the FF and the SHA**,
+  the same "close by content" duty a cherry-picked union carries.
+  ⚠️ And `gh pr view --json merged` does not exist — the field is **`mergedAt`**.
 - 🥇 **THE STRUCTURAL CURE FOR THE STALE-PR PROBLEM: FORCE-PUSH THE REBASED BRANCH *BEFORE* THE FF-MERGE.**
   Order that works (w2, #600, verified): rebase onto `origin/main` → `push --force-with-lease` the BRANCH →
   ff-merge into main → push main with an explicit refspec. Because the remote PR head is now the rebased commit,
@@ -1046,6 +1075,12 @@ Spostata qui dall'handoff 2026-08-18: e' una regola, non uno stato.
    conflitto): e' esattamente il caso in cui i quattro check sono l'unica cosa che distingue una risoluzione
    corretta da una che ha mangiato righe.** Non leggere "nessun conflitto" come "niente da verificare".
 5. **MARCATORE UNICO sulla RIGA INTERA** (`'<!-- entry #[^>]*-->'`; il troncato `#[0-9]*` inventa duplicati).
+6. 🔴🔴 **`design-notes-gate.sh` DA' rc=0 CON *"nothing to check"* SE L'ENTRY NON E' ANCORA COMMITTATA —
+   e' un VERDE VUOTO** (w1, 2026-08-23). Il gate misura le entry che il ramo **AGGIUNGE**, cioe' i
+   *commit*: con l'entry solo nel working tree non ha niente da guardare e **lo dice passando**. Vale
+   solo il run **post-commit**, quello che stampa `"N new entry heading(s), separator and marker
+   present."` 🥇 *Ennesima istanza dello ZERO FALSO E PLAUSIBILE: un rc=0 che risponde a una domanda
+   che non hai posto.* **Leggi la RIGA, non il codice di uscita**, e rigira il gate dopo il commit.
 🔴🔴 **GITHUB NON APPLICA IL DRIVER `merge=union`: UN REBASE LOCALE PULITO SU `DESIGN_NOTES.md` NON
 GARANTISCE UNA PR MERGEABILE** (w1, 2026-08-19 — misurato leggendo `mergeable`, non indovinato). Il
 merge-ref lato GitHub ignora i driver di `.gitattributes`, quindi la PR puo' aprirsi **CONFLICTING** subito
