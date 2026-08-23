@@ -852,6 +852,19 @@ jobs:
       # `mix.exs`, `mix.lock`, `VERSION` and `cicchetto` are POINTEDLY absent: the
       # moment source joins this list, the artifact stops being the tag and the
       # label lies.
+      #
+      # The two `infra/packaging` scripts are the exception that proves it, and
+      # they are WORKFLOW LOGIC rather than shipped bytes (#1686). The `:latest`
+      # gate below calls them, and the tree this job checks out on a repair is
+      # the OLD TAG's: `git tag --contains d622616d` answers `v1.3.0 v1.3.1`, so
+      # every earlier tag predates `prerelease_flag.sh` and the call would die
+      # 127 on a path that works today. Taking them from the dispatched ref is
+      # the same principle the whole repair path rests on — "dispatching from
+      # main runs the FIXED workflow against the tag" — extended to the two
+      # helpers that workflow now reasons with. MEASURED not to touch the
+      # artifact: `Dockerfile.release` COPYs exactly two files out of
+      # infra/packaging (`version.sh`, `gen-secrets.sh`) and neither is one of
+      # these, so the image is byte-for-byte the tag's either way.
       - name: Repair path — take the image build scaffolding from the dispatched ref
         if: ${{ env.IMAGE_REPAIR == 'true' }}
         run: |
@@ -860,7 +873,9 @@ jobs:
             Dockerfile.release \
             Dockerfile.shottino \
             .dockerignore \
-            infra/docker
+            infra/docker \
+            infra/packaging/latest_tag_gate.sh \
+            infra/packaging/prerelease_flag.sh
           # Print it. A repair that silently changed nothing means the tag was
           # already fine and the failure is elsewhere; a repair that changed more
           # than expected is the reviewer's business, not a surprise found later
@@ -930,19 +945,28 @@ jobs:
           echo "name=${name}" >> "$GITHUB_OUTPUT"
           echo "shottino_name=${shottino_name}" >> "$GITHUB_OUTPUT"
 
-          # :v<version> always; :latest ONLY when v<version> is the highest semver
-          # tag in the repo — a backport tag push (v0.7.5 after v0.8.0) must not
-          # re-point `:latest` at an OLDER image. deb/rpm/arch are immune (they
-          # attach to a tag-keyed Release); only the docker images have a MUTABLE
-          # `:latest`. These tags are USED only when push:true — a dry-run
-          # (push:false) computes but discards them. `-v:refname` sorts by semver.
-          highest="$(git tag -l 'v*' --sort=-v:refname | head -1)"
-          if [ "v${version}" = "${highest}" ]; then
-            latest=yes
-            echo "v${version} is the highest tag — tagging :latest"
-          else
-            latest=no
-            echo "v${version} is NOT the highest (${highest}) — NOT tagging :latest"
+          # :v<version> always; :latest ONLY when v<version> is the highest
+          # RELEASE tag in the repo. TWO hazards, ONE gate: a backport tag push
+          # (v0.7.5 after v0.8.0) must not re-point `:latest` at an OLDER image,
+          # and a release candidate must not take it at all. deb/rpm/arch are
+          # immune (they attach to a tag-keyed Release); only the docker images
+          # have a MUTABLE `:latest`. These tags are USED only when push:true —
+          # a dry-run (push:false) computes but discards them.
+          #
+          # The ranking used to be `git tag -l 'v*' --sort=-v:refname | head -1`
+          # written out here, and `versionsort.suffix` is unset in this repo, so
+          # git placed `-rcN` ABOVE the bare version. Both faces were read off
+          # the runs' own logs (#1686): v1.3.0-rc2 took `:latest`, and v1.3.0 was
+          # then DENIED it by its own candidate. The rule now lives in ONE script
+          # that reuses the ONE pre-release classifier — a second hand-rolled
+          # semver comparison is exactly how two `:latest` owners come to drift.
+          #
+          # A verdict that cannot be derived STOPS the job. The permissive
+          # reading — carry on with an empty `latest` — is the one that
+          # publishes, and this decision is not retractable from a registry.
+          if ! latest="$(infra/packaging/latest_tag_gate.sh "v${version}")"; then
+            echo "::error::cannot decide :latest for v${version} — refusing to publish images whose mutable tag was never derived (#1686)"
+            exit 1
           fi
 
           # ONE gate, BOTH images (#1168). Bouncer and bridge are cut from the
