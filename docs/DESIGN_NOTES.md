@@ -62100,3 +62100,104 @@ criterion is demonstrated to hold, one per plane, and the global-id finding
 above is precisely why neither could be replaced by a check made afterwards.
 The #1229 e2e was rewritten to that criterion rather than deleted, with its
 former contract quoted in its moduledoc so the reversal stays legible.
+<!-- entry #1737 -->
+
+---
+
+## 2026-08-24 — #1737: the rail owns its horizontal inset, and what the measurement corrected
+
+vjt reported the rail's now-playing band as *"manca margin left e right"* — it
+sits flush against the rail edges while the `actions` launcher below it is
+inset — and ruled the shape of the cure twice. First scoped to the band
+(09:41: no padding on the band; the padding lives on the RAIL and the elements
+are margin-zero), then generalised (13:11: the horizontal inset goes on the
+CONTAINER and that applies to the whole rail, not just that band). The second
+is the one implemented.
+
+**The obvious reading of the report is wrong, and measuring first is what
+caught it.** `.rail-radio-now` carried `padding: 0.4rem 0.5rem`; `.rail-actions`
+carried `padding: 0.5rem`. Those are the same number, and both surfaces already
+placed their CONTENT at the same 0.5rem — so nothing about the *content* inset
+disagreed. What disagreed was the **surface**. `.rail-radio-now` draws a
+`background` and a `border-top` on a border box that spanned the rail edge to
+edge, so it reads as a full-bleed card. `.rail-actions` spans edge to edge too,
+but its background is `--bg-alt`, which is exactly the `--bg-alt`
+`.shell-members` itself carries, so its box is INVISIBLE and the only surface
+rendered there is its bordered button, inset by the padding. Full-bleed card
+above, inset card below. The cure therefore does not equalise two content
+insets; it shrinks two border boxes to one figure.
+
+**Why a matching value on the band was refused, in vjt's words and in the
+count.** The rail carried FOUR hand-written copies of one number — the band's
+padding, the actions' padding, `.rail-server-info`'s horizontal MARGIN (the
+same inset spelled a third way), and `.rail-radio-picker-list`'s padding.
+Giving the band a fifth would have been another copy of the thing the ruling
+exists to remove. `--rail-inset` on `.shell-members` is the single owner now,
+and the rule for a new child is stated at that rule: **the inset is the gap
+between the child's BORDER box and the rail edge**. A bordered CARD's internal
+padding is a different axis and stays with the card — which is why
+`.rail-server-info` keeps `padding: 0.5rem 0.75rem` and only its horizontal
+margin moved, and why `.rail-actions-menu` keeps its own 0.5rem.
+
+**Moving a container inset silently moves every absolute anchored to that
+container**, because an absolutely-positioned box resolves `inset` against its
+ancestor's PADDING box, not its border box. `.shell-members` hosts two, and
+they resolve differently on purpose. `.rail-radio-picker` (`inset: 0`, the
+full-rail overlay) INHERITS — it is one of the three children the ruling names,
+and it is visually a non-event: the panel's background is the same `--bg-alt`
+as the rail, nothing lives in the strips it stops covering (nick text starts
+further in and `li` carries no background), and the same is *already* true on
+mobile today, where the drawer's safe-area padding makes that identical
+`inset: 0` resolve inside it. `.resize-handle-right` does NOT inherit and
+cancels the inset instead: it is not a content surface, it is chrome ON the
+boundary, definitionally outside the gap.
+
+**One child opts out, and the reason generalises.** `.members-pane` keeps its
+own geometry (`margin-inline: calc(-1 * var(--rail-inset))`) because its rows
+carry `padding-inline: 1rem` of their own — inheriting would push every nick to
+1.5rem, moving a surface nobody reported — and because it is the scroller
+(#500), so inside the inset its scrollbar would float half a rem off the rail
+edge it belongs on. The general rule that falls out: **the inset lines up
+SURFACES, so a child with no surface does not take it.** A nick row is
+transparent, has no border, and its hover is an underline.
+
+**Accepted cost, named because the issue asked for it to be named.** The band's
+`border-top` no longer reaches the rail edges; it becomes the card's own border
+rather than a full-width separator between the members pane and the radio
+chrome. `.rail-actions` carries the identical `border-top` and shortens with
+it, so the two rules stay the same length as each other — which is the point.
+The alternative the issue offered (move the separator onto something that still
+spans the rail) would re-introduce the single full-bleed line the report is
+about.
+
+**The band is also no longer inert.** Its identity half became the door back to
+a transport hidden by #1697. It is the identity and not the whole row because
+the ⏹ beside it is a `<button>` and a `<button>` inside a `<button>` is invalid
+HTML: two SIBLING buttons make the issue's own constraint ("stop must not
+become restore-then-stop") true by construction, where a row-level handler plus
+`stopPropagation` on the ⏹ would have made it an event-ordering rule somebody
+has to keep right. It is deliberately UNGATED, unlike the
+`rail-action-show-player` drawer entry that shares its verb: that one is a menu
+ROW, where a row that does nothing is clutter, whereas this costs no space and
+gating it would only make the band change DOM shape — and with it the row's
+flex layout — every time the operator hides the bar. The drawer entry stays
+regardless; it is the GENERAL door, because an upload carries `label: null`, is
+in no station table, and renders no band at all.
+
+**Half of that constraint is not observable, and the test says so instead of
+pretending.** `closeAudio` resets `playerHidden` to false itself, so "stopped"
+and "restored then stopped" are the SAME state. The observable half is that ⏹
+still stops; the other half is pinned structurally, as the two controls being
+siblings.
+
+**Two testing facts worth carrying.** jsdom computes no layout — every
+`getBoundingClientRect()` there is zero — so a geometry claim cannot be proven
+in vitest at all; an assertion that some declaration exists is a mirror of the
+stylesheet and passes just as happily on the defect. And the e2e assertion is a
+RELATION (the band's edges against the launcher's) rather than a pixel literal,
+which would re-encode the value just made single-source and go red on a
+root-font-size change that broke nothing. It additionally checks the pair is
+inset and not merely equal, because two full-bleed surfaces agree with each
+other too — that is the state being rejected. Watch the tolerance idiom:
+`toBeCloseTo`'s second argument is a DIGIT COUNT, not a tolerance, so
+sub-pixel slack is written as an explicit `Math.abs(…) < EPSILON`.
