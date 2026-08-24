@@ -34,6 +34,15 @@
 // deliberately not folded in: the tolerance below is wide enough to survive
 // that residue and narrow enough that the ~150px this issue is about cannot
 // hide inside it.
+//
+// IT DISCRIMINATES, measured 2026-08-24. Reverting the cure to the pre-#1094
+// shape — geometry captured before the `loadMoreScrollback` call instead of at
+// its commit seam — fails this test on the anchor assertion at
+// `Received: 150.5625` against a tolerance of 12, i.e. `ARM_AT_PX` to within
+// half a pixel, exactly the error the restore makes and nothing else. With the
+// cure in place the same run is green. A green here that has never been shown
+// that red is not a guard, and this file spent three runs being red for a
+// reason that had nothing to do with either (see the route hold below).
 
 import type { Page } from "@playwright/test";
 import { loginAs, scrollbackLines, selectChannel } from "../fixtures/cicchettoPage";
