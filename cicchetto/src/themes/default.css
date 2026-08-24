@@ -1491,6 +1491,44 @@ html.overlay-open #root > div {
   /* UX-5 BS: relative positioning so .resize-handle (absolute, inner-edge)
      anchors against this aside. */
   position: relative;
+  /* #1737 — THE RAIL OWNS ITS HORIZONTAL INSET, ONCE. Every surface mounted
+     in this aside used to declare its own: `.rail-radio-now` 0.5rem of
+     padding, `.rail-actions` 0.5rem of padding, `.rail-server-info` 0.5rem of
+     MARGIN, `.rail-radio-picker-list` 0.5rem again — four hand-written copies
+     of one number, free to drift from each other.
+
+     WHAT THE REPORTED SCREENSHOT ACTUALLY SHOWED, measured before moving
+     anything: the band's CONTENT and the actions launcher already sat at the
+     same 0.5rem. What disagreed was the SURFACE. `.rail-radio-now` draws a
+     background and a `border-top` on a border box that spanned this aside
+     edge to edge, so it read as a full-bleed card; `.rail-actions` spans edge
+     to edge too, but its background is the same `--bg-alt` this aside
+     carries, so its box is invisible and the only surface there is its
+     bordered button, inset by the padding. Full-bleed card above, inset card
+     below. Moving the inset up one level shrinks both border boxes to the
+     same figure, which is the fix — tweaking `.rail-radio-now`'s padding to
+     match `.rail-actions` by hand would have been the fifth copy.
+
+     THE RULE FOR A NEW CHILD: this inset is the gap between the child's
+     BORDER box and the rail edge, and this rule owns it — a new rail surface
+     declares no `padding-inline` / `margin-inline` of its own. A bordered
+     CARD's internal padding is a different axis and stays with the card
+     (`.rail-server-info` keeps its `padding: 0.5rem 0.75rem`,
+     `.rail-actions-menu` its 0.5rem); only the gap to the rail edge moved
+     here.
+
+     THE TWO ABSOLUTES ANCHORED TO THIS ASIDE MOVE WITH IT, because an abspos
+     box resolves `inset` against its ancestor's PADDING box, not its border
+     box. `.rail-radio-picker` (`inset: 0`) inherits deliberately — it is one
+     of the three children the ruling names, and it is visually a non-event:
+     the panel's background is this same `--bg-alt`, and nothing lives in the
+     strips it stops covering (nick text starts further in, `li` carries no
+     background). The same is already true on mobile today, where this aside's
+     safe-area padding makes that `inset: 0` resolve inside it.
+     `.resize-handle-right` does NOT inherit and is compensated at its own
+     rule: it is not a content surface, it is chrome ON the edge. */
+  --rail-inset: 0.5rem;
+  padding-inline: var(--rail-inset);
 }
 
 /* UX-5 bucket BS — drag handles on the inner edge of each sidebar.
@@ -1520,8 +1558,14 @@ html.overlay-open #root > div {
 }
 
 .resize-handle-right {
-  /* Inner (left) edge of the members aside. */
-  left: 0;
+  /* Inner (left) edge of the members aside.
+     #1737 — the aside now carries `padding-inline: var(--rail-inset)`, and an
+     abspos box resolves `left` against its ancestor's PADDING box, so a plain
+     `left: 0` would park this strip one inset INSIDE the edge it exists to
+     grip. Cancelled rather than inherited: every other rail child is a
+     content surface the inset is FOR, and this one is chrome ON the boundary,
+     definitionally outside it. Renders where it did before the move. */
+  left: calc(-1 * var(--rail-inset, 0px));
 }
 
 .resize-handle:hover,
@@ -2138,7 +2182,13 @@ html.resize-dragging * {
    footer). */
 .rail-actions {
   position: relative;
-  padding: 0.5rem;
+  /* #1737 — horizontal padding GONE, to `.shell-members`; see the note there.
+     Nothing inside moves: `.rail-action` is `width: 100%` of this box and
+     `.rail-actions-menu` is abspos at `left/right: 0` against it, so both
+     spanned rail-minus-1rem before and span rail-minus-1rem now — the aside's
+     padding replaces this one exactly. The `border-top` shortens with the
+     band's, deliberately and for the same reason. */
+  padding: 0.5rem 0;
   margin-top: auto;
   border-top: 1px solid var(--border);
   background: var(--bg-alt);
@@ -2321,7 +2371,17 @@ html.resize-dragging * {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.4rem 0.5rem;
+  /* #1737 — horizontal padding GONE, to `.shell-members`. This band's border
+     box is now inset with every other rail surface instead of bleeding to the
+     edges while the launcher below it sat half a rem in.
+     WHAT THAT COSTS, accepted knowingly: the `border-top` stops reaching the
+     rail edges and becomes this card's own rule rather than a full-width
+     separator between the members pane and the radio chrome. The alternative
+     the issue offers — move the separator onto something that still spans the
+     rail — would re-introduce the single full-bleed line the report is about.
+     `.rail-actions` carries the identical `border-top` and shortens with it,
+     so the two rules stay the same length as each other, which is the point. */
+  padding: 0.4rem 0;
   border-top: 1px solid var(--border);
   background: var(--bg-alt);
 }
@@ -2432,7 +2492,13 @@ html.resize-dragging * {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  padding: 0.5rem;
+  /* #1737 — horizontal padding GONE. The panel above is abspos at `inset: 0`
+     against `.shell-members`, which resolves to its PADDING box, so the panel
+     is already inset by `--rail-inset`; keeping 0.5rem here would land the
+     station rows at a full rem while the band and the launcher sit at half —
+     new drift, from the edit meant to remove it. Rows land exactly where they
+     did before the move. */
+  padding: 0.5rem 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -4289,6 +4355,15 @@ html.resize-dragging * {
 
 .members-pane {
   padding: 0.5rem 0;
+  /* #1737 — the ONE rail child that opts OUT of `--rail-inset`, and the two
+     reasons are both measured. Its rows carry their own `padding-inline: 1rem`
+     (here and on the `h3`), so inheriting would push every nick to 1.5rem —
+     moving a surface nobody reported. And this pane is the SCROLLER (#500):
+     inside the inset its scrollbar would float half a rem off the rail edge
+     it belongs on. The inset exists to line up SURFACES, and a nick row has
+     none — transparent background, no border, hover is an underline. Cancels
+     to zero where the var is undefined, i.e. anywhere but the rail. */
+  margin-inline: calc(-1 * var(--rail-inset, 0px));
   /* #500 — the members list owns the scroll on BOTH form factors. `flex: 1 1
      auto` + `min-height: 0` lets it take the remaining rail height and scroll
      internally (min-height:0 defeats the flex-item min-content floor that would
@@ -10633,7 +10708,12 @@ html.resize-dragging * {
    pushed off-screen on a phone. */
 .rail-server-info {
   flex: 0 0 auto;
-  margin: 0.5rem;
+  /* #1737 — the horizontal half of this margin was the rail inset spelled a
+     fourth way (as MARGIN, where its siblings used padding); it lives on
+     `.shell-members` now. The vertical half is this card's own separation
+     from the pane above and stays. The `padding` below is the card's INTERNAL
+     inset — a different axis, untouched by the move. */
+  margin: 0.5rem 0;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
