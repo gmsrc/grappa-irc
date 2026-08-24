@@ -1983,7 +1983,7 @@ export async function adminListSessionLogSessions(
 // `circuit_state` from `Grappa.Admission.NetworkCircuit.AdminWire.t()`
 // (controller composition in `lib/grappa_web/controllers/admin/networks_controller.ex`).
 //
-// Three-valued cap contract per `Networks.update_network_caps/2`:
+// Three-valued cap contract per `Networks.update_network_settings/2`:
 //   * `null` — explicit "unlimited" (operator-cleared)
 //   * `0`    — degenerate lock-down ("allow none")
 //   * `N>0`  — the cap itself
@@ -2023,16 +2023,22 @@ export type AdminNetwork = NetworksAdminWireT & {
 
 export type AdminNetworksResponse = { networks: AdminNetwork[] };
 
-// PATCH body is keys-optional per `Networks.update_network_caps/2`'s
-// `%{optional(:max_concurrent_visitor_sessions) => ...,
-// optional(:max_concurrent_user_sessions) => ...,
-// optional(:max_per_ip) => ...}` contract: unsupplied keys keep
-// their current value. Cic MUST only include keys whose value
-// actually changed vs the server-echoed row — sending all keys on
-// every edit creates a lost-update race (operator A's Save would
-// silently roll back operator B's concurrently-saved change to the
-// OTHER cap). CRIT-1 of M-10 review.
-export type AdminNetworkCapsPatch = {
+// PATCH body is keys-optional per `Networks.update_network_settings/2`'s
+// contract: unsupplied keys keep their current value. Cic MUST only
+// include keys whose value actually changed vs the server-echoed row —
+// sending all keys on every edit creates a lost-update race (operator A's
+// Save would silently roll back operator B's concurrently-saved change to
+// another key). CRIT-1 of M-10 review.
+//
+// The six keys mirror `NetworksController.settings_attrs/1`'s whitelist
+// exactly. It was named `AdminNetworkCapsPatch` while cic could only
+// reach the three caps; #1760 added the other three, and "caps" stopped
+// being true of the shape — the server has called the verb
+// `update_network_settings/2` since #211 phase 3.
+export type AdminNetworkSettingsPatch = {
+  services_flavor?: NetworksNetworkServicesFlavor | null;
+  visitor_enabled?: boolean;
+  visitor_autoconnect?: boolean;
   max_concurrent_visitor_sessions?: number | null;
   max_concurrent_user_sessions?: number | null;
   max_per_ip?: number | null;
@@ -2045,10 +2051,10 @@ export async function adminListNetworks(token: string): Promise<AdminNetwork[]> 
   return body.networks;
 }
 
-export async function adminPatchNetworkCaps(
+export async function adminPatchNetworkSettings(
   token: string,
   slug: string,
-  body: AdminNetworkCapsPatch,
+  body: AdminNetworkSettingsPatch,
 ): Promise<AdminNetwork> {
   const res = await fetch(`/admin/networks/${encodeURIComponent(slug)}`, {
     method: "PATCH",

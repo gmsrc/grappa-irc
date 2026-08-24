@@ -12,7 +12,7 @@ import { liveCountsByNetworkId } from "./lib/adminEvents";
 import {
   type AdminFeaturedChannel,
   type AdminNetwork,
-  type AdminNetworkCapsPatch,
+  type AdminNetworkSettingsPatch,
   type AdminServer,
   ApiError,
   adminAddFeaturedChannel,
@@ -24,7 +24,7 @@ import {
   adminListFeaturedChannels,
   adminListNetworks,
   adminListServers,
-  adminPatchNetworkCaps,
+  adminPatchNetworkSettings,
   adminResetCircuit,
   adminRunReaper,
   adminUpdateFeaturedChannel,
@@ -41,7 +41,7 @@ import { isAdminNarrow } from "./lib/theme";
 //     `max_concurrent_user_sessions` + `max_per_ip` (post-U-1 the
 //     network-total cap is split per subject; logic split lands in
 //     U-2). Empty string == null (the "unlimited" sentinel per
-//     `Networks.update_network_caps/2`'s three-valued contract).
+//     `Networks.update_network_settings/2`'s three-valued contract).
 //     Save fires PATCH with ONLY the changed keys (server contract:
 //     unsupplied keys keep their value; sending all keys on every
 //     edit would silently overwrite a concurrent admin's edit to the
@@ -289,7 +289,7 @@ const AdminNetworksTab: Component = () => {
     if (Object.keys(patch).length === 0) return; // pristine bypass — no-op
     setError(null);
     try {
-      await adminPatchNetworkCaps(t, net.slug, patch);
+      await adminPatchNetworkSettings(t, net.slug, patch);
       await refresh();
     } catch (e) {
       const code = e instanceof ApiError ? e.code : "request_failed";
@@ -975,14 +975,14 @@ function parseCap(raw: string): ParseResult {
 // keys keep their current value. Returns null if ANY field fails
 // validation (Save should be disabled in that case); returns an empty
 // object if the row is pristine. CRIT-1 of M-10 review.
-function buildPatchBody(net: AdminNetwork, edit: RowEdit): AdminNetworkCapsPatch | null {
+function buildPatchBody(net: AdminNetwork, edit: RowEdit): AdminNetworkSettingsPatch | null {
   const visitorSessions = parseCap(edit.max_concurrent_visitor_sessions);
   if (!visitorSessions.ok) return null;
   const userSessions = parseCap(edit.max_concurrent_user_sessions);
   if (!userSessions.ok) return null;
   const perIp = parseCap(edit.max_per_ip);
   if (!perIp.ok) return null;
-  const body: AdminNetworkCapsPatch = {};
+  const body: AdminNetworkSettingsPatch = {};
   if (visitorSessions.value !== net.max_concurrent_visitor_sessions) {
     body.max_concurrent_visitor_sessions = visitorSessions.value;
   }

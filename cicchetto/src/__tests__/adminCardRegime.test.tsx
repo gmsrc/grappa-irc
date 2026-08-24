@@ -46,7 +46,7 @@ vi.mock("../lib/api", async () => {
     adminUpdateUserPassword: vi.fn(),
     adminDeleteUser: vi.fn(),
     adminListNetworks: vi.fn(),
-    adminPatchNetworkCaps: vi.fn(),
+    adminPatchNetworkSettings: vi.fn(),
     adminRunReaper: vi.fn(),
     adminResetCircuit: vi.fn(),
     adminCreateNetwork: vi.fn(),

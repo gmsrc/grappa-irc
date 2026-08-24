@@ -135,7 +135,7 @@ function cellActions(
 
 function renderCap(cap: number | null): string {
   // Mirrors the AdminNetworksTab cap-cell convention: `null` is the
-  // "unlimited" sentinel per `Networks.update_network_caps/2`.
+  // "unlimited" sentinel per `Networks.update_network_settings/2`.
   return cap === null ? "∞" : String(cap);
 }
 

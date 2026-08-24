@@ -12,7 +12,7 @@ vi.mock("../lib/api", async () => {
   return {
     ...actual,
     adminListNetworks: vi.fn(),
-    adminPatchNetworkCaps: vi.fn(),
+    adminPatchNetworkSettings: vi.fn(),
     adminRunReaper: vi.fn(),
     adminResetCircuit: vi.fn(),
     adminCreateNetwork: vi.fn(),
@@ -225,7 +225,7 @@ describe("AdminNetworksTab", () => {
     vi.mocked(api.adminListNetworks)
       .mockResolvedValueOnce([BAHAMUT])
       .mockResolvedValueOnce([{ ...BAHAMUT, max_concurrent_visitor_sessions: 200 }]);
-    vi.mocked(api.adminPatchNetworkCaps).mockResolvedValue({
+    vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
       ...BAHAMUT,
       max_concurrent_visitor_sessions: 200,
     });
@@ -243,7 +243,7 @@ describe("AdminNetworksTab", () => {
     // the operator didn't touch it (CRIT-1 of M-10 review — sending
     // the unchanged value would lose concurrent edits to that field).
     await waitFor(() => {
-      expect(api.adminPatchNetworkCaps).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
+      expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
         max_concurrent_visitor_sessions: 200,
       });
     });
@@ -260,7 +260,7 @@ describe("AdminNetworksTab", () => {
     vi.mocked(api.adminListNetworks)
       .mockResolvedValueOnce([BAHAMUT])
       .mockResolvedValueOnce([{ ...BAHAMUT, max_concurrent_visitor_sessions: 200, max_per_ip: 9 }]);
-    vi.mocked(api.adminPatchNetworkCaps).mockResolvedValue({
+    vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
       ...BAHAMUT,
       max_concurrent_visitor_sessions: 200,
       max_per_ip: 9,
@@ -278,7 +278,7 @@ describe("AdminNetworksTab", () => {
     fireEvent.input(perIpInput, { target: { value: "9" } });
     fireEvent.click(screen.getByTestId(`admin-network-save-${BAHAMUT.slug}`));
     await waitFor(() => {
-      expect(api.adminPatchNetworkCaps).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
+      expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
         max_concurrent_visitor_sessions: 200,
         max_per_ip: 9,
       });
@@ -290,7 +290,7 @@ describe("AdminNetworksTab", () => {
     vi.mocked(api.adminListNetworks)
       .mockResolvedValueOnce([BAHAMUT])
       .mockResolvedValueOnce([{ ...BAHAMUT, max_concurrent_visitor_sessions: null }]);
-    vi.mocked(api.adminPatchNetworkCaps).mockResolvedValue({
+    vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
       ...BAHAMUT,
       max_concurrent_visitor_sessions: null,
     });
@@ -303,7 +303,7 @@ describe("AdminNetworksTab", () => {
     fireEvent.input(sessionsInput, { target: { value: "" } });
     fireEvent.click(screen.getByTestId(`admin-network-save-${BAHAMUT.slug}`));
     await waitFor(() => {
-      expect(api.adminPatchNetworkCaps).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
+      expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
         max_concurrent_visitor_sessions: null,
       });
     });
@@ -322,7 +322,7 @@ describe("AdminNetworksTab", () => {
     const save = screen.getByTestId(`admin-network-save-${BAHAMUT.slug}`) as HTMLButtonElement;
     expect(save.disabled).toBe(true);
     expect(sessionsInput.getAttribute("aria-invalid")).toBe("true");
-    expect(api.adminPatchNetworkCaps).not.toHaveBeenCalled();
+    expect(api.adminPatchNetworkSettings).not.toHaveBeenCalled();
   });
 
   it("rejects out-of-range (> MAX_CAP) input client-side", async () => {
@@ -345,7 +345,7 @@ describe("AdminNetworksTab", () => {
   it("PATCH error surfaces with verb-only prefix and preserves the operator's typed value", async () => {
     const api = await import("../lib/api");
     vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT]);
-    vi.mocked(api.adminPatchNetworkCaps).mockRejectedValue(
+    vi.mocked(api.adminPatchNetworkSettings).mockRejectedValue(
       new api.ApiError(422, "validation_failed"),
     );
 
