@@ -19,8 +19,9 @@ import {
 } from "./lib/mediaSession";
 import { nowPlayingLabel } from "./lib/nowPlaying";
 
-// Docked audio mini-player (GH #115) — a slim transport bar pinned above
-// the compose box. Non-modal: scrollback stays scrollable + readable
+// Docked audio mini-player (GH #115) — a slim transport bar pinned BELOW
+// the compose box (#1701: between it and the mobile bottom bar; it used to
+// sit above compose). Non-modal: scrollback stays scrollable + readable
 // while audio plays (CLAUDE.md "IRC stays text only" — audio routes here
 // instead of MediaViewerModal). Persistent: switching the active channel
 // doesn't kill playback; a new audio link swaps the source on the single

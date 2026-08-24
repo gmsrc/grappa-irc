@@ -3864,10 +3864,21 @@ html.resize-dragging * {
 
 /* ComposeBox */
 
-/* GH #115 — docked audio mini-player. In-flow slim transport bar
-   between scrollback and the compose box; non-modal so scrollback stays
-   scrollable + readable while audio plays. Sits above compose (and above
-   compose's own safe-area handling), so it needs no bottom inset. */
+/* GH #115 — docked audio mini-player. In-flow slim transport bar, non-modal
+   so scrollback stays scrollable + readable while audio plays.
+   #1701 — it is now the LAST row of the compose column rather than the row
+   above it: below the compose box, and on mobile above `.bottom-bar` (a
+   sibling of `.shell-main`, so still further down). `border-top` is unchanged
+   and still the correct edge — the neighbour it separates from is simply the
+   compose box now instead of the scrollback pane.
+   🔴 It still declares NO bottom inset, and the reason changed with the
+   position: the inset is owned by the SHELL, not by whatever happens to be
+   last. Base `.shell` carries `env(safe-area-inset-bottom)`; `.shell-mobile`
+   deliberately zeroes it (#1127, flush bottom edge), and that comment's
+   warning now applies to this rule too — with the keyboard up iOS reports
+   `env(safe-area-inset-bottom)` against the DEVICE, not the shrunken visual
+   viewport, so an inset added HERE double-counts against `--viewport-height`
+   and reopens the ~34px gap above the keyboard. */
 .audio-mini-player {
   display: flex;
   align-items: center;

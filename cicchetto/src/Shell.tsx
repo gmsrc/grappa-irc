@@ -704,15 +704,17 @@ const Shell: Component = () => {
                     channelName={selectedChannel()?.channelName ?? ""}
                     kind={(selKind() as "channel" | "query" | "server") ?? "channel"}
                   />
-                  {/* GH #115 — docked audio mini-player, above compose.
-                      Inside this Match so it survives channel↔query↔server
-                      switches (the kindHasScrollback Match stays mounted);
-                      leaving chat for home/list/mentions stops playback. */}
-                  <AudioMiniPlayer />
                   <ComposeBox
                     networkSlug={selectedChannel()?.networkSlug ?? ""}
                     channelName={selectedChannel()?.channelName ?? ""}
                   />
+                  {/* GH #115 — docked audio mini-player, BELOW compose (#1701).
+                      Inside this Match so it survives channel↔query↔server
+                      switches (the kindHasScrollback Match stays mounted);
+                      leaving chat for home/list/mentions stops playback.
+                      Still inside DropUploadZone, so #351's whole-pane drop
+                      target keeps covering the strip. */}
+                  <AudioMiniPlayer />
                 </DropUploadZone>
               </Match>
               <Match when={selKind() === "mentions"}>
@@ -995,12 +997,14 @@ const Shell: Component = () => {
                   channelName={selectedChannel()?.channelName ?? ""}
                   kind={(selKind() as "channel" | "query" | "server") ?? "channel"}
                 />
-                {/* GH #115 — docked audio mini-player, above compose (mobile). */}
-                <AudioMiniPlayer />
                 <ComposeBox
                   networkSlug={selectedChannel()?.networkSlug ?? ""}
                   channelName={selectedChannel()?.channelName ?? ""}
                 />
+                {/* GH #115 — docked audio mini-player. #1701 moved it BELOW
+                    compose, so on mobile it lands between the compose box and
+                    the BottomBar (a sibling of `.shell-main`, further down). */}
+                <AudioMiniPlayer />
               </DropUploadZone>
             </Match>
             <Match when={selKind() === "mentions"}>

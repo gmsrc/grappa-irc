@@ -13,8 +13,10 @@ import { dragHasFiles, dropUpload } from "./lib/dropUpload";
 // Layout: `.drop-upload-zone` is a transparent pass-through flex column
 // (`flex: 1`) occupying the exact slot the stack used to fill directly, so
 // `.scrollback-pane`'s `flex: 1` still grows within it and TopicBar /
-// AudioMiniPlayer / ComposeBox keep their natural heights. `position:
-// relative` anchors the overlay.
+// ComposeBox / AudioMiniPlayer keep their natural heights (#1701 put the
+// player last, below compose — the zone still wraps it, so a drop on the
+// transport strip uploads like a drop anywhere else in the pane).
+// `position: relative` anchors the overlay.
 //
 // Drag-depth counter: dragenter/dragleave fire once per child element the
 // cursor crosses, so a naive boolean flickers the overlay off every time the
