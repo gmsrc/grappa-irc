@@ -30,13 +30,31 @@ defmodule Grappa.Uploads.MimeExt do
 
   ## Cross-language contract (drift warning)
 
-  Every extension this map can mint for a VIEWER-RELEVANT type
-  (image / video / audio) MUST be classified by cic's `EXTENSION_KIND`
-  (`cicchetto/src/lib/mediaLink.ts`) — otherwise a fresh upload loses its
-  in-app media viewer on the client. Pinned on the cic side by
-  `mediaLink.test.ts` ("server-mintable viewer extensions"). Document
-  types (pdf/txt/odt/ods/docx/xlsx) are deliberately NOT viewer-relevant
-  and need no cic entry.
+  Every extension this map can mint for a VIEWER-RELEVANT type MUST be
+  classified by cic's `mediaLink.ts` — otherwise a fresh upload loses its
+  in-app viewer on the client. Pinned on the cic side by
+  `mediaLink.test.ts` ("server-mintable viewer extensions").
+
+  Viewer-relevant is TWO sets on the cic side, and the split is a CSP
+  boundary rather than a taste:
+
+    * image / video / audio → `EXTENSION_KIND`. These hang off an
+      element (`<img src>`, `<video src>`), governed by `img-src` /
+      `media-src`, both widened to `https:` — so cic admits them from a
+      foreign host too (#607, #1240).
+    * `txt` / `md` → `TEXT_EXTENSION_KIND`, ADMITTED HOSTS ONLY. A text
+      viewer `fetch`es the bytes into the DOM, which answers to
+      `connect-src`, and that one is NOT widened to `https:`. Do not
+      "fix" a cross-host text link by widening it.
+
+  🔴 This paragraph used to read *"Document types (pdf/txt/odt/ods/docx/
+  xlsx) are deliberately NOT viewer-relevant and need no cic entry"*.
+  **vjt reversed that for `txt` and `md` on 2026-08-24 (#1764, #sbiffo)**:
+  they open in the media-viewer modal as monospace SOURCE with line
+  numbers — no markdown rendering, not now and not as a later toggle.
+  `pdf/odt/ods/docx/xlsx` are unchanged and still need no cic entry.
+  `text/markdown` exists in this map for no other reason than that
+  reversal: nothing server-side reads it.
   """
 
   # Keep in lockstep with `GrappaWeb.UploadsController` @mime_categories
@@ -54,6 +72,7 @@ defmodule Grappa.Uploads.MimeExt do
     "video/webm" => "webm",
     "application/pdf" => "pdf",
     "text/plain" => "txt",
+    "text/markdown" => "md",
     "application/vnd.oasis.opendocument.text" => "odt",
     "application/vnd.oasis.opendocument.spreadsheet" => "ods",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",

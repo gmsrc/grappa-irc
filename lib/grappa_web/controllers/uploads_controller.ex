@@ -97,6 +97,11 @@ defmodule GrappaWeb.UploadsController do
     "video/webm" => :video,
     "application/pdf" => :document,
     "text/plain" => :document,
+    # #1764 — accepted so a `.md` can exist on the wire at all: the cic
+    # viewer reads it as SOURCE (no rendering, vjt's ruling), and a type
+    # the server refuses can never be read. Category `:document` like its
+    # sibling text/plain — the cap axis is size, not renderability.
+    "text/markdown" => :document,
     "application/vnd.oasis.opendocument.text" => :document,
     "application/vnd.oasis.opendocument.spreadsheet" => :document,
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => :document,

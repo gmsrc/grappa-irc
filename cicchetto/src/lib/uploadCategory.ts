@@ -26,6 +26,15 @@ export const VIDEO_MIMES = ["video/mp4", "video/quicktime", "video/webm"] as con
 export const DOCUMENT_MIMES_PORTABLE = [
   "application/pdf",
   "text/plain",
+  // #1764 — accepted so a `.md` reaches the wire; the viewer then reads it as
+  // SOURCE (mediaLink.ts TEXT_EXTENSION_KIND). ⚠️ A browser does not always
+  // label a .md file `text/markdown` — where the OS MIME table has no entry it
+  // hands over `""` or `application/octet-stream`, and this gate rejects those
+  // before the upload. There is deliberately NO extension rescue for it: the
+  // server's own rescue (@audio_ext_canonical_mime) is scoped to audio, where
+  // the mislabelling was measured, and widening it to documents would reopen
+  // the closed allowlist for a convenience nobody has asked for yet.
+  "text/markdown",
   "application/vnd.oasis.opendocument.text",
   "application/vnd.oasis.opendocument.spreadsheet",
 ] as const;
@@ -132,6 +141,7 @@ export const MIME_EXT_LABEL: Record<
   "video/webm": "webm",
   "application/pdf": "pdf",
   "text/plain": "txt",
+  "text/markdown": "md",
   "application/vnd.oasis.opendocument.text": "odt",
   "application/vnd.oasis.opendocument.spreadsheet": "ods",
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
