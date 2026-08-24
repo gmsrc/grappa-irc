@@ -60556,3 +60556,87 @@ commit moved the value and left the citation. Fixed by naming the ANCHOR
 (`busy_timeout: @waiter_budget_ms`, and `min(15_000, the budget)` for the
 historical arithmetic, kept and labelled rather than deleted), never by writing
 the new number in, which would only reschedule the rot.
+<!-- entry #1701a -->
+
+---
+
+## 2026-08-24 — #1701a: a held scrollTop is only a position while the box it was measured in is
+
+The report was "opening the radio player does not push the scrollback up —
+the bar takes its space and the last lines are left under it". The issue
+itself established that this should not be able to happen: the bar is IN
+FLOW (`Shell.tsx`, between `ScrollbackPane` and `ComposeBox`;
+`.audio-mini-player` is a plain flex row), the whole chain above it carries
+`min-height: 0`, so mounting it genuinely shortens `.scrollback` rather
+than covering it — and #778 already re-pins a follower on any container
+height change, via the `ResizeObserver` on the scroll list, for exactly the
+class *"chrome growing inside the shell shrinks THIS box with no event at
+all"*.
+
+What closed it is a fact the report could not carry, because it is one
+component over: **the player is tuned from the rail's station picker, the
+picker holds a `createOverlayLock` refcount, and picking deliberately does
+not close it.** `RailRadio` states that rule in prose — *"a launcher that
+NAVIGATES away is single-shot, a control the operator flips in place is
+not; auditioning stations is the second kind, so the picker stays up"* —
+and it is correct on its own terms. The consequence is that the bar mounts
+while the overlay freeze is UP. `applyActivation` hands the re-pin to
+`resolveIntent`, `overlay-freeze` outranks `tail-follow`, and the write is
+dropped. That drop is also correct: a reader parked mid-list under an
+overlay must not be yanked to the tail. No overlay edge fires again until
+the picker closes, so the correction never comes; the close edge then
+replays a `scrollTop` captured through a viewport ~47px taller than the one
+it lands in, and the reader keeps reading a pane whose last two lines sit
+below the fold.
+
+### The same defect #1121 closed, on the other axis
+
+This is not a new shape. #1121 fixed `applyOverlayRestore` for the case
+where the box was steady and the CONTENT grew underneath; here the content
+is steady and the BOX shortens. Both say one thing: **the freeze holds a
+single number, and a `scrollTop` names a position only relative to the
+viewport it was read through.** #1121 captured the distance-to-tail with
+the px because the INTENT belongs to the open edge; this captures the
+`clientHeight` with it because the POSITION does too.
+
+So `applyOverlayRestore` restores the tail instead of the proxy when — and
+only when — the reader was following AND the box has changed size. Two
+gates, each carrying its own argument:
+
+* **on the box, not on the extent.** Content arriving underneath is
+  #1121's axis and its ruling stands: a held position is not a scroll-up
+  the reader never performed. A steady box replays the px whatever landed
+  under it.
+* **on the follow intent.** A mid-list reader asked for a position, not
+  for the tail, and a shorter box does not change what they asked for. The
+  predicate is the SAME `snapDistance <= SCROLL_BOTTOM_THRESHOLD_PX` the
+  intent is set from, not a second one free to drift from it.
+
+Both gates are measured, not asserted: dropping the follow gate reddens the
+new mid-list guard, and dropping the box gate reddens #1121's own two
+geometry specs plus the W1 restore characterization.
+
+### Why it is derived from the snapshot and not from the observer
+
+The alternative was to remember that a re-pin had been suppressed and
+replay it on the thaw. That is a second structure with its own lifecycle,
+and it answers a narrower question: it only fires if the `ResizeObserver`
+fired. Comparing the captured `clientHeight` against the live one is
+event-independent — the correction holds whether the observer ran or not,
+which matters here because the field report cannot say which of the two
+suppressed paths ran and no local gate can settle it either.
+
+### Known residue, stated rather than papered over
+
+The cure lands on the CLOSE edge. On mobile that is the moment the reader
+can see the pane again — `.shell-members` is a full drawer while the picker
+is up — so there is nothing left to fix. **On desktop the rail is a
+permanent grid column and the picker covers only the rail, so an operator
+watching the scrollback with the picker still open sees the stale pane
+until they close it.** Curing that means letting a container-height change
+outrank the freeze, and #219's whole reason for existing is a mobile
+fullscreen modal shrinking the visual viewport and tail-snapping the pane —
+the same signal. The narrower reading (that a *non-covering* surface should
+take `createOverlayEscape` and not the scroll-lock refcount, which is what
+`overlayScrollLock.ts` already says the split is for) is a change to the
+rail's own posture with its own blast radius, not this fix's to make.
