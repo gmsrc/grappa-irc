@@ -140,7 +140,17 @@ test.describe("#1094 — the prepend preserve reads the geometry at the commit",
 
     // Hold the older page on the wire. Installed only NOW: the initial load
     // uses the same `before=` route and delaying it would just slow the setup.
-    await page.route("**/api/networks/**/messages?**", async (route) => {
+    //
+    // MATCHED BY REGEX, and that is the whole spec's load-bearing detail. The
+    // first three runs of this file used the glob `**/api/networks/**/messages?**`
+    // and it matched NOTHING: cic fetches `/networks/<slug>/channels/<name>/
+    // messages?before=<id>` — there is no `/api` segment, the router mounts
+    // this under `scope "/networks/:network_id"`. So the hold was INERT, the
+    // older page landed in under 100ms, and the second flick below always
+    // arrived after the commit instead of during it. The regex is also the
+    // house pattern for this endpoint (`delayMessageFetches` in
+    // issue1089-switch-into-unread-flicker.spec.ts).
+    await page.route(/\/messages(\?|$)/, async (route) => {
       if (!route.request().url().includes("before=")) {
         await route.continue();
         return;
@@ -193,6 +203,6 @@ test.describe("#1094 — the prepend preserve reads the geometry at the commit",
     // actually reached — so the anchor came out ~ARM_AT_PX lower than here.
     expect(Math.abs(after - before)).toBeLessThanOrEqual(ANCHOR_TOLERANCE_PX);
 
-    await page.unroute("**/api/networks/**/messages?**");
+    await page.unroute(/\/messages(\?|$)/);
   });
 });
