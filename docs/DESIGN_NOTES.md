@@ -60129,3 +60129,212 @@ e2e lane is exclusive.** CI is its first run.
 #1151 (11px of drift for an 18px insertion, same applier) is adjacent and was
 left alone. The e2e tolerance is set wide enough to survive that residue and
 narrow enough that the ~150px this issue is about cannot hide inside it.
+<!-- entry #1698 -->
+
+---
+
+## 2026-08-24 — #1698: now-playing metadata, and a `/np` that would rather say nothing
+
+Two wants, one store. The radio player names the track on air, and `/np`
+says it in channel. The interesting decisions are all about what NOT to
+publish.
+
+### Where the fact comes from — and the two sources that lost
+
+Measured 2026-08-24, and the negative results are worth as much as the
+positive one.
+
+**ICY in-band is not an option, twice over.** Requesting a stream with
+`Icy-MetaData: 1` returns `icy-name`, `icy-genre`, `icy-br` and **no
+`icy-metaint`** — there is no in-band title track to read at all. And even
+where one were offered, a browser `<audio>` element does not surface ICY
+metadata to the page. Either fact alone closes the door.
+
+**`channels.json` DOES carry a now-playing value, and it is the wrong one.**
+`lastPlaying` is a single joined STRING (`"Charlie North - Never (Means
+Forever)"`), so artist and title come out of a split on `" - "` that the first
+hyphenated title breaks. Measured: 0 of 46 channels are ambiguous under that
+split *right now*, which is a sample and not a contract. It also costs 52,767
+bytes to learn about 46 channels when we want one — **19x** the 2,771 the
+per-channel feed costs.
+
+`https://api.somafm.com/songs/<id>.json` is the source: `songs[0]` is current,
+already split into `title` / `artist` / `album` / `date`.
+
+**`albumArt` is empty. 0 of 237 songs across all 14 stations.** Nothing is
+built on it, and the issue's warning about it needing `img-src` rather than
+`connect-src` is correct but moot: there is no image to admit. (Had there been,
+`img-src 'self' data: https:` already admits any https image — no server change
+would have been needed, which is a different fact from the one #1695 bought.)
+
+### Cadence: 60 seconds, and the bill is named
+
+Polling a third party's host once per listening tab is an operational choice.
+
+* **60s.** The shortest gap between consecutive tracks across all 14 stations
+  (223 gaps) is **105s**, so a 60s read cannot miss a track outright. The
+  median gap is **259s**, so worst-case staleness is under a quarter of a
+  typical track. Tighter buys accuracy nobody can perceive.
+* **The bill is 2.7 KB/min per LISTENING tab**, against the 128 kbps stream
+  that same tab already pulls from the same provider — 960 KB/min. The
+  metadata is **0.28% of the audio**. That ratio is the argument: we are
+  already SomaFM's listener, and this is a rounding error on what listening
+  costs them.
+* **Keyed on `tunedStation()`**, the fact `radio.ts` already derives from the
+  one audio store. An idle player, an upload seizing the element, the
+  transport's ✕ and a logout each cost zero, with no separate "radio is on"
+  flag to forget to clear.
+* **NOT keyed on pause, and not on tab visibility.** `paused` lives inside the
+  `<audio>` element, and lifting it into a store to save 2.7 KB/min is exactly
+  the parallel structure that drifts. A backgrounded tab is still playing
+  audio, so the ratio above is unchanged.
+* **Server-side polling rejected.** It would dedupe the read across users and
+  pay for it with a supervised process, a wire event, a protocol bump and a
+  bouncer that depends on somafm being up — for a station that is a purely
+  client-side concept. The mechanism would be heavier than the problem.
+
+### Five states, and `stale` is the one `/np` forced
+
+`nowPlaying()` answers a five-arm union — `idle` / `unsupported` /
+`unanswered` / `stale` / `playing` — rather than a track-or-null, because
+`/np` writes into a channel and each state needs a different sentence and a
+different repair. Arms are named for what was OBSERVED (log honesty):
+`unanswered` is true whether the feed has been silent for 200ms or an hour,
+and promises no "yet".
+
+**`stale` is measured from our last successful READ, never from the track's
+own `date`.** A Drone Zone piece measured 86 minutes long (5,171s, the longest
+of 223 gaps) is long, not stale. The threshold is three poll intervals,
+cross-checked against the p25 gap of 193s: past that we have been blind across
+the point where three quarters of tracks would have ended.
+
+**It blanks the DISPLAY too, not just `/np`.** One predicate, both doors —
+proven by mutation rather than asserted: deleting the stale gate from the store
+kills the store's own test AND `/np`'s refusal, in two different files. A
+refusal bolted onto a surface that keeps lying would not have that property.
+
+### `/np`: four refusals and no fallback
+
+Registered in `slashCommands.ts` like any other verb (the issue asks for it,
+and it is also how the verb inherits the `//np` literal escape, #427 alias
+shadowing, and the dispatch reconciliation net). It carries no arguments —
+the parser stays pure and cannot see the store.
+
+Four of five arms send nothing, each with its own sentence, because the
+operator's next move differs: pick a station / stop expecting one from this
+provider / wait / check the network. The two degraded lines vjt named as worse
+than a local error cannot be built at all: the EMPTY one is refused three
+levels deep (a blank title never becomes a track, a trackless state never
+becomes a body, no arm reaches the send), and the STALE one by the shared
+predicate above. The stale sentence quotes the threshold from the store's
+constant, so a cadence change moves the number instead of stranding the
+operator with one the code stopped using.
+
+**The station is IN the line** (`is now playing: Trestal — A Land Unknown
+[Groove Salad]`) — it is the only part a reader can act on, which turns a
+boast into a recommendation. **A station-only fallback for the trackless arms
+was rejected**: `/np` means now PLAYING, the operator typed it to name a track,
+and quietly sending a different sentence is the command deciding it knows
+better. `/me` is one keystroke away for anyone who wants that.
+
+Targets `ctx.submittedFrom` exactly as `/me` does, through the shared
+`ctcpFrame` + `sendMessage` seam. **Known and deliberately out of scope:**
+`/me` in the `$server` window has no guard (only `privmsg` is refused there),
+so `/np` inherits the same gap. Adding one for `/np` alone would be two
+patterns for one behaviour; the honest fix spans `/me`, `/ctcp ACTION` and
+`/np` together.
+
+### The baked feed URL is checkable, because #1696 said so
+
+`songsUrl` is a THIRD baked third-party URL in `radioStations.ts`, and #1696's
+finding was that such a URL with nothing to execute against it is a claim, not
+a fact. `bun run check:radio` gains a FEED axis: 200 + `application/json`.
+Measured — a slug the host does not know answers 404 `text/html`, and that
+failure has no other symptom, since the station plays perfectly while the track
+line stays empty forever. Proven by injecting a wrong slug: `FEED HTTP 404`,
+`1 broken`, rc=1.
+
+**No AGREE twin, and the absence is measured:** `channels.json` publishes no
+per-channel songs-feed URL at all (46 channels, keys `description dj djmail
+featured genre id image largeimage lastPlaying listeners playlists preroll
+title twitter updated xlimage`), so there is no upstream value to compare the
+baked one against. Naming that beats inventing a comparison that passes on
+anything.
+
+`songsUrl` is `string | null` because publishing a feed is a provider
+CAPABILITY. That makes `unsupported` a type-FORCED arm which no current table
+row can reach — `tunedStation()` derives from RADIO_STATIONS and all fourteen
+carry a feed — so it is tested against the handler with `../lib/radio` mocked,
+in its own file. A production arm with no test was the alternative.
+
+### Rebased onto #1697, and the sum neither slice measured
+
+#1697 (hide-while-playing, and the picker's move to the shared `PaneTopBar`
+band) landed on main while this was in flight, against the same four files.
+Three things came out of the rebase that are not conflict resolution.
+
+**The layout pin caught it, LOUDLY, and that is the argument for pinning the
+GROUP.** `audioMiniPlayerLayout.test.ts` names the unshrinkable-controls rule
+by its full selector list, and #1697 inserted a fourth member
+(`.audio-mini-player-hide`) into that rule. `nestedRuleBodies` compares the
+list verbatim, so the stale spelling threw `CSS rule not found` instead of
+measuring a rule that had stopped existing. Had the guard asserted one member
+— `.audio-mini-player-close` alone — it would have stayed GREEN across the
+change and said nothing about the new button, which could then have shrunk and
+pushed the ✕ off the very edge #1697 exists to keep it on. **A CSS pin that
+names a grouped selector verbatim converts a silent rebase drift into a red;
+one that names a single member converts it into a vacuous green.**
+
+**Hiding splits the track in two, and only one half needed code.** The chrome
+half is free: the span sits inside the same `<Show>` the hide predicate
+narrows, so a hidden bar cannot render a track. The other half is the one worth
+stating — `/np` is a COMMAND, not chrome, and an operator who hid the bar to
+get their screen back is precisely the one who then asks the channel what is
+on. The fact outlives the surface because the poll is keyed on
+`tunedStation()`, i.e. on the AUDIO, and hiding deliberately says nothing about
+the audio. Keying it on visibility would have made `/np` answer "nothing is
+playing" in the state a phone spends most of its time in — a refusal that lies
+rather than reports. Pinned by a test that asserts all three at once: the span
+is gone, `nowPlayingLabel()` is intact, and `tunedStation()` still names the
+station (the last one is the mechanism, not a proxy: routing the hidden flag
+through `activeAudio` — the shape #1697's own comment forbids — nulls it).
+
+**And the row's fixed cost grew by a whole control.** In LIVE mode the download
+anchor is not rendered, so the docked bar carried two buttons before #1697 and
+carries three now, while #1698 adds a second growable span to the space they
+leave. Off the stylesheet: `html, body { font-size: var(--font-size) }` with
+`:root --font-size: 14px`, so `1rem` is 14px and the group's `min-width: 2.5rem`
+is 35px; `.audio-mini-player` declares `gap: 0.5rem` and `padding: 0.4rem
+0.5rem`; `.audio-mini-player-live` and `-time` are both `flex: none`. Three
+buttons (105px) + six gaps (42px) + inline padding (14px) = **161px before a
+single character of text**, and the live badge and elapsed clock take their
+intrinsic width out of what is left. On a 375px-wide viewport the two spans
+divide roughly 138px, and the 2:1 split hands the station label about 46px.
+**This is arithmetic off the stylesheet with an assumed 0.6em monospace
+advance, not a measurement** — the digit is soft, the ORDER is not: the station
+name on a small phone goes from most of the row to a handful of characters.
+Neither slice is wrong on its own and neither measured the sum, which is why
+the device-verify below is a blocking item on this branch and not boilerplate.
+
+### What was NOT measured
+
+* **The docked bar on a real phone.** #1698 adds a second text span to the row
+  #1697/#1721 measured as cramped, and #1697 has since added a third button to
+  it — see the arithmetic above. The layout contract is pinned against the
+  STYLESHEET (`min-width: 0`, ellipsis, `flex` shrink non-zero, controls
+  `flex: none`, and exactly ONE block per selector) because jsdom applies no
+  CSS — the #1697 mechanism. Two mutants confirm it: dropping `min-width: 0`
+  reds the CSS guard while all 16 DOM tests stay green, and appending a second
+  `.audio-mini-player-track` block (the #1697 shape exactly) reds it too. None
+  of that says the bar FITS. Device-verify. The named remedy if it does not,
+  recorded here so it is not re-derived under pressure: drop the label's grow
+  to 0 while a track is present, so the station name keeps its intrinsic width
+  and the track absorbs the shortfall — NOT a smaller track, which would put
+  both spans below legibility instead of one.
+* **No e2e was written, and the CSP half needs none.**
+  `issue1695-somafm-connect-src-perimeter.spec.ts` already proves a browser
+  lets a `fetch` to `api.somafm.com` out and blocks both neighbours; the CSP
+  token is a host-source with no path, so its verdict covers `songs/<id>.json`
+  by construction. What an e2e would add beyond that is the bundle-arrival
+  oracle, and it would have to intercept the feed anyway — the "no third-party
+  outage detector in the gate" posture this table established in #682/#1696.
