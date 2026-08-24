@@ -566,6 +566,40 @@ defmodule Grappa.WSPresenceTest do
     end
   end
 
+  describe "#1735 — reset_for_test/0 must not un-park the injected sweep" do
+    test "the injected sweep window survives a reset" do
+      # `config/test.exs` parks the singleton's #224 tick for the whole run,
+      # precisely so a tick cannot land inside a `mark_stale_for_test/2`
+      # window and demote a pid a #671 case still expects to be raw-visible.
+      # `reset_for_test/0` used to answer `%__MODULE__{}` — a DEFAULT struct —
+      # which silently restored `sweep_ms` to `@default_stale_ms`, i.e. 60s.
+      # The `setup` above calls it before EVERY test in this file, and six
+      # other files call it too, so the parking was gone suite-wide from the
+      # first reset onwards.
+      #
+      # It only became a RED once something ran `handle_info(:sweep, …)`,
+      # because that reschedules at `state.sweep_ms`: one `sweep_now/0` and
+      # the singleton is armed with a real 60s periodic tick for the rest of
+      # the run. Measured, two arms, same node: with no manual sweep nothing
+      # fires in 70s (the boot timer is still 3_600_000); with one manual
+      # sweep an unasked `:ws_all_hidden` arrives at 60006ms. That tick
+      # landing inside the 100ms refute at :419 is the whole of #1735.
+      injected = Keyword.fetch!(Application.get_env(:grappa, WSPresence, []), :sweep_ms)
+
+      # Compared against the CONFIGURED value, never against the server's
+      # current one: `setup` has already reset by the time this line runs, so
+      # a before/after comparison inside the test body would read 60_000 on
+      # both sides and pass on the bug.
+      assert :sys.get_state(Process.whereis(WSPresence)).sweep_ms == injected
+
+      # The re-arm door itself. `handle_info(:sweep, …)` reschedules at
+      # whatever `sweep_ms` the state carries, so this is the value that
+      # decides whether a manual tick leaves a 1-hour timer or a 60s one.
+      sweep_now()
+      assert :sys.get_state(Process.whereis(WSPresence)).sweep_ms == injected
+    end
+  end
+
   describe "client_closing/2 immediate path" do
     test "client_closing on the last VISIBLE socket fires immediate :ws_all_hidden" do
       p = stub_pid()

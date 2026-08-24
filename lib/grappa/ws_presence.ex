@@ -592,8 +592,21 @@ defmodule Grappa.WSPresence do
     end
   end
 
-  def handle_call(:reset_for_test, _, _) do
-    {:reply, :ok, %__MODULE__{}}
+  # #1735 — reset the STATE, carry the CONFIG through. `%__MODULE__{}` alone
+  # answers with the struct DEFAULTS, so it silently replaced the `stale_ms` /
+  # `sweep_ms` this server was STARTED with. `config/test.exs` parks the #224
+  # tick at an hour for exactly the reason the comment there gives; a reset
+  # put it back to the 60s default, and since `handle_info(:sweep, …)`
+  # reschedules at `state.sweep_ms`, the first manual tick then armed a real
+  # 60s periodic sweep for the rest of the run. Measured: an unasked
+  # `:ws_all_hidden` at 60006ms, against nothing in 70s without the manual
+  # tick. That is what reddened `ws_presence_test:419` once on main.
+  #
+  # The general shape: a reset helper that rebuilds a struct from literals
+  # discards every injected field, and the ones that hurt are the ones a
+  # config file deliberately moved off their default.
+  def handle_call(:reset_for_test, _, state) do
+    {:reply, :ok, %__MODULE__{stale_ms: state.stale_ms, sweep_ms: state.sweep_ms}}
   end
 
   def handle_call({:reset_for_user, user_name}, _, state) do
