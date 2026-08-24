@@ -5,12 +5,16 @@ import { RADIO_STATIONS } from "../lib/radioStations";
 // exists because breaking it fails SILENTLY in production rather than loudly
 // here.
 //
-// What this file deliberately does NOT assert: that a stream is reachable.
-// That needs the network, and a unit test that hits somafm.com would be a
-// third-party outage detector wired into our gate. Reachability was measured
-// by hand when each entry was added (see the module header for the date and
-// the method) and is re-measured when the list changes — it is not something
-// a test run in CI can honestly stand behind.
+// What this file deliberately does NOT assert: that a stream or a logo is
+// reachable. That needs the network, and a unit test that hits somafm.com would
+// be a third-party outage detector wired into our gate — it would go red on
+// days when nothing of ours is broken. That reasoning still holds; what #1696
+// changed is where the measurement lives. "Measured by hand when each entry was
+// added" was the standing answer here, and for the logos it was false for ten
+// of fourteen rows on the day it was written. So the logo half is now an
+// executable, on-demand probe — `bun run check:radio`
+// (`scripts/check-radio-logos.ts`) — and the stream half remains hand-measured,
+// for the mechanical reason the table's moduledoc gives.
 
 describe("RADIO_STATIONS", () => {
   it("is not empty — an empty table is a picker that opens onto nothing", () => {
