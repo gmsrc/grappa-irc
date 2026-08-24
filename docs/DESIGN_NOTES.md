@@ -62324,29 +62324,65 @@ wrong. Two more said "above compose" (`AudioMiniPlayer`'s moduledoc,
 
 ---
 
-## 2026-08-24 — #1751: one safe-area mechanism, and the picker that did not need it
+## 2026-08-24 — #1751: padding does not move an abspos child, and one safe-area mechanism
 
-**The reported defect was not the defect, and the requested fix was a
-regression.** #1751 came in as "the radio station picker rides under the notch;
-give it the settings-drawer top inset". Measured on `origin/main` at 713736f9,
-`.rail-radio-picker` is `position: absolute; inset: 0` inside `.shell-members`,
-and an abspos box resolves `inset` against its ancestor's PADDING box — the rule
-#1737 had just finished writing at that very aside. `.shell-members` carries the
-top inset on BOTH form factors: on mobile as the fixed drawer's own
-`padding-top`, on desktop as a grid child of the inset `.shell`. Both mounts of
-`<RailRadio/>` (Shell.tsx) are inside that aside; there is no third. So the
-picker already starts below the safe area, and giving it one of its own is the
-#205 double-count the `.shell-members` base rule has recorded since #205 —
-"keeping insets here too double-counted the top inset". The position-awareness
-trap the issue itself warned about landed on the element in its own title.
+🔴 **PADDING ON A CONTAINER IS INVISIBLE TO ITS ABSOLUTELY POSITIONED
+DESCENDANTS. That is the whole defect, and this file said the opposite.** An
+abspos box resolves its offsets against the ancestor's padding EDGE — the OUTER
+edge of the padding, just inside the border — so the containing rectangle
+INCLUDES the padding and `inset: 0` lands ON that edge, above and outside it.
+"Resolves against the padding box" does NOT mean "so the padding pushes it
+down"; it means the opposite. The #1737 entry and the comment it left at
+`.shell-members` both asserted the wrong reading, and this entry is the
+correction.
 
-⚠️ **The symptom is NOT explained and this entry does not claim it is.** The
-screenshot was not reproduced. Playwright synthesizes no safe-area inset on any
-engine we run and jsdom resolves no `env()` at all, so on-device geometry is
-observable in no gate we have; a notched device was not available. What is
-established is the containing-block chain, which says the inset is applied
-exactly once already. Something is wrong on that phone and it is not a missing
-inset on the picker.
+**Measured, not reasoned — and it took being wrong first.** The initial reading
+of #1751 was that the reported symptom could not exist: the picker is
+`position: absolute; inset: 0` inside `.shell-members`, that aside insets
+itself, therefore the picker was already clear and the requested
+`max(x, env(top))` would be a #205 double-count. A probe at 390px with the
+token stubbed at 59px killed it:
+
+| | `.shell-members` `padding-top` | `.rail-radio-picker` y |
+|---|---|---|
+| before stub | 0px | 0 |
+| after stub | **59px** | **0** |
+
+The inset reaches the drawer; the picker does not move. vjt's screenshot was
+real and the CSS-only argument against it was wrong. Horizontally the same
+physics, measured on the same run: the aside's padding box is x 146–383 and the
+picker measured 139–390 — the padding edge — so it never inherited
+`--rail-inset` either, and #1737's "inherits deliberately" never took effect. It
+stayed invisible for the reason #1737 gave (same `--bg-alt`, nothing in the
+strips), which is why nobody caught it there.
+
+**Why the desktop never showed it, and why one arm of the spec passed while the
+other failed.** On desktop the aside is a grid ITEM of `.shell`, so `.shell`'s
+padding moves the aside's BORDER BOX and the picker follows the box. On mobile
+the aside is `position: fixed; top: 0`: the box stays put and only the padding
+grows inward. Same inset, two different mechanisms — the defect is phone-only,
+and no source-level guard could ever have seen it.
+
+🔴 **THE RULE: on a top-pinned `position: fixed` container, safe-area clearance
+goes on `top` (with `height` losing the same amount), not on `padding-top`.**
+Moving the border box moves every child, in flow or not, and it is
+pixel-identical for the flow children — they started at the inset because the
+padding pushed them and now start there because the box does. Applied to both
+mobile drawers, including `.shell-sidebar`, which has no abspos child today and
+so changes nothing: its own comment calls it the mirror of `.shell-members`, and
+two drawers answering one geometry problem two ways is how the next one gets
+copied from whichever was nearer.
+
+**Not the fix the issue asked for, and the original objection survives in half.**
+A plain `max(x, env(top))` on the picker fixes the phone and DOUBLE-COUNTS on
+the desktop, where the ancestor's box has already moved. The fix belongs at the
+container.
+
+**Corroboration that this is a general shape and not one rule's accident:**
+`.rail-actions-menu`, the rail's other abspos child, has subtracted the inset by
+hand from its `max-height` since #913. It hit this same physics from the other
+end — a JS-measured offset taken from the physical top — and worked around it
+locally without anyone naming the class.
 
 **What the directive asked for instead, and the invariant it produced.**
 `env(safe-area-inset-*)` was hand-written at 23 declarations across 16 rules

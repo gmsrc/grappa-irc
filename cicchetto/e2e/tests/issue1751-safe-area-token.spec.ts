@@ -1,13 +1,19 @@
 // #1751 — the safe-area top inset reaches the radio picker's band through its
 // ANCESTOR, exactly once, on both form factors.
 //
-// This is the measurement that settles what the issue got wrong. #1751 was
-// filed as "the picker rides under the notch, give it the settings-drawer top
-// inset". The picker is `position: absolute; inset: 0` inside `.shell-members`,
-// and an abspos box resolves `inset` against its ancestor's PADDING box (the
-// #1737 rule, stated at that aside) — so the aside's own inset already moves
-// it. Adding a second one to the picker is the #205 double-count, not a fix.
-// That argument was made from the stylesheet; this spec makes it a number.
+// This spec is what caught the real defect, and it caught it by failing. The
+// first reading of #1751 was that the symptom could not exist — the picker is
+// `position: absolute; inset: 0` inside `.shell-members`, that aside insets
+// itself, so the picker must already be clear. This spec's MOBILE arm returned
+// a 0px delta and killed that argument: padding on a container is invisible to
+// its abspos descendants, because the containing rectangle is the padding EDGE
+// and INCLUDES the padding. The clearance now sits on the drawer's `top`, which
+// moves the border box and every child with it.
+//
+// The desktop arm passes by a DIFFERENT mechanism and always did: there the
+// aside is a grid item of the inset `.shell`, so its border box moves. Keeping
+// both arms is the point — one mechanism per form factor, and only one of them
+// was broken.
 //
 // THE MEASUREMENT PROBLEM, and the same answer #913 found. Playwright
 // synthesizes `env(safe-area-inset-*)` on NO engine — they resolve to 0, and

@@ -105,15 +105,15 @@ describe("#1751 — the safe-area inset has one source and one edit point", () =
     expect(insetCensus()).toEqual(CENSUS);
   });
 
-  it("leaves the picker OUT — its ancestor already insets it", () => {
-    // The issue asked for `max(<x>, env(safe-area-inset-top))` on
-    // `.rail-radio-picker`. That would be the seventh copy AND a regression:
-    // the picker is `position: absolute; inset: 0` and an abspos box resolves
-    // `inset` against its ancestor's PADDING box (the #1737 rule, stated at
-    // `.shell-members`). `.shell-members` carries the inset on both form
-    // factors — as the mobile fixed drawer directly, and on desktop as a grid
-    // child of the inset `.shell` — so the picker already starts below the
-    // safe area. A second inset here is the #205 double-count.
+  it("leaves the picker OUT — the clearance belongs to its container", () => {
+    // The issue asked for `max(<x>, env(safe-area-inset-top))` here. The
+    // symptom was real (the band DID paint under the notch on the phone) but
+    // the fix is not: on desktop the picker's ancestor is a grid child of the
+    // inset `.shell`, so its BORDER BOX has already moved and an inset here
+    // would double-count. The phone case is fixed where it belongs — the
+    // mobile drawer carries its clearance on `top` instead of `padding-top`,
+    // because padding is invisible to an abspos child. Measured; see the note
+    // at that rule, and issue1751-safe-area-token.spec.ts for the numbers.
     expect(ruleBody(".rail-radio-picker")).not.toMatch(/safe-area-inset/);
   });
 });
