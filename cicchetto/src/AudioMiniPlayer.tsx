@@ -1,10 +1,14 @@
 import { type Component, createEffect, createSignal, on, onCleanup, Show } from "solid-js";
 import {
   activeAudio,
+  audioFailureLabel,
+  clearPlaybackFailure,
   closeAudio,
   hidePlayer,
+  playbackFailure,
   playerHidden,
   rememberResumePoint,
+  reportPlaybackFailure,
   resumePoint,
 } from "./lib/audioPlayer";
 import {
@@ -197,6 +201,13 @@ const AudioMiniPlayer: Component = () => {
 
   const playNow = (): void => {
     if (audioEl === undefined) return;
+    // #1744 — a new attempt invalidates the verdict on the last one, and the
+    // clear is what makes a REPEATED failure visible: the same reason written
+    // to the same signal changes nothing, so without this the operator presses
+    // play on a source that cannot play and the bar sits there unchanged.
+    // It deliberately does NOT touch `el.error`, which stays set until the
+    // fetch below lands — that property is `mustRefetch`'s, not the surface's.
+    clearPlaybackFailure();
     // `play()` re-runs resource selection only from NETWORK_EMPTY, which is not
     // where a dropped stream lands; `load()` runs it unconditionally. The other
     // `load()` in this file DETACHES a source on close — same call, opposite
@@ -273,8 +284,17 @@ const AudioMiniPlayer: Component = () => {
            recoverable buffering, not a stop, and clearing the state on them
            would flip the button to ▶ over audio that is still coming — the
            same lie in the other direction. `error` is the terminal one, so
-           `error` is the one listened to. */
-        onError={() => setPlaying(false)}
+           `error` is the one listened to.
+           #1744 — and it is now REPORTED, not only absorbed. Clearing the
+           transport was half the answer: it stopped the bar claiming to play
+           and left it looking like a station the operator had PAUSED. The
+           element's own `error` goes to the store, which classifies it once
+           (`reportPlaybackFailure`); every surface reads the reason from
+           there. */
+        onError={() => {
+          setPlaying(false);
+          reportPlaybackFailure(audioEl?.error ?? null);
+        }}
         onTimeUpdate={() => setCurrent(audioEl?.currentTime ?? 0)}
         onLoadedMetadata={() => {
           setDuration(audioEl?.duration ?? 0);
@@ -311,60 +331,115 @@ const AudioMiniPlayer: Component = () => {
               </span>
             )}
           </Show>
-          {/* #1698 — what the station is playing, on the surface a phone can
-              actually see. The rail carries the same fact, and on mobile the
-              rail is `translateX(100%)` off-screen while the station plays —
-              the identical argument that put the label above here in #682,
-              one field further. Absent for an upload, which has no feed, and
-              absent for a station whose feed has gone quiet: the store's
-              `nowPlayingLabel` is null on every arm but `playing`, so the
-              stale rule reaches this row without this row knowing about it. */}
-          <Show when={nowPlayingLabel()}>
-            {(track) => (
-              <span class="audio-mini-player-track" data-testid="audio-mini-player-track">
-                {track()}
+          {/* #1744 — THE NOTICE TAKES THE TRACK'S SLOT. The feed polls
+              `tunedStation()`, which is derived from the SOURCE and knows
+              nothing about whether the element decoded it — so a live-updating
+              track name keeps scrolling over silence, which is the single
+              loudest way a dead station looks like a playing one. The row is
+              also one row: on a phone it IS the player, so the notice takes a
+              slot rather than adding one.
+              The LABEL above deliberately stays. "connection lost" with nothing
+              beside it does not tell the operator which station to re-pick. */}
+          <Show
+            when={playbackFailure()}
+            fallback={
+              /* #1698 — what the station is playing, on the surface a phone can
+                 actually see. The rail carries the same fact, and on mobile the
+                 rail is `translateX(100%)` off-screen while the station plays —
+                 the identical argument that put the label above here in #682,
+                 one field further. Absent for an upload, which has no feed, and
+                 absent for a station whose feed has gone quiet: the store's
+                 `nowPlayingLabel` is null on every arm but `playing`, so the
+                 stale rule reaches this row without this row knowing about it. */
+              <Show when={nowPlayingLabel()}>
+                {(track) => (
+                  <span class="audio-mini-player-track" data-testid="audio-mini-player-track">
+                    {track()}
+                  </span>
+                )}
+              </Show>
+            }
+          >
+            {(failure) => (
+              /* `role="status"`: this appears without the operator having done
+                 anything, so an assistive technology must be able to learn
+                 about it without polling the bar. */
+              <span
+                class="audio-mini-player-error"
+                data-testid="audio-mini-player-error"
+                role="status"
+              >
+                {`⚠ ${audioFailureLabel(failure())}`}
               </span>
             )}
           </Show>
-          <Show
-            when={!live()}
-            fallback={
-              <>
-                <span class="audio-mini-player-live" data-testid="audio-mini-player-live">
-                  live
-                </span>
-                {/* Elapsed since tune-in, NOT a position: there is no total
-                    to divide it by, so it is shown alone rather than as one
-                    half of a "cur / dur" pair with a hollow denominator. */}
-                <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
-                  {formatTime(current())}
-                </span>
-              </>
-            }
-          >
-            <input
-              type="range"
-              class="audio-mini-player-seek"
-              data-testid="audio-mini-player-seek"
-              min="0"
-              max={duration() || 0}
-              step="any"
-              value={current()}
-              onInput={onSeek}
-              aria-label="seek"
-            />
-            <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
-              {formatTime(current())} / {formatTime(duration())}
-            </span>
-            {/* Same-origin download: the `download` attribute forces a save
-                (overriding the server's `inline` Content-Disposition) and
-                inherits the server-sent filename — cic has no filename on
-                the wire (slug only), so no `download` value is set.
-                #682 — gated OFF for a live source, for two independent
-                reasons either of which is sufficient: the resource has no
-                end, so the save never completes; and `download` is ignored
-                outright on a cross-origin href, so the anchor would navigate
-                the operator out of the app instead of saving anything. */}
+          {/* THE READOUT, and #1744 gives it a third arm: NONE.
+              Measured on a source the browser refuses (MediaError code 4):
+              `loadedmetadata` never arrives, so `duration` stays at a finite 0,
+              so `live()` answers false and this row drew the FILE readout over
+              a dead endless stream — a scrubber at `max="0"` and a `0:00 /
+              0:00` clock. Both are statements about a resource that does not
+              exist, and the live arm is no better: an elapsed counter frozen at
+              a "live" badge says the stream is still on. A failed source has no
+              readout, so it is given none. */}
+          <Show when={playbackFailure() === null}>
+            <Show
+              when={!live()}
+              fallback={
+                <>
+                  <span class="audio-mini-player-live" data-testid="audio-mini-player-live">
+                    live
+                  </span>
+                  {/* Elapsed since tune-in, NOT a position: there is no total
+                      to divide it by, so it is shown alone rather than as one
+                      half of a "cur / dur" pair with a hollow denominator. */}
+                  <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
+                    {formatTime(current())}
+                  </span>
+                </>
+              }
+            >
+              <input
+                type="range"
+                class="audio-mini-player-seek"
+                data-testid="audio-mini-player-seek"
+                min="0"
+                max={duration() || 0}
+                step="any"
+                value={current()}
+                onInput={onSeek}
+                aria-label="seek"
+              />
+              <span class="audio-mini-player-time" data-testid="audio-mini-player-time">
+                {formatTime(current())} / {formatTime(duration())}
+              </span>
+            </Show>
+          </Show>
+          {/* Same-origin download: the `download` attribute forces a save
+              (overriding the server's `inline` Content-Disposition) and
+              inherits the server-sent filename — cic has no filename on the
+              wire (slug only), so no `download` value is set.
+              #682 — gated OFF for a live source, for two independent reasons
+              either of which is sufficient: the resource has no end, so the
+              save never completes; and `download` is ignored outright on a
+              cross-origin href, so the anchor would navigate the operator out
+              of the app instead of saving anything.
+              #1744 — LIFTED OUT of the file readout above, and it is the one
+              piece of chrome a failure does NOT take away. The two were one
+              <Show> only because they share a predicate, and that merge made
+              this case unsayable: an upload the browser cannot DECODE is
+              exactly the upload the operator wants to SAVE and open elsewhere.
+              This anchor is not a claim about playback — it is the remedy for
+              the notice standing beside it.
+              ⚠️ Still gated on `live()` and therefore still wrong in one
+              corner, unchanged from before this issue: a STREAM that failed
+              before metadata has a finite `duration` of 0, so it is not live as
+              far as this predicate can tell, and the anchor renders on an
+              endless cross-origin href. The honest gate is same-origin, which
+              is #682's own second reason spelled as a test rather than
+              inferred from the first — out of scope here, and named so it is
+              not rediscovered as new. */}
+          <Show when={!live()}>
             <a
               class="audio-mini-player-download"
               data-testid="audio-mini-player-download"

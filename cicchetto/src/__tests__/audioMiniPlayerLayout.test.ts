@@ -36,7 +36,10 @@ const soleRuleBody = (selector: string): string => {
 };
 
 describe("the docked player's text spans can shrink, and its controls cannot", () => {
-  it.each([".audio-mini-player-label", ".audio-mini-player-track"])(
+  // #1744 adds a THIRD growable span, and it is the one that arrives while the
+  // operator is already unhappy: it takes the track's slot on a failed source,
+  // so it inherits the same contract rather than being a new shape beside it.
+  it.each([".audio-mini-player-label", ".audio-mini-player-track", ".audio-mini-player-error"])(
     "%s ellipsises instead of widening the row",
     (selector) => {
       const body = soleRuleBody(selector);

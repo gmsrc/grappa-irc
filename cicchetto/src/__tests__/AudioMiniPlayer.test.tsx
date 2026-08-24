@@ -1,7 +1,14 @@
 import { render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AudioMiniPlayer from "../AudioMiniPlayer";
-import { activeAudio, closeAudio, playAudio, playerHidden, showPlayer } from "../lib/audioPlayer";
+import {
+  activeAudio,
+  audioFailureLabel,
+  closeAudio,
+  playAudio,
+  playerHidden,
+  showPlayer,
+} from "../lib/audioPlayer";
 import type { RadioStation } from "../lib/radioStations";
 
 // jsdom does not implement HTMLMediaElement playback — stub the methods
@@ -676,6 +683,274 @@ describe("AudioMiniPlayer", () => {
       metadataArrives(90);
 
       expect(element().currentTime).toBe(0);
+    });
+  });
+
+  // #1744 — A STREAM THAT NEVER STARTS SAID NOTHING TO ANYONE.
+  //
+  // MEASURED on the harness above with `MediaError` code 4, the codec case:
+  //
+  //   el.error.code                    4      ← the element populates it
+  //   elements naming the error        0      ← nobody reads it for display
+  //   toggle                           "▶" / aria-label="play"
+  //   LIVE badge                       false
+  //   SEEK slider                      present, max="0"
+  //   readout                          "0:00 / 0:00"
+  //   download link                    present
+  //
+  // NOT MERELY MUTE — LYING, and the second half is why this is more than one
+  // span. `loadedmetadata` never arrives, so `duration` stays at 0, which is a
+  // FINITE number, so `live()` answers false and the bar dresses a dead endless
+  // stream as a FILE: a scrubber over nothing and a `0:00 / 0:00` readout. The
+  // failure therefore REPLACES the readout rather than joining it.
+  //
+  // THE DOWNLOAD ANCHOR IS THE EXCEPTION, and finding it is what split that
+  // <Show> in two. It sat inside the file readout because the two share a
+  // predicate, not because they answer the same question — and an upload the
+  // browser cannot DECODE is exactly the upload the operator wants to SAVE.
+  // Taking it away would remove the remedy at the moment it is needed. So the
+  // notice replaces the readout, and the anchor keeps #682's own `live()`
+  // gate, unchanged.
+  //
+  // WHY THIS IS NOT A SECOND PREDICATE BESIDE `mustRefetch` (#1700's rule that
+  // the predicate is one). Two independent reasons, and either is sufficient:
+  //   * `mustRefetch` is `el.error !== null || live()`, so it is TRUE for every
+  //     healthy live stream. A surface gated on it would show a failure on
+  //     every station that works.
+  //   * It is a question ASKED OF THE ELEMENT at the instant of a decision, and
+  //     `el.error` is a plain property. Solid cannot subscribe to it, so no
+  //     amount of asking re-renders anything. The signal below is the reactive
+  //     record of the EVENT, which is a different object with a different job:
+  //     `mustRefetch` decides whether to call `load()`, this decides what the
+  //     operator is told. They can legitimately disagree — a retry clears the
+  //     notice while `el.error` is still set until the new fetch lands.
+  describe("#1744 — saying so when the source will not play", () => {
+    const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
+    const UPLOAD = "https://grappa.example/uploads/abc";
+
+    const element = (): HTMLElement => screen.getByTestId("audio-mini-player-el");
+    const toggle = (): HTMLElement => screen.getByTestId("audio-mini-player-toggle");
+
+    /** Put the element in the state a failed load leaves it in, at `code`. Same
+        instance-stub seam as `interrupt()` above, parameterised because the
+        REASON is what this slice is about. */
+    const failWith = (code: number): void => {
+      Object.defineProperty(element(), "error", {
+        configurable: true,
+        value: { code, message: "" },
+      });
+      element().dispatchEvent(new Event("error"));
+    };
+
+    /** Stub `duration` and replay the metadata round, as the file above does. */
+    const metadataArrives = (duration: number): void => {
+      Object.defineProperty(element(), "duration", { configurable: true, value: duration });
+      element().dispatchEvent(new Event("loadedmetadata"));
+    };
+
+    it("names the failure on the bar", () => {
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+
+      failWith(2);
+
+      expect(screen.getByTestId("audio-mini-player-error")).toHaveTextContent(
+        audioFailureLabel("network"),
+      );
+    });
+
+    it("says which failure it was — a codec is not a dropped connection", () => {
+      // The distinction the operator acts on: a lost connection is worth
+      // pressing play for, a source this browser cannot decode never will be.
+      // Kohina on iOS < 18.4 is the second kind, permanently.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+
+      failWith(4);
+
+      const said = screen.getByTestId("audio-mini-player-error");
+      expect(said).toHaveTextContent(audioFailureLabel("unsupported"));
+      expect(said).not.toHaveTextContent(audioFailureLabel("network"));
+    });
+
+    it("drops the FILE readout a failed load leaves behind", () => {
+      // The measured lie, and the reason the failure REPLACES the readout
+      // instead of sitting beside it: with no metadata `duration` is a finite
+      // 0, so the bar would otherwise draw a scrubber and a `0:00 / 0:00`
+      // clock over a source that produced no audio at all.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      expect(screen.getByTestId("audio-mini-player-seek")).toBeInTheDocument();
+
+      failWith(4);
+
+      expect(screen.queryByTestId("audio-mini-player-seek")).toBeNull();
+      expect(screen.queryByTestId("audio-mini-player-time")).toBeNull();
+      expect(screen.getByTestId("audio-mini-player-error")).toBeInTheDocument();
+    });
+
+    it("keeps the download link on a file it could not decode — that IS the remedy", () => {
+      // The one piece of chrome a failure must NOT take, and the reason the
+      // anchor was lifted out of the readout's <Show>: an upload this browser
+      // cannot decode is exactly the upload the operator wants to save and open
+      // in something that can. It is not a claim about playback — it is what
+      // to do about the notice beside it.
+      render(() => <AudioMiniPlayer />);
+      playAudio(UPLOAD, null);
+
+      failWith(4);
+
+      const dl = screen.getByTestId("audio-mini-player-download");
+      expect(dl).toHaveAttribute("href", UPLOAD);
+      expect(dl).toHaveAttribute("download");
+      expect(screen.getByTestId("audio-mini-player-error")).toBeInTheDocument();
+    });
+
+    it("a failed LIVE source still has no download link — #682's gate is untouched", () => {
+      // The gate stays `live()`, so a stream that had stated its length keeps
+      // refusing a save that would never complete. What this does NOT fix, and
+      // what is unchanged from before this issue: a stream that failed BEFORE
+      // metadata reads `duration = 0`, which is finite, so it is not live as
+      // far as this predicate can see.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      metadataArrives(Number.POSITIVE_INFINITY);
+
+      failWith(2);
+
+      expect(screen.queryByTestId("audio-mini-player-download")).toBeNull();
+    });
+
+    it("drops the LIVE chrome too, when metadata had arrived before the drop", () => {
+      // The other arm of the same <Show>. A stream that played and then died
+      // keeps `duration = Infinity`, so it wears the live badge and an elapsed
+      // counter that has stopped counting — a clock that says the stream is
+      // still on.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      metadataArrives(Number.POSITIVE_INFINITY);
+      expect(screen.getByTestId("audio-mini-player-live")).toBeInTheDocument();
+
+      failWith(2);
+
+      expect(screen.queryByTestId("audio-mini-player-live")).toBeNull();
+      expect(screen.queryByTestId("audio-mini-player-time")).toBeNull();
+      expect(screen.getByTestId("audio-mini-player-error")).toBeInTheDocument();
+    });
+
+    it("keeps naming the source — the failure is ABOUT something", () => {
+      // The label survives on purpose. "connection lost" with nothing beside it
+      // does not tell the operator which station to re-pick.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+
+      failWith(2);
+
+      expect(screen.getByTestId("audio-mini-player-label")).toHaveTextContent("Groove Salad");
+    });
+
+    it("takes the now-playing track off the row — the loudest of the lies", async () => {
+      // A live-updating track name is the single thing that makes a dead
+      // station look like a playing one, and the feed keeps answering: it polls
+      // `tunedStation()`, which is derived from the SOURCE and knows nothing
+      // about whether the element decoded it.
+      const TRACK = "Trestal — A Land Unknown";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => ({ songs: [{ title: "A Land Unknown", artist: "Trestal" }] }),
+        } as unknown as Response),
+      );
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      // #1701's barrier, for its reason: keyed on the STUBBED TEXT, so it
+      // cannot return on whichever answer happened to land first.
+      await vi.waitFor(() =>
+        expect(screen.getByTestId("audio-mini-player-track")).toHaveTextContent(TRACK),
+      );
+
+      failWith(4);
+
+      expect(screen.queryByTestId("audio-mini-player-track")).toBeNull();
+      expect(screen.getByTestId("audio-mini-player-error")).toBeInTheDocument();
+    });
+
+    // The family defect, pinned for the third time. #1697 (`hidden`) and #1734
+    // (`resumePoint`) each proved that a field added to `AudioPlayerState`
+    // re-fires `on(activeAudio, …)`, whose body assigns `audioEl.src` — and a
+    // re-assignment re-invokes the media load algorithm even at an unchanged
+    // URL. Here that would mean the error handler RESTARTING the source, which
+    // for a codec failure is an infinite retry loop nobody asked for.
+    it("reporting the failure does not re-tune the source", () => {
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      playSpy.mockClear();
+      loadSpy.mockClear();
+
+      failWith(4);
+
+      expect(playSpy).not.toHaveBeenCalled();
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(element()).toHaveAttribute("src", STATION);
+    });
+
+    it("pressing play clears the notice and goes back for the resource", () => {
+      // The retry is #1700's, unchanged — `mustRefetch` still decides to
+      // `load()`. What is new is that the notice describes the LAST ATTEMPT, so
+      // it must go when a new one starts.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      failWith(2);
+
+      toggle().click();
+
+      expect(screen.queryByTestId("audio-mini-player-error")).toBeNull();
+      expect(loadSpy).toHaveBeenCalled();
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    it("a retry that fails again says so again", () => {
+      // Without the clear above, the second failure would write the same value
+      // to the same signal, nothing would re-render, and the operator would tap
+      // play and watch the bar do nothing at all.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      failWith(4);
+      toggle().click();
+      expect(screen.queryByTestId("audio-mini-player-error")).toBeNull();
+
+      failWith(4);
+
+      expect(screen.getByTestId("audio-mini-player-error")).toHaveTextContent(
+        audioFailureLabel("unsupported"),
+      );
+    });
+
+    it("tuning something else clears the previous source's failure", () => {
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      failWith(4);
+
+      playAudio(UPLOAD, null);
+
+      expect(screen.queryByTestId("audio-mini-player-error")).toBeNull();
+      expect(screen.getByTestId("audio-mini-player-seek")).toBeInTheDocument();
+    });
+
+    it("still reads ▶, and pressing it is still the retry", () => {
+      // Deliberately unchanged. The toggle was never the lie — it says "not
+      // playing", which is true, and #1700 already made pressing it re-fetch.
+      // What was missing was the operator knowing there was something to retry,
+      // and that is the span above, not a fourth glyph.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      element().dispatchEvent(new Event("play"));
+
+      failWith(2);
+
+      expect(toggle()).toHaveAttribute("aria-label", "play");
     });
   });
 });

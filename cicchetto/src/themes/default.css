@@ -3850,6 +3850,23 @@ html.resize-dragging * {
   color: var(--fg-dim, var(--fg));
 }
 
+/* #1744 — why the source will not play, in the slot the track vacates. It
+   inherits the track's contract exactly (grow 2, shrink 1, `min-width: 0`,
+   clip) rather than declaring a new one: it stands in the same place, on the
+   same row, and a span that could widen the row would push ✕ off a phone —
+   the failure this file's #1698 note and `audioMiniPlayerLayout.test.ts` both
+   exist to prevent. Pinned there alongside its two neighbours.
+   `--error` with the same fallback every other error text in this sheet uses,
+   so a theme that recolours failures recolours this one too. */
+.audio-mini-player-error {
+  flex: 2 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--error, #e06c75);
+}
+
 /* #682 — the "this has no end" badge that stands in for the seek slider.
    Deliberately a LABEL and not a disabled slider: a greyed-out position bar
    still draws a scale, and there is no scale — the operator would read a
