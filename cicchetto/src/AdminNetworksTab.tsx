@@ -32,6 +32,10 @@ import {
 } from "./lib/api";
 import { token } from "./lib/auth";
 import { isAdminNarrow } from "./lib/theme";
+import {
+  NETWORKS_NETWORK_SERVICES_FLAVOR,
+  type NetworksNetworkServicesFlavor,
+} from "./lib/wireTypes";
 
 // M-cluster M-10 — Networks admin tab. Operator surface for the
 // admission caps + circuit-breaker recovery + on-demand visitor reap.
@@ -46,6 +50,15 @@ import { isAdminNarrow } from "./lib/theme";
 //     unsupplied keys keep their value; sending all keys on every
 //     edit would silently overwrite a concurrent admin's edit to the
 //     other cap — CRIT-1 of the M-10 review).
+//   * #1760 — `visitor_enabled` + `visitor_autoconnect` checkboxes and
+//     a `services_flavor` select, sharing that SAME draft and that same
+//     Save. The backend has whitelisted all six keys since #211 phase 3
+//     (`NetworksController.settings_attrs/1`) but the pane edited three,
+//     and the three it could not reach are the ones that decide whether
+//     a network is usable: a network created here was born
+//     `visitor_enabled = false` (`network.ex` column default) with no
+//     way out of it except an UPDATE against the production DB, which
+//     is what `rizon` needed on 2026-08-24.
 //   * Reset Circuit (InlineConfirmButton) — only rendered when
 //     `circuit_state !== null`. POST /admin/circuit/:id/reset.
 //
@@ -76,11 +89,26 @@ import { isAdminNarrow } from "./lib/theme";
 // `<For>` row. Per-row dirty state lives in a top-level store keyed
 // on slug; handlers close over slug (string copy), not DOM refs.
 
+// The per-row draft. The three caps hold the operator's RAW text (a
+// half-typed number has to survive in the draft, and `""` is the
+// "unlimited" null sentinel); the toggles and the flavor are already
+// closed values, so they hold the value itself. `""` on the flavor is
+// `services_flavor: null` — the schema's nullable "never classified",
+// a real wire value and not a missing one.
 type RowEdit = {
   max_concurrent_visitor_sessions: string;
   max_concurrent_user_sessions: string;
   max_per_ip: string;
+  visitor_enabled: boolean;
+  visitor_autoconnect: boolean;
+  services_flavor: FlavorDraft;
 };
+
+type CapField = "max_concurrent_visitor_sessions" | "max_concurrent_user_sessions" | "max_per_ip";
+
+type ToggleField = "visitor_enabled" | "visitor_autoconnect";
+
+type FlavorDraft = NetworksNetworkServicesFlavor | "";
 
 type ParseResult = { ok: true; value: number | null } | { ok: false };
 
@@ -94,21 +122,37 @@ const MAX_CAP = 2 ** 31 - 1;
 // `field` → human label. Mirrors the table `<th>` text so screen-
 // reader users get the same wording sighted users see (MED-8 of
 // M-10 review).
-const FIELD_LABELS: Record<keyof RowEdit, string> = {
+const FIELD_LABELS: Record<CapField, string> = {
   max_concurrent_visitor_sessions: "max visitor sessions",
   max_concurrent_user_sessions: "max user sessions",
   max_per_ip: "max per ip",
 };
 
-const FIELD_TEST_ID_SLUG: Record<keyof RowEdit, string> = {
+const FIELD_TEST_ID_SLUG: Record<CapField, string> = {
   max_concurrent_visitor_sessions: "max-visitor-sessions",
   max_concurrent_user_sessions: "max-user-sessions",
   max_per_ip: "max-per-ip",
 };
 
-// slug + the six secondary columns + actions. Feeds the detail row's
+const TOGGLE_LABELS: Record<ToggleField, string> = {
+  visitor_enabled: "visitors allowed",
+  visitor_autoconnect: "autoconnect visitors",
+};
+
+const TOGGLE_TEST_ID_SLUG: Record<ToggleField, string> = {
+  visitor_enabled: "visitor-enabled",
+  visitor_autoconnect: "visitor-autoconnect",
+};
+
+// Why autoconnect is inert while visitors are not allowed, in the words
+// an operator needs — the server drops the pair silently, so the UI is
+// the only place that can say so (`Networks.list_visitor_autoconnect/0`).
+const AUTOCONNECT_LOCKED_HINT =
+  "a network that does not accept visitors has nobody to autoconnect — allow visitors first";
+
+// slug + the nine secondary columns + actions. Feeds the detail row's
 // `colspan` at desktop width; on a phone only slug + actions survive.
-const NETWORK_COLUMNS = 8;
+const NETWORK_COLUMNS = 11;
 
 function reapKey(): string {
   return "force-reap";
@@ -195,6 +239,9 @@ const AdminNetworksTab: Component = () => {
             max_concurrent_visitor_sessions: capToInput(n.max_concurrent_visitor_sessions),
             max_concurrent_user_sessions: capToInput(n.max_concurrent_user_sessions),
             max_per_ip: capToInput(n.max_per_ip),
+            visitor_enabled: n.visitor_enabled,
+            visitor_autoconnect: n.visitor_autoconnect,
+            services_flavor: n.services_flavor ?? "",
           };
         }
       }),
@@ -220,12 +267,36 @@ const AdminNetworksTab: Component = () => {
   // width. ONE definition each: the cap editor is a live control, and a
   // second copy of it would mean two elements answering to one test id
   // and two inputs writing the same draft.
-  const capEditor = (net: AdminNetwork, field: keyof RowEdit): JSX.Element => (
+  const capEditor = (net: AdminNetwork, field: CapField): JSX.Element => (
     <CapInput
       slug={net.slug}
       field={field}
       value={edits[net.slug]?.[field] ?? ""}
       onInput={(v) => onEditCap(net.slug, field, v)}
+    />
+  );
+
+  // #1760 — the same one-definition-relocated rule as the cap editors:
+  // these are live controls, so the phone card renders the control
+  // itself, never a read-only echo of its value.
+  const visitorToggle = (net: AdminNetwork, field: ToggleField): JSX.Element => (
+    <VisitorToggle
+      slug={net.slug}
+      field={field}
+      checked={edits[net.slug]?.[field] ?? false}
+      // Gated on the DRAFT, not on the server row: an operator who has
+      // just ticked "visitors allowed" should be able to tick
+      // autoconnect in the same edit rather than Save twice.
+      locked={field === "visitor_autoconnect" && !(edits[net.slug]?.visitor_enabled ?? false)}
+      onChange={(v) => onEditToggle(net.slug, field, v)}
+    />
+  );
+
+  const flavorSelect = (net: AdminNetwork): JSX.Element => (
+    <FlavorSelect
+      slug={net.slug}
+      value={edits[net.slug]?.services_flavor ?? ""}
+      onChange={(v) => onEditFlavor(net.slug, v)}
     />
   );
 
@@ -262,12 +333,43 @@ const AdminNetworksTab: Component = () => {
     }
   };
 
-  const onEditCap = (slug: string, field: keyof RowEdit, value: string): void => {
+  const onEditCap = (slug: string, field: CapField, value: string): void => {
     setEdits(
       produce((draft) => {
         const row = draft[slug];
         if (row === undefined) return;
         row[field] = value;
+      }),
+    );
+  };
+
+  // #1760 — `visitor_autoconnect` is a strict SUBSET of `visitor_enabled`
+  // at the admin-intent level: `Networks.list_visitor_autoconnect/0`
+  // returns the raw set and the login/home readers AND it with
+  // `visitor_enabled`, so an autoconnect flag on a network that does not
+  // accept visitors is a benign no-op nobody is told about. Revoking
+  // visitor access therefore clears autoconnect IN THE DRAFT, so the
+  // operator sees the consequence before committing and the one PATCH
+  // carries both keys. Doing this with two fire-immediately toggles
+  // could not work: between the two requests the row would sit at
+  // exactly the stranded pair this exists to prevent.
+  const onEditToggle = (slug: string, field: ToggleField, checked: boolean): void => {
+    setEdits(
+      produce((draft) => {
+        const row = draft[slug];
+        if (row === undefined) return;
+        row[field] = checked;
+        if (field === "visitor_enabled" && !checked) row.visitor_autoconnect = false;
+      }),
+    );
+  };
+
+  const onEditFlavor = (slug: string, value: FlavorDraft): void => {
+    setEdits(
+      produce((draft) => {
+        const row = draft[slug];
+        if (row === undefined) return;
+        row.services_flavor = value;
       }),
     );
   };
@@ -700,9 +802,15 @@ const AdminNetworksTab: Component = () => {
                   <Show when={!isAdminNarrow()}>
                     <th>visitors (live/cap)</th>
                     <th>max visitor sessions</th>
+                    {/* #1760 — the visitor axis reads as one block: how
+                        many are on, how many may be, whether any may be
+                        at all, and whether they arrive unasked. */}
+                    <th>visitors allowed</th>
+                    <th>autoconnect</th>
                     <th>users (live/cap)</th>
                     <th>max user sessions</th>
                     <th>max per ip</th>
+                    <th>services</th>
                     <th>circuit</th>
                   </Show>
                   <th class="adm-table-sticky-actions">actions</th>
@@ -731,11 +839,18 @@ const AdminNetworksTab: Component = () => {
                           <td data-label="max visitors">
                             {capEditor(net, "max_concurrent_visitor_sessions")}
                           </td>
+                          <td data-label="visitors allowed">
+                            {visitorToggle(net, "visitor_enabled")}
+                          </td>
+                          <td data-label="autoconnect">
+                            {visitorToggle(net, "visitor_autoconnect")}
+                          </td>
                           <td data-label="users">{liveCount(net, "users")}</td>
                           <td data-label="max users">
                             {capEditor(net, "max_concurrent_user_sessions")}
                           </td>
                           <td data-label="max per ip">{capEditor(net, "max_per_ip")}</td>
+                          <td data-label="services">{flavorSelect(net)}</td>
                           <td data-label="circuit">
                             <CircuitBadge net={net} />
                           </td>
@@ -802,12 +917,21 @@ const AdminNetworksTab: Component = () => {
                                   label: "max visitor sessions",
                                   value: capEditor(net, "max_concurrent_visitor_sessions"),
                                 },
+                                {
+                                  label: "visitors allowed",
+                                  value: visitorToggle(net, "visitor_enabled"),
+                                },
+                                {
+                                  label: "autoconnect",
+                                  value: visitorToggle(net, "visitor_autoconnect"),
+                                },
                                 { label: "users (live/cap)", value: liveCount(net, "users") },
                                 {
                                   label: "max user sessions",
                                   value: capEditor(net, "max_concurrent_user_sessions"),
                                 },
                                 { label: "max per ip", value: capEditor(net, "max_per_ip") },
+                                { label: "services", value: flavorSelect(net) },
                                 { label: "circuit", value: <CircuitBadge net={net} /> },
                               ]}
                             />
@@ -889,9 +1013,71 @@ const AdminNetworksTab: Component = () => {
   );
 };
 
+// #1760 — `visitor_enabled` / `visitor_autoconnect`. A bare checkbox
+// rather than a labelled `.adm-check`: the column header (desktop) and
+// the `AdminFacts` label (phone) already name it, and a second word in
+// the cell would be the same string twice. The `aria-label` carries the
+// name for assistive tech either way, as `CapInput` does.
+const VisitorToggle: Component<{
+  slug: string;
+  field: ToggleField;
+  checked: boolean;
+  locked: boolean;
+  onChange: (checked: boolean) => void;
+}> = (props) => {
+  const testId = `admin-network-${TOGGLE_TEST_ID_SLUG[props.field]}-${props.slug}`;
+  return (
+    <input
+      type="checkbox"
+      checked={props.checked}
+      disabled={props.locked}
+      onChange={(e) => props.onChange((e.currentTarget as HTMLInputElement).checked)}
+      data-testid={testId}
+      aria-label={`${TOGGLE_LABELS[props.field]} for ${props.slug}`}
+      title={props.locked ? AUTOCONNECT_LOCKED_HINT : undefined}
+    />
+  );
+};
+
+// #1760 — `services_flavor`. Options come from the generated wire SSOT
+// (`NETWORKS_NETWORK_SERVICES_FLAVOR`, mirroring the `Ecto.Enum` values
+// in `network.ex`) so a flavor added server-side cannot leave the pane
+// silently short of one. The leading blank is the schema's nullable
+// "never classified", which the registration wizard treats as
+// `:unknown` — distinct values on the wire, so both stay selectable.
+const FlavorSelect: Component<{
+  slug: string;
+  value: FlavorDraft;
+  onChange: (value: FlavorDraft) => void;
+}> = (props) => {
+  return (
+    <select
+      value={props.value}
+      onChange={(e) => props.onChange(toFlavorDraft((e.currentTarget as HTMLSelectElement).value))}
+      data-testid={`admin-network-services-flavor-${props.slug}`}
+      aria-label={`services flavor for ${props.slug}`}
+    >
+      <option value="">unclassified</option>
+      <For each={NETWORKS_NETWORK_SERVICES_FLAVOR}>
+        {(flavor) => <option value={flavor}>{flavor}</option>}
+      </For>
+    </select>
+  );
+};
+
+// A `<select>` can only emit one of its own option values, so the else
+// arm IS the blank option and not a swallowed unknown. It exists because
+// the DOM types the event value as `string` and the draft is a closed
+// set — narrowing at the boundary rather than casting through it.
+function toFlavorDraft(raw: string): FlavorDraft {
+  return (NETWORKS_NETWORK_SERVICES_FLAVOR as readonly string[]).includes(raw)
+    ? (raw as NetworksNetworkServicesFlavor)
+    : "";
+}
+
 const CapInput: Component<{
   slug: string;
-  field: keyof RowEdit;
+  field: CapField;
   value: string;
   onInput: (value: string) => void;
 }> = (props) => {
@@ -991,6 +1177,20 @@ function buildPatchBody(net: AdminNetwork, edit: RowEdit): AdminNetworkSettingsP
   }
   if (perIp.value !== net.max_per_ip) {
     body.max_per_ip = perIp.value;
+  }
+  if (edit.visitor_enabled !== net.visitor_enabled) {
+    body.visitor_enabled = edit.visitor_enabled;
+  }
+  if (edit.visitor_autoconnect !== net.visitor_autoconnect) {
+    body.visitor_autoconnect = edit.visitor_autoconnect;
+  }
+  // `""` is the operator choosing "unclassified", which is
+  // `services_flavor: null` on the wire — a value to SEND, not a key to
+  // omit. Omitting it would make clearing a flavor impossible, since
+  // unsupplied keys keep their current value.
+  const flavor = edit.services_flavor === "" ? null : edit.services_flavor;
+  if (flavor !== net.services_flavor) {
+    body.services_flavor = flavor;
   }
   return body;
 }
