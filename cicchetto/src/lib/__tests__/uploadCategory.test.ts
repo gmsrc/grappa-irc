@@ -22,8 +22,16 @@ const matrix: ReadonlyArray<[string, UploadCategory]> = [
 ];
 
 describe("categoryOf — full MIME matrix", () => {
-  it("covers all 14 server-mirrored MIMEs", () => {
-    expect(matrix.length).toBe(14);
+  // 15 since #1764 added `text/markdown` to DOCUMENT_MIMES_PORTABLE (so a
+  // `.md` can be uploaded and then read as source in the viewer).
+  //
+  // ⚠️ AUDIO_MIMES is NOT in this matrix and never has been: the audio block
+  // arrived with #115, after this test was written, and mirrors the server
+  // without being pinned here. Left as found — widening the matrix is a
+  // different change from this one — but recorded so the next reader does not
+  // take "full MIME matrix" at its word.
+  it("covers all 15 server-mirrored image/video/document MIMEs", () => {
+    expect(matrix.length).toBe(15);
   });
 
   it.each(matrix)("%s → %s", (mime, category) => {

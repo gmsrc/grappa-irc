@@ -342,15 +342,80 @@ describe("classifyMediaLink", () => {
     });
   });
 
+  // #1764 — .txt and .md are viewer-relevant now, and ONLY from an admitted
+  // host. vjt reversed the "documents are not viewer-relevant" ruling for
+  // these two on 2026-08-24; pdf/odt/ods/docx/xlsx stay out.
+  describe("text source links (#1764)", () => {
+    it(".txt on the page origin classifies as text", () => {
+      expect(classifyMediaLink(`${UPLOAD_URL}.txt`, "", ORIGIN, NO_ALIASES)).toEqual({
+        kind: "text",
+        href: `${UPLOAD_URL}.txt`,
+      });
+    });
+
+    it(".md on the page origin classifies as text", () => {
+      expect(classifyMediaLink(`${UPLOAD_URL}.md`, "", ORIGIN, NO_ALIASES)).toEqual({
+        kind: "text",
+        href: `${UPLOAD_URL}.md`,
+      });
+    });
+
+    it("an advertised alias host re-roots onto the page origin, like every other kind (#324)", () => {
+      expect(
+        classifyMediaLink(`https://${ALIAS_B}/uploads/${SLUG}.txt`, "", ORIGIN, WITH_ALIAS_B),
+      ).toEqual({ kind: "text", href: `${UPLOAD_URL}.txt` });
+    });
+
+    it("a historical http:// same-host .txt is re-rooted, like every other kind", () => {
+      expect(classifyMediaLink(`http://grappa.example/notes.txt`, "", ORIGIN, NO_ALIASES)).toEqual({
+        kind: "text",
+        href: `${ORIGIN}/notes.txt`,
+      });
+    });
+
+    // 🔴 The load-bearing one. A text viewer FETCHES, so it goes through
+    // `connect-src`, which is `'self'` + the captcha hosts + api.somafm.com and
+    // is deliberately NOT widened to `https:` the way `img-src`/`media-src` are
+    // (#607, #1240). A cross-host .txt admitted here would open a modal the CSP
+    // then refuses to fill — strictly worse than the anchor it replaced.
+    it("a third-party https .txt is NOT admitted — connect-src is not widened to https:", () => {
+      expect(classifyMediaLink("https://example.com/notes.txt", "", ORIGIN, NO_ALIASES)).toBeNull();
+    });
+
+    it("a third-party https .md is NOT admitted either", () => {
+      expect(
+        classifyMediaLink(
+          "https://raw.githubusercontent.com/a/b/README.md",
+          "",
+          ORIGIN,
+          NO_ALIASES,
+        ),
+      ).toBeNull();
+    });
+
+    // The legacy extensionless shape (rule 2) has only the emoji as a type
+    // signal, and 📄 covers pdf/odt/docx too — all still out of scope. So a
+    // pre-#418 document link stays a plain anchor even now.
+    it("a legacy extensionless 📄 upload stays unclassified — the emoji cannot say which document", () => {
+      expect(classifyMediaLink(UPLOAD_URL, "📄 ", ORIGIN, NO_ALIASES)).toBeNull();
+    });
+
+    it("the document types vjt kept out of scope stay unclassified", () => {
+      for (const ext of ["pdf", "odt", "ods", "docx", "xlsx"]) {
+        expect(classifyMediaLink(`${UPLOAD_URL}.${ext}`, "", ORIGIN, NO_ALIASES)).toBeNull();
+      }
+    });
+  });
+
   // Cross-language contract pin (#418). The server mints /uploads/<slug>.<ext>
   // with the extension from Grappa.Uploads.MimeExt (lib/grappa/uploads/mime_ext.ex).
-  // EVERY viewer-relevant extension that map can mint (image/video/audio) MUST be
-  // classified here by EXTENSION_KIND, or a fresh upload loses its in-app viewer.
-  // Keep in sync with the image/video/audio rows of MimeExt.ext_for/1. Document
-  // types (pdf/txt/odt/ods/docx/xlsx) are deliberately NOT viewer-relevant and
-  // are excluded, mirroring the server map's doc rows.
+  // EVERY viewer-relevant extension that map can mint MUST be classified here,
+  // or a fresh upload loses its in-app viewer. Keep in sync with the
+  // image/video/audio rows of MimeExt.ext_for/1 — and, since #1764, with the
+  // text/plain + text/markdown rows too. The remaining document types
+  // (pdf/odt/ods/docx/xlsx) are still NOT viewer-relevant and are excluded.
   describe("server-mintable viewer extensions are all classified (#418 drift guard)", () => {
-    const SERVER_VIEWER_EXTS: ReadonlyArray<[string, "image" | "video" | "audio"]> = [
+    const SERVER_VIEWER_EXTS: ReadonlyArray<[string, "image" | "video" | "audio" | "text"]> = [
       ["png", "image"],
       ["jpg", "image"],
       ["gif", "image"],
@@ -364,6 +429,8 @@ describe("classifyMediaLink", () => {
       ["aac", "audio"],
       ["wav", "audio"],
       ["flac", "audio"],
+      ["txt", "text"], // #1764 — MimeExt mints text/plain → .txt
+      ["md", "text"], // #1764 — MimeExt mints text/markdown → .md
     ];
 
     for (const [ext, kind] of SERVER_VIEWER_EXTS) {

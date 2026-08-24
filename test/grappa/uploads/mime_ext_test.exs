@@ -17,6 +17,9 @@ defmodule Grappa.Uploads.MimeExtTest do
         "video/webm" => "webm",
         "application/pdf" => "pdf",
         "text/plain" => "txt",
+        # #1764 — text/markdown exists so a .md can be uploaded and READ in
+        # the viewer. It is the one MIME this map mints purely for the client.
+        "text/markdown" => "md",
         "application/vnd.oasis.opendocument.text" => "odt",
         "application/vnd.oasis.opendocument.spreadsheet" => "ods",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
