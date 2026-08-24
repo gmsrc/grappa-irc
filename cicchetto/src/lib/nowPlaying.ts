@@ -128,6 +128,18 @@ export function parseSongsFeed(body: unknown): NowPlayingTrack | null {
 }
 
 /**
+ * A track as one string: `<artist> — <title>`, or the title alone when the
+ * feed gave no artist (the dash goes with it rather than dangling).
+ *
+ * The ONE spelling of a track, shared by the rail chrome, the docked transport
+ * and the `/np` wire line. Three surfaces re-implementing the same join is
+ * three chances for the phone and the channel to disagree about what is on.
+ */
+export function trackLabel(track: NowPlayingTrack): string {
+  return track.artist === null ? track.title : `${track.artist} — ${track.title}`;
+}
+
+/**
  * The CTCP ACTION body `/np` sends: `is now playing: <artist> — <title>
  * [<station>]`.
  *
@@ -141,8 +153,7 @@ export function parseSongsFeed(body: unknown): NowPlayingTrack | null {
  * instead of re-typing it.
  */
 export function nowPlayingLine(track: NowPlayingTrack, station: string): string {
-  const what = track.artist === null ? track.title : `${track.artist} — ${track.title}`;
-  return `is now playing: ${what} [${station}]`;
+  return `is now playing: ${trackLabel(track)} [${station}]`;
 }
 
 /** What a read of the feed left behind. `at` is stamped at SUCCESS, so
@@ -234,7 +245,18 @@ const exports_ = moduleRoot(() => {
     return { status: "playing", track: last.track };
   };
 
-  return { nowPlaying };
+  // The DISPLAY projection, next to the state it projects. Both surfaces —
+  // the rail chrome and the docked transport — want the same two facts
+  // ("is there a track" / "how is it spelled"), and a component computing
+  // them for itself is the second one drifting from the first. Null on every
+  // arm but `playing`, which is what makes the stale rule reach the SCREEN
+  // and not just `/np`.
+  const nowPlayingLabel = (): string | null => {
+    const state = nowPlaying();
+    return state.status === "playing" ? trackLabel(state.track) : null;
+  };
+
+  return { nowPlaying, nowPlayingLabel };
 });
 
-export const { nowPlaying } = exports_;
+export const { nowPlaying, nowPlayingLabel } = exports_;

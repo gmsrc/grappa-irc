@@ -1,6 +1,7 @@
 import { type Component, For, Show } from "solid-js";
 import { closeAudio } from "./lib/audioPlayer";
 import { createDismissOnOutsidePointer } from "./lib/dismissOnOutsidePointer";
+import { nowPlayingLabel } from "./lib/nowPlaying";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { closeRadioPicker, radioPickerOpen, tunedStation, tuneStation } from "./lib/radio";
 import { RADIO_STATIONS } from "./lib/radioStations";
@@ -75,7 +76,27 @@ const RailRadio: Component = () => {
               <span class="rail-radio-now-title" data-testid="rail-radio-now-title">
                 {station().title}
               </span>
-              <span class="rail-radio-now-genres">{station().genres.join(" · ")}</span>
+              {/* #1698 — the TRACK takes the genres' slot rather than adding a
+                  third line. #500 bought this rail's vertical budget by
+                  collapsing the actions behind one launcher, and a permanently
+                  taller chrome would re-charge part of it. Nothing is lost:
+                  every picker row still carries its genres, and browsing by
+                  genre is what the picker is for — this row answers "what is
+                  on", which is the track. */}
+              <Show
+                when={nowPlayingLabel()}
+                fallback={
+                  <span class="rail-radio-now-genres" data-testid="rail-radio-now-genres">
+                    {station().genres.join(" · ")}
+                  </span>
+                }
+              >
+                {(line) => (
+                  <span class="rail-radio-now-track" data-testid="rail-radio-now-track">
+                    {line()}
+                  </span>
+                )}
+              </Show>
             </div>
             {/* `closeAudio` directly: it already IS the stop verb, and the
                 station is derived from the player, so clearing the player is

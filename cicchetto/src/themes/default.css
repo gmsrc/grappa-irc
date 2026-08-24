@@ -2352,13 +2352,24 @@ html.resize-dragging * {
   color: var(--fg);
 }
 
+/* #1698 — `.rail-radio-now-track` shares the genres' slot because it REPLACES
+   them: same second line, same clipping, so the chrome's height is the same
+   whether or not the feed has answered. #500's vertical budget is why it is a
+   swap and not a third line. */
 .rail-radio-now-genres,
+.rail-radio-now-track,
 .rail-radio-station-genres {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.8em;
   color: var(--muted);
+}
+
+/* One step brighter than the genres it stands in for: a genre tag is static
+   metadata, the track is the live fact this row exists to carry. */
+.rail-radio-now-track {
+  color: var(--fg-dim, var(--fg));
 }
 
 /* #1697 — the only delta left. Everything this rule used to declare
@@ -3815,6 +3826,28 @@ html.resize-dragging * {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg);
+}
+
+/* #1698 — the track, beside the station name. A SECOND growable span on a row
+   that had one, so the split is stated rather than left to chance: grow 2 vs
+   the label's 1, because the station is short and also on the rail while the
+   track is long and lives only here. Both keep shrink 1 and `min-width: 0`, so
+   neither can widen the row — the transport controls are `flex: none` above,
+   and on a phone this row IS the player: a ✕ pushed past the right edge is a
+   ✕ that cannot be tapped. That was #1697's finding one bar over, and it is no
+   longer one bar over: #1697 shipped the hide chevron INTO this row, so the
+   fixed cost the two spans divide what is left of is 4 × 2.5rem, not 3. The
+   label keeps grow 1 rather than dropping to 0 so a station whose feed has not
+   answered still fills the row instead of leaving a gap trailing the ✕.
+   Pinned by `audioMiniPlayerLayout.test.ts` against the STYLESHEET, because
+   jsdom applies no CSS and a DOM assertion cannot see a cascade override. */
+.audio-mini-player-track {
+  flex: 2 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim, var(--fg));
 }
 
 /* #682 — the "this has no end" badge that stands in for the seek slider.

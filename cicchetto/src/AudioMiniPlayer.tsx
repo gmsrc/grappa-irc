@@ -1,5 +1,6 @@
 import { type Component, createEffect, createSignal, on, Show } from "solid-js";
 import { activeAudio, closeAudio, hidePlayer, playerHidden } from "./lib/audioPlayer";
+import { nowPlayingLabel } from "./lib/nowPlaying";
 
 // Docked audio mini-player (GH #115) — a slim transport bar pinned above
 // the compose box. Non-modal: scrollback stays scrollable + readable
@@ -133,6 +134,21 @@ const AudioMiniPlayer: Component = () => {
             {(label) => (
               <span class="audio-mini-player-label" data-testid="audio-mini-player-label">
                 {label()}
+              </span>
+            )}
+          </Show>
+          {/* #1698 — what the station is playing, on the surface a phone can
+              actually see. The rail carries the same fact, and on mobile the
+              rail is `translateX(100%)` off-screen while the station plays —
+              the identical argument that put the label above here in #682,
+              one field further. Absent for an upload, which has no feed, and
+              absent for a station whose feed has gone quiet: the store's
+              `nowPlayingLabel` is null on every arm but `playing`, so the
+              stale rule reaches this row without this row knowing about it. */}
+          <Show when={nowPlayingLabel()}>
+            {(track) => (
+              <span class="audio-mini-player-track" data-testid="audio-mini-player-track">
+                {track()}
               </span>
             )}
           </Show>

@@ -20,9 +20,23 @@ if (station === undefined || other === undefined) {
   throw new Error("the curated table must carry at least two stations for these tests");
 }
 
+/** One 200 carrying a `…/songs/<id>.json` body. */
+const songsOk = (title: string, artist: string): Response =>
+  ({
+    ok: true,
+    status: 200,
+    json: async () => ({ songs: [{ title, artist }] }),
+  }) as unknown as Response;
+
 beforeEach(() => {
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+  // #1698 — MANDATORY, not decoration. This component now reads `nowPlaying`,
+  // whose poll fires on every tune. Unstubbed, each test that clicks a station
+  // would make a real cross-origin request to api.somafm.com from the worker —
+  // a unit gate quietly depending on a third party's uptime. Same hazard the
+  // `InertWebSocket` in setupTests exists for, one module over.
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(songsOk("A Land Unknown", "Trestal")));
   closeAudio();
   closeRadioPicker();
 });
@@ -31,6 +45,7 @@ afterEach(() => {
   closeAudio();
   closeRadioPicker();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("RailRadio", () => {
@@ -228,5 +243,51 @@ describe("RailRadio", () => {
         container.querySelector(".rail-radio-picker [data-testid='shell-chrome-rail-opener']"),
       ).toBeNull();
     });
+  });
+
+  // #1698 — the chrome answers "what is playing" and now says it twice: which
+  // STATION, and which TRACK.
+  it("names the track once the feed has answered", async () => {
+    render(() => <RailRadio />);
+    openRadioPicker();
+    screen.getByTestId(`rail-radio-station-${station.id}`).click();
+    await vi.waitFor(() => expect(screen.getByTestId("rail-radio-now-track")).toBeInTheDocument());
+
+    expect(screen.getByTestId("rail-radio-now-track")).toHaveTextContent(
+      "Trestal — A Land Unknown",
+    );
+    // The station name stays: the track is the second fact, not a replacement
+    // for the first.
+    expect(screen.getByTestId("rail-radio-now-title")).toHaveTextContent(station.title);
+  });
+
+  it("shows the genres while no track is known, and swaps them for the track", async () => {
+    // Same SLOT, not a third line. #500 bought the rail's vertical budget by
+    // collapsing the actions behind one launcher, and a permanently taller
+    // chrome would re-charge part of that. Nothing is lost: the genres are
+    // still on every picker row, which is where browsing by genre happens.
+    render(() => <RailRadio />);
+    openRadioPicker();
+    screen.getByTestId(`rail-radio-station-${station.id}`).click();
+
+    expect(screen.getByTestId("rail-radio-now-genres")).toBeInTheDocument();
+
+    await vi.waitFor(() => expect(screen.getByTestId("rail-radio-now-track")).toBeInTheDocument());
+    expect(screen.queryByTestId("rail-radio-now-genres")).toBeNull();
+  });
+
+  it("claims no track when the feed refuses to answer", async () => {
+    // The honest empty: a station that plays while its feed is down shows the
+    // station and says nothing about the track, rather than showing the last
+    // one it knew from some other station.
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    render(() => <RailRadio />);
+    openRadioPicker();
+    screen.getByTestId(`rail-radio-station-${station.id}`).click();
+    await vi.waitFor(() => expect(screen.getByTestId("rail-radio-now")).toBeInTheDocument());
+
+    expect(screen.queryByTestId("rail-radio-now-track")).toBeNull();
+    expect(screen.getByTestId("rail-radio-now-genres")).toBeInTheDocument();
   });
 });
