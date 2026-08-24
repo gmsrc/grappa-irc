@@ -61636,3 +61636,101 @@ surface. It is #1744. Kohina's only distinction is frequency:
 occasional for the others, systematic below iOS 18.4. Filing it as a
 gate on one row would have been a general bug mistaken for a
 per-station precondition.
+<!-- entry #1747 -->
+
+---
+
+## 2026-08-24 — #1747: six reds pointed at a frame that cannot block, and the barrier that made them illegible
+
+`lock_watch_test` reddened six unrelated PRs in one night — a GitHub Action
+bump, an elixir image bump, solid-js, phoenix, a `ws_presence.ex` fix, and one
+PR that touches **only TypeScript** — always with a 60 s `ExUnit.TimeoutError`,
+always green on rerun. They were filed as two defects because they sat on two
+line numbers, `:245` and `:270`.
+
+### The line number was never the discriminator; the stack is
+
+Pulling the failed attempt of each run (`gh run view <id> --attempt 1
+--log-failed`) sorts them into two shapes, and the shapes cut ACROSS the lines:
+
+| PR | time | line | `code:` | top frame |
+|---|---|---|---|---|
+| #1723 | 04:21Z | :245 | `await_roles(nil, [waiter])` | `application_controller.erl:470` |
+| #1726 | 04:2xZ | :245 | `await_roles(nil, [waiter])` | `application_controller.erl:470` |
+| #1745 | 11:09Z | :245 | `await_roles(nil, [waiter])` | `application_controller.erl:470` |
+| #1746 | 10:41Z | **:270** | `await_roles(nil, [waiter])` | `application_controller.erl:470` |
+| #1728 | 04:39Z | **:270** | `LockWatch.scan(0)` | `logger_config.erl:67 allow/2` |
+| #1724 | 04:17Z | — | — | not `lock_watch` at all |
+
+So `:245` and `:270` are ONE defect, not two. #1728 is #1715's door 1 and ran
+before that mitigation landed (06:09Z) — a legitimate residue, not a tail.
+#1724 never failed in Elixir at all (`6821 tests, 0 failures`; the red was the
+bats step). **Four** unrelated PRs, not six, and both post-mitigation reds are
+the shape below. Every one of them also shows `capture_log.ex:121` — the test
+BODY — where the earlier #1715 sighting of `:245` showed `:124`, the capture
+teardown. Same outcome, different site: that older reading does not carry over.
+
+### The frame every one of them names cannot block. Measured
+
+The stack looks like a park inside `LockWatch.inspect_lock/0` → `sample/2` →
+`stacktrace/1` → `Exception.format_stacktrace_entry/1`. It is not:
+
+* `:application.get_application/1` answers in **9 µs with the
+  `application_controller` SUSPENDED** (`erlang:suspend_process/1`). It is not
+  a `gen_server:call` — it is an ETS scan, and nothing can wait there.
+* `Process.info(pid, :current_stacktrace)` against a process **inside a dirty
+  NIF** (`:crypto.pbkdf2_hmac`, 40 M iterations) answers in **21 µs**. This was
+  the promising one — the waiter under test is parked in exqlite's dirty NIF —
+  and it is dead.
+
+**The stack was an artefact of SAMPLING A BUSY LOOP.** ExUnit captures
+`current_stacktrace` when it kills the test, so a runnable process reports
+wherever it happens to be, and that is reliably the most expensive thing the
+loop does. Six reports agreed on a location and none of them was evidence of
+one. **That generalises past this issue: on an `ExUnit.TimeoutError` the stack
+is a location, not a cause — establish that the top frame can block before
+reading it as where the time went.**
+
+### What actually consumed the 60 s: an attempt count is not a budget
+
+`await_until(fun, 300)` bounded itself by ATTEMPT COUNT with a `Process.sleep(10)`
+per turn — nominally ~3 s — while ExUnit's ceiling is 60 s. That fails in both
+directions. On a healthy runner it gives up after 3 s, under the wall clock a
+slow runner legitimately needs. On a starved one it runs past 60 s, so its own
+`flunk("condition never held: …")` — the diagnosis the helper exists to print —
+becomes unreachable and ExUnit's opaque timeout wins instead.
+
+Measured on the bench, with a 30 ms predicate standing in for the starved
+runner: a **200 ms** budget was spent in **10 078 ms**, 50× over.
+
+This file already carried the right rule for its other two clocks — *"Derive
+the budget FROM the test deadline and no test ExUnit still allows to run can
+outlive its own waiter"* — and had simply never applied it to the barrier.
+`@barrier_budget_ms` is now `div(@test_timeout_ms, 2)`, so the honest failure
+is always the one that fires.
+
+### The barrier also paid for a diagnostic it discards
+
+`await_roles/2` compares pid lists and nothing else, yet it asked
+`inspect_lock/0`, which runs `Process.info/2` plus twelve frames through
+`Exception.format_stacktrace_entry/1` for every sampled process, on every turn
+of the poll. `LockWatch.lock_roles/0` is that partition as bare pids. It shares
+`rows/0` and `partition/2` deliberately rather than reading the table again —
+the reaping of dead rows lives in `rows/0`, and a second reader that skipped it
+would leave corpses for the instrument to report. The full `inspect_lock/0` is
+now paid once, on the failure path, where the stacktraces ARE the diagnosis.
+
+### What this does NOT settle, stated rather than buried
+
+**Why the loop runs slow enough to be outrun is not established.** The standing
+hypothesis is #1715's root — the test deliberately parks a writer on the write
+lock — reached through the module-load leg rather than the Logger leg, which
+would explain why #1731's priming does not cover it. It is not measured, and
+the bench that would measure it is the one #1715 failed to build across eight
+configurations and 38 million puts. It was not attempted again here, because
+the cure does not depend on the answer: a barrier bounded by wall clock is
+correct whatever starves it.
+
+**So this does not close #1715, and it does not claim to stop the starvation.**
+It stops the starvation from being reported as a stack trace pointing at
+innocent code.
