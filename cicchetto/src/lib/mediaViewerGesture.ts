@@ -39,6 +39,17 @@ export const DISMISS_COMMIT_FRACTION = 0.15;
 // `messageGestures`.
 export const DRAGGING_CLASS = "media-viewer-modal--dragging";
 
+// Which way a drag is allowed to MEAN dismissal. `"both"` is the #1438 media
+// posture (nothing under the finger scrolls, so either direction is free);
+// `"down"` is what a surface with a SCROLLING body needs (#1764, the .txt/.md
+// source pane): at the top of that pane an upward drag means "read on", and a
+// binder that dismissed there would take the primary interaction away.
+//
+// A closed union rather than a boolean: two named values are two things a
+// reviewer can read at the call site, where `false` would be a coin flip
+// (`mediaViewer.ts`'s two-verb argument, same reasoning).
+export type DismissDirections = "both" | "down";
+
 export type DismissGestureParams = {
   // Injected (not read off the element) because jsdom has no layout.
   viewportHeight: () => number;
@@ -48,6 +59,11 @@ export type DismissGestureParams = {
   // off the fit baseline — but a scale, or a media kind, in here would be a
   // second classifier racing the one that already exists.
   canDismiss: () => boolean;
+  // Which drag directions may commit. Narrowing also narrows the CLAIM: a
+  // direction that cannot commit is never claimed either, so the browser keeps
+  // the pan and a scrolling body underneath still scrolls. Claiming and then
+  // refusing at touchend would eat the scroll and give nothing back.
+  directions: DismissDirections;
   // Running vertical delta in px (negative = up), on every claimed move. The
   // caller translates the modal and ramps the backdrop with it.
   onProgress: (dy: number) => void;
@@ -97,6 +113,10 @@ export function bindDismissGesture(el: HTMLElement, params: DismissGestureParams
       // whole — it is how a `<video>` scrubber survives, and how a future
       // left/right binding on this surface stays possible.
       if (!verticalClaim(start, current)) return;
+      // Same release-it-whole posture as the horizontal case above, for a
+      // direction this caller has ruled out: never claimed, never
+      // preventDefault'd, so the scroller underneath keeps the gesture.
+      if (params.directions === "down" && current.y <= start.y) return;
       claimed = true;
       el.classList.add(DRAGGING_CLASS);
     }
@@ -123,7 +143,14 @@ export function bindDismissGesture(el: HTMLElement, params: DismissGestureParams
     const direction = swipeDirection(s, end);
     const farEnough = Math.abs(end.y - s.y) >= params.viewportHeight() * DISMISS_COMMIT_FRACTION;
     const flicked = isFastSwipe(s, end, elapsed);
-    if ((direction === "up" || direction === "down") && (farEnough || flicked)) {
+    // The direction gate is restated here and not left to the claim: velocity
+    // must not be a way around it, and a gesture that started downward can end
+    // above where it began.
+    const meansDismiss =
+      params.directions === "both"
+        ? direction === "up" || direction === "down"
+        : direction === "down";
+    if (meansDismiss && (farEnough || flicked)) {
       params.onCommit();
       return;
     }
