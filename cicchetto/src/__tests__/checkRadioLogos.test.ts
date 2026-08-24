@@ -159,22 +159,39 @@ describe("agreeFailure", () => {
 });
 
 describe("the AGREE axis is not vacuous over the real table", () => {
-  it("has something to say about every station in RADIO_STATIONS", () => {
-    // The positive control, and the reason it is here: AGREE skips stations
-    // pointing at another provider, so one inverted comparison skips them ALL
-    // and `check:radio` reports "0 broken" having compared nothing. That green
-    // means silence, and it is indistinguishable from the real one at the
-    // summary line. Assert the axis actually engages.
-    const backed = RADIO_STATIONS.filter((s) => isCatalogueBacked(s.logoUrl));
-    expect(backed.length).toBe(RADIO_STATIONS.length);
+  // #1703 — these two used to assert the axis engages on EVERY row, which was
+  // true only because every row was SomaFM. The first non-SomaFM station made
+  // that reading false, and it was never the property worth holding: the
+  // module's own header says the table "is allowed to hold" a station from
+  // another provider, and the sibling case fifteen lines up asserts exactly
+  // that such a row is SKIPPED. Totality and non-vacuity are different claims;
+  // conflating them meant the control would have gone red for the table doing
+  // the thing it was designed to do. What survives is the threat the control
+  // was actually written against — an inverted predicate that skips everything
+  // — plus a guard the old spelling did not have.
+  const catalogueRows = (): readonly string[] =>
+    // An INDEPENDENT spelling of "this logo is SomaFM's", deliberately not
+    // reusing `isCatalogueBacked`: a control that asks the predicate to confirm
+    // itself passes however the predicate is broken.
+    RADIO_STATIONS.filter((s) => s.logoUrl.includes("//api.somafm.com/")).map((s) => s.id);
+
+  it("engages on exactly the catalogue-backed stations, and there are some", () => {
+    const backed = RADIO_STATIONS.filter((s) => isCatalogueBacked(s.logoUrl)).map((s) => s.id);
+    // Non-vacuity: an inverted predicate skips every row and lands on zero.
     expect(backed.length).toBeGreaterThan(0);
+    // Precision: a predicate wrong for SOME rows still clears the bar above.
+    expect(backed).toEqual(catalogueRows());
   });
 
-  it("flags the whole table against an empty catalogue", () => {
+  it("flags every catalogue-backed station against an empty catalogue", () => {
     // The other side of the same control: if the comparator can never fail,
-    // the case above would still pass.
+    // the case above would still pass. Scoped to the backed rows because a row
+    // from another provider is correctly null here — that is the skip, not a
+    // comparator that has gone quiet.
     const empty = new Map<string, string>();
-    for (const s of RADIO_STATIONS) {
+    const backed = RADIO_STATIONS.filter((s) => isCatalogueBacked(s.logoUrl));
+    expect(backed.length).toBeGreaterThan(0);
+    for (const s of backed) {
       expect(agreeFailure(s.logoUrl, s.id, empty), `station ${s.id}`).not.toBeNull();
     }
   });
@@ -185,14 +202,21 @@ describe("the AGREE axis is not vacuous over the real table", () => {
 // claim, not a fact. Adding one without extending this probe would repeat the
 // exact defect the probe exists for.
 describe("the FEED axis is not vacuous over the real table", () => {
-  it("has something to probe on every station that publishes a feed", () => {
+  it("has something to probe, on the stations that publish a feed", () => {
     // The positive control, the sibling of AGREE's above: FEED skips a station
     // whose `songsUrl` is null, so a table that lost the field would report
-    // "0 broken" having probed nothing. Both halves are asserted — the count
-    // matches the rows that carry one, AND that count is not zero.
+    // "0 broken" having probed nothing.
+    //
+    // #1703 — the second clause used to be `toBe(RADIO_STATIONS.length)`, i.e.
+    // every row publishes a feed. That was an accident of the table being
+    // all-SomaFM and it contradicted the field's own type: `songsUrl` is
+    // nullable precisely because a track feed is a provider CAPABILITY, and
+    // the first provider without one made the assertion red for a row that is
+    // correctly spelled. Non-vacuity is the property worth holding here, and
+    // `> 0` is the whole of it — a table that went uniformly null lands on
+    // zero and this goes red, which is the threat the control names.
     const withFeed = RADIO_STATIONS.filter((s) => s.songsUrl !== null);
     expect(withFeed.length).toBeGreaterThan(0);
-    expect(withFeed.length).toBe(RADIO_STATIONS.length);
   });
 });
 

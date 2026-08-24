@@ -299,4 +299,46 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     logoUrl: "https://api.somafm.com/logos/120/doomed120.png",
     songsUrl: "https://api.somafm.com/songs/doomed.json",
   },
+  // #1703 — THE FIRST STATION THAT IS NOT SOMAFM, and the row the issue was
+  // actually about. SomaFM publishes exactly one metal channel, so "more than a
+  // token amount of metal" cannot be bought from that provider at any price;
+  // this is a full-time metal channel rather than a genre tag on a mixed
+  // station. Measured 2026-08-24: 200 `audio/mpeg`, `icy-name: ROCK ANTENNE
+  // Heavy Metal`, 128 kbps stereo — the same bitrate as the rows above.
+  //
+  // What changes now that the table is no longer a SomaFM mirror, all three
+  // already provided for by the type and none of them requiring a server edit:
+  //
+  //   * `songsUrl` is null because Rock Antenne publishes no now-playing feed —
+  //     probed, not assumed. That is the field's designed arm (`unsupported`),
+  //     and it is also what keeps this a pure client change: `connect-src`
+  //     names `api.somafm.com` alone, so ANY feed URL here would have needed a
+  //     CSP widening — for a document `parseSongsFeed` could not read anyway,
+  //     since it parses SomaFM's `{songs:[…]}` shape and nothing else.
+  //   * `check:radio`'s AGREE axis goes quiet for this row by construction
+  //     (`isCatalogueBacked` keys on a somafm logo host) and it stays REACH-only
+  //     forever. There is no upstream catalogue to pin it against; naming that
+  //     absence beats inventing a comparison that would pass on anything.
+  //   * The CSP needs nothing: `media-src 'self' blob: https:` and `img-src
+  //     'self' data: https:` are scheme-scoped, not host-scoped, and the front
+  //     door's 302 target is https too — so the redirect adds no mixed-content
+  //     step.
+  //
+  // The logo is a content-addressed derivative (`…/<hash>.jpg`) and the hash is
+  // LOAD-BEARING: the hash-less form answers 403 and a wrong hash 404, so the
+  // URL cannot be shortened the way the `?v=` stamp above is dropped. It is
+  // served `cache-control: public, max-age=31536000, immutable`, which is a
+  // stronger stability claim than the timestamp query the SomaFM rows strip —
+  // an immutable content address does not rot on re-upload, it is simply not
+  // the URL a re-upload mints.
+  {
+    id: "rockantenne-metal",
+    title: "ROCK ANTENNE Heavy Metal",
+    genres: ["metal", "rock"],
+    description: "Heavy metal around the clock, from Bavaria's rock station.",
+    streamUrl: "https://stream.rockantenne.de/heavy-metal/stream/mp3",
+    logoUrl:
+      "https://www.rockantenne.de/media/cache/3/version/597/streamlogo_heavymetal_ra-v1.jpg/f1b996498456cb64.jpg",
+    songsUrl: null,
+  },
 ];

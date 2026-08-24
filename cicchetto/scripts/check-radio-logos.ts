@@ -122,9 +122,16 @@ const findings: StationFinding[] = await Promise.all(
   })),
 );
 
+// #1703 — DERIVED, not a constant. The column was a hand-typed 16, which the
+// first id longer than that ran straight into the URL beside it. An id length
+// is a curation choice and the report must not quietly constrain it.
+const idWidth = Math.max(...findings.map((f) => f.id.length)) + 2;
+
 for (const finding of findings) {
   const found = problems(finding);
-  console.log(`  ${found.length === 0 ? "ok  " : "FAIL"}  ${finding.id.padEnd(16)}${finding.logoUrl}`);
+  console.log(
+    `  ${found.length === 0 ? "ok  " : "FAIL"}  ${finding.id.padEnd(idWidth)}${finding.logoUrl}`,
+  );
   // The feed URL is printed on its own line rather than folded into the one
   // above: a station has two URLs now, and a report that names only one leaves
   // the reader guessing which of them a `FEED` line is about. `(no feed)` is
