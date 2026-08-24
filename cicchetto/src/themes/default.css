@@ -12991,6 +12991,103 @@ audio.media-viewer-media {
   width: min(80vw, 24rem);
 }
 
+/* #1764 — the .txt/.md SOURCE arm of the same modal. vjt ruled out rendering
+   of any kind, so everything below is about making raw source READABLE:
+   monospace, aligned line numbers, no wrapping.
+
+   The base .media-viewer-modal sizes itself to its content (`width:
+   max-content`), which is right for a picture and wrong for text — a
+   three-line file would open in a sliver and a 200-column one at the cap.
+   A fixed share of the viewport gives every file the same frame. */
+.media-viewer-modal--text {
+  width: min(92vw, 72rem);
+  /* Re-opens what the base rule closes. .media-viewer-modal takes the whole
+     touch stream with `touch-action: none` because nothing under it scrolls;
+     here the body DOES, and a descendant cannot widen what an ancestor
+     narrowed (the UA intersects down the chain), so the re-opening has to be
+     on this element. The dismiss binder still owns the drags it claims — it
+     preventDefaults them — and it deliberately claims neither an upward drag
+     nor one starting mid-scroll, which is what leaves those to the pane.
+     NOT VERIFIED ON A DEVICE: no browser can be driven from the dev host, so
+     whether iOS begins a rubber-band before the claim lands is on dogfood. */
+  touch-action: pan-x pan-y;
+}
+
+/* The base body centers a single fixed-size element and hides overflow; text
+   fills the frame and scrolls instead. */
+.media-viewer-body--text {
+  align-items: stretch;
+  justify-content: flex-start;
+  flex-direction: column;
+  /* Without this a flex item refuses to shrink below its content height and
+     the pane's own `overflow: auto` never engages. */
+  min-height: 0;
+}
+
+/* The scroller, and the ONE place the text metric is declared. Both <pre>
+   children take `font: inherit` from here rather than restating the tokens:
+   a <pre> carries a UA font-family/font-size that would otherwise win, and
+   two independently spelled copies are two things that can drift apart —
+   which for a gutter means number N drifting off line N. */
+.media-viewer-text {
+  display: flex;
+  align-items: flex-start;
+  overflow: auto;
+  /* A drag past either end belongs to this pane, not to the page behind the
+     modal (and not to iOS's pull-to-refresh). */
+  overscroll-behavior: contain;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  line-height: 1.4;
+}
+
+/* Sticky, so panning right along a long line does not scroll the numbers out
+   of the frame — the one thing that would make the gutter useless exactly
+   when it is needed. user-select: none keeps a copy of the source free of
+   line numbers. */
+.media-viewer-text-gutter {
+  position: sticky;
+  left: 0;
+  flex: none;
+  margin: 0;
+  padding: 0.5rem 0.5rem 0.5rem 0.75rem;
+  font: inherit;
+  white-space: pre;
+  text-align: right;
+  color: var(--muted);
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  user-select: none;
+}
+
+/* `white-space: pre` and NOT pre-wrap: a wrapped line would render as N rows
+   against one gutter number, and source with significant columns (a log, a
+   diff, a table) stops being readable. Long lines pan horizontally instead. */
+.media-viewer-text-source {
+  flex: none;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font: inherit;
+  white-space: pre;
+  color: var(--fg);
+}
+
+/* The honest-degradation line for a file cut at TEXT_VIEW_MAX_BYTES. Above
+   the pane on purpose: a reader must know they are holding a slice before
+   they start, not at a bottom they may never reach. Colour comes from the
+   shared .muted utility. */
+.media-viewer-text-truncated {
+  flex: none;
+  margin: 0;
+  padding: 0.25rem 0.75rem 0.5rem;
+  font-size: 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
 /* GH #235 — "jump to next active window" affordance (irssi Alt+A).
    One button, two placements (see .next-active-btn-desktop /
    -mobile). Mounted only while there are unread-activity windows

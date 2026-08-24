@@ -1,6 +1,15 @@
-import { type Component, createSignal, Match, onCleanup, Show, Switch } from "solid-js";
+import {
+  type Component,
+  createEffect,
+  createResource,
+  createSignal,
+  Match,
+  onCleanup,
+  Show,
+  Switch,
+} from "solid-js";
 import { closeMediaViewer, type MediaViewerState, mediaViewerState } from "./lib/mediaViewer";
-import { bindDismissGesture } from "./lib/mediaViewerGesture";
+import { bindDismissGesture, type DismissDirections } from "./lib/mediaViewerGesture";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import {
   applyPan,
@@ -14,6 +23,7 @@ import {
   toggleZoom,
 } from "./lib/pinchZoom";
 import { maybeEscapePwaClick } from "./lib/platform";
+import { fetchTextResource, TEXT_VIEW_MAX_BYTES } from "./lib/textResource";
 
 // In-app media viewer modal — media-link cluster (2026-06-11).
 //
@@ -43,6 +53,12 @@ import { maybeEscapePwaClick } from "./lib/platform";
 // token in `media-src` / `img-src` — without it this modal opens EMPTY.
 // The widening rides in the same change as each admission; the plug
 // moduledoc (GrappaWeb.Plugs.SecurityHeaders) is the SSOT.
+//
+// #1764 adds a FOURTH kind, `text`, and it is the one that does not hang off
+// an element: `.txt`/`.md` are FETCHED and put in the DOM as source, so they
+// answer to `connect-src`, which is NOT widened to `https:`. That is why
+// `classifyMediaLink` admits text from an admitted host only — this modal
+// never sees a cross-host text href, and must not be made to.
 //
 // #232 — Escape routes through the shared overlay ESC stack
 // (createOverlayLock's onEscape → the single keybindings keydown listener →
@@ -202,6 +218,93 @@ const ZoomableImage: Component<{
   );
 };
 
+// #1764 — `.txt` / `.md` read inline as SOURCE. vjt, #sbiffo 2026-08-24,
+// verbatim: "nono nessun rendering di gesu, assolutamente solo il sorgente txt
+// e md". Monospace, line numbers, and nothing interpreted — not now and not as
+// a later toggle. That is not only a taste call: cic has no sanitisation
+// surface anywhere today, and a markdown renderer would be the reason it grew
+// one, on a page that holds the bearer token.
+//
+// TWO text nodes, not one row per line. A gutter <pre> and a source <pre> side
+// by side keep the DOM node count constant whatever the file size, and they
+// are rendered from the SAME `lines` array so number N is beside line N by
+// construction rather than by two agreeing loops. The stylesheet does the rest
+// of the alignment (`font: inherit` on both — see mediaViewerTouchAction.test).
+//
+// Mounted only from inside the keyed <Show>, so the fetch fires on OPEN. A
+// createResource at MediaViewerModal scope would fire at Shell BOOT, because
+// the component body runs whether or not the modal is showing (the
+// ThemeEditor/#294 failure).
+const TextPane: Component<{
+  href: string;
+  onLoad: () => void;
+  onError: () => void;
+  // Published upward so the dismiss gesture can ask whether the pane is at its
+  // top. Not a signal: the reader is a touchstart handler, and the element
+  // identity never changes for the life of the mount.
+  paneRef: (el: HTMLDivElement | undefined) => void;
+}> = (props) => {
+  const abort = new AbortController();
+  onCleanup(() => {
+    abort.abort();
+    props.paneRef(undefined);
+  });
+
+  const [source] = createResource(
+    () => props.href,
+    (href) => fetchTextResource(href, abort.signal),
+  );
+
+  // The viewer's shared spinner/failure machinery is driven by element events
+  // for every other kind; here the same two outcomes come off the resource, so
+  // the modal keeps ONE load-state model instead of a second one for text.
+  //
+  // Both the effect and the render below go through `source.state` and never
+  // through a bare `source()`: reading an ERRORED resource RETHROWS, which
+  // takes the component down before it can show the failure the reader is
+  // owed — a fetch 404 rendered as a crash and a forever-spinner.
+  createEffect(() => {
+    if (source.state === "errored") props.onError();
+    else if (source.state === "ready") props.onLoad();
+  });
+
+  const settled = (): ReturnType<typeof source> | undefined =>
+    source.state === "ready" ? source() : undefined;
+
+  const gutter = (count: number): string =>
+    Array.from({ length: count }, (_, i) => String(i + 1)).join("\n");
+
+  return (
+    <Show when={settled()}>
+      {(loaded) => (
+        <>
+          <Show when={loaded().truncated}>
+            {/* Above the pane, not below it: a reader must know they are
+                holding a slice BEFORE they start reading, not discover it at
+                a bottom they may never scroll to. */}
+            <p class="muted media-viewer-text-truncated">
+              showing the first {TEXT_VIEW_MAX_BYTES / 1024} KiB of this file — "open in browser"
+              for the whole thing
+            </p>
+          </Show>
+          <div class="media-viewer-text" ref={props.paneRef}>
+            <pre
+              class="media-viewer-text-gutter"
+              data-testid="media-viewer-text-gutter"
+              aria-hidden="true"
+            >
+              {gutter(loaded().lines.length)}
+            </pre>
+            <pre class="media-viewer-text-source" data-testid="media-viewer-text-source">
+              {loaded().lines.join("\n")}
+            </pre>
+          </div>
+        </>
+      )}
+    </Show>
+  );
+};
+
 // Body subcomponent so the load status resets per open: the keyed
 // <Show> remounts it for every new viewer state, giving each open a
 // fresh signal — no manual reset effect to keep in sync. Spinner until
@@ -211,9 +314,11 @@ const ZoomableImage: Component<{
 // 404 can't spin forever. The failed media element is unmounted —
 // a broken <img> would render its alt text (the raw URL) under the
 // failure line.
-const MediaViewerBody: Component<{ state: MediaViewerState; onScale: (scale: number) => void }> = (
-  props,
-) => {
+const MediaViewerBody: Component<{
+  state: MediaViewerState;
+  onScale: (scale: number) => void;
+  onTextPaneRef: (el: HTMLDivElement | undefined) => void;
+}> = (props) => {
   const [status, setStatus] = createSignal<MediaLoadStatus>("loading");
   // Transitions only leave "loading" (review fix): a transient
   // mid-playback error must not unmount a ready element, and a suspend
@@ -232,7 +337,10 @@ const MediaViewerBody: Component<{ state: MediaViewerState; onScale: (scale: num
   // suspend is what it fires when it defers, and without it the
   // spinner spins forever. The element is fully usable at that point.
   return (
-    <div class="media-viewer-body">
+    <div
+      class="media-viewer-body"
+      classList={{ "media-viewer-body--text": props.state.kind === "text" }}
+    >
       <Show when={status() === "loading"}>
         <div role="status" aria-label="Loading media" class="media-viewer-spinner" />
       </Show>
@@ -277,6 +385,14 @@ const MediaViewerBody: Component<{ state: MediaViewerState; onScale: (scale: num
                 onError={failed}
               />
             </Match>
+            <Match when={props.state.kind === "text"}>
+              <TextPane
+                href={props.state.href}
+                onLoad={ready}
+                onError={failed}
+                paneRef={props.onTextPaneRef}
+              />
+            </Match>
           </Switch>
         }
       >
@@ -310,6 +426,11 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
   // advertise a reactivity that does not exist.
   let scale = MIN_SCALE;
   let backdrop: HTMLButtonElement | undefined;
+  // #1764 — the text arm's scroll container, once it has fetched. Same
+  // plain-mutable reasoning as `scale`: nothing renders from it, and the only
+  // reader is a touchstart handler.
+  let textPane: HTMLDivElement | undefined;
+  const isText = props.state.kind === "text";
 
   const paint = (el: HTMLElement, dy: number): void => {
     el.style.transform = draggedTransform(dy);
@@ -329,7 +450,14 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
       // A zoomed image owns the one-finger drag as a PAN (#213), so the viewer
       // stands down until the image is back at fit. Video and audio never
       // publish a scale, which is exactly right: they are always dismissible.
-      canDismiss: () => scale <= MIN_SCALE,
+      //
+      // #1764 — a text pane owns the drag as a SCROLL for as long as it has
+      // anywhere to scroll back to, so the dismiss is live only at its top.
+      // Paired with `directions: "down"` below, the two gates split the axis
+      // cleanly: scrolled → the pane keeps every vertical drag; at the top →
+      // up still scrolls, and only down dismisses.
+      canDismiss: () => (isText ? (textPane?.scrollTop ?? 0) <= 0 : scale <= MIN_SCALE),
+      directions: (isText ? "down" : "both") satisfies DismissDirections,
       onProgress: (dy) => {
         paint(el, dy);
       },
@@ -358,6 +486,7 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
         aria-modal="true"
         aria-label="Media viewer"
         class="media-viewer-modal"
+        classList={{ "media-viewer-modal--text": isText }}
       >
         <div class="media-viewer-header">
           <a
@@ -384,6 +513,9 @@ const MediaViewerDialog: Component<{ state: MediaViewerState }> = (props) => {
           state={props.state}
           onScale={(next) => {
             scale = next;
+          }}
+          onTextPaneRef={(el) => {
+            textPane = el;
           }}
         />
       </div>
