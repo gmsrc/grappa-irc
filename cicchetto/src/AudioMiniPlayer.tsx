@@ -7,6 +7,12 @@ import {
   rememberResumePoint,
   resumePoint,
 } from "./lib/audioPlayer";
+import {
+  applyMediaSession,
+  mediaSessionMetadata,
+  setMediaSessionHandlers,
+  setMediaSessionPlaybackState,
+} from "./lib/mediaSession";
 import { nowPlayingLabel } from "./lib/nowPlaying";
 
 // Docked audio mini-player (GH #115) — a slim transport bar pinned above
@@ -179,17 +185,18 @@ const AudioMiniPlayer: Component = () => {
   // which is the whole point of pausing one.
   const mustRefetch = (el: HTMLAudioElement): boolean => el.error !== null || live();
 
-  const togglePlay = (): void => {
+  // #1702 split these two out of `togglePlay`. A lock screen does not send a
+  // toggle — it sends `play` and `pause` as distinct actions, and handing it a
+  // toggle would PAUSE on a `play` that arrives while the stream is already on
+  // (the OS re-asserts intent freely). So the verbs are the primitive and the
+  // toggle is built from them, rather than the toggle being the only door.
+  const pauseNow = (): void => {
     if (audioEl === undefined) return;
-    // #1700 — branch on `playing()`, NOT on `audioEl.paused`. The glyph and the
-    // accessible name below read from this signal, and a control must act on
-    // the fact it DISPLAYS: after a failed fetch the element is still not
-    // `paused` while the transport already shows ▶, so reading the element here
-    // pauses at the moment the operator pressed play. One fact, one control.
-    if (playing()) {
-      audioEl.pause();
-      return;
-    }
+    audioEl.pause();
+  };
+
+  const playNow = (): void => {
+    if (audioEl === undefined) return;
     // `play()` re-runs resource selection only from NETWORK_EMPTY, which is not
     // where a dropped stream lands; `load()` runs it unconditionally. The other
     // `load()` in this file DETACHES a source on close — same call, opposite
@@ -197,6 +204,47 @@ const AudioMiniPlayer: Component = () => {
     if (mustRefetch(audioEl)) audioEl.load();
     void audioEl.play().catch(() => {});
   };
+
+  const togglePlay = (): void => {
+    // #1700 — branch on `playing()`, NOT on `audioEl.paused`. The glyph and the
+    // accessible name below read from this signal, and a control must act on
+    // the fact it DISPLAYS: after a failed fetch the element is still not
+    // `paused` while the transport already shows ▶, so reading the element here
+    // pauses at the moment the operator pressed play. One fact, one control.
+    if (playing()) pauseNow();
+    else playNow();
+  };
+
+  // #1702 — tell the OS what is playing. Until this, an iOS lock screen showed
+  // "Cicchetto" and nothing else: nothing ever set `navigator.mediaSession`.
+  //
+  // THREE effects rather than one, because they track three different facts
+  // and folding them would re-run all three whenever any one moved — which for
+  // the handlers means re-registering them on every track change, and for the
+  // metadata means rebuilding a `MediaMetadata` on every play/pause.
+  //
+  // The projection itself lives in `lib/mediaSession.ts`; what belongs HERE is
+  // only what needs the element. That is why the handlers are wired in this
+  // file and not in the lib: they must drive the SAME element the in-app bar
+  // drives, or the lock screen and the transport end up as two controls over
+  // one stream, disagreeing.
+  createEffect(() => {
+    applyMediaSession(mediaSessionMetadata());
+  });
+
+  createEffect(() => {
+    // Cleared with the source: a lock screen still holding handlers for a
+    // stopped player would send actions to an element with no `src`.
+    setMediaSessionHandlers(activeAudio() === null ? null : { play: playNow, pause: pauseNow });
+  });
+
+  createEffect(() => {
+    // Mirrored from `playing()` — the same signal the glyph reads, for the same
+    // reason #1700 gives: the OS must show the state the operator is being
+    // shown, not one it inferred from the audio pipeline.
+    if (activeAudio() === null) setMediaSessionPlaybackState("none");
+    else setMediaSessionPlaybackState(playing() ? "playing" : "paused");
+  });
 
   const onSeek = (e: { currentTarget: HTMLInputElement }): void => {
     if (audioEl === undefined) return;
