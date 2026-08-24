@@ -85,7 +85,24 @@ export type RadioStation = {
   readonly description: string;
   /** The endless audio endpoint handed to `playAudio`. */
   readonly streamUrl: string;
-  readonly logoUrl: string;
+  /** #1704 — the station's own artwork, or `null` when it publishes none.
+      NULLABLE since Kohina, and the reasoning is the one `songsUrl` gives
+      below rather than a second mechanism: a logo is a thing most stations
+      HAVE, so the field stays required-looking for every row that has one —
+      but "publishes no artwork" is a real state of the world and the type has
+      to be able to say it. The alternative was pointing this at Kohina's
+      192px FAVICON, which answers 200 — and that is the shape to refuse: a
+      favicon is not a station logo, and because it ANSWERS, no runtime error
+      handler would ever notice. An unverifiable claim that cannot even fail
+      loudly is exactly what #1696 was filed about.
+      What a null draws is `lib/radioLogoPlaceholder.ts` — our own SVG, stable
+      per station, per vjt's #1703 ruling. What it hands the OS lock screen is
+      NOTHING (`mediaSession.ts` emits an empty `artwork`), which is the same
+      answer an upload already gets there and for the same reason: the OS then
+      keeps the app icon instead of being handed art that is not the station's.
+      `bun run check:radio` reports a null row as SKIPPED rather than passing
+      it silently — a green built from zero probes is silence, not agreement. */
+  readonly logoUrl: string | null;
   /** #1698 — the JSON feed naming the track on air, or `null` when the
       provider publishes none.
       NULLABLE, unlike every sibling above, and the difference is real rather
@@ -339,6 +356,52 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     streamUrl: "https://stream.rockantenne.de/heavy-metal/stream/mp3",
     logoUrl:
       "https://www.rockantenne.de/media/cache/3/version/597/streamlogo_heavymetal_ra-v1.jpg/f1b996498456cb64.jpg",
+    songsUrl: null,
+  },
+  // #1704 — KOHINA, and the first row in this table that publishes no artwork
+  // at all. Requested in channel as chiptune / demoscene; measured 2026-08-24
+  // before being written, as every row here is.
+  //
+  // THE URL IS NOT THE ONE REQUESTED, and the reason is ours rather than
+  // upstream's. The request was `http://kohina.duckdns.org:8000/stream.ogg`.
+  // `media-src 'self' blob: https:` (GrappaWeb.Plugs.SecurityHeaders, re-read
+  // 2026-08-24) is SCHEME-scoped, so an http stream on our https page is
+  // refused before anything upstream is even consulted — and there is no TLS on
+  // that port to switch to. Kohina's own home page links an https playlist
+  // whose single line is the mirror baked below. That indirection is why this
+  // vendor is deliberately ABSENT from `radioStations.test.ts`'s front-door map:
+  // upstream's stable entry point is an `.m3u` document, not a redirecting
+  // host, and the map cannot express that shape. Inventing a front door for it
+  // would be the unverifiable claim #1696 was filed about.
+  //
+  // Measured on the URL below, with a ranged GET and a browser UA: HTTP 200,
+  // `Content-Type: audio/ogg`, Icecast 2.4.4, `Access-Control-Allow-Origin: *`,
+  // `icy-name: Kohina - Old School Game and Demo Music`, 312 KB pulled before
+  // the client timeout — the timeout being the evidence the source is endless.
+  //
+  // THE CODEC, read off the BYTES and not the mime type: the body opens `OggS`
+  // then `\x01vorbis`, i.e. Ogg VORBIS at 44.1 kHz stereo — the first row here
+  // that is not `audio/mpeg`. Per the vendored caniuse-lite (1.0.30001791),
+  // iOS Safari is `y` from 18.4, `a` (partial, and the packed data carries no
+  // note text to say partial HOW) from 17.4 through 18.3, and a flat `n` at
+  // 17.3 and below. So this row does not play for some population of phones,
+  // and #1744 is why it ships anyway: a source the browser refuses now SAYS so
+  // on the transport, the rail and the lock screen instead of looking paused.
+  // Kohina has no non-Ogg endpoint, so there is no fallback stream to prefer.
+  //
+  // `songsUrl` is null — no now-playing feed published. `logoUrl` is null and
+  // that is the field's new arm: kohina.com serves only favicons, the largest
+  // being a 192px PNG that answers 200. Pointing this at it was refused twice
+  // over — a favicon is not a station logo, and because it ANSWERS no error
+  // handler would ever fire, so the wrong image would render silently forever.
+  {
+    id: "kohina",
+    title: "Kohina",
+    genres: ["chiptune", "demoscene"],
+    description:
+      "Hand picked chip tunes from classic computers and consoles. SID, Amiga, Atari ST, Arcade, PC, and more!",
+    streamUrl: "https://kohina.brona.dk/icecast/stream.ogg",
+    logoUrl: null,
     songsUrl: null,
   },
 ];

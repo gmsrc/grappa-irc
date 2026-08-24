@@ -131,7 +131,15 @@ export function mediaSessionMetadata(): MediaSessionMetadata | null {
     };
   }
 
-  const artwork = [artworkFor(station.logoUrl)];
+  // #1704 — a station that publishes no artwork hands the OS NOTHING, which is
+  // the same answer an upload gets in the arm above and for the identical
+  // reason: an empty `artwork` lets the platform keep the app icon, which is a
+  // real image at every size it asks for. Our own placeholder is deliberately
+  // NOT sent — it is an SVG built for one 120px slot in the rail, `MediaImage`
+  // support for SVG is not something this codebase has measured on any
+  // platform, and a lock screen that refuses it would fall back to the app icon
+  // anyway. Sending nothing gets there without the claim.
+  const artwork = station.logoUrl === null ? [] : [artworkFor(station.logoUrl)];
 
   // The ARTIST slot, and it is not a compromise: it is the second line, and on
   // a failure there is no track and therefore no artist to displace. `title`

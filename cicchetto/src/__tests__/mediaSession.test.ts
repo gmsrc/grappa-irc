@@ -30,8 +30,8 @@ import { RADIO_STATIONS, type RadioStation } from "../lib/radioStations";
     proved the extension is per-station, so the artwork `type` must be READ off
     the URL rather than assumed; a test pinned to one extension would pass while
     the other half of the table shipped the wrong mime. */
-const jpgStation = RADIO_STATIONS.find((s) => s.logoUrl.endsWith(".jpg"));
-const pngStation = RADIO_STATIONS.find((s) => s.logoUrl.endsWith(".png"));
+const jpgStation = RADIO_STATIONS.find((s) => s.logoUrl?.endsWith(".jpg") === true);
+const pngStation = RADIO_STATIONS.find((s) => s.logoUrl?.endsWith(".png") === true);
 if (jpgStation === undefined || pngStation === undefined) {
   throw new Error("these tests need one .jpg-logo and one .png-logo station in the curated table");
 }
@@ -167,6 +167,26 @@ describe("mediaSessionMetadata", () => {
 
     expect(mediaSessionMetadata()).toEqual({
       title: "f00ba7.mp3",
+      artist: "",
+      album: "",
+      artwork: [],
+    });
+  });
+
+  it("hands the OS NO artwork for a station that publishes none (#1704)", () => {
+    // The same answer an upload gets two cases up, and for the same reason: an
+    // empty `artwork` lets the platform keep the app icon rather than be handed
+    // something that is not the station's. Our own placeholder is deliberately
+    // not sent — it is an SVG built for one 120px slot in the rail, and
+    // `MediaImage` support for SVG is not something this codebase has measured
+    // on any platform.
+    const logoless = RADIO_STATIONS.find((s) => s.logoUrl === null);
+    if (logoless === undefined) throw new Error("this test needs a logo-less station in the table");
+
+    tuneStation(logoless);
+
+    expect(mediaSessionMetadata()).toEqual({
+      title: logoless.title,
       artist: "",
       album: "",
       artwork: [],

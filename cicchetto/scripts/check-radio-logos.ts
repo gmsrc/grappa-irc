@@ -61,6 +61,7 @@ import {
   FEED_CONTENT_TYPE,
   LOGO_CONTENT_TYPE,
   problems,
+  probedCounts,
   reachFailure,
   type StationFinding,
 } from "./check-radio-logos-core";
@@ -112,7 +113,13 @@ const findings: StationFinding[] = await Promise.all(
     id: station.id,
     logoUrl: station.logoUrl,
     feedUrl: station.songsUrl,
-    reach: await probeReach(station.logoUrl, LOGO_CONTENT_TYPE),
+    // #1704 — a station that publishes NO logo is not probed and is not a
+    // finding, the same arm `songsUrl` has had since #1698. There is no URL to
+    // reach; what the UI draws instead is our own placeholder, which cannot
+    // 404. Counted out of the denominator below rather than folded into the
+    // green.
+    reach:
+      station.logoUrl === null ? null : await probeReach(station.logoUrl, LOGO_CONTENT_TYPE),
     agree: agreeFailure(station.logoUrl, station.id, catalogue),
     // A station that publishes no feed is not probed and is not a finding.
     feed:
@@ -130,7 +137,8 @@ const idWidth = Math.max(...findings.map((f) => f.id.length)) + 2;
 for (const finding of findings) {
   const found = problems(finding);
   console.log(
-    `  ${found.length === 0 ? "ok  " : "FAIL"}  ${finding.id.padEnd(idWidth)}${finding.logoUrl}`,
+    `  ${found.length === 0 ? "ok  " : "FAIL"}  ${finding.id.padEnd(idWidth)}` +
+      `${finding.logoUrl ?? "(no logo — placeholder)"}`,
   );
   // The feed URL is printed on its own line rather than folded into the one
   // above: a station has two URLs now, and a report that names only one leaves
@@ -148,10 +156,13 @@ const broken = brokenCount(findings);
 // adds a SECOND denominator for the same reason — the FEED axis skips a
 // station that publishes none, so "14 stations checked" alone would read as
 // "14 feeds checked" on a table where the field had gone uniformly null.
-const feedsProbed = findings.filter((f) => f.feedUrl !== null).length;
+// #1704 adds the logo half of that same denominator, now that `logoUrl` is
+// nullable too: without it a table whose logos had all gone null would report
+// "21 stations checked, 0 broken" having fetched nothing at all.
+const probed = probedCounts(findings);
 console.log(
   `\ncheck:radio summary — ${findings.length} stations checked ` +
-    `(${feedsProbed} with a now-playing feed), ${broken} broken`,
+    `(${probed.logos} with a logo, ${probed.feeds} with a now-playing feed), ${broken} broken`,
 );
 
 process.exit(broken === 0 ? 0 : 1);

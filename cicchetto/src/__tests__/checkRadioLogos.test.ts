@@ -4,6 +4,7 @@ import {
   brokenCount,
   catalogueLogos,
   isCatalogueBacked,
+  probedCounts,
   problems,
   reachFailure,
   type StationFinding,
@@ -173,7 +174,11 @@ describe("the AGREE axis is not vacuous over the real table", () => {
     // An INDEPENDENT spelling of "this logo is SomaFM's", deliberately not
     // reusing `isCatalogueBacked`: a control that asks the predicate to confirm
     // itself passes however the predicate is broken.
-    RADIO_STATIONS.filter((s) => s.logoUrl.includes("//api.somafm.com/")).map((s) => s.id);
+    // #1704 — `?? ""` rather than a filter on non-null: a row with NO logo is
+    // not catalogue-backed, and spelling that as an empty string keeps this an
+    // independent re-derivation of the predicate instead of borrowing its
+    // null-handling too.
+    RADIO_STATIONS.filter((s) => (s.logoUrl ?? "").includes("//api.somafm.com/")).map((s) => s.id);
 
   it("engages on exactly the catalogue-backed stations, and there are some", () => {
     const backed = RADIO_STATIONS.filter((s) => isCatalogueBacked(s.logoUrl)).map((s) => s.id);
@@ -248,5 +253,72 @@ describe("the union verdict", () => {
     // not a broken row. Reported as a finding it would make the table's own
     // nullable field permanently red.
     expect(problems(finding({ feedUrl: null, feed: null }))).toEqual([]);
+  });
+});
+
+// #1704 — `logoUrl` went NULLABLE for a station that publishes no artwork, and
+// a probe of a URL that does not exist is not a defect. Both halves are pinned:
+// the axis goes quiet for such a row, and the report still says how many rows it
+// actually fetched — a green built from zero probes is silence, not agreement,
+// which is the argument the whole file is written around.
+describe("a station that publishes no logo (#1704)", () => {
+  it("is outside the catalogue's scope — there is no URL to disagree with", () => {
+    expect(isCatalogueBacked(null)).toBe(false);
+  });
+
+  it("is never an AGREE finding, however empty the catalogue is", () => {
+    expect(agreeFailure(null, "kohina", new Map())).toBeNull();
+  });
+
+  it("counts out of the LOGO denominator, so a table of nulls cannot read green", () => {
+    const finding = (
+      id: string,
+      logoUrl: string | null,
+      feedUrl: string | null,
+    ): StationFinding => ({
+      id,
+      logoUrl,
+      feedUrl,
+      reach: null,
+      agree: null,
+      feed: null,
+    });
+    const counts = probedCounts([
+      finding("with-logo", "https://api.somafm.com/logos/120/x120.png", null),
+      finding("logoless", null, "https://api.somafm.com/songs/y.json"),
+      finding("neither", null, null),
+    ]);
+
+    expect(counts.logos).toBe(1);
+    expect(counts.feeds).toBe(1);
+  });
+
+  it("counts the real table, so the denominator is not a fixture", () => {
+    // The positive control: the numbers above are computed over hand-made rows,
+    // which proves the function and not the table. This one would catch a table
+    // whose logos had ALL gone null — the state that would make the script
+    // report a perfect green having fetched nothing.
+    const counts = probedCounts(
+      RADIO_STATIONS.map((s) => ({
+        id: s.id,
+        logoUrl: s.logoUrl,
+        feedUrl: s.songsUrl,
+        reach: null,
+        agree: null,
+        feed: null,
+      })),
+    );
+    expect(
+      counts.logos,
+      "no station in the table has a logo — the probe is vacuous",
+    ).toBeGreaterThan(0);
+    // The other direction, and it is a VACUITY guard rather than a rule about
+    // the table: with no logo-less row the SKIP path above is never exercised
+    // by real data. If the table legitimately goes all-logos one day, this is
+    // the line to delete, and deliberately — not the one to edit around.
+    expect(
+      counts.logos,
+      "every station has a logo — the logo-less arm is untested by the real table",
+    ).toBeLessThan(RADIO_STATIONS.length);
   });
 });

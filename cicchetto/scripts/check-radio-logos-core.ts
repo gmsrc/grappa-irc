@@ -78,15 +78,18 @@ export const FEED_CONTENT_TYPE = "application/json";
 /** Whether AGREE has anything to say about this station. A station pointing at
     another provider is outside the catalogue's scope — the table is allowed to
     hold one. Exported so the test can assert the axis is NOT vacuous over the
-    real table; a green built from zero comparisons is silence, not agreement. */
-export function isCatalogueBacked(logoUrl: string): boolean {
-  return new URL(logoUrl).host.endsWith("somafm.com");
+    real table; a green built from zero comparisons is silence, not agreement.
+    #1704 — `null` (the station publishes NO logo) is outside that scope too,
+    and for a stronger reason than a foreign provider: there is no URL for the
+    catalogue to disagree with. */
+export function isCatalogueBacked(logoUrl: string | null): boolean {
+  return logoUrl !== null && new URL(logoUrl).host.endsWith("somafm.com");
 }
 
 /** `null` when the baked URL is the one the catalogue publishes; otherwise the
     disagreement, spelled so the reader can paste the fix straight in. */
 export function agreeFailure(
-  logoUrl: string,
+  logoUrl: string | null,
   id: string,
   catalogue: ReadonlyMap<string, string>,
 ): string | null {
@@ -101,7 +104,11 @@ export function agreeFailure(
 
 export type StationFinding = {
   readonly id: string;
-  readonly logoUrl: string;
+  /** #1704 — the station's logo, or `null` when it publishes none. Carried as
+      a null rather than an empty string for the reason `feedUrl` below gives:
+      the report has to be able to print a SKIPPED row as skipped, and an empty
+      string reads as a probed URL that happened to be blank. */
+  readonly logoUrl: string | null;
   /** #1698 — the station's now-playing feed, or null when it publishes none.
       Carried so the report line can name the URL that failed, and so a null
       row is visibly SKIPPED rather than silently absent. */
@@ -114,6 +121,23 @@ export type StationFinding = {
       red. */
   readonly feed: string | null;
 };
+
+/** How many of `findings` were actually PROBED on each axis.
+ *
+ * #1704 — the denominator, and it exists because both `logoUrl` and `feedUrl`
+ * are nullable now: "21 stations checked, 0 broken" says nothing about how
+ * many logos were fetched, and on a table where the field had gone uniformly
+ * null it would report a perfect green having probed nothing. Same vacuity
+ * argument `isCatalogueBacked` is exported for. */
+export function probedCounts(findings: readonly StationFinding[]): {
+  readonly logos: number;
+  readonly feeds: number;
+} {
+  return {
+    logos: findings.filter((f) => f.logoUrl !== null).length,
+    feeds: findings.filter((f) => f.feedUrl !== null).length,
+  };
+}
 
 /** Every problem found for one station, all three axes, in report order. */
 export function problems(finding: StationFinding): readonly string[] {

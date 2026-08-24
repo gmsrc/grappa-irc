@@ -41,10 +41,25 @@ describe("RADIO_STATIONS", () => {
     // are scheme-scoped, and an http subresource on an https page is refused
     // as mixed content regardless. Either way the failure is a station that
     // silently does not play.
+    //
+    // #1704 — the STREAM half is unconditional and the LOGO half skips a null,
+    // because a station is now allowed to publish no artwork. The skip is what
+    // the positive control below exists to keep honest: a rule that skips every
+    // row reports green having compared nothing.
     for (const s of RADIO_STATIONS) {
       expect(s.streamUrl, `station ${s.id} stream`).toMatch(/^https:\/\//);
+      if (s.logoUrl === null) continue;
       expect(s.logoUrl, `station ${s.id} logo`).toMatch(/^https:\/\//);
     }
+  });
+
+  it("carries a logo for at least one station", () => {
+    // #1704 — the positive control for the rule above, the same one #1698 gave
+    // `songsUrl`. `logoUrl` went nullable for Kohina, which publishes only a
+    // favicon; a table where the field had gone uniformly null would sail
+    // through the https rule having checked nothing at all.
+    const withLogo = RADIO_STATIONS.filter((s) => s.logoUrl !== null);
+    expect(withLogo.length).toBeGreaterThan(0);
   });
 
   // #1698 — the now-playing feed URL. Same posture as `logoUrl`: a verbatim
