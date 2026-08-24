@@ -61734,3 +61734,122 @@ correct whatever starves it.
 **So this does not close #1715, and it does not claim to stop the starvation.**
 It stops the starvation from being reported as a stack trace pointing at
 innocent code.
+<!-- entry #1744 -->
+
+---
+
+## 2026-08-24 — #1744: a stream that will not start now says so, on every surface that was claiming otherwise
+
+`el.error` had a reader (`mustRefetch`, #1700) and no VIEWER. A station
+that failed to start looked exactly like one the operator had paused,
+which is the worst of the failure modes: there is nothing to tell you
+whether to wait, press play again, or pick something else.
+
+**Where the fact lives: a fourth sibling signal, and by now that is a
+rule.** The obvious home is a field on `AudioPlayerState`, and it is the
+same trap #1697 (`hidden`) and #1734 (`resumePoint`) each walked up to
+and stepped around. `AudioMiniPlayer` drives the element from
+`createEffect(on(activeAudio, …))` whose body assigns `audioEl.src`, and
+assigning `.src` re-invokes the media load algorithm even at an
+unchanged URL — so a field in that object hands the effect a new
+reference and RESTARTS the source. Here the write happens in the ERROR
+handler, so the field version restarts the source on the very event
+saying the source cannot be started: an unbounded retry loop for a codec
+that will never decode. Three issues, one edge, one remedy — the shape
+of the object is the defect, and `playbackFailure` is declared beside
+`activeAudio`, not inside it. Four axes now, four signals: `href`/`label`
+describe the SOURCE, `playerHidden` the CHROME, `resumePoint` the
+TRANSPORT, `playbackFailure` the last ATTEMPT to load. Pinned by the
+same-reference assertion #1697 introduced, now in its third copy.
+
+**It is not a second predicate beside `mustRefetch`, and it is not a
+mirror of `el.error`.** #1700 ruled that the predicate is one, and this
+does not add one — for two independent reasons, either sufficient.
+`mustRefetch` is `el.error !== null || live()`, so it is TRUE for every
+healthy live stream; a surface gated on it would show a failure on every
+station that works. And it is a question asked OF THE ELEMENT at the
+instant of a decision, over a plain property Solid cannot subscribe to,
+so no amount of asking re-renders anything. What the signal records is
+the EVENT. The two then answer different questions and are allowed to
+disagree: `el.error` is the element's CURRENT resource state and stays
+set until a new fetch lands, while the signal means "the last attempt
+failed and nothing has been attempted since" — which is what a surface
+must say. `playNow` clears the signal and deliberately does not touch
+`el.error`, so `mustRefetch` still decides to `load()`. That clear is
+also what makes a REPEATED failure visible: the same reason written to
+the same signal changes nothing, so without it the operator presses play
+on a source that cannot play and the bar sits there unchanged.
+
+**Source-lifetime, not element-lifetime.** Every writer of `activeAudio`
+clears it (the `resumePoint` discipline, extended), and identity
+rotation clears it with the rest of the store. It is deliberately NOT
+cleared on a re-mount: leaving a scrollback window destroys the element,
+and a source that could not be played will not have become playable in
+the meantime — the re-tune that follows re-measures it anyway.
+
+**Four codes, five reasons, one spelling.** `MediaError` is classified
+ONCE at the store boundary into a closed set, plus an `unknown` arm for
+a code the spec does not define and for the `null` the DOM type allows —
+a failure we cannot NAME is still a failure the operator must see.
+`audioFailureLabel` is the single spelling, shared by the three
+surfaces, for the reason `nowPlaying`'s `trackLabel` gives. The
+sentences are distinct because the next move is: a lost connection is
+worth re-pressing play for and a source this browser cannot decode never
+will be. Code 4 is worded as "this source, here" rather than as a claim
+about the format, because it also covers a 404 and a blocked
+cross-origin fetch.
+
+**Three surfaces, because fixing one leaves the others lying.** The
+docked bar (the notice takes the TRACK's slot — the feed polls
+`tunedStation()`, derived from the SOURCE, so a live-updating track name
+keeps scrolling over silence, which is the loudest way a dead station
+looks like a playing one) and its READOUT (dropped entirely: with no
+metadata `duration` is a finite 0, so `live()` is false and the row drew
+a scrubber at `max="0"` and a `0:00 / 0:00` clock over a resource that
+does not exist; the live arm is no better, being a frozen counter under
+a "live" badge). The RAIL chrome, which is the desktop answer to "what
+is playing" and the only surface left standing when the operator hides
+the bar (#1697). And the OS LOCK SCREEN, which on a phone is often the
+only one awake.
+
+**The download anchor is the exception, and finding it split a `<Show>`
+in two.** It sat inside the file readout because the two share a
+predicate, not because they answer the same question — and an upload the
+browser cannot DECODE is exactly the upload the operator wants to SAVE
+and open in something that can. It is not a claim about playback; it is
+the remedy for the notice beside it. So the notice replaces the readout
+and the anchor keeps #682's own `live()` gate, unchanged. Caught by
+reading `media-link-modal-viewer.spec.ts`, which uploads a deliberately
+FAKE mp3 and then asserts the download affordance — a real browser fails
+that body, so the first shape of this fix would have gone red in e2e
+having been green in every unit test.
+
+**The lock screen gets the reason in the ARTIST slot and keeps
+`playbackState` at `paused`.** Artist because it is the second line and
+a failure has no track and therefore no artist to displace, while
+`title` must keep naming the SOURCE or the sentence loses what failed.
+`playbackState` because the platform's three states are `none | paused |
+playing`, "none" is the only one that could mean broken, and a UA is
+free to drop the whole now-playing card on "none" — which would take the
+message off the lock screen along with the transport button `playNow`
+already retries through. Read off the Media Session spec; not measured
+on a device.
+
+**What was deliberately NOT changed, each named so it is not
+rediscovered as new.** The TOGGLE: it reads ▶ and pressing it already
+re-fetches (#1700), so it was never the lie — the missing thing was
+knowing there was something to retry, and that is the notice, not a
+fourth glyph. `/np` and `nowPlaying()`: the store is not keyed on PAUSE
+either, deliberately, so it means "what the station is broadcasting, as
+far as we know" rather than "what the operator is hearing", and a failed
+element does not change what the station is broadcasting. Whether `/np`
+should refuse when cic is not actually hearing the track (paused or
+failed) is a real question about what that command asserts, and it is a
+different one. The download's gate: still `live()`, so a stream that
+failed before metadata reads a finite `duration` of 0 and still renders
+the anchor on an endless cross-origin href — the honest gate is
+same-origin, which is #682's own second reason spelled as a test instead
+of inferred from the first. And a HIDDEN bar on a phone: the rail is
+off-screen there, so the OS lock screen is the only surface carrying the
+failure. Auto-showing the bar was considered and rejected — the operator
+asked for it to be gone, and cic does not originate state.
