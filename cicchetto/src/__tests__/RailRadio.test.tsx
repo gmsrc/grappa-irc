@@ -152,4 +152,81 @@ describe("RailRadio", () => {
 
     expect(screen.getByTestId("rail-radio-picker")).toBeInTheDocument();
   });
+
+  // #1697 — the picker had rebuilt the band `PaneTopBar` already provides, on
+  // its own `--rail-radio-*` layer, free to drift from the two surfaces that
+  // render the real one. #1073 extracted that band for exactly this reason;
+  // the picker is its third host.
+  describe("#1697 — the picker hosts the shared pane band", () => {
+    const band = (container: HTMLElement): Element | null =>
+      container.querySelector(".rail-radio-picker .topic-bar");
+
+    it("renders the shared band, not a lookalike of it", () => {
+      const { container } = render(() => <RailRadio />);
+      openRadioPicker();
+
+      expect(band(container)).not.toBeNull();
+      expect(container.querySelector(".rail-radio-picker-head")).toBeNull();
+    });
+
+    it("puts its heading in the band's content slot", () => {
+      const { container } = render(() => <RailRadio />);
+      openRadioPicker();
+
+      const slot = container.querySelector(".rail-radio-picker .topic-bar-header");
+      expect(slot).toHaveTextContent("radio");
+    });
+
+    it("puts the ✕ LAST in the band, where the other two hosts put their ☰", () => {
+      // #1073's ordering rule, inherited: the trailing child is what places the
+      // control on the right, on every surface that wears this band.
+      const { container } = render(() => <RailRadio />);
+      openRadioPicker();
+
+      expect(band(container)?.lastElementChild).toBe(screen.getByTestId("rail-radio-picker-close"));
+    });
+
+    it("the ✕ wears the shared chrome button, which is what gives it a tap target", () => {
+      // The hit-target half of item 3. `.shell-chrome-btn` carries
+      // `min-width/height: var(--chrome-tap-min)` (48px ABSOLUTE); the bespoke
+      // rule it replaces asked for 2rem, which is 28px at this app's 14px root.
+      render(() => <RailRadio />);
+      openRadioPicker();
+
+      expect(screen.getByTestId("rail-radio-picker-close")).toHaveClass("shell-chrome-btn");
+    });
+
+    it("the rail's stop control wears it too — the same defect, twice", () => {
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+
+      expect(screen.getByTestId("rail-radio-stop")).toHaveClass("shell-chrome-btn");
+    });
+
+    it("keeps the accessible name and the dismiss wiring across the move", () => {
+      render(() => <RailRadio />);
+      openRadioPicker();
+
+      const close = screen.getByTestId("rail-radio-picker-close");
+      expect(close).toHaveAttribute("aria-label", "close radio picker");
+      close.click();
+
+      expect(radioPickerOpen()).toBe(false);
+    });
+
+    it("does not offer a rail opener inside the already-open rail", () => {
+      // The band's other two hosts put a ☰ in the trailing slot. Rendering one
+      // HERE would be a door to the surface it is already standing on — and on
+      // desktop it is `display: none`, so the picker would lose its only
+      // dismiss control to a CSS rule written for a different host.
+      const { container } = render(() => <RailRadio />);
+      openRadioPicker();
+
+      expect(container.querySelector(".rail-radio-picker .topic-bar-hamburger")).toBeNull();
+      expect(
+        container.querySelector(".rail-radio-picker [data-testid='shell-chrome-rail-opener']"),
+      ).toBeNull();
+    });
+  });
 });

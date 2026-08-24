@@ -2361,14 +2361,13 @@ html.resize-dragging * {
   color: var(--muted);
 }
 
+/* #1697 — the only delta left. Everything this rule used to declare
+   (background / colour / border / cursor / the tap floor) now comes from
+   `.shell-chrome-btn`, worn beside this class in the markup. It asked for
+   `min-width/height: 2rem`, which is 28px at this app's 14px root — under the
+   44px HIG floor, the same defect the picker's ✕ was reported with. */
 .rail-radio-stop {
   flex: none;
-  min-width: 2rem;
-  min-height: 2rem;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  cursor: pointer;
 }
 
 /* The picker OVERLAYS the whole rail. Deliberately not the
@@ -2381,20 +2380,40 @@ html.resize-dragging * {
    grid track. z-index one step above the actions menu so the two cannot
    argue if both are ever up.
    `overscroll-behavior: contain` stops the scroll chaining into the nick list
-   behind it, as its sibling menu does. */
+   behind it, as its sibling menu does — it moved to the inner list below with
+   the scroll it qualifies.
+
+   #1697 — the scroll moved OFF this box onto `.rail-radio-picker-list`, and
+   the padding with it. The panel now hosts the shared `.topic-bar` band
+   (PaneTopBar), and a band inset by its scroller's padding is not the band its
+   two other hosts render — it has to span the panel edge to edge, which is
+   also where the missing top padding came from: the hand-rolled head inherited
+   this flat 0.5rem, while the band reads `--pane-chrome-inset-block/inline`
+   (0.5rem / 1rem). */
 .rail-radio-picker {
   position: absolute;
   inset: 0;
   z-index: 302;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.5rem;
   background: var(--bg-alt);
   border-left: 1px solid var(--border);
+  touch-action: pan-y;
+}
+
+/* #1697 — the station list, and now the scrolling element. `min-height: 0` is
+   what lets it shrink inside the flex column instead of overflowing the panel
+   (the same flooring `.shell-members` needed at #500); the band above it is
+   `flex: none` by virtue of not growing, so it stays put while this scrolls. */
+.rail-radio-picker-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem;
   overflow-y: auto;
   overscroll-behavior: contain;
-  touch-action: pan-y;
 }
 
 /* #913's descendant carve-out, for the same reason it exists on
@@ -2406,15 +2425,17 @@ html.resize-dragging * {
   touch-action: pan-y;
 }
 
-.rail-radio-picker-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
+/* #1697 — `.rail-radio-picker-head` is GONE, not merely unused. It was a
+   lookalike of the band `PaneTopBar` provides (flex row, centred, a content
+   slot and a trailing control), rebuilt on the `--rail-radio-*` layer and free
+   to drift from the two surfaces rendering the real one. The picker hosts
+   `.topic-bar` now, so the row shape, the `--pane-chrome-inset-*` padding and
+   the bottom border all come from there. Leaving the rule behind would leave a
+   second chrome layer alive for the next component to reach for. */
 
 /* Matches the `.members-pane h3` / `.rail-query-heading` slot — the
-   established heading shape for rail content. */
+   established heading shape for rail content. Now rendered INSIDE
+   `.topic-bar-header`, which supplies the `flex: 1; min-width: 0` chain. */
 .rail-radio-heading {
   margin: 0;
   font-size: var(--font-size);
@@ -2422,14 +2443,10 @@ html.resize-dragging * {
   color: var(--muted);
 }
 
+/* #1697 — the only delta left; see the twin note on `.rail-radio-stop`. The
+   tap floor, the palette and the border come from `.shell-chrome-btn`. */
 .rail-radio-picker-close {
   flex: none;
-  min-width: 2rem;
-  min-height: 2rem;
-  background: var(--bg);
-  color: var(--fg);
-  border: 1px solid var(--border);
-  cursor: pointer;
 }
 
 /* A station row. The tap floor is the app-wide absolute one, so it does not

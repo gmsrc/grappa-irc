@@ -4,6 +4,7 @@ import { createDismissOnOutsidePointer } from "./lib/dismissOnOutsidePointer";
 import { createOverlayLock } from "./lib/overlayScrollLock";
 import { closeRadioPicker, radioPickerOpen, tunedStation, tuneStation } from "./lib/radio";
 import { RADIO_STATIONS } from "./lib/radioStations";
+import PaneTopBar from "./PaneTopBar";
 
 // #682 — the rail's internet-radio surface: a station PICKER and, once
 // something is tuned, the station CHROME. Two views of the ONE audio player.
@@ -79,9 +80,13 @@ const RailRadio: Component = () => {
             {/* `closeAudio` directly: it already IS the stop verb, and the
                 station is derived from the player, so clearing the player is
                 what un-tunes. No radio-flavoured wrapper around it. */}
+            {/* #1697 — `.shell-chrome-btn` here too. The issue named the
+                picker's ✕, but this button carried the identical `2rem`
+                (= 28px at a 14px root) tap floor: one defect, two instances,
+                and fixing only the reported one leaves the class alive. */}
             <button
               type="button"
-              class="rail-radio-stop"
+              class="rail-radio-stop shell-chrome-btn"
               data-testid="rail-radio-stop"
               onClick={closeAudio}
               aria-label="stop radio"
@@ -94,43 +99,67 @@ const RailRadio: Component = () => {
 
       <Show when={radioPickerOpen()}>
         <div class="rail-radio-picker" data-testid="rail-radio-picker">
-          <div class="rail-radio-picker-head">
+          {/* #1697 — the SHARED band, not a lookalike. This used to be a
+              hand-rolled `.rail-radio-picker-head` on its own `--rail-radio-*`
+              layer, free to drift from the two surfaces rendering the real
+              one; #1073 extracted the band for exactly this reason and this is
+              its third host. The trailing control is a ✕, which is why #1697
+              had to turn that position into a slot: a rail-opener here would
+              be a door to the surface it is standing on, and its class is
+              `display: none` on desktop, so inheriting it would have cost the
+              picker its only dismiss control on the form factor where it
+              works today. */}
+          <PaneTopBar
+            trailing={
+              <button
+                type="button"
+                /* `.shell-chrome-btn` is what gives this a tap target. The
+                   bespoke rule it replaces asked for `2rem`, which is 28px at
+                   this app's 14px root — under the 44px HIG floor, and the
+                   reason the ✕ rendered without landing. Reuse, not a bigger
+                   number. */
+                class="rail-radio-picker-close shell-chrome-btn"
+                data-testid="rail-radio-picker-close"
+                onClick={closeRadioPicker}
+                aria-label="close radio picker"
+              >
+                {"✕"}
+              </button>
+            }
+          >
             {/* Mirrors the MembersPane `<h3>` slot (uppercased by CSS), the
                 established heading shape for rail content. */}
             <h3 class="rail-radio-heading">radio</h3>
-            <button
-              type="button"
-              class="rail-radio-picker-close"
-              data-testid="rail-radio-picker-close"
-              onClick={closeRadioPicker}
-              aria-label="close radio picker"
-            >
-              {"✕"}
-            </button>
+          </PaneTopBar>
+          {/* The scroll moved off the picker box onto this list when the band
+              arrived: the band must span the panel edge to edge, the way it
+              does on its other two hosts, so the padding that used to sit on
+              the scroller sits here instead. */}
+          <div class="rail-radio-picker-list">
+            <For each={RADIO_STATIONS}>
+              {(station) => (
+                <button
+                  type="button"
+                  class="rail-radio-station"
+                  classList={{ tuned: tunedStation()?.id === station.id }}
+                  data-testid={`rail-radio-station-${station.id}`}
+                  onClick={() => tuneStation(station)}
+                  /* aria-pressed, not aria-selected: these are toggle buttons in
+                     a plain container, not options in a listbox — and it is what
+                     marks the tuned row for a screen reader, matching the visual
+                     `.tuned` class. */
+                  aria-pressed={tunedStation()?.id === station.id ? "true" : "false"}
+                  title={station.description}
+                >
+                  <img class="rail-radio-station-logo" src={station.logoUrl} alt="" />
+                  <span class="rail-radio-station-text">
+                    <span class="rail-radio-station-title">{station.title}</span>
+                    <span class="rail-radio-station-genres">{station.genres.join(" · ")}</span>
+                  </span>
+                </button>
+              )}
+            </For>
           </div>
-          <For each={RADIO_STATIONS}>
-            {(station) => (
-              <button
-                type="button"
-                class="rail-radio-station"
-                classList={{ tuned: tunedStation()?.id === station.id }}
-                data-testid={`rail-radio-station-${station.id}`}
-                onClick={() => tuneStation(station)}
-                /* aria-pressed, not aria-selected: these are toggle buttons in
-                   a plain container, not options in a listbox — and it is what
-                   marks the tuned row for a screen reader, matching the visual
-                   `.tuned` class. */
-                aria-pressed={tunedStation()?.id === station.id ? "true" : "false"}
-                title={station.description}
-              >
-                <img class="rail-radio-station-logo" src={station.logoUrl} alt="" />
-                <span class="rail-radio-station-text">
-                  <span class="rail-radio-station-title">{station.title}</span>
-                  <span class="rail-radio-station-genres">{station.genres.join(" · ")}</span>
-                </span>
-              </button>
-            )}
-          </For>
         </div>
       </Show>
     </div>
