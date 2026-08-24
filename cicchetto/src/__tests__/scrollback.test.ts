@@ -1856,19 +1856,29 @@ describe("appendToScrollback — #1229 unread-retention bound", () => {
     // NEWEST page — the live tail is never what gets dropped.
     expect(rows.filter((m) => m.id > cursor).length).toBe(bound);
     expect(rows[rows.length - 1]?.id).toBe(total);
-    // The read context is untouched by this bound (the ring cap still owns
-    // it), boundary row included: `cursor` read rows plus one page of unread —
-    // bounded, where before the fix it was `total` and grew with every
-    // arriving row.
-    expect(rows.length).toBe(cursor + bound);
-    expect(rows.map((m) => m.id)).toContain(cursor);
+    // #1538 — the whole window is now that page and nothing else. It used to be
+    // `cursor + bound`: the read context below the divider was kept while the
+    // oldest unread was excised from between the two, which is the interior
+    // hole that issue is about. The collapse takes the read context with it, so
+    // the retained window is one contiguous page — a TIGHTER memory bound than
+    // the shape this test used to pin, which is what #1229 was for.
+    expect(rows.length).toBe(bound);
+    expect(rows.map((m) => m.id)).not.toContain(cursor);
   });
 
   // The FIRST bite, by exactly one row. Every other case in this file sits a
   // page or more away from the ceiling, where a one-row phase error in the
   // trim is invisible — so nothing pinned WHICH end the trim takes, nor WHERE
   // the threshold sits. Those are the two facts the bound is made of.
-  it("bites one row past the ceiling, dropping the OLDEST unread and never the boundary", async () => {
+  //
+  // 🔴 #1538 — this test used to ASSERT THE DEFECT. It read
+  //   expect(ids).toContain(cursor); expect(ids).not.toContain(cursor + 1);
+  // i.e. the row above the gap alive and the first row of the gap gone: the
+  // interior hole, pinned as the contract, under a title that called it
+  // "never the boundary". Two reporters on #sniffo lost nine rows out of the
+  // middle of a rendered range to exactly that shape, and this green is why
+  // nobody could have found it by running the suite. Rewritten with the cure.
+  it("collapses to the newest page one row past the ceiling, dropping a PREFIX", async () => {
     localStorage.setItem("grappa-token", "tok");
     const scrollback = await import("../lib/scrollback");
     const bound = scrollback.UNREAD_RETENTION_CAP;
@@ -1878,14 +1888,15 @@ describe("appendToScrollback — #1229 unread-retention bound", () => {
     const total = cursor + bound + 1;
     for (let i = 1; i <= total; i++) scrollback.appendToScrollback(key, mkRow(i));
     const ids = (scrollback.scrollbackByChannel()[key] ?? []).map((m) => m.id);
-    // The boundary row is READ. The divider anchors on it and this module's
-    // rule exempts `id >= cursor`, so it is not this bound's to drop: the
-    // ceiling is on the UNREAD region, and the row that leaves is the oldest
-    // unread — the one just under the divider.
-    expect(ids).toContain(cursor);
-    expect(ids).not.toContain(cursor + 1);
-    expect(ids.filter((id) => id > cursor).length).toBe(bound);
+    // One contiguous run ending at the live tail — no interior gap at any
+    // width, which is the property the excision could not offer.
+    expect(ids).toEqual(Array.from({ length: bound }, (_, i) => total - bound + 1 + i));
     expect(ids[ids.length - 1]).toBe(total);
+    // The boundary row goes with the prefix. It is exempt only because the
+    // divider anchors on it, and this same transition arms far-behind, which
+    // SUPPRESSES the divider — so there is no anchor left to preserve it for.
+    expect(ids).not.toContain(cursor);
+    expect(scrollback.farBehindByChannel()[key]).toBeDefined();
   });
 
   it("does not bite AT one page of unread — the line `isFarBehind` already draws", async () => {
@@ -1981,6 +1992,114 @@ describe("appendToScrollback — #1229 unread-retention bound", () => {
     for (let i = cursor; i <= total; i++) expect(ids).toContain(i);
     // No pruning of unread happened → the window is NOT far behind.
     expect(scrollback.farBehindByChannel()[key]).toBeUndefined();
+  });
+});
+
+// #1538 — the invariant the middle-excision broke, stated where it can
+// actually be enforced: ON THE FUNCTION.
+//
+// It cannot be checked after the fact, and that is not a stylistic
+// preference. `messages.id` is a GLOBAL autoincrement, not per-channel, so
+// two consecutive rows of one channel routinely carry non-consecutive ids —
+// every busy server interleaves other channels between them. No id-gap scan
+// over a loaded window can therefore distinguish a hole the client punched
+// from ordinary numbering, in production or in a test. The only place the
+// difference is observable is at the moment of the cut, against the input
+// the cut was made from. So the guard lives here, and it is structural:
+// whatever leaves this function is a CONTIGUOUS RUN of what entered it.
+//
+// (In the field probe that found #1538 the ids were synthetic and
+// consecutive, which is the ONLY reason the hole was visible at all.)
+describe("capScrollbackRing — structural contiguity invariant (#1538)", () => {
+  const mkRow = (id: number): import("../lib/api").ScrollbackMessage => ({
+    id,
+    network: "freenode",
+    channel: "#grappa",
+    server_time: id,
+    kind: "privmsg",
+    sender: "peer",
+    body: `line ${id}`,
+    meta: {},
+  });
+
+  // `out` must be `input.slice(start, start + out.length)` for some start —
+  // compared by REFERENCE, so no id arithmetic can fake it.
+  const assertContiguousRun = (
+    input: import("../lib/api").ScrollbackMessage[],
+    out: import("../lib/api").ScrollbackMessage[],
+    label: string,
+  ): void => {
+    if (out.length === 0) return;
+    const start = input.indexOf(out[0] as import("../lib/api").ScrollbackMessage);
+    expect(start, `${label}: first output row is not from the input`).toBeGreaterThanOrEqual(0);
+    expect(out, `${label}: output is not a contiguous run of the input`).toEqual(
+      input.slice(start, start + out.length),
+    );
+  };
+
+  it("returns a contiguous run of its input for every cursor position and size", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+    const bound = scrollback.UNREAD_RETENTION_CAP;
+    const ring = scrollback.SCROLLBACK_RING_CAP;
+
+    // Sizes straddle both thresholds and both their ±1 neighbourhoods; cursor
+    // positions cover "no cursor", "before every row", "one read row",
+    // mid-window, "one unread row" and "everything read".
+    const sizes = [1, bound, bound + 1, bound + 50, ring, ring + 1, ring + 300];
+    for (const size of sizes) {
+      const input = Array.from({ length: size }, (_, i) => mkRow(i + 1));
+      const positions: Array<number | null> = [
+        null,
+        0,
+        1,
+        Math.floor(size / 2),
+        size - 1,
+        size,
+        size + 10,
+      ];
+      for (const cursor of positions) {
+        mockGetReadCursor.mockReturnValue(cursor);
+        const capped = scrollback.capScrollbackRing(key, input);
+        assertContiguousRun(input, capped.rows, `size=${size} cursor=${cursor}`);
+        // And the live tail is never what leaves: the newest row always stays.
+        expect(capped.rows[capped.rows.length - 1], `size=${size} cursor=${cursor}`).toBe(
+          input[input.length - 1],
+        );
+      }
+    }
+  });
+
+  it("the reported shape: read context above + a live arrival leaves NO hole", async () => {
+    localStorage.setItem("grappa-token", "tok");
+    const scrollback = await import("../lib/scrollback");
+    const key = channelKey("freenode", "#grappa");
+    const bound = scrollback.UNREAD_RETENTION_CAP;
+    // #sniffo as reported: the operator scrolled up past their own read
+    // position, so read context sits ABOVE the divider, and the unread region
+    // below it is over the ceiling. This is the exact state in which the
+    // excision used to carve rows out from under the operator's eyes.
+    const cursor = 1000;
+    mockGetReadCursor.mockReturnValue(cursor);
+    const input = [
+      ...Array.from({ length: 50 }, (_, i) => mkRow(cursor - 49 + i)),
+      ...Array.from({ length: bound + 51 }, (_, i) => mkRow(cursor + 1 + i)),
+    ];
+    const capped = scrollback.capScrollbackRing(key, input);
+    const ids = capped.rows.map((m) => m.id);
+    for (let i = 1; i < ids.length; i++) {
+      expect(ids[i], "a row went missing from the middle of the kept range").toBe(
+        (ids[i - 1] as number) + 1,
+      );
+    }
+    // What it keeps is the TAIL, contiguous, exactly one page of it.
+    expect(capped.rows.length).toBe(bound);
+    expect(ids[ids.length - 1]).toBe(cursor + bound + 51);
+    // And it still reports the pruning, so the caller arms far-behind: the
+    // window announces itself as far behind rather than lying quietly.
+    expect(capped.unreadDropped).toBe(51);
+    expect(capped.unreadHeld).toBe(bound + 51);
   });
 });
 

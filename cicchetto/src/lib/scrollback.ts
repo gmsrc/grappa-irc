@@ -188,14 +188,21 @@ const isCanonicallyOrdered = (rows: ScrollbackMessage[]): boolean => {
   return true;
 };
 
-// Trim `rows` (ASC by id) to the ring cap by dropping the OLDEST, but NEVER a
-// row at/after the read cursor: the in-pane `── XX unread ──` divider anchors
-// on the cursor and its unread rows (CLAUDE.md "Read state is server-owned"),
-// so dropping the boundary would break the unread contract. The evictable
-// region is exactly the read-context strictly below the divider (id <
-// cursor); a pathological all-unread channel simply holds above the cap until
-// the operator reads (advancing the cursor makes those rows evictable). With
-// no cursor (fresh channel, no divider) eviction is unconstrained.
+// Trim `rows` (ASC by id) to the bounds below, ALWAYS by dropping a PREFIX —
+// never a block out of the interior (#1538; the invariant is enforced by a test
+// on this function, because global `messages.id` makes a hole undetectable from
+// the outside afterwards).
+//
+// Two bounds, in order:
+//   * the #1229 unread ceiling — past one page of unread the window collapses
+//     to the newest page and the caller arms far-behind. See below.
+//   * the S20 ring cap — under that ceiling, drop the OLDEST but NEVER a row
+//     at/after the read cursor: the in-pane `── XX unread ──` divider anchors
+//     on the cursor and its unread rows (CLAUDE.md "Read state is
+//     server-owned"), so the evictable region is exactly the read context
+//     strictly below the divider. With no cursor (fresh channel, no divider)
+//     eviction is unconstrained.
+//
 // What the cap did, so the caller can arm the far-behind state without the
 // pure updater reaching for a signal. `unreadDropped > 0` is the ONLY way a row
 // at/after the cursor ever leaves the store on this path.
@@ -208,7 +215,13 @@ type CappedRing = {
   cursor: number | null;
 };
 
-const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): CappedRing => {
+// #1538 — exported for its structural contiguity test, and for nothing else:
+// no production caller outside this module. Same reason
+// `shouldRescueUnderfillLoadOlder` is exported from `ScrollbackPane` — the
+// decision is where the defect lives, so the decision is what a test must be
+// able to address. See the invariant's own comment in `scrollback.test.ts`
+// for why it CANNOT be checked from the outside after the fact.
+export const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): CappedRing => {
   const decoded = decodeChannelKey(key);
   const cursor = decoded ? getReadCursor(decoded.slug, decoded.name) : null;
   // Rows are ASC by id, so the first index with id >= cursor bounds the
@@ -227,45 +240,71 @@ const capScrollbackRing = (key: ChannelKey, rows: ScrollbackMessage[]): CappedRi
   // ring cap because it can bite while the total is still under it (900 unread
   // and no read history is 900 rows the operator cannot see the top of).
   //
-  // It drops the OLDEST unread — the rows just under the divider — and not
-  // simply "everything but the newest page", which would have been one slice
-  // instead of two. The difference is the operator scrolled UP reading history
-  // while a busy channel runs on below them: their cursor sits at the last row
-  // they can see, so the arriving rows are unread and the ceiling bites: the
-  // one-slice version deletes the screen they are reading, the pane jumps to
-  // the tail. Dropping from just below the divider instead removes rows that
-  // are off-screen BELOW, leaving `scrollTop` and everything above it intact.
-  // What remains of the read context is then trimmed by the ring cap, exactly
-  // as it was before this bound existed.
-  //
-  // Two invariants decide the arithmetic, and both are one row wide:
-  //   * the BOUNDARY row (`id === cursor`, the newest READ row) is not this
-  //     bound's to drop — it is what the divider anchors on, and the rule this
-  //     whole function is built around exempts `id >= cursor`. So the trim
-  //     starts at `firstUnread`, never at `firstProtected`.
-  //   * the ceiling is crossed at `unreadCount > UNREAD_RETENTION_CAP`, the
-  //     SAME comparison `isFarBehind` makes, because the bound's job is to
-  //     deliver the window into that state. Biting at `=== CAP` would arm the
-  //     banner for a window the reload path's gap probe still calls near, and
-  //     the shared constant exists precisely so those two cannot disagree.
+  // The ceiling is crossed at `unreadCount > UNREAD_RETENTION_CAP`, the SAME
+  // comparison `isFarBehind` makes, because the bound's job is to deliver the
+  // window into that state. Biting at `=== CAP` would arm the banner for a
+  // window the reload path's gap probe still calls near, and the shared
+  // constant exists precisely so those two cannot disagree.
   const overflowUnread =
     unreadCount > UNREAD_RETENTION_CAP ? unreadCount - UNREAD_RETENTION_CAP : 0;
-  const afterUnreadTrim =
-    overflowUnread > 0
-      ? [...rows.slice(0, firstUnread), ...rows.slice(firstUnread + overflowUnread)]
-      : rows;
 
-  const surplus = afterUnreadTrim.length - SCROLLBACK_RING_CAP;
+  // #1538 — past the ceiling the window COLLAPSES to a contiguous tail window.
+  //
+  // It used to excise the oldest unread instead — `[...slice(0, firstUnread),
+  // ...slice(firstUnread + overflowUnread)]`, two slices, a block lifted out of
+  // the INTERIOR — on the argument that those rows are "off-screen BELOW,
+  // leaving scrollTop and everything above it intact". That argument reads the
+  // read cursor as a proxy for where the operator is looking, and the proxy
+  // fails in exactly one case: the operator has scrolled DOWN past the divider
+  // into the unread region. Then the rows just under the divider are the rows
+  // on screen, and the excision cut them out from under them — two reporters,
+  // #sniffo, nine rows out of the middle of a rendered range (#1538).
+  //
+  // So: keep the newest page, drop a PREFIX, never an interior block. What the
+  // operator loses is the read context above the divider — and that is a cost
+  // the pane ANNOUNCES, because the same transition arms far-behind: the
+  // "N unread — jump back" banner goes up and `jumpToUnread` rebuilds the
+  // region from the server. The excision's cost was a hole nothing declared and
+  // scrolling up could not repair (`loadMore` pages before `rows[0]`, which sits
+  // ABOVE the hole). An announced loss and a silent one are not comparable.
+  //
+  // This is also the shape `anchorAtTail` already produces, and for the reason
+  // it already states: a non-contiguous loaded set "renders a silent hole — two
+  // regions abutting as if they were consecutive". That verb refuses to create
+  // one; this one no longer does either. Contiguity is now a property of every
+  // path (`loadMore`, `loadNewer`, `jumpToUnread`, `anchorAtTail`, this), which
+  // is what makes it an invariant worth a test rather than a habit.
+  //
+  // The BOUNDARY row (`id === cursor`) goes too, and that is deliberate: it is
+  // exempt only because the divider anchors on it, and the far-behind state
+  // this same transition arms SUPPRESSES the divider (`ScrollbackPane`'s
+  // `injectMarker` gate). Keeping an anchor for a divider that is not drawn
+  // would be keeping it for nobody. Below the ceiling the exemption is
+  // untouched and S20's contract is byte-identical.
+  //
+  // Returning here leaves the ring cap below to the one case it still owns.
+  // The kept slice is `UNREAD_RETENTION_CAP` rows and that constant is
+  // `PAGE_LIMIT`, an order of magnitude under `SCROLLBACK_RING_CAP`, so the
+  // ring cap has nothing left to say about this window.
+  if (overflowUnread > 0) {
+    return {
+      rows: rows.slice(rows.length - UNREAD_RETENTION_CAP),
+      unreadDropped: overflowUnread,
+      unreadHeld: unreadCount,
+      cursor,
+    };
+  }
+
+  const surplus = rows.length - SCROLLBACK_RING_CAP;
   let dropCount = surplus > 0 ? surplus : 0;
   if (cursor !== null && dropCount > 0) {
-    // The evictable prefix shrank with the unread trim only in its tail, so the
-    // read-context boundary is still where it was: `firstProtected`.
-    const maxDroppable = firstProtected === -1 ? afterUnreadTrim.length : firstProtected;
+    // The evictable region is the read context strictly below the divider.
+    const maxDroppable = firstProtected === -1 ? rows.length : firstProtected;
     if (dropCount > maxDroppable) dropCount = maxDroppable;
   }
   return {
-    rows: dropCount > 0 ? afterUnreadTrim.slice(dropCount) : afterUnreadTrim,
-    unreadDropped: overflowUnread,
+    rows: dropCount > 0 ? rows.slice(dropCount) : rows,
+    unreadDropped: 0,
     unreadHeld: unreadCount,
     cursor,
   };

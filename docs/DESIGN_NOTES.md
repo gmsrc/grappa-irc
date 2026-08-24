@@ -61967,3 +61967,115 @@ nothing. And Kohina's vendor is deliberately ABSENT from
 is an `.m3u` DOCUMENT rather than a redirecting host, the map cannot
 express that shape, and inventing a front door for it would be the
 unverifiable claim the map exists to prevent.
+<!-- entry #1538 -->
+
+---
+
+## 2026-08-24 — #1538: rows vanish from the MIDDLE of a rendered range
+
+Two reporters on #sniffo, mobile, nine rows gone from between two rows that
+both stayed on screen. The issue asked for one thing first: separate "rows
+left the STORE" from "rows left the DOM", because the two have opposite
+cures. Recorded here is what the measurement settled, one discovery that
+makes the cure defensible, and one conflict it does NOT settle.
+
+### It is the store, and the DOM is a faithful projection
+
+Measured on both planes rather than argued from one.
+
+STORE, real module, the reported route (scroll-up then live arrivals),
+cursor 1000: six `loadMore` prepends give 301 rows, 950..1250, 51 read + 250
+unread, **no holes**. ONE live append then yields a contiguous **hole
+[1001..1051]** — the last READ row alive above it, the rest of the unread
+alive below. Eight further arrivals grow it to [1001..1059], **one row per
+message**. A further scroll-up moves the oldest row 950 → 900 and leaves the
+hole untouched: `loadMore` pages before `rows[0]`, which sits ABOVE the hole,
+so the gesture that looks like it should repair it never can.
+
+DOM, real `ScrollbackPane` in jsdom: 301 store rows → 301 `.scrollback-line`
+nodes; then the holed 251-row array → 251 nodes, exact set AND order
+equality. The pane reads the store directly and `<For each={rows()}>`
+rebuilds the list on every change, so it renders the hole and does not make
+one.
+
+The `rows()` presence filter (#222) is excluded by the SHAPE of the report,
+not by assumption: the gap contains ordinary messages while a presence row
+(`* mizar…`) survived it — the exact inverse of what that filter does.
+
+Control arm: with the cursor BELOW every loaded row (no read context above),
+500 rows become 200 with **no hole** — a prefix drop. The S20 ring cap alone
+therefore cannot open an interior gap, which is what the issue already
+suspected; the arm that opens one lives in the same function.
+
+### Why the guard has to be ON the function, not a check afterwards
+
+`messages.id` is a GLOBAL autoincrement, not per-channel. Two consecutive
+rows of one channel routinely carry non-consecutive ids, because every other
+channel on the server is interleaved between them. So **no id-gap scan over a
+loaded window can tell a hole the client punched from ordinary numbering** —
+not in production, not in a test, not after the fact. The difference is
+observable only at the moment of the cut, against the input the cut was made
+from.
+
+That is why `capScrollbackRing` is exported and carries a structural
+invariant test: whatever leaves it is a CONTIGUOUS RUN of what entered it,
+compared by reference across a grid of sizes and cursor positions. The probe
+that found #1538 only saw the hole because its ids were synthetic and
+consecutive. Nothing in the field would have.
+
+### Two further measurements
+
+**The ratchet.** `setCursorIfAdvances` (`selection.ts`) returns early while
+the window is far behind — measured: `setReadCursor` called **0 times**. The
+first bite arms far-behind, far-behind freezes the cursor, the frozen cursor
+keeps the unread region above the ceiling, and every later message takes one
+more row. Forty arrivals took the hole from 51 to 90 rows. Reading cannot
+stop it; only `jumpToUnread` or `dismissFarBehind` can. This is the second
+reporter's "after the third scroll it's toast".
+
+**The mobile bridge, without inventing a second defect.** The mechanism is
+platform-independent JS, so "mobile only" needed an explanation. It is the
+catch-up path: a HEALTHY window (201 rows, 120 unread, under the ceiling, no
+hole) takes ONE 150-row `refreshScrollback` page and comes out with a
+**70-row hole in a single step**. iOS suspends the web process on every app
+switch, so that path is the norm on a phone and the exception on a desktop.
+The frequency itself is inferred from the platform, not measured here. The
+#230 touch-underfill trigger is excluded with a proof rather than a guess:
+its seam returns false whenever the pane is natively scrollable, and a
+200-row pane overflows.
+
+### The cure, and the decision it reverses
+
+`capScrollbackRing` now collapses to a contiguous tail window past the unread
+ceiling — `rows.slice(rows.length - UNREAD_RETENTION_CAP)`, a PREFIX drop —
+instead of excising `[...slice(0, firstUnread), ...slice(firstUnread +
+overflow)]` from the interior. The boundary row goes with the prefix, which
+is consistent rather than careless: it is exempt only because the divider
+anchors on it, and the same transition arms far-behind, which suppresses the
+divider.
+
+The argument for it is that the two costs are not comparable. The operator is
+already being told "you are N behind, jump back"; losing the read context
+above the divider is part of that announcement, while losing a block from the
+middle is a silent loss of history that scrolling up cannot repair. It also
+restores contiguity as a property of every path — `loadMore`, `loadNewer`,
+`jumpToUnread`, `anchorAtTail` — and `anchorAtTail` already refuses to create
+a non-contiguous window for the reason it states in place: two regions
+abutting as if they were consecutive render "a silent hole".
+
+**What this does NOT settle, and it is written down because the branch must
+not be read as closing it.** #1229 did not arrive at the excision by
+accident: it considered this exact collapse and rejected it, and left an e2e
+(`issue1229-unread-retention-bound.spec.ts`) whose moduledoc says so —
+dropping "everything but the newest page" *"would have satisfied (2) while
+deleting the screen out from under a reader scrolled up in history"* — with
+assertions pinning that the read-context row survives and `scrollTop` does
+not move. So the cure trades #1538's victim (a reader scrolled DOWN past the
+divider, into the unread region) for #1229's victim (a reader parked ABOVE
+it, in read history). Both failures have one root: the store picks what to
+destroy using the read cursor as a proxy for the viewport, and the proxy is
+wrong for whichever reader is on the other side of the divider. A rule that
+serves both has to prune the end FURTHEST from the viewport — still prefix or
+suffix, never interior, both ends re-pageable by `loadMore` / `loadNewer` —
+which needs a viewport signal the store does not have today. That is the
+open question, and it is vjt's to rule on.
