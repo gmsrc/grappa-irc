@@ -7,6 +7,7 @@ import {
   overlayEscapeDepth,
   runTopmostOverlayEscape,
 } from "../lib/overlayScrollLock";
+import { TEXT_VIEW_MAX_BYTES } from "../lib/textResource";
 import MediaViewerModal from "../MediaViewerModal";
 import { resetPlatformStubs, stubIosStandalone } from "./helpers/platformStubs";
 import { fireTouchAt } from "./helpers/touchEvents";
@@ -369,5 +370,186 @@ describe("MediaViewerModal — swipe to dismiss (#1438)", () => {
     fireTouchAt(img, "touchstart", 1_100, { clientX: X, clientY: Y0 });
     dragAndLift(dialogIn(container), 400);
     expect(mediaViewerState()).not.toBeNull();
+  });
+});
+
+// #1764 — .txt / .md open as SOURCE in the same modal: monospace, line
+// numbers, no rendering of any kind (vjt, #sbiffo 2026-08-24: "nono nessun
+// rendering di gesu, assolutamente solo il sorgente txt e md"). The fetch/cap
+// arithmetic is pinned in textResource.test.ts against the raw verb; what is
+// asserted HERE is what only this component can get wrong — that the bytes
+// reach the pane, that the gutter numbers the lines the pane shows, that the
+// truncation is VISIBLE, and that a scrolled pane does not lose its scroll to
+// the dismiss gesture.
+describe("MediaViewerModal — text source viewer (#1764)", () => {
+  const TEXT_URL = "https://grappa.example/uploads/abcdefghijklmnopqrstuvwxyz.txt";
+
+  // Response-shaped stub, same reason as textResource.test.ts: the component
+  // depends on `res.body.getReader()`, and the platform's own Response is not
+  // what is under test here.
+  const stubBody = (text: string): void => {
+    const chunk = new TextEncoder().encode(text);
+    vi.stubGlobal("fetch", () =>
+      Promise.resolve({
+        ok: true,
+        status: 206,
+        body: {
+          getReader: () => {
+            let sent = false;
+            return {
+              read: () => {
+                if (sent) return Promise.resolve({ done: true });
+                sent = true;
+                return Promise.resolve({ done: false, value: chunk });
+              },
+              cancel: () => Promise.resolve(),
+            };
+          },
+        },
+      }),
+    );
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const textPane = (container: HTMLElement): HTMLElement => {
+    const el = container.querySelector<HTMLElement>(".media-viewer-text");
+    if (el === null) throw new Error("no text pane rendered");
+    return el;
+  };
+
+  it("renders the fetched source verbatim in a <pre>", async () => {
+    stubBody("alpha\nbeta\ngamma\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text-source")?.textContent).toBe(
+        "alpha\nbeta\ngamma",
+      );
+    });
+    // The whole point of the ruling: nothing was interpreted on the way in.
+    expect(container.querySelector(".media-viewer-text-source")?.tagName).toBe("PRE");
+  });
+
+  it("numbers every line, and exactly the lines the pane shows", async () => {
+    stubBody("one\ntwo\nthree\nfour\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text-gutter")?.textContent).toBe("1\n2\n3\n4");
+    });
+  });
+
+  it("markdown source is shown as SOURCE — no heading, no emphasis, no anchor", async () => {
+    stubBody("# Title\n\n**bold** and [a link](https://example.com)\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer("https://grappa.example/uploads/abcdefghijklmnopqrstuvwxyz.md", "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text-source")?.textContent).toContain(
+        "**bold**",
+      );
+    });
+    const pane = textPane(container);
+    // The three shapes a renderer would have produced. cic has no sanitisation
+    // surface anywhere today and this change must not be the reason it grows
+    // one — so the assertion is about generated HTML, not about looks.
+    expect(pane.querySelector("h1")).toBeNull();
+    expect(pane.querySelector("strong")).toBeNull();
+    expect(pane.querySelector("a")).toBeNull();
+  });
+
+  it("says so, in the pane, when the source was cut at the cap", async () => {
+    stubBody("x".repeat(TEXT_VIEW_MAX_BYTES + 1));
+    render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(screen.getByText(/first .* of this file/i)).not.toBeNull();
+    });
+  });
+
+  it("says nothing about truncation when the whole file arrived", async () => {
+    stubBody("short\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text-source")).not.toBeNull();
+    });
+    expect(container.querySelector(".media-viewer-text-truncated")).toBeNull();
+  });
+
+  it("a failed fetch shows the shared failure text, not a forever-spinner", async () => {
+    vi.stubGlobal("fetch", () => Promise.resolve({ ok: false, status: 404, body: null }));
+    render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(screen.getByText(/failed to load/i)).not.toBeNull();
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("a downward drag on a SCROLLED pane does not dismiss — the pane owns its own axis", async () => {
+    stubBody("a\nb\nc\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text")).not.toBeNull();
+    });
+    const dialog = container.querySelector<HTMLElement>(".media-viewer-modal");
+    if (dialog === null) throw new Error("no media viewer dialog rendered");
+    // jsdom has no layout, so scrollTop is a plain writable property here —
+    // which is exactly the state the gate reads on a real phone.
+    textPane(container).scrollTop = 120;
+    fireTouchAt(dialog, "touchstart", 0, { clientX: 160, clientY: 300 });
+    fireTouchAt(dialog, "touchmove", 1_000, { clientX: 160, clientY: 700 });
+    fireTouchAt(dialog, "touchend", 2_000, { clientX: 160, clientY: 700 });
+    expect(mediaViewerState()).not.toBeNull();
+  });
+
+  it("an UPWARD drag never dismisses a text pane — that gesture is 'read on'", async () => {
+    stubBody("a\nb\nc\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text")).not.toBeNull();
+    });
+    const dialog = container.querySelector<HTMLElement>(".media-viewer-modal");
+    if (dialog === null) throw new Error("no media viewer dialog rendered");
+    fireTouchAt(dialog, "touchstart", 0, { clientX: 160, clientY: 300 });
+    fireTouchAt(dialog, "touchmove", 1_000, { clientX: 160, clientY: -100 });
+    fireTouchAt(dialog, "touchend", 2_000, { clientX: 160, clientY: -100 });
+    expect(mediaViewerState()).not.toBeNull();
+  });
+
+  it("a long downward drag from the TOP of the pane still dismisses", async () => {
+    stubBody("a\nb\nc\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text")).not.toBeNull();
+    });
+    const dialog = container.querySelector<HTMLElement>(".media-viewer-modal");
+    if (dialog === null) throw new Error("no media viewer dialog rendered");
+    fireTouchAt(dialog, "touchstart", 0, { clientX: 160, clientY: 300 });
+    fireTouchAt(dialog, "touchmove", 1_000, { clientX: 160, clientY: 700 });
+    fireTouchAt(dialog, "touchend", 2_000, { clientX: 160, clientY: 700 });
+    expect(mediaViewerState()).toBeNull();
+  });
+
+  it("carries the text modifier class, which is what re-opens touch panning for the pane", async () => {
+    stubBody("a\n");
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(TEXT_URL, "text");
+    await waitFor(() => {
+      expect(container.querySelector(".media-viewer-text")).not.toBeNull();
+    });
+    expect(container.querySelector(".media-viewer-modal--text")).not.toBeNull();
+  });
+
+  it("an image open carries NO text modifier — `touch-action: none` must survive there", () => {
+    const { container } = render(() => <MediaViewerModal />);
+    openMediaViewer(IMAGE_URL, "image");
+    expect(container.querySelector(".media-viewer-modal--text")).toBeNull();
   });
 });
