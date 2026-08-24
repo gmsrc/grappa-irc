@@ -358,7 +358,62 @@ defmodule Grappa.Repo.LockWatchTest do
     end
   end
 
+  # `:logger_config` caches "may this module log?" under one
+  # `persistent_term` key PER MODULE, and writes it the first time that
+  # module logs. `allow/2` stores `?PRIMARY_TO_CACHE(get_primary_level())`,
+  # so the cached value is the PRIMARY level — the same for every module,
+  # and unrelated to the level of the call that happened to arrive first.
+  @logger_module_cache {:logger_config, LockWatch}
+  @logger_primary_cache {:logger_config, :"$primary_config$"}
+
+  describe "the logger module cache (#1715)" do
+    test "init/1 primes it, so no report path pays the first persistent_term:put" do
+      # A `persistent_term` write blocks on a thread-progress barrier, and a
+      # SQLite busy handler sleeping out its `busy_timeout` on a dirty-IO
+      # scheduler holds that barrier. So whichever call site logs FIRST from
+      # this module pays a wait of up to the whole `busy_timeout` — and the
+      # first line this module ever emits is, by construction, its stall
+      # report: the one thing that must not wait on the stall it is
+      # reporting. Paying the put at `init/1` moves it to boot, where no
+      # write lock is held.
+      #
+      # Erasing first is what gives the assertion teeth: without it the key
+      # is already there from the application's own boot and the test would
+      # pass with the priming deleted.
+      :persistent_term.erase(@logger_module_cache)
+      assert :persistent_term.get(@logger_module_cache, :absent) == :absent
+
+      restart_lock_watch()
+
+      assert :persistent_term.get(@logger_module_cache, :absent) ==
+               :persistent_term.get(@logger_primary_cache)
+    end
+  end
+
   ## ----- helpers --------------------------------------------------------
+
+  # Drives the REAL `init/1` — the only way to prove the priming is wired
+  # into it rather than merely available as a function. Calling `init/1`
+  # directly is not an option: it creates a `:named_table`, which the live
+  # child already owns.
+  #
+  # A child left stopped would poison every test after this one, so the
+  # restore is registered BEFORE the terminate, and tolerates the child
+  # already running — the happy path restarts it here, in the test body,
+  # where a failure is attributable.
+  defp restart_lock_watch do
+    on_exit(fn ->
+      case Supervisor.restart_child(Grappa.Supervisor, LockWatch) do
+        {:ok, _} -> :ok
+        {:error, :running} -> :ok
+      end
+    end)
+
+    :ok = Supervisor.terminate_child(Grappa.Supervisor, LockWatch)
+    {:ok, _} = Supervisor.restart_child(Grappa.Supervisor, LockWatch)
+
+    :ok
+  end
 
   defp start_tmp_repo do
     path = Path.join(System.tmp_dir!(), "lock_watch_#{System.unique_integer([:positive])}.db")
