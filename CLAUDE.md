@@ -696,6 +696,33 @@ not the surrounding code.**
   ⚠️ **A deploy preflight must therefore compare migration VERSIONS against
   `schema_migrations`, never count pending files** — a pending count of zero
   is exactly what the silent regime produces.
+- **🔴 A dirty NIF parked on a SQLite write-lock wait blocks every
+  `persistent_term` write and every module load in the VM, for the whole
+  wait (#1715).** The window is `busy_timeout` (`30_000` in every env
+  today) — the 133 s seen in `lock_watch_test` is that file's own
+  `@waiter_budget_ms`, **never** a production number, and quoting it as
+  one is the mistake this line exists to stop. **What blocks:** *every*
+  `persistent_term:put/2` and `erase/1` — **word-sized ones too**, which
+  trigger no global GC of their own but queue behind somebody else's, and
+  the shipped docs do not lead you to expect that; *every* **module's
+  first log line** (`logger_config:allow/2:67` **is** a put); and *every*
+  **module load** — that is, every module **not yet loaded**, since an
+  already-loaded one short-circuits in `code:ensure_loaded/1` and never
+  reaches the code server. ⚠️ **That is not a small set on a warm node:**
+  measured on a booted node, 2464 of 3063 modules are still cold (80 %),
+  265 of `Grappa.*` alone, because the release runs `:interactive` and its
+  `vm.args` sets no `-mode`. **The rule: a module that may log DURING a
+  write-lock wait buys its Logger cache key at boot**
+  (`LockWatch.prime_logger_module_cache/0`, #1731) — the observer whose
+  job is to report the wait is otherwise its own casualty. **Name the
+  observers; never blanket-prime.** Not for cost — blanket priming
+  measures sub-millisecond, five orders below the bug — but for **scope**:
+  the modules that must log under contention are enumerable (they live
+  around the Repo), and 265 primed cold modules is unfalsifiable
+  maintenance that will drift (design-discipline (1) and (5)). The
+  mechanism is measured in the field and **never reproduced on a bench**;
+  its final causal link is **inferred**, not measured. Measurements, the
+  2×2×2 and the three retractions: DESIGN_NOTES 2026-08-24.
 - **Sandbox per test (`async: true`).** Never share sandbox across
   tests. `use Grappa.DataCase, async: true`.
 - **PubSub topic naming: `grappa:` prefix mandatory.** Topics are
