@@ -85,6 +85,35 @@ describe("RADIO_STATIONS", () => {
     }
   });
 
+  // #1703 — the CURATION floor. The issue is not a shape bug: the table was
+  // structurally perfect and offered no metal at all and exactly one row of
+  // guitar music. Those two counts are the report, so they are what is pinned.
+  //
+  // FLOORS, never exact counts, and the difference is the whole reason these
+  // are worth writing: an exact count is a mirror of today's table that goes
+  // red on the next station anyone adds, which trains the next author to edit
+  // the assertion instead of reading it. A floor only goes red when the table
+  // stops answering the request this issue made — which is the fact worth
+  // defending.
+  //
+  // Keyed on the `rock` / `metal` TAGS rather than on ids, so pruning or
+  // swapping a specific station is free and only emptying the genre is not.
+  // `alternative` is deliberately NOT counted as guitar music: `u80s` carries
+  // it and is synthpop, so folding it in would let the floor be satisfied by
+  // rows that do not answer the request.
+  const tagged = (tag: string): readonly string[] =>
+    RADIO_STATIONS.filter((s) => s.genres.includes(tag)).map((s) => s.id);
+
+  it("offers metal at all — the list had none when #1703 was filed", () => {
+    expect(tagged("metal"), "no station carries the `metal` tag").not.toHaveLength(0);
+  });
+
+  it("offers more than one rock station — the list had exactly one", () => {
+    // `indiepop` was that one. A single row is what the issue called "almost no
+    // rock", so one is a regression to the reported state, not a pass.
+    expect(tagged("rock").length, "the table is back to a single rock row").toBeGreaterThan(1);
+  });
+
   it("uses SomaFM's stable front door, never a numbered pool host", () => {
     // Measured 2026-08-23: a channel's `.pls` lists three ROTATING hosts
     // (ice2 / ice5 / ice6) while the unnumbered `ice.somafm.com` answers for

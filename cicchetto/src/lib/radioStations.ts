@@ -231,4 +231,72 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     logoUrl: "https://api.somafm.com/logos/120/missioncontrol120.jpg",
     songsUrl: "https://api.somafm.com/songs/missioncontrol.json",
   },
+  // #1703 — guitar music. The table above answered "no metal, and one row of
+  // rock", and these six are what SomaFM can contribute to that: measured
+  // 2026-08-24 against the live catalogue, `metal` is the ONLY metal channel
+  // upstream has, so one slot is this provider's ceiling and the rest of the
+  // request had to leave SomaFM (see the Rock Antenne row below).
+  //
+  // ⚠️ The logo extensions below are MIXED and that is not an oversight — it is
+  // #1696's defect reproduced in advance if anyone "tidies" them. `metal120`,
+  // `poptron120` and `doomed120` are PNG; `seventies120`, `covers120` and
+  // `brfm120` are JPG. Every one is a verbatim copy of the catalogue's `image`
+  // minus the `?v=` stamp, per the rule the header states, and the negative
+  // control was run: `seventies120.png` answers 404. The 120 and 256 sizes are
+  // not interchangeable either.
+  {
+    id: "metal",
+    title: "Metal Detector",
+    genres: ["metal"],
+    description:
+      "From black to doom, prog to sludge, thrash to post, stoner to crossover, punk to industrial.",
+    streamUrl: "https://ice.somafm.com/metal-128-mp3",
+    logoUrl: "https://api.somafm.com/logos/120/metal120.png",
+    songsUrl: "https://api.somafm.com/songs/metal.json",
+  },
+  {
+    id: "seventies",
+    title: "Left Coast 70s",
+    genres: ["70s", "rock"],
+    description: "Mellow album rock from the Seventies. Yacht not required.",
+    streamUrl: "https://ice.somafm.com/seventies-128-mp3",
+    logoUrl: "https://api.somafm.com/logos/120/seventies120.jpg",
+    songsUrl: "https://api.somafm.com/songs/seventies.json",
+  },
+  {
+    id: "poptron",
+    title: "PopTron",
+    genres: ["alternative"],
+    description: "Electropop and indie dance rock with sparkle and pop.",
+    streamUrl: "https://ice.somafm.com/poptron-128-mp3",
+    logoUrl: "https://api.somafm.com/logos/120/poptron120.png",
+    songsUrl: "https://api.somafm.com/songs/poptron.json",
+  },
+  {
+    id: "covers",
+    title: "Covers",
+    genres: ["eclectic"],
+    description: "Just covers. Songs you know by artists you don't. We've got you covered.",
+    streamUrl: "https://ice.somafm.com/covers-128-mp3",
+    logoUrl: "https://api.somafm.com/logos/120/covers120.jpg",
+    songsUrl: "https://api.somafm.com/songs/covers.json",
+  },
+  {
+    id: "brfm",
+    title: "Black Rock FM",
+    genres: ["eclectic"],
+    description: "From the Black Rock Desert playa to the world, year round!",
+    streamUrl: "https://ice.somafm.com/brfm-128-mp3",
+    logoUrl: "https://api.somafm.com/logos/120/brfm120.jpg",
+    songsUrl: "https://api.somafm.com/songs/brfm.json",
+  },
+  {
+    id: "doomed",
+    title: "Doomed",
+    genres: ["ambient", "industrial"],
+    description: "Where every day is Halloween: dark industrial/ambient music for tortured souls.",
+    streamUrl: "https://ice.somafm.com/doomed-128-mp3",
+    logoUrl: "https://api.somafm.com/logos/120/doomed120.png",
+    songsUrl: "https://api.somafm.com/songs/doomed.json",
+  },
 ];
