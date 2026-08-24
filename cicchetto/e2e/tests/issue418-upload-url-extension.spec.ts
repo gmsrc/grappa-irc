@@ -75,26 +75,39 @@ test("image: server mints /uploads/<slug>.png and the extensioned URL opens the 
   expect(page.url()).toBe(cicUrl);
 });
 
-test("document: server mints /uploads/<slug>.txt — extension does NOT open the viewer and the download still serves the bytes", async ({
+test("document: server mints /uploads/<slug>.pdf — extension does NOT open the viewer and the download still serves the bytes", async ({
   page,
 }) => {
   const body = fixture("upload.txt");
   await openChannel(page);
 
+  // 🔴 This case used to upload a `.txt` and assert that its extension did NOT
+  // open the viewer. #1764 REVERSED that on vjt's call (#sbiffo 2026-08-24):
+  // `.txt` and `.md` now open as monospace source with line numbers, and
+  // `issue1764-text-source-viewer.spec.ts` owns that outcome. What #418 is
+  // actually about survives untouched — a document extension is minted
+  // faithfully, an extension the viewer does not claim leaves the anchor
+  // plain, and BOTH the extensioned URL and the bare slug serve the bytes —
+  // so the case moves to `.pdf`, which is one of the document types vjt
+  // deliberately kept out of scope. Keeping the old assertion on `.txt` would
+  // have pinned a ruling that no longer holds.
   const { slug, url } = await uploadViaPicker(
     page,
-    { name: "issue418.txt", mimeType: "text/plain", buffer: body },
+    // Bytes are the text fixture on purpose: `show/2` serves what was stored
+    // and this case is about the URL and the anchor, not about PDF parsing.
+    { name: "issue418.pdf", mimeType: "application/pdf", buffer: body },
     { postTimeout: 10_000 },
   );
 
   // #418: documents get a faithful extension too (uniform, and the
-  // download filename benefits) — but `.txt` is NOT viewer-relevant.
-  expect(url).toMatch(new RegExp(`/uploads/${slug}\\.txt$`));
+  // download filename benefits) — but `.pdf` is NOT viewer-relevant.
+  expect(url).toMatch(new RegExp(`/uploads/${slug}\\.pdf$`));
 
   // 📄 row lands after the echo; the anchor is a PLAIN link — no media
-  // class → the click never opens the viewer (📄 excluded, `.txt` not in
-  // EXTENSION_KIND). Asserting the class (not a click) mirrors the
-  // "plain web link is NOT intercepted" pattern and avoids a popup race.
+  // class → the click never opens the viewer (📄 excluded, `.pdf` in neither
+  // EXTENSION_KIND nor TEXT_EXTENSION_KIND). Asserting the class (not a click)
+  // mirrors the "plain web link is NOT intercepted" pattern and avoids a popup
+  // race.
   const { link } = await mediaScrollbackRow(page, "📄", slug);
   await expect(link).not.toHaveClass(/scrollback-media-link/);
   await expect(link).toHaveAttribute("href", url);
