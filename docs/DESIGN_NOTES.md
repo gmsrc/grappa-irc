@@ -62201,3 +62201,106 @@ inset and not merely equal, because two full-bleed surfaces agree with each
 other too — that is the state being rejected. Watch the tolerance idiom:
 `toBeCloseTo`'s second argument is a DIGIT COUNT, not a tolerance, so
 sub-pixel slack is written as an explicit `Math.abs(…) < EPSILON`.
+<!-- entry #1701b -->
+
+---
+
+## 2026-08-24 — #1701b: the player left the contested corner instead of winning it
+
+vjt's ruling on the repositioning half of #1701, relayed from IRC: *"lasciamo il
+player sotto ma mettiamolo SOTTO la compose box — tra compose box e bottom bar"*.
+It is none of the three options that had been argued, and that is the interesting
+part. The debate had narrowed to who wins the bottom corner on a mobile query
+window — the ☰ float (#1051's ruling) or the docked bar's own controls — and the
+ruling dissolves the question by moving the bar out of the corner entirely.
+
+Three things follow, and none of them is a compromise. The ☰ is never covered, so
+the premise of #1051 is not contested and that ruling stands as written — no
+reopening, and the four e2e specs that pin ☰ on query windows
+(`issue1039-hamburger-corner`, `issue1051-card-close-above-float` ×2,
+`issue985-mobile-floating-opener`) are untouched, because nothing here is hidden
+or gated by window kind. The bar's ✕ — the only STOP verb reachable from a phone
+while the rail is a drawer off-screen (#682) — stays in the main view. And the
+earlier local commit that implemented option ② (dock under the top bar, yield the
+corner) was DISCARDED rather than rebased: it implemented a decision that had been
+superseded, and building on it would have shipped the wrong one carefully.
+
+### The measurement the ruling asked for, and its limit
+
+The ruling named one thing as not-yet-measured: whether the position between the
+compose box and the bottom bar fights the on-screen keyboard (#209) or the
+scroll-to-bottom / next-window buttons. It does not, and the reason is that #280
+already solved the general form of it.
+
+Both floats live in `.scrollback-float-stack` — `position: absolute; bottom:
+0.75rem`, anchored inside `.scrollback-pane`. #280 chose the message container
+over the viewport precisely so their position is *"CONSTANT relative to the
+container regardless of keyboard state"*; before that they had two independent
+anchors and the keyboard-open lift drove one into the other. The pane is `flex: 1`
+inside `.drop-upload-zone`, a plain flex column whose other children take natural
+height, so reordering two natural-height siblings within it leaves the grown
+item's border box identical. Nothing keys on their order: the sheet declares no
+sibling combinator, `:nth-*` or `:last-child` involving `.audio-mini-player` or
+`.compose-box`, and `order` appears nowhere in it at all. The keyboard axis is the
+same argument — `.shell-mobile` is `height: var(--viewport-height)` tracking
+`visualViewport.height`, the shrink is absorbed by the pane through a
+`min-height: 0` chain, and the player stays inside that same chain, so the fixed
+pixels below the pane are unchanged by the reorder. Only the order changed.
+
+One delta is real and worth naming rather than burying: while the radio plays the
+float pair used to be separated from the send button by the bar's own row, and now
+it is adjacent. But adjacency is already the shipped geometry whenever the radio is
+NOT playing, and it is exactly what `issue278-next-active-send-overlap.spec.ts`
+pins green, keyboard-open, on webkit-iphone-15. The move makes the radio case
+converge onto an already-pinned case instead of opening a new one.
+
+The new pin is a PAIR of assertions, because either alone is satisfiable by a
+wrong shape: document order alone ("later in the tree") is satisfied by a player
+hoisted below the bottom bar, and shared parent alone ("same column") is satisfied
+by the pre-move mount above compose. Together they say "inside the compose box's
+own flex column, after it". jsdom computes no layout, so the fact that turns
+document order into VISUAL order — the column is `flex-direction: column` — is
+read off the stylesheet text, the same technique `audioMiniPlayerLayout` uses.
+
+⚠️ What this does NOT establish. #209's own text says soft-keyboard physics do not
+reproduce under chromium, and #278/#280 accordingly drive the app's OWN
+keyboard-open signal (focus the textarea → `.shell-mobile:has(textarea:focus)`)
+rather than a real keyboard. What is pinned in CI is the var-driven and
+focus-driven branch. The device leg remains vjt's.
+
+### Shape: last child of the zone, not a sibling of the main section
+
+"Between the compose box and the bottom bar" has two implementations. The bar can
+stay inside `DropUploadZone` as its last child, or be hoisted out to a sibling of
+`.shell-main` sitting just before `<BottomBar />`. On the windows where the player
+mounts they render identically, and the in-zone shape was chosen.
+
+The hoisted one costs two things the ruling did not ask to spend. #351's whole-pane
+drop target would stop covering the transport strip, so a file dropped there would
+do nothing. And the bar would mount on every mobile window kind rather than the
+scrollback kinds it mounts on today — a behaviour change nobody requested,
+arriving disguised as a reposition.
+
+`border-top` needed no flip, unlike the discarded option-② commit: the edge the bar
+separates on is still its top one; the neighbour above it is simply the compose box
+now instead of the pane.
+
+### The comment that went stale by moving, and its class
+
+`.audio-mini-player`'s header said it *"Sits above compose (and above compose's own
+safe-area handling), so it needs no bottom inset."* The conclusion survived the
+move and the reason did not: the bar still declares no bottom inset, but because
+the SHELL owns that inset, not because something below it does. Base `.shell`
+carries `env(safe-area-inset-bottom)`; `.shell-mobile` deliberately zeroes it
+(#1127, flush bottom edge). The distinction is load-bearing rather than pedantic,
+because #1127 measured what happens if an inset is added on this edge: with the
+keyboard up iOS reports `env(safe-area-inset-bottom)` against the DEVICE and not
+the shrunken visual viewport, so it double-counts against `--viewport-height` and
+reopens a ~34px gap above the keyboard. The bar is now the bottom-most row of that
+column, so the warning applies to its rule too and is recorded there.
+
+The general shape, worth more than the instance: **a comment that justifies an
+ABSENT declaration by naming a NEIGHBOUR is falsified silently by a reorder**,
+because the declaration it describes does not change and no gate can see prose go
+wrong. Two more said "above compose" (`AudioMiniPlayer`'s moduledoc,
+`DropUploadZone`'s layout note) and were corrected in the same commit.
