@@ -62629,3 +62629,111 @@ wrong flavor permanent.
 should request `visitor_enabled` up front so a network is never born in a
 state the panel cannot leave. That is a product call, it is vjt's, and it is
 not built here.
+<!-- entry #1764 -->
+
+---
+
+## 2026-08-25 — #1764: `.txt` and `.md` open as SOURCE in the media viewer
+
+vjt asked on IRC (#sbiffo, 2026-08-24 23:00) for a modal like the image one
+but for text files, "magari anche con i numeri di riga", and ruled three
+minutes later (23:03, verbatim) *"nono nessun rendering di gesu, assolutamente
+solo il sorgente txt e md"*. So: a fourth `MediaKind`, `"text"`, monospace
+source with a line-number gutter, and no interpretation of any kind — not now
+and not as a later toggle. `pdf/odt/ods/docx/xlsx` stay out of scope.
+
+### This REVERSES a ruling, and the SSOT that carried it was amended with it
+
+`Grappa.Uploads.MimeExt`'s moduledoc said, verbatim, that *"Document types
+(pdf/txt/odt/ods/docx/xlsx) are deliberately NOT viewer-relevant and need no
+cic entry"*. That sentence is the cross-language contract's single source of
+truth, and this change makes it false for two of the six. It is amended in the
+same commit, naming the reversal and whose call it was — a SSOT that lies is
+worse than one that is missing, because the next reader copies it. `.md`
+required widening `@mime_categories` and `@mime_ext` in lockstep (`MimeExtTest`
+fails CI on either alone) plus the cic mirror in `uploadCategory.ts`;
+`text/markdown` now exists in the accept-allowlist for exactly one reason,
+which is that the client can read it.
+
+The e2e that pinned the OLD ruling — `issue418-upload-url-extension.spec.ts`'s
+*"extension does NOT open the viewer"* case, on a `.txt` — was moved to `.pdf`
+rather than deleted. What #418 is about (a faithfully minted extension, a
+non-viewer extension leaving the anchor plain, both URL forms serving the
+bytes) is untouched; only the example had to move off a type that is now
+viewer-relevant.
+
+### Why `text` is admitted-host only, and why that is not a limitation to lift
+
+Every other kind hangs an ELEMENT off the URL, governed by `img-src` /
+`media-src` — both widened to `https:` (#607, #1240), which is why a foreign
+image opens. A text viewer has no element: it `fetch`es the body into the DOM,
+which answers to `connect-src`, and that directive is `'self'` plus the captcha
+hosts and `api.somafm.com`, deliberately NOT widened. The asymmetry is the
+point: an element source can only be rendered, whereas `fetch` can READ a
+response body, so widening it is exfiltration surface in a way the two media
+directives are not. Admitting a cross-host `.txt` would open a modal the CSP
+then refuses to fill — strictly worse than the anchor it replaced. The
+classifier therefore keeps two tables, `EXTENSION_KIND` (element-backed, usable
+by the external branch) and `TEXT_EXTENSION_KIND` (fetch-backed, same-host
+only), so the distinction is a type rather than a comment.
+
+### The cap, and what was actually measured
+
+The issue flagged the ceiling as 128 MB (`endpoint.ex` multipart, matched by
+`client_max_body_size 128m`) and left the cap undecided. **Measured
+correction: that is the roof, not the ceiling a `.txt` actually reaches.** The
+binding limit is per category —
+`ServerSettings.get_upload_per_file_cap_bytes(:document)`, default
+`10 * 1024 * 1024` — and an operator can raise it up to the 128 MB roof. A cap
+is still engineering rather than product, so there is one:
+`TEXT_VIEW_MAX_BYTES = 512 KiB`.
+
+That number is **not** a rendering measurement and is not presented as one — no
+browser can be driven from the dev host. It is anchored on the two numbers
+above and chosen on the safe side of them, because the degradation is visible
+and reversible: the pane says it was cut and "open in browser" still serves the
+whole file. At ~80 columns it is ~6,500 lines, past any log or config anyone
+pastes into IRC, and 20× under the default document cap so it bites long before
+an operator-raised setting could matter. **The behaviour AT the cap is UX and
+is vjt's to confirm** — built as a line above the pane reading "showing the
+first 512 KiB of this file", above and not below because a reader must know
+they hold a slice before they start, not at a bottom they may never reach.
+
+**The cap is enforced from the response stream, not by trusting `Range`.** The
+viewer sends `Range: bytes=0-<cap>` — one byte PAST the cap — but reads through
+`res.body.getReader()` and hangs up, so a proxy that strips the header, or any
+future admitted host that ignores it, changes nothing about how much lands in
+the page. The extra byte is what makes `truncated` a FACT: reading exactly the
+cap and stopping cannot tell "the file ended here" from "we stopped here", and
+would report a file of precisely 512 KiB as truncated forever.
+
+### The gesture: a scrolling body cannot share the vertical axis
+
+`bindDismissGesture` (#1438) commits on an up OR down drag, which is right when
+nothing underneath scrolls and wrong the moment something does — at the top of
+a text pane an upward drag means "read on". Rather than a second gesture
+policy in the caller, the binder gained a required `directions: "both" |
+"down"`, and the narrowing applies to the CLAIM as well as the commit: a
+direction that cannot commit is never claimed, never `preventDefault`ed, so the
+scroller keeps it. Paired with `canDismiss: () => pane.scrollTop <= 0`, the two
+gates split the axis cleanly — scrolled, the pane keeps every vertical drag; at
+the top, up still scrolls and only down dismisses.
+
+The stylesheet half: `.media-viewer-modal` claims the whole touch stream with
+`touch-action: none`, correct for a bitmap and fatal for a scroller, and a
+descendant cannot widen what an ancestor narrowed — so `.media-viewer-modal--text`
+re-opens it to `pan-x pan-y` on the modal element itself. Gutter and source are
+TWO `<pre>` text nodes rendered from the SAME `lines` array (node count stays
+constant whatever the file size) and both take `font: inherit` from the pane, so
+number N sits beside line N by construction rather than by two spellings of the
+same tokens agreeing.
+
+### Not established
+
+Whether iOS begins a rubber-band before the dismiss claim lands on a pane at
+`scrollTop 0` was **not** measured — no browser is drivable from this host and
+webkit emulation is not iOS. `overscroll-behavior: contain` is there for it;
+the verdict is dogfood's. Likewise the exact termination rule of the UA's
+`touch-action` ancestor intersection at a scroll container was not measured,
+which is why the re-opening is declared on the modal element rather than relied
+upon to stop at the pane.
