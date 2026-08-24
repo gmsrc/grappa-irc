@@ -102,12 +102,50 @@ test("🎵 upload link click opens the docked mini-player, NOT the modal (GH #11
   const { row, link } = await mediaScrollbackRow(page, "🎵", slug);
   await expect(link).toHaveClass(/scrollback-media-link/);
 
+  // #1701 — the bar now docks BELOW the compose box, and what makes that safe
+  // for the float stack (scroll-to-bottom + next-active, anchored `bottom:
+  // 0.75rem` INSIDE `.scrollback-pane`) is that mounting it no longer comes
+  // between the pane and the compose box: the pane's bottom edge, which is the
+  // floats' frame of reference, keeps the same relationship to the send button's
+  // row whether or not audio is playing.
+  //
+  // `issue278-next-active-send-overlap` pins the float-vs-send geometry, but it
+  // runs with NO audio — so a player that started displacing that geometry again
+  // would sail past it unseen. This is the witness for the case #278 cannot see,
+  // and it asserts the IDENTITY rather than the numbers: repeating #278's
+  // overlap arithmetic with the bar up would buy no coverage and cost a second
+  // place to maintain the same constants.
+  //
+  // Form-factor independent on purpose — both Shell branches mount the same
+  // `.drop-upload-zone` column, so this holds wherever the spec's project runs.
+  const paneToComposeGap = async (): Promise<number> => {
+    const pane = await page.locator(".scrollback-pane").boundingBox();
+    const compose = await page.locator(".compose-box").boundingBox();
+    if (pane === null || compose === null) {
+      throw new Error("pane and compose box must both be laid out to compare the gap");
+    }
+    return compose.y - (pane.y + pane.height);
+  };
+  const gapWithoutBar = await paneToComposeGap();
+
   const cicUrl = page.url();
   await link.click();
 
   // The docked bar appears; the media viewer modal stays closed.
   const player = page.getByTestId("audio-mini-player");
   await expect(player).toBeVisible({ timeout: 5_000 });
+
+  // …and it did NOT insert itself between the pane and the compose box. Polled,
+  // because the bar changes height a second time when `onLoadedMetadata`
+  // resolves and swaps the seek slider for the live badge — measuring once on
+  // first paint would read a layout that is still settling.
+  await expect
+    .poll(async () => Math.abs((await paneToComposeGap()) - gapWithoutBar), {
+      message:
+        "#1701: mounting the docked bar must not change the pane→compose gap — a bar that lands between them moves the float stack's frame relative to the send button, which #278 cannot see because it runs with no audio",
+      timeout: 5_000,
+    })
+    .toBeLessThan(1);
   await expect(mediaViewer(page)).toBeHidden();
   expect(page.url()).toBe(cicUrl);
 
