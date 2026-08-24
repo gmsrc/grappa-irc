@@ -61169,3 +61169,102 @@ race dressed as a check.
 GitHub offers no FreeBSD runner — every `runs-on:` in this repo is
 `ubuntu-latest` — so the bastille jail keeps its manual probe. Accepted,
 not an oversight.
+<!-- entry #1734 -->
+
+---
+
+## 2026-08-24 — #1734: a re-mount is not a new source, and the predicate could not tell
+
+Leaving a scrollback window for home / list / mentions / admin unmounts
+`AudioMiniPlayer` and destroys the `<audio>`. The source is MODULE state
+(`lib/audioPlayer.ts`) and outlives it, so coming back re-mounts the
+component and the `on(activeAudio, …)` effect runs its FIRST execution —
+indistinguishable, at that point, from a new source. A file restarted
+from zero, unasked.
+
+### The constraint did not hold as written, and that is the finding
+
+The rule was: reuse #1700's `mustRefetch`, never a second predicate. The
+rule is right — two predicates answering one question is how they start
+to diverge — but taken literally it does not work, and the reason is
+worth keeping.
+
+`mustRefetch` is `el.error !== null || live()`, and `live()` reads the
+`duration` **signal**, which belongs to the component and is recreated at
+`0` on a re-mount. `0` is finite. So on a fresh element the predicate
+answers "no re-fetch needed" for a stream as well as a file — at exactly
+the one moment the two must be told apart. Measured in jsdom:
+
+```
+[FILE]   before: play=1 currentTime=42 duration=180 seek-max=180
+         after:  play=2 currentTime=0                seek-max=0
+[STREAM] before: live-badge=true
+         after:  live-badge=FALSE  seek-present=TRUE
+```
+
+The second pair was not in the issue: a re-mounted STREAM came back
+**dressed as a file**, with a scrub slider drawn across an endless
+source, until metadata arrived to correct it.
+
+So the remembered point carries the DURATION, and restoring it before
+consulting the predicate is what puts the predicate back in a position to
+answer. The constraint is honoured in the form that matters — one
+predicate — by fixing its INPUT rather than by adding a sibling that
+would answer the same question a second way.
+
+### Resume, not sit still — decided by the same measurement
+
+The issue left this open and priced it as "resuming costs a state to
+maintain; sitting still costs nothing". That pricing is wrong under the
+constraint. Sitting still needs the same remembered `duration` (a stream
+must still re-tune, #1700's rule), and it needs the position too, or the
+transport reads `0:00` on a file that is at `0:42`. Both are owed either
+way. The real difference between the two options is a single call to
+`play()`.
+
+Given that, the transport is **preserved rather than chosen**: playing
+resumes, paused stays paused. The operator changed window — they asked
+for neither a stop nor a start, and picking one is cic originating state.
+
+### A sibling signal, because #1697 already measured the alternative
+
+The issue said the position belongs in `activeAudio`. It does not.
+Assigning `.src` re-invokes the media load algorithm even when the URL
+has not changed, so a field inside `AudioPlayerState` hands the effect a
+new reference and RESTARTS the source on every write — #1697 measured
+this for the hidden flag and rejected it there. Doing it here would
+reintroduce an unrequested restart inside the fix for unrequested
+restarts. `position` describes the TRANSPORT; `href`/`label` describe the
+SOURCE. Different axes, different signals — the same split #1697 drew.
+
+The point carries no href because every writer of `activeAudio` clears
+it, so a point that exists belongs to the source that is active. A FOURTH
+writer must clear it too; the test named "a NEW source does not inherit
+the previous one's position" is what keeps that from being broken
+quietly.
+
+### 🔴 The clear goes BEFORE the source, and this cost a measurement
+
+`playAudio` originally cleared the point after `setActiveAudio`. Solid
+runs the effect **synchronously inside the setter**, so the clear arrived
+after the effect had already read the OLD point: it armed the previous
+source's position and the new source landed at `0:42`. The diagnostic
+line, kept because it is the shape of the bug:
+
+```
+[D] after playAudio: currentTime=0 src=…/second
+[D] after metadata:  currentTime=42
+```
+
+The regression test was written before the bug existed — it was the
+guard on the no-href invariant — and is what caught it. General rule for
+this store: **a signal that an effect READS must be settled before the
+signal that TRIGGERS that effect is written.**
+
+### Two mechanics, stated so they are not re-litigated
+
+The position is applied from `onLoadedMetadata`, not next to `.src`: a
+real browser has no seekable range before metadata and silently drops
+the write. And it is remembered ONCE, in `onCleanup`, at the instant the
+fact is about to be lost — never on `timeupdate`, which would be four
+writes a second to module state to keep a value that one moment reads.
