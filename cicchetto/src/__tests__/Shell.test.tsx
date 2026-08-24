@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeAudio, playAudio } from "../lib/audioPlayer";
 import { LIST_WINDOW_NAME } from "../lib/windowKinds";
+import { nestedRuleBodies } from "./helpers/themeCss";
 import { swipeHorizontally } from "./helpers/touchEvents";
 
 // #500 — RailActions collapsed every rail affordance behind ONE launcher, so a
@@ -1554,5 +1556,81 @@ describe("Shell — #608 overlay-refcount leak on same-tick open→close", () =>
     selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
     await flushMacrotask();
     expect(overlayCount()).toBe(0);
+  });
+});
+
+// #1701 — vjt's ruling (relayed from IRC, 2026-08-24): the docked player stays
+// at the bottom of the main view but moves BELOW the compose box, between it
+// and the bottom bar. It is none of the three options that were on the table,
+// and taking the player out of the contested corner is the whole point: nothing
+// is hidden and nothing is gated by window kind, so #1051's ☰ ruling and the
+// four e2e specs that pin it are untouched.
+//
+// TWO assertions, and the pair is what carries the meaning. Document order
+// alone says only "later in the tree" — satisfied equally by a player hoisted
+// out to a sibling of `.shell-main`, which renders BELOW the bottom bar and not
+// between the two. Shared parent alone says only "same column" — satisfied
+// equally by today's above-compose mount. Together they say "inside the compose
+// box's own flex column, after it", which is the ruling verbatim.
+//
+// jsdom applies no stylesheet and computes no layout, so the fact that turns
+// document order into VISUAL order is read off the CSS text instead — the same
+// reason `audioMiniPlayerLayout` guards this bar's flex contract that way.
+describe("#1701 — the docked player sits below the compose box", () => {
+  beforeEach(() => {
+    // jsdom implements no HTMLMediaElement playback, and mounting the bar drives
+    // `play()` through the open effect. Same stubs `AudioMiniPlayer.test` installs.
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    // The audio store is a module singleton: a bar left mounted here leaks into
+    // every sibling suite that counts elements in the shell.
+    closeAudio();
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["mobile", true],
+    ["desktop", false],
+  ])("on %s it renders in the compose box's column, after it", async (_form, mobile) => {
+    mobileState.value = mobile;
+    selectionState.setSelSig({ networkSlug: "freenode", channelName: "#a", kind: "channel" });
+    // An UPLOAD href on purpose. `radio.ts` derives the tuned station by matching
+    // this against the curated table's exact `streamUrl`, and a station tunes
+    // `nowPlaying`'s poll at `api.somafm.com` — a live third-party request from a
+    // unit test. An `/uploads/` URL cannot match, so nothing reaches the network.
+    playAudio("https://grappa.example/uploads/abc", null);
+    const { container } = render(() => <Shell />);
+
+    // Anti-false-green: assert the bar is actually mounted before measuring
+    // where it is. An unmounted player trivially satisfies "not above compose".
+    const player = await waitFor(() => {
+      const el = container.querySelector(".audio-mini-player");
+      expect(el, "the docked bar must be mounted for this to measure anything").not.toBeNull();
+      return el as HTMLElement;
+    });
+    const compose = container.querySelector(".compose-box") as HTMLElement | null;
+    expect(compose, "the compose box must be mounted").not.toBeNull();
+    if (compose === null) return;
+
+    expect(
+      player.parentElement,
+      "the bar shares the compose box's column — hoisting it out puts it under the bottom bar",
+    ).toBe(compose.parentElement);
+    expect(
+      compose.compareDocumentPosition(player) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the bar must come AFTER the compose box, not before it",
+    ).toBeTruthy();
+  });
+
+  it("that column is a plain top-to-bottom flex, so document order IS visual order", () => {
+    // `order` would break the equivalence silently; measured, the property
+    // appears nowhere in the sheet, so this one declaration is the whole link.
+    const bodies = nestedRuleBodies(".drop-upload-zone");
+    expect(bodies.length, ".drop-upload-zone must be declared in exactly one block").toBe(1);
+    expect(bodies[0]).toMatch(/flex-direction:\s*column/);
   });
 });
