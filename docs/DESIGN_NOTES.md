@@ -60338,3 +60338,130 @@ the device-verify below is a blocking item on this branch and not boilerplate.
   by construction. What an e2e would add beyond that is the bundle-arrival
   oracle, and it would have to intercept the feed anyway — the "no third-party
   outage detector in the gate" posture this table established in #682/#1696.
+<!-- entry #1700 -->
+
+---
+
+## 2026-08-24 — #1700: a live stream is not a file, so `play` is not a resume
+
+Reported from the PWA on staging: after the radio stream is interrupted,
+pressing play does not bring it back. The transport reacts, the audio does not.
+
+### The mechanism, and where the issue's own one-liner is too strong
+
+The issue says `play()` never re-fetches. The contract says something narrower,
+and the difference is the fix. `play()` DOES invoke the resource selection
+algorithm — but only when `networkState` is NETWORK_EMPTY, and an Icecast
+connection dropped mid-stream does not land there. `load()` runs that algorithm
+unconditionally, and the only `load()` in `AudioMiniPlayer` sat on the CLOSE
+path, where it DETACHES a source. Same call, opposite intent, and nothing on
+the resume path ever went back for a new resource.
+
+This is read off the media-element contract, **not measured in a browser** —
+see the last section.
+
+### Two sources of truth for one control, which is the deeper half
+
+The button's LABEL came from the `playing()` signal, driven by media events.
+Its ACTION came from `audioEl.paused`, the element's own property. Those agree
+right up until something goes wrong: a failed fetch sets `error` and says
+nothing about `paused`, so the signal and the property diverge and the control
+does the OPPOSITE of what its label reads — the operator presses ▶ and gets a
+pause.
+
+The cure is not a third state reconciling them, it is deleting one of the two:
+`togglePlay` now branches on `playing()`, the same fact the glyph and the
+accessible name render. **General rule worth keeping: a control's action must
+be derived from the fact it DISPLAYS.** Anything else is a parallel structure
+that will drift, and it drifts precisely when something is already wrong.
+
+### "Paused" versus "interrupted" is the wrong question
+
+There is no reliable signal separating them, but the better reason not to look
+for one is that the answer would not be used. The axis that matters is whether
+there is a POSITION worth resuming to:
+
+* a FILE has one — resuming at `currentTime` is the whole point of pausing it;
+* an endless source does not. `currentTime` there is elapsed-since-tune-in, not
+  a place in a work. Resuming a live stream in place is not a feature being
+  sacrificed to fix something else — it is a defect of its own, where the
+  listener returns to buffered audio and stays exactly that far behind live
+  from then on.
+
+So the predicate is `el.error !== null || live()` — two disjoint reasons the
+element cannot continue from where it is, neither of them a guess about what
+went wrong. Re-fetching a live source on resume is correct whether or not
+anything was ever interrupted. `error` also picks up, for free, the broader
+form the issue named: a FILE whose fetch failed has no position left either.
+
+### `error` is wired, `stalled` and `waiting` are refused
+
+The issue suggested `onError`/`onStalled`; only the first is right. Without any
+handler the bar kept showing ⏸ over silence, so the failure was never observed
+and could never be recovered from — that half stands. But a stall or a wait is
+recoverable buffering, not a stop, and clearing the playing state on one flips
+the button to ▶ over audio that is still coming: the same lie in the other
+direction. Only `error` is terminal, so only `error` is listened to. The
+refusal is asserted, not merely commented — a mutant that adds `onStalled`
+reds a test.
+
+### The jsdom trap that made a HEALTHY source look broken
+
+jsdom implements no `error` on `HTMLMediaElement`: it reads `undefined`, where
+the contract types it `MediaError | null` and a browser answers `null`. The
+type-exact predicate above therefore reads TRUE on a pristine element under the
+unit gate, and the test written to say "a healthy paused FILE resumes in place"
+took the FAILURE branch instead — it would have gone green while measuring the
+wrong path, which is the vacuous-green shape this codebase keeps rediscovering.
+
+Two ways out, and the choice matters. Loosening the production predicate to a
+truthiness test immunises one call site and leaves the trap armed for the next
+reader of the property — and it shapes production around a test double. Pinning
+the conforming default in `setupTests.ts` fixes the CLASS, and that file is
+already where cic keeps exactly this (inert WebSocket, inert
+IntersectionObserver, in-memory localStorage). It is a `configurable` GETTER so
+a per-instance `defineProperty` still shadows it — that shadow is how a test
+injects failure, and `media-error-default.test.ts` asserts the shadow as well
+as the default, because a non-configurable pin would silently turn every
+failure-path test into a healthy-path one.
+
+### What was NOT measured
+
+* 🔴 **No browser was run, and the report is a device report.** jsdom has no
+  media pipeline, so the seven tests pin the WIRING — which call is issued, and
+  off which fact — never that a real interrupted stream comes back. The issue
+  itself is a source reading rather than a reproduction; this branch does not
+  change that, it only makes the named mechanism executable. **The verdict
+  lives on the PWA that reported it.**
+* **No e2e, and the reason is not the lane.** Proving this in a browser needs a
+  stream whose connection can be CUT mid-flight — a controllable audio origin,
+  not an assertion. The existing radio spec plays a real SomaFM stream and
+  cannot interrupt it. That fixture is a piece of infrastructure, and it is not
+  this issue. (The e2e lane was also not free, but that is the smaller reason.)
+* **A stream that dies silently before any metadata arrives** stays outside the
+  predicate: `duration` is still 0, so `live()` is false, and if the browser
+  set no `error` there is nothing to key on. The transport then needs two
+  presses — pause, then play — instead of one. Narrow, and named rather than
+  papered over.
+### The #1698 interaction, re-derived after the rebase rather than predicted
+
+This entry first carried the note as a forecast — "if #1698 lands". It landed
+mid-branch, so the question is live and the answer is a DECISION, not a
+deferral: **the now-playing line is left exactly as it is.**
+
+The poll is keyed on the tuned STATION, not on whether audio is reaching us, so
+a stream that dropped keeps showing a track. That looks like the same family of
+lie this issue is about — and it is not, once the transport is fixed. The line
+says what the STATION is playing, which remains true: SomaFM did not stop
+broadcasting because our socket died. What used to be false was the CONTROL
+next to it claiming playback, and that is now repaired at the control. Read
+together the row is coherent: ▶ (we are not playing) beside a track (this is
+what is on).
+
+Silencing the track on `error` would buy nothing and cost two things. `/np`
+must keep answering — the operator can truthfully tell the channel what the
+station is playing — so the display and the command would need DIFFERENT
+predicates over one fact, which is the parallel structure #1698 went out of its
+way to avoid by keying both on `tunedStation()`. **The general shape: when a
+surface stops being true, fix the element that made the false claim, not every
+neighbour that is still telling the truth.**
