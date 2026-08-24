@@ -62320,3 +62320,99 @@ ABSENT declaration by naming a NEIGHBOUR is falsified silently by a reorder**,
 because the declaration it describes does not change and no gate can see prose go
 wrong. Two more said "above compose" (`AudioMiniPlayer`'s moduledoc,
 `DropUploadZone`'s layout note) and were corrected in the same commit.
+<!-- entry #1751 -->
+
+---
+
+## 2026-08-24 — #1751: one safe-area mechanism, and the picker that did not need it
+
+**The reported defect was not the defect, and the requested fix was a
+regression.** #1751 came in as "the radio station picker rides under the notch;
+give it the settings-drawer top inset". Measured on `origin/main` at 713736f9,
+`.rail-radio-picker` is `position: absolute; inset: 0` inside `.shell-members`,
+and an abspos box resolves `inset` against its ancestor's PADDING box — the rule
+#1737 had just finished writing at that very aside. `.shell-members` carries the
+top inset on BOTH form factors: on mobile as the fixed drawer's own
+`padding-top`, on desktop as a grid child of the inset `.shell`. Both mounts of
+`<RailRadio/>` (Shell.tsx) are inside that aside; there is no third. So the
+picker already starts below the safe area, and giving it one of its own is the
+#205 double-count the `.shell-members` base rule has recorded since #205 —
+"keeping insets here too double-counted the top inset". The position-awareness
+trap the issue itself warned about landed on the element in its own title.
+
+⚠️ **The symptom is NOT explained and this entry does not claim it is.** The
+screenshot was not reproduced. Playwright synthesizes no safe-area inset on any
+engine we run and jsdom resolves no `env()` at all, so on-device geometry is
+observable in no gate we have; a notched device was not available. What is
+established is the containing-block chain, which says the inset is applied
+exactly once already. Something is wrong on that phone and it is not a missing
+inset on the picker.
+
+**What the directive asked for instead, and the invariant it produced.**
+`env(safe-area-inset-*)` was hand-written at 23 declarations across 16 rules
+with four different floors; the picker would have been the seventh copy of the
+`max(x, env(top))` shape. The mechanism is now: **`env()` appears exactly once
+per edge, at `:root`, and every consumer reads the token.** A surface with a
+minimum of its own writes `max(<its floor>, var(--safe-area-inset-top))`; one
+without writes the token bare. Left and right joined top and bottom as tokens,
+because a rule needing an exception list is not a rule.
+
+**Why that shape beat the alternatives.** A `:where(.safe-top)` group class was
+rejected on measurement, not taste: zero specificity loses to the `padding:`
+shorthands already on `.archive-modal` / `.settings-drawer` /
+`.modal-backdrop-viewport`, so every site needs editing anyway; it needs markup
+edits on top; it cannot express `.diag-float`'s `top:`; and per-site floors
+would need a second custom property, which does not work the obvious way — a
+`var()` inside a custom property declared on `:root` resolves against `:root`,
+not against the consumer. One shared floor was rejected because the four floors
+(1rem, 0.75rem, 0.5rem, none) each have an incident behind them and unifying
+them re-spaces five surfaces nobody reported.
+
+🔴 **The load-bearing argument is TESTABILITY, and it reverses what this
+codebase told itself.** The `:root` note used to say inline `env()` "is right
+for a padding: the engine substitutes it and nobody has to read it back". That
+is true of the ENGINE and false of every gate we run. Playwright resolves
+`env(safe-area-inset-*)` to 0 on every engine in the suite — including the
+`webkit-iphone-15` project, which is `devices["iPhone 15"]`, i.e. a viewport and
+a touch flag and no notch whatsoever — and jsdom resolves `env()` not at all.
+**So an inline site's inset is observable in NO test that can be written**,
+while a site reading the token is stubbable by re-declaring it on a
+`:root:root` override, which is precisely how `issue913-rail-menu-safe-area`
+proves its own wiring. #913 introduced the token for one site for this reason;
+#1751 finished the move rather than reversing it. **General rule: an
+engine-substituted value that no harness can synthesize must be reached through
+an indirection a harness CAN set, or the behaviour depending on it is
+unfalsifiable.**
+
+**The guard is a census, not a judgement.** `safeAreaInsetToken.test.ts`
+asserts (a) four tokens at `:root` with their `0px` fallbacks, (b) that no
+declaration outside `:root` writes `env(safe-area-inset-*)`, and (c) a
+transcription of all 27 safe-area declarations, selector by selector. (b) is
+the mechanism: it needs no list of which surfaces reach the physical top —
+a semantic judgement that would rot — and has no allowlist to add yourself to.
+(c) is what makes "an extraction changes no pixel" (#407's promise) a measured
+claim: `max(1rem, env(x))` and `max(1rem, var(--x))` compute the same length,
+so the pin moves without the promise moving with it.
+
+**Two further members of the same defect class, found by the census and NOT
+fixed here** (an extraction that also moves pixels is two changes wearing one
+commit): `.image-upload-modal` carries the BOTTOM inset and no top one, inside a
+`.modal-backdrop-full` with no padding and `max-height: var(--viewport-height)`,
+so at full height its top edge is the physical top. The issue body's claim that
+this modal "already carries" the inset is false, and the half-truth that
+produced it is the bottom inset that IS there. `.confirm-modal` is the weaker
+sibling: flat `1rem` padding, `margin: 1rem`, no `max-height`, in the same
+centred scrim, so tall content overflows above y=0. Filed separately.
+
+**A test-harness trap worth not rediscovering.** `helpers/themeCss.ruleBody`
+captures a rule body with a negated character class and stops at the FIRST
+closing brace, and it strips comments only AFTER capturing. So a curly brace
+inside a comment in the `:root` block truncates the capture and fails every
+test that reads `:root` — including ones nowhere near the edit. Cost two cycles
+here, writing `:root:root { … }` as an example inside the very comment
+explaining the stub. There is now an NB at that block. The same
+strip-after-capture ordering was a live false positive in
+`contextMenuSafeArea`'s uniqueness guard, which counted raw matches including
+prose and went red because the `:root` note names the class in a sentence; it
+now strips comments first, which is what every other helper in that module
+already documents itself as doing.
