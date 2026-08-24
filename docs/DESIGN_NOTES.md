@@ -60640,3 +60640,216 @@ the same signal. The narrower reading (that a *non-covering* surface should
 take `createOverlayEscape` and not the scroll-lock refcount, which is what
 `overlayScrollLock.ts` already says the split is for) is a change to the
 rail's own posture with its own blast radius, not this fix's to make.
+<!-- entry #1715a -->
+
+---
+
+## 2026-08-24 — #1715a: the world did not stop, and three claims came back
+
+Round 4 of #1715 existed to settle one fork: is the coupling an **ERTS defect**
+(then we file upstream and grappa gains no rule) or **by design** (then grappa
+has a production constraint)? The answer is neither branch as framed. Getting
+there required withdrawing three claims, two of them made inside this same
+round. The surviving rule lives in CLAUDE.md under "Phoenix / Ecto patterns";
+this is the measurement record behind it.
+
+### The discriminator, and the headline
+
+`W1Spin` — a pure loop over `System.monotonic_time` touching no literal, no
+`persistent_term`, no Logger and no unloaded module, reporting by message at
+`after_suite` so its reporting path could not be the thing it measured. Two
+stalls captured with both probes armed:
+
+| stall | wall | `W1Probe` worst put (a bare integer) | `W1Spin` worst gap | `W1Spin` iterations | ratio |
+|---|---|---|---|---|---|
+| r4c-1 | 132 s | **128 299 781 us** | **1 527 us** | 3 356 248 579 | **84 000x** |
+| r4c-5 | 135 s | **130 750 110 us** | **8 790 us** | 3 459 512 554 | **14 900x** |
+
+**The world does not stop.** A pure Erlang loop ran at full speed inside the
+same 133 s window in which one `persistent_term:put` of an integer took 128 s.
+The pairing is within-run, which is stronger than the separate clean-run
+baseline the driver was also asked for (never captured: run 1 stalled, so the
+driver's `caught -eq 0 && i -eq 1` branch never fired).
+
+`W1Spin` is a busy loop and does occupy a normal scheduler; it is a
+perturbation. It does not weaken the pairing, and the stall predates it.
+
+### Retraction 1 — "the world stopped" was an artefact of the instrument
+
+Round 4's own earlier headline read: *"`Process.sleep(250)` returned after
+133 s, so a process was not suspended, the world stopped. Logger,
+`persistent_term` and code load are TRIGGERS, not the mechanism."*
+
+Withdrawn. `W1Probe`'s loop stamps its `now` **before** the put and closes each
+iteration with a *second* `persistent_term:put` (the report). One blocking put
+collapses the tick count exactly the way a stopped world would:
+`{w1probe_ticks,7,elapsed_ms,135033}` is precisely what ONE 133 s put produces.
+The probe's instrument was inside the thing under suspicion — the blindness
+`W1Spin` was built to remove, and it removed it in the opposite direction from
+the one expected.
+
+**General rule this earns: an instrument built out of the mechanism under test
+cannot discriminate between "the mechanism fired" and "the world ended". Pair
+it with one built out of something else, in the same run.**
+
+### Retraction 2 — `logger_config:delete/2` is a `put/2`, not an `erase`
+
+The inherited reading held that signature A (victim is a queuer) and signature
+B (victim is the updater) differed because A's holder was a `delete/2` — an
+erase, releasing a literal area — which was "exactly the variant the bench never
+exercised". Decompiled from the beam we actually load
+(`kernel-10.6.3.3/ebin/logger_config.beam`, via `:code.which/1` +
+`:beam_lib.chunks(_, [:abstract_code])`, i.e. the binary we run and not
+published source):
+
+```
+delete/2 -> [{{52, 5}, :put, 2}]                        <- a put/2. NOT an erase.
+allow/2  -> [{{58,14}, :get, 2}, {{67,17}, :put, 2}]
+create/3 -> [{{124,10}, :put, 2}]
+set/3    -> [{{133,10}, :put, 2}, {{138,14}, :put, 2}, {{139,51}, :get, 0}]
+```
+
+There is no erase anywhere in `logger_config`. A and B are the **same
+operation**, differing only in which caller won the updater slot. The
+refinement built on the erase does not describe anything.
+
+### Retraction 3 — 133 s is the harness, never a production number
+
+`test/grappa/repo/lock_watch_test.exs` sets `@test_timeout_ms 60_000` and
+`@waiter_budget_ms @test_timeout_ms * 2` = **120 000**, used as the waiter's
+`busy_timeout`. The harness parks the dirty NIF for 120 s; the stall is 120 s
+plus harness overhead. This also fully explains the earlier "halve the budget,
+halve the stall, ratio 1.99": **the stall IS the NIF's lifetime, 1:1.**
+
+Production is `busy_timeout: 30_000` (`config/runtime.exs`, `config/dev.exs`,
+`config/test.exs`). **~30 s per contended write is the only figure to quote.**
+
+A fourth amplification, caught while writing the rule: the stall was captured
+**five** times but the multi-second put was measured **three** (125.2 / 128.3 /
+130.8 s). In the other two the probe reported 324 ms and 24 ms because its
+report reflected a pre-block iteration. Recording "five" in the very line that
+retracts three amplifications would have been comic.
+
+### What blocks, and what does not
+
+Blocked in both stalls: the `persistent_term` updater, suspended at
+`{erlang,bif_return_trap,2}`; every other `persistent_term:put`, queued at
+`{persistent_term,put_common_trap,3}` — including `W1Probe`'s word-sized
+integer, which triggers no global GC of its own; module loading (`code_server`
+in `prim_file:read_file_nif/1`, six processes parked at `code:ensure_loaded/1`);
+and `erts_literal_area_collector` caught mid-walk in all three signatures seen
+(`check_send_copy_req/3`, `switch_area/0`, `processes_next/1`). The only unusual
+runner, both times: a **dirty-IO** scheduler inside
+`Exqlite.Sqlite3NIF.execute/2`, `dio 99`. Everything else ran normally.
+
+### The mechanism: documented shape, inferred last link
+
+The OTP docs shipped with the runtime we run (`:code.get_doc(:persistent_term)`)
+state the cost outright, in the module summary and in a `.warning` admonition:
+*"a global garbage collection pass is run to scan all processes"*; *"All
+processes in the system will be scheduled to run a scan of their heaps"*; *"a
+global GC has been initiated when `put/2` returns"*; and *"Deletion of atoms and
+other terms that fit in one machine word is specially optimized to avoid doing a
+global GC."*
+
+That last clause is why the word-sized victim matters: `W1Probe`'s key holds a
+small integer, so its own put initiates nothing — it was **queued behind
+somebody else's**. `persistent_term` updates serialise globally, so the blast
+radius is *every* put/erase in the VM, not only the literal-bearing ones. A
+reader of the docs would not predict that part.
+
+The natural completion — a process executing a dirty NIF cannot run the heap
+scan until the NIF returns, because the NIF owns its heap — is consistent with
+every dump but is **inferred, not measured**. ERTS sources and `erl_nif` docs
+ship with neither the container nor the runtime (`erts-*/src` empty,
+`docfiles=0`), so even the weak published-source class was unavailable.
+
+### The bench: the full 2x2x2, exhausted, and it never reproduced
+
+Eight configurations across {word-sized, literal-bearing put} x {dirty NIF
+parked, not} x {concurrent code load, not}, all pre-registered in the probe
+headers before running. v7 (word-sized hammer), worst put per arm, `t_ms=8000`:
+
+| arm | stimulus | modules loaded | worst put |
+|---|---|---|---|
+| A (none) | — | — | 4.7 – 7.7 ms |
+| LOAD | — | 978 | 10.8 – 12.6 ms |
+| B (sqlite NIF) | 8288 ms | — | 3.3 – 5.7 ms |
+| C (fifo NIF) | 8001 ms | — | 2.5 – 3.0 ms |
+| Bload | 8149 ms | 2671 | 14.9 – 16.2 ms |
+| Cload | 8001 ms | 2672 | 10.9 – 15.2 ms |
+
+v8 closed the one cell nobody had run — literal-bearing put **and** parked NIF
+**and** code load together, the only configuration where all three field
+ingredients coexist:
+
+| arm | stimulus | modules | worst put |
+|---|---|---|---|
+| A (none) | — | — | 34.9 – 91.4 ms |
+| LOAD | — | 2672 | 48.0 – 78.9 ms |
+| B | 8297 ms | — | 52.9 – 81.8 ms |
+| Bload | 8139 ms | 2671 | **37.5 – 65.8 ms** |
+| Cload | 8001 ms | 2672 | 59.5 – 80.2 ms |
+
+`Bload` lands *below* the no-stimulus baseline's top. It is noise. Across
+v1–v8, roughly **38 M timed puts**, with both ingredients calibrated every time
+(`erts_dios_N` in `hrtimer_nanosleep` / `pipe_read`, 30-31 samples), **nothing
+came within three orders of magnitude of the field.**
+
+### Why no upstream report
+
+An ERTS bug report needs a reproducer and eight configurations failed to build
+one. Filing a 128 s field observation with "we cannot reproduce it" is not a
+report, it is a request that someone else redo the round. Nor is "by design"
+quite right if that is read as *fully documented*: the **shape** is documented
+loudly, the **magnitude** — one parked dirty NIF blocking every
+`persistent_term` write and every module load in the VM for the NIF's entire
+lifetime — is not, and the docs' own framing ("many processes... less
+responsive") points elsewhere. **Whether that magnitude is intended or a defect
+is the question round 4 could not close, and it stays open.** What does not
+depend on the answer is the constraint, which is measured.
+
+### `-mode embedded` was considered and is NOT recommended
+
+It surfaced as a lever because the cold set is what makes the module-load leg
+large. Three constraints, on the record so the next session does not re-derive
+them:
+
+1. **It acts on the wrong leg.** The victim measured at 128 s is a
+   `persistent_term:put`, not a module load. `embedded` removes the code-load
+   leg; the `persistent_term` leg survives intact, and the
+   first-log-line-per-module path (`logger_config:allow/2:67`) *is* a put, so it
+   survives too. It is a lever on the smaller half.
+2. **It does not break hot reload.** `Grappa.HotReload` loads via
+   `:code.load_abs/1` + `:code.soft_purge/1` (never `:code.load_file/1`, and its
+   moduledoc says why). Explicit loads work under `embedded`; what `embedded`
+   disables is *automatic* on-demand loading. `/admin/reload` would survive.
+3. **The price is that every lazy load becomes `{error, embedded}`** instead of
+   a load — `ensure_loaded/1` returns exactly that. With 2464 cold modules, any
+   path reaching a module outside the boot script fails rather than loads, plus
+   a slower boot. That has to be measured before, not after.
+
+Whether production overrides `-mode` by env var (its `vm.args` declares it
+configurable that way) was **not** verified: m42 is unreachable from the agent
+and prod is not touched without vjt's go-ahead. The impact of not knowing is
+bounded — if it is `embedded`, only the "every module load" clause of the rule
+falls; the `persistent_term` leg, the `busy_timeout` window and the
+prime-at-boot rule do not depend on it, because the measured victim is a put.
+
+### Blanket priming: rejected on scope, not on cost
+
+The first draft of the rule warned that priming every module would make a single
+`Logger.configure` "a bigger version of the bug". Measured, that is wrong by five
+orders of magnitude: `Logger.configure(level: :info)` costs 3–25 us at 11
+`logger_config` keys and 69–428 us at 604. Sub-millisecond. Two further
+precisions: `set/3`'s per-module loop is **gated on `What =:= primary`**, so it
+is `Logger.configure(level: ...)` and not any `Logger.configure`; and a
+word-sized put at 652 keys still measures 2–11 us.
+
+The conclusion survives, re-founded: **name the observers**. The modules that
+must log under contention are enumerable — they live around the Repo
+(`LockWatch`, `DbLatency`, `BusyRetry`, `Scrollback.Telemetry`) — and priming
+265 cold modules is unfalsifiable maintenance that will drift. That is
+design-discipline (1) "don't duplicate state that already exists" and (5) "if
+the mechanism is heavier than the problem, the mechanism IS the problem", not a
+performance argument.
