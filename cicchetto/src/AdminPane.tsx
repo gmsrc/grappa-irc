@@ -11,7 +11,7 @@ import AdminVhostsTab from "./AdminVhostsTab";
 import AdminNav, { type AdminNavGroup, type AdminNavTab } from "./admin/AdminNav";
 import { startAdminEventsSubscription, uninstallAdminEvents } from "./lib/adminEvents";
 import { adminOverview } from "./lib/adminOverview";
-import PaneTopBar from "./PaneTopBar";
+import PaneTopBar, { PaneTopBarRailOpener } from "./PaneTopBar";
 
 // M-7 — Admin console pane. Replaces the channel content in
 // Shell.tsx when an admin operator clicks "admin console" in
@@ -144,7 +144,13 @@ const AdminPane: Component<Props> = (props) => {
           the `--adm-*` layer. Everything admin-shaped goes in the content slot;
           the ☰ comes with the band, and comes LAST, which is what finally puts
           it on the same side as the channel bar's. */}
-      <PaneTopBar onOpenRail={props.onOpenRail} railLabel="open actions">
+      <PaneTopBar
+        trailing={
+          /* #1697 — passed in rather than baked into the band; see the note on
+             the channel bar's identical call. */
+          <PaneTopBarRailOpener onOpenRail={props.onOpenRail} railLabel="open actions" />
+        }
+      >
         <h1>admin console</h1>
         {/* #1073 — the live key stats, fed by the `"overview"` push the admin
             channel already carries (`lib/adminOverview.ts`). Read here rather

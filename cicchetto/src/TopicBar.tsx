@@ -18,7 +18,7 @@ import { createOverlayLock } from "./lib/overlayScrollLock";
 import { pushChannelTopicClear } from "./lib/socket";
 import { windowIsJoined } from "./lib/windowState";
 import { MircBody } from "./MircText";
-import PaneTopBar from "./PaneTopBar";
+import PaneTopBar, { PaneTopBarRailOpener } from "./PaneTopBar";
 
 // Top bar of the middle pane. Hosts:
 //  * channel-name + modes box (#275): the channel name (bold accent) on line
@@ -303,7 +303,17 @@ const TopicBar: Component<Props> = (props) => {
           selector descending from `.topic-bar`, so the move is inert;
           and while closed `<Show>` renders no element, which is what
           keeps the bar's child list at exactly two. */}
-      <PaneTopBar onOpenRail={props.onToggleMembers} railLabel="open members sidebar">
+      <PaneTopBar
+        trailing={
+          /* #1697 — the ☰ is passed IN now: the band's trailing control became
+             a slot when the rail's radio picker needed a ✕ there instead. Same
+             button, same class, same position — the markup is unchanged. */
+          <PaneTopBarRailOpener
+            onOpenRail={props.onToggleMembers}
+            railLabel="open members sidebar"
+          />
+        }
+      >
         {/* #275 — channel name + modes STACKED in ONE width-capped clickable
           box. The whole box opens the /mode viewer/editor modal (reuse
           `openModeModal` — the SAME verb `/mode #chan`, bare `/mode`, and the

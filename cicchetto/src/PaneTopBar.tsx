@@ -41,6 +41,27 @@ import type { Component, JSX } from "solid-js";
  * genuinely name the same door differently — the channel bar's ☰ has always
  * been *"open members sidebar"*, and changing it would rewrite the eight specs
  * that click it by that name.
+ *
+ * ## #1697 — the trailing control became a SLOT, and the ☰ became a passenger
+ *
+ * The third host is the rail's radio picker, and it is the one that broke the
+ * "extraction, not parameterisation" reading above. Two measured reasons, and
+ * either alone is decisive: the picker's trailing control must be a ✕ (a
+ * rail-opener inside the already-open rail is a door to the floor you are
+ * standing on), and `.topic-bar .topic-bar-hamburger` is `display: none` on
+ * desktop — so a picker inheriting the ☰ would lose its only dismiss control
+ * to a CSS rule written for a different host.
+ *
+ * So `trailing` is a slot, and the ☰ moved out into `PaneTopBarRailOpener`,
+ * which both original hosts render. The emitted markup is unchanged for them,
+ * which is why #1073's ordering pin in `TopicBar.test.tsx` and the accessible
+ * name in `AdminPane.test.tsx` stay green without an edit — the extraction's
+ * invariant (the trailing child is what puts the control on the right) is now
+ * stated by the slot rather than by the hard-coded button.
+ *
+ * The slot is REQUIRED, not defaulted to the ☰: a default would let a new host
+ * inherit a rail door it never asked for, silently, which is the degradation
+ * pattern this codebase bans.
  */
 export type Props = {
   /**
@@ -50,30 +71,51 @@ export type Props = {
    * for #344's intra-block line registration on the channel bar.
    */
   children: JSX.Element;
+  /**
+   * The band's LAST child. Being last is what places it on the right, on every
+   * surface wearing this band (#1073) — so a host passes the control itself,
+   * not a callback the band wraps.
+   */
+  trailing: JSX.Element;
+};
+
+export type RailOpenerProps = {
   onOpenRail: () => void;
-  /** Accessible name for the ☰ — the two hosts word this door differently. */
+  /** Accessible name for the ☰ — the hosts word this door differently. */
   railLabel: string;
+};
+
+/**
+ * #881 — UNCONDITIONAL. This ☰ is not a members toggle, it is the rail door: on
+ * mobile it opens `.shell-members`, the permanent right rail hosting Archive,
+ * Settings, Rooms and Admin. It used to sit behind `windowIsJoined` on the
+ * premise that it toggled a member list, and that gate took the whole
+ * navigation with it, stranding a `:failed`/`:kicked`/`:parked` window with no
+ * way out. Joinedness gates the LIST, never the DOOR.
+ *
+ * #1697 lifted it out of the band's body so the band could take a different
+ * trailing control. It lives HERE rather than being duplicated at its two call
+ * sites for the ordinary reason: two copies of a button whose class drives a
+ * desktop `display: none` rule is one copy too many.
+ */
+export const PaneTopBarRailOpener: Component<RailOpenerProps> = (props) => {
+  return (
+    <button
+      type="button"
+      class="topic-bar-hamburger shell-chrome-btn"
+      aria-label={props.railLabel}
+      onClick={props.onOpenRail}
+    >
+      {"\u{2630}"}
+    </button>
+  );
 };
 
 const PaneTopBar: Component<Props> = (props) => {
   return (
     <div class="topic-bar">
       <div class="topic-bar-header">{props.children}</div>
-      {/* #881 — UNCONDITIONAL. This ☰ is not a members toggle, it is the rail
-          door: on mobile it opens `.shell-members`, the permanent right rail
-          hosting Archive, Settings, Rooms and Admin. It used to sit behind
-          `windowIsJoined` on the premise that it toggled a member list, and
-          that gate took the whole navigation with it, stranding a
-          `:failed`/`:kicked`/`:parked` window with no way out. Joinedness
-          gates the LIST, never the DOOR. */}
-      <button
-        type="button"
-        class="topic-bar-hamburger shell-chrome-btn"
-        aria-label={props.railLabel}
-        onClick={props.onOpenRail}
-      >
-        {"\u{2630}"}
-      </button>
+      {props.trailing}
     </div>
   );
 };
