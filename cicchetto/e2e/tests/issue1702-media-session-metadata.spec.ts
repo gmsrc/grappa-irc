@@ -86,10 +86,14 @@ const TRACK_ARTIST = "Steve Roach";
     ever set. */
 type CapturedActions = Record<string, (() => void) | undefined>;
 
-/** What the page-side stub exposes back to the spec. */
+/** What the page-side stub exposes back to the spec.
+ *
+ * `__msRetained` is never READ. It exists to keep the patched object alive —
+ * see the init script for the measurement that made it necessary. */
 type Probe = {
   __msActions?: CapturedActions;
   __msCalls?: string[];
+  __msRetained?: MediaSession;
   __songsUrls?: string[];
 };
 
@@ -112,25 +116,6 @@ test("@webkit #1702 — the lock screen is told the track, the station and the a
       const ms = navigator.mediaSession as MediaSession | undefined;
       if (ms !== undefined) {
         const original = ms.setActionHandler.bind(ms);
-        // ⚠️ THIS SPY DOES NOT WORK YET, and the assertion it feeds — (d) — is
-        // the one red left in this spec. Recorded here rather than deleted so
-        // the next session does not re-walk the two hypotheses already killed.
-        //
-        // Measured, in order: with a plain `ms.setActionHandler = fn` the log
-        // came back "(never called)"; the guess was a sloppy-mode assignment
-        // silently dropped onto an instance whose method lives on
-        // `MediaSession.prototype`, so this became `Object.defineProperty` —
-        // and the log came back "(never called)" AGAIN. So that guess is dead.
-        //
-        // The discriminating read is `spyStillInstalled=false` with
-        // `mediaSessionPresent=true`: the spy is simply not on the object by the
-        // time the spec looks, on a document where the init script demonstrably
-        // ran (`__songsUrls` from the same script is populated and (a)–(c)
-        // pass). Leading hypothesis, NOT yet verified: `navigator.mediaSession`
-        // hands back a different object per access, so the patch lands on one
-        // instance and the app calls another. Verify that FIRST — and note that
-        // nothing here has yet measured production's own behaviour, so #1702's
-        // action handlers are UNPROVEN rather than known broken.
         const spy = (
           action: MediaSessionAction,
           handler: MediaSessionActionHandler | null,
@@ -151,6 +136,43 @@ test("@webkit #1702 — the lock screen is told the track, the station and the a
           writable: true,
           configurable: true,
         });
+
+        // 🔴 THIS LINE IS THE SPY. Without it the patch above is collected
+        // before the spec can read it back, and (d) fails with
+        // `calls=[none] spyStillInstalled=false mediaSessionPresent=true` —
+        // which reads exactly like a production fault and is not one.
+        //
+        // Measured in a two-arm probe on this same WebKit build (iPhone 15
+        // profile, ~250 MB of allocation churn between install and read-back):
+        //
+        //   retain nothing → spy=false own=false metadata="PIN" calls=[]
+        //   retain the obj → spy=true  own=true  metadata="PIN" calls=["play:fn"]
+        //
+        // `navigator.mediaSession` is `[SameObject]`, and JSC honours that by
+        // CACHING a wrapper — not by pinning one. `metadata` and
+        // `playbackState` are state on the platform object underneath and
+        // outlive the wrapper (hence "PIN" surviving in both arms, and hence
+        // (a)–(c) passing while (d) did not). A JS own property has nowhere to
+        // live but the wrapper, so once nothing in JS references it, the
+        // wrapper goes and the property with it, and the next read mints a
+        // clean one. Holding the object in a global is what makes the wrapper
+        // reachable, and it is why `window.fetch` — patched by the very same
+        // init script, on `window`, which is never collectible — never had this
+        // problem while the spy did.
+        //
+        // It is also the single explanation for BOTH earlier dead ends: a plain
+        // `ms.setActionHandler = fn` and an `Object.defineProperty` fail
+        // identically here, because neither survives losing the object it was
+        // written on. The write was never the variable.
+        //
+        // Production is not affected and is not being papered over: cic never
+        // patches the wrapper, it calls `setActionHandler` on it, and the
+        // handler is then held by the platform object — the same place the
+        // metadata that survived both arms lives. (Inferred from that
+        // measurement, not measured directly: no automation surface can fire a
+        // platform media action, which is the same device-check boundary this
+        // file's header already states.)
+        w.__msRetained = ms;
       }
 
       // (2) The now-playing feed, answered here rather than on the network.
