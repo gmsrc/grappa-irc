@@ -61507,3 +61507,132 @@ instead of replacing it. Known and deliberately left: `reset_for_test/0` drops
 `refs_to_user` without demonitoring, unlike `reset_for_user/1`. A leaked monitor's
 `:DOWN` finds no ref and takes the no-op branch, so it cannot produce an event;
 fixing it is a behaviour change to a test helper with no failure to its name.
+<!-- entry #1703 -->
+
+---
+
+## 2026-08-24 — #1703: the station table stops being a SomaFM mirror
+
+The curated radio list was structurally perfect and musically empty:
+14 rows, exactly ONE of guitar music (`indiepop`), no metal at all. No
+shape invariant could have caught that, because nothing about the shape
+was wrong — which is why the two new tests pin the two COUNTS from the
+report rather than any structure.
+
+### SomaFM's ceiling is one metal channel, so the work had to leave it
+
+Measured against the live catalogue (46 channels): `metal` is the only
+metal channel upstream publishes. Six rows are what this provider can
+contribute — `metal`, `seventies`, `poptron`, `covers`, `brfm`,
+`doomed` — and the rest of the request could not be bought here at any
+price. `rockantenne-metal` is therefore the first row in this table
+that is not SomaFM, and the type was written for it ("a table of
+stations, not a table of SomaFM slugs"); this is the first time that
+sentence had to hold weight.
+
+Three consequences, all already provided for, none needing a server edit:
+
+* **`songsUrl` is null** because Rock Antenne publishes no now-playing
+  feed — probed, not assumed. That is also what keeps the change purely
+  client-side: `connect-src` names `api.somafm.com` alone, so ANY feed
+  URL would have forced a CSP widening — for a document
+  `parseSongsFeed` could not read anyway, since it parses SomaFM's
+  `{songs:[…]}` shape and nothing else. Worth stating plainly, because
+  the field's doc comment reads more generally than the parser behaves:
+  a non-SomaFM JSON feed would pass `check:radio`'s FEED axis (200
+  `application/json`) and then yield `unanswered` forever — the
+  symptomless defect the probe exists for, walking through the probe.
+* **The AGREE axis goes dark for that row, permanently.** There is no
+  catalogue behind a non-SomaFM station, so it is REACH-only. Naming
+  the absence beats inventing a comparison that would pass on anything.
+* **The CSP needs nothing.** `media-src 'self' blob: https:` and
+  `img-src 'self' data: https:` are scheme-scoped, not host-scoped, and
+  the front door's 302 target is https too.
+
+### The front-door rule is now per-vendor, and it has a vacuity guard
+
+Every provider here fronts a numbered pool, and the obvious way to add
+a station — copy the URL a player hands you — pins one pool member.
+Measured, and the two vendors are not the same shape: SomaFM's `.pls`
+lists three rotating hosts while unnumbered `ice.somafm.com` answers
+for all; `stream.rockantenne.de` rotates PER REQUEST, five consecutive
+fetches of one channel answering s2, s6, s2, s1, s2.
+
+The rule used to name SomaFM alone. Left that way it would have pinned
+the vendor already correct and said nothing about the new one — the
+asymmetry that let a vite bump through `integration.yml` without
+running a line of JavaScript. It is now a vendor→front-door map with a
+SECOND test asserting every vendor in it has a row behind it, because
+the rule SKIPS unknown vendors and a skip that covers everything is a
+green built from zero comparisons. A vendor absent from the map is
+deliberately not a failure: the table may hold a provider whose
+topology nobody has measured, and inventing a front door for it is the
+unverifiable claim #1696 was filed about. The map lives in the TEST,
+not in the type — it is a fact about vendors' infrastructure, and
+baking it into `RadioStation` is exactly the vendor-slug table the
+module header refuses to become.
+
+### Two positive controls were asserting totality and calling it non-vacuity
+
+`checkRadioLogos.test.ts` held `backed.length === RADIO_STATIONS.length`
+and `withFeed.length === RADIO_STATIONS.length`. Both were true only
+because every row was SomaFM, and neither was the property named in its
+own comment. The FEED one directly contradicted the field's type —
+`songsUrl` is nullable precisely because a feed is a provider
+capability — so the first provider without one turned a correctly
+spelled row red. Non-vacuity is `> 0`; totality is a different claim.
+The AGREE control also gained precision it never had: it now compares
+the engaged set against an INDEPENDENT spelling of "this logo is
+SomaFM's", because a control that asks a predicate to confirm itself
+passes however the predicate is broken.
+
+### Curation tests are floors, never counts
+
+An exact count is a mirror of today's table: it goes red on the next
+station anyone adds, which teaches the next author to edit the
+assertion instead of reading it. A floor only goes red when the table
+stops answering the request that filed the issue. They key on the
+`rock` / `metal` tags rather than ids so pruning or swapping a station
+stays free, and `alternative` is excluded on purpose — `u80s` carries
+it and is synthpop, so counting it would let the floor be satisfied by
+rows that do not answer the request.
+
+### Why Kohina is not in this table
+
+#1704 was held and re-queued behind #1744, and the measurements are
+worth keeping because they reversed two readings.
+
+The codec question was framed from `caniuse-lite` 1.0.30001791 as "`a`
+(partial) from 17.6, dataset ends at 18.3". Read from the same
+vendored dataset, sorted by version, `ios_saf` × `ogg-vorbis` is `n` →
+**`a #2` from 17.4** → **`y` from 18.4**, with entries running to 26.5.
+Ogg Vorbis is fully supported on every iOS from 18.4 up. In the same
+dataset `aac` × `ios_saf` is `y` from 4.0, so the AAC candidates
+recorded alongside it were never a codec question either.
+
+That moved the blocker to a different place, and the second measurement
+is the one that mattered. Characterised on the existing harness with
+`MediaError` code 4 (`MEDIA_ERR_SRC_NOT_SUPPORTED`): `el.error`
+populates and `mustRefetch` reads it, but nothing RENDERS it — the sole
+effect of `onError` is `setPlaying(false)`. Worse, `loadedmetadata`
+never fires, so `duration` stays 0 — a FINITE number — `live()` is
+false, and the bar draws the FILE chrome: a seek slider at `max="0"`, a
+`0:00 / 0:00` readout and a download link over an endless cross-origin
+stream. A station that cannot decode does not merely fail quietly; it
+renders as a zero-length audio file.
+
+Re-measured after #1702 landed mid-branch, because that commit touches
+this component: the finding is unchanged, and there is now one more
+surface asserting the false state. `setMediaSessionPlaybackState` is
+driven off `playing()`, which the error handler has just set false, so
+the OS lock screen reports `paused` for a source that never played.
+Four surfaces agree on "paused" and none of them has been told there is
+an error to report.
+
+That is a general defect across all rows — any stream that fails to
+start looks the same — and it is the third instance of the #1700 class,
+which stopped the BUTTON lying without touching the chrome or adding a
+surface. It is #1744. Kohina's only distinction is frequency:
+occasional for the others, systematic below iOS 18.4. Filing it as a
+gate on one row would have been a general bug mistaken for a
+per-station precondition.
