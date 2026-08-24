@@ -103,6 +103,27 @@ class InertIntersectionObserver {
   }
 }
 
+// jsdom implements no `error` on HTMLMediaElement: reading it yields
+// `undefined`, where the DOM contract types it `MediaError | null` and a real
+// browser answers `null` on a healthy element. Measured under jsdom 29, not
+// assumed — `document.createElement("audio").error` is `undefined`.
+//
+// Left alone this is a silent TRAP rather than a missing feature. The
+// type-exact predicate for "did playback fail" is `el.error !== null`, and
+// under jsdom that reads TRUE on a pristine element — so a test meaning "this
+// source is healthy" quietly exercises the FAILURE branch and reports green
+// having measured the wrong path. #1700's resume rule is the first such
+// predicate in cic; pinning the conforming default here means the next one
+// inherits it instead of rediscovering it.
+//
+// A per-instance `Object.defineProperty` still shadows this, which is exactly
+// how a test puts an element INTO the error state. Production always runs in a
+// browser, where the property is real. Covered by media-error-default.test.ts.
+Object.defineProperty(HTMLMediaElement.prototype, "error", {
+  configurable: true,
+  get: () => null,
+});
+
 beforeEach(() => {
   // Fresh in-memory localStorage for every test — no state bleeds between cases.
   vi.stubGlobal("localStorage", makeLocalStorage());
