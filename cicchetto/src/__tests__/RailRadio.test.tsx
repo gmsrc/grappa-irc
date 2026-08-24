@@ -5,7 +5,9 @@ import {
   audioFailureLabel,
   clearPlaybackFailure,
   closeAudio,
+  hidePlayer,
   playAudio,
+  playerHidden,
   reportPlaybackFailure,
 } from "../lib/audioPlayer";
 import { closeRadioPicker, openRadioPicker, radioPickerOpen } from "../lib/radio";
@@ -121,6 +123,75 @@ describe("RailRadio", () => {
 
     expect(activeAudio()).toBeNull();
     expect(screen.queryByTestId("rail-radio-now")).toBeNull();
+  });
+
+  // #1737 — the band is what says "this is playing", so tapping it is the
+  // obvious way back to a transport the operator hid (#1697). The
+  // `rail-action-show-player` drawer entry stays: it is the GENERAL door,
+  // because an upload carries `label: null`, is in no station table, and
+  // renders no band at all.
+  describe("tap to restore a hidden player (#1737)", () => {
+    it("restores the transport when the band is tapped", () => {
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+      hidePlayer();
+      expect(playerHidden()).toBe(true);
+
+      screen.getByTestId("rail-radio-now-restore").click();
+
+      expect(playerHidden()).toBe(false);
+      // Restoring the CHROME must not touch the SOURCE — the two axes the
+      // store keeps in separate signals for exactly this reason.
+      expect(activeAudio()?.href).toBe(station.streamUrl);
+    });
+
+    it("names the station it would bring back", () => {
+      // Hidden, this control inherits the job the docked bar's caption did:
+      // answering "what am I listening to". Same posture as the drawer entry.
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+
+      expect(screen.getByTestId("rail-radio-now-restore")).toHaveAccessibleName(
+        `show player — ${station.title}`,
+      );
+    });
+
+    it("leaves ⏹ its own tap target: stopping from a hidden player still stops", () => {
+      // The issue's explicit constraint. Observable half: the restore control
+      // must not SWALLOW the stop click.
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+      hidePlayer();
+
+      screen.getByTestId("rail-radio-stop").click();
+
+      expect(activeAudio()).toBeNull();
+      expect(screen.queryByTestId("rail-radio-now")).toBeNull();
+    });
+
+    it("keeps ⏹ OUTSIDE the restore control, so stop cannot become restore-then-stop", () => {
+      // The other half of that constraint, and it can only be expressed
+      // structurally: `closeAudio` resets `playerHidden` to false itself, so
+      // "stopped" and "restored then stopped" are the SAME observable state.
+      // Nesting is what would make the row handler fire on a ⏹ tap, so the
+      // guarantee is that the two controls are siblings — no `stopPropagation`
+      // ordering rule for a future reader to get wrong.
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+
+      const restore = screen.getByTestId("rail-radio-now-restore");
+      const stop = screen.getByTestId("rail-radio-stop");
+
+      expect(restore.contains(stop)).toBe(false);
+      // Both are real buttons: a nested <button> is invalid HTML, which is
+      // why the identity half — and not the whole row — is the control.
+      expect(restore.tagName).toBe("BUTTON");
+      expect(stop.tagName).toBe("BUTTON");
+    });
   });
 
   it("drops the chrome when an audio upload takes the player over", () => {

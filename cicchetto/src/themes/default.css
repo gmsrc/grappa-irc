@@ -2386,6 +2386,32 @@ html.resize-dragging * {
   background: var(--bg-alt);
 }
 
+/* #1737 — the band's identity half, and the door back to a hidden transport
+   (#1697). A <button> because it IS one: the ⏹ beside it is a button too, and
+   nesting them is invalid HTML, so the control is the identity rather than
+   the whole row — which also makes "stop is not restore-then-stop" true by
+   construction instead of by a `stopPropagation` ordering rule.
+   `flex: 1` is what makes it the whole band MINUS the ⏹ rather than just the
+   text it wraps, so the ⏹ also stops drifting left behind a short station
+   title; `min-width: 0` hands the title the ellipsis budget that used to sit
+   on `.rail-radio-now-text` one level down. The rest is the plain button
+   reset, the `.members-pane li .member-name` idiom. */
+.rail-radio-now-restore {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .rail-radio-now-logo {
   flex: none;
   width: 2rem;

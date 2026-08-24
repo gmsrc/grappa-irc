@@ -1,5 +1,5 @@
 import { type Component, createSignal, For, Show } from "solid-js";
-import { audioFailureLabel, closeAudio, playbackFailure } from "./lib/audioPlayer";
+import { audioFailureLabel, closeAudio, playbackFailure, showPlayer } from "./lib/audioPlayer";
 import { createDismissOnOutsidePointer } from "./lib/dismissOnOutsidePointer";
 import { nowPlayingLabel } from "./lib/nowPlaying";
 import { createOverlayLock } from "./lib/overlayScrollLock";
@@ -106,12 +106,47 @@ const RailRadio: Component = () => {
       <Show when={tunedStation()}>
         {(station) => (
           <div class="rail-radio-now" data-testid="rail-radio-now">
-            <StationLogo station={station()} class="rail-radio-now-logo" />
-            <div class="rail-radio-now-text">
-              <span class="rail-radio-now-title" data-testid="rail-radio-now-title">
-                {station().title}
-              </span>
-              {/* #1698 — the TRACK takes the genres' slot rather than adding a
+            {/* #1737 — the band's identity half IS the door back to a hidden
+                transport (#1697). The band is the thing that says "this is
+                playing", and tapping what is playing to get the transport
+                back is the platform convention; before this it was inert
+                except for its ⏹.
+
+                WHY THE IDENTITY AND NOT THE WHOLE ROW. The ⏹ beside it is a
+                <button>, and a <button> inside a <button> is invalid HTML —
+                so the row itself cannot become the control. The alternative
+                (a click handler on the row, with ⏹ calling
+                `stopPropagation`) makes "stop must not become restore-then-
+                stop" an event-ordering rule somebody has to keep right; two
+                SIBLING buttons make it true by construction, and give the
+                keyboard two real stops instead of a div nobody can focus.
+                `flex: 1` is what makes it the whole band minus the ⏹ rather
+                than just the text it wraps.
+
+                WHY IT IS NOT GATED ON `playerHidden()`, unlike the
+                `rail-action-show-player` drawer entry that shares its verb:
+                that one is a MENU ROW, and a row that does nothing is
+                clutter you scroll past. This control costs no space — the
+                band is already on screen — so gating it would only make the
+                band change DOM shape, and with it the row's flex layout,
+                every time the operator hides the transport. `showPlayer()`
+                is idempotent, so the ungated tap is a no-op while the bar is
+                up. The drawer entry stays regardless: it is the GENERAL
+                door, because an upload carries `label: null`, is in no
+                station table, and renders no band at all. */}
+            <button
+              type="button"
+              class="rail-radio-now-restore"
+              data-testid="rail-radio-now-restore"
+              onClick={showPlayer}
+              aria-label={`show player — ${station().title}`}
+            >
+              <StationLogo station={station()} class="rail-radio-now-logo" />
+              <div class="rail-radio-now-text">
+                <span class="rail-radio-now-title" data-testid="rail-radio-now-title">
+                  {station().title}
+                </span>
+                {/* #1698 — the TRACK takes the genres' slot rather than adding a
                   third line. #500 bought this rail's vertical budget by
                   collapsing the actions behind one launcher, and a permanently
                   taller chrome would re-charge part of it. Nothing is lost:
@@ -129,32 +164,33 @@ const RailRadio: Component = () => {
                   `tunedStation()`, derived from the SOURCE, so it keeps
                   reporting what the station is broadcasting long after this
                   browser stopped being able to decode it. */}
-              <Show
-                when={playbackFailure()}
-                fallback={
-                  <Show
-                    when={nowPlayingLabel()}
-                    fallback={
-                      <span class="rail-radio-now-genres" data-testid="rail-radio-now-genres">
-                        {station().genres.join(" · ")}
-                      </span>
-                    }
-                  >
-                    {(line) => (
-                      <span class="rail-radio-now-track" data-testid="rail-radio-now-track">
-                        {line()}
-                      </span>
-                    )}
-                  </Show>
-                }
-              >
-                {(failure) => (
-                  <span class="rail-radio-now-error" data-testid="rail-radio-now-error">
-                    {`⚠ ${audioFailureLabel(failure())}`}
-                  </span>
-                )}
-              </Show>
-            </div>
+                <Show
+                  when={playbackFailure()}
+                  fallback={
+                    <Show
+                      when={nowPlayingLabel()}
+                      fallback={
+                        <span class="rail-radio-now-genres" data-testid="rail-radio-now-genres">
+                          {station().genres.join(" · ")}
+                        </span>
+                      }
+                    >
+                      {(line) => (
+                        <span class="rail-radio-now-track" data-testid="rail-radio-now-track">
+                          {line()}
+                        </span>
+                      )}
+                    </Show>
+                  }
+                >
+                  {(failure) => (
+                    <span class="rail-radio-now-error" data-testid="rail-radio-now-error">
+                      {`⚠ ${audioFailureLabel(failure())}`}
+                    </span>
+                  )}
+                </Show>
+              </div>
+            </button>
             {/* `closeAudio` directly: it already IS the stop verb, and the
                 station is derived from the player, so clearing the player is
                 what un-tunes. No radio-flavoured wrapper around it. */}
