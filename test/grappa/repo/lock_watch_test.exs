@@ -390,6 +390,70 @@ defmodule Grappa.Repo.LockWatchTest do
     end
   end
 
+  describe "the barrier itself (#1747)" do
+    test "a slow predicate cannot push the barrier past its own budget" do
+      # #1747 — six unrelated PRs went red here with a 60 s `ExUnit.TimeoutError`
+      # and NEVER with `await_until`'s own `flunk`, which is the diagnosis this
+      # helper exists to print. That is arithmetic, not luck: an attempt count
+      # is not a budget. Bounded at 300 attempts the helper spends ~3 s on a
+      # healthy runner and well past ExUnit's 60 s ceiling on a starved one, so
+      # exactly when the failure is interesting the honest message becomes
+      # unreachable and the report shows a stack sampled from wherever the loop
+      # happened to be.
+      #
+      # A 30 ms predicate is the starved runner, compressed: under the attempt
+      # bound this call costs 200 * (30 + 10) ms = 8 s, under a wall-clock bound
+      # it costs the budget.
+      budget_ms = 200
+
+      {elapsed_us, _} =
+        :timer.tc(fn ->
+          assert_raise ExUnit.AssertionError, fn ->
+            await_until(
+              fn ->
+                Process.sleep(30)
+                false
+              end,
+              budget_ms
+            )
+          end
+        end)
+
+      assert div(elapsed_us, 1000) < 10 * budget_ms
+    end
+
+    test "lock_roles/0 names the same holders and waiters inspect_lock/0 does" do
+      # The barrier compares pid lists and nothing else, but `inspect_lock/0`
+      # formats a 12-frame stacktrace per sampled process to answer it. This
+      # pins the cheap projection to the expensive one so the barrier can stop
+      # paying for a diagnostic it never reads — and so a reimplementation that
+      # drifts from `partition/2` reddens here instead of silently disagreeing
+      # with the instrument it is supposed to mirror.
+      repo = start_tmp_repo()
+
+      {holder, holder_ref} = start_writer(1, :park)
+      assert_receive {:holding, ^holder}, 5_000
+
+      {waiter, waiter_ref} = start_writer(2, :straight_through)
+
+      await_roles(holder, [waiter])
+
+      %{holders: held, waiters: queued} = LockWatch.lock_roles()
+      %{holders: held_samples, waiters: queued_samples} = LockWatch.inspect_lock()
+
+      assert Enum.map(held, &inspect/1) == pids(held_samples)
+      assert Enum.sort(Enum.map(queued, &inspect/1)) == Enum.sort(pids(queued_samples))
+      assert held == [holder]
+      assert queued == [waiter]
+
+      send(holder, :release)
+      assert_receive {:DOWN, ^holder_ref, :process, ^holder, :normal}, 5_000
+      assert_receive {:DOWN, ^waiter_ref, :process, ^waiter, :normal}, 10_000
+
+      Supervisor.stop(repo)
+    end
+  end
+
   ## ----- helpers --------------------------------------------------------
 
   # Drives the REAL `init/1` — the only way to prove the priming is wired
