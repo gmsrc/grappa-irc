@@ -86,6 +86,20 @@ export type RadioStation = {
   /** The endless audio endpoint handed to `playAudio`. */
   readonly streamUrl: string;
   readonly logoUrl: string;
+  /** #1698 — the JSON feed naming the track on air, or `null` when the
+      provider publishes none.
+      NULLABLE, unlike every sibling above, and the difference is real rather
+      than defensive: a title, a stream and a logo are things every station HAS,
+      while a machine-readable now-playing feed is a provider CAPABILITY. A
+      required field would force the next non-SomaFM station to invent a URL,
+      and an invented URL is the unverifiable claim #1696 was filed about.
+      COPIED, never templated from `id` — the same rule `logoUrl` states above,
+      for the same reason: `id` is our slug, not a SomaFM one, and deriving
+      `…/songs/${id}.json` would bake a vendor's naming convention into the
+      type. That the two coincide for all fourteen rows today is a fact about
+      SomaFM, not a contract. `bun run check:radio` probes this URL alongside
+      the logo, so the claim stays executable. */
+  readonly songsUrl: string | null;
 };
 
 export const RADIO_STATIONS: readonly RadioStation[] = [
@@ -96,6 +110,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "A nicely chilled plate of ambient/downtempo beats and grooves.",
     streamUrl: "https://ice.somafm.com/groovesalad-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/groovesalad120.png",
+    songsUrl: "https://api.somafm.com/songs/groovesalad.json",
   },
   {
     id: "dronezone",
@@ -105,6 +120,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       "Served best chilled, safe with most medications. Atmospheric textures with minimal beats.",
     streamUrl: "https://ice.somafm.com/dronezone-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/dronezone120.jpg",
+    songsUrl: "https://api.somafm.com/songs/dronezone.json",
   },
   {
     id: "spacestation",
@@ -113,6 +129,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Tune in, turn on, space out. Spaced-out ambient and mid-tempo electronica.",
     streamUrl: "https://ice.somafm.com/spacestation-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/spacestation120.jpg",
+    songsUrl: "https://api.somafm.com/songs/spacestation.json",
   },
   {
     id: "lush",
@@ -121,6 +138,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Sensuous and mellow female vocals, many with an electronic influence.",
     streamUrl: "https://ice.somafm.com/lush-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/lush120.jpg",
+    songsUrl: "https://api.somafm.com/songs/lush.json",
   },
   {
     id: "indiepop",
@@ -129,6 +147,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "New and classic favorite indie pop tracks.",
     streamUrl: "https://ice.somafm.com/indiepop-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/indiepop120.jpg",
+    songsUrl: "https://api.somafm.com/songs/indiepop.json",
   },
   {
     id: "u80s",
@@ -137,6 +156,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Early 80s UK Synthpop and a bit of New Wave.",
     streamUrl: "https://ice.somafm.com/u80s-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/u80s120.png",
+    songsUrl: "https://api.somafm.com/songs/u80s.json",
   },
   {
     id: "secretagent",
@@ -146,6 +166,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
       "The soundtrack for your stylish, mysterious, dangerous life. For Spies and PIs too!",
     streamUrl: "https://ice.somafm.com/secretagent-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/secretagent120.jpg",
+    songsUrl: "https://api.somafm.com/songs/secretagent.json",
   },
   {
     id: "defcon",
@@ -154,6 +175,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Music for Hacking. The DEF CON Year-Round Channel.",
     streamUrl: "https://ice.somafm.com/defcon-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/defcon120.png",
+    songsUrl: "https://api.somafm.com/songs/defcon.json",
   },
   {
     id: "folkfwd",
@@ -162,6 +184,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Indie Folk, Alt-folk and the occasional folk classics. ",
     streamUrl: "https://ice.somafm.com/folkfwd-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/folkfwd120.jpg",
+    songsUrl: "https://api.somafm.com/songs/folkfwd.json",
   },
   {
     id: "bootliquor",
@@ -170,6 +193,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Americana Roots music for Cowhands, Cowpokes and Cowtippers",
     streamUrl: "https://ice.somafm.com/bootliquor-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/bootliquor120.jpg",
+    songsUrl: "https://api.somafm.com/songs/bootliquor.json",
   },
   {
     id: "bossa",
@@ -178,6 +202,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Silky-smooth, laid-back Brazilian-style rhythms of Bossa Nova, Samba and beyond",
     streamUrl: "https://ice.somafm.com/bossa-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/bossa120.jpg",
+    songsUrl: "https://api.somafm.com/songs/bossa.json",
   },
   {
     id: "reggae",
@@ -186,6 +211,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Reggae, Ska, Rocksteady classic and deep tracks.",
     streamUrl: "https://ice.somafm.com/reggae-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/reggae120.png",
+    songsUrl: "https://api.somafm.com/songs/reggae.json",
   },
   {
     id: "sonicuniverse",
@@ -194,6 +220,7 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Transcending the world of jazz with eclectic, avant-garde takes on tradition.",
     streamUrl: "https://ice.somafm.com/sonicuniverse-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/sonicuniverse120.jpg",
+    songsUrl: "https://api.somafm.com/songs/sonicuniverse.json",
   },
   {
     id: "missioncontrol",
@@ -202,5 +229,6 @@ export const RADIO_STATIONS: readonly RadioStation[] = [
     description: "Celebrating NASA and Space Explorers everywhere.",
     streamUrl: "https://ice.somafm.com/missioncontrol-128-mp3",
     logoUrl: "https://api.somafm.com/logos/120/missioncontrol120.jpg",
+    songsUrl: "https://api.somafm.com/songs/missioncontrol.json",
   },
 ];

@@ -47,6 +47,44 @@ describe("RADIO_STATIONS", () => {
     }
   });
 
+  // #1698 — the now-playing feed URL. Same posture as `logoUrl`: a verbatim
+  // copy, never templated from `id` (this is a table of stations, not a table
+  // of SomaFM slugs), and nullable because publishing a track feed is a
+  // provider CAPABILITY, not something every station has.
+  it("carries a now-playing feed for at least one station", () => {
+    // The positive control for every rule below it. Each of those skips a
+    // station whose `songsUrl` is null, so a table where the field went
+    // uniformly null would report green having compared nothing — silence
+    // read as agreement.
+    const withFeed = RADIO_STATIONS.filter((s) => s.songsUrl !== null);
+    expect(withFeed.length).toBeGreaterThan(0);
+  });
+
+  it("serves every now-playing feed over https", () => {
+    // A feed is a `fetch`, so it is governed by `connect-src`, and the CSP
+    // token that admits it (`https://api.somafm.com`) is scheme-scoped. An
+    // http URL is refused as mixed content before the CSP is even consulted.
+    for (const s of RADIO_STATIONS) {
+      if (s.songsUrl === null) continue;
+      expect(s.songsUrl, `station ${s.id} songs feed`).toMatch(/^https:\/\//);
+    }
+  });
+
+  it("aims every somafm now-playing feed at api.somafm.com, the host the CSP admits", () => {
+    // #1695 measured this and it is the trap worth pinning: `connect-src`
+    // admits `https://api.somafm.com` and NOT the bare `somafm.com`, which
+    // answers an identical 200 under curl and dies in the browser. The failure
+    // is a console CSP violation and a permanently empty track line — silent
+    // from the operator's side. Scoped to somafm hosts for the same reason the
+    // stream rule is: the table may hold a station from another provider.
+    for (const s of RADIO_STATIONS) {
+      if (s.songsUrl === null) continue;
+      const host = new URL(s.songsUrl).host;
+      if (!host.endsWith("somafm.com")) continue;
+      expect(host, `station ${s.id} songs feed is off the CSP's host`).toBe("api.somafm.com");
+    }
+  });
+
   it("uses SomaFM's stable front door, never a numbered pool host", () => {
     // Measured 2026-08-23: a channel's `.pls` lists three ROTATING hosts
     // (ice2 / ice5 / ice6) while the unnumbered `ice.somafm.com` answers for
