@@ -70,6 +70,25 @@ defmodule Grappa.Repo.LockWatchTest do
   @moduletag timeout: @test_timeout_ms
   @waiter_budget_ms @test_timeout_ms * 2
 
+  # 🔴 THE BARRIER IS A THIRD CLOCK, AND IT HAS TO BE ORDERED TOO (#1747).
+  #
+  # `await_until/2` used to count 300 ATTEMPTS, which is not a budget in
+  # either direction. On a healthy runner it gave up after ~3s — under the
+  # roles a slow runner still needs. On a starved one it ran far past ExUnit's
+  # deadline, so its own `flunk` became UNREACHABLE and the test died an
+  # `ExUnit.TimeoutError` whose stack was sampled from wherever the loop
+  # happened to be. Six unrelated PRs went red that way in one night, all six
+  # naming a frame that turns out not to be a blocker at all: measured, an
+  # `:application.get_application/1` answers in 9µs with the
+  # `application_controller` SUSPENDED, and a `Process.info(pid,
+  # :current_stacktrace)` against a process inside a dirty NIF answers in
+  # 21µs. Neither can park; the stack was an artefact of sampling a busy loop.
+  #
+  # Same move as the two clocks above, applied to the clock they missed:
+  # derive FROM the test deadline, and stay strictly UNDER it so the honest
+  # diagnosis is always the one that fires.
+  @barrier_budget_ms div(@test_timeout_ms, 2)
+
   setup do
     LockWatch.put_test_enabled(true)
     on_exit(fn -> LockWatch.put_test_enabled(false) end)
@@ -613,31 +632,44 @@ defmodule Grappa.Repo.LockWatchTest do
 
   # `holder` is `nil` for the #1687 topology — a queue whose holder owns no
   # row, so the barrier is "holders is EMPTY and these pids are queued".
+  # Reads the PID-ONLY projection, not `inspect_lock/0`: this predicate
+  # compares pid lists and discards everything else, while `inspect_lock/0`
+  # runs `Process.info/2` plus twelve frames through
+  # `Exception.format_stacktrace_entry/1` per process, on every turn (#1747).
   defp await_roles(holder, waiters) do
     await_until(
       fn ->
-        %{holders: held, waiters: queued} = LockWatch.inspect_lock()
+        %{holders: held, waiters: queued} = LockWatch.lock_roles()
 
-        pids(held) == expected_holders(holder) and
-          Enum.sort(pids(queued)) == Enum.sort(Enum.map(waiters, &inspect/1))
+        held == expected_holders(holder) and Enum.sort(queued) == Enum.sort(waiters)
       end,
-      300
+      @barrier_budget_ms
     )
   end
 
   defp expected_holders(nil), do: []
-  defp expected_holders(holder), do: [inspect(holder)]
+  defp expected_holders(holder), do: [holder]
 
   defp pids(samples), do: Enum.map(samples, & &1.pid)
 
-  defp await_until(_, 0), do: flunk("condition never held: #{inspect(LockWatch.inspect_lock())}")
+  # A WALL CLOCK. See `@barrier_budget_ms` for why an attempt count was not
+  # one. The full `inspect_lock/0` is paid HERE and only here — on the failure
+  # path, where the stacktraces are the diagnosis rather than overhead.
+  defp await_until(fun, budget_ms) do
+    await_until(fun, budget_ms, System.monotonic_time(:millisecond) + budget_ms)
+  end
 
-  defp await_until(fun, attempts) do
-    if fun.() do
-      :ok
-    else
-      Process.sleep(10)
-      await_until(fun, attempts - 1)
+  defp await_until(fun, budget_ms, deadline) do
+    cond do
+      fun.() ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("condition never held within #{budget_ms}ms: #{inspect(LockWatch.inspect_lock())}")
+
+      true ->
+        Process.sleep(10)
+        await_until(fun, budget_ms, deadline)
     end
   end
 end

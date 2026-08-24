@@ -362,6 +362,27 @@ defmodule Grappa.Repo.LockWatch do
     }
   end
 
+  @doc """
+  The same partition `inspect_lock/0` reports, as bare pids.
+
+  For a caller that wants to know WHO holds and WHO queues and nothing else.
+  `inspect_lock/0` answers that too, but it pays `sample/2` for every process
+  — `Process.info/2` plus `@stack_frames` frames run through
+  `Exception.format_stacktrace_entry/1` — and a caller polling in a loop pays
+  that on every turn for an answer it discards (#1747).
+
+  Shares `rows/0` and `partition/2` with `inspect_lock/0` rather than reading
+  the table again: the reaping of dead rows lives in `rows/0`, so a second
+  reader that skipped it would leave corpses behind for the instrument to
+  report.
+  """
+  @spec lock_roles() :: %{holders: [pid()], waiters: [pid()]}
+  def lock_roles do
+    {holders, waiters} = partition(rows(), now_ms())
+
+    %{holders: Enum.map(holders, &elem(&1, 0)), waiters: Enum.map(waiters, &elem(&1, 0))}
+  end
+
   if Mix.env() == :test do
     @doc false
     # Test seam: arm/disarm the write-path instrumentation. Gated to :test so
