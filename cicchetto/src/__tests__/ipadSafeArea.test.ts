@@ -96,8 +96,13 @@ describe("#205 iPad standalone-PWA safe area", () => {
     // in the `@media (max-width: 768px)` override (indented, so matched by
     // substring, not `ruleBody`'s column-0 anchor). Both top and the
     // 1.5rem-floored bottom must survive the move.
+    // #1751 — the TOP arm moved from `padding-top` to `top` (+ a compensating
+    // `height`). Not cosmetic: padding does not move a container's abspos
+    // descendants, so the padded form left `.rail-radio-picker` under the
+    // notch. The claim here is unchanged — the fixed drawer owns its own top
+    // clearance — only the property carrying it moved.
     expect(css).toMatch(
-      /@media[^{]*\(max-width: 768px\)[\s\S]*\.shell-members\s*\{[\s\S]*?padding-top:\s*var\(--safe-area-inset-top\)/,
+      /@media[^{]*\(max-width: 768px\)[\s\S]*\.shell-members\s*\{[\s\S]*?top:\s*var\(--safe-area-inset-top\)/,
     );
     expect(css).toMatch(
       /\.shell-members\s*\{[\s\S]*?padding-bottom:\s*max\(1\.5rem,\s*var\(--safe-area-inset-bottom\)\)/,

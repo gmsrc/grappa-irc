@@ -143,10 +143,19 @@ const CENSUS = [
   ".shell | padding-left: var(--safe-area-inset-left)",
   ".shell | padding-right: var(--safe-area-inset-right)",
   ".shell | padding-top: var(--safe-area-inset-top)",
+  // 🔴 The two fixed drawers carry the TOP clearance on `top` + a compensating
+  // `height`, NOT on `padding-top`, and that is not a spelling choice — it is
+  // #1751's actual defect. Padding is invisible to a container's absolutely
+  // positioned descendants, so a padded top-pinned drawer leaves `.rail-radio-
+  // picker` (`inset: 0`) under the notch. Measured; see the note at the mobile
+  // `.shell-members` rule. A future edit that "tidies" these back into a
+  // `padding-top` re-opens the bug silently on the phone, and lands here first.
+  ".shell-members | height: calc(var(--viewport-height, 100dvh) - var(--safe-area-inset-top))",
   ".shell-members | padding-bottom: max(1.5rem, var(--safe-area-inset-bottom))",
-  ".shell-members | padding-top: var(--safe-area-inset-top)",
+  ".shell-members | top: var(--safe-area-inset-top)",
+  ".shell-mobile .shell-sidebar | height: calc(var(--viewport-height, 100dvh) - var(--safe-area-inset-top))",
   ".shell-mobile .shell-sidebar | padding-bottom: max(1.5rem, var(--safe-area-inset-bottom))",
-  ".shell-mobile .shell-sidebar | padding-top: var(--safe-area-inset-top)",
+  ".shell-mobile .shell-sidebar | top: var(--safe-area-inset-top)",
   ".shell-mobile | padding-left: var(--safe-area-inset-left)",
   ".shell-mobile | padding-right: var(--safe-area-inset-right)",
   ".shell-mobile | padding-top: var(--safe-area-inset-top)",

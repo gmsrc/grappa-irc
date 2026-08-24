@@ -1542,16 +1542,35 @@ html.overlay-open #root > div {
      `.rail-actions-menu` its 0.5rem); only the gap to the rail edge moved
      here.
 
-     THE TWO ABSOLUTES ANCHORED TO THIS ASIDE MOVE WITH IT, because an abspos
-     box resolves `inset` against its ancestor's PADDING box, not its border
-     box. `.rail-radio-picker` (`inset: 0`) inherits deliberately — it is one
-     of the three children the ruling names, and it is visually a non-event:
-     the panel's background is this same `--bg-alt`, and nothing lives in the
-     strips it stops covering (nick text starts further in, `li` carries no
-     background). The same is already true on mobile today, where this aside's
-     safe-area padding makes that `inset: 0` resolve inside it.
-     `.resize-handle-right` does NOT inherit and is compensated at its own
-     rule: it is not a content surface, it is chrome ON the edge. */
+     🔴 THE TWO ABSOLUTES ANCHORED TO THIS ASIDE DO **NOT** MOVE WITH IT, and
+     #1737 said the opposite here. Corrected by #1751, measured rather than
+     reasoned. An abspos box resolves its offsets against this box's PADDING
+     EDGE — the OUTER edge of the padding, just inside the border — so the
+     containing rectangle INCLUDES the padding and `inset: 0` lands ON that
+     edge, above and outside the padding. Padding on a container is invisible
+     to its absolutely positioned descendants.
+
+     Measured at 390px with the inset token stubbed at 59px: this aside's
+     `padding-top` read 59px while `.rail-radio-picker` (`inset: 0`) stayed at
+     y=0. Horizontally, same physics: the aside's border box spans x 138–390
+     with a 1px border and 7px of padding, so its padding BOX is 146–383, and
+     the picker measured 139–390 — the padding edge, full-bleed inside the
+     border, NOT inset by `--rail-inset`.
+
+     So the horizontal half of #1737's ruling never took effect on this child.
+     It stayed visually a non-event for the reason #1737 gave — the panel's
+     background is this same `--bg-alt` and nothing lives in the strips — which
+     is why nobody saw it. The VERTICAL half was the bug in #1751: the picker's
+     band painted under the notch on the phone. Fixed at the mobile rule, by
+     moving the clearance onto `top` where it moves this box and every child
+     with it; see the long note there.
+
+     THE RULE FOR A NEW ABSPOS CHILD OF THIS ASIDE: it is NOT inset by
+     `--rail-inset` and it does NOT clear the safe area on its own. Give it its
+     own offsets deliberately, or make the ancestor's BOX carry what it needs.
+     `.resize-handle-right` was already compensated at its own rule — for a
+     stated different reason (it is chrome ON the edge, not a content surface),
+     but it is the only one of the three that was ever actually correct. */
   --rail-inset: 0.5rem;
   padding-inline: var(--rail-inset);
 }
@@ -7939,20 +7958,31 @@ html.resize-dragging * {
      flex column; only the fixed-drawer geometry is bespoke. */
   .shell-mobile .shell-sidebar {
     position: fixed;
-    top: 0;
+    /* #1751 — clearance on `top`, not `padding-top`, for the reason spelled out
+       at `.shell-members` below: padding does not move a container's absolutely
+       positioned descendants, so a top-pinned fixed drawer that clears the
+       notch with padding leaves any abspos child under it.
+
+       This drawer has NO such child today, so the change moves nothing and
+       fixes nothing here — it is made anyway because the comment above says
+       this rule is the MIRROR of `.shell-members`, and two drawers answering
+       the same geometry problem two different ways is how the next one gets
+       copied from whichever was nearer. That is the mechanism that put four
+       hand-written copies of the rail inset in this file (#1737). */
+    top: var(--safe-area-inset-top);
     left: 0;
     /* UX-5 bucket BV — iOS lies about 100vh (and dvh/svh) while the on-screen
        keyboard is up; `--viewport-height` tracks `visualViewport.height` via
        lib/viewportHeight.ts and shrinks in lockstep. Same fallback chain as
        `.shell-members`: `100dvh` for the boot window before the JS sets the var
-       and for browsers without VisualViewport. */
-    height: var(--viewport-height, 100dvh);
+       and for browsers without VisualViewport. Less the top inset, which `top`
+       now carries (#1751) — else the drawer overruns the bottom edge. */
+    height: calc(var(--viewport-height, 100dvh) - var(--safe-area-inset-top));
     /* #205 — `position: fixed` puts this OUTSIDE `.shell`'s padding box, so it
        owns its notch / Dynamic-Island and home-indicator clearance. The 1.5rem
        bottom floor mirrors UX-5 BD on the members drawer: env() is 0px on
        non-notched iPhones, which left the last row cramped under the Safari
-       chrome / gesture indicator. */
-    padding-top: var(--safe-area-inset-top);
+       chrome / gesture indicator. #1751 moved the TOP arm to `top`. */
     padding-bottom: max(1.5rem, var(--safe-area-inset-bottom));
     width: 80vw;
     max-width: 18rem;
@@ -7983,7 +8013,37 @@ html.resize-dragging * {
   /* Members drawer slide-in from right (unchanged from pre-C6) */
   .shell-members {
     position: fixed;
-    top: 0;
+    /* 🔴 #1751 — THE CLEARANCE IS ON `top`, NOT ON `padding-top`, AND THAT IS
+       THE WHOLE BUG THIS ISSUE WAS FILED FOR. An absolutely positioned child
+       resolves its offsets against this box's PADDING EDGE — the outer edge of
+       the padding, just inside the border — so the rectangle INCLUDES the
+       padding and `top: 0` on such a child lands ABOVE it. Padding on a
+       container does NOT move its abspos descendants. Measured on a 390px
+       viewport with the token stubbed at 59px: this rule's `padding-top` went
+       0px → 59px while `.rail-radio-picker` (`position: absolute; inset: 0`)
+       stayed at y=0 — under the notch, which is exactly the screenshot.
+
+       Moving the clearance onto `top` moves the BORDER BOX, which every child
+       follows, in flow or not. It is pixel-identical for the flow children:
+       they used to start at the inset because the padding pushed them, and now
+       start there because the box does. `height` has to lose the same amount
+       or the drawer overruns the bottom edge it used to reach exactly.
+
+       WHY THE DESKTOP NEVER SHOWED IT: there this aside is a grid ITEM of
+       `.shell`, so `.shell`'s padding moves this box and the picker follows the
+       box. Same inset, different mechanism — which is why the defect is
+       phone-only and why a source-level guard could never have caught it.
+
+       Corroboration, not theory: `.rail-actions-menu` is the rail's other
+       abspos child and #913 had to subtract the inset by hand from its
+       `max-height`. It hit this same physics from the other end and worked
+       around it locally. This rule is the general form of that workaround.
+
+       THE RULE FOR A NEW TOP-PINNED FIXED CONTAINER: put the safe-area
+       clearance on `top` and compensate `height`. Reach for `padding-top` only
+       once you are sure nothing inside is absolutely positioned — and that is
+       a promise about the future, which is why it is not the default here. */
+    top: var(--safe-area-inset-top);
     /* UX-5 bucket BV (2026-05-20) — VisualViewport keyboard-react.
        Pre-BV: `height: 100vh`. On iOS Safari the on-screen keyboard
        overlays the viewport without resizing CSS units (100vh/100dvh/
@@ -7997,7 +8057,11 @@ html.resize-dragging * {
        `100dvh` for the brief boot window before the JS sets the var
        OR browsers without VisualViewport. Mirrors `.shell-mobile`
        (~:2120). */
-    height: var(--viewport-height, 100dvh);
+    /* #1751 — MINUS the top inset, because `top` now carries it
+       (see above). Without this subtraction the drawer starts one inset lower
+       and still asks for a full viewport of height, so it overruns the bottom
+       edge it used to reach exactly. Content area is unchanged either way. */
+    height: calc(var(--viewport-height, 100dvh) - var(--safe-area-inset-top));
     /* #205 — safe-area insets relocated here from the base `.shell-members`
        rule (~:439). The mobile members drawer is `position: fixed` so it
        sits OUTSIDE `.shell`'s container padding box and needs its own
@@ -8007,8 +8071,9 @@ html.resize-dragging * {
        the bottom `.rail-actions` launcher row (#473; was BM's
        `.mobile-panel-actions` footer) hosts buttons that relied on
        env(safe-area-inset-bottom) alone — 0px on non-notched iPhones —
-       leaving the row cramped under Safari chrome / the gesture indicator. */
-    padding-top: var(--safe-area-inset-top);
+       leaving the row cramped under Safari chrome / the gesture indicator.
+       #1751 moved the TOP arm to `top`; the bottom arm stays a padding
+       because nothing is abspos-anchored to this box's bottom edge. */
     padding-bottom: max(1.5rem, var(--safe-area-inset-bottom));
     width: 80vw;
     max-width: 18rem;
