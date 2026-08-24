@@ -1,4 +1,4 @@
-import { activeAudio } from "./audioPlayer";
+import { activeAudio, audioFailureLabel, playbackFailure } from "./audioPlayer";
 import { nowPlaying } from "./nowPlaying";
 import { tunedStation } from "./radio";
 
@@ -109,6 +109,15 @@ export function mediaSessionMetadata(): MediaSessionMetadata | null {
   const audio = activeAudio();
   if (audio === null) return null;
 
+  // #1744 — the failure OUTRANKS the track, on both arms below. The OS is the
+  // fourth surface and on a phone it is often the only one awake: the screen
+  // is locked, the docked bar is behind it, the rail is a drawer off-screen.
+  // A lock screen naming a track over a stream that never decoded is the
+  // silence this issue is about, one layer out — and it is the same rule the
+  // `stale` arm obeys further down: cic must not assert to the OS something it
+  // has stopped telling the operator.
+  const failure = playbackFailure();
+
   const station = tunedStation();
   if (station === null) {
     // An upload, or any source outside the curated table. No station, no feed,
@@ -116,13 +125,29 @@ export function mediaSessionMetadata(): MediaSessionMetadata | null {
     // rather than be handed some other station's art.
     return {
       title: audio.label ?? uploadTitle(audio.href),
-      artist: "",
+      artist: failure === null ? "" : audioFailureLabel(failure),
       album: "",
       artwork: [],
     };
   }
 
   const artwork = [artworkFor(station.logoUrl)];
+
+  // The ARTIST slot, and it is not a compromise: it is the second line, and on
+  // a failure there is no track and therefore no artist to displace. `title`
+  // keeps naming the SOURCE, which is what completes the sentence — "Groove
+  // Salad / connection lost". Putting the reason in `title` would cost the
+  // operator the name of the thing that failed.
+  //
+  // `playbackState` is deliberately NOT moved to "none" alongside this. The
+  // platform's three states are `none | paused | playing`, and a UA is free to
+  // drop the whole now-playing card on "none" — which would take this sentence
+  // off the lock screen along with the transport button that `playNow` already
+  // retries through. Read off the Media Session spec, not measured on a device.
+  if (failure !== null) {
+    return { title: station.title, artist: audioFailureLabel(failure), album: "", artwork };
+  }
+
   const state = nowPlaying();
 
   // Matching `playing` alone is the STALE RULE, and it is deliberate: reading

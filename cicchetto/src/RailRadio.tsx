@@ -1,5 +1,5 @@
 import { type Component, For, Show } from "solid-js";
-import { closeAudio } from "./lib/audioPlayer";
+import { audioFailureLabel, closeAudio, playbackFailure } from "./lib/audioPlayer";
 import { createDismissOnOutsidePointer } from "./lib/dismissOnOutsidePointer";
 import { nowPlayingLabel } from "./lib/nowPlaying";
 import { createOverlayLock } from "./lib/overlayScrollLock";
@@ -82,18 +82,40 @@ const RailRadio: Component = () => {
                   taller chrome would re-charge part of it. Nothing is lost:
                   every picker row still carries its genres, and browsing by
                   genre is what the picker is for — this row answers "what is
-                  on", which is the track. */}
+                  on", which is the track.
+                  #1744 — and a THIRD tenant of the same line, ahead of both,
+                  because a station that will not play is not "on" at all. Two
+                  reasons it belongs on this surface and not only on the docked
+                  bar: this is the DESKTOP answer to "what is playing", and it
+                  is what is left standing when the operator hides the bar
+                  (#1697) — which takes the transport, and with it the docked
+                  notice, off the screen while the audio keeps running. The
+                  track in particular must yield: the feed polls
+                  `tunedStation()`, derived from the SOURCE, so it keeps
+                  reporting what the station is broadcasting long after this
+                  browser stopped being able to decode it. */}
               <Show
-                when={nowPlayingLabel()}
+                when={playbackFailure()}
                 fallback={
-                  <span class="rail-radio-now-genres" data-testid="rail-radio-now-genres">
-                    {station().genres.join(" · ")}
-                  </span>
+                  <Show
+                    when={nowPlayingLabel()}
+                    fallback={
+                      <span class="rail-radio-now-genres" data-testid="rail-radio-now-genres">
+                        {station().genres.join(" · ")}
+                      </span>
+                    }
+                  >
+                    {(line) => (
+                      <span class="rail-radio-now-track" data-testid="rail-radio-now-track">
+                        {line()}
+                      </span>
+                    )}
+                  </Show>
                 }
               >
-                {(line) => (
-                  <span class="rail-radio-now-track" data-testid="rail-radio-now-track">
-                    {line()}
+                {(failure) => (
+                  <span class="rail-radio-now-error" data-testid="rail-radio-now-error">
+                    {`⚠ ${audioFailureLabel(failure())}`}
                   </span>
                 )}
               </Show>

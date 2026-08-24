@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeAudio, playAudio } from "../lib/audioPlayer";
+import {
+  audioFailureLabel,
+  clearPlaybackFailure,
+  closeAudio,
+  playAudio,
+  reportPlaybackFailure,
+} from "../lib/audioPlayer";
 import { setToken } from "../lib/auth";
 import {
   applyMediaSession,
@@ -78,6 +84,7 @@ beforeEach(() => {
 
 afterEach(() => {
   closeAudio();
+  clearPlaybackFailure();
   setToken(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -163,6 +170,78 @@ describe("mediaSessionMetadata", () => {
       artist: "",
       album: "",
       artwork: [],
+    });
+  });
+
+  // #1744 — the OS is the FOURTH surface, and on a phone it is often the only
+  // one: the screen is locked, the docked bar is behind it, and the rail is a
+  // drawer slid off-screen. A lock screen that reads "SomaFM Metal" over a
+  // stream that never decoded is the same silence as the bar's, one layer out.
+  //
+  // WHY THE ARTIST SLOT. It is the second line, and on a failure there is no
+  // track and therefore no artist to displace — the projection's `title` keeps
+  // naming the SOURCE, which is what makes the sentence complete ("Groove
+  // Salad / connection lost"). Putting the failure in `title` would cost the
+  // operator the name of the thing that failed.
+  //
+  // WHY `playbackState` IS DELIBERATELY LEFT AT "paused". The states the
+  // platform defines are `none | paused | playing`, and "none" is the only one
+  // that could carry "broken" — but a UA is free to drop the whole now-playing
+  // card on "none", which would take the sentence above off the screen with it.
+  // Read off the Media Session spec, not measured on a device: the safe move is
+  // to keep the card (and its retry button, which `playNow` already re-fetches
+  // through) and let the TEXT carry the fact.
+  describe("a source that will not play (#1744)", () => {
+    it("hands the failure to the lock screen beside the station's name", () => {
+      tuneStation(jpgStation);
+
+      reportPlaybackFailure({ code: 2, message: "" } as MediaError);
+
+      expect(mediaSessionMetadata()).toEqual({
+        title: jpgStation.title,
+        artist: audioFailureLabel("network"),
+        album: "",
+        artwork: [{ src: jpgStation.logoUrl, type: "image/jpeg" }],
+      });
+    });
+
+    it("stops naming a track the operator cannot hear", async () => {
+      // Same rule the `stale` arm above obeys, from the other direction: cic
+      // must not assert to the OS something it has stopped telling the
+      // operator. The feed keeps answering — it polls the station, and the
+      // station is derived from the SOURCE, which a decode failure does not
+      // touch.
+      await tuneWithTrack(jpgStation, { artist: "Steve Roach", title: "Structures from Silence" });
+      expect(mediaSessionMetadata()?.title).toBe("Structures from Silence");
+
+      reportPlaybackFailure({ code: 4, message: "" } as MediaError);
+
+      expect(mediaSessionMetadata()).toMatchObject({
+        title: jpgStation.title,
+        artist: audioFailureLabel("unsupported"),
+      });
+    });
+
+    it("says it for an upload too, which has no station to name", () => {
+      playAudio("https://grappa.example/uploads/f00ba7.mp3", null);
+
+      reportPlaybackFailure({ code: 3, message: "" } as MediaError);
+
+      expect(mediaSessionMetadata()).toEqual({
+        title: "f00ba7.mp3",
+        artist: audioFailureLabel("decode"),
+        album: "",
+        artwork: [],
+      });
+    });
+
+    it("goes quiet again as soon as another source is tuned", () => {
+      tuneStation(jpgStation);
+      reportPlaybackFailure({ code: 2, message: "" } as MediaError);
+
+      tuneStation(pngStation);
+
+      expect(mediaSessionMetadata()?.artist).toBe("");
     });
   });
 });

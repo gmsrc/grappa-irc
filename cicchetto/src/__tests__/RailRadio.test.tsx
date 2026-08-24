@@ -1,6 +1,13 @@
 import { fireEvent, render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activeAudio, closeAudio, playAudio } from "../lib/audioPlayer";
+import {
+  activeAudio,
+  audioFailureLabel,
+  clearPlaybackFailure,
+  closeAudio,
+  playAudio,
+  reportPlaybackFailure,
+} from "../lib/audioPlayer";
 import { closeRadioPicker, openRadioPicker, radioPickerOpen } from "../lib/radio";
 import { RADIO_STATIONS } from "../lib/radioStations";
 import RailRadio from "../RailRadio";
@@ -44,6 +51,7 @@ beforeEach(() => {
 afterEach(() => {
   closeAudio();
   closeRadioPicker();
+  clearPlaybackFailure();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -289,5 +297,59 @@ describe("RailRadio", () => {
 
     expect(screen.queryByTestId("rail-radio-now-track")).toBeNull();
     expect(screen.getByTestId("rail-radio-now-genres")).toBeInTheDocument();
+  });
+
+  // #1744 — the rail's chrome is the DESKTOP answer to "what is playing", and
+  // it is also the surface left standing when the operator hides the docked bar
+  // (#1697), which takes the transport — and with it #1744's own notice — off
+  // the screen while the audio keeps running. A station that cannot play must
+  // not sit here wearing its genres as if nothing had happened.
+  //
+  // Same SLOT as the track and the genres, for #500's reason one line up: the
+  // chrome's height must not depend on what the second line happens to say.
+  describe("a station that will not play (#1744)", () => {
+    it("says so in the second line, in place of the genres", () => {
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+      expect(screen.getByTestId("rail-radio-now-genres")).toBeInTheDocument();
+
+      reportPlaybackFailure({ code: 4, message: "" } as MediaError);
+
+      expect(screen.getByTestId("rail-radio-now-error")).toHaveTextContent(
+        audioFailureLabel("unsupported"),
+      );
+      expect(screen.queryByTestId("rail-radio-now-genres")).toBeNull();
+      // The station keeps its name and its stop button: the failure is ABOUT
+      // this row, it does not replace it.
+      expect(screen.getByTestId("rail-radio-now-title")).toHaveTextContent(station.title);
+      expect(screen.getByTestId("rail-radio-stop")).toBeInTheDocument();
+    });
+
+    it("takes precedence over a track the feed is still reporting", async () => {
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+      await vi.waitFor(() =>
+        expect(screen.getByTestId("rail-radio-now-track")).toBeInTheDocument(),
+      );
+
+      reportPlaybackFailure({ code: 2, message: "" } as MediaError);
+
+      expect(screen.queryByTestId("rail-radio-now-track")).toBeNull();
+      expect(screen.getByTestId("rail-radio-now-error")).toBeInTheDocument();
+    });
+
+    it("clears when the operator picks another station", () => {
+      render(() => <RailRadio />);
+      openRadioPicker();
+      screen.getByTestId(`rail-radio-station-${station.id}`).click();
+      reportPlaybackFailure({ code: 2, message: "" } as MediaError);
+
+      screen.getByTestId(`rail-radio-station-${other.id}`).click();
+
+      expect(screen.queryByTestId("rail-radio-now-error")).toBeNull();
+      expect(screen.getByTestId("rail-radio-now-genres")).toBeInTheDocument();
+    });
   });
 });

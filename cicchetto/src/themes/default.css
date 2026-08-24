@@ -2358,6 +2358,7 @@ html.resize-dragging * {
    swap and not a third line. */
 .rail-radio-now-genres,
 .rail-radio-now-track,
+.rail-radio-now-error,
 .rail-radio-station-genres {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2370,6 +2371,15 @@ html.resize-dragging * {
    metadata, the track is the live fact this row exists to carry. */
 .rail-radio-now-track {
   color: var(--fg-dim, var(--fg));
+}
+
+/* #1744 — the third tenant of that one line, and the only one that is bad
+   news. It shares the clipping rule above for #500's reason (the chrome's
+   height must not depend on what the second line says) and takes the same
+   `--error` the docked bar's notice takes, so one failure reads as one thing
+   across both surfaces. */
+.rail-radio-now-error {
+  color: var(--error, #e06c75);
 }
 
 /* #1697 — the only delta left. Everything this rule used to declare
