@@ -468,9 +468,14 @@ const BACKDROP_VIEWPORT_REST = {
   "align-items": "center",
   "justify-content": "center",
   "z-index": "1000",
-  "padding-top": "max(1rem, env(safe-area-inset-top))",
+  // #1751 re-spelled the two insets through the `:root` tokens — the ONE place
+  // this stylesheet writes `env()` now. `max(1rem, env(x))` and
+  // `max(1rem, var(--x))` compute the same length, so the transcription moves
+  // without the promise it encodes ("changes no pixel") moving with it. The
+  // floors are the pinned half and they are untouched.
+  "padding-top": "max(1rem, var(--safe-area-inset-top))",
   "padding-right": "1rem",
-  "padding-bottom": "max(1.5rem, env(safe-area-inset-bottom))",
+  "padding-bottom": "max(1.5rem, var(--safe-area-inset-bottom))",
   "padding-left": "1rem",
 };
 

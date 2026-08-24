@@ -17,10 +17,15 @@ import { ruleBody, themeCss } from "./helpers/themeCss";
 // an unregistered custom property with `getComputedStyle().getPropertyValue()`
 // is not guaranteed to yield a length — it can hand back the literal token
 // stream, which `parseFloat` turns into NaN and a `|| 0` fallback silently
-// swallows, leaving the bug in place while looking fixed. Every other inset in
-// this stylesheet is a plain CSS `env()` for the same reason; this one joins
-// them. JS supplies only what CSS cannot know — the anchor's viewport offset,
-// as `--rail-menu-space-above` (see RailActions.test.tsx for that half).
+// swallows, leaving the bug in place while looking fixed. JS supplies only what
+// CSS cannot know — the anchor's viewport offset, as `--rail-menu-space-above`
+// (see RailActions.test.tsx for that half).
+//
+// This paragraph used to end "every other inset in this stylesheet is a plain
+// CSS `env()` for the same reason; this one joins them." #1751 inverted that:
+// the token this cap needed turned out to be what makes ANY inset observable
+// in a gate, so all of them read it now and `env()` survives only on `:root`.
+// See safeAreaInsetToken.test.ts, which owns that invariant.
 //
 // SOURCE-LEVEL guards. Playwright does not synthesize `env(safe-area-inset-*)`
 // (they resolve to 0), and jsdom resolves neither `env()` nor `calc()`, so the

@@ -48,11 +48,15 @@ describe("#205 iPad standalone-PWA safe area", () => {
     // top chrome (settings cog) clears the status bar and stays tappable.
     // Left/right matter in landscape where the home-indicator + camera
     // housing eat the side gutters.
+    //
+    // #1751 moved the spelling to the `:root` tokens (one `env()` per edge,
+    // there and nowhere else). The claim is unchanged — this container carries
+    // all four insets — only the vector is the token now.
     const body = ruleBody(".shell");
-    expect(body).toMatch(/padding-top:\s*env\(safe-area-inset-top\)/);
-    expect(body).toMatch(/padding-bottom:\s*env\(safe-area-inset-bottom\)/);
-    expect(body).toMatch(/padding-left:\s*env\(safe-area-inset-left\)/);
-    expect(body).toMatch(/padding-right:\s*env\(safe-area-inset-right\)/);
+    expect(body).toMatch(/padding-top:\s*var\(--safe-area-inset-top\)/);
+    expect(body).toMatch(/padding-bottom:\s*var\(--safe-area-inset-bottom\)/);
+    expect(body).toMatch(/padding-left:\s*var\(--safe-area-inset-left\)/);
+    expect(body).toMatch(/padding-right:\s*var\(--safe-area-inset-right\)/);
   });
 
   it("desktop .shell height is dynamic-viewport, not a bare clipping 100vh", () => {
@@ -73,8 +77,16 @@ describe("#205 iPad standalone-PWA safe area", () => {
     // double-inset regression — guard against it. `ruleBody` anchors to
     // column 0, so it captures the BASE rule, not the indented mobile
     // override.
+    //
+    // Both spellings, since #1751: an `env()` here and a `var(--safe-area-…)`
+    // here are the same double-count, and pinning only the older one would
+    // leave this guard passing over exactly the edit it exists to stop. This
+    // is also the rule that keeps `.rail-radio-picker` correct — the picker is
+    // abspos `inset: 0` against this aside, so an inset landing here reaches
+    // it too (#1751 declined to put one on the picker for the mirror reason).
     const body = ruleBody(".shell-members");
     expect(body).not.toMatch(/env\(safe-area-inset-/);
+    expect(body).not.toMatch(/var\(--safe-area-inset-/);
   });
 
   it("mobile .shell-members (the fixed drawer) keeps its own safe-area insets", () => {
@@ -85,10 +97,10 @@ describe("#205 iPad standalone-PWA safe area", () => {
     // substring, not `ruleBody`'s column-0 anchor). Both top and the
     // 1.5rem-floored bottom must survive the move.
     expect(css).toMatch(
-      /@media[^{]*\(max-width: 768px\)[\s\S]*\.shell-members\s*\{[\s\S]*?padding-top:\s*env\(safe-area-inset-top\)/,
+      /@media[^{]*\(max-width: 768px\)[\s\S]*\.shell-members\s*\{[\s\S]*?padding-top:\s*var\(--safe-area-inset-top\)/,
     );
     expect(css).toMatch(
-      /\.shell-members\s*\{[\s\S]*?padding-bottom:\s*max\(1\.5rem,\s*env\(safe-area-inset-bottom\)\)/,
+      /\.shell-members\s*\{[\s\S]*?padding-bottom:\s*max\(1\.5rem,\s*var\(--safe-area-inset-bottom\)\)/,
     );
   });
 });
@@ -122,8 +134,8 @@ describe("#1127 mobile shell bottom edge", () => {
     // chrome tappable (UX-3 BIS); the sides matter in the sub-768 landscape
     // edge on small notched devices.
     const body = nestedRuleBodies(".shell-mobile").join("\n");
-    expect(body).toMatch(/padding-top:\s*env\(safe-area-inset-top\)/);
-    expect(body).toMatch(/padding-left:\s*env\(safe-area-inset-left\)/);
-    expect(body).toMatch(/padding-right:\s*env\(safe-area-inset-right\)/);
+    expect(body).toMatch(/padding-top:\s*var\(--safe-area-inset-top\)/);
+    expect(body).toMatch(/padding-left:\s*var\(--safe-area-inset-left\)/);
+    expect(body).toMatch(/padding-right:\s*var\(--safe-area-inset-right\)/);
   });
 });

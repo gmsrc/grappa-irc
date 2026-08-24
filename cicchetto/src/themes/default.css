@@ -232,25 +232,50 @@
      option runs under the caret. Theme-independent, so base :root. */
   --select-caret-inset: 0.6rem;
   --select-caret-room: 1.75rem;
-  /* #913 — the iOS top safe-area inset, as a variable. Everything else in this
-     file writes `env(safe-area-inset-top)` inline, which is right for a
-     padding: the engine substitutes it and nobody has to read it back. The
-     rail actions menu is the one cap whose OTHER operand is measured in JS
-     (`--rail-menu-space-above`), and JS cannot reliably obtain the inset: an
-     unregistered custom property hands `getComputedStyle().getPropertyValue()`
-     its token stream, not a length, so `parseFloat` yields NaN and a `|| 0`
-     fallback hides it. Keeping the arithmetic in CSS keeps `env()` where the
-     engine resolves it. The `0px` fallback is load-bearing: without it an
-     engine that does not know the variable invalidates the whole declaration
-     and the cap disappears (the #588 overflow, back). Theme-independent, so it
-     lives on base :root. */
+  /* #913 / #949 / #1751 — THE FOUR SAFE-AREA INSETS, AND THE ONLY PLACE THIS
+     FILE WRITES `env()`.
+
+     THE RULE: `env(safe-area-inset-*)` appears exactly once per edge, here,
+     and every consumer reads the token. A surface that needs a MINIMUM of its
+     own writes `max(<its floor>, var(--safe-area-inset-top))`; one that wants
+     the bare inset writes the token alone. Do not inline `env()` at a call
+     site — `safeAreaInsetToken.test.ts` fails on it, by census, with no
+     allowlist to add yourself to.
+
+     WHY A TOKEN, reversing what this comment said until #1751 ("inline is
+     right for a padding: the engine substitutes it and nobody has to read it
+     back"). That is true of the ENGINE and false of every gate we run.
+     Playwright synthesizes no safe-area inset on any engine — they resolve to
+     0, measured in issue913-rail-menu-safe-area.spec.ts — and jsdom resolves
+     no `env()` at all. So an inline site's inset is not observable in ANY
+     test we can write, while a site reading the token is stubbable — a spec
+     re-declares `--safe-area-inset-top` on a `:root:root` override at a
+     non-zero length and every consumer moves at once, which is how that same
+     #913 spec proves its own wiring. #913 introduced the indirection for one
+     site; #1751 finished it for all of them. The other half of #913's reason
+     still holds and is why the arithmetic stays in CSS rather than moving to
+     JS: reading an unregistered custom property back with
+     `getComputedStyle().getPropertyValue()` hands you its token stream, not a
+     length, so `parseFloat` yields NaN and a `|| 0` fallback hides it. JS
+     supplies only what CSS cannot know (`--rail-menu-space-above`).
+
+     THE `0px` FALLBACKS ARE LOAD-BEARING, not defensive, and now cover every
+     consumer instead of the two that used to spell them out. Without one, an
+     engine that does not know the inset invalidates the WHOLE declaration:
+     `.context-menu-safe-area`'s `inset` shorthand collapses to a zero-sized
+     rect and pins every menu to the corner (#949), and `.rail-actions-menu`'s
+     cap disappears (the #588 overflow, back).
+
+     NB, keep CURLY BRACES out of the prose in this whole block: the `ruleBody`
+     test helper captures a rule with a negated character class and stops dead
+     at the first closing one, so a brace in a comment truncates :root and
+     fails every test that reads it.
+
+     Theme-independent, so base :root. */
   --safe-area-inset-top: env(safe-area-inset-top, 0px);
-  /* #949 — the bottom (home-indicator) inset, same contract, same reason: the
-     `.context-menu` height cap subtracts BOTH vertical insets from a value
-     (`--viewport-height`) that JS writes, so the subtraction has to happen in
-     CSS. Sibling of the top inset above; the `0px` fallback is load-bearing
-     for the same reason. */
+  --safe-area-inset-right: env(safe-area-inset-right, 0px);
   --safe-area-inset-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-inset-left: env(safe-area-inset-left, 0px);
   /* grappa-irc#69: theme the scrollbars. `scrollbar-color` and
      `scrollbar-width` inherit, so declaring them on :root themes every
      scrollable descendant (.scrollback, members pane, admin tables…)
@@ -1271,10 +1296,10 @@ html.overlay-open #root > div {
         reported). */
   height: 100dvh;
   min-height: 0;
-  padding-top: env(safe-area-inset-top);
-  padding-bottom: env(safe-area-inset-bottom);
-  padding-left: env(safe-area-inset-left);
-  padding-right: env(safe-area-inset-right);
+  padding-top: var(--safe-area-inset-top);
+  padding-bottom: var(--safe-area-inset-bottom);
+  padding-left: var(--safe-area-inset-left);
+  padding-right: var(--safe-area-inset-right);
 }
 
 /* #205 — dvh fallback floor for engines without dynamic-viewport units
@@ -1613,7 +1638,7 @@ html.resize-dragging * {
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  padding-top: env(safe-area-inset-top);
+  padding-top: var(--safe-area-inset-top);
 }
 
 .error-banner {
@@ -4312,7 +4337,8 @@ html.resize-dragging * {
    one shrinks to the padding box and lands between the safe areas. */
 .modal-backdrop-viewport {
   height: var(--viewport-height, 100dvh);
-  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom)) 1rem;
+  padding: max(1rem, var(--safe-area-inset-top)) 1rem max(1.5rem, var(--safe-area-inset-bottom))
+    1rem;
 }
 
 /* Privacy modal — full-viewport backdrop + centred dialog. */
@@ -4328,7 +4354,7 @@ html.resize-dragging * {
      non-notched devices. Uniform 1.5rem floor with `.settings-drawer`
      / `.archive-modal`. Top/horizontal arms preserve the original
      1.5rem padding shape. */
-  padding: 1.5rem 1.5rem max(1.5rem, env(safe-area-inset-bottom));
+  padding: 1.5rem 1.5rem max(1.5rem, var(--safe-area-inset-bottom));
   max-width: 28rem;
   /* UX-5 bucket BV (2026-05-20) — defensive keyboard-react cap.
      Modal centers inside fixed backdrop (~:1173) so it CAN grow past
@@ -4561,7 +4587,8 @@ html.resize-dragging * {
      cramped against Safari's chrome / gesture indicator strip. 1.5rem
      (24px) gives mobile-thumb-reach breathing room while still
      yielding to the larger notched-device env value via max(). */
-  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom)) 1rem;
+  padding: max(1rem, var(--safe-area-inset-top)) 1rem max(1.5rem, var(--safe-area-inset-bottom))
+    1rem;
   z-index: 100;
   transform: translateX(100%);
   transition: transform 200ms ease-out;
@@ -4891,7 +4918,7 @@ html.resize-dragging * {
   /* #987 — the scrim has to be visible AROUND the dialog, not just behind it;
      `.confirm-modal` carries the same margin for the same reason. */
   margin: 1rem;
-  padding: max(0.75rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom));
+  padding: max(0.75rem, var(--safe-area-inset-top)) 1rem max(1.5rem, var(--safe-area-inset-bottom));
   font-family: var(--font-mono);
   font-size: var(--font-size);
   display: flex;
@@ -7705,11 +7732,13 @@ html.resize-dragging * {
    ruler to `auto` on every side and hand back a zero-sized rect: a safe box of
    [0,0] on both axes, i.e. every menu pinned to the corner. With the fallbacks
    an engine that knows no insets reports the full viewport, which is exactly
-   the pre-#949 behaviour. */
+   the pre-#949 behaviour. #1751 moved the fallbacks INTO the tokens (see the
+   :root block); they still cover this shorthand, and this rule no longer
+   spells them out four times. */
 .context-menu-safe-area {
   position: fixed;
-  inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
-    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  inset: var(--safe-area-inset-top) var(--safe-area-inset-right) var(--safe-area-inset-bottom)
+    var(--safe-area-inset-left);
   pointer-events: none;
 }
 
@@ -7797,7 +7826,7 @@ html.resize-dragging * {
        clear-ish but was non-interactive. box-sizing: border-box
        (global, line 67) means the inset is consumed FROM the height,
        not added to it. */
-    padding-top: env(safe-area-inset-top);
+    padding-top: var(--safe-area-inset-top);
     /* #1127 — the bottom edge is FLUSH: no home-indicator inset, so the
        whole mobile shell (the `.bottom-bar` tab strip included) reaches
        the physical bottom and the reclaimed band goes to content.
@@ -7848,8 +7877,8 @@ html.resize-dragging * {
        iPhones exceed 768px and get the desktop shell) but non-zero in the
        sub-768 landscape edge (small notched devices): correct clearance
        for the camera housing / rounded corners, not a regression. */
-    padding-left: env(safe-area-inset-left);
-    padding-right: env(safe-area-inset-right);
+    padding-left: var(--safe-area-inset-left);
+    padding-right: var(--safe-area-inset-right);
   }
 
   /* Legacy fallback for browsers that don't grok `dvh` (Safari < 15.4).
@@ -7923,8 +7952,8 @@ html.resize-dragging * {
        bottom floor mirrors UX-5 BD on the members drawer: env() is 0px on
        non-notched iPhones, which left the last row cramped under the Safari
        chrome / gesture indicator. */
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+    padding-top: var(--safe-area-inset-top);
+    padding-bottom: max(1.5rem, var(--safe-area-inset-bottom));
     width: 80vw;
     max-width: 18rem;
     z-index: 90;
@@ -7979,8 +8008,8 @@ html.resize-dragging * {
        `.mobile-panel-actions` footer) hosts buttons that relied on
        env(safe-area-inset-bottom) alone — 0px on non-notched iPhones —
        leaving the row cramped under Safari chrome / the gesture indicator. */
-    padding-top: env(safe-area-inset-top);
-    padding-bottom: max(1.5rem, env(safe-area-inset-bottom));
+    padding-top: var(--safe-area-inset-top);
+    padding-bottom: max(1.5rem, var(--safe-area-inset-bottom));
     width: 80vw;
     max-width: 18rem;
     z-index: 90;
@@ -8089,7 +8118,7 @@ html.resize-dragging * {
    was obscured by the keyboard. */
 .diag-float {
   position: fixed;
-  top: max(0.5rem, env(safe-area-inset-top));
+  top: max(0.5rem, var(--safe-area-inset-top));
   right: 0.5rem;
   z-index: 99999;
   background: rgba(0, 0, 0, 0.85);
@@ -8421,7 +8450,7 @@ html.resize-dragging * {
      uniformly with `.settings-drawer` (~:1382). Non-notched iOS
      bug class: env(safe-area-inset-bottom) = 0 → 0.75rem left
      modal's bottom row visually cramped under Safari chrome. */
-  padding: max(0.75rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom));
+  padding: max(0.75rem, var(--safe-area-inset-top)) 1rem max(1.5rem, var(--safe-area-inset-bottom));
   font-family: var(--font-mono);
   font-size: var(--font-size);
   display: flex;
@@ -9659,7 +9688,7 @@ html.resize-dragging * {
   width: 100%;
   max-width: 32rem;
   max-height: var(--viewport-height, 100dvh);
-  padding: max(0.75rem, env(safe-area-inset-top)) 1rem max(1.5rem, env(safe-area-inset-bottom));
+  padding: max(0.75rem, var(--safe-area-inset-top)) 1rem max(1.5rem, var(--safe-area-inset-bottom));
   font-family: var(--font-mono);
   font-size: var(--font-size);
   display: flex;
@@ -11364,8 +11393,8 @@ html.resize-dragging * {
    reproducible in jsdom or Playwright). */
 .install-a2hs {
   position: fixed;
-  right: max(0.75rem, env(safe-area-inset-right));
-  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  right: max(0.75rem, var(--safe-area-inset-right));
+  bottom: max(0.75rem, var(--safe-area-inset-bottom));
   z-index: 201;
   display: flex;
   flex-direction: column;
@@ -13020,7 +13049,7 @@ audio.media-viewer-media {
      actual height below the default --font-size. */
   --nab-lift: 0.75rem;
   top: calc(var(--viewport-height, 100dvh) - max(3.5rem, 48px) - var(--nab-lift));
-  right: calc(0.5rem + env(safe-area-inset-right, 0px));
+  right: calc(0.5rem + var(--safe-area-inset-right));
   z-index: 40;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
 }

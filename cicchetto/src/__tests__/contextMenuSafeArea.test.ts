@@ -55,9 +55,21 @@ describe("#949 context menu safe-area clamp", () => {
     // bottom and the two sides are not decoration — the bottom is the home
     // indicator, and in landscape the sides are the notch and the rounded
     // corners, which is the other half of `d129bfb0`'s "both edges".
+    //
+    // #1751 moved the spelling from an inline `env(…, 0px)` per edge to the
+    // `:root` tokens, which carry the same fallback. Both halves of the claim
+    // are still asserted, and the second half deliberately still reads :root
+    // here: the fallback is what keeps ONE unknown edge from invalidating the
+    // whole `inset` shorthand and collapsing the ruler to a zero-sized rect,
+    // so a test about this rule has to see it even though it is declared
+    // elsewhere now.
     const body = ruleBody(".context-menu-safe-area");
+    const root = ruleBody(":root");
     for (const edge of ["top", "right", "bottom", "left"]) {
-      expect(body).toMatch(new RegExp(`env\\(safe-area-inset-${edge},\\s*0px\\)`));
+      expect(body).toMatch(new RegExp(`var\\(--safe-area-inset-${edge}[,)]`));
+      expect(root).toMatch(
+        new RegExp(`--safe-area-inset-${edge}:\\s*env\\(safe-area-inset-${edge},\\s*0px\\)`),
+      );
     }
   });
 
@@ -71,7 +83,14 @@ describe("#949 context menu safe-area clamp", () => {
   it("the ruler is declared once, so the measured box is the one written here", () => {
     // The rect is read from live layout, so ANY second rule reaching this class
     // silently redefines what the placement math measures.
-    expect(themeCss.match(/\.context-menu-safe-area/g)?.length).toBe(1);
+    //
+    // Comments stripped first, which is this module's convention everywhere
+    // else ("prose that mentions a property cannot satisfy or trip a
+    // declaration assertion", helpers/themeCss.ts) and was the one place that
+    // missed it: #1751 named this class in the `:root` note explaining what
+    // the fallback protects, and a guard about RULES went red over a sentence.
+    const declarations = themeCss.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(declarations.match(/\.context-menu-safe-area/g)?.length).toBe(1);
   });
 
   it(".context-menu caps its height against the viewport MINUS both vertical insets", () => {
