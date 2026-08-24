@@ -461,11 +461,13 @@ defmodule Grappa.Repo.LockWatchTest do
   # drives the real edge sequence rather than a hand-written copy of it.
   #
   # 🔴 `timeout: :infinity` is load-bearing, and it is what makes
-  # `start_tmp_repo/0`'s `busy_timeout: 30_000` mean what that comment says
-  # it means. Without it both writers inherit Ecto's DEFAULT `:timeout` of
-  # 15_000 (`ecto_sql/lib/ecto/adapters/sql.ex`), which DBConnection arms as
-  # a checkout deadline covering the WHOLE transaction — queue, statements
-  # and the holder's park alike. So the real wait was `min(15_000, 30_000)`,
+  # `start_tmp_repo/0`'s `busy_timeout: @waiter_budget_ms` mean what that
+  # comment says it means. Without it both writers inherit Ecto's DEFAULT
+  # `:timeout` of 15_000 (`ecto_sql/lib/ecto/adapters/sql.ex`), which
+  # DBConnection arms as a checkout deadline covering the WHOLE transaction
+  # — queue, statements and the holder's park alike. So the real wait was
+  # `min(15_000, the budget)` — cited by anchor because #1687 moved that
+  # budget off its literal and the number here would have rotted with it —
   # the smaller number was never written down anywhere, and once a loaded
   # runner pushed the window past 15s the pool disconnected BOTH
   # connections: the parked holder mid-park, and the waiter mid-`BEGIN
