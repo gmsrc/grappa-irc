@@ -6100,6 +6100,125 @@ describe("ScrollbackPane", () => {
         expect(readingAtTailKey()).toBeNull();
       });
     });
+
+    // #1701 — the CONTAINER axis of the defect #1121 closed on the CONTENT axis,
+    // at the same site and for the same reason: the freeze holds ONE number, a
+    // scrollTop, and a scrollTop only names the position it was captured at
+    // while the box it was measured in is the same box. #1121's box was steady
+    // and the CONTENT grew under it; here the content is steady and the BOX
+    // shortens.
+    //
+    // The field path is the docked audio player. It is tuned from the rail's
+    // station picker, the picker is a `createOverlayLock` surface, and picking
+    // deliberately does NOT close it (RailRadio: "Auditioning stations is the
+    // second kind, so the picker stays up") — so the bar mounts between
+    // `.scrollback-pane` and `.compose-box` WHILE the freeze is up. The #778
+    // ResizeObserver re-pin that exists for exactly this class ("chrome growing
+    // inside the shell shrinks THIS box with no event at all") is gated out by
+    // `isOverlayFrozen()`, correctly — a mid-list reader under an overlay must
+    // not be yanked — and no overlay edge fires again until the close. So the
+    // restore replays a px that is short of the tail by the bar's height and the
+    // reader is left looking at a pane whose last lines sit below the fold: the
+    // reported "opening the player does not push the scrollback up".
+    //
+    // The cure is derived from the CAPTURED clientHeight, not from the observer,
+    // so it holds whether or not the RO fired — which matters, because the field
+    // report does not say which of the two suppressed paths ran and this test
+    // cannot settle that either.
+    describe("#1701 — chrome mounting under an overlay strands a tail reader", () => {
+      // `.audio-mini-player`: a 2.5rem control (35px at this app's 14px root)
+      // plus 0.4rem block padding either side and a 1px top border.
+      const BAR_PX = 47;
+      const VIEWPORT_PX = 500;
+      const EXTENT_PX = 2000;
+
+      afterEach(() => {
+        vi.unstubAllGlobals();
+      });
+
+      const mountChromeUnderOverlay = async (scrollTop: number): Promise<HTMLDivElement> => {
+        let roCallback: ResizeObserverCallback | undefined;
+        class FakeResizeObserver {
+          constructor(cb: ResizeObserverCallback) {
+            roCallback = cb;
+          }
+          observe(): void {}
+          unobserve(): void {}
+          disconnect(): void {}
+        }
+        vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+        seedRows();
+        render(() => (
+          <ScrollbackPane networkSlug="freenode" channelName="#grappa" kind="channel" />
+        ));
+        const list = screen.getByTestId("scrollback") as HTMLDivElement;
+        await flushRaf();
+
+        Object.defineProperty(list, "scrollHeight", { value: EXTENT_PX, configurable: true });
+        Object.defineProperty(list, "clientHeight", { value: VIEWPORT_PX, configurable: true });
+        Object.defineProperty(list, "scrollTop", {
+          value: scrollTop,
+          writable: true,
+          configurable: true,
+        });
+        // MEASURED, not merely set — same load-bearing scroll event as #1121's
+        // helper: without it `tailGeometryMeasured` is unset and the geometry the
+        // restore republishes is withheld.
+        list.dispatchEvent(new Event("scroll"));
+        await flushRaf();
+
+        pushOverlay(null);
+        await flushRaf();
+        scrollIntoViewSpy.mockClear();
+
+        // The bar takes its space. The scroll list loses height; the CONTENT is
+        // untouched, which is what separates this from #1121.
+        Object.defineProperty(list, "clientHeight", {
+          value: VIEWPORT_PX - BAR_PX,
+          configurable: true,
+        });
+        roCallback?.([], {} as ResizeObserver);
+        await flushRaf();
+
+        return list;
+      };
+
+      it("drops the #778 re-pin while the overlay is up (the freeze eats it, as designed)", async () => {
+        const list = await mountChromeUnderOverlay(EXTENT_PX - VIEWPORT_PX);
+
+        // Characterization, not a defect: the freeze outranking the re-pin is
+        // what keeps a mid-list reader still. It is the CLOSE edge that owes the
+        // tail reader an honest answer, and the test below is where that is due.
+        expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+        expect(list.scrollTop).toBe(EXTENT_PX - VIEWPORT_PX);
+      });
+
+      it("lands a tail reader ON the tail when the overlay closes, not on the stale px", async () => {
+        const list = await mountChromeUnderOverlay(EXTENT_PX - VIEWPORT_PX);
+
+        popOverlay(null);
+        await flushRaf();
+
+        // The tail of a 2000px buffer seen through a 453px box is 1547 — not the
+        // 1500 that was the tail of the 500px box the snapshot was taken in.
+        // Pre-fix the restore replayed 1500 and the last 47px, two chat lines,
+        // stayed under the bar for as long as the reader kept reading.
+        expect(list.scrollTop).toBe(EXTENT_PX - (VIEWPORT_PX - BAR_PX));
+      });
+
+      it("still holds a MID-LIST reader across the same shrink (the #608 posture is not widened)", async () => {
+        const list = await mountChromeUnderOverlay(750);
+
+        popOverlay(null);
+        await flushRaf();
+
+        // distance 2000-750-500 = 750, far past the tail band: this reader asked
+        // for a position, not for the tail, and a shorter box does not change
+        // what they asked for. Guards the fix against becoming "always tail".
+        expect(list.scrollTop).toBe(750);
+      });
+    });
   });
 
   // affordances. Rendered as flex siblings BEFORE `.scrollback` they
