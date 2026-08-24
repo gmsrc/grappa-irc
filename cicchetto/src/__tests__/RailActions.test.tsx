@@ -165,6 +165,14 @@ vi.mock("../lib/mobilePanel", () => ({
 }));
 
 import ConfirmModal from "../ConfirmModal";
+import {
+  activeAudio,
+  closeAudio,
+  hidePlayer,
+  playAudio,
+  playerHidden,
+  showPlayer,
+} from "../lib/audioPlayer";
 import { channelKey } from "../lib/channelKey";
 import { dismissConfirm } from "../lib/confirmDialog";
 import RailActions from "../RailActions";
@@ -1044,5 +1052,117 @@ describe("the admin refresh, moved into the rail (#1073)", () => {
     render(() => <RailActions setters={setters} />);
     expect(screen.queryByTestId("admin-visitors-refresh")).toBeNull();
     expect(screen.queryByTestId("rail-action-refresh")).toBeNull();
+  });
+});
+
+// #1697 — the door back to a hidden transport.
+//
+// `AudioMiniPlayer` can now be taken off screen while it keeps playing, and
+// something has to bring it back. It lands HERE, and the placement is the
+// argument:
+//
+//   * GENERAL. An upload passes `label: null` and is in no station table, so
+//     the rail's `rail-radio-now` chrome — which is gated on `tunedStation()` —
+//     cannot be the door. Whatever restores the bar has to be keyed on the
+//     PLAYER, not on the radio.
+//   * ZERO VERTICAL COST, which is the entire point of hiding. A restore
+//     handle left in the docked slot would still have to clear the 44px HIG
+//     floor this very issue is about, so it would give back almost none of the
+//     space the operator hid the bar to reclaim.
+//   * CAPABILITY-GATED, exactly like the `mentions` launcher above: the row
+//     exists only while there is something to restore.
+//
+// The cost, stated rather than hidden: on mobile this is three taps
+// (☰ → launcher → row) against one for a handle in place. Hiding is the
+// frequent gesture; restoring is the occasional one.
+describe("RailActions — restoring a hidden audio player (#1697)", () => {
+  const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
+
+  afterEach(() => {
+    closeAudio();
+    showPlayer();
+  });
+
+  it("offers no restore row while nothing is playing", () => {
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+    expect(screen.queryByTestId("rail-action-show-player")).toBeNull();
+  });
+
+  it("offers no restore row while the player is on screen", () => {
+    // The row is not a duplicate transport door — with the bar visible there is
+    // nothing to restore, and a row saying otherwise would be chrome noise in a
+    // drawer #500 exists to keep short.
+    playAudio(STATION, "Groove Salad");
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+    expect(screen.queryByTestId("rail-action-show-player")).toBeNull();
+  });
+
+  it("offers the restore row once a playing player has been hidden", () => {
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+
+    const row = screen.getByTestId("rail-action-show-player");
+    expect(row).toBeInTheDocument();
+    expect(row).toHaveTextContent("player");
+  });
+
+  it("names the hidden source, so the operator knows what is still playing", () => {
+    // On mobile the docked bar was the ONLY surface naming a station (#682);
+    // hidden, this row inherits that job.
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+
+    expect(screen.getByTestId("rail-action-show-player")).toHaveAttribute(
+      "aria-label",
+      "show player — Groove Salad",
+    );
+  });
+
+  it("names an unlabelled source generically rather than lying about it", () => {
+    // An upload has no title on the wire (slug only), so there is nothing to
+    // name. It must still be restorable — that is the case a radio-flavoured
+    // door would have stranded.
+    playAudio("https://grappa.example/uploads/abc", null);
+    hidePlayer();
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+
+    expect(screen.getByTestId("rail-action-show-player")).toHaveAttribute(
+      "aria-label",
+      "show player",
+    );
+  });
+
+  it("clicking it brings the transport back without touching the source", () => {
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+    const before = activeAudio();
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+
+    fireEvent.click(screen.getByTestId("rail-action-show-player"));
+
+    expect(playerHidden()).toBe(false);
+    expect(activeAudio()).toBe(before);
+  });
+
+  it("closes the menu behind it, like every launcher that navigates away", () => {
+    // RailActions' own rule: a launcher that takes the operator somewhere is
+    // single-shot; a control they flip in place (denoise) is not. Restoring the
+    // bar is the first kind — the thing it reveals is behind this drawer.
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+    render(() => <RailActions setters={setters} />);
+    openMenu();
+
+    fireEvent.click(screen.getByTestId("rail-action-show-player"));
+
+    expect(screen.queryByTestId("rail-action-show-player")).toBeNull();
   });
 });

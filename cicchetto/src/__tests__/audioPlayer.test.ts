@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { activeAudio, closeAudio, playAudio } from "../lib/audioPlayer";
+import {
+  activeAudio,
+  closeAudio,
+  hidePlayer,
+  playAudio,
+  playerHidden,
+  showPlayer,
+} from "../lib/audioPlayer";
 import { setToken } from "../lib/auth";
 
 // Docked audio mini-player store (GH #115). Module-singleton signal —
@@ -58,5 +65,76 @@ describe("audioPlayer store", () => {
     playAudio("https://ice.somafm.com/groovesalad-128-mp3", "Groove Salad");
     playAudio("https://grappa.example/uploads/abc", null);
     expect(activeAudio()).toEqual({ href: "https://grappa.example/uploads/abc", label: null });
+  });
+});
+
+// #1697 — HIDING IS NOT STOPPING. `closeAudio` clears the source, and the
+// element effect then pauses + detaches it; that is the STOP verb and it stays.
+// Hiding is a third fact, orthogonal to both "there is a source" and "it is
+// playing", and it gets its own signal.
+describe("audioPlayer transport visibility (#1697)", () => {
+  const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
+
+  afterEach(() => {
+    showPlayer();
+  });
+
+  it("the transport starts shown", () => {
+    expect(playerHidden()).toBe(false);
+  });
+
+  it("hidePlayer hides the transport", () => {
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+    expect(playerHidden()).toBe(true);
+  });
+
+  it("showPlayer brings it back", () => {
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+    showPlayer();
+    expect(playerHidden()).toBe(false);
+  });
+
+  // THE load-bearing assertion, and it is `toBe`, not `toEqual`, on purpose.
+  //
+  // `AudioMiniPlayer` drives the element from `createEffect(on(activeAudio,…))`,
+  // whose body assigns `audioEl.src` — and assigning `.src` re-invokes the media
+  // load algorithm even when the URL is unchanged. So the ONLY shape of this
+  // feature that does not restart the stream on every hide is one where the
+  // source object's IDENTITY survives the gesture. Folding `hidden` into
+  // `AudioPlayerState` (the shape #682 chose for `label`, which describes the
+  // SOURCE) would hand back a fresh object here and turn a hide into a re-buffer.
+  it("hiding does not touch the source object at all — same reference in, same out", () => {
+    playAudio(STATION, "Groove Salad");
+    const before = activeAudio();
+
+    hidePlayer();
+
+    expect(activeAudio()).toBe(before);
+  });
+
+  it("a new source always shows its transport — a hidden player cannot swallow it", () => {
+    hidePlayer();
+    playAudio("https://grappa.example/uploads/abc", null);
+    expect(playerHidden()).toBe(false);
+  });
+
+  it("closing the player leaves no stale hidden flag behind", () => {
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+    closeAudio();
+    expect(playerHidden()).toBe(false);
+  });
+
+  it("token rotation resets the flag with the rest of the store (identity-scoped)", () => {
+    setToken("tokA");
+    playAudio(STATION, "Groove Salad");
+    hidePlayer();
+
+    setToken("tokB");
+
+    expect(playerHidden()).toBe(false);
+    expect(activeAudio()).toBeNull();
   });
 });

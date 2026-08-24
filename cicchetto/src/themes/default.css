@@ -3749,7 +3749,22 @@ html.resize-dragging * {
   font-size: var(--font-size);
 }
 
+/* #1697 — the hide control joins the group rather than sizing itself, and the
+   group's `2.5rem` is left ALONE deliberately.
+   Measured while adding it: the html root font-size is 14px
+   (`:root --font-size`), so `2.5rem` resolves to 35px — under the 44px
+   `--tap-min` floor, the same class of defect as the rail picker's ✕ at
+   2rem/28px, which #306's absolute-px sweep never reached here. Raising it is
+   the right call and it is NOT this issue's: #1697 names the picker's ✕, and
+   lifting this row would grow the docked bar by ~9px — a visible change to a
+   surface vjt looked at and approved ("keeping it above the message box is
+   right"). Filed separately so he decides.
+   The new control therefore ships at the row's height rather than above it: a
+   lone 44px button here grows the bar by exactly the 9px that carve-out exists
+   to avoid, and settling one member of a four-button row apart from its
+   siblings is how a sheet ends up with two patterns. */
 .audio-mini-player-toggle,
+.audio-mini-player-hide,
 .audio-mini-player-close,
 .audio-mini-player-download {
   flex: none;

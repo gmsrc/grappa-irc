@@ -1,5 +1,5 @@
 import { type Component, createEffect, createSignal, on, Show } from "solid-js";
-import { activeAudio, closeAudio } from "./lib/audioPlayer";
+import { activeAudio, closeAudio, hidePlayer, playerHidden } from "./lib/audioPlayer";
 
 // Docked audio mini-player (GH #115) — a slim transport bar pinned above
 // the compose box. Non-modal: scrollback stays scrollable + readable
@@ -22,6 +22,23 @@ import { activeAudio, closeAudio } from "./lib/audioPlayer";
 // the caller — so it is correct for ANY endless source, not just the radio
 // stations that motivated it, and it cannot drift from the element's truth.
 // It is the general rule, not the incident.
+//
+// #1697 — HIDING. The bar was permanent once a source was tuned: the only way
+// off the screen was the ✕, which STOPS. Hiding is now a second control and a
+// second signal (`playerHidden`), and the mechanism costs nothing because the
+// element is ALREADY mounted outside the <Show> below — the unconditional mount
+// documented just above, put there for the ref-assignment race, is exactly what
+// makes "hide while it keeps playing" free. Narrowing the <Show> predicate
+// cannot reach the element.
+//
+// Two shapes this must NOT become, both of which stop playback:
+//   * hiding by unmounting this component from Shell — that destroys the
+//     element (which is why leaving chat for home already stops playback);
+//   * carrying the hidden flag inside `activeAudio` — that re-fires the effect
+//     below, which reassigns `.src` and re-buffers a live stream.
+// The door back is in `RailActions`, not here: a restore handle left in this
+// slot would still have to clear the 44px tap floor, so it would give back
+// almost none of the vertical space that motivated hiding.
 
 const formatTime = (seconds: number): string => {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
@@ -97,7 +114,7 @@ const AudioMiniPlayer: Component = () => {
         onTimeUpdate={() => setCurrent(audioEl?.currentTime ?? 0)}
         onLoadedMetadata={() => setDuration(audioEl?.duration ?? 0)}
       />
-      <Show when={activeAudio() !== null}>
+      <Show when={activeAudio() !== null && !playerHidden()}>
         <div class="audio-mini-player" data-testid="audio-mini-player">
           <button
             type="button"
@@ -168,6 +185,21 @@ const AudioMiniPlayer: Component = () => {
               ⬇
             </a>
           </Show>
+          {/* #1697 — HIDE, beside the ✕ and never merged with it. The ✕ is the
+              STOP verb, and on a phone it is the only reachable one while the
+              rail that holds the station chrome is slid off-screen; collapsing
+              the two would cost the operator the ability to stop. The glyph is
+              a chevron down (the surface leaves downward, past the compose
+              box), and the accessible name says what survives the gesture. */}
+          <button
+            type="button"
+            class="audio-mini-player-hide"
+            data-testid="audio-mini-player-hide"
+            onClick={hidePlayer}
+            aria-label="hide player, keep playing"
+          >
+            ⌄
+          </button>
           <button
             type="button"
             class="audio-mini-player-close"

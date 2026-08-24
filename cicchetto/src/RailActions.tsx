@@ -2,6 +2,7 @@ import { useNavigate } from "@solidjs/router";
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { refreshInCardHead, refreshSlot } from "./admin/refreshSlot";
 import { archiveSlugForSelection } from "./lib/archiveContext";
+import { activeAudio, playerHidden, showPlayer } from "./lib/audioPlayer";
 import { type ChannelKey, channelKey } from "./lib/channelKey";
 import { conversationMuteKey, isConversationMuted } from "./lib/conversationMute";
 import { createDismissOnOutsidePointer } from "./lib/dismissOnOutsidePointer";
@@ -431,6 +432,51 @@ const RailActions: Component<Props> = (props) => {
                   {"\u{1F4E3}"}
                 </span>
                 <span class="rail-action-label">mentions</span>
+              </button>
+            )}
+          </Show>
+
+          {/* #1697 — the door back to a HIDDEN transport. `AudioMiniPlayer`
+              can now be taken off screen while it keeps playing, and this is
+              what restores it.
+              WHY HERE. It has to be general: an upload passes `label: null`
+              and is in no station table, so the rail's `rail-radio-now` chrome
+              (gated on `tunedStation()`) cannot be the door — whatever
+              restores the bar is keyed on the PLAYER, not on the radio. And it
+              has to cost no vertical space, which is the entire point of
+              hiding: a restore handle left in the docked slot would still owe
+              the 44px HIG floor, giving back almost none of the room the
+              operator hid the bar to reclaim. This drawer already carries
+              zero permanent cost (#500) and already hosts `radio`.
+              Gated on there being something to restore, the same
+              CAPABILITY gate the mentions launcher above uses. Closes the menu
+              like every launcher that navigates away: what it reveals is
+              behind this drawer. */}
+          <Show when={activeAudio() !== null && playerHidden()}>
+            {(_present) => (
+              <button
+                type="button"
+                class="shell-chrome-btn rail-action rail-action-show-player"
+                /* The label names the source when it has one: hidden, this row
+                   inherits the job the docked bar's caption did on mobile
+                   (#682), which is answering "what am I listening to". An
+                   upload has no title on the wire, so it says nothing rather
+                   than inventing one. */
+                aria-label={
+                  activeAudio()?.label === null || activeAudio()?.label === undefined
+                    ? "show player"
+                    : `show player — ${activeAudio()?.label}`
+                }
+                data-testid="rail-action-show-player"
+                onClick={() => {
+                  showPlayer();
+                  close();
+                }}
+              >
+                <span class="rail-action-icon" aria-hidden="true">
+                  {"\u{1F39A}"}
+                </span>
+                <span class="rail-action-label">player</span>
               </button>
             )}
           </Show>

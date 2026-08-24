@@ -1,7 +1,7 @@
 import { render, screen } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AudioMiniPlayer from "../AudioMiniPlayer";
-import { activeAudio, closeAudio, playAudio } from "../lib/audioPlayer";
+import { activeAudio, closeAudio, playAudio, playerHidden, showPlayer } from "../lib/audioPlayer";
 
 // jsdom does not implement HTMLMediaElement playback — stub the methods
 // the player drives so the component mounts without "Not implemented".
@@ -17,10 +17,12 @@ beforeEach(() => {
   pauseSpy = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   closeAudio();
+  showPlayer();
 });
 
 afterEach(() => {
   closeAudio();
+  showPlayer();
   vi.restoreAllMocks();
 });
 
@@ -151,5 +153,86 @@ describe("AudioMiniPlayer", () => {
     playAudio("https://grappa.example/uploads/abc", null);
 
     expect(screen.queryByTestId("audio-mini-player-label")).toBeNull();
+  });
+
+  // #1697 — the bar was permanent once a station was tuned: the only way off
+  // the screen was the ✕, which STOPS. Hiding is a different gesture and the
+  // two must not be one control.
+  //
+  // Why these assertions and not a screenshot: jsdom implements no media
+  // pipeline, so "it kept playing" is not directly observable here. What IS
+  // observable — and is the entire mechanism — is that the <audio> element
+  // survives the gesture with its source attached and that neither `pause()`
+  // nor a fresh `play()` is issued. Those three together are exactly the
+  // footprint of "nothing in the element's effect chain ran".
+  describe("#1697 — hiding the surface without stopping the audio", () => {
+    const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
+
+    it("hiding removes the bar but leaves the source loaded and untouched", () => {
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      playSpy.mockClear();
+      pauseSpy.mockClear();
+
+      screen.getByTestId("audio-mini-player-hide").click();
+
+      expect(screen.queryByTestId("audio-mini-player")).toBeNull();
+      expect(screen.getByTestId("audio-mini-player-el")).toHaveAttribute("src", STATION);
+      expect(activeAudio()).not.toBeNull();
+      expect(playerHidden()).toBe(true);
+    });
+
+    it("hiding issues no pause and no re-play — the element is not disturbed", () => {
+      // The mutation this kills: reaching for `activeAudio` to carry the hidden
+      // flag. That re-fires `on(activeAudio)`, which reassigns `audioEl.src`
+      // and calls `play()` again — a visible re-buffer of a live stream, which
+      // is precisely the thing "hide ≠ stop" forbids.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      playSpy.mockClear();
+      pauseSpy.mockClear();
+
+      screen.getByTestId("audio-mini-player-hide").click();
+
+      expect(pauseSpy).not.toHaveBeenCalled();
+      expect(playSpy).not.toHaveBeenCalled();
+    });
+
+    it("the bar comes back with the same source still attached", () => {
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      screen.getByTestId("audio-mini-player-hide").click();
+      playSpy.mockClear();
+
+      showPlayer();
+
+      expect(screen.getByTestId("audio-mini-player")).toBeInTheDocument();
+      expect(screen.getByTestId("audio-mini-player-el")).toHaveAttribute("src", STATION);
+      expect(playSpy).not.toHaveBeenCalled();
+    });
+
+    it("hide and close stay two distinct controls, and only close stops", () => {
+      // Guards against the tempting simplification of folding them: the ✕ is
+      // the STOP verb (#115) and the phone's only reachable one while the rail
+      // is slid off-screen.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+
+      expect(screen.getByTestId("audio-mini-player-hide")).toBeInTheDocument();
+      screen.getByTestId("audio-mini-player-close").click();
+
+      expect(activeAudio()).toBeNull();
+      expect(pauseSpy).toHaveBeenCalled();
+    });
+
+    it("a new source re-shows a hidden bar rather than playing behind it", () => {
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      screen.getByTestId("audio-mini-player-hide").click();
+
+      playAudio("https://grappa.example/uploads/abc", null);
+
+      expect(screen.getByTestId("audio-mini-player")).toBeInTheDocument();
+    });
   });
 });
