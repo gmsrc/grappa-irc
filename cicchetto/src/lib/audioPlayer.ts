@@ -27,6 +27,21 @@ export type AudioPlayerState = {
   label: string | null;
 };
 
+/** Where the transport was when the element went away (#1734). */
+export type AudioResumePoint = {
+  /** Seconds into the source. */
+  position: number;
+  /** The element's last stated length — `Infinity` / `NaN` for an endless
+      source. Carried for a reason that is not display: it is what puts
+      `AudioMiniPlayer`'s `mustRefetch` back in a position to answer on a
+      fresh element, whose own `duration` signal starts at a finite 0 and so
+      makes a stream look like a file. See that file's #1734 comment. */
+  duration: number;
+  /** Whether it was playing. A re-mount nobody asked for must not start
+      audio the operator had paused — cic does not originate state. */
+  playing: boolean;
+};
+
 const exports_ = identityScopedStore((onIdentityChange) => {
   const [activeAudio, setActiveAudio] = createSignal<AudioPlayerState | null>(null);
   // #1697 — HIDING IS NOT STOPPING, and this is the signal that separates them.
@@ -49,14 +64,41 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   // different signals.
   const [playerHidden, setPlayerHidden] = createSignal(false);
 
+  // #1734 — where the transport was when the element was last destroyed.
+  //
+  // A SIBLING SIGNAL, for the reason #1697 spells out one comment up and
+  // measured: `AudioMiniPlayer` drives the element from
+  // `createEffect(on(activeAudio, …))`, whose body assigns `audioEl.src`, and
+  // assigning `.src` re-invokes the media load algorithm even when the URL has
+  // not changed. A position riding INSIDE `AudioPlayerState` would hand that
+  // effect a new object on every write and restart the source — inside the fix
+  // whose entire purpose is to stop unrequested restarts. `position` describes
+  // the TRANSPORT; `href`/`label` describe the SOURCE. Different axes.
+  //
+  // It carries no href of its own because it does not need one: every writer
+  // of `activeAudio` below clears it, so a point that exists belongs to the
+  // source that is active. A FOURTH writer of `activeAudio` must clear it too,
+  // or a new source inherits the old one's position — pinned by
+  // "a NEW source does not inherit the previous one's position".
+  const [resumePoint, setResumePoint] = createSignal<AudioResumePoint | null>(null);
+
   onIdentityChange(() => {
     setActiveAudio(null);
     setPlayerHidden(false);
+    setResumePoint(null);
   });
 
   return {
     activeAudio,
     playerHidden,
+    resumePoint,
+    // #1734 — called from the component's `onCleanup`, i.e. exactly once per
+    // destruction, at the instant the fact is about to be lost. Deliberately
+    // NOT written on every `timeupdate`: that would be four writes a second to
+    // module state to keep a value only this one moment reads.
+    rememberResumePoint(point: AudioResumePoint): void {
+      setResumePoint(point);
+    },
     // Start (or swap to) the audio at `href`. One instance: a second
     // click replaces the source rather than stacking a new player.
     //
@@ -76,6 +118,16 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // hidden would let the next upload play with no controls anywhere on
     // screen, which is a worse version of the bug this fixes.
     playAudio(href: string, label: string | null): void {
+      // #1734 — a remembered position belongs to the source it was taken
+      // from, and clearing it here is what lets the point carry no href.
+      //
+      // 🔴 BEFORE `setActiveAudio`, not after, and this order is load-bearing
+      // — MEASURED. Solid runs the `on(activeAudio, …)` effect SYNCHRONOUSLY
+      // inside the setter, so a clear written on the next line arrives after
+      // the effect has already read the OLD point: it armed the previous
+      // source's position and the new source landed at 0:42.
+      // `[D] after playAudio: currentTime=0` then `after metadata: 42`.
+      setResumePoint(null);
       setActiveAudio({ href, label });
       setPlayerHidden(false);
     },
@@ -83,6 +135,12 @@ const exports_ = identityScopedStore((onIdentityChange) => {
     // element effect pause and detach it. #1697 only adds the reset, so a
     // dismissed player cannot leave a stale flag for the next source.
     closeAudio(): void {
+      // #1734 — ✕ is the STOP verb: it must not leave a position behind for
+      // whatever gets tuned next. Cleared first, for the same synchronous
+      // -effect reason spelled out in `playAudio` — the null arm does not read
+      // the point today, and ordering it defensively costs nothing while
+      // relying on that fact costs the next reader a measurement.
+      setResumePoint(null);
       setActiveAudio(null);
       setPlayerHidden(false);
     },
@@ -98,5 +156,13 @@ const exports_ = identityScopedStore((onIdentityChange) => {
   };
 });
 
-export const { activeAudio, playAudio, closeAudio, playerHidden, hidePlayer, showPlayer } =
-  exports_;
+export const {
+  activeAudio,
+  playAudio,
+  closeAudio,
+  playerHidden,
+  hidePlayer,
+  showPlayer,
+  resumePoint,
+  rememberResumePoint,
+} = exports_;

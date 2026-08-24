@@ -551,4 +551,131 @@ describe("AudioMiniPlayer", () => {
       expect(playSpy).not.toHaveBeenCalled();
     });
   });
+
+  // #1734 — LEAVING A WINDOW AND COMING BACK.
+  //
+  // The source is MODULE state and outlives this component, but the ELEMENT
+  // does not: navigating a scrollback window → home / list / mentions / admin
+  // unmounts the player. Coming back re-mounts it, the `on(activeAudio, …)`
+  // effect runs its FIRST execution, and a re-mount is indistinguishable from
+  // a new source at that point — so a file used to restart from zero, unasked.
+  //
+  // MEASURED before the fix, and the second line is why the shape below is
+  // what it is:
+  //
+  //   [FILE]   before: play=1 currentTime=42 duration=180 seek-max=180
+  //            after:  play=2 currentTime=0                seek-max=0
+  //   [STREAM] before: live-badge=true
+  //            after:  live-badge=FALSE  seek-present=TRUE
+  //
+  // A re-mounted STREAM came back dressed as a file. `live()` reads `duration`,
+  // a signal of THIS component, and a re-mount recreates it at 0 — a finite
+  // number. So #1700's `mustRefetch` (`el.error !== null || live()`) answers
+  // "no re-fetch needed" for a stream too, and cannot tell the two apart at the
+  // one moment that matters. Restoring the remembered `duration` BEFORE
+  // consulting it is what puts the predicate back in a position to answer, and
+  // is why there is no second predicate here.
+  //
+  // WHY RESUME AND NOT SIT STILL. Sitting still needs the same remembered
+  // `duration` (a stream must still re-tune — #1700's rule), and it needs the
+  // position too or the transport reads 0:00 on a file that is at 0:42. Once
+  // both are restored the only thing left to decide is whether to call
+  // `play()`, and the operator never asked for a stop: they changed window. So
+  // the transport is preserved rather than chosen — playing resumes, paused
+  // stays paused. Anything else is cic originating state.
+  describe("#1734 — re-mounting after leaving the window", () => {
+    const UPLOAD = "https://grappa.example/uploads/abc";
+    const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
+
+    const element = (): HTMLAudioElement =>
+      screen.getByTestId("audio-mini-player-el") as HTMLAudioElement;
+
+    /** Bring the element to the state a played source leaves it in: metadata
+        arrived, the transport is at `at`, and it is playing or not. jsdom runs
+        no media pipeline, so the properties are stubbed on the INSTANCE and the
+        events replayed by hand — the same seam the rest of this file uses. */
+    const settleAt = (duration: number, at: number, isPlaying: boolean): void => {
+      const el = element();
+      Object.defineProperty(el, "duration", { configurable: true, value: duration });
+      el.dispatchEvent(new Event("loadedmetadata"));
+      el.currentTime = at;
+      el.dispatchEvent(new Event("timeupdate"));
+      el.dispatchEvent(new Event(isPlaying ? "play" : "pause"));
+    };
+
+    /** The metadata round the re-mounted element does on its own. The position
+        can only be applied once the element knows its length, which is why the
+        fix waits for this event rather than writing `currentTime` next to
+        `.src` — that write is dropped by a real browser before metadata. */
+    const metadataArrives = (duration: number): void => {
+      const el = element();
+      Object.defineProperty(el, "duration", { configurable: true, value: duration });
+      el.dispatchEvent(new Event("loadedmetadata"));
+    };
+
+    it("a FILE that was playing comes back at its position, still playing", () => {
+      playAudio(UPLOAD, null);
+      const first = render(() => <AudioMiniPlayer />);
+      settleAt(180, 42, true);
+      playSpy.mockClear();
+
+      first.unmount();
+      render(() => <AudioMiniPlayer />);
+      metadataArrives(180);
+
+      expect(element().currentTime).toBe(42);
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    it("a FILE that was PAUSED comes back at its position and stays paused", () => {
+      // The half that separates "resume" from "restart something": a re-mount
+      // the operator did not ask for must not start audio they had stopped.
+      playAudio(UPLOAD, null);
+      const first = render(() => <AudioMiniPlayer />);
+      settleAt(180, 42, false);
+      playSpy.mockClear();
+
+      first.unmount();
+      render(() => <AudioMiniPlayer />);
+      metadataArrives(180);
+
+      expect(element().currentTime).toBe(42);
+      expect(playSpy).not.toHaveBeenCalled();
+    });
+
+    it("a STREAM still re-tunes, and never wears the file chrome on the way", () => {
+      // #1700's rule, unchanged: re-tuning IS the correct resume for a stream.
+      // The second assertion is the measured regression above — the bar must
+      // not draw a seek slider across an endless source while the re-mounted
+      // element waits for metadata it will never usefully answer.
+      playAudio(STATION, "Groove Salad");
+      const first = render(() => <AudioMiniPlayer />);
+      settleAt(Number.POSITIVE_INFINITY, 42, true);
+      playSpy.mockClear();
+
+      first.unmount();
+      render(() => <AudioMiniPlayer />);
+
+      expect(playSpy).toHaveBeenCalled();
+      expect(screen.getByTestId("audio-mini-player-live")).toBeInTheDocument();
+      expect(screen.queryByTestId("audio-mini-player-seek")).toBeNull();
+    });
+
+    it("a NEW source does not inherit the previous one's position", () => {
+      // The invalidation, and the reason the remembered point needs no href of
+      // its own: every writer of `activeAudio` clears it, so a point that
+      // exists belongs to the source that is active. This test is what keeps
+      // that invariant from being quietly broken by a fourth writer.
+      playAudio(UPLOAD, null);
+      const first = render(() => <AudioMiniPlayer />);
+      settleAt(180, 42, true);
+      first.unmount();
+
+      render(() => <AudioMiniPlayer />);
+      playAudio("https://grappa.example/uploads/second", null);
+      metadataArrives(90);
+
+      expect(element().currentTime).toBe(0);
+    });
+  });
 });

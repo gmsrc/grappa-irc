@@ -1,5 +1,12 @@
-import { type Component, createEffect, createSignal, on, Show } from "solid-js";
-import { activeAudio, closeAudio, hidePlayer, playerHidden } from "./lib/audioPlayer";
+import { type Component, createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import {
+  activeAudio,
+  closeAudio,
+  hidePlayer,
+  playerHidden,
+  rememberResumePoint,
+  resumePoint,
+} from "./lib/audioPlayer";
 import { nowPlayingLabel } from "./lib/nowPlaying";
 
 // Docked audio mini-player (GH #115) — a slim transport bar pinned above
@@ -75,11 +82,20 @@ const AudioMiniPlayer: Component = () => {
   const [current, setCurrent] = createSignal(0);
   const [duration, setDuration] = createSignal(0);
 
+  // #1734 — a position waiting for the element to know its own length.
+  // `currentTime` written next to `.src` is dropped by a real browser: the
+  // seekable range does not exist until metadata arrives, which is why this
+  // is applied from `onLoadedMetadata` below and not two lines after the
+  // assignment. Always cleared at the top of the effect, so a source that
+  // changes mid-flight cannot land the previous one's position.
+  let pendingSeek: number | null = null;
+
   // Point the element at the active href + autoplay on open; on close,
   // stop + detach the source so a closed player holds no buffered audio.
   createEffect(
     on(activeAudio, (a) => {
       if (audioEl === undefined) return;
+      pendingSeek = null;
       if (a === null) {
         audioEl.pause();
         audioEl.removeAttribute("src");
@@ -88,14 +104,54 @@ const AudioMiniPlayer: Component = () => {
         setDuration(0);
         return;
       }
+
+      // #1734 — this effect's FIRST execution cannot tell a new source from a
+      // re-mount: the source is module state and outlives the component, so
+      // leaving a scrollback window for home / list / mentions / admin and
+      // coming back re-runs exactly this code. A remembered point is the
+      // difference, and there is one only after a destruction.
+      //
+      // Restoring `duration` FIRST is load-bearing and is why no second
+      // predicate was added: `mustRefetch` asks `live()`, which reads the
+      // `duration` signal — recreated at a finite 0 on a fresh element. Left
+      // at 0 the predicate answers "no re-fetch" for a stream as well, which
+      // is both the wrong resume AND, measured, a seek slider drawn across an
+      // endless source. Fed the remembered length it answers correctly for
+      // both, exactly as it does everywhere else.
+      const resume = resumePoint();
+      setCurrent(resume?.position ?? 0);
+      setDuration(resume?.duration ?? 0);
+
       audioEl.src = a.href;
-      setCurrent(0);
-      setDuration(0);
+
+      if (resume !== null && !mustRefetch(audioEl)) {
+        // A healthy FILE: come back where it was, and preserve the transport
+        // rather than pick one. The operator changed window; they did not ask
+        // for a stop, and they did not ask for a start either.
+        pendingSeek = resume.position;
+        if (resume.playing) void audioEl.play().catch(() => {});
+        return;
+      }
+
+      // Everything else — a first tune, or a stream, whose correct resume IS
+      // re-tuning (#1700). Unchanged.
+      //
       // Autoplay may be blocked (no user gesture / iOS policy); the user
       // taps play in that case — swallow the rejection, don't surface it.
       void audioEl.play().catch(() => {});
     }),
   );
+
+  // #1734 — the element is about to be destroyed; the transport's position is
+  // about to go with it. One write, at the only instant that has the fact.
+  onCleanup(() => {
+    if (audioEl === undefined || activeAudio() === null) return;
+    rememberResumePoint({
+      position: audioEl.currentTime,
+      duration: audioEl.duration,
+      playing: playing(),
+    });
+  });
 
   // Endless source? `duration` starts at 0 — a FINITE number, so a source
   // whose metadata has not arrived yet keeps today's file chrome and does not
@@ -172,7 +228,18 @@ const AudioMiniPlayer: Component = () => {
            `error` is the one listened to. */
         onError={() => setPlaying(false)}
         onTimeUpdate={() => setCurrent(audioEl?.currentTime ?? 0)}
-        onLoadedMetadata={() => setDuration(audioEl?.duration ?? 0)}
+        onLoadedMetadata={() => {
+          setDuration(audioEl?.duration ?? 0);
+          // #1734 — the element now has a seekable range, so the position
+          // remembered from the last destruction can finally be applied. The
+          // browser clamps it to the real length, so a source that turned out
+          // shorter lands at its end rather than nowhere.
+          if (pendingSeek !== null && audioEl !== undefined) {
+            audioEl.currentTime = pendingSeek;
+            setCurrent(audioEl.currentTime);
+            pendingSeek = null;
+          }
+        }}
       />
       <Show when={activeAudio() !== null && !playerHidden()}>
         <div class="audio-mini-player" data-testid="audio-mini-player">
