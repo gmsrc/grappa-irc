@@ -383,6 +383,10 @@ defmodule Grappa.Repo.LockWatch do
       enabled: Keyword.fetch!(opts, :enabled)
     }
 
+    # Before anything else: buy this module's Logger cache key while no
+    # write lock is held. See `prime_logger_module_cache/0`.
+    prime_logger_module_cache()
+
     # `:public` because the seam writes from every caller's own process; the
     # table is owned here so a supervisor restart rebuilds it clean.
     _ = :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
@@ -405,6 +409,49 @@ defmodule Grappa.Repo.LockWatch do
     :persistent_term.put(@enabled_key, false)
     :ok
   end
+
+  # #1715 — pay this module's ONE lazy `persistent_term:put` here, at boot,
+  # where nothing is holding the SQLite write lock. That is not a hope: this
+  # child starts BEFORE `Grappa.Repo` (see `application.ex`), so at prime
+  # time the tree holds no SQLite connection at all and the prime cannot
+  # wait on the very thing it exists to step around.
+  #
+  # `Logger.__should_log__/2` calls `:logger_config.allow/2` at every call
+  # site unconditionally, and `allow/2` writes `{logger_config, Module}` the
+  # FIRST time a given module logs. A `persistent_term` write blocks on a
+  # thread-progress barrier, and SQLite's busy handler sleeps out its
+  # `busy_timeout` inside a dirty-IO NIF, which holds that barrier for the
+  # whole sleep. So a module's first log line during a lock wait waits for
+  # the lock wait — and THIS module's first line is its own stall report,
+  # i.e. precisely the line that must not wait on the stall it reports.
+  # Measured: `busy_timeout` halved, stall halved (133 s → 66.7/67.4/66.1,
+  # ratio 1.99).
+  #
+  # `debug` is deliberate and emits nothing: `allow/2` caches
+  # `?PRIMARY_TO_CACHE(get_primary_level())`, i.e. the PRIMARY level, so
+  # `debug` writes the same key with the same value `warning` would while
+  # staying below the bar itself.
+  #
+  # 🔴 What this does NOT cover, so a later stall here is not read as a
+  # regression of a cure that never claimed the ground. It is ONE of the
+  # three mechanisms measured, and 6 of the 9 measured victims:
+  #
+  #   * `logger_config:set/3` — a CONFIG write, with no module key to prime;
+  #   * `code:ensure_loaded/1` — module LOADING, a different serialisation
+  #     point entirely;
+  #   * the first log line of EVERY other module — measured on a booted dev
+  #     node, 7 modules hold a cache key against 597 loaded — and in
+  #     particular a CRASH REPORT, which is by definition the first line
+  #     from whichever module just died;
+  #   * the coupling itself, which is untouched.
+  #
+  # 🔴 And priming every module is not a bigger cure, it is a bigger bug:
+  # `logger_config:set/3` on a PRIMARY level change does one
+  # `persistent_term:put` per CACHED module (the flush loop), so
+  # `Logger.configure(level: …)` would go from today's 7 waits to one per
+  # loaded module.
+  @spec prime_logger_module_cache() :: :ok
+  defp prime_logger_module_cache, do: Logger.debug(fn -> "" end)
 
   ## ----- Detection -----------------------------------------------------
 
