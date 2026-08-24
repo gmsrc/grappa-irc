@@ -61407,3 +61407,103 @@ intercept a third-party `fetch()` once cic's Workbox service worker has claimed
 the page, and the first runs of this spec reached the real api.somafm.com and
 came back naming a track SomaFM was actually playing. That finding is not
 specific to #1702 and is tracked as #1741.
+<!-- entry #1735 -->
+
+---
+
+## 2026-08-24 — #1735: a reset helper that quietly un-parked a 60-second timer
+
+`ci` on main at `1e919c2c` was red with exactly one failure — `ws_presence_test:419`,
+`refute_receive {:ws_all_hidden, "lena"}, 100` — while the identical sha had been
+9/9 green as PR #1731 minutes earlier, and green again on rerun. Same tree, three
+verdicts.
+
+### What was measured, in order
+
+**The event really arrived.** From the failing attempt's own log:
+`Unexpectedly received message {:ws_all_hidden, "lena"} (which matched …)`. Not a
+timeout, not a vacuous pass — the singleton emitted.
+
+**Only one door can emit it here.** `emit_transition/4` fires `:ws_all_hidden` on a
+`true → false` flip of `any_reported_visible_in?/2`, which is RAW `:visible`
+membership and ignores freshness. In this case `stale` is registered and still
+`{:visible, backdated}`, so killing the sibling `fresh` pid leaves the predicate
+true on both sides — no emit. The only thing that can turn `stale` into
+`{:hidden, nil}` is `demote_stale/1`, and its only trigger is
+`handle_info(:sweep, …)`. So a sweep tick must have landed inside the refute
+window.
+
+**But the sweep was supposed to be parked.** `config/test.exs` sets
+`sweep_ms: 3_600_000` for the whole run, and that parking landed with #224 itself
+(`954d2417`, 2026-08-08) — weeks before the failing sha, verified by reading
+`config/test.exs` AT `1e919c2c`. ExUnit started at 06:11:48 and the failure was at
+06:14:25: 157 seconds in, so a one-hour boot timer cannot have fired.
+
+**`reset_for_test/0` was throwing the parking away.** It answered `%__MODULE__{}` —
+a struct built from LITERALS — so it replaced the injected window with the
+`@default_stale_ms` default. Measured on a booted test node:
+
+```
+BOOT  sweep_ms=3600000
+RESET sweep_ms=60000
+configured=[sweep_ms: 3600000]
+```
+
+**And a manual tick then armed a real 60s timer.** `handle_info(:sweep, …)`
+reschedules at `state.sweep_ms`, so the first `sweep_now/0` — the file's own
+helper, or `session/server_test.exs` — converts the lost injection into a live
+periodic sweep. Two arms on the same node, a stale-but-visible pid parked and 70
+seconds of waiting:
+
+| arm | `state.sweep_ms` | result |
+|---|---|---|
+| reset only | `60000` | nothing in 70 s (the boot timer is still an hour) |
+| reset + one manual `:sweep` | `60000` | **unasked `:ws_all_hidden` at 60006 ms** |
+
+After the fix, both arms read `3600000` and both answer *nothing in 70 s*.
+
+That is the whole failure: from the first reset the singleton is un-parked, from
+the first manual tick it sweeps every 60 s for the rest of the run, and
+`100 / 60_000 ≈ 0.17%` of runs have that tick land inside the refute at :419. Seven
+test files call `reset_for_test/0`, so the exposure was suite-wide, not local to
+this file.
+
+### The reading that was briefed, and where it was wrong
+
+The issue proposed that the test simply borrows the global server, whose `sweep_ms`
+is the 60 s default. The **arithmetic and the conclusion were right** — it is the
+sweep, and 0.17% is the right order — but the **mechanism was not**: the config
+parks the sweep at an hour and did so at the failing sha. The 60 s comes back only
+because a test helper discards injected config.
+
+The distinction decides the cure. Giving `:419` its own server — what the #224
+neighbour at :549 does — would have made this test green and left every other
+`reset_for_test/0` caller un-parked, with the same trap re-arming somewhere else.
+The root fix is the helper carrying `stale_ms` / `sweep_ms` through.
+
+### The discriminator the issue named could not discriminate
+
+It proposed reading the global server's demotion log. `log_demotions/4` is a
+`Logger.info` and `config/test.exs` sets `level: :warning`, so that line is never
+emitted in the test environment — its absence in the failing log proves nothing in
+either direction. Worth stating because the log looked like the cheap answer and
+would have produced a confident wrong one.
+
+### What this is NOT
+
+The rival reading — `:ws_all_hidden` emitted while `stale` was still raw-visible,
+i.e. #671 violated in production — is **falsified**. The emit required a demotion,
+the demotion came from a real tick, the raw predicate is correct as written, and
+both `reset_for_test/0` and `mark_stale_for_test/2` are `Mix.env()`-gated and raise
+outside test. No production path exists.
+
+### The general rule
+
+**A reset helper that rebuilds a struct from literals discards every injected
+field, and the ones that hurt are exactly the ones a config file deliberately
+moved off their default** — silently, because the struct is valid and the process
+keeps working. `reset_for_user/1` never had the bug: it edits the existing state
+instead of replacing it. Known and deliberately left: `reset_for_test/0` drops
+`refs_to_user` without demonitoring, unlike `reset_for_user/1`. A leaked monitor's
+`:DOWN` finds no ref and takes the no-op branch, so it cannot produce an event;
+fixing it is a behaviour change to a test helper with no failure to its name.
