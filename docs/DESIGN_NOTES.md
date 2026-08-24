@@ -62452,3 +62452,99 @@ strip-after-capture ordering was a live false positive in
 prose and went red because the `:root` note names the class in a sentence; it
 now strips comments first, which is what every other helper in that module
 already documents itself as doing.
+<!-- entry #1759 -->
+
+---
+
+## 2026-08-24 — #1759: the stated mechanism does not exist, and the window that does
+
+A prod incident (2026-08-24, 22:10 Rome, release 1.3.1) put the SQLite pool
+into a ~64 s stall and, in the same window, killed two IRC sessions with
+`reason={:client_exit, :ping_timeout}`. #1759 read that as one causal chain:
+`Session.Server` persists synchronously, a parked mailbox does not process the
+upstream `PONG`, and the liveness watchdog launders a database stall into a
+false "peer is dead" verdict. **Measured against the code, that chain does not
+exist**, and the correction is worth more than the incident.
+
+**The watchdog is not in the process the issue blames.** `Grappa.IRC.Client` is
+a separate GenServer, linked and started by `Session.Server`, and it owns the
+socket. Four properties make a parked session mailbox irrelevant to the
+verdict, each independently: the socket delivers to the CLIENT's mailbox; the
+cycle is reset BEFORE parsing, at one choke point (`process_line(line,
+arm_idle(state))`), so even a malformed line counts as liveness; the Client
+dispatches upward with an asynchronous `send/2` and never a `GenServer.call`,
+so it cannot block on a parked Session; and an already-fired timer is DRAINED
+from the mailbox by `arm_idle/1` → `cancel_and_drain/2`. Measured alongside:
+`IRC.Client` makes zero outbound `GenServer.call`s and touches no `Repo`, no
+ETS, no `persistent_term`, and `IRC.FakeLag` — its only send-path collaborator
+— is a pure struct, not a process. There is no explicit code path from database
+latency to the liveness verdict.
+
+**The window that COULD kill is much narrower, and it is not "the Client is
+parked".** A parked Client alone survives: suspended between callbacks it
+merely queues `:liveness_idle`, and even with the timer already fired the PONG
+sits AHEAD of `:liveness_timeout` in the mailbox, so `cancel_and_drain/2`
+drains the stale message and the cycle resets. The one lethal shape is a Client
+blocked INSIDE `process_line/2`, **before it re-arms `active: :once`**. The
+socket is `packet: :line, active: :once` and the re-arm lives at the end of
+that call, so a Client stalled there never has the PONG delivered at all — it
+stays in the kernel buffer — and `:liveness_timeout` fires against a genuinely
+empty mailbox. The candidate blocking points inside that call are a module
+load, a cold module's first log line, and `:gen_tcp.send` on a full send
+buffer; the first two are exactly the VM-wide mechanism of #1715, for which
+prod was un-deployed at the time. **This window is named, not measured** — the
+code offers no seam to block there, and it was not reproduced.
+
+**Two numbers the issue named do not govern, and one does.** All 63 waits fell
+in a 31 228–32 177 ms band. It is anchored by `:busy_timeout` (`30_000`, the
+`Grappa.Repo` block of `config/runtime.exs`). It is NOT `30_000 + 1_500`: the
+`@budget_ms` retry budget contributes zero wall-clock, because
+`BusyRetry.loop/4`'s retry arm is guarded by `elapsed_ms < @budget_ms` and at
+~31 000 that is false on the FIRST rescue — no sleep, no second attempt, and
+the prod lines say `across 1 attempts` independently. Nor is it the `15000ms`
+DBConnection checkout the issue nominates: that is a default prod never sets,
+and it cannot compose into 31 s inside a loop that ran once. The residual
++1.2–2.2 s matches no named constant and is left unattributed rather than
+dressed up. Related: 17 of the 63 were `fault=interrupted`, which should
+surface at the 15 s statement timeout and instead landed in the same
+30 000-anchored band — consistent with a cancellation that could not take
+effect until the connection returned from its dirty NIF, but inferred.
+
+**The magnitude in the title is wrong and the arithmetic says why.** Seven
+sessions disconnected out of 45 active, and only two by the liveness verdict
+(the other five are #1708's `Ecto.MultiplePrimaryKeyError`). A session can only
+die if its `:liveness_idle` probe fires inside `[stall_start, stall_start +
+(duration − 30 s)]`, and only a socket already silent for a full 60 s enters
+it. With a ~64 s stall that window is ~34 s wide: **2 of 45 is what the
+geometry predicts**, and "every session declared dead" is not merely unmeasured
+but inconsistent with a 90-second watchdog.
+
+**The negative is the deliverable.** The stress test the issue asks for —
+assert that no session is declared dead — passes on today's code without
+testing anything, because the saturation never threatens that invariant. So
+`test/grappa/session/persist_stall_liveness_test.exs` asks the opposite
+question: can the death be PRODUCED? It reproduces the stated mechanism
+literally (a `dispatch_to` that never drains), asserts both preconditions
+rather than assuming them (the probe fired; the target's mailbox is provably
+backed up), and pairs every survival claim with a positive control that fires a
+real `:ping_timeout` — one of which holds the parked-mailbox variable constant
+across a live-peer/silent-peer pair so the PONG is the only degree of freedom
+left. Both survival assertions were mutated to red on the intended assert
+before being trusted. **The general rule: when an issue's cure would target a
+defect the code does not have, the executable refutation is worth as much as
+the cure, and it must carry its own positive control or it is a green that
+cannot fail.**
+
+**A testability gap this surfaced, deliberately left open.**
+`Session.Server.client_opts/1` does not thread `:liveness_idle_ms` /
+`:liveness_timeout_ms` to the Client, so a session-layer client always runs the
+60 s / 30 s config defaults — 90 s to a verdict, inert inside any test. The
+#100 test seam exists on `Client.start_link/1` and stops there. The end-to-end
+stress test #1759 requests therefore cannot be written today without a
+production change, which is why the causal question is asked at the client
+layer instead.
+
+**What is NOT established.** The harness rules out the mechanism the issue
+states, not the two production deaths. A VM-wide stall of the kind #1715
+describes is outside what an in-process ExUnit harness can construct, and it
+was not constructed. Those two `:ping_timeout` deaths remain unexplained.
