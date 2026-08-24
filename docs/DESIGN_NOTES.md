@@ -62254,6 +62254,22 @@ NOT playing, and it is exactly what `issue278-next-active-send-overlap.spec.ts`
 pins green, keyboard-open, on webkit-iphone-15. The move makes the radio case
 converge onto an already-pinned case instead of opening a new one.
 
+**That convergence was at first left as an ARGUMENT, and the correction is the
+transferable part.** "The geometry is identical with the bar up" is a claim, and
+#278 cannot be its witness: it runs with **no audio**, so a player that began
+displacing that geometry again would sail past it green. The cure is not a
+radio-mounted copy of #278 — repeating those constants buys no coverage and
+creates a second place for them to drift — but a witness for the case #278 is
+blind to, asserting the IDENTITY instead of the values. The float stack is
+anchored inside `.scrollback-pane`, so the pane's bottom edge IS the floats'
+frame of reference and the send button rides the compose box; therefore if
+mounting the bar leaves the pane→compose gap unchanged, the with-audio
+float-vs-send relationship is by construction the one #278 already pins without
+it. Measured before and after the link click in `media-link-modal-viewer`, which
+already has both on screen. **The rule: an identity that a spec's own
+preconditions exclude is not covered by that spec, however green it is — pin it
+or declare it, never leave it silent.**
+
 The new pin is a PAIR of assertions, because either alone is satisfiable by a
 wrong shape: document order alone ("later in the tree") is satisfied by a player
 hoisted below the bottom bar, and shared parent alone ("same column") is satisfied
