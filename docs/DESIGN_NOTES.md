@@ -61268,3 +61268,142 @@ real browser has no seekable range before metadata and silently drops
 the write. And it is remembered ONCE, in `onCleanup`, at the instant the
 fact is about to be lost — never on `timeupdate`, which would be four
 writes a second to module state to keep a value that one moment reads.
+<!-- entry #1702 -->
+
+---
+
+## 2026-08-24 — #1702: telling the OS what is playing, and the spy that the garbage collector ate
+
+On an iOS lock screen cic's radio showed "Cicchetto" and nothing else — no
+station, no track, no artwork. Nothing in the client had ever set
+`navigator.mediaSession`, so the OS fell back to the web app manifest's name.
+This entry records what shipped, the one place the issue's own wording was
+overruled, and the measurement that cost this issue eight e2e runs.
+
+### The field mapping is the platform's, not the issue's
+
+#1702 as filed asked for `title` = the station name, with the track fed into
+`artist` / `album`. Taken literally that puts a TRACK TITLE into the `artist`
+slot, and since `title` is the primary line on an iOS lock screen it leaves the
+station shouting and the track buried — which is half of the complaint the
+issue opens with ("no station, **no track**"). Shipped instead: **`title` is
+the TRACK, `artist` is its artist, `album` is the STATION**, falling back to
+`title` = station (or an upload's own URL slug) when no track is known.
+
+That is not a direction invented here. It is already this codebase's spelling
+in `nowPlayingLine`: `<artist> — <title> [<station>]`, which treats the station
+as context and the track as the subject. Approved on the issue before the code
+was written, under CLAUDE.md's "challenge the spec" rule; e2e assertion (b)
+and `src/__tests__/mediaSession.test.ts` are what pin it, so a future reader
+who takes the issue text literally will break a test rather than the lock
+screen.
+
+### A projection, not a store
+
+Everything a lock screen needs is already written down: the source in
+`activeAudio()`, the station derived from it by `tunedStation()`, the track
+derived from that by `nowPlaying()`. A signal holding "current lock-screen
+metadata" would be a fourth copy needing housekeeping, and it would drift the
+first time a source swapped without anyone updating it. `mediaSessionMetadata()`
+derives on read — the same reasoning `radio.ts` already gives for not storing
+the tuned station.
+
+Two rules the projection inherits rather than invents. **Stale tracks stay off
+the lock screen**: it matches `status === "playing"` only, never reading
+`state.track` off whatever arm happens to carry one, because the alternative is
+cic asserting to the OS a track it has already stopped showing the operator —
+same predicate as `nowPlayingLabel()`, same answer, both surfaces. And **the
+artwork mime is READ off the logo URL**, never hardcoded: the curated table is
+10 `.jpg` and 4 `.png`, so either constant ships wrong for the other group.
+`sizes` is deliberately not emitted — every row sits under `/logos/120/` and
+reading `120` out of a directory name is inferring a dimension, which is
+exactly the guess #1696 existed to punish.
+
+### Why the handlers live in the component and the projection does not
+
+`play` and `pause` were split out of `togglePlay` in `AudioMiniPlayer`. A lock
+screen does not send a toggle; it sends the two actions as distinct verbs, and
+the OS re-asserts intent freely — handing it a toggle would PAUSE on a `play`
+that arrives while the stream is already on. So the verbs are now the
+primitive and the toggle is built from them.
+
+The handlers are wired in `AudioMiniPlayer` and not in `lib/mediaSession.ts`
+because they must drive the SAME `<audio>` element the in-app bar drives, and
+only the component owns it. Two controls over one stream that disagree is the
+failure this avoids. Three separate effects rather than one, because they track
+three different facts: folding them would re-register handlers on every track
+change and rebuild a `MediaMetadata` on every play/pause.
+
+### 🔴 The e2e instrument was the suspect, and it was guilty
+
+The spec runs on `webkit-iphone-15` rather than the default chromium project —
+a green on desktop Chrome would be a green off the defect's own platform. Four
+assertions: metadata exists at all, the field mapping, the artwork mime, and
+(d) that the lock-screen transport drives the same element the in-app bar does.
+(d) failed eight runs in a row with:
+
+```
+calls=[none] spyStillInstalled=false mediaSessionPresent=true
+```
+
+The spy the spec installs on `navigator.mediaSession.setActionHandler` was
+simply not on the object by the time the spec read it — in a document where
+the same init script demonstrably ran, since its `fetch` stub was populated and
+(a)–(c) passed. Two hypotheses were killed before the right one: a sloppy-mode
+assignment dropped onto an instance whose method lives on the prototype (so the
+patch became `Object.defineProperty` — and failed identically), and then
+`navigator.mediaSession` handing back a different object per access.
+
+**Measured, in a two-arm probe on the same WebKit build and device profile,
+with ~250 MB of allocation churn between install and read-back:**
+
+| arm | spy | own property | `metadata` | calls seen |
+|---|---|---|---|---|
+| retain nothing | `false` | `false` | `"PIN"` | `[]` |
+| retain the object | `true` | `true` | `"PIN"` | `["play:fn"]` |
+
+The first row reproduces the failure exactly. `navigator.mediaSession` is
+`[SameObject]`, and JSC honours that by **caching** a wrapper, not by pinning
+one. `metadata` and `playbackState` are state on the platform object
+underneath and outlive the wrapper — which is why `"PIN"` survives in BOTH arms,
+and why (a)–(c) passed while (d) did not. A JS own property has nowhere to live
+but the wrapper, so once nothing in JS references it the wrapper is collected
+and the property goes with it; the next read mints a clean one. Holding the
+object in a global is what makes the wrapper reachable, and it is the whole fix.
+
+**The general rule, and it is what makes this worth writing down: a Playwright
+spy patched onto a platform-provided sub-object of `navigator` (or any
+`[SameObject]` accessor) must be kept reachable from JS, or it is collectible
+and its disappearance reads as a production fault.** The same init script's
+stub on `window.fetch` never had this problem, because `window` is not
+collectible — the two patches differed only in what they were written on. It is
+also the single explanation for both earlier dead ends: a plain assignment and
+a `defineProperty` fail the same way, because neither survives losing the
+object it was written on. The write was never the variable. Two other specs
+patch `navigator.serviceWorker` in an init script and carry the same latent
+exposure; that belongs to the testing-findings issue (#1741), not here.
+
+Isolated probes are what hid it: a bare page installs the spy and reads it back
+in about two seconds with no allocation pressure, and passes. The real spec
+spends nearly nine seconds booting a Solid SPA over a WebSocket first. **A
+mechanism that only fails under load will pass every short reproduction you
+write for it.**
+
+### What stays out of reach, stated rather than hidden
+
+That iOS actually RENDERS on its lock screen what WebKit was handed is not
+observable from any browser automation; it is a device check and it remains
+one. Two narrower limits were also measured along the way. WebKit maintains
+`playbackState` **itself** — it moved to `"playing"` in the probe on a bare
+element with no cic code present at all — so an assertion on `playbackState`
+alone is weak evidence that our effect ran, and (d) invoking a captured handler
+is what carries the weight. And the handlers surviving a collected wrapper in
+production is **inferred** from the metadata that survived both probe arms, not
+measured: no automation surface can fire a platform media action.
+
+Separately, and the reason the spec stubs `window.fetch` in an init script
+rather than using `page.route` for the now-playing feed: `page.route` does not
+intercept a third-party `fetch()` once cic's Workbox service worker has claimed
+the page, and the first runs of this spec reached the real api.somafm.com and
+came back naming a track SomaFM was actually playing. That finding is not
+specific to #1702 and is tracked as #1741.
