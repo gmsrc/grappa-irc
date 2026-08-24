@@ -32,14 +32,35 @@ import { nowPlayingLabel } from "./lib/nowPlaying";
 // makes "hide while it keeps playing" free. Narrowing the <Show> predicate
 // cannot reach the element.
 //
-// Two shapes this must NOT become, both of which stop playback:
+// Two shapes this must NOT become, both of which break playback:
 //   * hiding by unmounting this component from Shell — that destroys the
-//     element (which is why leaving chat for home already stops playback);
+//     element;
 //   * carrying the hidden flag inside `activeAudio` — that re-fires the effect
 //     below, which reassigns `.src` and re-buffers a live stream.
+//
 // The door back is in `RailActions`, not here: a restore handle left in this
 // slot would still have to clear the 44px tap floor, so it would give back
 // almost none of the vertical space that motivated hiding.
+//
+// #1701 — what unmounting ACTUALLY does, measured, because the first bullet
+// above used to end "(which is why leaving chat for home already stops
+// playback)" and that is not what happens. The source is MODULE state
+// (`lib/audioPlayer.ts`) and outlives the component, so leaving a scrollback
+// window for home / list / mentions / admin destroys the element — and coming
+// back RE-MOUNTS it: the `on(activeAudio, …)` effect below runs on its first
+// execution, reassigns `.src` and calls `play()`. The semantics are
+// kill-and-re-tune, not stop. A station re-buffers (#1700's `mustRefetch` says
+// re-tuning IS the correct resume for one), and an UPLOAD restarts from the
+// beginning, unasked — that half is a defect in its own right and is not this
+// file's to fix. Recorded here so the next reader reasons about the code
+// rather than about this comment.
+//
+// Where "stop" genuinely lives, and neither of the two depends on where this
+// component is mounted: `closeAudio` (the ✕ — it clears the source, and the
+// effect below pauses and detaches on null), and the `identityScopedStore`
+// wrapper around the store, whose `onIdentityChange` nulls the same signal.
+// That second one is what keeps a logout or a token rotation from playing the
+// previous identity's audio over the new identity's shell.
 
 const formatTime = (seconds: number): string => {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
