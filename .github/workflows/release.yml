@@ -70,7 +70,7 @@ name: release
 # packaging README.
 #
 # This workflow runs on a `v*` tag push (the real release — every job PUBLISHES)
-# OR via manual workflow_dispatch, which has TWO mutually-exclusive modes:
+# OR via manual workflow_dispatch, which has THREE mutually-exclusive modes:
 #
 #   * REPAIR (default, `docker_validation=false`, #504): (re)build an EXISTING
 #     tag's deb/arch/rpm AND its ghcr images and upload to its release, no tag
@@ -97,6 +97,17 @@ name: release
 #     proves the build (arm64 QEMU + ABI-lockstep assertion + cic + mix release)
 #     and publishes NOTHING. deb/arch/rpm/publish are skipped. Run it with:
 #       gh workflow run release.yml --ref <branch> -f docker_validation=true
+#   * DEB DRY-RUN (`deb_validation=true`, #1714): the same idea for the package
+#     job — a ZERO-PUBLICATION validation of the deb job ITSELF, from the
+#     DISPATCHED ref, so its proofs can be exercised BEFORE a release leans on
+#     them. It exists because #1714 put the distribution-hop arms in that job,
+#     AHEAD of the uploads: unprovable, the first thing to discover a broken arm
+#     would be a blocked release cut. No tag is involved (`RELEASE_TAG` resolves
+#     to the dispatched ref, the two tag-comparing steps opt out) and
+#     arch/rpm/docker/publish are skipped — `deb` still uploads its artifact, so
+#     it is the `publish` exclusion, not an empty artifact set, that keeps
+#     branch-built packages off a real release. Run it with:
+#       gh workflow run release.yml --ref <branch> -f deb_validation=true
 #
 # The tag-push path is unchanged by the dry-run plumbing: the default publishes.
 # A normal main-branch push never triggers this workflow (ci.yml + integration.yml
@@ -122,6 +133,11 @@ on:
         required: false
         type: boolean
         default: false
+      deb_validation:
+        description: "Zero-publication validation of the .deb job: build + install the package from the DISPATCHED ref (branch) and run its proofs, including the #1714 distribution-hop arms. No tag involved, NOTHING published. Skips arch/rpm/docker/publish."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -133,16 +149,26 @@ permissions:
 jobs:
   deb:
     name: build + prove .deb (amd64)
-    # Runs on a tag push and on a repair dispatch (unchanged). Skipped ONLY on a
-    # docker-image dry-run dispatch (docker_validation=true), which validates the
-    # release-image job alone and must publish nothing.
+    # Runs on a tag push, on a repair dispatch, and — since #1714 — on a
+    # deb-validation dispatch, which needs no change here: that path sets
+    # docker_validation=false, so the condition already admits it. Skipped ONLY
+    # on a docker-image dry-run dispatch (docker_validation=true), which
+    # validates the release-image job alone and must publish nothing.
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation) }}
     runs-on: ubuntu-latest
     env:
       # The release tag, resolved from whichever trigger fired: the input on a
       # manual repair dispatch, else the pushed tag. Every tag reference in this
       # job uses it (never bare GITHUB_REF_NAME, which is `main` on a dispatch).
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      #
+      # #1714 — on a deb-validation dispatch there IS no tag: the point is to
+      # prove this job's own steps from a branch, before a release leans on
+      # them. `inputs.tag` is ignored there and this resolves to the dispatched
+      # ref, so the checkout below takes the BRANCH. The two steps that compare
+      # against a tag opt out explicitly rather than being fed a branch name
+      # and asked to pretend.
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && !inputs.deb_validation && inputs.tag || github.ref_name }}
+      DEB_VALIDATION: ${{ github.event_name == 'workflow_dispatch' && inputs.deb_validation }}
     steps:
       - name: Checkout (tags for #391 version derivation)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -159,8 +185,20 @@ jobs:
       - name: Verify the tag matches the VERSION file
         id: ver
         run: |
-          tag="${RELEASE_TAG#v}"
           srcv="$(infra/packaging/version.sh)"
+
+          # #1714 — a deb-validation dispatch builds a BRANCH: there is no tag
+          # to match, and matching a branch name against VERSION would fail for
+          # a reason that has nothing to do with what is being validated. The
+          # VERSION file is the single source either way (§ version.sh), so it
+          # supplies the number directly here.
+          if [ "$DEB_VALIDATION" = "true" ]; then
+            echo "deb-validation dispatch: no tag involved; version from VERSION ($srcv)"
+            echo "version=$srcv" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          tag="${RELEASE_TAG#v}"
           echo "tag=$tag VERSION=$srcv"
           if [ "$tag" != "$srcv" ]; then
             echo "::error::tag v$tag does not match the VERSION file ($srcv) — bump VERSION before cutting the tag"
@@ -217,7 +255,16 @@ jobs:
             exit 1
           fi
 
+      # #1714 — skipped on a deb-validation dispatch, and the reason is this
+      # step's own contract: #391 says a CLEAN TAG makes `Grappa.Version` report
+      # the bare `X.Y.Z`. A branch is by definition not that — `git describe
+      # --exact-match` finds nothing and the release correctly reports the
+      # unreleased `X.Y.Z-<sha>`. Asserting the bare form there would fail on
+      # the version machinery working exactly as designed. The sibling proof
+      # below (the nfpm package stamp) derives from VERSION, not from a tag, and
+      # so keeps running on both paths.
       - name: Prove the artifact reports the bare tag version
+        if: ${{ env.DEB_VALIDATION != 'true' }}
         run: |
           want="${{ steps.ver.outputs.version }}"
           # Sentinel-prefix the printed version so a stray stdout line from the
@@ -487,8 +534,10 @@ jobs:
 
   arch:
     name: build + prove Arch pkg (x86_64)
-    # See the deb job: skipped only on a docker-image dry-run dispatch.
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation) }}
+    # See the deb job: skipped on either dry-run dispatch — the docker-image one
+    # and, since #1714, the deb one (which proves the deb job alone and must
+    # publish nothing).
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && !inputs.deb_validation) }}
     runs-on: ubuntu-latest
     container: archlinux:latest
     env:
@@ -707,8 +756,9 @@ jobs:
 
   rpm:
     name: build + prove .rpm (x86_64)
-    # See the deb job: skipped only on a docker-image dry-run dispatch.
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation) }}
+    # See the deb job: skipped on either dry-run dispatch — the docker-image one
+    # and, since #1714, the deb one.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && !inputs.deb_validation) }}
     runs-on: ubuntu-latest
     # Pinned Fedora MAJOR (not :latest): a release artifact's glibc floor must
     # not move under us (#438 open-q2). The rule: the OLDEST still-supported
@@ -956,7 +1006,11 @@ jobs:
     #
     # A repair dispatch with an EMPTY tag input is not a repair: it falls through
     # to no job at all, rather than silently republishing main as some tag.
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag != '') }}
+    # #1714 adds one exclusion to the repair arm: a deb-validation dispatch
+    # proves the deb job alone and must not build images nobody asked for. The
+    # docker_validation arm is untouched — asking for both dry-runs at once is
+    # contradictory but harmless, since neither publishes anything.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && !inputs.deb_validation && inputs.tag != '') }}
     runs-on: ubuntu-latest
     # Job-level permissions REPLACE the workflow default (contents: write) for
     # this job — so re-grant `contents: read` for checkout and ADD
@@ -1241,7 +1295,11 @@ jobs:
     # obtained, this job FAILS. A smoke test that quietly passes having tested
     # nothing is worse than not having one, and a repair is precisely the run
     # you least want to take on trust: it publishes a mixed tree.
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && inputs.tag != '') }}
+    # #1714 adds one exclusion to the repair arm: a deb-validation dispatch
+    # proves the deb job alone and must not build images nobody asked for. The
+    # docker_validation arm is untouched — asking for both dry-runs at once is
+    # contradictory but harmless, since neither publishes anything.
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.docker_validation) || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && !inputs.deb_validation && inputs.tag != '') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1338,7 +1396,13 @@ jobs:
     # the attach step, not here, because it needs the downloaded asset set.
     # ALSO skipped on a docker-image dry-run dispatch (its needs are skipped and
     # there is nothing to publish) — else it would fail "no artifacts present".
-    if: ${{ !cancelled() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation)) }}
+    # 🔴 And, since #1714, on a deb-validation dispatch — where the exclusion is
+    # not about empty artifacts but about REACH: that path builds a BRANCH, and
+    # publishing would attach branch-built assets to a real release. `deb` DOES
+    # run there and does upload its artifact, so the "nothing downloaded" guard
+    # would not have caught it. This condition is the only thing standing
+    # between a validation run and a published release.
+    if: ${{ !cancelled() && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.docker_validation && !inputs.deb_validation)) }}
     runs-on: ubuntu-latest
     env:
       # The release to attach to — the input on a repair dispatch, else the
