@@ -939,6 +939,36 @@ describe("AudioMiniPlayer", () => {
       expect(screen.getByTestId("audio-mini-player-seek")).toBeInTheDocument();
     });
 
+    // #1704 — the SHIP ARGUMENT for Kohina, bound to the row that actually
+    // shipped rather than to a URL typed here.
+    //
+    // Kohina is the table's first Ogg Vorbis row, and per the vendored
+    // caniuse-lite iOS Safari does not decode Ogg Vorbis below 17.4 and is
+    // partial from 17.4 to 18.3. #1703's standing condition was that such a
+    // station must not ship while a stream that fails says nothing — so the
+    // condition is discharged by THIS behaviour, and if it ever regresses the
+    // row should come out of the table. A test tied to a hand-typed URL would
+    // keep passing after the row was renamed or dropped; this one reads the
+    // table.
+    it("names the failure for the curated Ogg station, whose population needs it", async () => {
+      const { RADIO_STATIONS } = await import("../lib/radioStations");
+      const ogg = RADIO_STATIONS.find((s) => s.streamUrl.endsWith(".ogg"));
+      if (ogg === undefined) throw new Error("the table no longer carries an ogg station");
+
+      render(() => <AudioMiniPlayer />);
+      playAudio(ogg.streamUrl, ogg.title);
+
+      failWith(4);
+
+      expect(screen.getByTestId("audio-mini-player-error")).toHaveTextContent(
+        audioFailureLabel("unsupported"),
+      );
+      expect(screen.getByTestId("audio-mini-player-label")).toHaveTextContent(ogg.title);
+      // And it is not wearing the file chrome the measurement found: no
+      // scrubber over a stream that produced nothing.
+      expect(screen.queryByTestId("audio-mini-player-seek")).toBeNull();
+    });
+
     it("still reads ▶, and pressing it is still the retry", () => {
       // Deliberately unchanged. The toggle was never the lie — it says "not
       // playing", which is true, and #1700 already made pressing it re-fetch.
