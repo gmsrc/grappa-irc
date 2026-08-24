@@ -62063,19 +62063,40 @@ restores contiguity as a property of every path — `loadMore`, `loadNewer`,
 a non-contiguous window for the reason it states in place: two regions
 abutting as if they were consecutive render "a silent hole".
 
-**What this does NOT settle, and it is written down because the branch must
-not be read as closing it.** #1229 did not arrive at the excision by
-accident: it considered this exact collapse and rejected it, and left an e2e
-(`issue1229-unread-retention-bound.spec.ts`) whose moduledoc says so —
-dropping "everything but the newest page" *"would have satisfied (2) while
-deleting the screen out from under a reader scrolled up in history"* — with
-assertions pinning that the read-context row survives and `scrollTop` does
-not move. So the cure trades #1538's victim (a reader scrolled DOWN past the
-divider, into the unread region) for #1229's victim (a reader parked ABOVE
-it, in read history). Both failures have one root: the store picks what to
+### The decision this reverses, and the ruling that authorised it
+
+#1229 did not arrive at the excision by accident: it considered this exact
+collapse and rejected it, and left an e2e
+(`issue1229-unread-retention-bound.spec.ts`) whose moduledoc said so in
+place — dropping "everything but the newest page" *"would have satisfied (2)
+while deleting the screen out from under a reader scrolled up in history"* —
+with assertions pinning that the read-context row survives and `scrollTop`
+does not move.
+
+So the two are a straight trade, and the trade is worth stating because
+neither side is free. #1229 protected the reader parked ABOVE the divider, in
+read history; the cost it accepted, without knowing it, was the reader
+scrolled DOWN past the divider, into the unread region, whose screen the
+excision cuts out. Both failures have ONE root: **the store picks what to
 destroy using the read cursor as a proxy for the viewport, and the proxy is
-wrong for whichever reader is on the other side of the divider. A rule that
-serves both has to prune the end FURTHEST from the viewport — still prefix or
+wrong for whichever reader is on the far side of the divider.** A rule that
+serves both would prune the end FURTHEST from the viewport — still prefix or
 suffix, never interior, both ends re-pageable by `loadMore` / `loadNewer` —
-which needs a viewport signal the store does not have today. That is the
-open question, and it is vjt's to rule on.
+which needs a viewport signal the store does not have and which the DOM-free
+seam (`lib/scrollback.ts` says WHEN, the pane reads WHAT) would have to be
+reopened to supply.
+
+Put to vjt as that trade. Ruled, 2026-08-24:
+
+> "basta che lo scroll sia contiguo e non ci siano buchi"
+
+**That sentence is the acceptance criterion, not a side condition, and it is
+why the structural invariant above is load-bearing rather than good
+practice.** The ruling does not say "prefer contiguity"; it makes contiguity
+the thing the cure is accepted FOR. The reference-equality contiguity sweep
+on `capScrollbackRing` and the e2e's run-check against the server's own
+ordering are therefore not extra coverage — they are the two places the
+criterion is demonstrated to hold, one per plane, and the global-id finding
+above is precisely why neither could be replaced by a check made afterwards.
+The #1229 e2e was rewritten to that criterion rather than deleted, with its
+former contract quoted in its moduledoc so the reversal stays legible.

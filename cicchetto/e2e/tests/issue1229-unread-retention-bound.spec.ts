@@ -14,6 +14,37 @@
 // exactly this shape: divider suppressed, "N unread — jump back" banner,
 // `jumpToUnread` rebuilding the region from the server.
 //
+// ── #1538 REVERSED points 3 and 4 of this spec. Read this before the list ──
+//
+// This spec used to pin the opposite of what it pins now, and the history
+// matters because the reversal is a ruling, not a refactor.
+//
+// Points 3 and 4 below USED TO read: "the OLDEST unread row is gone from the
+// DOM, and the rows the operator is looking at are NOT", and "`scrollTop` is
+// preserved across the bite" — with the note that this "distinguishes the
+// implementation that shipped from the simpler one that did not: dropping
+// 'everything but the newest page' would have satisfied (2) while deleting
+// the screen out from under a reader scrolled up in history."
+//
+// What that traded away is what #1538 came back as. Keeping the read context
+// while excising the oldest unread means lifting a block out of the INTERIOR
+// of the loaded range, and the read cursor was standing in for "where the
+// operator is looking". For the reader who has scrolled DOWN past the divider
+// — into the unread region — the rows "just under the divider" are the rows on
+// screen, and the excision cut them out from under them. Two reporters,
+// #sniffo, nine rows out of the middle of a rendered range, unrepairable by
+// scrolling up (`loadMore` pages before `rows[0]`, which sits ABOVE the hole).
+//
+// vjt's ruling on #1538, and it is the acceptance criterion this spec now
+// verifies rather than a preference it accommodates:
+//
+//     "basta che lo scroll sia contiguo e non ci siano buchi"
+//
+// So the bound now collapses to a contiguous tail window, the read context
+// goes with the prefix, and the viewport DOES move — an announced loss, on a
+// pane that is simultaneously raising "N unread — jump back". The assertions
+// below are that criterion, checked from outside.
+//
 // ── What this spec pins, and why each assertion is here ──────────────────
 //
 // The gesture is ONE live PRIVMSG, not a flood. The cursor is planted so the
@@ -27,17 +58,19 @@
 //      (a cold far-behind resume, #693) and the spec would test nothing.
 //   2. After it: the bar is up with the honest total, and the divider is gone.
 //      That is the state transition, seen from outside.
-//   3. The OLDEST unread row is gone from the DOM, and the rows the operator
-//      is looking at are NOT. This is the one assertion that distinguishes the
-//      implementation that shipped from the simpler one that did not: dropping
-//      "everything but the newest page" would have satisfied (2) while
-//      deleting the screen out from under a reader scrolled up in history.
-//      The absence assertion is only meaningful because the list is not
-//      virtualised — every retained row is in the DOM whatever the scroll
-//      position, which is the same measurement that motivated the fix.
-//   4. `scrollTop` is preserved across the bite, within the tolerance the
-//      sibling scroll specs use. Rows leaving from BELOW the fold must not
-//      move the viewport.
+//   3. THE RULING: what remains in the DOM is a CONTIGUOUS run of the
+//      channel's rows as the server orders them — no hole, at any width.
+//      Checked against `fetchAllMessagesAsc` rather than by id arithmetic,
+//      and that is load-bearing: `messages.id` is a GLOBAL autoincrement, so
+//      consecutive rows of one channel carry non-consecutive ids and an
+//      id-gap scan cannot tell a punched hole from ordinary numbering. The
+//      server's own ordering is the only thing that can. The assertion is
+//      only meaningful because the list is not virtualised — every retained
+//      row is in the DOM whatever the scroll position, which is the same
+//      measurement that motivated #1229 in the first place.
+//   4. The oldest unread row AND the read-context row are both gone: the drop
+//      is a PREFIX. Pinning both ends is what separates the collapse from an
+//      excision that merely happened to take the row this spec sampled.
 //
 // Scrolling up is also what keeps the precondition alive: `setCursorIfAdvances`
 // is forward-only, so with the pane scrolled into the read context the settle
@@ -135,7 +168,7 @@ const scrollGeometry = (page: import("@playwright/test").Page) =>
 test.describe("#1229 — the unread retention bound", () => {
   test.use({ viewport: { width: 800, height: 400 } });
 
-  test("crossing one page of unread prunes from the divider and raises the far-behind bar", async ({
+  test("crossing one page of unread collapses to a CONTIGUOUS tail window and raises the far-behind bar (#1538)", async ({
     page,
   }) => {
     if (!CHANNEL) throw new Error("AUTOJOIN_CHANNELS empty");
@@ -235,16 +268,33 @@ test.describe("#1229 — the unread retention bound", () => {
       await expect(bar).toContainText(String(UNREAD_BOUND + 1));
       await expect(marker).toHaveCount(0);
 
-      // (3) pruned from the divider, not from the screen
+      // (4) a PREFIX drop: both the oldest unread AND the read context above
+      // it are gone. The live row that crossed the ceiling is still there —
+      // the tail is never what leaves.
       await expect(oldestUnreadLine).toHaveCount(0);
-      await expect(readContextLine).toHaveCount(1);
+      await expect(readContextLine).toHaveCount(0);
       await expect(
         page.locator('.scrollback-line:has-text("the row that crosses the ceiling")'),
       ).toHaveCount(1);
 
-      // (4) the viewport did not move
-      const after = await scrollGeometry(page);
-      expect(Math.abs(after.scrollTop - before.scrollTop)).toBeLessThanOrEqual(SCROLL_TOLERANCE_PX);
+      // (3) THE RULING — "basta che lo scroll sia contiguo e non ci siano
+      // buchi". What the pane still holds must be an unbroken run of the
+      // channel as the server orders it: take the DOM's ids, find where the
+      // first one sits in the server's list, and require the rest to follow it
+      // one for one. A hole anywhere inside the retained range fails here, and
+      // nothing weaker can see one (see the moduledoc on global ids).
+      const serverIds = (await fetchAllMessagesAsc(vjt.token, NETWORK_SLUG, CHANNEL)).map(
+        (r) => r.id,
+      );
+      const domIds = await page.$$eval(".scrollback-line[data-msg-id]", (els) =>
+        els.map((el) => Number((el as HTMLElement).dataset.msgId)),
+      );
+      expect(domIds.length).toBeGreaterThan(0);
+      const start = serverIds.indexOf(domIds[0] as number);
+      expect(start, "the pane's oldest row is not one the server served").toBeGreaterThanOrEqual(0);
+      expect(domIds, "the retained range has a hole in it").toEqual(
+        serverIds.slice(start, start + domIds.length),
+      );
     } finally {
       await peer.part(CHANNEL, "done");
     }
