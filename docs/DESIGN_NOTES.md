@@ -61107,10 +61107,65 @@ no workflow in this repo had ever run `systemctl` or probed `/healthz` —
 zero hits across `.github/workflows/*.yml`. The offline arms are free;
 the live arm is scaffolding, and saying so cost one grep.
 
-### Limits, stated rather than discovered later
+### A gate you cannot execute is not a gate
 
-`release.yml` fires on a **tag**, so these arms prove the hop at
-release-cut time and not on the pull request that changes it. And GitHub
-offers no FreeBSD runner — every `runs-on:` in this repo is
-`ubuntu-latest` — so the bastille jail keeps its manual probe. Both are
-accepted, neither is an oversight.
+The first cut of this shipped unexecuted, with the limit written down
+honestly — `release.yml` fires on a tag, so the arms would first run
+during a release. That honesty was not enough, and the ruling says why:
+the arms sit AHEAD of the uploads, so the first person to learn one was
+broken would be whoever cuts the next release, holding a blocked cut and
+no explanation. Writing a limit down does not pay for it.
+
+The existing dispatch is not the way out, measured: the repair path
+checks out the TAG's tree, the newest tag is `v1.3.1`, and
+`live_node.ex` does not exist there — it would build a package with no
+transport in it and fail all three arms for a reason that is not a
+defect. Worse, it reaches `publish`, which runs even on a red leg, and
+would re-attach assets to a release that is already out.
+
+So `deb_validation` was added: the twin of `docker_validation`, which is
+already exactly this shape for the image job — a zero-publication dry run
+of the deb job ITSELF, from the dispatched ref. Not new machinery; the
+pattern was in the file. Five points, all inside `release.yml`: the
+input; `RELEASE_TAG` resolving to the dispatched ref plus a
+`DEB_VALIDATION` flag; the tag/VERSION gate taking its number from the
+file; the bare-tag version proof opting out (a branch is not a clean tag,
+and #391's contract is about clean tags — asserting the bare form there
+would fail on the version machinery working as designed); and
+arch/rpm/docker/smoke/publish skipping. The deb job's own `if:` needed
+none — that path sets `docker_validation=false`, which it already admits.
+
+**The `publish` exclusion is the load-bearing one, and it is not about
+empty artifacts.** `deb` DOES run on this path and DOES upload, so the
+"nothing downloaded" guard would not have caught it. That one condition
+is the whole distance between a validation run and branch-built packages
+on a real release.
+
+The tag-push path is unchanged BY CONSTRUCTION rather than by review:
+`github.event_name == 'push'` is the first disjunct of every condition
+touched, so it short-circuits before any new term is evaluated.
+
+Then the arms were run — [run
+32706000296](https://github.com/vjt/grappa-irc/actions/runs/32706000296),
+`deb` success, every other job skipped, no release touched:
+
+```
+arm 1  epmd: not running (arm premise holds)
+       Protocol 'inet_tcp': register/listen error: econnrefused
+       the binding is PARKED: nothing is listening on epmd…   → 'parked'
+arm 2  epmd: running, no node registered (arm premise holds)
+       the binding is PARKED: the live node did not answer…   → 'parked'
+arm 3  service: healthy (arm premise holds)
+       started a session on the live node                     → 'connected'
+```
+
+Arm 3 landing on `connected` rather than `failing` is exactly why that
+assertion accepts both: the row had not settled when the query ran, and a
+slower runner catches the other value. Pinning either would have been a
+race dressed as a check.
+
+### The limit that stands
+
+GitHub offers no FreeBSD runner — every `runs-on:` in this repo is
+`ubuntu-latest` — so the bastille jail keeps its manual probe. Accepted,
+not an oversight.

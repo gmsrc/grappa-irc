@@ -204,12 +204,28 @@ never the exit status, which is 0 by design (above). The two remaining
 transport outcomes, `:no_release_node` and `:distribution_disabled`, are
 refusals taken before any I/O on one environment variable and stay in
 `test/grappa/release/live_node_test.exs`: the substrate cannot make them
-any truer. **Two limits, both deliberate.** The arms run on a TAG (that
-is when `release.yml` fires), so a change to the hop is proven at
-release-cut time and not on the pull request that makes it. And GitHub
-offers no FreeBSD runner — every `runs-on:` in this repo is
-`ubuntu-latest` — so the bastille jail stays covered by the manual probe
-alone.
+any truer.
+
+**Running them without cutting a tag.** `release.yml` fires on a `v*`
+tag, so left alone these arms would first execute during a release — and
+they sit AHEAD of the uploads, so a broken one blocks that release. The
+`deb_validation` dispatch is the door out of that: a zero-publication dry
+run of the deb job itself, from a branch.
+
+```
+gh workflow run release.yml --ref <branch> -f deb_validation=true
+```
+
+No tag is involved (`RELEASE_TAG` resolves to the dispatched ref and the
+two tag-comparing steps opt out) and `arch` / `rpm` / `docker` / `smoke` /
+`publish` all skip. The `publish` exclusion is the load-bearing one: `deb`
+DOES run and DOES upload its artifact there, so without it a branch-built
+package would be attached to a real release. Sibling of the older
+`docker_validation`, same posture.
+
+**One limit stands.** GitHub offers no FreeBSD runner — every `runs-on:`
+in this repo is `ubuntu-latest` — so the bastille jail stays covered by
+the manual probe alone.
 
 ### Per-server outbound source address (`--source`)
 
