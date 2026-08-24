@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@solidjs/testing-library";
 import type { Channel } from "phoenix";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdminNetwork, WireAdminEvent } from "../lib/api";
+import { NETWORKS_NETWORK_SERVICES_FLAVOR } from "../lib/wireTypes";
 
 vi.mock("../lib/auth", () => ({
   token: () => "test-bearer",
@@ -825,6 +826,261 @@ describe("AdminNetworksTab", () => {
       fireEvent.click(delBtn);
       await waitFor(() => {
         expect(api.adminDeleteFeaturedChannel).toHaveBeenCalledWith("test-bearer", BAHAMUT.id, 1);
+      });
+    });
+  });
+
+  // #1760 — the three settings the backend has whitelisted since #211
+  // phase 3 but the pane could not reach. They ride the SAME draft +
+  // per-row Save as the caps (one dirty check, one PATCH, only the
+  // changed keys), not the fire-immediately toggle the servers and
+  // featured sub-tables use. That is not stylistic: `visitor_autoconnect`
+  // has a documented ordering hazard against `visitor_enabled`, and only
+  // a single PATCH carrying both can flip them without the incoherent
+  // pair ever being written.
+  describe("visitor allowlist + services flavor (#1760)", () => {
+    const VISITOR_ON: AdminNetwork = {
+      ...BAHAMUT,
+      id: 9,
+      slug: "visitor-on",
+      services_flavor: "azzurra",
+      visitor_enabled: true,
+      visitor_autoconnect: true,
+    };
+
+    it("seeds the two toggles and the flavor select from the server row", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([VISITOR_ON, BAHAMUT]);
+
+      render(() => <AdminNetworksTab />);
+
+      const on = (await screen.findByTestId(
+        `admin-network-visitor-enabled-${VISITOR_ON.slug}`,
+      )) as HTMLInputElement;
+      expect(on.checked).toBe(true);
+      const auto = screen.getByTestId(
+        `admin-network-visitor-autoconnect-${VISITOR_ON.slug}`,
+      ) as HTMLInputElement;
+      expect(auto.checked).toBe(true);
+      const flavor = screen.getByTestId(
+        `admin-network-services-flavor-${VISITOR_ON.slug}`,
+      ) as HTMLSelectElement;
+      expect(flavor.value).toBe("azzurra");
+
+      // A default row: both false, flavor unclassified (null → "").
+      const off = screen.getByTestId(
+        `admin-network-visitor-enabled-${BAHAMUT.slug}`,
+      ) as HTMLInputElement;
+      expect(off.checked).toBe(false);
+      const offFlavor = screen.getByTestId(
+        `admin-network-services-flavor-${BAHAMUT.slug}`,
+      ) as HTMLSelectElement;
+      expect(offFlavor.value).toBe("");
+    });
+
+    it("offers every wire flavor plus the unclassified blank, from the generated SSOT", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT]);
+
+      render(() => <AdminNetworksTab />);
+
+      const flavor = (await screen.findByTestId(
+        `admin-network-services-flavor-${BAHAMUT.slug}`,
+      )) as HTMLSelectElement;
+      const values = Array.from(flavor.options).map((o) => o.value);
+      // The blank is `services_flavor: null` — a real, distinct wire value
+      // (`network.ex`: nullable, "never classified"), not a placeholder.
+      expect(values).toEqual(["", ...NETWORKS_NETWORK_SERVICES_FLAVOR]);
+    });
+
+    it("ticking visitor_enabled enables Save and PATCHes ONLY that key", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks)
+        .mockResolvedValueOnce([BAHAMUT])
+        .mockResolvedValueOnce([{ ...BAHAMUT, visitor_enabled: true }]);
+      vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
+        ...BAHAMUT,
+        visitor_enabled: true,
+      });
+
+      render(() => <AdminNetworksTab />);
+
+      const toggle = (await screen.findByTestId(
+        `admin-network-visitor-enabled-${BAHAMUT.slug}`,
+      )) as HTMLInputElement;
+      const save = screen.getByTestId(`admin-network-save-${BAHAMUT.slug}`) as HTMLButtonElement;
+      expect(save.disabled).toBe(true);
+
+      fireEvent.click(toggle);
+      expect(save.disabled).toBe(false);
+      fireEvent.click(save);
+
+      await waitFor(() => {
+        expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
+          visitor_enabled: true,
+        });
+      });
+      await waitFor(() => {
+        const post = screen.getByTestId(`admin-network-save-${BAHAMUT.slug}`) as HTMLButtonElement;
+        expect(post.disabled).toBe(true);
+      });
+    });
+
+    it("choosing a flavor PATCHes it; choosing the blank PATCHes null", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT]);
+      vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
+        ...BAHAMUT,
+        services_flavor: "atheme",
+      });
+
+      render(() => <AdminNetworksTab />);
+
+      const flavor = (await screen.findByTestId(
+        `admin-network-services-flavor-${BAHAMUT.slug}`,
+      )) as HTMLSelectElement;
+      fireEvent.change(flavor, { target: { value: "atheme" } });
+      fireEvent.click(screen.getByTestId(`admin-network-save-${BAHAMUT.slug}`));
+
+      await waitFor(() => {
+        expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
+          services_flavor: "atheme",
+        });
+      });
+    });
+
+    it("clearing an existing flavor back to unclassified PATCHes services_flavor null", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([VISITOR_ON]);
+      vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
+        ...VISITOR_ON,
+        services_flavor: null,
+      });
+
+      render(() => <AdminNetworksTab />);
+
+      const flavor = (await screen.findByTestId(
+        `admin-network-services-flavor-${VISITOR_ON.slug}`,
+      )) as HTMLSelectElement;
+      fireEvent.change(flavor, { target: { value: "" } });
+      fireEvent.click(screen.getByTestId(`admin-network-save-${VISITOR_ON.slug}`));
+
+      await waitFor(() => {
+        expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", VISITOR_ON.slug, {
+          services_flavor: null,
+        });
+      });
+    });
+
+    // The invariant, half one: autoconnect is a SUBSET of enabled
+    // (`networks.ex` `list_visitor_autoconnect/0` — the login filter ANDs
+    // the two and drops the odd pair as a no-op). Arming the subset while
+    // the superset is off is not an error the server reports, it is a
+    // silent nothing — so the control must not be reachable.
+    it("cannot arm autoconnect on a network that does not accept visitors", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT]);
+
+      render(() => <AdminNetworksTab />);
+
+      const auto = (await screen.findByTestId(
+        `admin-network-visitor-autoconnect-${BAHAMUT.slug}`,
+      )) as HTMLInputElement;
+      expect(auto.disabled).toBe(true);
+
+      // Ticking visitor_enabled in the DRAFT — before any Save — is
+      // enough to unlock it. Requiring a round-trip first would make
+      // "enable a network and auto-connect it" a two-Save chore.
+      fireEvent.click(screen.getByTestId(`admin-network-visitor-enabled-${BAHAMUT.slug}`));
+      expect(auto.disabled).toBe(false);
+    });
+
+    // The invariant, half two: revoking the superset must take the subset
+    // with it, in the SAME body. Sending `visitor_enabled: false` alone
+    // would leave `visitor_autoconnect: true` behind in the row — exactly
+    // the stranded pair, reachable by one careless click.
+    it("revoking visitor access clears autoconnect in the same PATCH", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([VISITOR_ON]);
+      vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
+        ...VISITOR_ON,
+        visitor_enabled: false,
+        visitor_autoconnect: false,
+      });
+
+      render(() => <AdminNetworksTab />);
+
+      const enabled = (await screen.findByTestId(
+        `admin-network-visitor-enabled-${VISITOR_ON.slug}`,
+      )) as HTMLInputElement;
+      const auto = screen.getByTestId(
+        `admin-network-visitor-autoconnect-${VISITOR_ON.slug}`,
+      ) as HTMLInputElement;
+      expect(auto.checked).toBe(true);
+
+      fireEvent.click(enabled);
+
+      // Visibly cleared, not merely dropped from the body on the way out —
+      // the operator has to SEE what their click did before they commit it.
+      expect(auto.checked).toBe(false);
+      expect(auto.disabled).toBe(true);
+
+      fireEvent.click(screen.getByTestId(`admin-network-save-${VISITOR_ON.slug}`));
+      await waitFor(() => {
+        expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", VISITOR_ON.slug, {
+          visitor_enabled: false,
+          visitor_autoconnect: false,
+        });
+      });
+    });
+
+    it("carries a cap edit and a toggle in one body when both are dirty", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT]);
+      vi.mocked(api.adminPatchNetworkSettings).mockResolvedValue({
+        ...BAHAMUT,
+        visitor_enabled: true,
+        max_per_ip: 9,
+      });
+
+      render(() => <AdminNetworksTab />);
+
+      const perIp = (await screen.findByTestId(
+        `admin-network-max-per-ip-${BAHAMUT.slug}`,
+      )) as HTMLInputElement;
+      fireEvent.input(perIp, { target: { value: "9" } });
+      fireEvent.click(screen.getByTestId(`admin-network-visitor-enabled-${BAHAMUT.slug}`));
+      fireEvent.click(screen.getByTestId(`admin-network-save-${BAHAMUT.slug}`));
+
+      await waitFor(() => {
+        expect(api.adminPatchNetworkSettings).toHaveBeenCalledWith("test-bearer", BAHAMUT.slug, {
+          visitor_enabled: true,
+          max_per_ip: 9,
+        });
+      });
+    });
+
+    it("refresh discards a toggle draft the operator never saved", async () => {
+      const api = await import("../lib/api");
+      vi.mocked(api.adminListNetworks).mockResolvedValue([BAHAMUT]);
+
+      render(() => <AdminNetworksTab />);
+
+      const toggle = (await screen.findByTestId(
+        `admin-network-visitor-enabled-${BAHAMUT.slug}`,
+      )) as HTMLInputElement;
+      fireEvent.click(toggle);
+      expect(toggle.checked).toBe(true);
+
+      fireEvent.click(screen.getByTestId("admin-networks-refresh"));
+      await waitFor(() => {
+        expect(api.adminListNetworks).toHaveBeenCalledTimes(2);
+      });
+      await waitFor(() => {
+        const post = screen.getByTestId(
+          `admin-network-visitor-enabled-${BAHAMUT.slug}`,
+        ) as HTMLInputElement;
+        expect(post.checked).toBe(false);
       });
     });
   });
