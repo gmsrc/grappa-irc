@@ -61853,3 +61853,117 @@ of inferred from the first. And a HIDDEN bar on a phone: the rail is
 off-screen there, so the OS lock screen is the only surface carrying the
 failure. Auto-showing the bar was considered and rejected — the operator
 asked for it to be gone, and cic does not originate state.
+<!-- entry #1704 -->
+
+---
+
+## 2026-08-24 — #1704: Kohina ships, and the table learns to say "this station has no logo"
+
+Two decisions, and the second one outlives the row that forced it.
+
+**THE ROW.** Kohina (hand-picked chiptunes — SID, Amiga, Atari ST,
+arcade, PC) is the table's first Ogg Vorbis station and its second
+non-SomaFM one. Measured 2026-08-24 before being written, as every row
+here is: HTTP 200, `Content-Type: audio/ogg`, Icecast 2.4.4,
+`Access-Control-Allow-Origin: *`, `icy-name: Kohina - Old School Game
+and Demo Music`, 312 KB pulled with a ranged GET before the client
+timeout — the timeout itself being the evidence the source is endless.
+
+**The URL is not the one requested, and the decisive reason is OURS.**
+The request named `http://kohina.duckdns.org:8000/stream.ogg`. Our
+`media-src 'self' blob: https:` is SCHEME-scoped, so an http stream on
+an https page is refused before anything upstream is consulted, and
+there is no TLS on that port to switch to. Upstream's own home page
+links an https playlist whose single line is the mirror now baked in.
+⚠️ Neither the http endpoint nor that playlist is reachable from the
+worker's sandbox (every attempt off :443 answers `Recv failure: Socket
+is not connected`), so the 2026-08-23 measurements of them stand
+unrefuted rather than re-confirmed — and the CSP argument above needs
+neither, which is why it is the one recorded.
+
+**The codec is read off the BYTES, not the mime type:** the body opens
+`OggS` then `\x01vorbis` — Ogg Vorbis, 44.1 kHz stereo. **A correction
+to the issue's own text while we are here:** the vendored caniuse-lite
+(1.0.30001791) does NOT say iOS fails to decode Ogg Vorbis below 18.4.
+It says `y` from 18.4, `a` — partial, note #2, whose TEXT the packed
+`caniuse-lite` data does not carry, so we cannot say partial HOW — for
+17.4 through 18.3, and a flat `n` only at 17.3 and below. The
+population for whom this row is guaranteed silent is therefore iOS
+≤ 17.3, and 17.4–18.3 is a year-wide band we can claim nothing about in
+either direction. It changes no decision here; it changes what may be
+written down as measured.
+
+**Why it ships anyway, and the proof rather than the assumption.**
+#1703's standing condition was that a station which cannot play must
+not ship *while a stream that fails says nothing to anybody*. #1744
+built the saying-so, so the condition is discharged — but discharged by
+a BEHAVIOUR, which means it can regress, so it is pinned twice: a unit
+test that tunes the table's real Ogg row and asserts the notice names
+the unsupported reason, and an e2e that serves undecodable bytes at
+Kohina's real URL and asserts, in a real browser and on both configured
+projects (Chromium and WebKit-on-iPhone-15), that the element populated
+`MediaError` and that the transport, the rail and the station name all
+report it. ⚠️ What that green establishes is a CONDITIONAL — given the
+element reports a media error, the operator is told — and NOT that iOS
+below 18.4 fails on Kohina. That second claim is caniuse's and is not
+measurable at any browser version CI can drive.
+
+**THE PART THAT OUTLIVES THE ROW: `logoUrl` is nullable.** Kohina
+publishes no station artwork; `www.kohina.com` serves only favicons, the
+largest being a 192px PNG. Pointing the field at that favicon was
+refused twice over, and the second reason is the interesting one: a
+favicon is not a station logo, **and because it ANSWERS 200 no runtime
+error handler would ever fire** — the picker would render the wrong
+image silently, forever. An unverifiable claim that cannot even fail
+loudly is exactly what #1696 was filed about. So the absence is
+declared in the TYPE, the shape `songsUrl` already had since #1698, with
+the same positive control beside it (`carries a logo for at least one
+station`) because every rule that skips a null reports green having
+compared nothing when the field goes uniformly null.
+
+**The placeholder, and one deliberate deviation from the ruling.** vjt
+ruled "a set of random placeholders of our own, SVG or similar", "ma che
+sian consistenti", readable in both themes. Built as a hue-derived
+opaque tile carrying the station's initial — NOT a hand-written set,
+because a set needs a size K nobody can justify and collides the moment
+the table outgrows it. The deviation buys something a set could not:
+saturation and lightness are FIXED and only the hue turns, so contrast
+against the glyph cannot depend on which station this is, and the test
+walks **all 360 hues** instead of trusting a swatch. That is also how
+the lightness was chosen rather than picked — 31 % is where the worst
+hue (60°, yellow) reaches 4.71:1, clearing the 4.5:1 bar for NORMAL text
+while the bar that actually applies to a 64px mark is 3:1; at 32 % it
+measures 4.47:1 and the test goes red. "Reads in both themes" is
+structural, not tuned: the tile is OPAQUE, so the page behind it never
+gets a vote. The colour keys on `id` (stable) and the letter on `title`
+(display) — two jobs, two fields, so renaming a station cannot repaint
+it.
+
+**One stand-in, two different facts, and one component.** `logoUrl ===
+null` is a DECLARED absence; `onError` is a URL we believed in that
+broke at runtime — the other half of the #1703 ruling, and until now
+both render sites were a bare `<img>` whose 404 drew the browser's
+broken-image glyph. They now share one `StationLogo`, which also ends
+the two hand-copied `<img>` tags that were free to drift. The swap is a
+SIGNAL and not `e.currentTarget.src = …`: rewriting the src from inside
+the handler re-enters it if the replacement also fails, and the guard
+against that loop is a comparison somebody has to keep right, whereas a
+second failure writing `true` over `true` re-renders nothing.
+
+**Where the placeholder deliberately does NOT go: the OS lock screen.**
+A logo-less station hands the platform an empty `artwork`, which is the
+same answer an upload already gets there and for the same reason — the
+OS then keeps the app icon, a real image at every size it asks for. Our
+tile is an SVG built for one 120px slot in the rail, and `MediaImage`
+support for SVG is not something this codebase has measured on any
+platform; sending nothing arrives at the same place without the claim.
+
+**Two smaller things, recorded so they are not rediscovered as new.**
+`bun run check:radio` skips a null logo and now prints a LOGO
+denominator beside the feed one — without it a table whose logos had all
+gone null would report "21 stations checked, 0 broken" having fetched
+nothing. And Kohina's vendor is deliberately ABSENT from
+`radioStations.test.ts`'s front-door map: upstream's stable entry point
+is an `.m3u` DOCUMENT rather than a redirecting host, the map cannot
+express that shape, and inventing a front door for it would be the
+unverifiable claim the map exists to prevent.
