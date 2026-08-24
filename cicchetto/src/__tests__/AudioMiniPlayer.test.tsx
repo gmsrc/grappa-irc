@@ -20,6 +20,33 @@ beforeEach(() => {
   // #1700 — held, not discarded: `load()` is the only call that re-fetches, so
   // the resume path is now asserted through it.
   loadSpy = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  // #1701 — an OFFLINE `fetch`, for every test in this file, installed before
+  // any of them can tune anything.
+  //
+  // Two tests here call `playAudio("https://ice.somafm.com/groovesalad-128-mp3",
+  // …)` to exercise the transport, and neither of them is about the feed — but
+  // `tunedStation()` is DERIVED, not declared: `radio.ts` matches
+  // `activeAudio()?.href` against the curated table, so those two calls tune
+  // Groove Salad as far as the rest of the app is concerned. `nowPlaying.ts`'s
+  // effect then polls `api.somafm.com` IMMEDIATELY, and in CI — where a network
+  // exists and this sandbox's does not — that is a live third-party request
+  // issued from a unit test. Measured: the run that caught it reported
+  // `Expected "Trestal — A Land Unknown", Received "Alex Cortiz — Paluka days"`,
+  // a real track that was genuinely on the air.
+  //
+  // It also RACED. The in-flight real answer clears the poll's own guard
+  // (`tunedStation()?.songsUrl !== url`) because the feed test tunes the SAME
+  // station, so it lands on top of the stub. That guard is not the defect and
+  // is deliberately left alone — it is asking the right question; the barrier
+  // below is what let a stale answer reach it at the wrong moment.
+  //
+  // Rejecting rather than answering `ok: false`: both leave `track` null via the
+  // poll's catch, and "there is no network here" is the honest one to model. A
+  // test that WANTS a feed says so by overriding this — see `tuneWithFeed`.
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockRejectedValue(new Error("offline: a unit test must not reach the network")),
+  );
   closeAudio();
   showPlayer();
 });
@@ -275,8 +302,18 @@ describe("AudioMiniPlayer", () => {
       render(() => <AudioMiniPlayer />);
       tuneStation(station);
 
+      // #1701 — wait for the STUBBED TEXT, not for the element.
+      //
+      // Presence is not the state this helper promises. Any answer at all mounts
+      // the span, so a barrier keyed on `toBeInTheDocument` returns on WHICHEVER
+      // read landed first and hands the caller a row it never checked the
+      // provenance of. With the offline default above there is only one possible
+      // answer left — but a barrier that is correct only because nothing else
+      // can happen is one leak away from deciding by timing again, and this one
+      // already did once (a live SomaFM track, in CI). Keyed on the text, the
+      // helper cannot return until the feed IT installed is the one on screen.
       await vi.waitFor(() =>
-        expect(screen.getByTestId("audio-mini-player-track")).toBeInTheDocument(),
+        expect(screen.getByTestId("audio-mini-player-track")).toHaveTextContent(TRACK),
       );
       return station;
     };
