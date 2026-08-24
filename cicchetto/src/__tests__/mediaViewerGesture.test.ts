@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vite
 import {
   bindDismissGesture,
   DISMISS_COMMIT_FRACTION,
+  type DismissDirections,
   DRAGGING_CLASS,
 } from "../lib/mediaViewerGesture";
 import { fireTouch, fireTouchAt } from "./helpers/touchEvents";
@@ -29,12 +30,14 @@ let onProgress: Mock<(dy: number) => void>;
 let onCommit: Mock<() => void>;
 let onRelease: Mock<() => void>;
 let canDismiss: Mock<() => boolean>;
+let directions: DismissDirections;
 let dispose: () => void;
 
 function bind(): void {
   dispose = bindDismissGesture(modal, {
     viewportHeight: () => VH,
     canDismiss,
+    directions,
     onProgress,
     onCommit,
     onRelease,
@@ -52,6 +55,7 @@ beforeEach(() => {
   onCommit = vi.fn<() => void>();
   onRelease = vi.fn<() => void>();
   canDismiss = vi.fn<() => boolean>(() => true);
+  directions = "both";
   bind();
 });
 
@@ -178,5 +182,40 @@ describe("bindDismissGesture — lifecycle", () => {
     dragVertically(media, COMMIT_PX + 20, 2_000);
     expect(onCommit).not.toHaveBeenCalled();
     dispose = (): void => {}; // afterEach must not double-dispose
+  });
+});
+
+// #1764 — a scrolling body (the .txt/.md source pane) cannot share the vertical
+// axis with a gesture that commits in BOTH directions: at the top of the pane
+// an upward drag means "read on", and dismissing there would take the primary
+// interaction away. `directions: "down"` is that constraint, in the binder
+// rather than in the caller, because the caller would have to re-derive the
+// direction the binder already computes.
+describe("bindDismissGesture — directions: 'down' (#1764)", () => {
+  beforeEach(() => {
+    directions = "down";
+    dispose();
+    bind();
+  });
+
+  it("a long downward drag still commits", () => {
+    dragVertically(media, COMMIT_PX + 20, 2_000);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a long UPWARD drag does not commit — and is not even claimed", () => {
+    const { moves } = dragVertically(media, -(COMMIT_PX + 20), 2_000);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onProgress).not.toHaveBeenCalled();
+    // Unclaimed means the browser keeps the pan: the pane scrolls, which is
+    // the whole reason the direction is narrowed. A claimed-then-refused drag
+    // would have eaten the scroll and given nothing back.
+    expect(moves.every((e) => !e.defaultPrevented)).toBe(true);
+    expect(modal.classList.contains(DRAGGING_CLASS)).toBe(false);
+  });
+
+  it("an upward FLICK does not commit either — velocity is not a way around the direction", () => {
+    dragVertically(media, -(COMMIT_PX + 20), 60);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });
