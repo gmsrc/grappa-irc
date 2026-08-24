@@ -59936,3 +59936,78 @@ policy by construction.
 
 HOT. The policy is a module attribute in `lib/grappa_web/plugs/security_headers.ex`,
 not `config/*.exs` — a recompiled `.beam`, no `VERSION` bump, no migration.
+<!-- entry #1696 -->
+
+---
+
+## 2026-08-24 — #1696: the catalogue is the authority, consulted at check time and not at render time
+
+Ten of the fourteen radio-station logos 404'd. `radioStations.ts` spelled every
+one as `<id>120.png`, and that shape only LOOKED like a convention: measured,
+the extension is per-station AND per-size — `dronezone120.jpg` at 120px,
+`dronezone256.png` at 256px — and no extension-free form exists to fall back
+on (`…/logos/120/dronezone120` is a 404, served as `text/html`). Every logo URL
+in that table is therefore a verbatim COPY of a catalogue value, never a
+derivation, and the four that happened to work were the four SomaFM genuinely
+serves as PNG.
+
+### Why the runtime read was declined
+
+#1695 had just admitted `api.somafm.com` to `connect-src`, so reading `image`
+straight from `channels.json` was newly possible, and the issue proposed it as
+the real cure with the extension fix as an admitted stopgap. It was declined,
+on four grounds:
+
+* **`logoUrl` cannot leave the type.** A station from another provider has no
+  catalogue row and must still carry a logo — the table's own stated invariant
+  is that it is a table of STATIONS, not of SomaFM slugs. So a runtime read
+  would not REPLACE the baked field, it would stack a second source on top of
+  it and split one record across two authorities field by field. That is more
+  housekeeping than it removes, which inverts the reason for reaching for it.
+* **The list is curated** — 46 channels upstream, 14 here — so the choice of
+  rows stays in this file regardless of what a render path reads.
+* **This was not drift, and drift is the only thing a runtime read cures.**
+  Every `.jpg` the table got wrong carries a `?v=` upload stamp of 2026-06-12
+  or earlier, three of them from 2023, while the table was written 2026-08-23.
+  Nothing moved under us in the 2.5 months between. The extensions were wrong
+  the day they were typed.
+* **A cosmetic pixel is a thin reason** to put a third party in a render path
+  that today awaits nothing.
+
+### The general rule this leaves
+
+The defect was never the ten characters. It was that `radioStations.ts` asserted
+a fact about EXTERNAL state — "the versionless logo URLs were checked" — that
+no artefact in the repo could establish, so a true claim and a false one read
+identically to every later reader. Writing the claim more carefully does not
+fix that; making it executable does.
+
+So the catalogue IS the authority for these URLs, and `bun run check:radio`
+(`cicchetto/scripts/check-radio-logos.ts`) consults it at CHECK time rather than
+at RENDER time. Two axes per station, union verdict, the `scripts/check.ts`
+posture: REACH (200 AND an `image/*` content type — a status-only assert would
+wave through the `text/html` soft 404 this host serves) and AGREE (the baked URL
+equals what `channels.json` publishes, `?v=` stripped, for stations pointing at
+somafm). That pins the table to the authority and buys no runtime failure mode:
+when somafm is unreachable the picker still draws the logos it drew yesterday.
+There is no fetch to fail.
+
+It is out of `bun run check` and out of CI deliberately. `radioStations.test.ts`
+had already argued that a gate fetching somafm.com is a third-party outage
+detector bolted to our build, going red on days when nothing of ours is broken.
+That argument is right and survives; what was wrong was leaving the alternative
+as a human's memory. An unfetchable catalogue exits 1 and never 0 — "not
+measured" reading as "measured ok" is the original bug in miniature.
+
+### What stays hand-measured, and why
+
+The stream half of the same claim. `HEAD` on `ice.somafm.com` returns an empty
+reply (curl exit 52) because icecast answers a GET with an endless body, so
+proving a stream needs a ranged-or-aborted fetch — a different mechanism from
+the logo probe, and out of scope here rather than silently folded in.
+
+### Deploy class
+
+cic bundle only. No server module, no `VERSION` bump, no migration: the change
+is the station table, one new `cicchetto/scripts/` probe and a `package.json`
+script that CI never calls.
