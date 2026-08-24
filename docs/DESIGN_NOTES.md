@@ -61021,3 +61021,96 @@ first run is the case the CLI exists for — so a substrate that cannot
 raise distribution simply always takes it, and the credential lands
 `:parked` exactly as ruled. What the jail can lose is the convenience,
 never the honesty.
+<!-- entry #1714 -->
+
+---
+
+## 2026-08-24 — #1714: gating the release CLI's distribution hop, and how many arms that is
+
+#1685 taught `grappa add-network` to cross out of its transient `eval` VM
+into the running bouncer as Erlang terms. Every branch of that hop was
+proven by hand exactly once. This is the gate — three arms at the tail of
+`release.yml`'s `deb` job — and the reasoning that picked three.
+
+### The criterion: gate what only the substrate can falsify
+
+The issue asked for "both branches", which is how its author named the
+pair they had in mind, not a count. `Grappa.Release.LiveNode.reach/2`
+distinguishes **five** transport outcomes before the far side is reached:
+`:no_release_node`, `:distribution_disabled`, `:no_distribution`,
+`:unreachable`, and the `{:ok, :started}` round trip.
+
+Three are gated in CI. Each is a **state of the deployment** — is epmd
+up? is the node up? — and turns on systemd, epmd, the release cookie and
+the node name ERTS derives. No in-process test can make any of them true
+or false.
+
+Two are not, and stay where they already are. `:no_release_node` and
+`:distribution_disabled` are refusals taken **before any I/O**, on the
+value of one environment variable, and
+`test/grappa/release/live_node_test.exs` covers both. An arm would
+re-read the same `System.get_env` through a slower door: CI minutes, no
+extra falsifying power.
+
+So the rule this leaves behind is not "gate every branch" and not "gate
+the two the issue named" — it is **gate the outcomes the substrate owns,
+and leave the ones a unit test owns to the unit test**.
+
+### `systemctl stop` does not give you the second offline shape
+
+#1685 measured that there are two no-live-node shapes, not one: with no
+epmd `:net_kernel.start/2` itself fails `:nodistribution`; with epmd up
+and the node down it succeeds and `Node.connect/1` returns false. The
+obvious way to stage the second — start the service, then stop it — does
+**not** work. `grappa.service` sets no `KillMode`, so systemd's default
+`control-group` applies and the stop takes epmd down *with* the node,
+landing back in the first shape with a green tick and the wrong claim
+tested.
+
+The arm therefore starts `epmd -daemon` from the installed release's own
+ERTS, outside the unit's cgroup. That is not a contrivance: on a real
+host epmd outlives the service precisely because something outside the
+unit started it.
+
+Each arm also **asserts its own premise** (`pgrep -x epmd` before arm 1,
+after arm 2; `/healthz` before arm 3). An arm that silently finds itself
+in another arm's state would otherwise report a green for a claim it
+never made.
+
+### What is asserted, and two things that are not
+
+Not the exit status: `Grappa.Release.CLI` returns 0 in every branch on
+purpose, so that `create-user && add-network && start the service` does
+not break on the case that has no live node by definition. The gate reads
+stdout and the row instead.
+
+Not `connection_state = 'connected'` on the live arm either. Since #1675
+`:connected` means *registered upstream*, and the arm points at
+`127.0.0.1:6667` with nothing listening, so the row settles to `:failing`
+on its own — pinning either value races. What the arm exists to prove is
+that the hop **landed**: the transport promoted the row out of `:parked`,
+which nothing on the CLI side can fake.
+
+### Placement, and a spec line that fell to a grep
+
+The issue put the steps "right after Install both packages". That would
+run the live arm — which must START the service — before every existing
+proof in the job, leaving a daemon nobody asked for running underneath
+them. A proof that runs with unrequested state up no longer proves what
+it says it proves. The arms go last among the proofs, and still ahead of
+the uploads, so a failed arm keeps the artifacts unpublished.
+
+The issue also said the job "needs no new scaffolding". Measured: the
+postinstall `enable`s the unit and deliberately does **not** start it (a
+real `PHX_HOST` must be set first; the env file ships `REPLACE_ME`), and
+no workflow in this repo had ever run `systemctl` or probed `/healthz` —
+zero hits across `.github/workflows/*.yml`. The offline arms are free;
+the live arm is scaffolding, and saying so cost one grep.
+
+### Limits, stated rather than discovered later
+
+`release.yml` fires on a **tag**, so these arms prove the hop at
+release-cut time and not on the pull request that changes it. And GitHub
+offers no FreeBSD runner — every `runs-on:` in this repo is
+`ubuntu-latest` — so the bastille jail keeps its manual probe. Both are
+accepted, neither is an oversight.
