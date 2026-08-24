@@ -19,17 +19,28 @@
 // moduledoc names it, so the next author edits the table and has a command
 // instead of a ritual.
 //
-// TWO AXES, both reported, union verdict (the `scripts/check.ts` posture):
+// THREE AXES, all reported, union verdict (the `scripts/check.ts` posture):
 //
-//   REACH  — the URL answers 200 with an `image/*` content type. This is the
-//            property the picker needs, and it covers every station including
-//            one from another provider.
+//   REACH  — the logo URL answers 200 with an `image/*` content type. This is
+//            the property the picker needs, and it covers every station
+//            including one from another provider.
 //   AGREE  — for a station whose logo we point at somafm, the baked URL is the
 //            one `channels.json` ships. Stronger than REACH: it catches a logo
 //            that still resolves but is no longer the one upstream publishes,
 //            and it is what pins the table to the authority WITHOUT making the
 //            running client depend on that authority (see the table's
 //            moduledoc for why the fetch stays out of the render path).
+//   FEED   — #1698: the `songsUrl` now-playing feed answers 200 with
+//            `application/json`. A third baked third-party URL in the same
+//            table, so it inherits the same problem this script exists for:
+//            get the slug wrong and the station still plays perfectly while
+//            the track line stays permanently empty — a defect with no symptom
+//            anywhere the operator looks. A station that publishes no feed
+//            (`songsUrl: null`) is SKIPPED, not failed.
+//            No AGREE twin: `channels.json` publishes a `lastPlaying` STRING,
+//            not the feed's URL, so there is no upstream value to compare the
+//            baked one against. Naming that absence beats inventing a
+//            comparison that would pass on anything.
 //
 // THIS FILE IS THE IO HALF ONLY. Every rule lives in `check-radio-logos-core.ts`
 // so that it is reachable from `src` and therefore covered by `tsc --noEmit`;
@@ -47,6 +58,8 @@ import {
   brokenCount,
   type CatalogueBody,
   catalogueLogos,
+  FEED_CONTENT_TYPE,
+  LOGO_CONTENT_TYPE,
   problems,
   reachFailure,
   type StationFinding,
@@ -73,11 +86,16 @@ async function fetchCatalogue(): Promise<Map<string, string> | null> {
 
 /** A transport error is a REACH failure like any other: the picker would show
     no logo either way, and swallowing it to null would be the soft green this
-    probe exists to refuse. */
-async function probeReach(url: string): Promise<string | null> {
+    probe exists to refuse.
+    #1698 — shared by the logo and the now-playing feed, which differ only in
+    the content type they must answer with. Measured 2026-08-24: `HEAD` on
+    `api.somafm.com/songs/<id>.json` answers 200 `application/json`, and a slug
+    the host does not know answers 404 `text/html` — so one HEAD separates a
+    live feed from a mistyped one, exactly as it does for a logo. */
+async function probeReach(url: string, expected: string): Promise<string | null> {
   try {
     const res = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(TIMEOUT_MS) });
-    return reachFailure(res.status, res.headers.get("content-type"));
+    return reachFailure(res.status, res.headers.get("content-type"), expected);
   } catch (err) {
     return `${err}`;
   }
@@ -93,21 +111,40 @@ const findings: StationFinding[] = await Promise.all(
   RADIO_STATIONS.map(async (station) => ({
     id: station.id,
     logoUrl: station.logoUrl,
-    reach: await probeReach(station.logoUrl),
+    feedUrl: station.songsUrl,
+    reach: await probeReach(station.logoUrl, LOGO_CONTENT_TYPE),
     agree: agreeFailure(station.logoUrl, station.id, catalogue),
+    // A station that publishes no feed is not probed and is not a finding.
+    feed:
+      station.songsUrl === null
+        ? null
+        : await probeReach(station.songsUrl, FEED_CONTENT_TYPE),
   })),
 );
 
 for (const finding of findings) {
   const found = problems(finding);
   console.log(`  ${found.length === 0 ? "ok  " : "FAIL"}  ${finding.id.padEnd(16)}${finding.logoUrl}`);
+  // The feed URL is printed on its own line rather than folded into the one
+  // above: a station has two URLs now, and a report that names only one leaves
+  // the reader guessing which of them a `FEED` line is about. `(no feed)` is
+  // stated for the same reason the summary states its denominator — a skipped
+  // row must not read as a probed one.
+  console.log(`          feed ${finding.feedUrl ?? "(no feed)"}`);
   for (const p of found) console.log(`          ${p}`);
 }
 
 const broken = brokenCount(findings);
 
 // The denominator is the honesty payload, as in scripts/check.ts: "14 stations
-// checked" is what tells a reader the verdict covers the whole table.
-console.log(`\ncheck:radio summary — ${findings.length} stations checked, ${broken} broken`);
+// checked" is what tells a reader the verdict covers the whole table. #1698
+// adds a SECOND denominator for the same reason — the FEED axis skips a
+// station that publishes none, so "14 stations checked" alone would read as
+// "14 feeds checked" on a table where the field had gone uniformly null.
+const feedsProbed = findings.filter((f) => f.feedUrl !== null).length;
+console.log(
+  `\ncheck:radio summary — ${findings.length} stations checked ` +
+    `(${feedsProbed} with a now-playing feed), ${broken} broken`,
+);
 
 process.exit(broken === 0 ? 0 : 1);

@@ -46,17 +46,34 @@ export function catalogueLogos(body: CatalogueBody): Map<string, string> {
   return new Map(entries);
 }
 
-/** `null` when the response is a served image; otherwise why it is not.
+/** `null` when the response is a served resource of the `expected` type;
+    otherwise why it is not.
     Content type is checked and not just the status because api.somafm.com
     answers some paths with a 200-shaped `text/html` body — a status-only
     assert would wave a soft 404 straight through, and a soft 404 is exactly
-    the failure this probe was written to catch. */
-export function reachFailure(status: number, contentType: string | null): string | null {
+    the failure this probe was written to catch.
+    #1698 — `expected` is a PARAMETER because the table now bakes two kinds of
+    third-party URL: a logo (`image/`) and a now-playing feed
+    (`application/json`). One predicate rather than a near-copy, and the
+    message names what was WANTED because otherwise the two axes report the
+    identical sentence for opposite defects. */
+export function reachFailure(
+  status: number,
+  contentType: string | null,
+  expected: string,
+): string | null {
   if (status < 200 || status >= 300) return `HTTP ${status}`;
   const type = contentType ?? "(none)";
-  if (!type.startsWith("image/")) return `HTTP ${status} but content-type ${type}`;
+  if (!type.startsWith(expected)) {
+    return `HTTP ${status} but content-type ${type} (wanted ${expected})`;
+  }
   return null;
 }
+
+/** The content types each axis demands. Named rather than spelled at the call
+    sites so the runner and its tests cannot drift apart on the string. */
+export const LOGO_CONTENT_TYPE = "image/";
+export const FEED_CONTENT_TYPE = "application/json";
 
 /** Whether AGREE has anything to say about this station. A station pointing at
     another provider is outside the catalogue's scope — the table is allowed to
@@ -85,19 +102,29 @@ export function agreeFailure(
 export type StationFinding = {
   readonly id: string;
   readonly logoUrl: string;
+  /** #1698 — the station's now-playing feed, or null when it publishes none.
+      Carried so the report line can name the URL that failed, and so a null
+      row is visibly SKIPPED rather than silently absent. */
+  readonly feedUrl: string | null;
   readonly reach: string | null;
   readonly agree: string | null;
+  /** #1698 — the FEED axis: whether `feedUrl` answers with JSON. Always null
+      for a station that publishes no feed — that is not a defect, and
+      reporting it as one would make the table's nullable field permanently
+      red. */
+  readonly feed: string | null;
 };
 
-/** Every problem found for one station, both axes, in report order. */
+/** Every problem found for one station, all three axes, in report order. */
 export function problems(finding: StationFinding): readonly string[] {
   return [
     finding.reach === null ? null : `REACH ${finding.reach}`,
     finding.agree === null ? null : `AGREE ${finding.agree}`,
+    finding.feed === null ? null : `FEED ${finding.feed}`,
   ].filter((p): p is string => p !== null);
 }
 
-/** A station is broken if EITHER axis has something to say — the union
+/** A station is broken if ANY axis has something to say — the union
     verdict, the `scripts/check.ts` posture. */
 export function brokenCount(findings: readonly StationFinding[]): number {
   return findings.filter((f) => problems(f).length > 0).length;
