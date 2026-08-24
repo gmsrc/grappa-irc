@@ -196,6 +196,21 @@ their env file) and `RELEASE_DISTRIBUTION` not set to `none`. A cookie
 mismatch is indistinguishable from a stopped node at the CLI end and
 prints as "did not answer".
 
+**How the hop is gated (#1714).** Three arms at the tail of
+`release.yml`'s `deb` job, on the installed `.deb`: no epmd at all (the
+first-run box), epmd up with no node answering, and the live hop against
+a started service. Each asserts the operator-facing line AND the row —
+never the exit status, which is 0 by design (above). The two remaining
+transport outcomes, `:no_release_node` and `:distribution_disabled`, are
+refusals taken before any I/O on one environment variable and stay in
+`test/grappa/release/live_node_test.exs`: the substrate cannot make them
+any truer. **Two limits, both deliberate.** The arms run on a TAG (that
+is when `release.yml` fires), so a change to the hop is proven at
+release-cut time and not on the pull request that makes it. And GitHub
+offers no FreeBSD runner — every `runs-on:` in this repo is
+`ubuntu-latest` — so the bastille jail stays covered by the manual probe
+alone.
+
 ### Per-server outbound source address (`--source`)
 
 `bind-network` and `add-server` accept `--source <ip>` to pin the

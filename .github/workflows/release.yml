@@ -312,6 +312,159 @@ jobs:
           [ "$got" = "$want" ] || {
             echo "::error::client package is stamped '$got', expected '$want'"; exit 1; }
 
+      # ── #1714: the release CLI's distribution hop, on the real substrate ──
+      #
+      # #1685 taught `grappa add-network` to cross out of its transient `eval`
+      # VM and into the running bouncer as Erlang terms. Every branch of that
+      # hop was proven by hand exactly once, and the branch a self-hoster meets
+      # FIRST — no live node at all — had no gate.
+      #
+      # WHICH OUTCOMES GET AN ARM, AND THE CRITERION USED
+      #
+      # `Grappa.Release.LiveNode.reach/2` distinguishes five transport
+      # outcomes before the far side is even reached: `:no_release_node`,
+      # `:distribution_disabled`, `:no_distribution`, `:unreachable`, and the
+      # `{:ok, :started}` round trip. Three are gated below and two are not.
+      # The split is NOT the issue title's "both branches" — it is which
+      # outcomes only THIS substrate can falsify:
+      #
+      #   gated here    `:no_distribution`, `:unreachable`, `{:ok, :started}`
+      #                 — each is a STATE OF THE DEPLOYMENT (is epmd up? is the
+      #                 node up?) and turns on systemd, epmd, the release
+      #                 cookie and the node name ERTS derives. Nothing
+      #                 in-process can make any of them true or false.
+      #   left to unit  `:no_release_node`, `:distribution_disabled`
+      #                 — both are refusals taken BEFORE any I/O, on the value
+      #                 of one environment variable, and
+      #                 test/grappa/release/live_node_test.exs already covers
+      #                 them. An arm here would re-read the same
+      #                 `System.get_env` through a slower door: CI minutes, no
+      #                 extra falsifying power.
+      #
+      # WHY THE TAIL OF THE JOB AND NOT WHERE #1714 PUT IT
+      #
+      # The issue says "right after Install both packages". That would run the
+      # live arm — which must START the service — BEFORE every existing proof
+      # in this job, leaving a daemon nobody asked for running underneath them.
+      # A proof that runs with unrequested state up no longer proves what it
+      # says it proves. So the arms go last among the proofs, and still ahead
+      # of the uploads: a failed arm must keep the artifacts unpublished.
+      #
+      # NOT asserted: the exit status. `Grappa.Release.CLI` returns 0 in every
+      # branch ON PURPOSE (cli.ex — the first-run script `create-user &&
+      # add-network && start the service` must not break on the case that has
+      # no live node BY DEFINITION). The bind is reported through stdout and
+      # the row, so that is what these steps read.
+      - name: Create the account the distribution-hop arms bind against
+        run: |
+          sudo grappa create-user gate --password 'ci-not-a-secret' | tee /tmp/hop-user.log
+          grep -q '^created user gate ' /tmp/hop-user.log || {
+            echo "::error::create-user did not report the account it created"; exit 1; }
+
+      # ARM 1 — no epmd at all. This is a box that has never started the
+      # service, which is the FIRST of the two no-live-node shapes #1685
+      # measured (`:net_kernel.start/2` itself fails `:nodistribution`) and the
+      # one whose cure, missing, "crashes on first run". The postinstall
+      # `enable`s the unit and deliberately does NOT start it (a real PHX_HOST
+      # must be set first), so this state is what the job is already sitting in.
+      #
+      # The premise is ASSERTED, not assumed: with epmd somehow already up this
+      # step would silently test arm 2 instead and report a green for a claim
+      # it never made.
+      - name: 'Hop arm 1/3: no epmd — the bind parks and says why'
+        run: |
+          pgrep -x epmd >/dev/null && {
+            echo "::error::epmd is already running — this arm cannot test the no-epmd shape"
+            exit 1; }
+          echo "epmd: not running (arm premise holds)"
+
+          sudo grappa add-network gate gate-no-epmd \
+            --server 127.0.0.1:6667 --nick gatebot --auth none | tee /tmp/hop-arm1.log
+
+          grep -qF 'the binding is PARKED: nothing is listening on epmd' /tmp/hop-arm1.log || {
+            echo "::error::expected the no-epmd park reason on stdout"; exit 1; }
+
+          state="$(sudo sqlite3 /var/lib/grappa/grappa.db \
+            "SELECT c.connection_state FROM network_credentials c
+               JOIN networks n ON n.id = c.network_id WHERE n.slug = 'gate-no-epmd'")"
+          echo "gate-no-epmd connection_state: '$state'"
+          [ "$state" = "parked" ] || {
+            echo "::error::row reads '$state', expected 'parked' — #1685's whole point"; exit 1; }
+
+      # ARM 2 — epmd up, nothing answering to the name. The SECOND no-live-node
+      # shape: `:net_kernel.start/2` succeeds and `Node.connect/1` returns
+      # false. It is reached here by starting epmd on its own rather than by
+      # stopping the service, and that is deliberate — systemd's default
+      # KillMode is control-group, so `systemctl stop grappa` takes epmd down
+      # WITH the node and lands back in arm 1. On a real host epmd outlives the
+      # service because something outside the unit started it; `epmd -daemon`
+      # from the release's own ERTS is that, staged.
+      - name: 'Hop arm 2/3: epmd up, node down — the bind parks on unreachable'
+        run: |
+          epmd_bin="$(find /usr/lib/grappa -type f -name epmd -perm -u+x -print -quit)"
+          [ -n "$epmd_bin" ] || { echo "::error::no epmd in the installed release"; exit 1; }
+          "$epmd_bin" -daemon
+          pgrep -x epmd >/dev/null || { echo "::error::epmd did not stay up"; exit 1; }
+          echo "epmd: running, no node registered (arm premise holds)"
+
+          sudo grappa add-network gate gate-no-node \
+            --server 127.0.0.1:6667 --nick gatebot --auth none | tee /tmp/hop-arm2.log
+
+          grep -qF 'the binding is PARKED: the live node did not answer' /tmp/hop-arm2.log || {
+            echo "::error::expected the unreachable park reason on stdout"; exit 1; }
+
+          state="$(sudo sqlite3 /var/lib/grappa/grappa.db \
+            "SELECT c.connection_state FROM network_credentials c
+               JOIN networks n ON n.id = c.network_id WHERE n.slug = 'gate-no-node'")"
+          echo "gate-no-node connection_state: '$state'"
+          [ "$state" = "parked" ] || {
+            echo "::error::row reads '$state', expected 'parked'"; exit 1; }
+
+      # ARM 3 — the hop itself. Starting the service is NEW scaffolding: no
+      # workflow in this repo has ever run `systemctl start grappa`, and the
+      # postinstall ships PHX_HOST=REPLACE_ME because it is the one value
+      # nothing can generate. Both are set here explicitly.
+      #
+      # The row assertion is NOT `= connected`, and the reason is #1675: since
+      # then `:connected` means REGISTERED UPSTREAM, and 127.0.0.1:6667 has
+      # nothing listening, so the session starts and then settles to `:failing`
+      # on its own. Pinning either value would be a race. What this arm exists
+      # to prove is that the hop LANDED — that the transport promoted the row
+      # out of `:parked`, which no amount of retrying can do from this side.
+      - name: 'Hop arm 3/3: live node — the session starts across the hop'
+        run: |
+          sudo sed -i 's/^PHX_HOST=.*/PHX_HOST=127.0.0.1/' /etc/grappa/grappa.env
+          sudo systemctl start grappa
+
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:4000/healthz >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:4000/healthz >/dev/null || {
+            echo "::error::the service never became healthy"
+            sudo systemctl status grappa --no-pager || true
+            sudo journalctl -u grappa --no-pager -n 200 || true
+            exit 1; }
+          echo "service: healthy (arm premise holds)"
+
+          sudo grappa add-network gate gate-live \
+            --server 127.0.0.1:6667 --nick gatebot --auth none | tee /tmp/hop-arm3.log
+
+          grep -qF 'started a session on the live node' /tmp/hop-arm3.log || {
+            echo "::error::the CLI did not report a session started on the live node"
+            sudo journalctl -u grappa --no-pager -n 200 || true
+            exit 1; }
+
+          state="$(sudo sqlite3 /var/lib/grappa/grappa.db \
+            "SELECT c.connection_state FROM network_credentials c
+               JOIN networks n ON n.id = c.network_id WHERE n.slug = 'gate-live'")"
+          echo "gate-live connection_state: '$state'"
+          case "$state" in
+            connected|failing) ;;
+            *) echo "::error::row reads '$state' — the hop did not promote it out of parked"
+               exit 1 ;;
+          esac
+
       # Two packages, two upload steps (#1447 slice B). One glob over a shared
       # directory would publish whatever landed there next; a step per artifact
       # keeps publication something a human wrote down. `publish` then attaches
