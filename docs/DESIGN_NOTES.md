@@ -62548,3 +62548,84 @@ layer instead.
 states, not the two production deaths. A VM-wide stall of the kind #1715
 describes is outside what an in-process ExUnit harness can construct, and it
 was not constructed. Those two `:ping_timeout` deaths remain unexplained.
+<!-- entry #1760 -->
+
+---
+
+## 2026-08-25 — #1760: a silent AND on the server is a single write on the client
+
+The admin networks pane could edit three of the six keys
+`PATCH /admin/networks/:slug` has whitelisted since #211 phase 3, and the three
+it could not reach were the ones that decide whether a network is usable:
+`visitor_enabled`, `visitor_autoconnect`, `services_flavor`. `rizon` was added
+from the panel on 2026-08-24 and finished with a hand-written `UPDATE` against
+`runtime/grappa_prod.db`, because `networks.visitor_enabled` defaults to false
+and `Networks.list_visitor_enabled/0` is the sole allowlist gate.
+
+**Measured before building, because it decides the class of the deploy.** The
+issue asserted "the wire contract exists; no backend change needed" and it is
+true, but it was checked rather than taken: `settings_attrs/1` whitelists all
+six, `Network.changeset/2` casts all six, `Networks.AdminWire` projects all
+six, and the generated `wireTypes.ts` already carries them. Cic-only, no BEAM
+file touched, hot-deployable.
+
+### The rule: a subset the server enforces as a silent AND must be written once
+
+`visitor_autoconnect` is a strict subset of `visitor_enabled` at the
+admin-intent level — the login and home readers intersect the two, so
+autoconnect on a network that accepts no visitors is a benign no-op. Benign is
+the problem. There is **no error and no effect**, so nothing downstream can
+tell an operator they have armed a flag that does nothing, and the flag stays
+armed until somebody re-enables the network months later and gets an
+auto-connect nobody asked for.
+
+That is what forced the interaction shape, rather than taste. The pane's other
+booleans (server TLS, featured-channel enabled) are fire-immediately toggles,
+and **two of those could not express this invariant at all**: whichever request
+goes first, the row sits at the stranded pair until the second lands, and a
+failure in between makes it permanent. So the three new controls join the
+caps' draft-and-Save instead: revoking visitor access clears autoconnect **in
+the draft**, visibly, and one PATCH carries both keys. The incoherent row is
+never written, not merely corrected quickly.
+
+The lock is gated on the DRAFT's `visitor_enabled`, not on the server row —
+gating on the row would make "allow visitors and autoconnect them" a two-Save
+chore for no gain, since nothing is persisted until Save either way.
+
+**Generalise it as:** when two persisted flags have a subset relation that the
+server resolves by intersecting at READ time, the client owns the coherence,
+and it can only own it with a single write. Look for the same shape wherever a
+reader ANDs two columns and the writer does not.
+
+### The e2e oracle is the downstream projection, not the control
+
+A checkbox that renders passes "the control exists"; a checkbox whose PATCH
+lands passes "the input is checked". Neither would have failed against the bug
+this issue is about, which is that the network stays unreachable. The spec
+therefore reads `GET /me`'s `home_data.available_networks` — the server's own
+`list_visitor_enabled/0` minus attached — and asserts the slug ABSENT before
+the click and PRESENT after. The pane agreeing with itself is checked too, and
+is explicitly labelled as necessary and nowhere near sufficient.
+
+### Two smaller things
+
+`AdminNetworkCapsPatch` / `adminPatchNetworkCaps` were renamed to
+`…SettingsPatch` / `adminPatchNetworkSettings`, in their own commit ahead of
+the feature. The trigger is worth stating as a rule: **the name was accurate
+until this change made it false, and a name falsified by a change belongs to
+that change** — leaving it would have created the misnomer, not inherited one.
+Three comments citing `Networks.update_network_caps/2`, a function no longer
+exported under that name anywhere in `lib/`, were corrected in the same commit.
+
+The flavor `<select>` builds its options from
+`NETWORKS_NETWORK_SERVICES_FLAVOR`, the generated wire SSOT, so a fifth flavor
+added server-side cannot leave the pane silently four-valued. Its blank option
+is `services_flavor: null` — the schema's nullable "never classified", a real
+wire value distinct from `:unknown` — and it is SENT rather than omitted:
+unsupplied keys keep their current value, so an omitted blank would make a
+wrong flavor permanent.
+
+**Left undecided, deliberately.** The issue asks whether the create form
+should request `visitor_enabled` up front so a network is never born in a
+state the panel cannot leave. That is a product call, it is vjt's, and it is
+not built here.
