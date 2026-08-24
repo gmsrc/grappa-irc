@@ -88,10 +88,37 @@ const AudioMiniPlayer: Component = () => {
   //                                    "=== Infinity".
   const live = (): boolean => !Number.isFinite(duration());
 
+  // #1700 — can this element continue from where it is, or must the resource
+  // be fetched again? Two disjoint reasons, and note that neither of them is
+  // "was it interrupted":
+  //   * `error` — the media resource is gone. There is nothing to continue.
+  //   * live    — there is no POSITION to continue TO. `currentTime` on an
+  //               endless source is elapsed-since-tune-in, not a place in a
+  //               work, so resuming in place returns to buffered audio and
+  //               stays exactly that far behind live from then on. Re-tuning
+  //               IS the correct resume for a stream; it is not a sacrifice
+  //               made to fix something else.
+  // A healthy paused FILE matches neither and keeps resuming at its position,
+  // which is the whole point of pausing one.
+  const mustRefetch = (el: HTMLAudioElement): boolean => el.error !== null || live();
+
   const togglePlay = (): void => {
     if (audioEl === undefined) return;
-    if (audioEl.paused) void audioEl.play().catch(() => {});
-    else audioEl.pause();
+    // #1700 — branch on `playing()`, NOT on `audioEl.paused`. The glyph and the
+    // accessible name below read from this signal, and a control must act on
+    // the fact it DISPLAYS: after a failed fetch the element is still not
+    // `paused` while the transport already shows ▶, so reading the element here
+    // pauses at the moment the operator pressed play. One fact, one control.
+    if (playing()) {
+      audioEl.pause();
+      return;
+    }
+    // `play()` re-runs resource selection only from NETWORK_EMPTY, which is not
+    // where a dropped stream lands; `load()` runs it unconditionally. The other
+    // `load()` in this file DETACHES a source on close — same call, opposite
+    // intent, and until now the only one.
+    if (mustRefetch(audioEl)) audioEl.load();
+    void audioEl.play().catch(() => {});
   };
 
   const onSeek = (e: { currentTarget: HTMLInputElement }): void => {
@@ -112,6 +139,17 @@ const AudioMiniPlayer: Component = () => {
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)}
+        /* #1700 — a failure that is never observed can never be recovered
+           from, and an unobserved one here also made the bar LIE: a stream
+           that dies without firing `pause` left this signal true, so the
+           button kept showing ⏸ over silence and the transport looked like it
+           had worked.
+           `stalled` and `waiting` are deliberately NOT wired. They are
+           recoverable buffering, not a stop, and clearing the state on them
+           would flip the button to ▶ over audio that is still coming — the
+           same lie in the other direction. `error` is the terminal one, so
+           `error` is the one listened to. */
+        onError={() => setPlaying(false)}
         onTimeUpdate={() => setCurrent(audioEl?.currentTime ?? 0)}
         onLoadedMetadata={() => setDuration(audioEl?.duration ?? 0)}
       />

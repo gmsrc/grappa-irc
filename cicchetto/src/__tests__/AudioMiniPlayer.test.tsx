@@ -10,13 +10,16 @@ import type { RadioStation } from "../lib/radioStations";
 // these tests pin the bar's show/hide + control wiring only.
 let playSpy: ReturnType<typeof vi.spyOn>;
 let pauseSpy: ReturnType<typeof vi.spyOn>;
+let loadSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   playSpy = vi
     .spyOn(HTMLMediaElement.prototype, "play")
     .mockImplementation(() => Promise.resolve());
   pauseSpy = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
-  vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+  // #1700 — held, not discarded: `load()` is the only call that re-fetches, so
+  // the resume path is now asserted through it.
+  loadSpy = vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   closeAudio();
   showPlayer();
 });
@@ -325,6 +328,190 @@ describe("AudioMiniPlayer", () => {
       // `activeAudio` — the shape #1697's own comment forbids — would null this
       // out, and the poll keyed on it would stop with the chrome.
       expect(tunedStation()).toBe(station);
+    });
+  });
+
+  // #1700 — pressing play could not bring an interrupted live stream back.
+  //
+  // THE MECHANISM, stated precisely, because the issue's one-liner ("play never
+  // re-fetches") is not quite what the contract says. `play()` DOES invoke the
+  // resource selection algorithm — but only when `networkState` is
+  // NETWORK_EMPTY, and an Icecast connection that drops mid-stream does not
+  // land there. `load()` runs that algorithm unconditionally, and the only
+  // `load()` in this component was on the CLOSE path, where it DETACHES a
+  // source. Nothing on the resume path re-fetched. (Read off the HTML media
+  // element spec, not measured in a browser — see the test-level notes below
+  // for what these assertions do and do not establish.)
+  //
+  // TWO SOURCES OF TRUTH FOR ONE CONTROL, which is the deeper half. The
+  // button's LABEL came from the `playing()` signal (driven by events) and its
+  // ACTION came from `audioEl.paused` (the element's own property). Those agree
+  // until something goes wrong and then they do not, and a control whose action
+  // disagrees with its label does the opposite of what the operator read. The
+  // fix is not a third state: it is deriving both from `playing()`.
+  //
+  // WE DO NOT DISTINGUISH "paused" FROM "interrupted", and that is deliberate
+  // rather than a gap we could not close. There is no reliable signal for it —
+  // but more to the point, the question does not need answering. The axis that
+  // matters is "is there a POSITION worth resuming to", and for a live source
+  // there is none: `currentTime` is elapsed-since-tune-in, not a place in a
+  // work. Resuming a live stream in place is not a feature being sacrificed, it
+  // is a defect of its own — you come back to buffered audio and stay exactly
+  // that far behind live, forever. So re-fetching a live source on resume is
+  // the CORRECT behaviour independently of any interruption having happened.
+  describe("#1700 — resuming after an interruption", () => {
+    const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
+    const UPLOAD = "https://grappa.example/uploads/abc";
+
+    const element = (): HTMLElement => screen.getByTestId("audio-mini-player-el");
+    const toggle = (): HTMLElement => screen.getByTestId("audio-mini-player-toggle");
+
+    /** Replay one media event by hand. jsdom runs no media pipeline and the
+        methods above are stubbed, so nothing fires on its own — the same seam
+        `loadMetadataWithDuration` uses, at the events the transport listens to. */
+    const fire = (type: string): void => {
+      element().dispatchEvent(new Event(type));
+    };
+
+    /** Put the element in the state a dropped fetch leaves it in: a MediaError
+        set, and — per the spec's resource-fetch failure path, which sets
+        `error` and `networkState` and says nothing about `paused` — still not
+        paused. Stubbed on the INSTANCE, like `duration` above. */
+    const interrupt = (): void => {
+      Object.defineProperty(element(), "error", {
+        configurable: true,
+        value: { code: 2, message: "network" },
+      });
+      Object.defineProperty(element(), "paused", { configurable: true, value: false });
+      fire("error");
+    };
+
+    const clearSpies = (): void => {
+      playSpy.mockClear();
+      pauseSpy.mockClear();
+      loadSpy.mockClear();
+    };
+
+    it("re-fetches a live source before playing it again", () => {
+      // The reported symptom. `play()` on an element whose media resource is
+      // gone resolves and produces silence; only `load()` goes back for a new
+      // one.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      loadMetadataWithDuration(Number.POSITIVE_INFINITY);
+      fire("play");
+      fire("pause");
+      clearSpies();
+
+      toggle().click();
+
+      expect(loadSpy).toHaveBeenCalled();
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    it("resumes a paused FILE in place, without re-fetching it", () => {
+      // The other side of the same predicate, and the reason it is not "always
+      // reload": a file HAS a position, resuming at `currentTime` is the whole
+      // point of pausing one, and re-fetching would throw that away along with
+      // whatever is already buffered.
+      render(() => <AudioMiniPlayer />);
+      playAudio(UPLOAD, null);
+      loadMetadataWithDuration(212);
+      fire("play");
+      fire("pause");
+      clearSpies();
+
+      toggle().click();
+
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    it("re-fetches a FILE too once its resource is in error", () => {
+      // A file whose fetch failed has no position left to preserve either, so
+      // the same rule covers it. This is the half the issue called the broader
+      // form, and it costs nothing to include: `error !== null` is exactly
+      // "cannot continue from here".
+      render(() => <AudioMiniPlayer />);
+      playAudio(UPLOAD, null);
+      loadMetadataWithDuration(212);
+      fire("play");
+      interrupt();
+      clearSpies();
+
+      toggle().click();
+
+      expect(loadSpy).toHaveBeenCalled();
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    it("stops claiming to play once the element reports an error", () => {
+      // Half the reason nobody noticed the bug: with no `error` handler the bar
+      // kept showing ⏸ over silence, so the transport looked like it had
+      // worked.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      fire("play");
+      expect(toggle()).toHaveAttribute("aria-label", "pause");
+
+      interrupt();
+
+      expect(toggle()).toHaveAttribute("aria-label", "play");
+    });
+
+    it("keeps claiming to play through a stall — a stall is not a stop", () => {
+      // Deliberately NOT wired, against the issue's suggestion of
+      // `onStalled`. A stall or a wait is recoverable buffering: clearing the
+      // state there would flip the button to ▶ over audio that is still
+      // coming, which is the same lie in the other direction. Only `error` is
+      // terminal, and only `error` is listened to.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      fire("play");
+
+      fire("stalled");
+      fire("waiting");
+
+      expect(toggle()).toHaveAttribute("aria-label", "pause");
+    });
+
+    it("acts on what the button SAYS, not on the element's paused flag", () => {
+      // The divergence, made concrete: our signal says not-playing (the error
+      // cleared it) while the element still says not-paused. Reading
+      // `audioEl.paused` here makes the control PAUSE when its own label reads
+      // ▶ — the operator presses play and gets a pause. Reading `playing()`
+      // makes label and action one fact.
+      //
+      // What this establishes: that the two can disagree and which one wins.
+      // What it does NOT establish: that a real browser leaves `paused` false
+      // after a dropped stream. That is a spec reading, and the device verdict
+      // is owed either way.
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      fire("play");
+      interrupt();
+      expect(toggle()).toHaveAttribute("aria-label", "play");
+      expect(element()).toHaveProperty("paused", false);
+      clearSpies();
+
+      toggle().click();
+
+      expect(pauseSpy).not.toHaveBeenCalled();
+      expect(playSpy).toHaveBeenCalled();
+    });
+
+    it("still pauses a healthy source, and does not re-fetch to do it", () => {
+      render(() => <AudioMiniPlayer />);
+      playAudio(STATION, "Groove Salad");
+      loadMetadataWithDuration(Number.POSITIVE_INFINITY);
+      fire("play");
+      clearSpies();
+
+      toggle().click();
+
+      expect(pauseSpy).toHaveBeenCalled();
+      expect(loadSpy).not.toHaveBeenCalled();
+      expect(playSpy).not.toHaveBeenCalled();
     });
   });
 });
