@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "check": "bun scripts/check.ts",
     "check:fix": "biome check --write",
+    "check:radio": "bun scripts/check-radio-logos.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "gen:emoji": "bun scripts/gen-emoji.ts"
