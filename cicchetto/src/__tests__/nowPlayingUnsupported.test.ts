@@ -53,7 +53,7 @@ describe("a tuned station that publishes no now-playing feed", () => {
     // Three states, three different facts. `idle` would deny that anything is
     // playing; `unanswered` would promise an answer that will never come and
     // send `/np` looking for one. `unsupported` is what was OBSERVED.
-    expect(nowPlaying()).toEqual({ status: "unsupported" });
+    expect(nowPlaying()).toEqual({ status: "unsupported", station: "Feedless FM" });
   });
 
   it("never touches the network for it", async () => {
@@ -65,5 +65,36 @@ describe("a tuned station that publishes no now-playing feed", () => {
     await vi.advanceTimersByTimeAsync(NOW_PLAYING_POLL_MS * 5);
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  // `/np`'s arm for this state, tested against the HANDLER rather than through
+  // `compose.submit` like every other verb. Not a preference: the dispatcher
+  // can only be driven into this state by tuning a station the curated table
+  // holds, and no such row is feedless — so the arm is unreachable from there,
+  // and the alternative to this test is a production switch arm with no test
+  // at all. Reached here because the mock above is already the station it
+  // needs.
+  it("tells `/np` to refuse, naming the station and the reason", async () => {
+    const sendMessage = vi.fn();
+    vi.doMock("../lib/scrollback", () => ({ sendMessage }));
+    const { npCommand } = await import("../lib/commands/radio");
+
+    // A context that THROWS on any read. The arm must decide from the store
+    // alone — it has no window to send to and no network to resolve — so
+    // touching the record at all is the bug, and this makes that a failure
+    // rather than a detail nobody checks.
+    const hostileCtx = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          throw new Error(`/np's refusal read ctx.${String(prop)}`);
+        },
+      },
+    ) as unknown as Parameters<typeof npCommand>[1];
+
+    const result = await npCommand({ kind: "np" }, hostileCtx);
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({ error: "/np: Feedless FM publishes no track information" });
   });
 });

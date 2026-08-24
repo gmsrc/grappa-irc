@@ -35,6 +35,7 @@ import {
   unbanCommand,
   voiceCommand,
 } from "./commands/ops";
+import { npCommand } from "./commands/radio";
 import { ctcpCommand, noticeCommand, pingCommand } from "./commands/relay";
 import {
   adminCommand,
@@ -797,6 +798,10 @@ const exports_ = identityScopedStore((onIdentityChange) => {
         }
         case "ping": {
           result = await pingCommand(cmd, ctx);
+          break;
+        }
+        case "np": {
+          result = await npCommand(cmd, ctx);
           break;
         }
         case "notice": {

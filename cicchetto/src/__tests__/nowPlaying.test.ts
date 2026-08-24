@@ -172,6 +172,7 @@ describe("nowPlaying store", () => {
     expect(nowPlaying()).toEqual({
       status: "playing",
       track: { artist: "Setsuna", title: "Juno" },
+      station: station.title,
     });
   });
 
@@ -286,7 +287,7 @@ describe("nowPlaying store", () => {
 
     tuneStation(other);
     await settle();
-    expect(nowPlaying()).toEqual({ status: "unanswered" });
+    expect(nowPlaying()).toEqual({ status: "unanswered", station: other.title });
   });
 
   it("does not let a fetch that outlives its station write the wrong track", async () => {
@@ -307,12 +308,20 @@ describe("nowPlaying store", () => {
     await settle();
     tuneStation(other);
     await settle();
-    expect(nowPlaying()).toEqual({ status: "playing", track: { artist: "B", title: "B track" } });
+    expect(nowPlaying()).toEqual({
+      status: "playing",
+      track: { artist: "B", title: "B track" },
+      station: other.title,
+    });
 
     resolveA?.(okOnce(songsBody([{ title: "A track", artist: "A" }])));
     await settle();
 
-    expect(nowPlaying()).toEqual({ status: "playing", track: { artist: "B", title: "B track" } });
+    expect(nowPlaying()).toEqual({
+      status: "playing",
+      track: { artist: "B", title: "B track" },
+      station: other.title,
+    });
   });
 
   it("keeps the last track through a single failed read", async () => {
@@ -329,7 +338,11 @@ describe("nowPlaying store", () => {
     await settle();
     await vi.advanceTimersByTimeAsync(NOW_PLAYING_POLL_MS);
 
-    expect(nowPlaying()).toEqual({ status: "playing", track: { artist: "S", title: "Juno" } });
+    expect(nowPlaying()).toEqual({
+      status: "playing",
+      track: { artist: "S", title: "Juno" },
+      station: station.title,
+    });
   });
 
   it("goes stale once the last successful read is older than the threshold", async () => {
@@ -347,7 +360,7 @@ describe("nowPlaying store", () => {
     await settle();
     await vi.advanceTimersByTimeAsync(NOW_PLAYING_STALE_MS + NOW_PLAYING_POLL_MS);
 
-    expect(nowPlaying()).toEqual({ status: "stale" });
+    expect(nowPlaying()).toEqual({ status: "stale", station: station.title });
   });
 
   it("recovers from stale when the feed answers again", async () => {
@@ -364,10 +377,14 @@ describe("nowPlaying store", () => {
     tuneStation(station);
     await settle();
     await vi.advanceTimersByTimeAsync(NOW_PLAYING_STALE_MS + NOW_PLAYING_POLL_MS);
-    expect(nowPlaying()).toEqual({ status: "stale" });
+    expect(nowPlaying()).toEqual({ status: "stale", station: station.title });
 
     await vi.advanceTimersByTimeAsync(NOW_PLAYING_POLL_MS);
-    expect(nowPlaying()).toEqual({ status: "playing", track: { artist: "S", title: "Back" } });
+    expect(nowPlaying()).toEqual({
+      status: "playing",
+      track: { artist: "S", title: "Back" },
+      station: station.title,
+    });
   });
 
   it("treats a non-2xx answer as a failed read, not as a track", async () => {
@@ -379,7 +396,7 @@ describe("nowPlaying store", () => {
     tuneStation(station);
     await settle();
 
-    expect(nowPlaying()).toEqual({ status: "unanswered" });
+    expect(nowPlaying()).toEqual({ status: "unanswered", station: station.title });
   });
 
   it("stays unanswered — never pretends — when the feed has never answered", async () => {
@@ -393,7 +410,7 @@ describe("nowPlaying store", () => {
     // NOT "stale": stale means "we had a track and it aged out". We never had
     // one, and saying otherwise would put a track-shaped hole where an
     // honest "the feed has not answered" belongs.
-    expect(nowPlaying()).toEqual({ status: "unanswered" });
+    expect(nowPlaying()).toEqual({ status: "unanswered", station: station.title });
   });
 
   it("the stale threshold outlives more than one missed read", () => {

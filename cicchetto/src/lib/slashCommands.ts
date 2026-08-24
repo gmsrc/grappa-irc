@@ -234,6 +234,13 @@ export type SlashCommand =
   // target; compose.ts stamps the outbound timestamp token and owns the
   // reply-correlation state (RTT synthesized locally in the source window).
   | { kind: "ping"; target: string }
+  // #1698 — /np: an ACTION naming the track the tuned radio station is
+  // playing. It carries NOTHING, and that is the shape rather than an
+  // omission: the track, the station and whether either is currently
+  // knowable all live in the `nowPlaying` store, and a parser that stays
+  // pure cannot see any of them. compose.ts resolves the state and decides
+  // between a wire frame and a local refusal.
+  | { kind: "np" }
   | { kind: "error"; verb: string; message: string };
 
 function err(verb: string, message: string): SlashCommand {
@@ -374,6 +381,15 @@ const DISPATCH: Readonly<Record<string, Handler>> = {
   // #591 — CTCP send verbs. /ctcp is the general form; /ping is the RTT sugar.
   ctcp: (_verb, rest) => parseCtcp(rest),
   ping: (_verb, rest) => parsePing(rest),
+
+  // #1698 — /np. Registered here like any other verb rather than special-cased
+  // in the composer, which the issue asks for explicitly and which is also the
+  // only way it inherits the whole path for free: the `//np` literal escape,
+  // #427 alias shadowing, and the dispatch characterization net.
+  // Trailing tokens are ignored, the no-arg family's posture (/info, /version):
+  // there is nothing a second token could mean, so refusing one would buy the
+  // operator a scolding instead of the line they asked for.
+  np: (_verb, _rest) => ({ kind: "np" }),
 
   join: (verb, rest, chantypes) => {
     // UX-4 bucket F: `/join #chan` OR `/join #chan key` (+k channel

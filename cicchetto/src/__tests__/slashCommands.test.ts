@@ -1816,3 +1816,31 @@ describe("parseSlash — network-advertised CHANTYPES (#1255)", () => {
     });
   });
 });
+
+describe("parseSlash — /np (#1698)", () => {
+  it("takes no arguments", () => {
+    expect(parseSlash("/np")).toEqual({ kind: "np" });
+  });
+
+  it("ignores trailing tokens rather than erroring on them", () => {
+    // The no-arg family's posture (`/info`, `/version`): there is nothing a
+    // second token could mean, and refusing one buys the operator a scolding
+    // instead of the line they asked for.
+    expect(parseSlash("/np right now")).toEqual({ kind: "np" });
+  });
+
+  it("stays a plain privmsg behind the literal-slash escape", () => {
+    // `//np` is how the operator says "the text /np", per the mIRC escape the
+    // parser already implements. A new verb must not steal it.
+    expect(parseSlash("//np")).toEqual({ kind: "privmsg", body: "/np" });
+  });
+
+  it("can be shadowed by a user alias, like every builtin but /alias", () => {
+    // #427's rule, checked on the new verb rather than assumed to apply: the
+    // non-shadowable set is a FIXED two names, and /np is not one of them.
+    expect(parseSlash("/np", { np: "me is listening" })).toEqual({
+      kind: "me",
+      body: "is listening",
+    });
+  });
+});

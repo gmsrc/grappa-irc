@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { channelKey } from "../lib/channelKey";
 import type { SlashCommand } from "../lib/slashCommands";
 import { LIST_WINDOW_NAME, SERVER_WINDOW_NAME } from "../lib/windowKinds";
@@ -1388,6 +1388,195 @@ describe("compose submit — slash command dispatch", () => {
       target: "bob",
     });
     expect(result).toEqual({ ok: true });
+  });
+
+  // #1698 — `/np`. Driven through the REAL `nowPlaying` store rather than a
+  // mock of it, because the thing worth testing is precisely which store state
+  // reaches the wire and which does not; a mocked store would test the mock.
+  // `fetch` is stubbed per case to place the store in the state under test.
+  describe("/np (#1698)", () => {
+    afterEach(() => {
+      // Local to this block: the file's own beforeEach must not unstub, or it
+      // would strip the localStorage / WebSocket stand-ins setupTests installs
+      // just before it. setupTests re-installs those on the next test, which is
+      // exactly the contract its header describes.
+      vi.unstubAllGlobals();
+    });
+
+    /** Tune `RADIO_STATIONS[0]` with `fetch` answering `body`, and hand back
+        the station so a case can name it in its expectation. */
+    const tuneWith = async (body: unknown): Promise<{ title: string }> => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body } as Response),
+      );
+      const { RADIO_STATIONS } = await import("../lib/radioStations");
+      const station = RADIO_STATIONS[0];
+      if (station === undefined) throw new Error("the curated table must carry a station");
+      const { tuneStation } = await import("../lib/radio");
+      const { nowPlaying } = await import("../lib/nowPlaying");
+      tuneStation(station);
+      await vi.waitFor(() => expect(nowPlaying().status).not.toBe("unanswered"));
+      return station;
+    };
+
+    it("sends an ACTION naming artist, track and station into the current window", async () => {
+      // ACTION, not PRIVMSG: `* nick is now playing: …` is the verb's whole
+      // shape, and the framing is the shared `ctcpFrame` seam — the same one
+      // /me and /ctcp ACTION go through, never a second hand-rolled \x01.
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      vi.mocked(sb.sendMessage).mockResolvedValue();
+      const station = await tuneWith({ songs: [{ title: "A Land Unknown", artist: "Trestal" }] });
+
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/np");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(sb.sendMessage).toHaveBeenCalledWith(
+        "freenode",
+        "#a",
+        `\x01ACTION is now playing: Trestal — A Land Unknown [${station.title}]\x01`,
+      );
+      expect(result).toEqual({ ok: true });
+    });
+
+    it("refuses, locally, when nothing is playing", async () => {
+      // The verb WRITES INTO A CHANNEL, so "nothing to say" must cost the
+      // channel nothing at all — not a blank action, not a station-only line
+      // the operator did not ask for.
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      vi.mocked(sb.sendMessage).mockResolvedValue();
+
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/np");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(sb.sendMessage).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        error: "/np: nothing is playing — tune a station from the radio picker first",
+      });
+    });
+
+    it("refuses when the feed has not answered, and names the station", async () => {
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      vi.mocked(sb.sendMessage).mockResolvedValue();
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+      const { RADIO_STATIONS } = await import("../lib/radioStations");
+      const station = RADIO_STATIONS[0];
+      if (station === undefined) throw new Error("the curated table must carry a station");
+      const { tuneStation } = await import("../lib/radio");
+      tuneStation(station);
+
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/np");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(sb.sendMessage).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        error: `/np: no track from ${station.title} yet — its feed has not answered`,
+      });
+    });
+
+    it("refuses a feed answer carrying no usable track", async () => {
+      // A 200 with an empty `songs` is not a track, and the arm that would
+      // otherwise build `* nick is now playing:  [Groove Salad]` is the one
+      // this whole chain exists to make unreachable.
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      vi.mocked(sb.sendMessage).mockResolvedValue();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => ({ songs: [] }),
+        } as Response),
+      );
+      const { RADIO_STATIONS } = await import("../lib/radioStations");
+      const station = RADIO_STATIONS[0];
+      if (station === undefined) throw new Error("the curated table must carry a station");
+      const { tuneStation } = await import("../lib/radio");
+      tuneStation(station);
+
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/np");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(sb.sendMessage).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ error: expect.stringContaining("has not answered") });
+    });
+
+    it("refuses a track that has gone stale, rather than publishing a lie", async () => {
+      // The arm vjt asked to have decided in advance. A ten-minute-old track
+      // announced as "now" is wrong in a way only OTHER PEOPLE can see, which
+      // is precisely why a local error beats it — and the refusal quotes the
+      // threshold from the store's constant, so a cadence change moves the
+      // sentence with it instead of leaving the operator a stale number.
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      vi.mocked(sb.sendMessage).mockResolvedValue();
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValueOnce({
+            ok: true,
+            status: 200,
+            json: async () => ({ songs: [{ title: "Juno", artist: "Setsuna" }] }),
+          } as Response)
+          .mockRejectedValue(new Error("offline")),
+      );
+      const { RADIO_STATIONS } = await import("../lib/radioStations");
+      const station = RADIO_STATIONS[0];
+      if (station === undefined) throw new Error("the curated table must carry a station");
+      const { tuneStation } = await import("../lib/radio");
+      const { NOW_PLAYING_POLL_MS, NOW_PLAYING_STALE_MS, nowPlaying } = await import(
+        "../lib/nowPlaying"
+      );
+
+      vi.useFakeTimers();
+      tuneStation(station);
+      await vi.advanceTimersByTimeAsync(NOW_PLAYING_STALE_MS + NOW_PLAYING_POLL_MS);
+      expect(nowPlaying().status).toBe("stale");
+      vi.useRealTimers();
+
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "#a");
+      compose.setDraft(k, "/np");
+      const result = await compose.submit(k, "freenode", "#a");
+
+      expect(sb.sendMessage).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        error: `/np: the last track from ${station.title} is over 3 minutes old — not sending it`,
+      });
+    });
+
+    it("sends into a QUERY window when that is where it was typed", async () => {
+      // Targets `ctx.submittedFrom`, exactly as /me does — an ACTION to a peer
+      // is ordinary conversation, so there is no channel-only guard to add.
+      localStorage.setItem("grappa-token", "tok");
+      const sb = await import("../lib/scrollback");
+      vi.mocked(sb.sendMessage).mockResolvedValue();
+      await tuneWith({ songs: [{ title: "Juno", artist: "Setsuna" }] });
+
+      const compose = await import("../lib/compose");
+      const k = channelKey("freenode", "bob");
+      compose.setDraft(k, "/np");
+      await compose.submit(k, "freenode", "bob");
+
+      expect(sb.sendMessage).toHaveBeenCalledWith(
+        "freenode",
+        "bob",
+        expect.stringContaining("\x01ACTION is now playing: Setsuna — Juno ["),
+      );
+    });
   });
 
   // #1192 — a deliberate behaviour change, pinned so it cannot regress by
@@ -5007,6 +5196,7 @@ const DISPATCH_CASE_LABELS = [
   "nick",
   "notice",
   "notify",
+  "np",
   "op",
   "open-settings",
   "oper",
@@ -5059,6 +5249,14 @@ const DISPATCH_DRAFTS: ReadonlyArray<{ kind: SlashCommand["kind"]; draft: string
   { kind: "amsg", draft: "/amsg hi" },
   { kind: "ctcp", draft: "/ctcp bob VERSION" },
   { kind: "ping", draft: "/ping bob" },
+  // #1698 — this row lands in the UNPROTECTED list below, and that is the
+  // truth rather than a gap to paper over: nothing is tuned in this harness,
+  // so `/np` refuses locally and touches no mocked seam. Its sending arm needs
+  // a tuned station and a stubbed feed, which is what the `/np (#1698)`
+  // describe block above sets up. The row still earns its place — it keeps the
+  // arm reachable from the coverage reconciliation, which is what fails when
+  // the switch and this table drift apart.
+  { kind: "np", draft: "/np" },
   { kind: "join", draft: "/join #b" },
   { kind: "part", draft: "/part #other" },
   { kind: "invite", draft: "/invite bob #other" },
@@ -5206,12 +5404,12 @@ describe("#1396 — dispatch characterization over every arm", () => {
       misparsed,
     }).toMatchInlineSnapshot(`
       {
-        "arms": 59,
+        "arms": 60,
         "armsWithNoDraft": [],
         "draftsNamingNoArm": [],
         "duplicated": [],
         "misparsed": [],
-        "rows": 59,
+        "rows": 60,
       }
     `);
   });
@@ -5619,6 +5817,15 @@ describe("#1396 — dispatch characterization over every arm", () => {
             "ok": "notify: watching bob",
           },
         },
+        "np": {
+          "effects": [
+            "aliasList.aliases()",
+            "networks.networkIdBySlug("freenode")",
+          ],
+          "result": {
+            "error": "/np: nothing is playing — tune a station from the radio picker first",
+          },
+        },
         "op": {
           "effects": [
             "aliasList.aliases()",
@@ -5984,7 +6191,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
           "aliasList.aliases()",
           "networks.networkIdBySlug("freenode")",
         ],
-        "arms": 59,
+        "arms": 60,
         "indistinguishablePairs": [
           [
             "ame",
@@ -5992,6 +6199,7 @@ describe("#1396 — dispatch characterization over every arm", () => {
           ],
         ],
         "unprotected": [
+          "np",
           "error",
         ],
       }

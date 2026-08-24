@@ -92,10 +92,17 @@ export type NowPlayingTrack = {
     200ms or for an hour, and does not promise a "yet". */
 export type NowPlaying =
   | { readonly status: "idle" }
-  | { readonly status: "unsupported" }
-  | { readonly status: "unanswered" }
-  | { readonly status: "stale" }
-  | { readonly status: "playing"; readonly track: NowPlayingTrack };
+  // `station` is the TITLE, and EVERY arm that has one carries it — only
+  // `idle` does not, because there is no station to name. Uniform on purpose:
+  // each of these is a sentence `/np` says to the operator about a particular
+  // station, and an arm without the name forces a caller to go and read
+  // `tunedStation()` again, at a different instant, to finish the sentence.
+  // Projected out of the same synchronous derivation rather than stored, so it
+  // cannot drift from the player it comes from.
+  | { readonly status: "unsupported"; readonly station: string }
+  | { readonly status: "unanswered"; readonly station: string }
+  | { readonly status: "stale"; readonly station: string }
+  | { readonly status: "playing"; readonly track: NowPlayingTrack; readonly station: string };
 
 /** The shape SomaFM gives us. Everything optional: this is a third party's
     document and a missing field must degrade to "no track", never to a throw —
@@ -238,11 +245,11 @@ const exports_ = moduleRoot(() => {
   const nowPlaying = (): NowPlaying => {
     const station = tunedStation();
     if (station === null) return { status: "idle" };
-    if (station.songsUrl === null) return { status: "unsupported" };
-    if (staleFlag()) return { status: "stale" };
+    if (station.songsUrl === null) return { status: "unsupported", station: station.title };
+    if (staleFlag()) return { status: "stale", station: station.title };
     const last = read();
-    if (last === null) return { status: "unanswered" };
-    return { status: "playing", track: last.track };
+    if (last === null) return { status: "unanswered", station: station.title };
+    return { status: "playing", track: last.track, station: station.title };
   };
 
   // The DISPLAY projection, next to the state it projects. Both surfaces —
