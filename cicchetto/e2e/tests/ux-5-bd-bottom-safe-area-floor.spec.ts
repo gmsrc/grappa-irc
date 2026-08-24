@@ -98,7 +98,11 @@ test("@webkit ux-5-bd — .settings-drawer padding uses 1.5rem env() bottom floo
   // CSS-source shape: `max(1.5rem, env(safe-area-inset-bottom))` for
   // the bottom arm of the shorthand. The bottom arm is the 3rd value
   // in `padding: top horizontal bottom horizontal` (4-arm form).
-  expect(pad).toContain("max(1.5rem, env(safe-area-inset-bottom))");
+  // #1751 re-spelled the inset through the `:root` token — this file's own
+  // computed-value siblings below are what prove the floor still takes effect
+  // (they stayed green across that change; only these declared-spelling pins
+  // moved). The pinned half is the 1.5rem FLOOR, and it is untouched.
+  expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
 test("@webkit ux-5-bd — .settings-drawer computed padding-bottom >= 1.5rem floor (non-notched)", async ({
@@ -134,7 +138,11 @@ test("@webkit ux-5-bd — .archive-modal padding uses 1.5rem env() bottom floor"
 
   const pad = await readDeclaredCssValue(page, ".archive-modal", "padding");
   expect(pad).not.toBeNull();
-  expect(pad).toContain("max(1.5rem, env(safe-area-inset-bottom))");
+  // #1751 re-spelled the inset through the `:root` token — this file's own
+  // computed-value siblings below are what prove the floor still takes effect
+  // (they stayed green across that change; only these declared-spelling pins
+  // moved). The pinned half is the 1.5rem FLOOR, and it is untouched.
+  expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
 test("@webkit ux-5-bd — .archive-modal computed padding-bottom >= 1.5rem floor (non-notched)", async ({
@@ -174,7 +182,11 @@ test("@webkit ux-5-bd — .image-upload-modal padding uses 1.5rem env() bottom f
   expect(pad).not.toBeNull();
   // Pre-BD the modal had flat `padding: 1.5rem` (no env() arm at all
   // for bottom). Post-BD the bottom arm gets the safe-area treatment.
-  expect(pad).toContain("max(1.5rem, env(safe-area-inset-bottom))");
+  // #1751 re-spelled the inset through the `:root` token — this file's own
+  // computed-value siblings below are what prove the floor still takes effect
+  // (they stayed green across that change; only these declared-spelling pins
+  // moved). The pinned half is the 1.5rem FLOOR, and it is untouched.
+  expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
 test("@webkit ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor (BM launcher footer trap)", async ({
@@ -193,7 +205,11 @@ test("@webkit ux-5-bd — .shell-members padding-bottom uses 1.5rem env() floor 
   // chrome.
   const pad = await readDeclaredCssValue(page, ".shell-members", "padding-bottom");
   expect(pad).not.toBeNull();
-  expect(pad).toContain("max(1.5rem, env(safe-area-inset-bottom))");
+  // #1751 re-spelled the inset through the `:root` token — this file's own
+  // computed-value siblings below are what prove the floor still takes effect
+  // (they stayed green across that change; only these declared-spelling pins
+  // moved). The pinned half is the 1.5rem FLOOR, and it is untouched.
+  expect(pad).toContain("max(1.5rem, var(--safe-area-inset-bottom))");
 });
 
 test("@webkit ux-5-bd — .shell-members computed padding-bottom >= 1.5rem floor (non-notched)", async ({

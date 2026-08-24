@@ -111,7 +111,10 @@ test("@webkit UX-3 BIS — .shell.shell-mobile carries safe-area inset; bars do 
   // The longhands MAY be authored or expanded; tolerate either.
   const shellTop = shell?.paddingTop ?? "";
   const shellBottom = shell?.paddingBottom ?? "";
-  expect(shellTop).toContain("env(");
+  // #1751 — the inset arrives as `var(--safe-area-inset-top)` now; `env()`
+  // survives only on `:root`. The claim is unchanged: this container declares
+  // the top inset.
+  expect(shellTop).toContain("var(");
   expect(shellTop).toContain("safe-area-inset-top");
   // Zero, and declared: an empty string here means the longhand is gone
   // and base `.shell`'s inset cascades in. CSSOM may serialize the
@@ -131,12 +134,23 @@ test("@webkit UX-3 BIS — .shell.shell-mobile carries safe-area inset; bars do 
   const topicBar = await findRulePadding(page, ".topic-bar");
   expect(topicBar).not.toBeNull();
   const topicPadding = `${topicBar?.padding ?? ""} ${topicBar?.paddingTop ?? ""}`;
-  expect(topicPadding).not.toContain("env(");
+  // #1751 — STRENGTHENED, not merely re-spelled. `not.toContain("env(")` alone
+  // would now pass on `var(--safe-area-inset-top)`, i.e. on exactly the edit it
+  // exists to stop, because #1751 moved every consumer onto the token. This
+  // band is THE surface vjt's directive singled out: `env(safe-area-inset-top)`
+  // is a viewport constant and not position-aware, and `.topic-bar` also renders
+  // MID-COLUMN under the mobile header, where an inset would pad it away from a
+  // notch it never touches. Reject the inset by NAME, whichever vector carries
+  // it.
+  expect(topicPadding).not.toContain("safe-area-inset");
 
   // .bottom-bar MUST NOT carry the inset anymore (container handles
   // the home-indicator clearance via padding-bottom).
   const bottomBar = await findRulePadding(page, ".bottom-bar");
   expect(bottomBar).not.toBeNull();
   const bottomPadding = `${bottomBar?.padding ?? ""} ${bottomBar?.paddingBottom ?? ""}`;
-  expect(bottomPadding).not.toContain("env(");
+  // Same strengthening as the band above, same reason: the container owns the
+  // home-indicator clearance, and after #1751 an inset would arrive here spelled
+  // `var(--safe-area-inset-bottom)` and slip straight past an `env(`-only guard.
+  expect(bottomPadding).not.toContain("safe-area-inset");
 });
