@@ -60465,3 +60465,94 @@ predicates over one fact, which is the parallel structure #1698 went out of its
 way to avoid by keying both on `tunedStation()`. **The general shape: when a
 surface stops being true, fix the element that made the false claim, not every
 neighbour that is still telling the truth.**
+<!-- entry #1715 -->
+
+---
+
+## 2026-08-24 — #1715: the watchdog's own log line waits out the lock it reports
+
+`Grappa.Repo.LockWatch.report_unattributed/2` blocked for the whole ExUnit
+deadline inside `Logger.warning`, on pristine main, in ~15 % of runs. There is
+no VM stall behind it, and the mechanism is not specific to this module.
+
+`Logger.__should_log__/2` calls `:logger_config.allow/2` at every call site
+unconditionally, and `allow/2` writes `{logger_config, Module}` — one
+`persistent_term` key PER MODULE — the FIRST time that module logs. A
+`persistent_term` write blocks on a **thread-progress barrier**; SQLite's busy
+handler sleeps out its `busy_timeout` inside a **dirty-IO** NIF and holds that
+barrier for the whole sleep. So a module's first log line during a write-lock
+wait waits for the wait — and this module's first line is, by construction, its
+own stall report, i.e. exactly the line that must not.
+
+Measured rather than inferred: halve the budget and the stall halves. 133 s →
+66.7 / 67.4 / 66.1 s, ratio **1.99**.
+
+### The mitigation, and the exact ground it holds
+
+`init/1` calls `prime_logger_module_cache/0` — a bare `Logger.debug(fn -> "" end)`
+— paying this module's one lazy put at boot, where nothing holds the write lock.
+`debug` is deliberate and emits nothing: `allow/2` caches
+`?PRIMARY_TO_CACHE(get_primary_level())`, i.e. the PRIMARY level, so `debug`
+writes the same key with the same value `warning` would while staying below the
+bar itself. Measured on `ad1df939`: the key reads `:absent` at boot before the
+change and the primary level after it.
+
+🔴 **It covers ONE of the three measured mechanisms, and 6 of the 9 measured
+victims. It does NOT cover:**
+
+* `logger_config:set/3` — a CONFIG write, with no module key to prime; measured
+  as the suspended site in 3 of 30 bench runs;
+* `code:ensure_loaded/1` — module LOADING, a different serialisation point
+  entirely, outside this design's reach;
+* the first log line of every OTHER module — measured on a booted dev node, 7
+  modules hold a cache key against 597 loaded — and in particular a **crash
+  report**, which is by definition the first line from whichever module just
+  died, i.e. during an incident the module nobody anticipated;
+* **the coupling itself, which is untouched.**
+
+🔴 **And priming every module is not a bigger cure, it is a bigger version of the
+bug.** `logger_config:set/3` on a PRIMARY level change does one
+`persistent_term:put` per CACHED module (its flush loop), so a
+`Logger.configure(level: …)` would go from today's 7 thread-progress waits to one
+per loaded module. That is why the prime is one module and not a sweep.
+
+### What the bench does NOT say
+
+52 primed runs, 0 stalls, against 6 stalls in 30 unprimed. **That is not quoted
+as a cure rate.** The rate on that bench is void: the watchdog is a co-cause, and
+the run was designed to census WHICH victim site survives priming — no primed run
+stalled, so the census collected no data. That is the UNINTERPRETABLE branch of
+its own pre-registration, and it is reported as one. Suggestive; not the
+measurement that was set out to be taken.
+
+### Still open, and deliberately not blocking
+
+Whether the coupling is an **ERTS defect** (→ an upstream report, and grappa
+gains no architectural constraint) or **`umrefc` by design** (→ grappa has a real
+production constraint: during any SQLite write-lock wait, up to `busy_timeout`,
+the first log line of any module and any module load block). The second reading
+is a production claim larger than #1687 and is **unmeasured in production**. It
+is a separate question, answered after this ships, not before.
+
+### #1687 (`c4acaf6c`) holds — the pre-registered prediction was REFUTED
+
+`c4acaf6c` moved `start_tmp_repo/0` from `busy_timeout: 30_000` to
+`@waiter_budget_ms` (`@test_timeout_ms * 2`), which quadrupled the wall clock
+burnt per occurrence (≈33 s → ≈133 s). That prices the fix; it does not condemn
+it, so the other half was run. **Pre-registered prediction:** restore only
+`busy_timeout` to `30_000`, leave the deadline; the stall then fits inside the
+deadline and the runs go green. **Refuted, informatively** — 2 stalls in 18 runs,
+both red, failing on the test's own `assert_receive` at 10 s with an unrelated
+`%Exqlite.Error{message: "database is locked"}` in the mailbox. That is verbatim
+the symptom #1687 exists to remove. At the larger budget the same stall fails as
+an honest ExUnit timeout naming the test and the line. ⇒ `c4acaf6c` does what it
+claims; it neither causes #1715 nor cures it, and it makes the failure legible.
+
+### One drift, fixed by anchor and not by value
+
+`lock_watch_test.exs` still cited *"`start_tmp_repo/0`'s `busy_timeout: 30_000`"*
+while `c4acaf6c` had changed that very line to `@waiter_budget_ms` — the same
+commit moved the value and left the citation. Fixed by naming the ANCHOR
+(`busy_timeout: @waiter_budget_ms`, and `min(15_000, the budget)` for the
+historical arithmetic, kept and labelled rather than deleted), never by writing
+the new number in, which would only reschedule the rot.
