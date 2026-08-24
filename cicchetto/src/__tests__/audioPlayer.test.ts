@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  type AudioFailure,
   activeAudio,
+  audioFailureLabel,
+  clearPlaybackFailure,
   closeAudio,
   hidePlayer,
   playAudio,
+  playbackFailure,
   playerHidden,
+  reportPlaybackFailure,
   showPlayer,
 } from "../lib/audioPlayer";
 import { setToken } from "../lib/auth";
@@ -136,5 +141,135 @@ describe("audioPlayer transport visibility (#1697)", () => {
 
     expect(playerHidden()).toBe(false);
     expect(activeAudio()).toBeNull();
+  });
+});
+
+// #1744 — A SOURCE THAT WILL NOT PLAY. The element populates `el.error` and
+// nothing was reading it for DISPLAY, so a station that never decoded looked
+// exactly like one the operator had paused.
+//
+// A THIRD SIBLING SIGNAL, and by now that is a rule rather than a choice. The
+// obvious home is a field on `AudioPlayerState` — and it is the same trap
+// #1697 (`hidden`) and #1734 (`resumePoint`) each walked up to: `AudioMiniPlayer`
+// drives the element from `createEffect(on(activeAudio, …))`, whose body assigns
+// `audioEl.src`, and assigning `.src` re-invokes the media load algorithm even
+// when the URL has not changed. A failure riding inside the state object would
+// hand that effect a new reference and RESTART the source — on the very event
+// that says the source cannot be started. Pinned below by the same
+// same-reference assertion #1697 uses.
+describe("audioPlayer playback failure (#1744)", () => {
+  const STATION = "https://ice.somafm.com/groovesalad-128-mp3";
+
+  /** A `MediaError` as the element hands one over. Only `code` is read: the
+      `message` is empty on every browser measured and vendor-flavoured where it
+      is not, so it is never shown. */
+  const mediaError = (code: number): MediaError => ({ code, message: "" }) as MediaError;
+
+  afterEach(() => {
+    clearPlaybackFailure();
+  });
+
+  it("starts with no failure", () => {
+    expect(playbackFailure()).toBeNull();
+  });
+
+  // The four the spec defines, as a table — a `switch` that answered the same
+  // reason twice would still pass a single-code test.
+  it.each([
+    [1, "aborted"],
+    [2, "network"],
+    [3, "decode"],
+    [4, "unsupported"],
+  ] as ReadonlyArray<readonly [number, AudioFailure]>)(
+    "records MediaError code %i as %s",
+    (code, reason) => {
+      reportPlaybackFailure(mediaError(code));
+      expect(playbackFailure()).toBe(reason);
+    },
+  );
+
+  it("records a code outside the spec's four as unknown rather than dropping it", () => {
+    // A failure we cannot NAME is still a failure, and the surface must say
+    // something. Silently ignoring an unrecognised code is how a bar goes back
+    // to looking like a paused station.
+    reportPlaybackFailure(mediaError(9));
+    expect(playbackFailure()).toBe("unknown");
+  });
+
+  it("records a failure even when the element supplies no MediaError", () => {
+    // `error` is typed `MediaError | null`, and the event having fired is
+    // itself the fact. Same argument as the unknown code above.
+    reportPlaybackFailure(null);
+    expect(playbackFailure()).toBe("unknown");
+  });
+
+  it("every reason has a sentence for the operator", () => {
+    const reasons: readonly AudioFailure[] = [
+      "aborted",
+      "network",
+      "decode",
+      "unsupported",
+      "unknown",
+    ];
+    const said = reasons.map((r) => audioFailureLabel(r));
+    expect(said.every((s) => s.length > 0)).toBe(true);
+    // Distinct, because the operator's next move differs: a lost connection is
+    // worth re-pressing play for and an unplayable source never will be.
+    expect(new Set(said).size).toBe(reasons.length);
+  });
+
+  it("tuning a new source clears the previous one's failure", () => {
+    playAudio(STATION, "Groove Salad");
+    reportPlaybackFailure(mediaError(4));
+
+    playAudio("https://grappa.example/uploads/abc", null);
+
+    expect(playbackFailure()).toBeNull();
+  });
+
+  it("closing the player leaves no stale failure behind", () => {
+    playAudio(STATION, "Groove Salad");
+    reportPlaybackFailure(mediaError(2));
+
+    closeAudio();
+
+    expect(playbackFailure()).toBeNull();
+  });
+
+  it("clearPlaybackFailure re-arms the notice for a retry of the SAME source", () => {
+    // The retry door. Without it a second failure of the same source would
+    // change no signal, so the operator would press play and watch nothing
+    // happen — the bar would look frozen rather than re-refused.
+    playAudio(STATION, "Groove Salad");
+    reportPlaybackFailure(mediaError(2));
+
+    clearPlaybackFailure();
+
+    expect(playbackFailure()).toBeNull();
+    expect(activeAudio()).not.toBeNull();
+  });
+
+  it("token rotation clears it with the rest of the store (identity-scoped)", () => {
+    setToken("tokA");
+    playAudio(STATION, "Groove Salad");
+    reportPlaybackFailure(mediaError(3));
+
+    setToken("tokB");
+
+    expect(playbackFailure()).toBeNull();
+    expect(activeAudio()).toBeNull();
+  });
+
+  // THE load-bearing assertion, third time on this edge, and `toBe` for the
+  // same reason #1697 spells out: only a source object whose IDENTITY survives
+  // the write leaves the element's effect asleep. A `failure` field inside
+  // `AudioPlayerState` fails exactly here.
+  it("reporting a failure does not touch the source object — same reference in, same out", () => {
+    playAudio(STATION, "Groove Salad");
+    const before = activeAudio();
+
+    reportPlaybackFailure(mediaError(4));
+
+    expect(activeAudio()).toBe(before);
   });
 });
