@@ -63215,3 +63215,111 @@ GNU/perl extension POSIX never defined; BSD grep answers rc=2, which
 (#745's helper doing exactly its job). The stand-in is the printable-ASCII
 byte range under `LC_ALL=C` — strictly tighter, which is the safe direction:
 a value it accepts is certainly ASCII.
+<!-- entry #1618 -->
+
+---
+
+## 2026-08-25 — #1618: a write allowed to be dropped was not allowed to be slow
+
+`GrappaWeb.UserSocket.connect/3` captured the subject's client `/64` by
+calling `Grappa.Vhosts.record_client_source/2` between authentication and
+`{:ok, socket}`. Phoenix holds the WebSocket upgrade open until `connect/3`
+returns, and that call is a `BEGIN IMMEDIATE` write transaction on
+`user_settings` — so with another writer holding the SQLite write lock the
+upgrade waited the entire `busy_timeout` and then dropped the write it had
+waited for. Measured on one `scripts/integration.sh` run over `425426f2`: 682
+connects, 680 at or below 56 ms, one at 11 140 ms, one at **31 575 ms**, the
+last naming its own mechanism in the container log (`db write unavailable:
+SQLite write lock held by another writer for 31572ms` → `dropped
+(best-effort)` → `CONNECTED TO GrappaWeb.UserSocket in 31575ms`).
+
+The interesting part is that the drop was already policy. #523 made
+`record_client_source/2` swallow `:db_unavailable` precisely so a saturated
+DB could never fail a connect, and its comment says so — *"a client-connect
+sample that must NEVER fail the connect"*. **What a best-effort contract
+written about the RESULT does not cover is the CLOCK.** A sample nobody is
+allowed to depend on was allowed to delay every new WebSocket by half a
+minute, and the code read as if that had been considered.
+
+### The cure, and the three that were not chosen
+
+The persist moves to `Grappa.TaskSupervisor` — the same door
+`ReadCursorController.create/2` (#273) uses for the same shape at the same
+kind of boundary: request-critical work stays inline, eventually-consistent
+work leaves it. No new supervision child, so it is hot-deployable.
+`Task.Supervisor.start_child/2` rather than the `Task.start_link/1` that
+CLAUDE.md's fire-and-forget line names, because a LINKED task takes the
+transport down with it on a crash — which would reinstate #523's hole one
+layer up.
+
+*A shorter timeout of its own* was rejected: expressing it means threading a
+per-call `busy_timeout` through `BusyRetry` / `Repo.immediate_transaction/1`,
+which is the `Repo` refactor this issue is not, and the upgrade still waits —
+just less. *Not writing on this path at all* was rejected because the WS
+connect is the ONLY capture point a USER has; #647's fallback reads
+`sessions.ip`, written at login, so a long-lived bearer that roams would never
+refresh. Curing a latency bug by deleting a capability is not a cure.
+
+**The detach is at the CALL SITE, not inside `Vhosts.record_client_source/2`,
+and that is a domain boundary rather than a convenience.** The verb's other
+two callers are ordering-critical: `Visitors.Login` (#645) must have the
+sample PERSISTED before it spawns the anchor session in the same request —
+that ordering is the whole reason #645 exists — and
+`Vhosts.last_known_client_key/1` (#647) re-persists inside a read that a
+session spawn is already blocking on. Detaching in the context would have
+broken both without a test firing. This is design-discipline (6) read
+literally: the 80 % that fits is the fire-and-forget execution, the 20 % that
+does not is the ordering, and the 20 % is where the line goes.
+
+### What the deferral costs, stated rather than waved away
+
+#1618 declined to propose a cure partly on this: #543's static-mapping
+addressing reads `last_client_prefix64`, so a session spawned right after a
+connect could read a sample one connect stale. Resolved by cases rather than
+by assertion. The COLD case cannot be hit — a subject with nothing recorded
+falls through to `sessions.ip` / `visitor.ip` (#647), which on a fresh login
+is the very address this connect would have written, and #647 persists it
+synchronously on the way past. What remains is an ESTABLISHED subject that
+roamed and spawns a session inside the task's scheduling window. There the
+synchronous path was not better: under the contention that makes the window
+wide it waited the full `busy_timeout` and then dropped the write, leaving the
+same stale value plus half a minute of upgrade. **The async path is never
+worse under contention and marginally racier in the sub-millisecond window
+without it.**
+
+### Why the test is a test
+
+A wall-clock threshold would be flaky, and to be honest it would need a real
+30 s lock. The assertion is the PROCESS instead:
+`Phoenix.ChannelTest.connect/3` invokes `connect/3` in the test process, so a
+synchronous capture reports `self()`. The probe is Ecto's own
+`[:grappa, :repo, :query]` — the event `Grappa.DbLatency` already consumes —
+filtered on `source == "user_settings"`, which fires in whichever process ran
+the query. **No production seam was added for the test to be satisfied by**:
+the thing observed is the real write. A second assertion in the same test
+proves it is a deferral and not a drop (the sample is there once the task
+exits), so the two obvious mutants die on different lines — re-synchronising
+kills the `refute`, detaching-without-writing kills the value.
+
+The five pre-existing #543 Part C cases read the persisted value immediately
+after connect; each now drains the supervisor's children first. **The two
+NEGATIVE cases drain too**, deliberately: "nothing was recorded" must not be
+able to pass merely because a task had not got there yet.
+
+### What was measured, and what was not
+
+Measured, on this branch: the red is the discriminating one —
+`refute exec_pid == test_pid`, *"both sides are exactly equal"*, i.e. the
+write ran in the connect process; green afterwards at 38/38 in
+`user_socket_test.exs`; 80/80 across `session_plan_vhost_test.exs`,
+`vhosts_test.exs` and `user_settings_concurrency_test.exs`, the three suites
+that read this sample back.
+
+NOT measured here: the latency improvement itself. The 31 575 ms is #1618's
+number from its own integration run, not one taken again on this branch, and
+no lock-contention bench was built to reproduce it — the cure is argued from
+the mechanism (a process that nobody awaits cannot block its caller), not from
+a second measurement of the symptom. Also not measured: whether the roam
+window above is ever reached in production, and the Linux `integration.yml`
+substrate, which #1618 already flagged as unshared with the darwin/Docker run
+the numbers come from.
