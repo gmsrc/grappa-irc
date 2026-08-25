@@ -56,8 +56,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
 
   alias Grappa.Networks.{Credentials, Servers}
   alias Grappa.PubSub.Topic
-  alias Grappa.Scrollback.Message
-  alias Grappa.Scrollback.Wire
+  alias Grappa.Scrollback.{Message, Wire}
   alias GrappaWeb.UserSocket
 
   setup do
@@ -116,7 +115,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
   defp subscription_metadata(topic) do
     Grappa.PubSub
     |> Registry.lookup(topic)
-    |> Enum.map(fn {_pid, meta} -> meta end)
+    |> Enum.map(fn {_, meta} -> meta end)
   end
 
   describe "default join (no params) — the compatibility guarantee" do
@@ -265,7 +264,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
 
   describe "presence: false on a topic that is not channel-shaped" do
     test "is ignored on the user topic — its traffic is unaffected" do
-      {user, _network} = setup_user_and_network()
+      {user, _} = setup_user_and_network()
       topic = Topic.user(user.name)
 
       {:ok, _, socket} =
@@ -497,15 +496,20 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
     end
   end
 
+  # `:absent` and `nil` are DIFFERENT answers and must not collapse: `nil` IS
+  # the metadata of a plain subscription, which is the very state the barrier
+  # waits for, while `:absent` means this pid holds no subscription at all.
+  # Matching the pid with a filter (rather than `Enum.find_value/2`, which
+  # reads a `nil` value as "keep looking") is what keeps them apart.
   defp channel_metadata(socket) do
     Grappa.PubSub
     |> Registry.lookup(socket.topic)
-    |> Enum.find_value(fn {pid, meta} -> if pid == socket.channel_pid, do: {:found, meta} end)
-    |> case do
-      {:found, meta} -> meta
-      nil -> :absent
-    end
+    |> Enum.filter(fn {pid, _} -> pid == socket.channel_pid end)
+    |> metadata_of()
   end
+
+  defp metadata_of([{_, meta} | _]), do: meta
+  defp metadata_of([]), do: :absent
 
   defp drain_pushes do
     receive do

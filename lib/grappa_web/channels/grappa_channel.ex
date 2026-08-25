@@ -285,7 +285,7 @@ defmodule GrappaWeb.GrappaChannel do
   # flag that could never fire.
   @spec assign_presence_suppression(Topic.parsed(), map(), Phoenix.Socket.t()) ::
           Phoenix.Socket.t()
-  defp assign_presence_suppression({:channel, user_name, network_slug, _channel}, params, socket)
+  defp assign_presence_suppression({:channel, user_name, network_slug, _}, params, socket)
        when is_map(params) do
     case params do
       %{"presence" => false} ->
@@ -641,7 +641,7 @@ defmodule GrappaWeb.GrappaChannel do
 
   defp pausable_peer_presence?(_, _), do: false
 
-  defp own?(_sender, nil), do: false
+  defp own?(_, nil), do: false
 
   defp own?(sender, own_nick) when is_binary(own_nick),
     do: Identifier.canonical_target(sender) == Identifier.canonical_target(own_nick)
