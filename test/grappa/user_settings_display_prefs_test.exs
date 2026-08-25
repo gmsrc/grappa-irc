@@ -5,8 +5,9 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
   account converges its UI across devices (report: desktop toggle didn't
   reach the iOS PWA because the prefs were localStorage-only).
 
-  The three prefs: `time_format` (`"hms" | "hm"`, #217), `colored_nicklist`
-  (boolean, #443), and `presence_filter` (a per-channel tri-state map, #222).
+  The four prefs: `time_format` (`"hms" | "hm"`, #217), `colored_nicklist`
+  (boolean, #443), `presence_filter` (a per-channel tri-state map, #222), and
+  `show_bottom_bar` (boolean, #1766).
 
   ## The tri-state invariant (NON-NEGOTIABLE)
 
@@ -39,7 +40,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
       %{
         "time_format" => "hms",
         "colored_nicklist" => false,
-        "presence_filter" => %{}
+        "presence_filter" => %{},
+        "show_bottom_bar" => true
       },
       overrides
     )
@@ -56,7 +58,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
       assert UserSettings.get_display_prefs({:user, fake_id}) == %{
                time_format: "hms",
                colored_nicklist: false,
-               presence_filter: %{}
+               presence_filter: %{},
+               show_bottom_bar: true
              }
     end
 
@@ -68,7 +71,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
       assert UserSettings.get_display_prefs({:user, user.id}) == %{
                time_format: "hms",
                colored_nicklist: false,
-               presence_filter: %{}
+               presence_filter: %{},
+               show_bottom_bar: true
              }
     end
 
@@ -86,7 +90,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
       assert UserSettings.get_display_prefs({:user, user.id}) == %{
                time_format: "hm",
                colored_nicklist: false,
-               presence_filter: %{}
+               presence_filter: %{},
+               show_bottom_bar: true
              }
     end
 
@@ -101,7 +106,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
       assert UserSettings.get_display_prefs({:user, user.id}) == %{
                time_format: "hms",
                colored_nicklist: false,
-               presence_filter: %{}
+               presence_filter: %{},
+               show_bottom_bar: true
              }
     end
   end
@@ -160,7 +166,7 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
   # ---------------------------------------------------------------------------
 
   describe "put_display_prefs/2 — round-trip" do
-    test "persists all three prefs and reads them back" do
+    test "persists all four prefs and reads them back" do
       user = user_fixture()
 
       body =
@@ -175,7 +181,8 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
       assert UserSettings.get_display_prefs({:user, user.id}) == %{
                time_format: "hm",
                colored_nicklist: true,
-               presence_filter: %{"libera #bofh" => "hide", "libera #cat" => "show"}
+               presence_filter: %{"libera #bofh" => "hide", "libera #cat" => "show"},
+               show_bottom_bar: true
              }
     end
 
@@ -335,6 +342,88 @@ defmodule Grappa.UserSettingsDisplayPrefsTest do
                  {:user, user.id},
                  valid_wire(%{"presence_filter" => %{long_key => "hide"}})
                )
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # show_bottom_bar (#1766) — the fourth key, and the one whose ARRIVAL is the
+  # interesting case
+  # ---------------------------------------------------------------------------
+  #
+  # The pref itself is an ordinary boolean; what needs pinning is the skew a
+  # fourth key creates. `fetch_display_bool/2` — the validator every prior key
+  # uses — 422s a key that is absent, so a cic bundle predating #1766 would have
+  # every one of its PUTs rejected the moment the server grows this key: the
+  # operator's time-format and nicklist toggles would silently stop persisting
+  # until the tab reloads onto the new bundle. That window is real (the server
+  # and the bundle deploy separately — `deploy-m42.sh` vs `--cic`), and the wire
+  # contract already names the rule: an unknown-or-missing field is never fatal,
+  # in BOTH directions. So absence takes the default; a value that IS sent still
+  # has to be a boolean.
+
+  describe "show_bottom_bar (#1766)" do
+    test "defaults to true — the bar ships shown, this is an opt-OUT" do
+      assert UserSettings.default_display_prefs().show_bottom_bar == true
+      assert UserSettings.get_display_prefs({:user, Ecto.UUID.generate()}).show_bottom_bar == true
+    end
+
+    test "round-trips false" do
+      user = user_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_display_prefs({:user, user.id}, valid_wire(%{"show_bottom_bar" => false}))
+
+      assert UserSettings.get_display_prefs({:user, user.id}).show_bottom_bar == false
+    end
+
+    test "a PUT from a pre-#1766 client (three keys, no show_bottom_bar) is ACCEPTED" do
+      user = user_fixture()
+      legacy_body = Map.delete(valid_wire(), "show_bottom_bar")
+
+      assert {:ok, _} = UserSettings.put_display_prefs({:user, user.id}, legacy_body)
+      # …and the omission reads as the default, not as a crash and not as false.
+      assert UserSettings.get_display_prefs({:user, user.id}).show_bottom_bar == true
+    end
+
+    test "rejects a non-boolean show_bottom_bar — absent is tolerated, garbage is not" do
+      user = user_fixture()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               UserSettings.put_display_prefs({:user, user.id}, valid_wire(%{"show_bottom_bar" => "yes"}))
+
+      assert cs.errors[:display_prefs]
+    end
+
+    test "accepts an atom key too (parity with the sibling booleans)" do
+      user = user_fixture()
+
+      assert {:ok, _} =
+               UserSettings.put_display_prefs({:user, user.id}, %{
+                 time_format: "hms",
+                 colored_nicklist: false,
+                 presence_filter: %{},
+                 show_bottom_bar: false
+               })
+
+      assert UserSettings.get_display_prefs({:user, user.id}).show_bottom_bar == false
+    end
+
+    test "a stored blob predating the key reads true, not false" do
+      user = user_fixture()
+      {:ok, settings} = UserSettings.get_or_init({:user, user.id})
+
+      settings
+      |> Settings.changeset(%{
+        data:
+          Map.put(settings.data, "display_prefs", %{
+            "time_format" => "hm",
+            "colored_nicklist" => true,
+            "presence_filter" => %{}
+          })
+      })
+      |> Repo.update!()
+
+      assert UserSettings.get_display_prefs({:user, user.id}).show_bottom_bar == true
     end
   end
 

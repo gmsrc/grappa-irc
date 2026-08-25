@@ -522,8 +522,9 @@ defmodule GrappaWeb.UserSettingsControllerTest do
   # ===========================================================================
   # display_prefs (#449) — server-backed display preferences, so one account
   # converges its UI across devices. Wrapped-envelope endpoint mirroring
-  # aliases; full-map PUT, no PATCH/diff. Three prefs: time_format,
-  # colored_nicklist, presence_filter (per-channel tri-state map).
+  # aliases; full-map PUT, no PATCH/diff. Four prefs: time_format,
+  # colored_nicklist, presence_filter (per-channel tri-state map), and
+  # show_bottom_bar (#1766).
   #
   # A/B-INDEPENDENT core: font-size (Fork A, escalated to vjt) and the
   # client-side seed-up-once migration (Fork B) are NOT exercised here.
@@ -534,7 +535,8 @@ defmodule GrappaWeb.UserSettingsControllerTest do
     %{
       "time_format" => "hms",
       "colored_nicklist" => false,
-      "presence_filter" => %{}
+      "presence_filter" => %{},
+      "show_bottom_bar" => true
     }
   end
 
@@ -569,6 +571,10 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       assert prefs == default_display_prefs_wire()
     end
 
+    # The write below is deliberately the PRE-#1766 three-key body: it is what
+    # a cic bundle predating the fourth key sends, and the GET has to answer
+    # the complete four-key shape anyway (the missing key filled from the
+    # default, not dropped and not false).
     test "reflects the most-recent PUT", %{conn: conn, user: user} do
       {:ok, _} =
         UserSettings.put_display_prefs({:user, user.id}, %{
@@ -584,7 +590,8 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       assert prefs == %{
                "time_format" => "hm",
                "colored_nicklist" => true,
-               "presence_filter" => %{"libera #bofh" => "hide"}
+               "presence_filter" => %{"libera #bofh" => "hide"},
+               "show_bottom_bar" => true
              }
     end
 
@@ -631,6 +638,32 @@ defmodule GrappaWeb.UserSettingsControllerTest do
       stored = UserSettings.get_display_prefs({:user, user.id})
       assert stored.time_format == "hm"
       assert stored.presence_filter == %{"libera #cat" => "show"}
+    end
+
+    # #1766 — the fourth key through the HTTP door, both directions. The `false`
+    # is the whole point of the pref, so a payload that carried the key but
+    # silently normalised it back to the default would pass every other test
+    # here.
+    test "200 + round-trips show_bottom_bar: false", %{conn: conn, user: user} do
+      body = %{"display_prefs" => Map.put(default_display_prefs_wire(), "show_bottom_bar", false)}
+
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"display_prefs" => returned} = json_response(conn, 200)
+      assert returned["show_bottom_bar"] == false
+      assert UserSettings.get_display_prefs({:user, user.id}).show_bottom_bar == false
+    end
+
+    # A bundle predating #1766 keeps PUTting three keys. It must not start
+    # 422ing the moment the server grows the fourth — that would silently break
+    # the operator's OTHER display toggles until the tab reloaded.
+    test "200 for a pre-#1766 three-key body (no show_bottom_bar)", %{conn: conn} do
+      body = %{"display_prefs" => Map.delete(default_display_prefs_wire(), "show_bottom_bar")}
+
+      conn = put(conn, "/me/settings/display-prefs", body)
+
+      assert %{"display_prefs" => returned} = json_response(conn, 200)
+      assert returned["show_bottom_bar"] == true
     end
 
     test "PUT response carries persisted:true", %{conn: conn} do

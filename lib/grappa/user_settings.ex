@@ -210,6 +210,14 @@ defmodule Grappa.UserSettings do
       stores a third value and never coerces unset into a boolean. Font size
       is deliberately excluded — it is per-DEVICE (vjt, #449) and stays
       client-local (`cicchetto/src/lib/fontSize.ts`).
+    * `show_bottom_bar` — whether cic renders the mobile window bar (#1766).
+      Default TRUE: this is an opt-OUT, carrying #174's standing constraint
+      that the bar is never deleted, only made optional. SYNCED rather than
+      per-device (the split above) because the complaint behind it — "7
+      networks and the strip no longer picks" — is account-scoped: the bar is
+      O(windows), and the window count is the same on the phone and the
+      tablet. That is the whole distinction from #914's `hide_next_active`,
+      which stayed client-local because its complaint was about a viewport.
   """
   # `time_format` + the presence values are closed sets ("hms"|"hm",
   # "show"|"hide"), but they stay `String.t()` on PURPOSE: Elixir typespecs
@@ -222,7 +230,8 @@ defmodule Grappa.UserSettings do
   @type display_prefs :: %{
           time_format: String.t(),
           colored_nicklist: boolean(),
-          presence_filter: %{String.t() => String.t()}
+          presence_filter: %{String.t() => String.t()},
+          show_bottom_bar: boolean()
         }
 
   @notification_prefs_key "notification_prefs"
@@ -1305,12 +1314,13 @@ defmodule Grappa.UserSettings do
   @doc """
   Default display preferences applied when a subject has no row OR the
   `"display_prefs"` key is absent: `"hms"` timestamps, monochrome nicklist,
-  and an empty presence-filter map (every channel follows the size default).
+  an empty presence-filter map (every channel follows the size default), and
+  the mobile window bar SHOWN (#1766 is an opt-out, never a default change).
   """
   @dialyzer {:nowarn_function, default_display_prefs: 0}
   @spec default_display_prefs() :: display_prefs()
   def default_display_prefs do
-    %{time_format: "hms", colored_nicklist: false, presence_filter: %{}}
+    %{time_format: "hms", colored_nicklist: false, presence_filter: %{}, show_bottom_bar: true}
   end
 
   @doc """
@@ -1367,6 +1377,9 @@ defmodule Grappa.UserSettings do
 
     * `time_format` ∈ #{inspect(@display_time_formats)}.
     * `colored_nicklist` is a boolean.
+    * `show_bottom_bar` is a boolean IF PRESENT; an absent key takes the
+      default (#1766). Every other key 422s when missing, and that asymmetry
+      is deliberate — see `fetch_optional_display_bool/3`.
     * `presence_filter` is a `%{channel_key => "show" | "hide"}` map. Any
       other value (a boolean, a third state) is REJECTED — the tri-state's
       unset is the ABSENCE of a key, never a stored value, so the server
@@ -1997,7 +2010,8 @@ defmodule Grappa.UserSettings do
     %{
       time_format: read_display_time_format(stored),
       colored_nicklist: read_display_bool(stored, :colored_nicklist, false),
-      presence_filter: read_presence_filter(stored)
+      presence_filter: read_presence_filter(stored),
+      show_bottom_bar: read_display_bool(stored, :show_bottom_bar, true)
     }
   end
 
@@ -2032,8 +2046,15 @@ defmodule Grappa.UserSettings do
   defp validate_and_normalize_display_prefs(prefs, subject) do
     with {:ok, tf} <- fetch_display_time_format(prefs),
          {:ok, cn} <- fetch_display_bool(prefs, :colored_nicklist),
-         {:ok, pf} <- fetch_presence_filter(prefs) do
-      {:ok, %{"time_format" => tf, "colored_nicklist" => cn, "presence_filter" => pf}}
+         {:ok, pf} <- fetch_presence_filter(prefs),
+         {:ok, sbb} <- fetch_optional_display_bool(prefs, :show_bottom_bar, true) do
+      {:ok,
+       %{
+         "time_format" => tf,
+         "colored_nicklist" => cn,
+         "presence_filter" => pf,
+         "show_bottom_bar" => sbb
+       }}
     else
       {:error, message} -> {:error, display_prefs_changeset_error(message, subject)}
     end
@@ -2051,6 +2072,37 @@ defmodule Grappa.UserSettings do
       v when is_boolean(v) -> {:ok, v}
       _ -> {:error, "#{key} must be a boolean"}
     end
+  end
+
+  # #1766 — the same boolean check, except that an ABSENT key takes `default`
+  # instead of 422ing. Every key added before this one is mandatory, and that
+  # was free while the shape never grew: the ONLY writer is cic's
+  # `buildWireMap()`, which always sends every key it knows. The moment the
+  # shape grows a key, "every key it knows" stops meaning "every key" for any
+  # bundle already loaded in a tab — and the server and the bundle deploy
+  # separately (`deploy-m42.sh` vs `--cic`). A mandatory fourth key would then
+  # 422 that tab's every display write, so the time-format and nicklist toggles
+  # would quietly stop persisting until it reloaded. The wire contract already
+  # rules this direction: an unknown-or-missing field is never fatal.
+  #
+  # ACCEPTED CONSEQUENCE, not an oversight: the PUT is a full-map replace, so
+  # such a tab's write also resets this key to `default`. It is a clobber, and
+  # the alternative — reading the stored value for the missing key — turns the
+  # documented full-replace path into a per-key read-modify-write that the
+  # NEXT added key would have to remember too. The window is one bundle
+  # reload wide and it self-heals; the drift would not.
+  defp fetch_optional_display_bool(prefs, key, default) when is_atom(key) do
+    if display_has_key?(prefs, key) do
+      fetch_display_bool(prefs, key)
+    else
+      {:ok, default}
+    end
+  end
+
+  # Absence has to be told apart from a present `nil`, which `display_fetch/2`
+  # flattens into one. Dual atom/string read, mirroring it.
+  defp display_has_key?(prefs, key) when is_atom(key) do
+    Map.has_key?(prefs, key) or Map.has_key?(prefs, Atom.to_string(key))
   end
 
   defp fetch_presence_filter(prefs) do
