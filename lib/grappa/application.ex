@@ -423,7 +423,7 @@ defmodule Grappa.Application do
           # anyway — ordering is
           # belt-and-braces. Reaper consumes Grappa.Visitors; the
           # Application boundary has it listed in deps for that reason.
-          {Grappa.Visitors.Reaper, interval_ms: reaper_interval_ms()},
+          {Grappa.Visitors.Reaper, [interval_ms: reaper_interval_ms()] ++ incognito_grace_opt()},
 
           # UX-6-B1 (2026-05-20): embedded image uploader Reaper. Same
           # rationale as Visitors.Reaper for the ordering: after Repo
@@ -556,6 +556,20 @@ defmodule Grappa.Application do
   # boundary only (CLAUDE.md "Application.get_env: boot-time only").
   defp reaper_interval_ms do
     Application.get_env(:grappa, :reaper_interval_ms, 60_000)
+  end
+
+  # #1770 — the incognito fast-close grace, passed ONLY when an env actually
+  # configures one. Deliberately not `get_env(..., 30_000)` like its sibling
+  # above: that shape puts the production default in two files, and the pair
+  # drifts the day one of them moves. The single source is
+  # `Grappa.Visitors.Reaper`'s own `@default_incognito_grace_ms`; this reader
+  # exists so `config/test.exs` can shorten the window without the suite
+  # sleeping 30s per assertion.
+  defp incognito_grace_opt do
+    case Application.fetch_env(:grappa, :incognito_close_grace_ms) do
+      {:ok, ms} -> [incognito_grace_ms: ms]
+      :error -> []
+    end
   end
 
   # #399: the built cicchetto SPA dist root. Configured via

@@ -198,6 +198,7 @@ defmodule GrappaWeb.GrappaChannel do
   alias Grappa.ServerSettings
   alias Grappa.ServerSettings.Wire, as: ServerSettingsWire
   alias Grappa.Session.Wire, as: SessionWire
+  alias Grappa.Visitors.Reaper
   alias GrappaWeb.{BodyLimit, Subject}
 
   require Logger
@@ -726,6 +727,7 @@ defmodule GrappaWeb.GrappaChannel do
     # `WSPresence.handle_call({:client_closing, ...}, ...)` no-ops
     # if the pid was never registered).
     :ok = WSPresence.client_closing(user_name, socket.transport_pid)
+    :ok = arm_incognito_close(socket.assigns.current_subject)
 
     {:noreply, socket}
   end
@@ -1528,6 +1530,27 @@ defmodule GrappaWeb.GrappaChannel do
   defp do_handle_in(_, _, socket) do
     {:reply, {:error, %{error: "unknown_event"}}, socket}
   end
+
+  # #1770 (item 2 of #363) — `client_closing` also arms the incognito fast
+  # close for a VISITOR. Closing the PWA on an incognito session is meant to
+  # be a `/quit`; before this it only flipped presence to hidden and the row
+  # survived until the 1h linger elapsed.
+  #
+  # The channel routes and nothing else. Every gate that decides whether
+  # anything is wiped — incognito? anon? any socket left once the grace
+  # elapses? — lives in `Reaper.close_incognito/1`, re-derived there at the
+  # far end of the grace. Routing on the subject KIND is the one fact this
+  # frame holds without a query: `current_subject` is the bare-id tuple, so
+  # reading `incognito` here would cost a DB read on the closing tab's last
+  # breath AND fork the policy across two modules. A non-incognito visitor is
+  # armed too, and abstains there.
+  #
+  # Lives down here rather than beside its caller because the `do_handle_in/3`
+  # clauses must stay contiguous — splitting them is a compiler warning, and
+  # `--warnings-as-errors` makes it a red.
+  @spec arm_incognito_close(Grappa.Subject.t()) :: :ok
+  defp arm_incognito_close({:visitor, visitor_id}), do: Reaper.client_closing(visitor_id)
+  defp arm_incognito_close({:user, _}), do: :ok
 
   # Watchlist add helper — extracted to keep handle_in nesting ≤ 2 levels.
   @spec watchlist_add(Grappa.Subject.t(), String.t(), Phoenix.Socket.t()) ::

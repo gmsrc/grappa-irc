@@ -67,6 +67,10 @@ defmodule GrappaWeb do
         Grappa.Version,
         Grappa.Vhosts,
         Grappa.Visitors,
+        # #1770 — the channel arms the incognito fast close on `client_closing`.
+        # The Reaper is its own `top_level?: true` boundary, so this declares
+        # the leaf that owns the verb rather than widening `Grappa.Visitors`.
+        Grappa.Visitors.Reaper,
         Grappa.Visitors.Visitor,
         Grappa.WindowCounts,
         Grappa.WSPresence,

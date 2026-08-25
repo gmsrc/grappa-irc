@@ -16,7 +16,20 @@ defmodule Grappa.Visitors.ReaperTest do
   import ExUnit.CaptureLog
   import Grappa.AuthFixtures, only: [network_fixture: 1, start_visitor_session_for: 2, visitor_with_network: 2]
 
-  alias Grappa.{AdmissionStateHelpers, IRCServer, Push, QueryWindows, ReadCursor, Session, UserSettings, Visitors}
+  alias Grappa.{
+    AdmissionStateHelpers,
+    IRCServer,
+    Push,
+    QueryWindows,
+    ReadCursor,
+    Session,
+    Subject,
+    UserSettings,
+    Visitors,
+    WSPresence
+  }
+
+  alias Grappa.Networks.Credentials
   alias Grappa.Repo.BusyRetry
   alias Grappa.Visitors.{Reaper, Visitor}
 
@@ -185,6 +198,89 @@ defmodule Grappa.Visitors.ReaperTest do
     end
   end
 
+  describe "incognito fast close (#1770)" do
+    test "no socket left → CLOSED: the IRC session quits and the row is gone" do
+      {server, port} = IRCServer.start_server(IRCServer.passthrough_handler())
+      {visitor, network} = visitor_with_network(port, incognito: true)
+      pid = start_visitor_session_for(visitor, network)
+      ref = Process.monitor(pid)
+
+      assert visitor.incognito
+      assert Session.whereis({:visitor, visitor.id}, network.id) == pid
+
+      assert :closed = Reaper.close_incognito(visitor.id)
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _}
+      assert Session.whereis({:visitor, visitor.id}, network.id) == nil
+      refute Repo.reload(visitor)
+
+      # The user-visible contract is a /quit, and the reason names what was
+      # observed — the client closed, the TTL did not elapse.
+      assert {:ok, _} =
+               IRCServer.wait_for_line(server, &(&1 == "QUIT :session closed\r\n"), 1_000)
+    end
+
+    test "a socket is still registered → RECONNECTED, the row survives (the reload case)" do
+      # The discriminator this whole slice turns on. Measured in a standalone
+      # chromium/webkit bench: a RELOAD fires `pagehide` with
+      # `persisted === false` — byte-identical to a genuine close — and lands
+      # a NEW socket 2-3ms later. So the client's teardown report can never be
+      # the gate on its own; "is anybody still connected when the grace
+      # elapses" is.
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, ghost} = Visitors.find_or_provision_anon("ghost", slug, nil, true)
+      :ok = WSPresence.register(Subject.label({:visitor, ghost.id}), self())
+
+      assert :reconnected = Reaper.close_incognito(ghost.id)
+      assert Repo.reload(ghost)
+    end
+
+    test "a NON-incognito visitor is untouched — the away-only behaviour is correct for it" do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, plain} = Visitors.find_or_provision_anon("plain", slug, nil, false)
+
+      assert :not_incognito = Reaper.close_incognito(plain.id)
+      assert Repo.reload(plain)
+    end
+
+    test "a REGISTERED incognito visitor is untouched — same scope as list_expired/0" do
+      # The fast path may only ACCELERATE the linger, never widen it.
+      # `Visitors.list_expired/0` excludes registered visitors, so the 1h
+      # fallback would never delete this row; deleting it here would not be an
+      # acceleration but a new destruction.
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      network = network_fixture(slug: slug)
+      {:ok, ghost} = Visitors.find_or_provision_anon("identified-ghost", slug, nil, true)
+      {:ok, _} = Visitors.commit_password(ghost.id, network.id, "s3cret")
+      assert Credentials.visitor_registered?(ghost.id)
+
+      assert :registered = Reaper.close_incognito(ghost.id)
+      assert Repo.reload(ghost)
+    end
+
+    test "an unknown id is GONE, not a crash — pagehide and beforeunload both arm" do
+      assert :gone = Reaper.close_incognito(Ecto.UUID.generate())
+    end
+
+    test "client_closing/1 arms the grace and the row is gone once it elapses" do
+      slug = "azzurra-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, ghost} = Visitors.find_or_provision_anon("armed", slug, nil, true)
+
+      # The ambient Reaper is the one the channel casts to; grant it the
+      # shared sandbox connection so its delete lands on this test's DB.
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), Process.whereis(Reaper))
+
+      assert :ok = Reaper.client_closing(ghost.id)
+
+      # Poll, never sleep blind: the grace is config-driven and the assertion
+      # is "it happened", not "it happened at N ms".
+      assert wait_until(fn -> Repo.reload(ghost) == nil end)
+    end
+  end
+
   describe "GenServer tick" do
     test "scheduled tick fires sweep" do
       slug = "azzurra-#{System.unique_integer([:positive])}"
@@ -202,6 +298,28 @@ defmodule Grappa.Visitors.ReaperTest do
       Process.sleep(150)
 
       refute Repo.reload(dead)
+    end
+  end
+
+  # Poll a predicate to a deadline instead of sleeping past a guessed grace.
+  # The grace is config-driven (`:incognito_close_grace_ms`), so a fixed sleep
+  # would either be a flake or a hardcoded twin of the config.
+  defp wait_until(fun) do
+    deadline = System.monotonic_time(:millisecond) + 2_000
+    poll_until(fun, deadline)
+  end
+
+  defp poll_until(fun, deadline) do
+    cond do
+      fun.() ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        Process.sleep(10)
+        poll_until(fun, deadline)
     end
   end
 

@@ -51,12 +51,15 @@ defmodule GrappaWeb.GrappaChannelTest do
     Repo,
     ScrollbackHelpers,
     Session,
+    Subject,
+    Visitors,
     WSPresence
   }
 
   alias Grappa.Networks.{Credentials, Servers}
   alias Grappa.PubSub.Topic
   alias Grappa.Scrollback.Wire
+  alias Grappa.Visitors.Reaper
   alias Grappa.Visitors.SessionPlan, as: VisitorSessionPlan
   alias GrappaWeb.UserSocket
 
@@ -3655,6 +3658,85 @@ defmodule GrappaWeb.GrappaChannelTest do
 
       assert_reply(ref, :error, %{error: "unknown_event"})
       assert Process.alive?(chan_pid), "channel must survive a wrong-typed known event"
+    end
+  end
+
+  # #1770 (item 2 of #363) — `client_closing` used to terminate in the
+  # auto-away FSM. For an incognito visitor it must also be a `/quit`: the
+  # channel arms the fast close, and the row is gone without waiting out the
+  # 1h linger. The decision itself belongs to `Reaper.close_incognito/1` and is
+  # exercised there; what these two pin is the ROUTING, which is the part that
+  # was missing.
+  describe "client_closing — incognito fast close (#1770)" do
+    setup do
+      :ok = WSPresence.reset_for_test()
+      # The channel casts to the AMBIENT Reaper; grant it this test's shared
+      # sandbox connection so its delete lands on the DB the test can read.
+      Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), Process.whereis(Reaper))
+      :ok
+    end
+
+    test "an incognito visitor's client_closing wipes the row once the grace elapses" do
+      slug = "azzurra-cc-#{System.unique_integer([:positive])}"
+      _ = network_fixture(slug: slug)
+      {:ok, ghost} = Visitors.find_or_provision_anon("ghost", slug, nil, true)
+      visitor_name = Subject.label({:visitor, ghost.id})
+
+      {:ok, _, socket} =
+        visitor_name
+        |> build_socket()
+        |> subscribe_and_join(Topic.user(visitor_name), %{})
+
+      # No transport registered: the state the grace exists to detect is "the
+      # socket is gone", which is where a real close lands before the window
+      # elapses. `WSPresence.client_closing/2` no-ops on an untracked pid, so
+      # the S3.3 leg is unchanged (pinned in ws_presence_test).
+      push(socket, "client_closing", %{})
+
+      assert wait_until(fn -> Repo.reload(ghost) == nil end),
+             "an incognito visitor's row must be wiped on client_closing, not left to the linger"
+    end
+
+    test "a USER's client_closing marks the tab hidden and arms nothing" do
+      user_name = "ch-cc-#{System.unique_integer([:positive])}"
+      _ = user_fixture(name: user_name)
+
+      {:ok, _, socket} =
+        user_name
+        |> build_socket()
+        |> subscribe_and_join(Topic.user(user_name), %{})
+
+      :ok = WSPresence.register(user_name, socket.transport_pid)
+      :ok = WSPresence.set_visibility(user_name, socket.transport_pid, true)
+      assert WSPresence.any_visible?(user_name)
+
+      push(socket, "client_closing", %{})
+
+      # The S3.3 contract is all a user gets — and the channel must not have
+      # tried to route a `{:user, _}` subject into the visitor door.
+      assert wait_until(fn -> not WSPresence.any_visible?(user_name) end)
+      assert Process.alive?(socket.channel_pid)
+    end
+  end
+
+  # Poll to a deadline rather than sleep past the configured grace: a fixed
+  # sleep would either flake or hardcode a twin of `:incognito_close_grace_ms`.
+  defp wait_until(fun) do
+    deadline = System.monotonic_time(:millisecond) + 2_000
+    poll_until(fun, deadline)
+  end
+
+  defp poll_until(fun, deadline) do
+    cond do
+      fun.() ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        Process.sleep(10)
+        poll_until(fun, deadline)
     end
   end
 end
