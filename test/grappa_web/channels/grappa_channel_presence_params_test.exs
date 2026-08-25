@@ -19,11 +19,26 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
       `nick_change` drives the #372/#373 identity migration, `mode` feeds
       channel-mode state, and an own PART tears the window down.
 
-  ⚠️ `socket.join_ref` is nil in `Phoenix.ChannelTest` (nothing sets it), so
-  the production wire difference between a fastlane frame (`[nil, nil, …]`)
-  and a `push/3` frame (`[join_ref, nil, …]`) is NOT observable here — an
-  assertion on `join_ref` would be vacuously green on both arms. The registry
-  metadata is the oracle that is not.
+  ## The oracle: `join_ref`, and why it is timing-free
+
+  Which PATH delivered a frame is directly observable, and it is the same
+  distinction production makes. `Phoenix.ChannelTest.join/4` mints a
+  `ref: System.unique_integer/1` for the join message and the framework
+  carries it onto `socket.join_ref`, so:
+
+    * a FASTLANE frame is built by `serializer.fastlane!/1` from a
+      `%Broadcast{}`, which has no ref — `join_ref: nil`, exactly the
+      `[nil, nil, topic, event, payload]` the V2 serializer puts on the wire;
+    * a `push/3` frame is built from `%Message{join_ref: socket.join_ref}` —
+      a positive integer here, the `[join_ref, nil, …]` shape on the wire.
+
+  That makes "did this socket keep its fastlane?" an assertion on a delivered
+  frame rather than on a clock. It matters most for the BUG 6 arm: the
+  dispatcher writes the fastlane copy SYNCHRONOUSLY inside
+  `broadcast_event/2`, so a duplicate is already AHEAD of the push copy in
+  this process's mailbox — asserting on the FIRST matching frame catches it
+  with no window to tune. `subscription_metadata/1` is kept as the structural
+  companion for the arms that assert about a topic nobody broadcasts on.
   """
   use GrappaWeb.ChannelCase, async: false
 
@@ -110,14 +125,22 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
       chan = "#pp_default"
       topic = Topic.channel(user.name, network.slug, chan)
 
-      {:ok, _, _} =
+      {:ok, _, socket} =
         user.name
         |> build_socket()
         |> subscribe_and_join(topic, %{})
 
+      settle(socket)
+
       assert Enum.any?(subscription_metadata(topic), &match?({:fastlane, _, _, _}, &1)),
              "a default join must stay a fastlane subscriber — that is what makes it " <>
                "byte-identical and free for third-party clients"
+
+      # ...and prove it on a real frame, not only in the registry: a fastlane
+      # frame carries no join_ref.
+      payload = broadcast_row(user, network, chan, %{kind: :privmsg, sender: "peer", body: "oi"})
+
+      assert_receive %Phoenix.Socket.Message{event: "event", payload: ^payload, join_ref: nil}
     end
 
     test "delivers a peer join, part and quit" do
@@ -125,10 +148,12 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
       chan = "#pp_default_kinds"
       topic = Topic.channel(user.name, network.slug, chan)
 
-      {:ok, _, _} =
+      {:ok, _, socket} =
         user.name
         |> build_socket()
         |> subscribe_and_join(topic, %{})
+
+      settle(socket)
 
       for kind <- Message.pausable_presence_kinds() do
         payload = broadcast_row(user, network, chan, %{kind: kind, sender: "peer"})
@@ -141,10 +166,12 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
       chan = "#pp_garbage"
       topic = Topic.channel(user.name, network.slug, chan)
 
-      {:ok, _, _} =
+      {:ok, _, socket} =
         user.name
         |> build_socket()
         |> subscribe_and_join(topic, %{"presence" => "nope"})
+
+      settle(socket)
 
       payload = broadcast_row(user, network, chan, %{kind: :join, sender: "peer"})
       assert_push("event", ^payload)
@@ -157,10 +184,12 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
       chan = "#pp_suppressed"
       topic = Topic.channel(user.name, network.slug, chan)
 
-      {:ok, _, _} =
+      {:ok, _, socket} =
         user.name
         |> build_socket()
         |> subscribe_and_join(topic, %{"presence" => false})
+
+      settle(socket)
 
       %{user: user, network: network, chan: chan, topic: topic}
     end
@@ -183,7 +212,7 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
       assert_push("event", ^payload)
     end
 
-    test "delivers the message EXACTLY once — BUG 6 regression", ctx do
+    test "arrives once, on the push path — BUG 6 regression", ctx do
       payload =
         broadcast_row(ctx.user, ctx.network, ctx.chan, %{
           kind: :privmsg,
@@ -191,8 +220,18 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
           body: "una sola volta"
         })
 
-      assert_push("event", ^payload)
-      refute_push("event", ^payload, 50)
+      # FIRST matching frame, deliberately: a leftover fastlane subscription
+      # would have written its copy synchronously inside `broadcast_event/2`,
+      # so it would be ahead of this one and `join_ref` would be nil. No
+      # window to tune, and it fails naming the mechanism.
+      assert_receive %Phoenix.Socket.Message{event: "event", payload: ^payload, join_ref: join_ref}
+
+      assert is_integer(join_ref),
+             "frame arrived with join_ref nil — that is a FASTLANE frame, so this socket " <>
+               "still holds the subscription `drop_fastlane_if_suppressing/1` was meant to " <>
+               "trade away (BUG 6: one broadcast, two frames)"
+
+      refute_receive %Phoenix.Socket.Message{event: "event", payload: ^payload}, 50
     end
 
     test "still delivers the non-pausable presence kinds (nick_change, mode)", ctx do
@@ -226,10 +265,12 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
       {user, _network} = setup_user_and_network()
       topic = Topic.user(user.name)
 
-      {:ok, _, _} =
+      {:ok, _, socket} =
         user.name
         |> build_socket()
         |> subscribe_and_join(topic, %{"presence" => false})
+
+      settle(socket)
 
       assert Enum.any?(subscription_metadata(topic), &match?({:fastlane, _, _, _}, &1)),
              "presence never travels the user topic, so the param must not cost it its fastlane"
@@ -276,11 +317,11 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
           socket_ref: Ecto.UUID.generate()
         })
 
-      {:ok, _, _} = subscribe_and_join(live_socket, topic, %{"presence" => false})
+      {:ok, _, joined_socket} = subscribe_and_join(live_socket, topic, %{"presence" => false})
 
-      # Drain the cold-subscribe snapshots so the arms below assert on their
-      # own frame and not on a leftover.
-      drain_pushes()
+      # Barrier + drain: the arms below must assert on their own frame, and
+      # must not race the fastlane swap.
+      settle(joined_socket)
 
       %{user: user, network: network, chan: chan, topic: topic, irc_server: irc_server}
     end
@@ -320,11 +361,30 @@ defmodule GrappaWeb.GrappaChannelPresenceParamsTest do
     end
   end
 
+  # The barrier every arm below needs, and the reason it is a barrier rather
+  # than a wait. `:after_join` is a `Process.send_after(self(), …, 0)`, so a
+  # synchronous call to the channel queues BEHIND it: when `:sys.get_state/1`
+  # returns, the after-join leg has run to completion — which means the
+  # fastlane swap (its first statement) is installed and the cold-subscribe
+  # snapshot pushes are already in this process's mailbox.
+  #
+  # Measured, not precautionary: without it the BUG 6 mutant (subscribe
+  # without unsubscribing) was caught on one seed and missed on the next.
+  # The `refute_push` was racing `push_channel_snapshot/4`'s DB round-trips,
+  # so the duplicate frame sometimes landed after the refute window. The cure
+  # is the deterministic setup, never a longer window — a timeout raised to
+  # cover a race turns the assertion into a coin toss with better odds.
+  defp settle(socket) do
+    :sys.get_state(socket.channel_pid)
+    drain_pushes()
+    socket
+  end
+
   defp drain_pushes do
     receive do
       %Phoenix.Socket.Message{} -> drain_pushes()
     after
-      100 -> :ok
+      0 -> :ok
     end
   end
 end
