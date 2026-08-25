@@ -63,6 +63,15 @@
 #   - the above held for IDLE_TICKS_REQUIRED consecutive ticks (debounce)
 # After firing, COOLDOWN seconds before it can fire again.
 #
+# RESUME TICK (vjt's go, 2026-08-25 20:44 #grappa). The clear branch above
+# only fires at ctx >= THRESHOLD, and an orchestrator that is DOING NOTHING
+# burns no context — so a stalled orch sits below the threshold forever and
+# nothing re-invokes it. Measured on 2026-08-25: two holes, ~7h of workers
+# idle while the orch pane was quiet at low ctx. This second branch nudges
+# the pane back into a turn once it has been idle for RESUME_IDLE seconds
+# WITHOUT clearing anything: same idle/typing safeguards, plus a dialog guard
+# (typing into an open permission modal would answer it at random).
+#
 # Usage:
 #   auto-clear-watch.sh start  [TITLE] [--pane %NN]
 #   auto-clear-watch.sh stop   [TITLE]
@@ -99,6 +108,8 @@ TICK="${AUTOCLEAR_TICK:-15}"                       # seconds between checks
 IDLE_TICKS_REQUIRED="${AUTOCLEAR_IDLE_TICKS:-2}"   # consecutive qualifying ticks (2*15=30s; is_busy already guards mid-turn)
 COOLDOWN="${AUTOCLEAR_COOLDOWN:-90}"               # pause after a clear
 FLUSH_MAX="${AUTOCLEAR_FLUSH_MAX:-180}"            # max secs to wait for the pre-clear handoff flush to settle
+RESUME_IDLE="${AUTOCLEAR_RESUME_IDLE:-900}"        # secs of unbroken idle below THRESHOLD before a resume nudge
+RESUME_COOLDOWN="${AUTOCLEAR_RESUME_COOLDOWN:-900}" # pause after a nudge (0 disables the branch entirely)
 
 SLUG="$(printf '%s' "$TITLE" | tr -c 'a-zA-Z0-9' '-')"
 PIDFILE="/tmp/orchestrate-autoclear-${SLUG}.pid"
@@ -167,6 +178,13 @@ is_busy()   { printf '%s' "$1" | tail -15 | grep -qE '… \('; }            # sp
 input_pending() {
   printf '%s' "$1" | grep -E '^❯ ' | tail -1 | sed -E 's/^❯ +//' | grep -qE '[^[:space:]]'
 }
+# A permission modal / picker is up. is_busy() does NOT see these (no spinner),
+# so without this guard the resume nudge would type into an open dialog and
+# answer it at random. `1. Yes` is the invariant of the modal, not the wording
+# of the question — same reasoning as wakeup-tick.sh's prompt detector.
+dialog_pending() {
+  printf '%s' "$1" | grep -qE '^[[:space:]│]*(1\.|❯ 1\.) Yes|↑/↓ to navigate|Enter to select'
+}
 
 # The ONE classifier for "the watch cannot see", shared by the loop and by
 # `status` so the two can never disagree about what blindness is. Takes a
@@ -194,7 +212,7 @@ run() {
   printf '%s' "$$" > "$PIDFILE"
   printf '%s' "$pane" > "$PANEFILE"
   log "START pane=${pane} (bound by ${bound_by}) title='$TITLE' threshold=${THRESHOLD}% tick=${TICK}s idle_req=${IDLE_TICKS_REQUIRED} cooldown=${COOLDOWN}s"
-  local qualifying=0
+  local qualifying=0 idle_secs=0
   # The blind state the log last recorded. A transition — in, out, or
   # from one reason to another — is what gets a line; a tick that only
   # repeats the known state does not (see LOG POSTURE in the header).
@@ -210,13 +228,36 @@ run() {
         blind_now="$reason"
         log "BLIND: $reason"
       fi
-      qualifying=0; continue
+      # A blind tick is not an idle tick: we did not observe an idle pane,
+      # we observed nothing. Nudging on unread time is how a watchdog types
+      # into a pane it cannot see.
+      qualifying=0; idle_secs=0; continue
     fi
     if [ -n "$blind_now" ]; then
       log "RECOVERED: reading pane ${pane} again (was BLIND: ${blind_now})"
       blind_now=""
     fi
     local ctx; ctx="$(parse_ctx "$cap")"
+
+    # --- RESUME TICK: idle below the clear threshold ---------------------
+    # Anything that means "not sitting there doing nothing" resets the timer:
+    # a live turn, a modal waiting on a human, vjt mid-typing.
+    if is_busy "$cap" || dialog_pending "$cap" || input_pending "$cap"; then
+      idle_secs=0
+    else
+      idle_secs=$((idle_secs + TICK))
+      if [ "$RESUME_COOLDOWN" -gt 0 ] && [ "$idle_secs" -ge "$RESUME_IDLE" ]; then
+        log "RESUME NUDGE on ${pane} (ctx=${ctx}%, idle ${idle_secs}s) — re-invoking, NOT clearing"
+        local nudge="RESUME TICK: you have been idle ${idle_secs}s. Re-read the handoff at /srv/grappa/.orchestrate/orchestrator-resume.md, run a board check and a wakeup tick on the workers, and dispatch whatever is ready. If there is genuinely nothing to do, say so in ONE line and go idle — this is an automatic heartbeat, not a human asking."
+        tmux send-keys -t "$pane" C-u; sleep 1
+        tmux send-keys -t "$pane" -l "$nudge"; sleep 1
+        tmux send-keys -t "$pane" Enter; sleep 1
+        tmux send-keys -t "$pane" Enter               # 2nd Enter — flush the submit
+        idle_secs=0
+        sleep "$RESUME_COOLDOWN"
+        continue
+      fi
+    fi
 
     # Healthy but not firing: quiet on purpose.
     if [ "$ctx" -lt "$THRESHOLD" ]; then qualifying=0; continue; fi
@@ -252,9 +293,13 @@ run() {
       log "handoff flush settled after ~${fwait}s (cap ${FLUSH_MAX}s) — clearing now"
       # 3. Now wipe + reload (the orchestrator re-reads the freshly
       #    flushed handoff on /orchestrate).
+      # Text and Enter NEVER in the same send-keys: measured 2026-08-25, the
+      # combined form leaves the line sitting un-submitted in the prompt.
       tmux send-keys -t "$pane" C-u; sleep 1
-      tmux send-keys -t "$pane" '/clear' Enter; sleep 4
-      tmux send-keys -t "$pane" '/orchestrate' Enter; sleep 1
+      tmux send-keys -t "$pane" -l '/clear'; sleep 1
+      tmux send-keys -t "$pane" Enter; sleep 4
+      tmux send-keys -t "$pane" -l '/orchestrate'; sleep 1
+      tmux send-keys -t "$pane" Enter; sleep 1
       tmux send-keys -t "$pane" Enter
       log "sent /clear + /orchestrate — cooldown ${COOLDOWN}s"
       qualifying=0

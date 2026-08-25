@@ -155,6 +155,32 @@ spinner_timer() {
     | grep -oE '… \([^·)]*' | tail -1
 }
 
+# A SECOND LIVENESS WITNESS, because the spinner timer is not always one.
+#
+# MEASURED on w1 (%16) 2026-08-25 14:54Z, not deduced. That pane renders
+# BROKENLY: a capture holds SEVERAL stale spinner frames at once — `… (54m 39s`
+# AND `… (54m 42s` in the same `-S -30` — and NEITHER advances. Two calls to
+# `spinner_timer` 5s apart both returned `54m 42s` while the turn was plainly
+# running: the cost counter moved $9.26 → $9.91 over the same minutes and the
+# worktree went dirty→clean. The freeze guard below therefore read a LIVE turn
+# as scrollback and demoted it to idle — and because the next tick saw a
+# different frozen value it flipped back, producing the perfect BUSY/IDLE
+# alternation in `/tmp/orchestrate-events-16.log`: ~20 pairs, ctx climbing
+# monotonically through every one of them, plus `STALL state=idle` at 306s.
+# The orchestrator burned one hand probe per event and nearly learned to
+# ignore the pane, which is how a REAL idle gets missed.
+#
+# The cost line lives in the status block, which that pane DOES redraw. It is
+# also a strictly safer witness in the direction that matters: cost only moves
+# while a turn is generating, so it cannot resurrect the pinned-BUSY bug this
+# freeze guard was written to kill (measured on w2 2026-08-18) — on a genuinely
+# idle worker `$c1 = $c2` and the demotion still fires. The cost is therefore a
+# RESCUE only: it can keep busy, never impose it.
+turn_cost() {
+  tmux capture-pane -t "$1" -p -S -30 2>/dev/null \
+    | grep -oE '💰 \$[0-9]+\.[0-9]+' | tail -1
+}
+
 # `frozen_spinner` carries the freeze verdict FORWARD to the idle debounce below.
 # Without it the debounce re-reads the same scrollback and undoes this decision —
 # see the comment on the debounce for the measurement.
@@ -162,13 +188,17 @@ frozen_spinner=""
 
 if [ "$state" = "busy" ] \
    && ! echo "$tail" | grep -qE 'Press up to edit|esc to interrupt'; then
-  t1=$(spinner_timer "$pane")
+  t1=$(spinner_timer "$pane"); c1=$(turn_cost "$pane")
   sleep 5
-  t2=$(spinner_timer "$pane")
-  # Frozen or vanished ⇒ not a running turn.
+  t2=$(spinner_timer "$pane"); c2=$(turn_cost "$pane")
+  # Frozen or vanished ⇒ not a running turn — UNLESS the cost says otherwise.
   if [ -z "$t2" ] || [ "$t1" = "$t2" ]; then
-    state="idle"
-    frozen_spinner="$t2"
+    if [ -n "$c1" ] && [ -n "$c2" ] && [ "$c1" != "$c2" ]; then
+      : # cost advanced ⇒ a turn IS generating; the spinner line is just stale
+    else
+      state="idle"
+      frozen_spinner="$t2"
+    fi
   fi
 fi
 
