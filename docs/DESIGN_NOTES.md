@@ -62819,3 +62819,126 @@ a far-behind CURRENT selection from `orderUnreadWindows` so the button
 auto-hides and the labelled bar is the only affordance — which #1178
 explicitly rejected as trading a lying button for an absent one, an argument
 made before the bar was known to be up in this state.
+<!-- entry #1582 -->
+
+---
+
+## 2026-08-25 — #1582: cic unit tests get one home, and a way to prove nothing was lost
+
+**The state.** cic unit tests lived in three directories at once:
+`src/__tests__/` (272 files, 5656 cases), `src/lib/__tests__/` (23 files, 290
+cases) and co-located `src/lib/*.test.ts` (14 files, 193 cases). All three
+were still receiving commits in the same week, so this was not an abandoned
+convention with a successor — choosing was a decision, not an observation.
+`docs/TESTING.md` named exactly one of them.
+
+**The destination is `src/__tests__/`, on weight, not on merit.** It already
+held 88% of the files and 92% of the cases; it is the one the doc names, so
+completing that line costs a clause rather than a rewrite; and moving TO it
+touches 37 files where moving AWAY from it would touch 272 — a diff nobody
+could review, bought for a naming preference. No claim is made that a flat
+directory of 304 files is a good shape. It is the shape this tree chose at
+scale, and re-choosing is a bigger change than this issue.
+
+**The issue's census was right about three modules and short by two.** It
+compared the two `__tests__/` directories against each other and never
+compared either against the co-located files, so it found `customTheme`,
+`mobilePanel` and `passkeys` and missed `channelTopic` and `mentionScroll`.
+Five basename collisions, not three — which the consolidation would have
+forced into the open anyway, since one directory admits one file per name.
+
+**`channelTopic` and `mobilePanel` are the shape that actually hurts.** Their
+APIs were PARTITIONED across the pair: the store here and the pure derivation
+helpers there; four launcher verbs here and three there. Overlap wastes a few
+milliseconds. Partition destroys the thing a suite is mostly for — a verb
+missing from the file you opened meant nothing, because it might be covered
+next door or nowhere, so ABSENCE stopped being evidence.
+
+### The conservation rule, and why it stayed narrow
+
+Consolidating tests means deleting and merging files, which is the easiest way
+there is to lose coverage with every gate still green: the test that would have
+failed is simply gone. So the rule was fixed before anything moved — a case
+disappears ONLY if it is byte-identical to one that stays, or strictly weaker
+than one that stays, and in that second case the STRICTER survives.
+
+Measuring the pairs is what showed the rule must not be loosened to "reads like
+a paraphrase". `passkeys` was the issue's worst-looking duplication ("the same
+claim written twice", twice over) and yielded ZERO drops: each member asserted
+fields the other did not — `challenge` bytes on one side, `user.name`,
+`attestation` and `excludeCredentials` on the other — so neither dominated.
+`mentionScroll`'s two below-the-fold pairs likewise differ only in fixture
+data. Vocabulary overlap is not logical equality, and the cheap direction of
+error here is keeping a redundant case, not dropping a unique one.
+
+**Exactly two cases died,** both on `customTheme.tokenToCssVars`: the
+`mono-default` omission was asserted twice with byte-identical bodies, and the
+named-family mapping twice differing only in strictness. The copy asserting
+`toContain('"jetbrains-mono"')` is kept over the one asserting it unquoted —
+a regression that dropped the CSS quoting passes the looser assertion.
+
+### The instrument, and the two things it caught
+
+**6208 cases in 315 files before, 6206 in 310 after.** The arithmetic is not
+the evidence. The evidence is that diffing the full case-NAME set of the whole
+suite before against after yields **exactly two lines, both deletions, both
+the two adjudicated above** — no case renamed, none invented. That is also why
+no surviving case was renamed even where a tidier `describe` heading was
+available: holding the name diff at two lines is what makes the conservation
+auditable by anyone in one command, and that is worth more than two neater
+headings.
+
+Ground truth is `vitest list --json` cross-checked against `vitest run`'s own
+summary and against `git ls-files` over the config's include set — three
+surfaces, and the counter prints NOTHING unless all three agree. That refusal
+earned itself immediately: piping `vitest list --json` to a file through the
+container's stdout silently truncated it, losing 103 KB of a 1.09 MB document
+mid-string. `jq` died on the parse; a grep-based counter would have reported a
+confident, wrong, smaller number. **A count that can be wrong in silence is
+worse than no count** — the same argument `lock-drift.ts` already makes with
+its exit 3, and the reason the new gate copies that code rather than inventing
+one.
+
+### Why the convention gets a gate and not a better sentence
+
+`docs/TESTING.md` has named `src/__tests__/` since 2026-05-24.
+`src/lib/__tests__/` was created **the same day**. Documentation has therefore
+already been tried on this exact convention, at full strength, and did not hold
+it for twenty-four hours. The line was never FALSE — tests really do live in
+the named directory — which is also why the #1554 audit of that file read past
+it while checking 21 of its claims: **an incomplete claim survives a check for
+falsehoods, and that makes incompleteness the more dangerous defect of the two.**
+
+`scripts/test-location.ts` is a `src/` walk plus one predicate, second in
+`check.ts`'s STAGES so it inherits the #1469 union aggregation and answers
+"is this file even in the right place?" before any diagnostic about its
+contents. It prints the number of files SEEN next to the number misplaced,
+and treats finding zero test files as its own failure — a location check is
+exactly the shape that goes green by walking nothing. Proven in all three
+directions rather than asserted: rc=0 on the tree (304 files, 0 misplaced),
+rc=1 naming the file when one is planted under `src/lib/`, rc=3 with zero
+verdict lines printed when a known-answer control is broken.
+
+### What was measured, and what was not
+
+Measured: the counts and the two-line name diff above; `tsc --noEmit` green
+over src AND e2e, which is what proves 37 relocations' worth of rewritten
+specifiers; the full vitest suite green at 6206; the gate's three exit paths;
+that none of biome's 60 standing warnings names a file this change touched.
+
+NOT measured: that no surviving case was WEAKENED. Three merges had to collapse
+incompatible plumbing — one module path admits one mock factory — and a
+weakened stub conserves the case count perfectly. The mitigation is structural
+rather than measured: each unified harness fails LOUDLY if it stops working (a
+non-spy handed to `toHaveBeenCalledWith`, a ceremony that throws on an absent
+`navigator.credentials`, an exact-colour assertion against the unified
+`payload()` builder) rather than passing vacuously. Green is meaningful here
+for that reason, and no further than it.
+
+One hazard the merge itself created, closed in the same commit: `customTheme`'s
+day/night boot cases REPLACE `window.matchMedia` by plain assignment, which
+`vi.restoreAllMocks` cannot undo. Confined to its own file that leaked nowhere;
+sharing a file with the #837 mount cases, which read the real one, makes
+restoring it load-bearing rather than tidy. **General rule for any future test
+consolidation: a hook or global that was harmless because a file boundary
+contained it becomes live state the moment the boundary goes.**
