@@ -76,11 +76,21 @@ test("#1764 — a .txt upload opens as readable source with line numbers, and a 
   const source = viewer.getByTestId("media-viewer-text-source");
   const gutter = viewer.getByTestId("media-viewer-text-gutter");
 
-  // Read the CONTENT — every line, in order, as one block.
-  await expect(source).toHaveText(TXT_LINES.join("\n"), { timeout: 10_000 });
+  // 🔴 `textContent` through `expect.poll`, NOT `toHaveText`. Playwright
+  // NORMALIZES whitespace for that matcher, which collapses every newline to a
+  // space — so a viewer that rendered four lines as one run-on paragraph would
+  // pass it, and so would one that lost the gutter's line breaks. Line
+  // structure is the entire subject here, so the assertion has to see the raw
+  // characters. `poll` keeps the retry the matcher would have given.
+  await expect
+    .poll(() => source.textContent(), {
+      message: "the uploaded lines must be on screen, in order, as source",
+      timeout: 10_000,
+    })
+    .toBe(TXT_LINES.join("\n"));
   // …and the numbers are really there, one per line and no phantom for the
   // file's trailing newline.
-  await expect(gutter).toHaveText("1\n2\n3\n4");
+  await expect.poll(() => gutter.textContent()).toBe("1\n2\n3\n4");
 
   // Not a rendered document: the source element is a <pre>.
   expect(await source.evaluate((el) => el.tagName)).toBe("PRE");
@@ -107,8 +117,17 @@ test("#1764 — a .txt upload opens as readable source with line numbers, and a 
 
   const mdViewer = await openMediaViewer(page, mdRow.link);
   const mdSource = mdViewer.getByTestId("media-viewer-text-source");
-  await expect(mdSource).toHaveText(MD_LINES.join("\n"), { timeout: 10_000 });
-  await expect(mdViewer.getByTestId("media-viewer-text-gutter")).toHaveText("1\n2\n3");
+  // Raw characters again, and here it matters twice over: MD_LINES carries a
+  // BLANK line, which whitespace normalisation would erase outright.
+  await expect
+    .poll(() => mdSource.textContent(), {
+      message: "markdown must arrive as its own source, blank line included",
+      timeout: 10_000,
+    })
+    .toBe(MD_LINES.join("\n"));
+  await expect
+    .poll(() => mdViewer.getByTestId("media-viewer-text-gutter").textContent())
+    .toBe("1\n2\n3");
 
   // The three shapes a renderer would have produced. Asserted on generated
   // HTML rather than on looks: cic has no sanitisation surface anywhere today,
