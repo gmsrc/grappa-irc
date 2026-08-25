@@ -634,6 +634,24 @@ export async function adminDeleteVisitor(adminToken: string, visitorId: string):
   }
 }
 
+// #1770 — "is this visitor row still there?", read from the admin listing.
+//
+// The oracle is deliberately the ADMIN index and not the visitor's own bearer
+// coming back 401: a revoked-but-present row answers 401 too, so that reading
+// could not tell a deleted row from a merely logged-out one — and "the row is
+// gone" is the whole claim. `GET /admin/visitors` renders
+// `Grappa.Visitors.AdminWire.index_payload/1`, i.e. `{visitors: [...]}`.
+export async function visitorExists(adminToken: string, visitorId: string): Promise<boolean> {
+  const res = await fetch(`${GRAPPA_BASE_URL}/admin/visitors`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`grappaApi.visitorExists: ${res.status} ${await res.text()}`);
+  }
+  const body = (await res.json()) as { visitors: Array<{ id: string }> };
+  return body.visitors.some((v) => v.id === visitorId);
+}
+
 // #574 — reap minted visitors LOUD in test cleanup. The single de-swallowing
 // primitive every spec's teardown must go through instead of the old
 // `adminDeleteVisitor(...).catch(() => {})`.

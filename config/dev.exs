@@ -1,5 +1,19 @@
 import Config
 
+# #1770 — shorten the incognito fast-close grace for the dev stack, which is
+# also the stack `scripts/integration.sh` boots (`MIX_ENV: dev` in
+# `cicchetto/e2e/compose.yaml`). Production's 30s is chosen so a RELOAD gets to
+# land its replacement socket before the wipe; an e2e that closes a page and
+# asserts the row is gone would otherwise idle out the whole window inside
+# Playwright's 30s per-test default.
+#
+# The divergence is deliberate and it is named here rather than hidden behind
+# an env var: dev is where you WANT the behaviour to be observable inside one
+# attention span. A developer debugging the reload-protection window itself
+# must read `Grappa.Visitors.Reaper`'s `@default_incognito_grace_ms`, which is
+# the production number and the single source of it.
+config :grappa, :incognito_close_grace_ms, 2_000
+
 config :grappa, Grappa.Repo,
   database: Path.expand("../runtime/grappa_dev.db", __DIR__),
   pool_size: 5,

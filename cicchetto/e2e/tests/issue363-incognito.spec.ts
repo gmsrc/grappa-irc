@@ -7,12 +7,17 @@
 //   - reconcile + linger + reap ......... visitors_test / reaper_test.exs
 //   - [HERE] checkbox visibility in a real DOM (nick vs email)
 //   - [HERE] incognito session disables share-session (server → /me → gate)
+//   - [HERE] #1770: closing the PWA is a /quit — the row is gone at once
 //
 // Copy is deliberately NOT asserted: the checkbox keys off its data-testid,
 // so vjt's final (pending) wording swap can never break this spec.
 
-import { openSettingsDrawer } from "../fixtures/cicchettoPage";
-import { mintVisitor, reapVisitors } from "../fixtures/grappaApi";
+import {
+  bootVisitorContext,
+  openSettingsDrawer,
+  waitForUserTopicReady,
+} from "../fixtures/cicchettoPage";
+import { mintVisitor, reapVisitors, visitorExists } from "../fixtures/grappaApi";
 import { getSeededAdmin } from "../fixtures/seedData";
 import { expect, test } from "../fixtures/test";
 
@@ -80,5 +85,51 @@ test("#363 incognito session disables share-session; a normal visitor keeps it",
     // Reap BOTH visitors — the variadic collects so a failed first delete
     // can't skip the second (see reapVisitors).
     await reapVisitors(admin.token, ghost.id, normal.id);
+  }
+});
+
+// #1770 (item 2 of #363) — the fast path the wiring never got. Before it,
+// `client_closing` only marked the socket hidden and the row lived on until the
+// 1h linger stopped being renewed.
+//
+// 🔴 The close gesture is `page.close({ runBeforeUnload: true })`, and that is a
+// MEASUREMENT, not a preference. On a standalone chromium + webkit bench,
+// `context.close()` delivers NO pagehide report at all (chromium sends only the
+// WebSocket close frame; webkit sends nothing), and `window.close()` likewise —
+// Playwright skips unload handlers unless asked, which a real tab close does
+// not. With `runBeforeUnload` the report lands over the socket at +4 ms
+// (chromium) / +2 ms (webkit), in both engines. A spec written around
+// `ctx.close()` would fail here for a harness reason and send the reader
+// hunting a product bug that is not there.
+//
+// The wait is the real grace, not a guess: `config/dev.exs` sets
+// `:incognito_close_grace_ms` to 2s for this stack (production is 30s — see
+// `Grappa.Visitors.Reaper`), so the poll ceiling below is grace + margin and
+// still well inside Playwright's 30s per-test default.
+test("#1770 closing an incognito PWA is a /quit: the row is gone, no linger wait", async ({
+  browser,
+}) => {
+  const admin = getSeededAdmin();
+  const ghost = await mintVisitor(`quit-${Date.now()}`, true);
+  expect(ghost.subject.incognito).toBe(true);
+
+  const { ctx, page } = await bootVisitorContext(browser, ghost);
+  try {
+    // The report rides the USER channel, so no joined channel means no report:
+    // gate on the subscribe rather than on paint.
+    await waitForUserTopicReady(page, `visitor:${ghost.id}`);
+
+    // Pre-state, asserted rather than assumed — without it a wipe that never
+    // happened and a row that never existed read identically.
+    expect(await visitorExists(admin.token, ghost.id)).toBe(true);
+
+    await page.close({ runBeforeUnload: true });
+
+    await expect.poll(() => visitorExists(admin.token, ghost.id), { timeout: 15_000 }).toBe(false);
+  } finally {
+    await ctx.close();
+    // Idempotent: `adminDeleteVisitor` counts 404 as success, so this is a
+    // no-op on the green path and a real cleanup on every red one.
+    await reapVisitors(admin.token, ghost.id);
   }
 });
