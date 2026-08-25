@@ -104,6 +104,13 @@ function count_signatures(line) {
     # connection, so counting it as a checkout that never happened would
     # misreport where the write died.
     if (line ~ /statement cancelled by a pool timeout/) CNT["interrupted"]++
+    # #1708 — the fourth BusyRetry terminal state, and the only one whose row
+    # is NOT lost: the statement completed and committed, and what the pool
+    # took away was the connection the driver then asked for the row count.
+    # Its own counter for the reason #1687 gives above, plus one more — folding
+    # it into `dropped` would count a durable row as a lost one, and `dropped`
+    # is the number the #1429 census exists to be trusted on.
+    if (line ~ /SQLite connection closed after the write completed/) CNT["orphaned"]++
 
     # `index` before the three regexes: every lock signature carries the
     # literal "lock", and the stream is ~10^6 lines. The known-answer
@@ -130,7 +137,7 @@ function zero_counters(   i) {
 function summary_line(svc, nlines, mg, mat) {
     return sprintf(SUMFMT, svc, nlines, mg, mat, THRESH, ngap, \
         CNT["db30"], CNT["idle30"], CNT["dropped"], CNT["saturated"], \
-        CNT["interrupted"], CNT["lockheld"], CNT["lockstall"], \
+        CNT["interrupted"], CNT["orphaned"], CNT["lockheld"], CNT["lockstall"], \
         CNT["lockstall_resolved"], CNT["lockstall_unattributed"])
 }
 
@@ -202,7 +209,7 @@ BEGIN {
 
     SUMFMT = "%s\tSUMMARY\tlines=%d\tmaxgap=%.1f\tmaxgap_at=%s\tgaps_ge_%d=%d" \
         "\tdb30=%d\tidle30=%d\tdropped=%d\tsaturated=%d\tinterrupted=%d" \
-        "\tlockheld=%d\tlockstall=%d\tlockstall_resolved=%d" \
+        "\torphaned=%d\tlockheld=%d\tlockstall=%d\tlockstall_resolved=%d" \
         "\tlockstall_unattributed=%d\n"
 
     # Samples copied from the emitting call site. Keep them verbatim: a
@@ -211,6 +218,23 @@ BEGIN {
     #   dropped            — Grappa.Scrollback, #336 never-crash contract.
     #   saturated          — Repo.BusyRetry, pool queue_timeout arm.
     #   interrupted        — Repo.BusyRetry, interrupted arm (#1657).
+    #   orphaned           — Repo.BusyRetry, connection_closed arm (#1708):
+    #                      the pool closed the connection AFTER the statement
+    #                      completed, so the row is DURABLE and only its
+    #                      RETURNING id and live broadcast were lost. 22 of
+    #                      these killed 22 live IRC sessions on 2026-08-22
+    #                      while losing no message at all.
+    #                      🔴 It OVERLAPS `dropped`, it does not sit beside it.
+    #                      Scrollback maps this fault onto the same
+    #                      `:persist_unavailable` as a row that never landed
+    #                      (the engine cannot hand the kind back without a
+    #                      fourth terminal atom, and ~150 `@spec`s carry the
+    #                      current three), so every orphaned fault on the
+    #                      scrollback path ALSO raises `dropped`. Read it as:
+    #                      `dropped` is the UPPER bound on lost rows and
+    #                      `dropped - orphaned` the LOWER one — orphaned also
+    #                      counts the non-scrollback write paths, which emit
+    #                      no `dropped` line of their own.
     #   lockheld           — Repo.BusyRetry, busy_locked arm (#1420).
     #   lockstall{,_resolved} — Grappa.Repo.LockWatch's two episode edges.
     #   lockstall_unattributed — LockWatch's third edge (#1687): a queue past
@@ -227,6 +251,10 @@ BEGIN {
     sig("interrupted", \
         "db write unavailable: SQLite statement cancelled by a pool timeout for 15042ms" \
         " across 1 attempts (1500ms retry budget) — returning :db_unavailable")
+    sig("orphaned", \
+        "db write landed but its result was lost: SQLite connection closed after the" \
+        " write completed, 15042ms into the write, on attempt 1 (not retried — the row" \
+        " is durable, a retry would duplicate it) — returning :db_unavailable")
     sig("lockheld", \
         "db write unavailable: SQLite write lock held by another writer for 30067ms" \
         " across 1 attempts (1500ms retry budget) — returning :db_unavailable")

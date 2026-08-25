@@ -24,7 +24,7 @@ setup() {
     # Verbatim from the call sites, so a pin that drifts from production
     # prose fails here rather than reporting a confident zero.
     #   lock_watch.ex — the two edges of one stall episode
-    #   busy_retry.ex — the three terminal arms, one per fault kind
+    #   busy_retry.ex — the four terminal arms, one per fault kind
     LOCKSTALL_LINE='db lock stall: holder #PID<0.512.0> has held RESERVED for 30123ms with 2 waiter(s) queued — holder status=:runnable at :gen_server.loop/7, stack: a <- b'
     LOCKRESOLVED_LINE='db lock stall RESOLVED: holder #PID<0.512.0> released RESERVED after 30456ms'
     LOCKUNATTR_LINE='db lock stall UNATTRIBUTED: 3 writer(s) queued past the threshold, longest 31303ms — no holder registered, so the holder is NOT attributable at the BEGIN IMMEDIATE seam; longest waiter #PID<0.512.0> status=:waiting at :gen_server.loop/7, stack: a <- b'
@@ -34,6 +34,12 @@ setup() {
     # raised only once DBConnection's own `:timeout` has expired, which is
     # also why its attempt count is 1 and not 14 like the saturated line.
     INTERRUPTED_LINE='db write unavailable: SQLite statement cancelled by a pool timeout for 15042ms across 1 attempts (1500ms retry budget) — returning :db_unavailable'
+    # #1708 — the fourth arm, and the only one that does NOT open with "db
+    # write unavailable": its statement completed, so the row is durable and
+    # the prose must not send an operator hunting for it. Attempt count is 1
+    # by VERDICT here (the fault is classified non-retryable) rather than
+    # because a budget expired.
+    ORPHANED_LINE='db write landed but its result was lost: SQLite connection closed after the write completed, 15042ms into the write, on attempt 1 (not retried — the row is durable, a retry would duplicate it) — returning :db_unavailable'
 }
 
 # The scanner as integration.sh invokes it: a service label and a
@@ -99,6 +105,7 @@ stamp() {
         stamp '12:00:05.' "$LOCKSTALL_LINE"
         stamp '12:00:06.' "$LOCKRESOLVED_LINE"
         stamp '12:00:07.' "$INTERRUPTED_LINE"
+        stamp '12:00:08.' "$ORPHANED_LINE"
     } | scan 10 )"
 
     grep -q 'db30=1' <<<"$out"
@@ -107,6 +114,9 @@ stamp() {
     grep -q 'saturated=1' <<<"$out"
     # #1657 — and specifically NOT folded into `saturated`, which stays 1.
     grep -q 'interrupted=1' <<<"$out"
+    # #1708 — nor into `interrupted`, nor into `dropped`: the write LANDED, so
+    # counting it as a lost row is the one reading the census must not offer.
+    grep -q 'orphaned=1' <<<"$out"
     grep -q 'lockheld=1' <<<"$out"
     grep -q 'lockstall=1' <<<"$out"
     grep -q 'lockstall_resolved=1' <<<"$out"
