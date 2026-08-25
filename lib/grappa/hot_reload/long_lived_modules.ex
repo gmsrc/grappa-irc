@@ -138,6 +138,11 @@ defmodule Grappa.HotReload.LongLivedModules do
     Grappa.RateLimit.FailureWindow,
     Grappa.RateLimit.TokenBucket,
     Grappa.Net.PtrCache,
+    # #1768 — its `init/1` returns the bare `{:ok, %{}}` literal, which is
+    # exactly the empty-map case this list takes on purpose: the day the
+    # pending map gains a field beside the ctx, THAT field-add is the
+    # hot-unsafe change, and only a listed module is checked for it.
+    Grappa.WindowCounts.Pusher.Coalescer,
     Grappa.Session.Server,
     Grappa.IRC.Client,
     Grappa.IRC.AuthFSM,
@@ -191,6 +196,7 @@ defmodule Grappa.HotReload.LongLivedModules do
           | Grappa.RateLimit.FailureWindow
           | Grappa.RateLimit.TokenBucket
           | Grappa.Net.PtrCache
+          | Grappa.WindowCounts.Pusher.Coalescer
           | Grappa.Session.Server
           | Grappa.IRC.Client
           | Grappa.IRC.AuthFSM
