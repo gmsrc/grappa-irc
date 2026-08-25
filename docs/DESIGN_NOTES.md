@@ -63801,3 +63801,141 @@ Both driver behaviours are defensible in isolation and wrong together:
 `exqlite_transaction_status` reporting a closed connection as `{:ok, :error}`.
 An `%Exqlite.Error{}` from either would have made this a clean degrade in 2026
 and never reached Ecto. Worth reporting to exqlite; not worth waiting for.
+<!-- entry #1766 -->
+
+---
+
+## 2026-08-25 — #1766: the bottom bar becomes optional, and what a fourth key costs
+
+vjt, `#grappa` 00:10: *"aggiungiamo setting toggle per disattivare la bottom
+bar su mobile. ora sono su 7 reti ed è diventata praticamente inutile"*. The
+BottomBar is a flat horizontal strip of every window across every network —
+**O(windows), not O(screens)** — so past a handful of networks it is longer
+than the useful scroll distance and the picker stops picking. Default stays
+ON: #174 closed with the ruling that the bar must NOT be deleted, only made
+opt-in from settings, and #71's second design ruling reversed *"kill the
+mobile bottom bar"* outright. This is that opt-out, arriving via a different
+carrier because #71 — the one #174 handed the constraint to — closed without
+shipping it.
+
+### SYNCED, and the neighbour it deliberately disagrees with
+
+The pref is the fourth key of the #449 server-backed `display_prefs`, not a
+localStorage flag. Its own sibling in the same settings fieldset argues the
+other way: #914's `hide_next_active` is per-DEVICE on purpose, and the bottom
+bar only ever renders on mobile, so the same reasoning was available. It does
+not hold. #914's complaint was about a **viewport** — a fixed overlay on a
+phone — and syncing it would have blanked a desktop control nobody objected
+to. The complaint here is *"7 networks"*, which is a property of the
+**account**: the window count is identical on the phone and on the tablet, and
+a device-local toggle would reproduce the very bug that produced the
+coordinator (Hypnotize, #449: set on desktop, invisible on the iOS PWA).
+
+### The fourth key is where the work was, and it is a general lesson
+
+`display_prefs` had never grown a key since #449 shipped it, and three
+mandatory keys were free while that held: the only writer is cic's
+`buildWireMap()`, which always sends every key it knows. The moment the shape
+grows, *"every key it knows"* stops meaning *"every key"* for any bundle
+already loaded in a tab — and the server and the bundle deploy separately
+(`deploy-m42.sh` vs `--cic`). So the skew runs **both** ways and each end has
+to tolerate the other:
+
+* **Server**: `fetch_optional_display_bool/3` — absent takes the default,
+  present-but-not-a-boolean still 422s. Without it a pre-#1766 tab's every
+  display write is rejected, so the operator's *time-format and nicklist*
+  toggles quietly stop persisting until they reload. Absence had to be told
+  apart from a present `nil`, which `display_fetch/2` flattens into one; hence
+  `display_has_key?/2`.
+* **Client**: `applyServerPrefs` coalesces `?? DEFAULT_DISPLAY_PREFS`. This
+  bundle can ship AHEAD of the server (`--cic`), and that apply is a
+  full-replace that runs on every login reconcile — passing the absent value
+  through would write `undefined` into the owner module and take the primary
+  mobile navigation away from everyone until the server caught up. `??` and
+  not `||`: a genuine `false` is the point of the preference.
+
+**Accepted consequence, not an oversight:** the PUT is a full-map replace, so
+a pre-#1766 tab's write also resets this key to its default. The alternative —
+reading the stored value for the missing key — turns a documented
+full-replace path into a per-key read-modify-write that the NEXT added key
+would have to remember too. The clobber window is one bundle reload wide and
+self-heals; the drift would not.
+
+### `space-between` was the wrong instruction, measured
+
+The issue specified `.shell-chrome` → `justify-content: space-between` to put
+the new ☰ on the left. It cannot be that, because the leading child is
+**conditional**: `space-between` with a SINGLE item resolves to flex-start, so
+on every window where the bar is ON — the default, i.e. everyone — it would
+move the EXISTING rail opener out of the right corner. `margin-inline-end:
+auto` on the leading child absorbs the free space before `justify-content` is
+consulted, leaving the one-child case byte-identical to what shipped.
+
+### The ☰ was thin, not small
+
+vjt asked for a 40px box; refused with the measure and he confirmed (*"si
+confermo"*). `--chrome-tap-min` is declared in ABSOLUTE px on purpose — the
+root is 14px, so 40px expressed in `rem` lands under the HIG floor, which is
+#305's *"defect 2"*. The box was never the problem: U+2630 is three thin
+strokes centred on the em box, so the **character** is thin while the box is
+not narrow. vjt on the remedy: *"va bene css"*. Three bars drawn on a
+`::before` in `currentColor` (so `.shell-chrome-btn`'s hover/focus colour lift
+still answers), sized off `--chrome-icon-size` so a text-size change still
+moves them — and **not** a bump of that token, which is #305's *"desired
+parity"* and would grow the cog, mentions, archive and the presence toggle
+together. With the bars drawn, perceived size is set to the pixel, which is
+why the 40px request has no motive left.
+
+Two selector traps, both already documented for other properties. The
+suppression of the character (`font-size: 0`) is written `button.` and placed
+after `.shell-chrome-btn`, because a bare `.topic-bar-hamburger` ties that
+rule at (0,1,0) and LOSES on source order — #305's `display` trap, one
+property over. And it is **not** scoped `.topic-bar .topic-bar-hamburger`:
+good specificity, but that matches only inside the band, and the same button
+now also floats in `.shell-chrome`, where it would render as the thin
+character beside a drawn twin.
+
+### The `leading` slot, and the two window kinds that knowingly have none
+
+`PaneTopBar` grew a leading slot, REQUIRED for the reason #1697 made
+`trailing` required: a defaulted slot lets a new host inherit a door it never
+asked for. Hosts with no left door pass `null` and say so at the call site.
+`admin` and `list` are those hosts — both suppress `.shell-chrome` (#1050 /
+the admin redesign) and both already carry a ✕ back to a window that does have
+the door, so a second ☰ there would open onto a floor reachable in one tap.
+Named here rather than left to be rediscovered as a hole.
+
+### What the fieldset merge hides, said out loud
+
+The three display checkboxes collapse into one fieldset (the two radio groups
+keep theirs — a radio group is a fieldset by nature). The merge hides one
+thing the three legends kept apart: **the rows do not persist alike.** Two are
+account-synced, the jump button is per-device. Under one legend three
+identical-looking rows behave differently on a second device, so the fieldset
+carries a `settings-section-blurb` saying which is which. Every `data-testid`
+survives verbatim; the dissolved classes were referenced nowhere else.
+
+### The redundant label had a job
+
+Dropping *"mark me away after:"* from the general sub-page is right — the
+`<legend>` says it and the blurb spells the behaviour out — but that `<label>`
+WRAPPED the `<select>`, so the text WAS the control's accessible name. Same
+cure #1227 applied to the upload-duration select two fieldsets up: the label
+stays as the row's flex box, the name moves onto the control. Not the legend
+instead: a legend names the GROUP, and a screen reader landing on the select
+would still be told nothing.
+
+### Protocol bump, and a gap the pin still has
+
+`Grappa.Protocol.version/0` moves 5 → 6. `display_prefs` is a client-facing
+REST payload and the shape changed, which under the #1393d ruling is enough
+on its own — additivity describes what the server EMITS, not what a client
+comes to REQUIRE. **`mix grappa.wire_pin --check` did not force this and could
+not**: its digest spans the codegen artefacts, whose sources are
+`lib/grappa/**/*wire.ex` plus a hand-kept list of web envelopes, and
+`GrappaWeb.UserSettingsJSON` is not on that list. That is the same silence
+#1679 hit with `BootJSON` — recorded there as a gap in the detector, not as a
+boundary of the rule, and it is still open for every hand-written
+`*_json.ex`. Widening the digest is a coverage change, which the pin
+deliberately cannot distinguish from a shape change, so it is not smuggled in
+here.
