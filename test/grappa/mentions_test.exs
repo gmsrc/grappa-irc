@@ -429,6 +429,64 @@ defmodule Grappa.MentionsTest do
     end
   end
 
+  # #1786 — a term whose own edge is punctuation could never match, because
+  # `build_matchers/1` wrapped every term in `\b…\b` unconditionally.
+  #
+  # `\b` is a TRANSITION between a word char and a non-word one, so the
+  # trailing anchor on `QUACK!` demanded a word character immediately AFTER
+  # the `!` — end-of-line and a space both fail it. Found in prod: a whole
+  # watchlist of `["QUACK!", "flap!", "quack!"]`, listed as active by the
+  # settings pane and silently matching nothing, forever.
+  #
+  # THE TRUTH TABLE BELOW IS SHARED with
+  # `cicchetto/src/__tests__/mentionMatch.test.ts` — a case added here without
+  # its client twin is exactly how the two ports drift, which is the failure
+  # this module's own moduledoc contract exists to prevent.
+  describe "mentioned?/3 — a punctuated edge still anchors (#1786)" do
+    test "matches a term ending in punctuation, mid-line and at end of body" do
+      assert Mentions.mentioned?("say QUACK! now", "", ["QUACK!"])
+      assert Mentions.mentioned?("QUACK!", "", ["QUACK!"])
+    end
+
+    test "matches a term starting in punctuation — a command-prefix highlight" do
+      assert Mentions.mentioned?("!list please", "", ["!list"])
+      assert Mentions.mentioned?("!list", "", ["!list"])
+    end
+
+    test "matches a term punctuated at BOTH edges" do
+      assert Mentions.mentioned?("run (deploy) now", "", ["(deploy)"])
+    end
+
+    # ── the two discriminating cases ──────────────────────────────────────
+    # Everything above passes just as well if the anchor is DROPPED on a
+    # punctuated edge instead of replaced by a lookaround. These two do not:
+    # they are the only cases that can tell "not glued to a word" from "no
+    # rule at all". Measured on the client twin — mutating the cure to drop
+    # the anchor leaves 18 of 20 cases green and kills exactly these two.
+    test "does not match a punctuation-led term glued to the end of a word" do
+      refute Mentions.mentioned?("foo!list", "", ["!list"])
+    end
+
+    test "does not match a punctuation-tailed term glued to the start of a word" do
+      refute Mentions.mentioned?("QUACK!x", "", ["QUACK!"])
+    end
+
+    # ── the rule that must NOT move ───────────────────────────────────────
+    test "still refuses a substring match on a word-edged term" do
+      refute Mentions.mentioned?("vjt123 is here", "vjt", [])
+      refute Mentions.mentioned?("QUACKING!", "", ["QUACK!"])
+    end
+
+    test "a word-edged term keeps both \\b anchors — the metas case is unmoved" do
+      # `5+1` is word-edged at BOTH ends, so the conditional must leave it
+      # exactly as it was. Duplicated from the patterns block deliberately:
+      # there it guards the escape, here it guards that #1786 did not disturb
+      # the terms that already worked.
+      assert Mentions.mentioned?("got 5+1 alerts", "vjt", ["5+1"])
+      refute Mentions.mentioned?("got 555 alerts", "vjt", ["5+1"])
+    end
+  end
+
   describe "mentioned?/3 — guards + degenerate inputs" do
     test "nil body never matches" do
       refute Mentions.mentioned?(nil, "vjt", ["oncall"])

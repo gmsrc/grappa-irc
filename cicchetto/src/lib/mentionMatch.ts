@@ -24,10 +24,35 @@
 
 import { isServerSender, isServicesSender } from "./servicesSender";
 
+// #1786 — the anchor is conditional on the term's OWN edge, and that is a fix
+// rather than a loosening.
+//
+// `\b` is a TRANSITION between a word char and a non-word one, so it is only
+// satisfiable on a side where the term's edge character IS a word char. Wrapped
+// unconditionally, a term like `QUACK!` demanded a word character immediately
+// after the `!` — end-of-line and a space both fail it, so the term could never
+// match anything. Found in prod as a whole watchlist of trailing-`!` terms the
+// settings pane listed as active while they silently matched nothing.
+//
+// The lookarounds say what `\b` was always meant to say on those edges: "not
+// glued to a word". They are NOT the same as dropping the anchor — `!list` must
+// still refuse `foo!list` — which is the pair of cases the test file calls
+// discriminating.
+//
+// The probe is a regex over the RAW term rather than a character-class literal
+// so that it consults the SAME `\w` the anchor will: one definition, no second
+// spelling to drift from it. Mirror of `Grappa.Mentions.build_matchers/1`; a
+// change here lands in both ports together, per this module's header.
+const termAnchors = (term: string): { readonly prefix: string; readonly suffix: string } => ({
+  prefix: /^\w/.test(term) ? "\\b" : "(?<!\\w)",
+  suffix: /\w$/.test(term) ? "\\b" : "(?!\\w)",
+});
+
 const matchesTerm = (body: string | null, term: string | null): boolean => {
   if (!body || !term) return false;
   const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}\\b`, "i").test(body);
+  const { prefix, suffix } = termAnchors(term);
+  return new RegExp(`${prefix}${escaped}${suffix}`, "i").test(body);
 };
 
 export const matchesWatchlist = (

@@ -30,10 +30,20 @@ defmodule Grappa.Mentions do
   ## Watchlist matching rule
 
   A message matches if its body (case-insensitively) contains `own_nick`
-  OR any pattern from `watchlist_patterns` as a whole word
-  (`\\b..\\b` word-boundary). Substring-only matches are excluded: "vjt"
-  must not match "vjt123". Empty `watchlist_patterns` list is valid
-  (only `own_nick` matches are returned).
+  OR any pattern from `watchlist_patterns` as a whole word.
+  Substring-only matches are excluded: "vjt" must not match "vjt123".
+  Empty `watchlist_patterns` list is valid (only `own_nick` matches are
+  returned).
+
+  **The anchor is per-edge, not a blanket `\\b..\\b` (#1786).** `\\b` is a
+  TRANSITION between a word char and a non-word one, so it is satisfiable
+  only on a side where the term's own edge character IS a word char.
+  Wrapped unconditionally — as it was until #1786 — a term like `QUACK!`
+  demanded a word character immediately after the `!`, which end-of-line
+  and a space both fail: the term could never match anything, and nothing
+  told the operator so. `build_matchers/1` therefore picks `\\b` where the
+  edge is a word char and a lookaround (`(?<!\\w)` / `(?!\\w)`) where it is
+  not. That is not a loosening: `!list` still refuses `foo!list`.
 
   ## Return order
 
@@ -54,9 +64,11 @@ defmodule Grappa.Mentions do
   two consumers — same predicate guarantees the badge cic raises in
   the sidebar and the OS push that fires server-side never disagree.
 
-  Mirror of `cicchetto/src/lib/mentionMatch.ts`'s `mentionsUser/2`. A
-  regex tweak (e.g. broader Unicode word-boundary support) MUST land
-  in both ports together.
+  Mirror of `cicchetto/src/lib/mentionMatch.ts`'s `matchesWatchlist`. A
+  regex tweak (e.g. broader Unicode word-boundary support, or #1786's
+  per-edge anchor) MUST land in both ports together, and the truth table
+  is shared between `test/grappa/mentions_test.exs` and that module's
+  `src/__tests__/mentionMatch.test.ts` so a one-sided change is red.
 
   ## `mentionable_sender?/1` — the SENDER half (#1674)
 
@@ -241,6 +253,11 @@ defmodule Grappa.Mentions do
   # Private helpers
   # ---------------------------------------------------------------------------
 
+  # Options every matcher is compiled with. Named so the EDGE PROBES below can
+  # be built from the same list: a probe that disagreed with the anchor it is
+  # choosing for would be worse than no probe at all.
+  @matcher_opts [:caseless, :unicode]
+
   # Build a list of compiled word-boundary regexes, one per term.
   # Empty and duplicate terms are tolerated; `Regex.escape/1` ensures
   # special characters in watchlist patterns (e.g. "+", ".") are treated
@@ -251,8 +268,54 @@ defmodule Grappa.Mentions do
     |> Enum.reject(&(&1 == ""))
     |> Enum.uniq()
     |> Enum.map(fn term ->
-      Regex.compile!("\\b#{Regex.escape(term)}\\b", [:caseless, :unicode])
+      Regex.compile!(prefix_anchor(term) <> Regex.escape(term) <> suffix_anchor(term), @matcher_opts)
     end)
+  end
+
+  # #1786 — the anchor is conditional on the term's OWN edge, and that is a fix
+  # rather than a loosening.
+  #
+  # `\b` is a TRANSITION between a word char and a non-word one, so it is only
+  # satisfiable on a side where the term's edge character IS a word char.
+  # Wrapped unconditionally, a term like `QUACK!` demanded a word character
+  # immediately after the `!` — end-of-line and a space both fail it, so the
+  # term could never match anything. Found in prod as a whole watchlist of
+  # trailing-`!` terms that the settings pane listed as active while they
+  # silently matched nothing, forever.
+  #
+  # The lookarounds say what `\b` was always meant to say on those edges: "not
+  # glued to a word". They are NOT the same as dropping the anchor — `!list`
+  # must still refuse `foo!list`, which is the pair of cases the test file
+  # calls discriminating, and the only pair that separates this cure from the
+  # cheaper wrong one.
+  #
+  # The probe is a regex over the RAW term rather than a character-class
+  # literal so that it consults the SAME `\w` the anchor will, under the same
+  # compile options: one definition, no second spelling to drift from it.
+  #
+  # Mirror of `cicchetto/src/lib/mentionMatch.ts`'s `termAnchors`. JS `\w` is
+  # ASCII-only and unconditionally so, which is why the ports agree on a
+  # non-ASCII edge as well: whichever way each engine classifies `é`, each
+  # port's probe asks its OWN engine, and the two formulations then accept and
+  # reject the same bodies.
+  #
+  # The probes carry `u` and not `i`: `:caseless` cannot change what a `\w`
+  # class accepts, so the `u` modifier IS the whole of the option surface the
+  # probe shares with `@matcher_opts`. Sigils, so they are compiled once with
+  # the module rather than per term — `matchers/2` exists precisely so a caller
+  # with many bodies pays compilation once, and a probe rebuilt per term would
+  # take that back.
+  @word_led ~r/\A\w/u
+  @word_tailed ~r/\w\z/u
+
+  @spec prefix_anchor(String.t()) :: String.t()
+  defp prefix_anchor(term) do
+    if Regex.match?(@word_led, term), do: "\\b", else: "(?<!\\w)"
+  end
+
+  @spec suffix_anchor(String.t()) :: String.t()
+  defp suffix_anchor(term) do
+    if Regex.match?(@word_tailed, term), do: "\\b", else: "(?!\\w)"
   end
 
   # Returns true if body matches ANY compiled pattern.

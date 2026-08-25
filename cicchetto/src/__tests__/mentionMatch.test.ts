@@ -60,6 +60,62 @@ describe("matchesWatchlist — own nick ∪ custom highlight patterns (#370)", (
   });
 });
 
+// #1786 — a term whose own edge is punctuation could never match, because both
+// ports wrapped every term in `\b…\b` unconditionally.
+//
+// `\b` is a TRANSITION between a word char and a non-word one. On `QUACK!` the
+// trailing `\b` therefore demands a word character immediately AFTER the `!`,
+// which end-of-line and a space both fail — so the term was inert. Found in
+// prod: a whole watchlist of `["QUACK!","flap!","quack!"]`, listed as active by
+// the settings pane and silently matching nothing, forever.
+//
+// The cure makes each anchor conditional on the term's OWN edge: `\b` where the
+// edge character is a word char (it is satisfiable there), a lookaround where
+// it is not. THE TRUTH TABLE BELOW IS SHARED with `test/grappa/mentions_test.exs`
+// — a case added here without its server twin is exactly how the two ports
+// drift, which is the failure `mentionMatch.ts`'s own header exists to prevent.
+describe("matchesWatchlist — a punctuated edge still anchors (#1786)", () => {
+  it("matches a term ending in punctuation, mid-line and at end of body", () => {
+    expect(matchesWatchlist("say QUACK! now", null, ["QUACK!"])).toBe(true);
+    expect(matchesWatchlist("QUACK!", null, ["QUACK!"])).toBe(true);
+  });
+
+  it("matches a term starting in punctuation — a command-prefix highlight", () => {
+    expect(matchesWatchlist("!list please", null, ["!list"])).toBe(true);
+    expect(matchesWatchlist("!list", null, ["!list"])).toBe(true);
+  });
+
+  it("matches a term punctuated at BOTH edges", () => {
+    expect(matchesWatchlist("run (deploy) now", null, ["(deploy)"])).toBe(true);
+  });
+
+  // ── the two discriminating cases ────────────────────────────────────────
+  // Everything above passes just as well if the anchor is DROPPED on a
+  // punctuated edge instead of replaced by a lookaround. These two do not:
+  // they are the only cases that can tell "not glued to a word" from "no rule
+  // at all", and without them the cheap wrong fix ships green.
+  it("does not match a punctuation-led term glued to the end of a word", () => {
+    expect(matchesWatchlist("foo!list", null, ["!list"])).toBe(false);
+  });
+
+  it("does not match a punctuation-tailed term glued to the start of a word", () => {
+    expect(matchesWatchlist("QUACK!x", null, ["QUACK!"])).toBe(false);
+  });
+
+  // ── the rule that must NOT move ─────────────────────────────────────────
+  it("still refuses a substring match on a word-edged term", () => {
+    expect(matchesWatchlist("vjt123 is here", "vjt", [])).toBe(false);
+    expect(matchesWatchlist("QUACKING!", null, ["QUACK!"])).toBe(false);
+  });
+
+  it("still escapes regex metacharacters rather than honouring them", () => {
+    // `5+1` is word-edged at BOTH ends, so both anchors stay `\b` — the
+    // conditional must not disturb the terms that already worked.
+    expect(matchesWatchlist("got 5+1 alerts", "vjt", ["5+1"])).toBe(true);
+    expect(matchesWatchlist("got 555 alerts", "vjt", ["5+1"])).toBe(false);
+  });
+});
+
 // #1674 — the SENDER half of the mention rule. Mirror of
 // `Grappa.Mentions.mentionable_sender?/1`. Keyed on the sender because
 // neither of the alternatives survives: excluding `:notice` silences a
