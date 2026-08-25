@@ -63047,7 +63047,78 @@ The production log was **not** read, so there is no field frequency for the 202
 arm — only the proof that the flow is reachable and documented. Nothing here
 measures how often an operator `/msg`es a service.
 
-Whether any REST door is a *body*-discriminated union that cic collapses is a
-different axis and was not audited; this census keyed on the HTTP status.
-`POST /auth/login`'s two 202 shapes are one such pair, and they are narrowed
-correctly, but that is one observation and not a sweep.
+Whether any REST door is a *body*-discriminated union that cic collapses was a
+different axis and is **no longer open** — swept in entry #1430b, negative, and
+it is what turned this finding into a rule. The paragraph that stood here
+declared the refusal; it has been closed by measurement rather than left
+standing.
+<!-- entry #1430b -->
+
+---
+
+## 2026-08-25 — #1430b: the body axis, and the rule that names the collapse
+
+Entry #1430 closed the status axis and left one refusal standing: whether any
+REST door is a *body*-discriminated union cic collapses the same way. It is
+closed here, negative, and closing it turned the finding from an instance into
+a rule.
+
+### Measured
+
+Three passes — multi-clause render functions across all twelve `*_json.ex`,
+conditional response key-set construction in the controllers, and the same in
+the `*/wire.ex` builders. Four multi-clause views, no conditional key sets on
+any REST response, and the one conditional key that exists
+(`Cic.Wire.bundle_hash`'s `optional(:version)`) belongs to a WS event and
+declares itself optional.
+
+Three of the four views are the same polymorphism — subject kind — and every
+one of them carries `kind` **inside the body**: `AuthJSON.login`'s `subject`,
+`MeJSON.show`, and both arms of `NetworksJSON.index`. cic models all three as
+TypeScript discriminated unions. The fourth,
+`UserSettingsJSON.auto_away_debounce_seconds`, renders one key in both clauses
+and is not a union at all. **Nothing collapses on the body axis either.**
+
+The census cannot see a shape that varies inside a builder the greps do not
+reach; it is a sweep, not a proof of exhaustion.
+
+### The rule
+
+> A success union is collapsible **in silence** if and only if its discriminant
+> lives ONLY in the HTTP status **and** both arms have parseable bodies.
+
+The three status-discriminated doors from entry #1430 are one clean instance of
+each regime, which is why exactly one of them broke:
+
+| door | discriminant | both bodies parse? | outcome |
+|---|---|---|---|
+| `POST …/channels/:c/messages` 201/202 | status only | **yes** | **the collapse** |
+| `GET …/channels/:c/members` 200/204 | status only | no — 204 is empty | cannot be silent; `.json()` throws |
+| `POST /auth/login` 200/202 | status **and** `two_factor_required` | yes | the client may ignore the status and still be right — and `auth.ts` does |
+
+The mechanism at the one that broke has a name. Its 202 arm reuses
+`{ok: true}`, the house acknowledgement body — six sites across four actions.
+At the other three actions that shape IS the answer; here it is one of two, and
+once `res.ok` has erased the status the JSON alone cannot say which arm
+arrived. A borrowed ack shape is fine until it stands in a union.
+
+### Why this was not bad luck
+
+The convention was already in the codebase and this door was the exception to
+it: every other polymorphic success payload tags itself. `MeJSON` puts `kind`,
+both `NetworksJSON` builders put `kind`, `AuthJSON`'s `subject` puts `kind`.
+`POST …/messages`'s 202 was the only polymorphic success body with no internal
+tag — so the only one whose discriminant a client could drop without noticing.
+
+**The design rule that follows, for a new door:** a success answer that can take
+more than one shape carries its own discriminant IN the body, even when the
+status already distinguishes the arms. The status is a second signal, not the
+only one — the client that forgets to read it should still be able to be right.
+Where that is impossible because one arm has no body at all (`GET …/members`'s
+204), the absence is itself safe, because parsing nothing fails loud.
+
+### Not established
+
+No production log was read for either axis, so nothing here carries a field
+frequency. And the sweep is a sweep: three greps over the shapes they can see,
+with their blind spot stated above rather than argued away.
